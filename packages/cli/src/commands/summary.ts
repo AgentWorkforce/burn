@@ -4,7 +4,7 @@ import type { CostBreakdown } from '@relayburn/analyze';
 import { queryAll, type Query } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 
-import { ingestClaudeProjects } from '../ingest.js';
+import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
@@ -16,7 +16,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
   if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
 
-  const ingestReport = await ingestClaudeProjects();
+  const ingestReport = await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll(q);
 

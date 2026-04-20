@@ -2,7 +2,7 @@ import { loadPricing, costForTurn } from '@relayburn/analyze';
 import { queryAll, type Query } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 
-import { ingestClaudeProjects } from '../ingest.js';
+import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
@@ -12,7 +12,7 @@ export async function runByTool(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
 
-  await ingestClaudeProjects();
+  await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll(q);
 
