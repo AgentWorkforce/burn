@@ -1,0 +1,103 @@
+import { loadPricing } from '@relayburn/analyze';
+import { costForTurn, sumCosts } from '@relayburn/analyze';
+import type { CostBreakdown } from '@relayburn/analyze';
+import { queryAll, type Query } from '@relayburn/ledger';
+import type { EnrichedTurn } from '@relayburn/ledger';
+
+import { ingestClaudeProjects } from '../ingest.js';
+import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
+import type { ParsedArgs } from '../args.js';
+
+export async function runSummary(args: ParsedArgs): Promise<number> {
+  const q: Query = {};
+  if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
+  if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
+  if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
+  if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
+  if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
+
+  const ingestReport = await ingestClaudeProjects();
+  const pricing = await loadPricing();
+  const turns = await queryAll(q);
+
+  const rowsByModel = aggregateByModel(turns, pricing);
+  const totalCost = sumCosts(rowsByModel.map((r) => r.cost));
+
+  const lines: string[] = [];
+  lines.push('');
+  lines.push(
+    `ingested ${ingestReport.ingestedSessions} new session${ingestReport.ingestedSessions === 1 ? '' : 's'} (+${formatInt(ingestReport.appendedTurns)} turns)`,
+  );
+  lines.push('');
+  lines.push(`turns analyzed: ${formatInt(turns.length)}`);
+  lines.push('');
+
+  if (turns.length === 0) {
+    lines.push('no turns match the current filters.');
+    process.stdout.write(lines.join('\n') + '\n');
+    return 0;
+  }
+
+  const header = ['model', 'turns', 'input', 'output', 'cacheRead', 'cacheCreate', 'cost'];
+  const dataRows: string[][] = [header];
+  for (const r of rowsByModel) {
+    dataRows.push([
+      r.model,
+      formatInt(r.turns),
+      formatInt(r.usage.input),
+      formatInt(r.usage.output),
+      formatInt(r.usage.cacheRead),
+      formatInt(r.usage.cacheCreate5m + r.usage.cacheCreate1h),
+      formatUsd(r.cost.total),
+    ]);
+  }
+  lines.push(table(dataRows));
+  lines.push('');
+  lines.push(`total cost: ${formatUsd(totalCost.total)}`);
+  lines.push(
+    `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
+  );
+  lines.push('');
+
+  process.stdout.write(lines.join('\n'));
+  return 0;
+}
+
+interface ModelRow {
+  model: string;
+  turns: number;
+  usage: EnrichedTurn['usage'];
+  cost: CostBreakdown;
+}
+
+function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {
+  const byModel = new Map<string, ModelRow>();
+  for (const t of turns) {
+    const key = t.model || 'unknown';
+    let row = byModel.get(key);
+    if (!row) {
+      row = {
+        model: key,
+        turns: 0,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        cost: { model: key, total: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+      };
+      byModel.set(key, row);
+    }
+    row.turns++;
+    row.usage.input += t.usage.input;
+    row.usage.output += t.usage.output;
+    row.usage.cacheRead += t.usage.cacheRead;
+    row.usage.cacheCreate5m += t.usage.cacheCreate5m;
+    row.usage.cacheCreate1h += t.usage.cacheCreate1h;
+    const c = costForTurn(t, pricing);
+    if (c) {
+      row.cost.total += c.total;
+      row.cost.input += c.input;
+      row.cost.output += c.output;
+      row.cost.cacheRead += c.cacheRead;
+      row.cost.cacheCreate += c.cacheCreate;
+    }
+  }
+  return [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total);
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@relayburn/cli",
+  "version": "0.0.0",
+  "description": "burn CLI — spawn wrapper + summary/by-tool over the relayburn ledger",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "burn": "./dist/cli.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@relayburn/reader": "0.0.0",
+    "@relayburn/ledger": "0.0.0",
+    "@relayburn/analyze": "0.0.0"
+  }
+}

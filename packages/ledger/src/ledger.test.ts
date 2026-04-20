@@ -1,0 +1,152 @@
+import { strict as assert } from 'node:assert';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { after, before, beforeEach, describe, it } from 'node:test';
+
+import type { TurnRecord } from '@relayburn/reader';
+
+import { appendTurns, stamp } from './writer.js';
+import { queryAll } from './reader.js';
+import { ledgerPath } from './paths.js';
+
+function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId: 's-1',
+    messageId: 'msg-1',
+    turnIndex: 0,
+    ts: '2026-04-20T00:00:00.000Z',
+    model: 'claude-sonnet-4-6',
+    usage: { input: 100, output: 50, cacheRead: 1000, cacheCreate5m: 0, cacheCreate1h: 0 },
+    toolCalls: [],
+    project: '/tmp/project',
+    ...overrides,
+  };
+}
+
+describe('ledger', () => {
+  let tmpDir: string;
+  const originalHome = process.env['RELAYBURN_HOME'];
+
+  before(async () => {
+    tmpDir = await mkdtemp(path.join(tmpdir(), 'relayburn-test-'));
+  });
+
+  beforeEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+    await mkdtemp(path.join(tmpdir(), 'relayburn-test-')).then((d) => {
+      tmpDir = d;
+    });
+    process.env['RELAYBURN_HOME'] = tmpDir;
+  });
+
+  after(async () => {
+    if (originalHome !== undefined) {
+      process.env['RELAYBURN_HOME'] = originalHome;
+    } else {
+      delete process.env['RELAYBURN_HOME'];
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('round-trips turns through append + query', async () => {
+    await appendTurns([fakeTurn(), fakeTurn({ messageId: 'msg-2', turnIndex: 1 })]);
+    const got = await queryAll();
+    assert.equal(got.length, 2);
+    assert.equal(got[0]!.messageId, 'msg-1');
+    assert.deepEqual(got[0]!.enrichment, {});
+  });
+
+  it('stores ledger at RELAYBURN_HOME/ledger.jsonl', async () => {
+    await appendTurns([fakeTurn()]);
+    const expected = path.join(tmpDir, 'ledger.jsonl');
+    assert.equal(ledgerPath(), expected);
+  });
+
+  it('folds a sessionId stamp onto matching turns', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 's-A', messageId: 'm-A1' }),
+      fakeTurn({ sessionId: 's-B', messageId: 'm-B1' }),
+    ]);
+    await stamp({ sessionId: 's-A' }, { workflowId: 'wf-1', agentId: 'ag-42' });
+    const got = await queryAll();
+    const a = got.find((t) => t.sessionId === 's-A')!;
+    const b = got.find((t) => t.sessionId === 's-B')!;
+    assert.equal(a.enrichment['workflowId'], 'wf-1');
+    assert.equal(a.enrichment['agentId'], 'ag-42');
+    assert.deepEqual(b.enrichment, {});
+  });
+
+  it('applies messageId stamp only to that one turn', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 's-A', messageId: 'm1' }),
+      fakeTurn({ sessionId: 's-A', messageId: 'm2', turnIndex: 1 }),
+    ]);
+    await stamp({ messageId: 'm2' }, { stepId: 'step-2' });
+    const got = await queryAll();
+    assert.equal(got.find((t) => t.messageId === 'm1')!.enrichment['stepId'], undefined);
+    assert.equal(got.find((t) => t.messageId === 'm2')!.enrichment['stepId'], 'step-2');
+  });
+
+  it('later stamps override earlier stamps per key (last-write-wins)', async () => {
+    await appendTurns([fakeTurn()]);
+    await stamp({ sessionId: 's-1' }, { tier: 'best' });
+    await new Promise((r) => setTimeout(r, 10));
+    await stamp({ sessionId: 's-1' }, { tier: 'fast' });
+    const got = await queryAll();
+    assert.equal(got[0]!.enrichment['tier'], 'fast');
+  });
+
+  it('stamp range filters by ts', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 's-1', messageId: 'm1', ts: '2026-04-20T00:00:00.000Z' }),
+      fakeTurn({ sessionId: 's-1', messageId: 'm2', ts: '2026-04-20T05:00:00.000Z', turnIndex: 1 }),
+      fakeTurn({ sessionId: 's-1', messageId: 'm3', ts: '2026-04-20T10:00:00.000Z', turnIndex: 2 }),
+    ]);
+    await stamp(
+      {
+        sessionId: 's-1',
+        range: { fromTs: '2026-04-20T03:00:00.000Z', toTs: '2026-04-20T06:00:00.000Z' },
+      },
+      { workflowId: 'wf-mid' },
+    );
+    const got = await queryAll();
+    assert.equal(got.find((t) => t.messageId === 'm1')!.enrichment['workflowId'], undefined);
+    assert.equal(got.find((t) => t.messageId === 'm2')!.enrichment['workflowId'], 'wf-mid');
+    assert.equal(got.find((t) => t.messageId === 'm3')!.enrichment['workflowId'], undefined);
+  });
+
+  it('query filters by since, project, sessionId, and enrichment', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 's-A', messageId: 'm1', ts: '2026-04-19T00:00:00.000Z', project: '/a' }),
+      fakeTurn({ sessionId: 's-B', messageId: 'm2', ts: '2026-04-20T12:00:00.000Z', project: '/b', turnIndex: 1 }),
+    ]);
+    await stamp({ sessionId: 's-B' }, { persona: 'posthog' });
+
+    const sinceFiltered = await queryAll({ since: '2026-04-20T00:00:00.000Z' });
+    assert.equal(sinceFiltered.length, 1);
+    assert.equal(sinceFiltered[0]!.messageId, 'm2');
+
+    const projectFiltered = await queryAll({ project: '/a' });
+    assert.equal(projectFiltered.length, 1);
+    assert.equal(projectFiltered[0]!.sessionId, 's-A');
+
+    const enrichmentFiltered = await queryAll({ enrichment: { persona: 'posthog' } });
+    assert.equal(enrichmentFiltered.length, 1);
+    assert.equal(enrichmentFiltered[0]!.sessionId, 's-B');
+  });
+
+  it('stamp before the turn is still applied (out-of-order tolerant)', async () => {
+    await stamp({ sessionId: 's-future' }, { workflowId: 'wf-early' });
+    await appendTurns([fakeTurn({ sessionId: 's-future', messageId: 'm-late' })]);
+    const got = await queryAll();
+    assert.equal(got.length, 1);
+    assert.equal(got[0]!.enrichment['workflowId'], 'wf-early');
+  });
+
+  it('empty selector throws', async () => {
+    await assert.rejects(() => stamp({}, { x: 'y' }));
+  });
+});

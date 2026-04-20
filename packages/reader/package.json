@@ -1,0 +1,21 @@
+{
+  "name": "@relayburn/reader",
+  "version": "0.0.0",
+  "description": "Pure parsers for agent CLI session logs → TurnRecord[]",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./claude": "./dist/claude.js",
+    "./types": "./dist/types.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

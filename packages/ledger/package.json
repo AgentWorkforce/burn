@@ -1,0 +1,22 @@
+{
+  "name": "@relayburn/ledger",
+  "version": "0.0.0",
+  "description": "Append-only JSONL ledger + stamp API for relayburn",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./schema": "./dist/schema.js",
+    "./paths": "./dist/paths.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean"
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@relayburn/reader": "0.0.0"
+  }
+}
