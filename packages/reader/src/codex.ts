@@ -127,7 +127,10 @@ export async function parseCodexSession(
       if (rec.type === 'session_meta') {
         const p = payload as SessionMetaPayload;
         if (typeof p.id === 'string') sessionId = p.id;
-        if (typeof p.cwd === 'string') sessionCwd = p.cwd;
+        if (typeof p.cwd === 'string') {
+          sessionCwd = p.cwd;
+          if (openTurn && openTurn.project === undefined) openTurn.project = p.cwd;
+        }
         continue;
       }
 
