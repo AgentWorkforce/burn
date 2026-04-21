@@ -65,7 +65,7 @@ export async function parseOpencodeSession(
 
   const storageRoot = path.resolve(sessionFilePath, '..', '..', '..');
   const messages = await readMessages(storageRoot, session.id);
-  const assistants = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+  const assistants = messages.filter(isCompleteAssistant);
   assistants.sort((a, b) => a.time.created - b.time.created);
 
   const isSidechain = typeof session.parentID === 'string' && session.parentID.length > 0;
@@ -78,7 +78,7 @@ export async function parseOpencodeSession(
     const stopReason = lastStepFinishReason(parts);
 
     const model = buildModel(m.providerID, m.modelID);
-    const project = m.path?.cwd;
+    const project = m.path?.cwd ?? session.directory;
     const usage = toUsage(m.tokens);
 
     const record: TurnRecord = {
@@ -168,7 +168,7 @@ async function readParts(storageRoot: string, messageId: string): Promise<Part[]
       continue;
     }
   }
-  // prt_* ids are time-ordered base36 suffixes; filename sort keeps chronological order
+  // prt_* ids have time-ordered base36 suffixes, so sorting by part.id keeps chronological order
   parts.sort((a, b) => ((a.id ?? '') < (b.id ?? '') ? -1 : (a.id ?? '') > (b.id ?? '') ? 1 : 0));
   return parts;
 }
@@ -259,4 +259,14 @@ function toUsage(t: MessageTokens | undefined): Usage {
 function buildModel(providerID: string | undefined, modelID: string | undefined): string {
   if (providerID && modelID) return `${providerID}/${modelID}`;
   return modelID ?? providerID ?? '';
+}
+
+function isCompleteAssistant(m: { role: string; id: string }): m is AssistantMessage {
+  if (m.role !== 'assistant') return false;
+  const a = m as Partial<AssistantMessage>;
+  return (
+    typeof a.sessionID === 'string' &&
+    typeof a.time?.created === 'number' &&
+    Number.isFinite(a.time.created)
+  );
 }

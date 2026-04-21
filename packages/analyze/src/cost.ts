@@ -7,6 +7,7 @@ export interface CostBreakdown {
   total: number;
   input: number;
   output: number;
+  reasoning: number;
   cacheRead: number;
   cacheCreate: number;
 }
@@ -21,15 +22,17 @@ export function costForUsage(
   const rate = lookup(model, pricing);
   if (!rate) return null;
   const input = (usage.input / PER_MILLION) * rate.input;
-  const output = ((usage.output + usage.reasoning) / PER_MILLION) * rate.output;
+  const output = (usage.output / PER_MILLION) * rate.output;
+  const reasoning = (usage.reasoning / PER_MILLION) * rate.output;
   const cacheRead = (usage.cacheRead / PER_MILLION) * rate.cacheRead;
   const cacheCreate =
     ((usage.cacheCreate5m + usage.cacheCreate1h) / PER_MILLION) * rate.cacheWrite;
   return {
     model,
-    total: input + output + cacheRead + cacheCreate,
+    total: input + output + reasoning + cacheRead + cacheCreate,
     input,
     output,
+    reasoning,
     cacheRead,
     cacheCreate,
   };
@@ -62,10 +65,19 @@ export function sumCosts(costs: CostBreakdown[]): CostBreakdown {
       total: a.total + c.total,
       input: a.input + c.input,
       output: a.output + c.output,
+      reasoning: a.reasoning + c.reasoning,
       cacheRead: a.cacheRead + c.cacheRead,
       cacheCreate: a.cacheCreate + c.cacheCreate,
     }),
-    { model: 'aggregate', total: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+    {
+      model: 'aggregate',
+      total: 0,
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cacheRead: 0,
+      cacheCreate: 0,
+    },
   );
   return total;
 }

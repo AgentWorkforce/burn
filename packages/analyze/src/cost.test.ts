@@ -67,6 +67,19 @@ describe('cost', () => {
     assert.equal(c.cacheCreate, p['claude-opus-4-7']!.cacheWrite);
   });
 
+  it('bills reasoning tokens at the output rate and reports them separately', async () => {
+    const p = await loadBuiltinPricing();
+    const c = costForTurn(
+      turn('claude-sonnet-4-6', { output: 1_000_000, reasoning: 1_000_000 }),
+      p,
+    );
+    assert.ok(c);
+    const rate = p['claude-sonnet-4-6']!;
+    assert.equal(c.output, rate.output);
+    assert.equal(c.reasoning, rate.output);
+    assert.equal(c.total, rate.output * 2);
+  });
+
   it('returns null for unknown model', async () => {
     const p = await loadBuiltinPricing();
     const c = costForTurn(turn('definitely-not-a-model', { input: 100 }), p);
