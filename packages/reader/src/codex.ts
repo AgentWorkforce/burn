@@ -71,6 +71,7 @@ interface CumulativeUsage {
   input: number;
   output: number;
   cacheRead: number;
+  reasoning: number;
 }
 
 interface OpenTurn {
@@ -101,7 +102,7 @@ export async function parseCodexSession(
   let sessionId = '';
   let sessionCwd: string | undefined;
   const turnContexts = new Map<string, TurnContextPayload>();
-  const cumulative: CumulativeUsage = { input: 0, output: 0, cacheRead: 0 };
+  const cumulative: CumulativeUsage = { input: 0, output: 0, cacheRead: 0, reasoning: 0 };
   let openTurn: OpenTurn | null = null;
   const finalized: FinalizedTurn[] = [];
 
@@ -158,6 +159,7 @@ export async function parseCodexSession(
             cumulative.input = inputTotal - cached;
             cumulative.cacheRead = cached;
             cumulative.output = total.output_tokens ?? 0;
+            cumulative.reasoning = total.reasoning_output_tokens ?? 0;
           }
           continue;
         }
@@ -274,6 +276,7 @@ function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTur
   const usage: Usage = {
     input: Math.max(0, cumulative.input - open.startCumulative.input),
     output: Math.max(0, cumulative.output - open.startCumulative.output),
+    reasoning: Math.max(0, cumulative.reasoning - open.startCumulative.reasoning),
     cacheRead: Math.max(0, cumulative.cacheRead - open.startCumulative.cacheRead),
     cacheCreate5m: 0,
     cacheCreate1h: 0,
