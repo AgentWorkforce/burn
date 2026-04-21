@@ -18,6 +18,7 @@ function turn(model: string, u: Partial<TurnRecord['usage']> = {}): TurnRecord {
     usage: {
       input: 0,
       output: 0,
+      reasoning: 0,
       cacheRead: 0,
       cacheCreate5m: 0,
       cacheCreate1h: 0,
@@ -54,6 +55,7 @@ describe('cost', () => {
       {
         input: 0,
         output: 0,
+        reasoning: 0,
         cacheRead: 0,
         cacheCreate5m: 500_000,
         cacheCreate1h: 500_000,

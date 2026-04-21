@@ -205,9 +205,9 @@ function toUsage(u: ClaudeUsage | undefined): Usage {
   const create1h = u?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
   const totalCreate = u?.cache_creation_input_tokens ?? 0;
   if (create5m === 0 && create1h === 0 && totalCreate > 0) {
-    return { input, output, cacheRead, cacheCreate5m: totalCreate, cacheCreate1h: 0 };
+    return { input, output, reasoning: 0, cacheRead, cacheCreate5m: totalCreate, cacheCreate1h: 0 };
   }
-  return { input, output, cacheRead, cacheCreate5m: create5m, cacheCreate1h: create1h };
+  return { input, output, reasoning: 0, cacheRead, cacheCreate5m: create5m, cacheCreate1h: create1h };
 }
 
 function extractToolCalls(blocks: ContentBlock[]): ToolCall[] {

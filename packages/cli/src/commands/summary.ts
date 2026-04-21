@@ -4,7 +4,7 @@ import type { CostBreakdown } from '@relayburn/analyze';
 import { queryAll, type Query } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 
-import { ingestClaudeProjects } from '../ingest.js';
+import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
@@ -16,7 +16,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
   if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
 
-  const ingestReport = await ingestClaudeProjects();
+  const ingestReport = await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll(q);
 
@@ -79,7 +79,7 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
       row = {
         model: key,
         turns: 0,
-        usage: { input: 0, output: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
         cost: { model: key, total: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
       };
       byModel.set(key, row);
@@ -87,6 +87,7 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
     row.turns++;
     row.usage.input += t.usage.input;
     row.usage.output += t.usage.output;
+    row.usage.reasoning += t.usage.reasoning;
     row.usage.cacheRead += t.usage.cacheRead;
     row.usage.cacheCreate5m += t.usage.cacheCreate5m;
     row.usage.cacheCreate1h += t.usage.cacheCreate1h;

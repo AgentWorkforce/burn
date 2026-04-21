@@ -21,7 +21,7 @@ export function costForUsage(
   const rate = lookup(model, pricing);
   if (!rate) return null;
   const input = (usage.input / PER_MILLION) * rate.input;
-  const output = (usage.output / PER_MILLION) * rate.output;
+  const output = ((usage.output + usage.reasoning) / PER_MILLION) * rate.output;
   const cacheRead = (usage.cacheRead / PER_MILLION) * rate.cacheRead;
   const cacheCreate =
     ((usage.cacheCreate5m + usage.cacheCreate1h) / PER_MILLION) * rate.cacheWrite;
