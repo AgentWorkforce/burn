@@ -1,6 +1,6 @@
 # Competitor landscape
 
-Reference notes from surveying eight token-usage tools in the Claude Code / multi-agent space. The goal was to decide what burn should port, what it should deliberately skip, and what unique territory it owns.
+Reference notes from surveying ten token-usage tools in the Claude Code / multi-agent space. The goal was to decide what burn should port, what it should deliberately skip, and what unique territory it owns.
 
 **Burn's meta-goal** (repeated here because it shapes every evaluation below): answer "would the same work cost less on a different model, harness, or tool — in dollars or quota consumption?" Everything in this doc is graded against that question, not against "is this tool well-built."
 
@@ -16,6 +16,8 @@ Reference notes from surveying eight token-usage tools in the Claude Code / mult
 | 6 | [agentic-metric](https://github.com/MrQianjinsi/agentic-metric) | 182 | Python + TUI | Observability dashboard | Cursor-is-dead evidence |
 | 7 | [ccusage](https://github.com/ryoppippi/ccusage) | — | TS monorepo | Multi-harness CLI family | 5-hour block forecasting; MCP server pattern; Amp reader |
 | 8 | [tokscale](https://github.com/junhoyeo/tokscale) | 2057 | Rust core + TS | Most mature multi-collector | Content-fingerprint dedup; 5 new collectors (Roo Code, Kilo CLI, Mux, Crush, Synthetic) |
+| 9 | [agentsview](https://github.com/wesm/agentsview) | 816 | Go + SQLite + Svelte + Tauri | Local-first session intelligence | Outcome-inference algorithm (triggered content-storage reversal); 3 new collectors (OpenHands, iFlow, Cortex Code) |
+| 10 | [codeburn](https://github.com/getagentseal/codeburn) | 3247 | TS + Swift (macOS menubar) | TUI dashboard with activity/optimize/compare | Activity classifier; model-comparison-by-category (closest to meta-goal in the field); three new waste detectors; plan-based quota tracking |
 
 ## Per-project detail
 
@@ -221,21 +223,105 @@ Spawner registers `@relayburn/mcp` on every agent. Agent mid-session queries `bu
 
 **Explicitly not adopted:** Rust rewrite, Ratatui TUI, social leaderboard / Wrapped feature, 3D contributions graph, multi-language READMEs.
 
+### 9. agentsview
+
+**What it is:** Go + SQLite + Svelte SPA + Tauri desktop wrapper. Built by Wes McKinney. 816 stars. Local-first session browser with full-text search, activity heatmaps, per-session analytics, and per-model cost dashboards. 16 supported agents.
+
+**Key files:**
+- `internal/db/schema.sql:55-82` — `messages` table with full `content TEXT` columns for prompts and responses
+- `internal/db/schema.sql:140-191` — `tool_calls` and `tool_result_events` tables storing raw `input_json` and `result_content` (not hashed)
+- `internal/db/db.go:54-71` — FTS5 virtual table `messages_fts` indexing message content
+- `internal/signals/outcome.go:1-95` — session outcome inference from metadata + last-assistant-text pattern matching
+- `internal/signals/toolhealth.go`, `context.go`, `score.go` — tool-health, compaction-detection, and health-scoring implementations for #11's detector suite
+- `internal/sessionwatch/watcher.go:55-109` — polling + mtime-fallback live updates (not fsnotify)
+- `internal/parser/openhands.go:23-47`, `iflow.go:27-46`, `cortex.go:342+`, `kiro.go:34-59`, `kiro_ide.go:18-49` — parser references
+
+**The breakthrough finding: outcome inference.** `outcome.go` classifies sessions as `completed | abandoned | errored | unknown` with `high | medium | low` confidence based on `MessageCount`, `EndedWithRole`, `FinalFailureStreak`, recency, and give-up-pattern matching on `LastAssistantText`. Automatic (no user tagging), general (not per-rule checkers), confidence-weighted. This became the primary candidate for #6 quality signal.
+
+**The design reversal it triggered:** agentsview stores full message content (FTS5-indexed prompts and responses; raw tool inputs and outputs) — the opposite of burn's original no-content stance. After weighing analytical upside vs. local-only storage concerns, burn flipped to a **sidecar content store** with a 90-day retention default and a `content.store=hash-only | off` opt-out. This strengthened #2, #3, #6, #7, #10, #11.
+
+**Reference implementations for scoped issues:** agentsview independently implemented much of what #11 specs (retry counting, consecutive failures, compaction detection). Threshold tuning already done empirically — port rather than rederive.
+
+**READMEware caveat:** the README advertises session archetypes `automation / quick / standard / deep / marathon`, but source only implements `is_automated` (binary flag on hardcoded prefix matching in `internal/db/automated.go:32-46`). The others don't exist in code. Don't chase.
+
+**Burn issues from this survey:**
+- #33 content sidecar with retention + opt-out (the design reversal)
+- Comments on #2, #3, #6, #7, #10, #11 reflecting content-store primacy
+- Comment on #6 proposing outcome-inference as primary quality signal
+- Comment on #11 citing agentsview's `signals/` as reference implementations
+- Comment on #17 splitting Kiro into CLI + IDE variants
+- #34 OpenHands CLI collector
+- #35 iFlow collector
+- #36 Cortex Code collector
+
+**Explicitly not adopted:** Go rewrite, SQLite as primary storage (JSONL ledger + JSONL sidecar keeps the design consistent), Tauri desktop app, FTS5 indexing (deferred — may come back if full-text search becomes a user need), PostgreSQL team-sync (out of scope; relay/workforce's job if they want team-visible content), the quick/standard/deep/marathon archetypes (don't exist in code).
+
+### 10. codeburn
+
+**What it is:** TypeScript CLI + TUI dashboard (Ink + React), Swift macOS menubar app. 3247 stars — most-starred in the survey. Distinguished from the rest by its depth on *analysis*, not just collection. Supports Claude Code, Codex, Cursor (claimed), cursor-agent, OpenCode, Pi, OMP, GitHub Copilot.
+
+**Key files:**
+- `src/classifier.ts:1-164` — rule-based 11-category activity classifier (tool-pattern + keyword)
+- `src/classifier.ts:120-140` — `countRetries()` detecting edit→bash→edit cycles (one-shot success metric)
+- `src/compare-stats.ts:26-74` — per-model aggregation of calls, cost, tokens, one-shot rate, cache hit rate
+- `src/compare-stats.ts:188-240` — `computeCategoryComparison` — one-shot rate by (model, category) pair
+- `src/optimize.ts` (1135 lines, 11 finders) — waste detectors with structured fix actions (`{type: 'paste' | 'command' | 'file-content'}`)
+- `src/optimize.ts:731-821` — ghost agents/skills/commands detection
+- `src/optimize.ts:596-639` — low read:edit ratio detection
+- `src/optimize.ts:835-857` — BASH_MAX_OUTPUT_LENGTH bloat detection
+- `src/context-budget.ts:1-150` — static setup-cost measurement (complement to dynamic hot-path math in #10)
+- `src/plan-usage.ts:1-149` + `src/plans.ts:1-56` — Claude Pro/Max + Cursor Pro monthly quota tracking
+- `src/providers/cursor.ts:76-88` — Cursor SQLite query (unvalidated against current Cursor schema)
+
+**The three breakthrough findings:**
+
+1. **Activity classifier.** 11 rule-based categories (`planning | delegation | testing | git | build-deploy | coding | debugging | refactoring | feature | exploration | brainstorming | conversation`). Deterministic, no LLM dependency. The missing primitive that no other tool in the landscape has. Unlocks honest like-to-like comparison.
+
+2. **Model comparison by observed activity category.** Given both Sonnet and Haiku in the user's history, computes one-shot rate and cost-per-turn *per category*. Sidesteps the unrealistic counterfactual problem (*\"would Haiku have succeeded on that past Sonnet session?\"*) by using observed parallel data. This is the closest any surveyed tool has gotten to burn's meta-goal.
+
+3. **One-shot rate as a quality proxy.** `oneShotRate = oneShotTurns / editTurns` — turns with edits that had zero retries. No content dependency, works per-turn. Complements agentsview's outcome inference (which operates per-session with content needed).
+
+**Waste detectors to port** (three new, beyond #3/#10/#11 scope):
+- Ghost agents/skills/commands (static system-prompt bloat)
+- Low read:edit ratio (simpler symptom detector for careless editing)
+- Bash output-limit config bloat (raised `BASH_MAX_OUTPUT_LENGTH` creates per-call waste)
+
+Plus **structured fix actions** (`WasteAction = { type: 'paste' | 'command' | 'file-content' }`) — better output shape than free-text recommendations. Direct upgrade for #11.
+
+**Plan tracking** (`plan-usage.ts`, `plans.ts`) covers **monthly quota** — orthogonal to #5's 5-hour window. Both matter for Pro/Max users.
+
+**Cursor support: unresolved.** Claims to work via the local `cursorDiskKV` SQLite table. Code has no schema validation — silently returns empty on post-Cursor-migration installs. Either Cursor reversed course or codeburn's parser is broken but unreported (3247 stars and April 2026 push doesn't prove the parser works for current Cursor). Empirical verification needed before reopening #22.
+
+**Burn issues from this survey:**
+- #37 rule-based activity classifier (the foundational primitive)
+- #38 `burn compare` model comparison by activity category (the meta-goal query)
+- #39 plan-based monthly quota tracking (complement to #5)
+- Comment on #6 proposing one-shot rate as a second primary quality signal
+- Comment on #10 proposing `burn context-budget` as a static-cost sibling command
+- Comment on #11 adding three detectors + upgrading fix-action shape
+- Comment on #22 documenting codeburn's conflicting Cursor evidence and the empirical-verification path
+
+**Explicitly not adopted:** TUI dashboard (`dashboard.tsx`, `compare.tsx`) — orthogonal; Swift macOS menubar app — out of scope; \"provider plugin system\" (advertised as pluggable in the README; source shows hardcoded imports with lazy loading for optional dependencies — not actually user-extensible); daily cache (`daily-cache.ts`) — burn's #4 incremental cursor addresses the same concern for JSONL.
+
 ## Landscape takeaways
 
-1. **Nobody else does per-tool-call attribution.** All 8 tools stop at per-message or per-turn totals. Anthropic returns `usage` at the message level, and every surveyed project treated that as a ceiling. Burn's plan — delta-math fallback (#2), hook-path precise (#7), consumed by `burn waste` (#3) — is novel territory.
+1. **Nobody else does per-tool-call attribution.** All 10 tools stop at per-message or per-turn totals. Anthropic returns `usage` at the message level, and every surveyed project treated that as a ceiling. Burn's plan — delta-math fallback (#2), hook-path precise (#7), consumed by `burn waste` (#3) — is novel territory.
 
 2. **Nobody has a workflow/stamp concept.** Burn's `@relayburn/ledger.stamp` API for attributing turns to `workflowId` / `agentId` / `persona` at query time is unique in the landscape. Every competitor aggregates by source-harness or model. This is the primitive that makes cross-harness comparison possible for the meta-goal.
 
-3. **Nobody closes the loop.** All 8 tools are report-only. `@relayburn/mcp` (#26) turns burn into in-session self-awareness for spawned agents. Ccusage is closest (their MCP server) but exposes only broad queries, not session-scoped self-reporting.
+3. **Nobody closes the loop.** All 10 tools are report-only. `@relayburn/mcp` (#26) turns burn into in-session self-awareness for spawned agents. Ccusage is closest (their MCP server) but exposes only broad queries, not session-scoped self-reporting.
 
-4. **Most mature ≠ deepest on the meta-goal.** Tokscale (2057 stars) has the broadest collector coverage but is still ingest-only — no per-tool-call attribution, no workflow concept, no waste diagnosis. Stars track surface breadth and polish, not depth on the spend-optimization question.
+4. **Stars track different axes.** Tokscale (2057 stars) has the broadest collector coverage. Codeburn (3247 stars) has the deepest analytical surface — activity classification + model comparison by category is the closest anyone has come to answering burn's meta-goal. Agentsview (816 stars) is middle ground with its outcome-inference algorithm. The most-starred project is not always the deepest on any given axis; depth on the meta-goal question clusters around codeburn.
 
-5. **CLAUDE.md hot-path is the highest-leverage specific waste finder.** Prism surfaced it but with crude math. Burn can do it properly (#10) using the first-`cache_write` anchor from opencode-tokenscope. Compounds across every future session in the repo — higher leverage than model-switching.
+5. **Activity classification is the missing primitive across the rest of the landscape.** Only codeburn labels what kind of work a session is doing. Without this, any comparison between models or harnesses collapses to crude aggregates — you can't say \"Sonnet is 20% more efficient than Haiku on refactoring\" if you don't know which sessions *were* refactoring. Burn adopts this (#37) and builds the comparison query on top of it (#38).
 
-6. **Hooks beat post-hoc log parsing** for any collector that supports them. Lazyagent showed this: `PostToolUse` carries `tool_response` content directly. No delta math. The constraint — "we always control the spawn" (relay/workforce) — makes hook installation per-invocation via `--settings` cleaner than global config mutation.
+6. **CLAUDE.md hot-path is the highest-leverage specific waste finder.** Prism surfaced it but with crude math. Burn can do it properly (#10) using the first-`cache_write` anchor from opencode-tokenscope. Compounds across every future session in the repo — higher leverage than model-switching.
 
-7. **Cursor is not going to be viable locally.** Confirmed by agentic-metric and cross-verified against tokscale's online-service workaround. Unless Cursor reverses course, burn does not support it.
+7. **Hooks beat post-hoc log parsing** for any collector that supports them. Lazyagent showed this: `PostToolUse` carries `tool_response` content directly. No delta math. The constraint — "we always control the spawn" (relay/workforce) — makes hook installation per-invocation via `--settings` cleaner than global config mutation.
+
+8. **Cursor is not going to be viable locally.** Confirmed by agentic-metric and cross-verified against tokscale's online-service workaround. Unless Cursor reverses course, burn does not support it.
+
+9. **Storing content is a deliberate reversal, not an oversight.** Burn originally avoided storing prompts and responses. After surveying agentsview's outcome-inference algorithm (which needs `LastAssistantText`), and realizing #2, #3, #6, #10, #11 all get meaningfully stronger with content available, burn flipped to a sidecar content store (#33) with 90-day retention and a `content.store=hash-only | off` opt-out. The sidecar is separate from the main ledger so aggregate queries stay fast; hash-only mode restores the original minimal-storage behavior for sensitive environments.
 
 ## Projects noted but not surveyed
 
@@ -282,6 +368,13 @@ For each filed issue, the project(s) it drew from:
 | #29 | Mux collector | tokscale |
 | #30 | Crush collector | tokscale |
 | #31 | Synthetic reattribution | tokscale |
+| #33 | Content sidecar with retention and opt-out | agentsview (design reversal trigger) |
+| #34 | OpenHands CLI collector | agentsview |
+| #35 | iFlow collector | agentsview |
+| #36 | Cortex Code collector | agentsview |
+| #37 | Activity classifier | codeburn |
+| #38 | `burn compare` by activity category | codeburn (method); Original concept (framing) |
+| #39 | Plan-based monthly quota tracking | codeburn |
 
 ## Methodology note
 

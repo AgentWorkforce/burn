@@ -26,7 +26,6 @@ Burn is local-first. Data lives in an append-only JSONL ledger on your machine. 
 
 - Not a dashboard or a product with a UI of its own.
 - Not an automatic optimizer — it surfaces the choices; you decide.
-- Not a content store. Prompts and model responses are never captured.
 - Not a leaderboard or a social service.
 
 ## Composability: how burn plugs into a spawner
@@ -106,20 +105,33 @@ interface TurnRecord {
 }
 ```
 
-## What burn records, and what it doesn't
+## What burn records
 
-Recorded:
+The main ledger stores usage and metadata:
+
 - Token counts, timestamps, model identifiers.
 - Tool names, tool-call argument hashes, file paths touched.
 - Session IDs, message IDs, and whatever metadata you stamp against them.
 
-Not recorded:
-- Prompt content.
-- Model responses.
-- Tool-call arguments beyond their hash.
-- Tool-call outputs.
+A **content sidecar** (enabled by default) stores the full conversation separately:
 
-The ledger can live locally without leaking conversation content. This is deliberate: it keeps adoption reviewable — you can read the reader source and verify what enters the ledger.
+- User prompts and assistant responses.
+- Tool inputs and outputs, verbatim.
+- Lives at `~/.relayburn/content/<sessionId>.jsonl` — separate from the main ledger so aggregate queries stay fast.
+
+Content is stored because it meaningfully strengthens several attribution and diagnostic paths — tool-call sizing becomes exact (no delta estimation), outcome inference gets a real signal, CLAUDE.md adherence checking becomes possible, and waste patterns can surface the specific error text that caused a retry loop rather than just a count.
+
+Retention defaults to 90 days for the sidecar, forever for the main ledger. Configure via `RELAYBURN_CONTENT_TTL_DAYS`.
+
+Three content modes:
+
+- `content.store=full` (default) — everything above.
+- `content.store=hash-only` — usage + hashes + metadata, no prompt/response content. Restores burn's minimal-storage behavior for sensitive environments.
+- `content.store=off` — skip the sidecar entirely; no content directory.
+
+Set via `RELAYBURN_CONTENT_STORE=<mode>` or the config file.
+
+Content lives on your machine. Burn makes no outbound requests beyond optional pricing updates. If the device you run on is sensitive to conversation leak (shared dev machines, cloud-synced home directories, compliance contexts), switch to `hash-only`.
 
 ## Packages
 
