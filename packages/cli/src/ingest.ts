@@ -68,31 +68,37 @@ async function ingestOne(
   parse: (f: string) => Promise<TurnRecord[]>,
 ): Promise<void> {
   report.scannedSessions++;
-  const st = await stat(file);
-  const prior = hwm[file];
-  if (prior && prior.mtimeMs >= st.mtimeMs) return;
+  try {
+    const st = await stat(file);
+    const prior = hwm[file];
+    if (prior && prior.mtimeMs >= st.mtimeMs) return;
 
-  const turns = await parse(file);
-  if (turns.length === 0) return;
+    const turns = await parse(file);
+    if (turns.length === 0) return;
 
-  const newTurns = prior
-    ? turns.filter(
-        (t) => t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId),
-      )
-    : turns;
+    const newTurns = prior
+      ? turns.filter(
+          (t) =>
+            t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId),
+        )
+      : turns;
 
-  if (newTurns.length > 0) {
-    await appendTurns(newTurns);
-    report.appendedTurns += newTurns.length;
-    report.ingestedSessions++;
+    if (newTurns.length > 0) {
+      await appendTurns(newTurns);
+      report.appendedTurns += newTurns.length;
+      report.ingestedSessions++;
+    }
+
+    const last = turns[turns.length - 1]!;
+    hwm[file] = {
+      lastMessageId: last.messageId,
+      lastTs: last.ts,
+      mtimeMs: st.mtimeMs,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
   }
-
-  const last = turns[turns.length - 1]!;
-  hwm[file] = {
-    lastMessageId: last.messageId,
-    lastTs: last.ts,
-    mtimeMs: st.mtimeMs,
-  };
 }
 
 async function listDirs(parent: string): Promise<string[]> {
