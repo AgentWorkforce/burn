@@ -2,6 +2,7 @@
 import { parseArgs } from './args.js';
 import { runByTool } from './commands/by-tool.js';
 import { runClaudeWrapper } from './commands/claude.js';
+import { runCodexWrapper } from './commands/codex.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runSummary } from './commands/summary.js';
 
@@ -11,12 +12,14 @@ Usage:
   burn summary  [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
   burn by-tool  [--since 7d] [--project <path>] [--session <id>]
   burn claude   [--tag k=v ...] [-- <claude args>]
+  burn codex    [--tag k=v ...] [-- <codex args>]
   burn opencode [--tag k=v ...] [-- <opencode args>]
 
 Examples:
   burn summary --since 24h
   burn by-tool --since 7d
   burn claude   --tag workflow=refactor -- --resume
+  burn codex    --tag workflow=refactor
   burn opencode --tag workflow=refactor
 `;
 
@@ -34,11 +37,10 @@ async function main(): Promise<number> {
       return runByTool(args);
     case 'claude':
       return runClaudeWrapper(args);
+    case 'codex':
+      return runCodexWrapper(args);
     case 'opencode':
       return runOpencodeWrapper(args);
-    case 'codex':
-      process.stderr.write(`${cmd}: reader not implemented yet in v0\n`);
-      return 2;
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 1;

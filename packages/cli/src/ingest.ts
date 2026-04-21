@@ -3,10 +3,18 @@ import type { Dirent } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
-import { parseClaudeSession, parseOpencodeSession } from '@relayburn/reader';
+import {
+  parseClaudeSession,
+  parseCodexSession,
+  parseOpencodeSession,
+  type TurnRecord,
+} from '@relayburn/reader';
 import { appendTurns, loadHwm, saveHwm, type HwmMap } from '@relayburn/ledger';
 
+import { walkJsonl } from './walk.js';
+
 const CLAUDE_PROJECTS = path.join(homedir(), '.claude', 'projects');
+const CODEX_SESSIONS = path.join(homedir(), '.codex', 'sessions');
 const OPENCODE_STORAGE = path.join(homedir(), '.local', 'share', 'opencode', 'storage');
 const OPENCODE_SESSION_ROOT = path.join(OPENCODE_STORAGE, 'session');
 const OPENCODE_MESSAGE_ROOT = path.join(OPENCODE_STORAGE, 'message');
@@ -19,94 +27,137 @@ export interface IngestReport {
 
 export async function ingestClaudeProjects(): Promise<IngestReport> {
   const hwm = await loadHwm();
-  let scanned = 0;
-  let ingested = 0;
-  let appended = 0;
+  const report = emptyReport();
+  await ingestClaudeInto(hwm, report);
+  await saveHwm(hwm);
+  return report;
+}
 
+export async function ingestCodexSessions(): Promise<IngestReport> {
+  const hwm = await loadHwm();
+  const report = emptyReport();
+  await ingestCodexInto(hwm, report);
+  await saveHwm(hwm);
+  return report;
+}
+
+export async function ingestOpencodeSessions(): Promise<IngestReport> {
+  const hwm = await loadHwm();
+  const report = emptyReport();
+  await ingestOpencodeInto(hwm, report);
+  await saveHwm(hwm);
+  return report;
+}
+
+export async function ingestAll(): Promise<IngestReport> {
+  const hwm = await loadHwm();
+  const report = emptyReport();
+  await ingestClaudeInto(hwm, report);
+  await ingestCodexInto(hwm, report);
+  await ingestOpencodeInto(hwm, report);
+  await saveHwm(hwm);
+  return report;
+}
+
+async function ingestClaudeInto(hwm: HwmMap, report: IngestReport): Promise<void> {
   const projects = await listDirs(CLAUDE_PROJECTS);
   for (const projectDir of projects) {
     const files = await listJsonlFiles(projectDir);
     for (const file of files) {
-      scanned++;
-      const st = await stat(file);
-      const prior = hwm[file];
-      if (prior && prior.mtimeMs >= st.mtimeMs) continue;
+      await ingestOne(file, hwm, report, (f) => parseClaudeSession(f, { sessionPath: f }));
+    }
+  }
+}
 
-      const turns = await parseClaudeSession(file, { sessionPath: file });
+async function ingestCodexInto(hwm: HwmMap, report: IngestReport): Promise<void> {
+  for (const file of await walkJsonl(CODEX_SESSIONS)) {
+    await ingestOne(file, hwm, report, (f) => parseCodexSession(f, { sessionPath: f }));
+  }
+}
+
+async function ingestOpencodeInto(hwm: HwmMap, report: IngestReport): Promise<void> {
+  for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
+    report.scannedSessions++;
+    try {
+      const sessionId = path.basename(file, '.json');
+      const messageDir = path.join(OPENCODE_MESSAGE_ROOT, sessionId);
+      const messageMtime = await getDirMtime(messageDir);
+      if (messageMtime === null) continue;
+
+      const prior = hwm[file];
+      if (prior && prior.mtimeMs >= messageMtime) continue;
+
+      const turns = await parseOpencodeSession(file, { sessionPath: file });
       if (turns.length === 0) continue;
 
       const newTurns = prior
-        ? turns.filter((t) => t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId))
+        ? turns.filter(
+            (t) =>
+              t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId),
+          )
         : turns;
 
       if (newTurns.length > 0) {
         await appendTurns(newTurns);
-        appended += newTurns.length;
-        ingested++;
+        report.appendedTurns += newTurns.length;
+        report.ingestedSessions++;
       }
 
       const last = turns[turns.length - 1]!;
       hwm[file] = {
         lastMessageId: last.messageId,
         lastTs: last.ts,
-        mtimeMs: st.mtimeMs,
+        mtimeMs: messageMtime,
       };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
     }
   }
-
-  await saveHwm(hwm);
-  return { scannedSessions: scanned, ingestedSessions: ingested, appendedTurns: appended };
 }
 
-export async function ingestOpencodeSessions(): Promise<IngestReport> {
-  const hwm = await loadHwm();
-  let scanned = 0;
-  let ingested = 0;
-  let appended = 0;
+function emptyReport(): IngestReport {
+  return { scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 };
+}
 
-  for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
-    scanned++;
-    const sessionId = path.basename(file, '.json');
-    const messageDir = path.join(OPENCODE_MESSAGE_ROOT, sessionId);
-    const messageMtime = await getDirMtime(messageDir);
-    if (messageMtime === null) continue;
-
+async function ingestOne(
+  file: string,
+  hwm: HwmMap,
+  report: IngestReport,
+  parse: (f: string) => Promise<TurnRecord[]>,
+): Promise<void> {
+  report.scannedSessions++;
+  try {
+    const st = await stat(file);
     const prior = hwm[file];
-    if (prior && prior.mtimeMs >= messageMtime) continue;
+    if (prior && prior.mtimeMs >= st.mtimeMs) return;
 
-    const turns = await parseOpencodeSession(file, { sessionPath: file });
-    if (turns.length === 0) continue;
+    const turns = await parse(file);
+    if (turns.length === 0) return;
 
     const newTurns = prior
-      ? turns.filter((t) => t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId))
+      ? turns.filter(
+          (t) =>
+            t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId),
+        )
       : turns;
 
     if (newTurns.length > 0) {
       await appendTurns(newTurns);
-      appended += newTurns.length;
-      ingested++;
+      report.appendedTurns += newTurns.length;
+      report.ingestedSessions++;
     }
 
     const last = turns[turns.length - 1]!;
     hwm[file] = {
       lastMessageId: last.messageId,
       lastTs: last.ts,
-      mtimeMs: messageMtime,
+      mtimeMs: st.mtimeMs,
     };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
   }
-
-  await saveHwm(hwm);
-  return { scannedSessions: scanned, ingestedSessions: ingested, appendedTurns: appended };
-}
-
-export async function ingestAll(): Promise<IngestReport> {
-  const a = await ingestClaudeProjects();
-  const b = await ingestOpencodeSessions();
-  return {
-    scannedSessions: a.scannedSessions + b.scannedSessions,
-    ingestedSessions: a.ingestedSessions + b.ingestedSessions,
-    appendedTurns: a.appendedTurns + b.appendedTurns,
-  };
 }
 
 async function listDirs(parent: string): Promise<string[]> {
