@@ -2,13 +2,21 @@ import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
-import { parseClaudeSession, parseCodexSession, type TurnRecord } from '@relayburn/reader';
+import {
+  parseClaudeSession,
+  parseCodexSession,
+  parseOpencodeSession,
+  type TurnRecord,
+} from '@relayburn/reader';
 import { appendTurns, loadHwm, saveHwm, type HwmMap } from '@relayburn/ledger';
 
-import { walkJsonl } from './walk.js';
+import { walkJsonl, walkOpencodeSessions } from './walk.js';
 
 const CLAUDE_PROJECTS = path.join(homedir(), '.claude', 'projects');
 const CODEX_SESSIONS = path.join(homedir(), '.codex', 'sessions');
+const OPENCODE_STORAGE = path.join(homedir(), '.local', 'share', 'opencode', 'storage');
+const OPENCODE_SESSION_ROOT = path.join(OPENCODE_STORAGE, 'session');
+const OPENCODE_MESSAGE_ROOT = path.join(OPENCODE_STORAGE, 'message');
 
 export interface IngestReport {
   scannedSessions: number;
@@ -32,11 +40,20 @@ export async function ingestCodexSessions(): Promise<IngestReport> {
   return report;
 }
 
+export async function ingestOpencodeSessions(): Promise<IngestReport> {
+  const hwm = await loadHwm();
+  const report = emptyReport();
+  await ingestOpencodeInto(hwm, report);
+  await saveHwm(hwm);
+  return report;
+}
+
 export async function ingestAll(): Promise<IngestReport> {
   const hwm = await loadHwm();
   const report = emptyReport();
   await ingestClaudeInto(hwm, report);
   await ingestCodexInto(hwm, report);
+  await ingestOpencodeInto(hwm, report);
   await saveHwm(hwm);
   return report;
 }
@@ -54,6 +71,47 @@ async function ingestClaudeInto(hwm: HwmMap, report: IngestReport): Promise<void
 async function ingestCodexInto(hwm: HwmMap, report: IngestReport): Promise<void> {
   for (const file of await walkJsonl(CODEX_SESSIONS)) {
     await ingestOne(file, hwm, report, (f) => parseCodexSession(f, { sessionPath: f }));
+  }
+}
+
+async function ingestOpencodeInto(hwm: HwmMap, report: IngestReport): Promise<void> {
+  for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
+    report.scannedSessions++;
+    try {
+      const sessionId = path.basename(file, '.json');
+      const messageDir = path.join(OPENCODE_MESSAGE_ROOT, sessionId);
+      const messageMtime = await getDirMtime(messageDir);
+      if (messageMtime === null) continue;
+
+      const prior = hwm[file];
+      if (prior && prior.mtimeMs >= messageMtime) continue;
+
+      const turns = await parseOpencodeSession(file, { sessionPath: file });
+      if (turns.length === 0) continue;
+
+      const newTurns = prior
+        ? turns.filter(
+            (t) =>
+              t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId),
+          )
+        : turns;
+
+      if (newTurns.length > 0) {
+        await appendTurns(newTurns);
+        report.appendedTurns += newTurns.length;
+        report.ingestedSessions++;
+      }
+
+      const last = turns[turns.length - 1]!;
+      hwm[file] = {
+        lastMessageId: last.messageId,
+        lastTs: last.ts,
+        mtimeMs: messageMtime,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
+    }
   }
 }
 
@@ -118,6 +176,15 @@ async function listJsonlFiles(dir: string): Promise<string[]> {
       .map((e) => path.join(dir, e.name));
   } catch {
     return [];
+  }
+}
+
+async function getDirMtime(dir: string): Promise<number | null> {
+  try {
+    const st = await stat(dir);
+    return st.mtimeMs;
+  } catch {
+    return null;
   }
 }
 

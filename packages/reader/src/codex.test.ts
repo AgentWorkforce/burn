@@ -24,6 +24,7 @@ describe('parseCodexSession', () => {
     assert.deepEqual(t.usage, {
       input: 600,
       output: 120,
+      reasoning: 30,
       cacheRead: 400,
       cacheCreate5m: 0,
       cacheCreate1h: 0,
@@ -40,6 +41,7 @@ describe('parseCodexSession', () => {
     assert.deepEqual(t.usage, {
       input: 3000,
       output: 800,
+      reasoning: 200,
       cacheRead: 2000,
       cacheCreate5m: 0,
       cacheCreate1h: 0,
@@ -73,6 +75,7 @@ describe('parseCodexSession', () => {
     assert.deepEqual(t1!.usage, {
       input: 2000,
       output: 200,
+      reasoning: 50,
       cacheRead: 1000,
       cacheCreate5m: 0,
       cacheCreate1h: 0,
@@ -84,6 +87,7 @@ describe('parseCodexSession', () => {
     assert.deepEqual(t2!.usage, {
       input: 2500,
       output: 500,
+      reasoning: 50,
       cacheRead: 2500,
       cacheCreate5m: 0,
       cacheCreate1h: 0,

@@ -22,6 +22,7 @@ describe('parseClaudeSession', () => {
     assert.deepEqual(t.usage, {
       input: 10,
       output: 5,
+      reasoning: 0,
       cacheRead: 500,
       cacheCreate5m: 80,
       cacheCreate1h: 20,
@@ -38,6 +39,7 @@ describe('parseClaudeSession', () => {
     assert.deepEqual(t.usage, {
       input: 3,
       output: 43,
+      reasoning: 0,
       cacheRead: 11496,
       cacheCreate5m: 0,
       cacheCreate1h: 4773,

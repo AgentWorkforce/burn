@@ -19,7 +19,7 @@ function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
     turnIndex: 0,
     ts: '2026-04-20T00:00:00.000Z',
     model: 'claude-sonnet-4-6',
-    usage: { input: 100, output: 50, cacheRead: 1000, cacheCreate5m: 0, cacheCreate1h: 0 },
+    usage: { input: 100, output: 50, reasoning: 0, cacheRead: 1000, cacheCreate5m: 0, cacheCreate1h: 0 },
     toolCalls: [],
     project: '/tmp/project',
     ...overrides,

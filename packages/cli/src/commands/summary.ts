@@ -38,7 +38,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  const header = ['model', 'turns', 'input', 'output', 'cacheRead', 'cacheCreate', 'cost'];
+  const header = ['model', 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
   const dataRows: string[][] = [header];
   for (const r of rowsByModel) {
     dataRows.push([
@@ -46,6 +46,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
       formatInt(r.turns),
       formatInt(r.usage.input),
       formatInt(r.usage.output),
+      formatInt(r.usage.reasoning),
       formatInt(r.usage.cacheRead),
       formatInt(r.usage.cacheCreate5m + r.usage.cacheCreate1h),
       formatUsd(r.cost.total),
@@ -55,7 +56,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   lines.push('');
   lines.push(`total cost: ${formatUsd(totalCost.total)}`);
   lines.push(
-    `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
+    `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / reasoning ${formatUsd(totalCost.reasoning)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
   );
   lines.push('');
 
@@ -79,14 +80,15 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
       row = {
         model: key,
         turns: 0,
-        usage: { input: 0, output: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
-        cost: { model: key, total: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+        usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        cost: { model: key, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate: 0 },
       };
       byModel.set(key, row);
     }
     row.turns++;
     row.usage.input += t.usage.input;
     row.usage.output += t.usage.output;
+    row.usage.reasoning += t.usage.reasoning;
     row.usage.cacheRead += t.usage.cacheRead;
     row.usage.cacheCreate5m += t.usage.cacheCreate5m;
     row.usage.cacheCreate1h += t.usage.cacheCreate1h;
@@ -95,6 +97,7 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
       row.cost.total += c.total;
       row.cost.input += c.input;
       row.cost.output += c.output;
+      row.cost.reasoning += c.reasoning;
       row.cost.cacheRead += c.cacheRead;
       row.cost.cacheCreate += c.cacheCreate;
     }

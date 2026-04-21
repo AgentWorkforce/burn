@@ -18,6 +18,7 @@ function turn(model: string, u: Partial<TurnRecord['usage']> = {}): TurnRecord {
     usage: {
       input: 0,
       output: 0,
+      reasoning: 0,
       cacheRead: 0,
       cacheCreate5m: 0,
       cacheCreate1h: 0,
@@ -54,6 +55,7 @@ describe('cost', () => {
       {
         input: 0,
         output: 0,
+        reasoning: 0,
         cacheRead: 0,
         cacheCreate5m: 500_000,
         cacheCreate1h: 500_000,
@@ -63,6 +65,19 @@ describe('cost', () => {
     );
     assert.ok(c);
     assert.equal(c.cacheCreate, p['claude-opus-4-7']!.cacheWrite);
+  });
+
+  it('bills reasoning tokens at the output rate and reports them separately', async () => {
+    const p = await loadBuiltinPricing();
+    const c = costForTurn(
+      turn('claude-sonnet-4-6', { output: 1_000_000, reasoning: 1_000_000 }),
+      p,
+    );
+    assert.ok(c);
+    const rate = p['claude-sonnet-4-6']!;
+    assert.equal(c.output, rate.output);
+    assert.equal(c.reasoning, rate.output);
+    assert.equal(c.total, rate.output * 2);
   });
 
   it('returns null for unknown model', async () => {

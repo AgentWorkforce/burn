@@ -3,21 +3,24 @@ import { parseArgs } from './args.js';
 import { runByTool } from './commands/by-tool.js';
 import { runClaudeWrapper } from './commands/claude.js';
 import { runCodexWrapper } from './commands/codex.js';
+import { runOpencodeWrapper } from './commands/opencode.js';
 import { runSummary } from './commands/summary.js';
 
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
-  burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
-  burn by-tool [--since 7d] [--project <path>] [--session <id>]
-  burn claude  [--tag k=v ...] [-- <claude args>]
-  burn codex   [--tag k=v ...] [-- <codex args>]
+  burn summary  [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
+  burn by-tool  [--since 7d] [--project <path>] [--session <id>]
+  burn claude   [--tag k=v ...] [-- <claude args>]
+  burn codex    [--tag k=v ...] [-- <codex args>]
+  burn opencode [--tag k=v ...] [-- <opencode args>]
 
 Examples:
   burn summary --since 24h
   burn by-tool --since 7d
-  burn claude --tag workflow=refactor -- --resume
-  burn codex  --tag workflow=refactor
+  burn claude   --tag workflow=refactor -- --resume
+  burn codex    --tag workflow=refactor
+  burn opencode --tag workflow=refactor
 `;
 
 async function main(): Promise<number> {
@@ -37,8 +40,7 @@ async function main(): Promise<number> {
     case 'codex':
       return runCodexWrapper(args);
     case 'opencode':
-      process.stderr.write(`${cmd}: reader not implemented yet in v0\n`);
-      return 2;
+      return runOpencodeWrapper(args);
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 1;

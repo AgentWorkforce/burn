@@ -9,6 +9,7 @@ export type SourceKind =
 export interface Usage {
   input: number;
   output: number;
+  reasoning: number;
   cacheRead: number;
   cacheCreate5m: number;
   cacheCreate1h: number;

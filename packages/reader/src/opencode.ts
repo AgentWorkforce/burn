@@ -1,0 +1,272 @@
+import { readFile, readdir } from 'node:fs/promises';
+import * as path from 'node:path';
+
+import { argsHash } from './hash.js';
+import type { Subagent, ToolCall, TurnRecord, Usage } from './types.js';
+
+export interface ParseOpencodeOptions {
+  sessionPath?: string;
+}
+
+interface SessionInfo {
+  id: string;
+  parentID?: string;
+  directory?: string;
+}
+
+interface MessageTokens {
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cache?: {
+    read?: number;
+    write?: number;
+  };
+}
+
+interface AssistantMessage {
+  id: string;
+  sessionID: string;
+  role: 'assistant';
+  time: { created: number };
+  providerID?: string;
+  modelID?: string;
+  path?: { cwd?: string };
+  tokens?: MessageTokens;
+}
+
+interface ToolPart {
+  type: 'tool';
+  callID?: string;
+  tool?: string;
+  state?: {
+    input?: Record<string, unknown>;
+    [k: string]: unknown;
+  };
+}
+
+interface StepFinishPart {
+  type: 'step-finish';
+  reason?: string;
+  tokens?: MessageTokens;
+}
+
+type Part =
+  | ToolPart
+  | StepFinishPart
+  | { type: string; [k: string]: unknown };
+
+export async function parseOpencodeSession(
+  sessionFilePath: string,
+  options: ParseOpencodeOptions = {},
+): Promise<TurnRecord[]> {
+  const session = await readSession(sessionFilePath);
+  if (!session) return [];
+
+  const storageRoot = path.resolve(sessionFilePath, '..', '..', '..');
+  const messages = await readMessages(storageRoot, session.id);
+  const assistants = messages.filter(isCompleteAssistant);
+  assistants.sort((a, b) => a.time.created - b.time.created);
+
+  const isSidechain = typeof session.parentID === 'string' && session.parentID.length > 0;
+  const turns: TurnRecord[] = [];
+
+  for (let i = 0; i < assistants.length; i++) {
+    const m = assistants[i]!;
+    const parts = await readParts(storageRoot, m.id);
+    const { toolCalls, filesTouched } = extractToolsAndFiles(parts);
+    const stopReason = lastStepFinishReason(parts);
+
+    const model = buildModel(m.providerID, m.modelID);
+    const project = m.path?.cwd ?? session.directory;
+    const usage = toUsage(m.tokens);
+
+    const record: TurnRecord = {
+      v: 1,
+      source: 'opencode',
+      sessionId: m.sessionID,
+      messageId: m.id,
+      turnIndex: i,
+      ts: new Date(m.time.created).toISOString(),
+      model,
+      usage,
+      toolCalls,
+    };
+    if (options.sessionPath !== undefined) record.sessionPath = options.sessionPath;
+    if (project !== undefined) record.project = project;
+    if (filesTouched.length > 0) record.filesTouched = filesTouched;
+    if (isSidechain) {
+      const sub: Subagent = { isSidechain: true };
+      record.subagent = sub;
+    }
+    if (stopReason !== undefined) record.stopReason = stopReason;
+    turns.push(record);
+  }
+
+  return turns;
+}
+
+async function readSession(sessionFilePath: string): Promise<SessionInfo | null> {
+  try {
+    const raw = await readFile(sessionFilePath, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed.id !== 'string') return null;
+    const out: SessionInfo = { id: parsed.id };
+    if (typeof parsed.parentID === 'string') out.parentID = parsed.parentID;
+    if (typeof parsed.directory === 'string') out.directory = parsed.directory;
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+async function readMessages(
+  storageRoot: string,
+  sessionId: string,
+): Promise<Array<AssistantMessage | { role: string; id: string }>> {
+  const dir = path.join(storageRoot, 'message', sessionId);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const out: Array<AssistantMessage | { role: string; id: string }> = [];
+  for (const name of entries) {
+    if (!name.endsWith('.json')) continue;
+    const full = path.join(dir, name);
+    try {
+      const raw = await readFile(full, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const role = parsed.role;
+      const id = parsed.id;
+      if (typeof role !== 'string' || typeof id !== 'string') continue;
+      out.push(parsed as unknown as AssistantMessage | { role: string; id: string });
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
+
+async function readParts(storageRoot: string, messageId: string): Promise<Part[]> {
+  const dir = path.join(storageRoot, 'part', messageId);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const parts: Array<Part & { id?: string }> = [];
+  for (const name of entries) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const raw = await readFile(path.join(dir, name), 'utf8');
+      const parsed = JSON.parse(raw) as Part & { id?: string };
+      parts.push(parsed);
+    } catch {
+      continue;
+    }
+  }
+  // prt_* ids have time-ordered base36 suffixes, so sorting by part.id keeps chronological order
+  parts.sort((a, b) => ((a.id ?? '') < (b.id ?? '') ? -1 : (a.id ?? '') > (b.id ?? '') ? 1 : 0));
+  return parts;
+}
+
+function extractToolsAndFiles(parts: Part[]): {
+  toolCalls: ToolCall[];
+  filesTouched: string[];
+} {
+  const toolCalls: ToolCall[] = [];
+  const seen = new Set<string>();
+  const files = new Set<string>();
+  for (const p of parts) {
+    if (p.type !== 'tool') continue;
+    const tp = p as ToolPart;
+    if (typeof tp.callID !== 'string' || typeof tp.tool !== 'string') continue;
+    if (seen.has(tp.callID)) continue;
+    seen.add(tp.callID);
+    const input = tp.state?.input ?? {};
+    const call: ToolCall = {
+      id: tp.callID,
+      name: tp.tool,
+      argsHash: argsHash(input),
+    };
+    const target = pickTarget(tp.tool, input);
+    if (target !== undefined) call.target = target;
+    toolCalls.push(call);
+    if (target !== undefined && isFileTool(tp.tool)) files.add(target);
+  }
+  return { toolCalls, filesTouched: [...files] };
+}
+
+function pickTarget(name: string, input: Record<string, unknown>): string | undefined {
+  const s = (k: string): string | undefined => {
+    const v = input[k];
+    return typeof v === 'string' ? v : undefined;
+  };
+  switch (name) {
+    case 'read':
+    case 'write':
+    case 'edit':
+      return s('filePath') ?? s('file_path') ?? s('path');
+    case 'bash':
+      return s('command');
+    case 'grep':
+      return s('pattern');
+    case 'glob':
+      return s('pattern');
+    case 'webfetch':
+      return s('url');
+    case 'task':
+      return s('subagent_type') ?? s('description') ?? s('prompt');
+    default:
+      return s('filePath') ?? s('file_path') ?? s('path') ?? s('url') ?? s('command');
+  }
+}
+
+function isFileTool(name: string): boolean {
+  return name === 'read' || name === 'write' || name === 'edit';
+}
+
+function lastStepFinishReason(parts: Part[]): string | undefined {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]!;
+    if (p.type === 'step-finish') {
+      const sf = p as StepFinishPart;
+      if (typeof sf.reason === 'string') return sf.reason;
+    }
+  }
+  return undefined;
+}
+
+function toUsage(t: MessageTokens | undefined): Usage {
+  const input = t?.input ?? 0;
+  const output = t?.output ?? 0;
+  const reasoning = t?.reasoning ?? 0;
+  const cacheRead = t?.cache?.read ?? 0;
+  const cacheWrite = t?.cache?.write ?? 0;
+  return {
+    input,
+    output,
+    reasoning,
+    cacheRead,
+    cacheCreate5m: cacheWrite,
+    cacheCreate1h: 0,
+  };
+}
+
+function buildModel(providerID: string | undefined, modelID: string | undefined): string {
+  if (providerID && modelID) return `${providerID}/${modelID}`;
+  return modelID ?? providerID ?? '';
+}
+
+function isCompleteAssistant(m: { role: string; id: string }): m is AssistantMessage {
+  if (m.role !== 'assistant') return false;
+  const a = m as Partial<AssistantMessage>;
+  return (
+    typeof a.sessionID === 'string' &&
+    typeof a.time?.created === 'number' &&
+    Number.isFinite(a.time.created)
+  );
+}
