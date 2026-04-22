@@ -2,8 +2,15 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import { parseClaudeSession } from '@relayburn/reader';
-import { appendContent, appendTurns, loadConfig, stamp } from '@relayburn/ledger';
-import type { Enrichment } from '@relayburn/ledger';
+import {
+  appendContent,
+  appendTurns,
+  loadConfig,
+  loadCursors,
+  saveCursors,
+  stamp,
+} from '@relayburn/ledger';
+import type { ClaudeCursor, Enrichment } from '@relayburn/ledger';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { stat } from 'node:fs/promises';
@@ -42,11 +49,12 @@ export async function runClaudeWrapper(args: ParsedArgs): Promise<number> {
   return code;
 }
 
-async function ingestSession(cwd: string, sessionId: string): Promise<void> {
+export async function ingestSession(cwd: string, sessionId: string): Promise<void> {
   const encoded = cwd.replace(/\//g, '-');
   const file = path.join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
+  let st: Awaited<ReturnType<typeof stat>>;
   try {
-    const st = await stat(file);
+    st = await stat(file);
     if (!st.isFile()) return;
   } catch {
     process.stderr.write(`[burn] no session file found at ${file}\n`);
@@ -60,5 +68,20 @@ async function ingestSession(cwd: string, sessionId: string): Promise<void> {
   if (turns.length === 0) return;
   await appendTurns(turns);
   if (content.length > 0) await appendContent(content);
+
+  // Persist a cursor so a later `burn summary` (which calls ingestAll) skips
+  // this file instead of re-parsing and re-appending its content. Turns are
+  // protected by appendTurns dedup, but appendContent has no dedup — without
+  // this, content records would duplicate on every subsequent invocation.
+  const cursors = await loadCursors();
+  const cursor: ClaudeCursor = {
+    kind: 'claude',
+    inode: st.ino,
+    offsetBytes: st.size,
+    mtimeMs: st.mtimeMs,
+  };
+  cursors[file] = cursor;
+  await saveCursors(cursors);
+
   process.stderr.write(`[burn] ingested ${turns.length} turns from ${file}\n`);
 }
