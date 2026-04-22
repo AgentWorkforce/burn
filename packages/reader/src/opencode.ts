@@ -1,6 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type { Subagent, ToolCall, TurnRecord, Usage } from './types.js';
 
@@ -60,8 +61,25 @@ export async function parseOpencodeSession(
   sessionFilePath: string,
   options: ParseOpencodeOptions = {},
 ): Promise<TurnRecord[]> {
+  const { turns } = await parseOpencodeSessionIncremental(sessionFilePath, options);
+  return turns;
+}
+
+export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
+  seenMessageIds?: ReadonlySet<string>;
+}
+
+export interface ParseOpencodeIncrementalResult {
+  turns: TurnRecord[];
+  seenMessageIds: Set<string>;
+}
+
+export async function parseOpencodeSessionIncremental(
+  sessionFilePath: string,
+  options: ParseOpencodeIncrementalOptions = {},
+): Promise<ParseOpencodeIncrementalResult> {
   const session = await readSession(sessionFilePath);
-  if (!session) return [];
+  if (!session) return { turns: [], seenMessageIds: new Set(options.seenMessageIds ?? []) };
 
   const storageRoot = path.resolve(sessionFilePath, '..', '..', '..');
   const messages = await readMessages(storageRoot, session.id);
@@ -69,10 +87,12 @@ export async function parseOpencodeSession(
   assistants.sort((a, b) => a.time.created - b.time.created);
 
   const isSidechain = typeof session.parentID === 'string' && session.parentID.length > 0;
+  const seen = new Set<string>(options.seenMessageIds ?? []);
   const turns: TurnRecord[] = [];
 
   for (let i = 0; i < assistants.length; i++) {
     const m = assistants[i]!;
+    if (seen.has(m.id)) continue;
     const parts = await readParts(storageRoot, m.id);
     const { toolCalls, filesTouched } = extractToolsAndFiles(parts);
     const stopReason = lastStepFinishReason(parts);
@@ -93,7 +113,11 @@ export async function parseOpencodeSession(
       toolCalls,
     };
     if (options.sessionPath !== undefined) record.sessionPath = options.sessionPath;
-    if (project !== undefined) record.project = project;
+    if (project !== undefined) {
+      const resolved = resolveProject(project);
+      record.project = resolved.project;
+      if (resolved.projectKey !== undefined) record.projectKey = resolved.projectKey;
+    }
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (isSidechain) {
       const sub: Subagent = { isSidechain: true };
@@ -101,9 +125,10 @@ export async function parseOpencodeSession(
     }
     if (stopReason !== undefined) record.stopReason = stopReason;
     turns.push(record);
+    seen.add(m.id);
   }
 
-  return turns;
+  return { turns, seenMessageIds: seen };
 }
 
 async function readSession(sessionFilePath: string): Promise<SessionInfo | null> {

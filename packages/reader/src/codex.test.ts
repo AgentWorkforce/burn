@@ -1,9 +1,10 @@
 import { strict as assert } from 'node:assert';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { parseCodexSession } from './codex.js';
+import { parseCodexSession, parseCodexSessionIncremental } from './codex.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.resolve(__dirname, '..', '..', '..', 'tests', 'fixtures', 'codex');
@@ -108,5 +109,87 @@ describe('parseCodexSession', () => {
     const file = path.join(FIXTURES, 'simple-turn.jsonl');
     const turns = await parseCodexSession(file, { sessionPath: file });
     assert.equal(turns[0]!.sessionPath, file);
+  });
+});
+
+describe('parseCodexSessionIncremental', () => {
+  it('full parse from startOffset=0 matches parseCodexSession', async () => {
+    const file = path.join(FIXTURES, 'multi-turn.jsonl');
+    const expected = await parseCodexSession(file);
+    const { turns, endOffset } = await parseCodexSessionIncremental(file);
+    assert.equal(turns.length, expected.length);
+    const raw = await readFile(file);
+    assert.equal(endOffset, raw.length);
+  });
+
+  it('splits at task_complete boundary and resumes with cumulative snapshot', async () => {
+    const file = path.join(FIXTURES, 'multi-turn.jsonl');
+    const raw = await readFile(file, 'utf8');
+    const lines = raw.split('\n');
+    // Offset right after the first task_complete line (line index 5, 0-based)
+    const cutoff = Buffer.byteLength(lines.slice(0, 6).join('\n') + '\n', 'utf8');
+
+    const first = await parseCodexSessionIncremental(file, {
+      startOffset: 0,
+    });
+    // Simulate the scenario where only the first turn had completed by now:
+    // split the stream at the first task_complete by passing a truncated buffer.
+    // For this we rewrite to a temp-truncated view via a custom test file.
+    // Simpler: verify that when we parse the full file, the resume returned
+    // reflects the latest task_complete boundary (end of file here).
+    assert.equal(first.endOffset, Buffer.byteLength(raw, 'utf8'));
+    assert.equal(first.turns.length, 2);
+
+    // Now parse from a mid-file startOffset simulating resumption:
+    // assume the caller previously committed at `cutoff` with matching resume state.
+    // Build the resume state by first doing a partial parse up to cutoff.
+    // Easiest: write a temp file containing the first half, run parse, then
+    // concat second half and run parse with resume.
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-inc-'));
+    try {
+      const partialPath = path.join(tmp, 'partial.jsonl');
+      await writeFile(partialPath, raw.slice(0, cutoff), 'utf8');
+      const partial = await parseCodexSessionIncremental(partialPath);
+      assert.equal(partial.turns.length, 1);
+      assert.equal(partial.turns[0]!.messageId, 'turn_multi_1');
+      assert.equal(partial.endOffset, cutoff);
+
+      // Now write the full file and resume
+      const fullPath = path.join(tmp, 'full.jsonl');
+      await writeFile(fullPath, raw, 'utf8');
+      const resumed = await parseCodexSessionIncremental(fullPath, {
+        startOffset: partial.endOffset,
+        resume: partial.resume,
+      });
+      assert.equal(resumed.turns.length, 1);
+      assert.equal(resumed.turns[0]!.messageId, 'turn_multi_2');
+      // The second turn's usage must match the delta computed in the full parse
+      const full = await parseCodexSession(fullPath);
+      assert.deepEqual(resumed.turns[0]!.usage, full[1]!.usage);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not advance endOffset if no task_complete seen in the tail', async () => {
+    const file = path.join(FIXTURES, 'simple-turn.jsonl');
+    const raw = await readFile(file, 'utf8');
+    const lines = raw.split('\n');
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-noctc-'));
+    try {
+      // Keep only lines up to and including task_started (index 2), no task_complete
+      const truncated = lines.slice(0, 3).join('\n') + '\n';
+      const truncPath = path.join(tmp, 'trunc.jsonl');
+      await writeFile(truncPath, truncated, 'utf8');
+      const r = await parseCodexSessionIncremental(truncPath);
+      assert.equal(r.turns.length, 0, 'no task_complete = no committed turns');
+      assert.equal(r.endOffset, 0, 'endOffset stays at startOffset');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 });

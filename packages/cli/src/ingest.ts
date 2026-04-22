@@ -3,12 +3,20 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 
 import {
-  parseClaudeSession,
-  parseCodexSession,
-  parseOpencodeSession,
-  type TurnRecord,
+  parseClaudeSessionIncremental,
+  parseCodexSessionIncremental,
+  parseOpencodeSessionIncremental,
 } from '@relayburn/reader';
-import { appendTurns, loadHwm, saveHwm, type HwmMap } from '@relayburn/ledger';
+import type { CodexResumeState } from '@relayburn/reader';
+import {
+  appendTurns,
+  loadCursors,
+  saveCursors,
+  type ClaudeCursor,
+  type CodexCursor,
+  type FileCursor,
+  type OpencodeCursor,
+} from '@relayburn/ledger';
 
 import { walkJsonl, walkOpencodeSessions } from './walk.js';
 
@@ -25,56 +33,155 @@ export interface IngestReport {
 }
 
 export async function ingestClaudeProjects(): Promise<IngestReport> {
-  const hwm = await loadHwm();
+  const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestClaudeInto(hwm, report);
-  await saveHwm(hwm);
+  await ingestClaudeInto(cursors, report);
+  await saveCursors(cursors);
   return report;
 }
 
 export async function ingestCodexSessions(): Promise<IngestReport> {
-  const hwm = await loadHwm();
+  const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestCodexInto(hwm, report);
-  await saveHwm(hwm);
+  await ingestCodexInto(cursors, report);
+  await saveCursors(cursors);
   return report;
 }
 
 export async function ingestOpencodeSessions(): Promise<IngestReport> {
-  const hwm = await loadHwm();
+  const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestOpencodeInto(hwm, report);
-  await saveHwm(hwm);
+  await ingestOpencodeInto(cursors, report);
+  await saveCursors(cursors);
   return report;
 }
 
 export async function ingestAll(): Promise<IngestReport> {
-  const hwm = await loadHwm();
+  const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestClaudeInto(hwm, report);
-  await ingestCodexInto(hwm, report);
-  await ingestOpencodeInto(hwm, report);
-  await saveHwm(hwm);
+  await ingestClaudeInto(cursors, report);
+  await ingestCodexInto(cursors, report);
+  await ingestOpencodeInto(cursors, report);
+  await saveCursors(cursors);
   return report;
 }
 
-async function ingestClaudeInto(hwm: HwmMap, report: IngestReport): Promise<void> {
+async function ingestClaudeInto(
+  cursors: Record<string, FileCursor>,
+  report: IngestReport,
+): Promise<void> {
   const projects = await listDirs(CLAUDE_PROJECTS);
   for (const projectDir of projects) {
     const files = await listJsonlFiles(projectDir);
     for (const file of files) {
-      await ingestOne(file, hwm, report, (f) => parseClaudeSession(f, { sessionPath: f }));
+      report.scannedSessions++;
+      try {
+        const st = await stat(file);
+        const prior = cursors[file];
+        const priorClaude = prior?.kind === 'claude' ? prior : undefined;
+        const rotated =
+          !priorClaude ||
+          priorClaude.inode !== st.ino ||
+          st.mtimeMs < priorClaude.mtimeMs ||
+          st.size < priorClaude.offsetBytes;
+        const startOffset = rotated ? 0 : priorClaude.offsetBytes;
+
+        if (!rotated && startOffset >= st.size) {
+          // nothing new; refresh mtime bookkeeping
+          priorClaude.mtimeMs = st.mtimeMs;
+          continue;
+        }
+
+        const { turns, endOffset } = await parseClaudeSessionIncremental(file, {
+          startOffset,
+          sessionPath: file,
+        });
+        if (turns.length > 0) {
+          await appendTurns(turns);
+          report.appendedTurns += turns.length;
+          report.ingestedSessions++;
+        }
+        const next: ClaudeCursor = {
+          kind: 'claude',
+          inode: st.ino,
+          offsetBytes: endOffset,
+          mtimeMs: st.mtimeMs,
+        };
+        cursors[file] = next;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
+      }
     }
   }
 }
 
-async function ingestCodexInto(hwm: HwmMap, report: IngestReport): Promise<void> {
+async function ingestCodexInto(
+  cursors: Record<string, FileCursor>,
+  report: IngestReport,
+): Promise<void> {
   for (const file of await walkJsonl(CODEX_SESSIONS)) {
-    await ingestOne(file, hwm, report, (f) => parseCodexSession(f, { sessionPath: f }));
+    report.scannedSessions++;
+    try {
+      const st = await stat(file);
+      const prior = cursors[file];
+      const priorCodex = prior?.kind === 'codex' ? prior : undefined;
+      const rotated =
+        !priorCodex ||
+        priorCodex.inode !== st.ino ||
+        st.mtimeMs < priorCodex.mtimeMs ||
+        st.size < priorCodex.offsetBytes;
+      const startOffset = rotated ? 0 : priorCodex.offsetBytes;
+      const resume: CodexResumeState | undefined = rotated
+        ? undefined
+        : {
+            cumulative: { ...priorCodex.cumulative },
+            sessionId: priorCodex.sessionId,
+            turnContexts: { ...priorCodex.turnContexts },
+            ...(priorCodex.sessionCwd !== undefined ? { sessionCwd: priorCodex.sessionCwd } : {}),
+          };
+
+      if (!rotated && startOffset >= st.size) {
+        priorCodex.mtimeMs = st.mtimeMs;
+        continue;
+      }
+
+      const opts: Parameters<typeof parseCodexSessionIncremental>[1] = {
+        startOffset,
+        sessionPath: file,
+      };
+      if (resume !== undefined) opts.resume = resume;
+      const { turns, endOffset, resume: nextResume } = await parseCodexSessionIncremental(
+        file,
+        opts,
+      );
+      if (turns.length > 0) {
+        await appendTurns(turns);
+        report.appendedTurns += turns.length;
+        report.ingestedSessions++;
+      }
+      const next: CodexCursor = {
+        kind: 'codex',
+        inode: st.ino,
+        offsetBytes: endOffset,
+        mtimeMs: st.mtimeMs,
+        cumulative: nextResume.cumulative,
+        sessionId: nextResume.sessionId,
+        turnContexts: nextResume.turnContexts,
+      };
+      if (nextResume.sessionCwd !== undefined) next.sessionCwd = nextResume.sessionCwd;
+      cursors[file] = next;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
+    }
   }
 }
 
-async function ingestOpencodeInto(hwm: HwmMap, report: IngestReport): Promise<void> {
+async function ingestOpencodeInto(
+  cursors: Record<string, FileCursor>,
+  report: IngestReport,
+): Promise<void> {
   for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
     report.scannedSessions++;
     try {
@@ -83,31 +190,36 @@ async function ingestOpencodeInto(hwm: HwmMap, report: IngestReport): Promise<vo
       const messageMtime = await getDirMtime(messageDir);
       if (messageMtime === null) continue;
 
-      const prior = hwm[file];
-      if (prior && prior.mtimeMs >= messageMtime) continue;
+      const st = await stat(file);
+      const prior = cursors[file];
+      const priorOpencode = prior?.kind === 'opencode' ? prior : undefined;
+      const rotated =
+        !priorOpencode || priorOpencode.inode !== st.ino || messageMtime < priorOpencode.mtimeMs;
+      const seenMessageIds = rotated
+        ? new Set<string>()
+        : new Set(priorOpencode.seenMessageIds);
 
-      const turns = await parseOpencodeSession(file, { sessionPath: file });
-      if (turns.length === 0) continue;
-
-      const newTurns = prior
-        ? turns.filter(
-            (t) =>
-              t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId),
-          )
-        : turns;
-
-      if (newTurns.length > 0) {
-        await appendTurns(newTurns);
-        report.appendedTurns += newTurns.length;
-        report.ingestedSessions++;
+      if (!rotated && messageMtime === priorOpencode.mtimeMs) {
+        // nothing new
+        continue;
       }
 
-      const last = turns[turns.length - 1]!;
-      hwm[file] = {
-        lastMessageId: last.messageId,
-        lastTs: last.ts,
+      const { turns, seenMessageIds: nextSeen } = await parseOpencodeSessionIncremental(file, {
+        sessionPath: file,
+        seenMessageIds,
+      });
+      if (turns.length > 0) {
+        await appendTurns(turns);
+        report.appendedTurns += turns.length;
+        report.ingestedSessions++;
+      }
+      const next: OpencodeCursor = {
+        kind: 'opencode',
+        inode: st.ino,
         mtimeMs: messageMtime,
+        seenMessageIds: [...nextSeen],
       };
+      cursors[file] = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
@@ -117,46 +229,6 @@ async function ingestOpencodeInto(hwm: HwmMap, report: IngestReport): Promise<vo
 
 function emptyReport(): IngestReport {
   return { scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 };
-}
-
-async function ingestOne(
-  file: string,
-  hwm: HwmMap,
-  report: IngestReport,
-  parse: (f: string) => Promise<TurnRecord[]>,
-): Promise<void> {
-  report.scannedSessions++;
-  try {
-    const st = await stat(file);
-    const prior = hwm[file];
-    if (prior && prior.mtimeMs >= st.mtimeMs) return;
-
-    const turns = await parse(file);
-    if (turns.length === 0) return;
-
-    const newTurns = prior
-      ? turns.filter(
-          (t) =>
-            t.ts > prior.lastTs || (t.ts === prior.lastTs && t.messageId !== prior.lastMessageId),
-        )
-      : turns;
-
-    if (newTurns.length > 0) {
-      await appendTurns(newTurns);
-      report.appendedTurns += newTurns.length;
-      report.ingestedSessions++;
-    }
-
-    const last = turns[turns.length - 1]!;
-    hwm[file] = {
-      lastMessageId: last.messageId,
-      lastTs: last.ts,
-      mtimeMs: st.mtimeMs,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
-  }
 }
 
 async function listDirs(parent: string): Promise<string[]> {
@@ -181,12 +253,9 @@ async function listJsonlFiles(dir: string): Promise<string[]> {
 
 async function getDirMtime(dir: string): Promise<number | null> {
   try {
-    const st = await stat(dir);
-    return st.mtimeMs;
+    const s = await stat(dir);
+    return s.mtimeMs;
   } catch {
     return null;
   }
 }
-
-// Unused in v0; exposed for tests.
-export type { HwmMap };

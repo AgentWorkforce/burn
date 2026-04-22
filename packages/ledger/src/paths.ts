@@ -15,6 +15,22 @@ export function hwmPath(): string {
   return path.join(ledgerHome(), 'hwm.json');
 }
 
+export function cursorsPath(): string {
+  return path.join(ledgerHome(), 'cursors.json');
+}
+
+export function ledgerIndexPath(): string {
+  return path.join(ledgerHome(), 'ledger.idx');
+}
+
+export function ledgerContentIndexPath(): string {
+  return path.join(ledgerHome(), 'ledger.content.idx');
+}
+
+export function lockPath(name: string): string {
+  return path.join(ledgerHome(), `${name}.lock`);
+}
+
 export function pricingOverridePath(): string {
   return path.join(ledgerHome(), 'models.dev.json');
 }

@@ -67,7 +67,7 @@ async function collectStamps(filePath: string): Promise<StampLine[]> {
 function turnPasses(turn: TurnRecord, q: Query, enrichment: Enrichment): boolean {
   if (q.since && turn.ts < q.since) return false;
   if (q.until && turn.ts > q.until) return false;
-  if (q.project && turn.project !== q.project) return false;
+  if (q.project && turn.project !== q.project && turn.projectKey !== q.project) return false;
   if (q.sessionId && turn.sessionId !== q.sessionId) return false;
   if (q.source && turn.source !== q.source) return false;
   if (q.enrichment) {

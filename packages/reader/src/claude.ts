@@ -1,6 +1,8 @@
 import { createReadStream } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
+import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type { Subagent, ToolCall, TurnRecord, Usage } from './types.js';
 
@@ -138,7 +140,11 @@ export async function parseClaudeSession(
       toolCalls,
     };
     if (options.sessionPath !== undefined) record.sessionPath = options.sessionPath;
-    if (w.cwd !== undefined) record.project = w.cwd;
+    if (w.cwd !== undefined) {
+      const resolved = resolveProject(w.cwd);
+      record.project = resolved.project;
+      if (resolved.projectKey !== undefined) record.projectKey = resolved.projectKey;
+    }
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (subagent) record.subagent = subagent;
     if (w.stopReason !== undefined) record.stopReason = w.stopReason;
@@ -279,4 +285,126 @@ function resolveSubagent(
     return { isSidechain: true };
   }
   return undefined;
+}
+
+export interface ParseIncrementalOptions extends ParseOptions {
+  startOffset?: number;
+}
+
+export interface ParseIncrementalResult {
+  turns: TurnRecord[];
+  endOffset: number;
+}
+
+export async function parseClaudeSessionIncremental(
+  filePath: string,
+  options: ParseIncrementalOptions = {},
+): Promise<ParseIncrementalResult> {
+  const startOffset = options.startOffset ?? 0;
+  const handle = await open(filePath, 'r');
+  let buf: Buffer;
+  let size: number;
+  try {
+    const st = await handle.stat();
+    size = st.size;
+    if (startOffset >= size) {
+      return { turns: [], endOffset: startOffset };
+    }
+    const length = size - startOffset;
+    buf = Buffer.allocUnsafe(length);
+    await handle.read(buf, 0, length, startOffset);
+  } finally {
+    await handle.close();
+  }
+
+  const working = new Map<string, WorkingRecord>();
+  const order: string[] = [];
+  const subagentByToolUseId = new Map<
+    string,
+    { type?: string; taskDescription?: string }
+  >();
+  const messageIdFirstOffset = new Map<string, number>();
+
+  let p = 0;
+  let cursorOffset = startOffset; // position just past the last complete \n
+  while (p < buf.length) {
+    const nlIdx = buf.indexOf(0x0a, p);
+    if (nlIdx === -1) break;
+    const lineStartOffset = startOffset + p;
+    const lineEndOffset = startOffset + nlIdx + 1;
+    const text = buf.subarray(p, nlIdx).toString('utf8').trim();
+    p = nlIdx + 1;
+    cursorOffset = lineEndOffset;
+    if (!text) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const rec = parsed as Record<string, unknown>;
+    if (rec.type === 'assistant') {
+      const line = rec as unknown as AssistantLine;
+      const msgId =
+        line.message && typeof line.message.id === 'string' ? line.message.id : undefined;
+      if (msgId && !messageIdFirstOffset.has(msgId)) {
+        messageIdFirstOffset.set(msgId, lineStartOffset);
+      }
+      ingestAssistant(line, working, order);
+    } else if (rec.type === 'user') {
+      captureSubagentFromToolResult(rec as unknown as UserLine, subagentByToolUseId);
+    }
+  }
+
+  // Determine end offset: the byte position of the earliest in-progress messageId,
+  // or `cursorOffset` (= pos after last complete newline) if all messages are complete.
+  let earliestIncompleteOffset: number | undefined;
+  for (const id of order) {
+    const w = working.get(id);
+    if (!w) continue;
+    if (w.stopReason === undefined) {
+      const firstOff = messageIdFirstOffset.get(id);
+      if (firstOff !== undefined) {
+        if (earliestIncompleteOffset === undefined || firstOff < earliestIncompleteOffset) {
+          earliestIncompleteOffset = firstOff;
+        }
+      }
+    }
+  }
+  const endOffset = earliestIncompleteOffset ?? cursorOffset;
+
+  const turns: TurnRecord[] = [];
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i]!;
+    const w = working.get(id);
+    if (!w) continue;
+    if (w.stopReason === undefined) continue; // defer in-progress messages
+    const toolCalls = extractToolCalls(w.blocks);
+    const filesTouched = extractFilesTouched(toolCalls);
+    const subagent = resolveSubagent(w, toolCalls, subagentByToolUseId);
+    const record: TurnRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: w.sessionId,
+      messageId: w.messageId,
+      turnIndex: i,
+      ts: w.firstTs,
+      model: w.model,
+      usage: w.usage,
+      toolCalls,
+    };
+    if (options.sessionPath !== undefined) record.sessionPath = options.sessionPath;
+    if (w.cwd !== undefined) {
+      const resolved = resolveProject(w.cwd);
+      record.project = resolved.project;
+      if (resolved.projectKey !== undefined) record.projectKey = resolved.projectKey;
+    }
+    if (filesTouched.length > 0) record.filesTouched = filesTouched;
+    if (subagent) record.subagent = subagent;
+    record.stopReason = w.stopReason;
+    turns.push(record);
+  }
+
+  return { turns, endOffset };
 }

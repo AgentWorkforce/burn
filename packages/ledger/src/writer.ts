@@ -3,6 +3,12 @@ import * as path from 'node:path';
 
 import type { TurnRecord } from '@relayburn/reader';
 
+import {
+  appendHashes,
+  loadIndex,
+  turnContentFingerprint,
+  turnIdHash,
+} from './index-sidecar.js';
 import { ledgerPath } from './paths.js';
 import type { Enrichment, LedgerLine, StampLine, StampSelector, TurnLine } from './schema.js';
 
@@ -19,8 +25,29 @@ async function appendLines(lines: LedgerLine[]): Promise<void> {
 }
 
 export async function appendTurns(turns: TurnRecord[]): Promise<void> {
-  const lines: TurnLine[] = turns.map((record) => ({ v: 1, kind: 'turn', record }));
+  if (turns.length === 0) return;
+  const idx = await loadIndex();
+  // Snapshot content set before this batch — content-fingerprint dedup only
+  // compares against historically-committed turns, never within the same batch.
+  const historicalContent = new Set(idx.content);
+  const fresh: TurnRecord[] = [];
+  const newIds: string[] = [];
+  const newContent: string[] = [];
+  for (const t of turns) {
+    const id = turnIdHash(t);
+    if (idx.ids.has(id)) continue;
+    const cf = turnContentFingerprint(t);
+    if (historicalContent.has(cf)) continue;
+    fresh.push(t);
+    newIds.push(id);
+    newContent.push(cf);
+    idx.ids.add(id); // primary dedup DOES apply within batch — same messageId = same turn
+  }
+  if (fresh.length === 0) return;
+  for (const cf of newContent) idx.content.add(cf);
+  const lines: TurnLine[] = fresh.map((record) => ({ v: 1, kind: 'turn', record }));
   await appendLines(lines);
+  await appendHashes(newIds, newContent);
 }
 
 export async function stamp(

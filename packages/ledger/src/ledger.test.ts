@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -8,7 +8,8 @@ import type { TurnRecord } from '@relayburn/reader';
 
 import { appendTurns, stamp } from './writer.js';
 import { queryAll } from './reader.js';
-import { ledgerPath } from './paths.js';
+import { ledgerContentIndexPath, ledgerIndexPath, ledgerPath } from './paths.js';
+import { __resetIndexCacheForTesting, rebuildIndex } from './index-sidecar.js';
 
 function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -40,6 +41,7 @@ describe('ledger', () => {
       tmpDir = d;
     });
     process.env['RELAYBURN_HOME'] = tmpDir;
+    __resetIndexCacheForTesting();
   });
 
   after(async () => {
@@ -148,5 +150,88 @@ describe('ledger', () => {
 
   it('empty selector throws', async () => {
     await assert.rejects(() => stamp({}, { x: 'y' }));
+  });
+
+  it('dedupes by (source, sessionId, messageId) across repeated appends', async () => {
+    const t1 = fakeTurn({ messageId: 'dup-1' });
+    const t2 = fakeTurn({ messageId: 'dup-2', turnIndex: 1 });
+    await appendTurns([t1, t2]);
+    const sizeAfterFirst = (await stat(ledgerPath())).size;
+
+    await appendTurns([t1, t2]);
+    const sizeAfterSecond = (await stat(ledgerPath())).size;
+    assert.equal(sizeAfterSecond, sizeAfterFirst, 'ledger must not grow on repeated appends');
+
+    const got = await queryAll();
+    assert.equal(got.length, 2);
+  });
+
+  it('skips a turn whose content fingerprint matches (ID regenerated)', async () => {
+    // Same timestamp/model/usage/toolCalls, different messageIds
+    const a = fakeTurn({ messageId: 'id-a' });
+    const b = fakeTurn({ messageId: 'id-b', turnIndex: 1 });
+    await appendTurns([a]);
+    await appendTurns([b]);
+    const got = await queryAll();
+    assert.equal(got.length, 1, 'content fingerprint dedup drops second turn');
+  });
+
+  it('query filters by projectKey when q.project matches projectKey', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-X',
+        messageId: 'pk-1',
+        project: '/Users/me/repo',
+        projectKey: 'github.com/org/repo',
+      }),
+      fakeTurn({
+        sessionId: 's-Y',
+        messageId: 'pk-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+        project: '/tmp/worktree',
+        projectKey: 'github.com/org/repo',
+      }),
+      fakeTurn({
+        sessionId: 's-Z',
+        messageId: 'pk-3',
+        turnIndex: 2,
+        ts: '2026-04-20T00:00:02.000Z',
+        project: '/tmp/other',
+      }),
+    ]);
+    const byKey = await queryAll({ project: 'github.com/org/repo' });
+    assert.equal(byKey.length, 2);
+    const byPath = await queryAll({ project: '/Users/me/repo' });
+    assert.equal(byPath.length, 1);
+  });
+
+  it('rebuildIndex recovers after index files are deleted', async () => {
+    const t1 = fakeTurn({ messageId: 'r-1', ts: '2026-04-20T00:00:00.000Z' });
+    const t2 = fakeTurn({
+      messageId: 'r-2',
+      turnIndex: 1,
+      ts: '2026-04-20T00:01:00.000Z', // distinct content fingerprint
+    });
+    await appendTurns([t1, t2]);
+
+    // Delete sidecar index files
+    await unlink(ledgerIndexPath());
+    await unlink(ledgerContentIndexPath());
+    __resetIndexCacheForTesting();
+
+    const { ids, content } = await rebuildIndex();
+    assert.equal(ids, 2);
+    assert.equal(content, 2);
+
+    // After rebuild, re-appending the same turns must not duplicate
+    const sizeBefore = (await stat(ledgerPath())).size;
+    await appendTurns([t1, t2]);
+    const sizeAfter = (await stat(ledgerPath())).size;
+    assert.equal(sizeAfter, sizeBefore);
+
+    // Verify index files are populated
+    const idsContent = await readFile(ledgerIndexPath(), 'utf8');
+    assert.equal(idsContent.trim().split('\n').length, 2);
   });
 });

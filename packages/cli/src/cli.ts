@@ -4,16 +4,18 @@ import { runByTool } from './commands/by-tool.js';
 import { runClaudeWrapper } from './commands/claude.js';
 import { runCodexWrapper } from './commands/codex.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
+import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
 
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
-  burn summary  [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
-  burn by-tool  [--since 7d] [--project <path>] [--session <id>]
-  burn claude   [--tag k=v ...] [-- <claude args>]
-  burn codex    [--tag k=v ...] [-- <codex args>]
-  burn opencode [--tag k=v ...] [-- <opencode args>]
+  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
+  burn by-tool       [--since 7d] [--project <path>] [--session <id>]
+  burn claude        [--tag k=v ...] [-- <claude args>]
+  burn codex         [--tag k=v ...] [-- <codex args>]
+  burn opencode      [--tag k=v ...] [-- <opencode args>]
+  burn rebuild-index
 
 Examples:
   burn summary --since 24h
@@ -21,6 +23,7 @@ Examples:
   burn claude   --tag workflow=refactor -- --resume
   burn codex    --tag workflow=refactor
   burn opencode --tag workflow=refactor
+  burn rebuild-index
 `;
 
 async function main(): Promise<number> {
@@ -41,6 +44,8 @@ async function main(): Promise<number> {
       return runCodexWrapper(args);
     case 'opencode':
       return runOpencodeWrapper(args);
+    case 'rebuild-index':
+      return runRebuildIndex();
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 1;

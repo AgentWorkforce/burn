@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { parseOpencodeSession } from './opencode.js';
+import { parseOpencodeSession, parseOpencodeSessionIncremental } from './opencode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.resolve(__dirname, '..', '..', '..', 'tests', 'fixtures', 'opencode');
@@ -108,5 +108,34 @@ describe('parseOpencodeSession', () => {
     const file = sessionFile('simple', 'ses_simple');
     const turns = await parseOpencodeSession(file, { sessionPath: file });
     assert.equal(turns[0]!.sessionPath, file);
+  });
+});
+
+describe('parseOpencodeSessionIncremental', () => {
+  it('returns all turns + seenMessageIds when seen is empty', async () => {
+    const file = sessionFile('multi-turn', 'ses_multi');
+    const r = await parseOpencodeSessionIncremental(file);
+    assert.equal(r.turns.length, 2);
+    assert.ok(r.seenMessageIds.has('msg_multi_a1'));
+    assert.ok(r.seenMessageIds.has('msg_multi_a2'));
+  });
+
+  it('filters already-seen messageIds', async () => {
+    const file = sessionFile('multi-turn', 'ses_multi');
+    const r = await parseOpencodeSessionIncremental(file, {
+      seenMessageIds: new Set(['msg_multi_a1']),
+    });
+    assert.equal(r.turns.length, 1);
+    assert.equal(r.turns[0]!.messageId, 'msg_multi_a2');
+    assert.ok(r.seenMessageIds.has('msg_multi_a1'));
+    assert.ok(r.seenMessageIds.has('msg_multi_a2'));
+  });
+
+  it('yields zero turns when all ids already seen', async () => {
+    const file = sessionFile('multi-turn', 'ses_multi');
+    const r = await parseOpencodeSessionIncremental(file, {
+      seenMessageIds: new Set(['msg_multi_a1', 'msg_multi_a2']),
+    });
+    assert.equal(r.turns.length, 0);
   });
 });

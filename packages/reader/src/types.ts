@@ -39,6 +39,7 @@ export interface TurnRecord {
   ts: string;
   model: string;
   project?: string;
+  projectKey?: string;
   usage: Usage;
   toolCalls: ToolCall[];
   filesTouched?: string[];
