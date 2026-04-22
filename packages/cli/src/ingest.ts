@@ -104,11 +104,17 @@ async function ingestClaudeInto(
           continue;
         }
 
-        const { turns, content, endOffset } = await parseClaudeSessionIncremental(file, {
+        const parseOpts: Parameters<typeof parseClaudeSessionIncremental>[1] = {
           startOffset,
           sessionPath: file,
           contentMode,
-        });
+        };
+        const priorUserText = rotated ? undefined : priorClaude?.lastUserText;
+        if (priorUserText) parseOpts.lastUserText = priorUserText;
+        const { turns, content, endOffset, lastUserText } = await parseClaudeSessionIncremental(
+          file,
+          parseOpts,
+        );
         if (turns.length > 0) {
           await appendTurns(turns);
           report.appendedTurns += turns.length;
@@ -123,6 +129,7 @@ async function ingestClaudeInto(
           offsetBytes: endOffset,
           mtimeMs: st.mtimeMs,
         };
+        if (lastUserText) next.lastUserText = lastUserText;
         cursors[file] = next;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

@@ -529,12 +529,19 @@ function extractAssistantTextForClassification(blocks: ContentBlock[]): string {
 
 export interface ParseIncrementalOptions extends ParseOptions {
   startOffset?: number;
+  // The most recent user prompt text seen before `startOffset`. Classification
+  // uses the user prompt for keyword refinement; when `endOffset` backs up to
+  // an incomplete assistant line, the prompt that preceded it is before the
+  // resume point and won't be re-read — so callers must carry it forward.
+  lastUserText?: string;
 }
 
 export interface ParseIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   endOffset: number;
+  // Carry forward to the next incremental call; see `lastUserText` option.
+  lastUserText: string;
 }
 
 export async function parseClaudeSessionIncremental(
@@ -551,7 +558,12 @@ export async function parseClaudeSessionIncremental(
     const st = await handle.stat();
     size = st.size;
     if (startOffset >= size) {
-      return { turns: [], content: [], endOffset: startOffset };
+      return {
+        turns: [],
+        content: [],
+        endOffset: startOffset,
+        lastUserText: options.lastUserText ?? '',
+      };
     }
     const length = size - startOffset;
     buf = Buffer.allocUnsafe(length);
@@ -569,7 +581,9 @@ export async function parseClaudeSessionIncremental(
   const messageIdFirstOffset = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
-  let currentUserText = '';
+  // Seed from the prior call so an in-progress turn whose user prompt lives
+  // before `startOffset` still classifies against that prompt on resume.
+  let currentUserText = options.lastUserText ?? '';
   // User content tagged with the byte offset of its line so we can (a) drop
   // records past endOffset and (b) interleave them with assistant content by
   // source-order at emit time.
@@ -694,5 +708,5 @@ export async function parseClaudeSessionIncremental(
     content = merged.map((m) => m.record);
   }
 
-  return { turns, content, endOffset };
+  return { turns, content, endOffset, lastUserText: currentUserText };
 }

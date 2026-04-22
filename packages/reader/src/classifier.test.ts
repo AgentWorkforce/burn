@@ -116,6 +116,23 @@ describe('classifyActivity — keyword refinement', () => {
     assert.equal(r.activity, 'debugging');
   });
 
+  it('promotes failed bash test/git/build to debugging', () => {
+    // A failing pytest / git push / npm run build is the model reacting to an
+    // error, not neutrally running the command — debugging should win over the
+    // bash-pattern category.
+    const cases: Array<[string, string]> = [
+      ['pytest', 'testing'],
+      ['git push origin main', 'git'],
+      ['npm run build', 'build-deploy'],
+    ];
+    for (const [cmd] of cases) {
+      const ok = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      const failed = classifyActivity({ toolCalls: [tc('Bash', cmd)], hasFailedTool: true });
+      assert.notEqual(ok.activity, 'debugging', `${cmd} without failure should not be debugging`);
+      assert.equal(failed.activity, 'debugging', `${cmd} with failure should be debugging`);
+    }
+  });
+
   it('promotes exploration to feature when the prompt asks to add something', () => {
     // Adversarial case from the issue: a turn that looks like exploration
     // (only Read/Grep) but the ask is clearly a feature request — keyword

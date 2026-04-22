@@ -91,11 +91,11 @@ interface PickInput {
 }
 
 function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): ActivityCategory {
-  // Priority 1: explicit plan-mode marker.
-  if (toolCalls.some((t) => t.name === 'ExitPlanMode')) return 'planning';
-
-  // Priority 2: delegation — spawning a subagent dominates whatever else happened.
+  // Priority 1: delegation — spawning a subagent dominates whatever else happened.
   if (toolCalls.some((t) => DELEGATION_TOOLS.has(t.name))) return 'delegation';
+
+  // Priority 2: explicit plan-mode marker.
+  if (toolCalls.some((t) => t.name === 'ExitPlanMode')) return 'planning';
 
   // Priority 3: edits present. Let keyword refinement pick a sub-category;
   // default to coding if nothing stronger fires.
@@ -104,7 +104,12 @@ function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): 
     return refined ?? 'coding';
   }
 
-  // Priority 4: bash commands with recognizable patterns.
+  // Priority 4: a failed tool call on a non-edit turn is debugging — a failing
+  // pytest / git push / build command is the model reacting to an error, not
+  // neutrally running tests or pushing code.
+  if (hasFailedTool) return 'debugging';
+
+  // Priority 5: bash commands with recognizable patterns.
   const bashCalls = toolCalls.filter((t) => t.name === 'Bash');
   for (const call of bashCalls) {
     const cmd = stripEnv(call.target ?? '');
@@ -114,10 +119,9 @@ function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): 
     if (BUILD_DEPLOY_PATTERNS.some((re) => re.test(cmd))) return 'build-deploy';
   }
 
-  // Priority 5: any tools used at all → exploration (read-only, MCP, skills,
-  // or un-patterned bash). Keyword hints can still promote to debugging etc.
+  // Priority 6: any tools used at all → exploration (read-only, MCP, skills,
+  // or un-patterned bash). Keyword hints can still promote the category.
   if (toolCalls.length > 0) {
-    if (hasFailedTool) return 'debugging';
     const refined = refineByKeywords(text, false);
     if (refined) return refined;
     if (toolCalls.some((t) => READ_ONLY_TOOLS.has(t.name))) return 'exploration';
