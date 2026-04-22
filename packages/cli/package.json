@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/cli",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "burn CLI — spawn wrapper + summary/by-tool over the relayburn ledger",
   "type": "module",
   "main": "./dist/index.js",
@@ -8,12 +8,19 @@
   "bin": {
     "burn": "./dist/cli.js"
   },
-  "files": ["dist", "README.md", "CHANGELOG.md", "package.json"],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
   "scripts": {
     "build": "tsc --build && chmod +x dist/cli.js",
     "clean": "tsc --build --clean"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@relayburn/reader": "workspace:*",
     "@relayburn/ledger": "workspace:*",

@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/analyze",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Cost and usage derivations for relayburn TurnRecords",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,12 +10,20 @@
     "./pricing": "./dist/pricing.js",
     "./cost": "./dist/cost.js"
   },
-  "files": ["dist", "pricing", "README.md", "CHANGELOG.md", "package.json"],
+  "files": [
+    "dist",
+    "pricing",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@relayburn/reader": "workspace:*",
     "@relayburn/ledger": "workspace:*"

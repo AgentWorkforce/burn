@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/reader",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Pure parsers for agent CLI session logs → TurnRecord[]",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,7 +10,12 @@
     "./claude": "./dist/claude.js",
     "./types": "./dist/types.js"
   },
-  "files": ["dist", "README.md", "CHANGELOG.md", "package.json"],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean"
