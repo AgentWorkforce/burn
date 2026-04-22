@@ -1,0 +1,110 @@
+name: Verify Publish
+
+# Manually triggered smoke test against the npm registry — run after a Publish
+# Package workflow completes. Installs the just-published package into a clean
+# environment and exercises it enough to catch "published but broken" failures
+# (bin missing +x, workspace:* deps not rewritten, missing exports, etc.).
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to verify'
+        required: true
+        default: '@relayburn/cli'
+        type: choice
+        options:
+          - '@relayburn/cli'
+          - '@relayburn/reader'
+          - '@relayburn/ledger'
+          - '@relayburn/analyze'
+      version:
+        description: 'Version to verify (defaults to the "latest" dist-tag)'
+        required: false
+        default: latest
+      tag:
+        description: 'Alternate dist-tag to pull from if `version` is left as default'
+        required: false
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Install + smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          INPUT='${{ github.event.inputs.version }}'
+          TAG='${{ github.event.inputs.tag }}'
+          if [ -z "$INPUT" ] || [ "$INPUT" = "latest" ]; then
+            RESOLVED=$(npm view "${{ github.event.inputs.package }}@$TAG" version)
+          else
+            RESOLVED="$INPUT"
+          fi
+          echo "version=$RESOLVED" >> "$GITHUB_OUTPUT"
+          echo "Verifying ${{ github.event.inputs.package }}@$RESOLVED"
+
+      - name: CLI smoke test
+        if: ${{ github.event.inputs.package == '@relayburn/cli' }}
+        run: |
+          set -euo pipefail
+          npm install -g "${{ github.event.inputs.package }}@${{ steps.resolve.outputs.version }}"
+          # --help should exit 0 and print the usage block.
+          output=$(burn --help)
+          echo "$output"
+          echo "$output" | grep -q "burn — token usage" || {
+            echo "::error::--help output did not include expected banner" >&2
+            exit 1
+          }
+          echo "$output" | grep -q "burn summary" || {
+            echo "::error::--help output did not list summary command" >&2
+            exit 1
+          }
+          # Bare invocation should still print help (burn falls back to help).
+          burn > /dev/null || {
+            echo "::error::bare burn unexpectedly exited non-zero" >&2
+            exit 1
+          }
+          echo "CLI smoke test passed."
+
+      - name: Library smoke test (ESM import + exports surface)
+        if: ${{ github.event.inputs.package != '@relayburn/cli' }}
+        run: |
+          set -euo pipefail
+          WORKDIR=$(mktemp -d)
+          cd "$WORKDIR"
+          npm init -y > /dev/null
+          node -e "require('fs').writeFileSync('package.json', JSON.stringify({...require('./package.json'), type:'module'}, null, 2))"
+          npm install "${{ github.event.inputs.package }}@${{ steps.resolve.outputs.version }}"
+          cat > check.mjs <<'EOF'
+          const mod = await import(process.argv[2]);
+          const exports = Object.keys(mod).sort();
+          if (exports.length === 0) {
+            console.error('no exports from package');
+            process.exit(1);
+          }
+          console.log('exports:', exports.join(', '));
+          EOF
+          node check.mjs "${{ github.event.inputs.package }}"
+          echo "Library smoke test passed."
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Verify Publish"
+            echo ""
+            echo "- **package**: \`${{ github.event.inputs.package }}\`"
+            echo "- **version**: \`${{ steps.resolve.outputs.version }}\`"
+            echo "- **result**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

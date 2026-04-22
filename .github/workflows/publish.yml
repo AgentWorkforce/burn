@@ -1,0 +1,456 @@
+name: Publish Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Which package(s) to publish'
+        required: true
+        default: cli
+        type: choice
+        options:
+          - all
+          - reader
+          - ledger
+          - analyze
+          - cli
+      version:
+        description: 'Version bump type (ignored if custom_version is set)'
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prepatch
+          - preminor
+          - premajor
+          - prerelease
+          - none
+      custom_version:
+        description: 'Exact version (e.g. 0.1.0). Overrides version type when set.'
+        required: false
+      prerelease_id:
+        description: 'Prerelease identifier for pre* bumps (e.g. "next", "beta")'
+        required: false
+        default: next
+      tag:
+        description: 'npm dist-tag'
+        required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - next
+          - beta
+          - alpha
+      dry_run:
+        description: 'Dry run (no actual publish, no version commit, no git tag)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.bump.outputs.versions }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # Build + test everything regardless of which package is being released —
+      # cli depends on analyze/ledger/reader, analyze depends on ledger/reader,
+      # ledger depends on reader, all via workspace:*. `pnpm pack` rewrites
+      # those specs to concrete versions at pack time, and we want every
+      # package's dist/ to be fresh when that happens.
+      - name: Build workspace
+        run: pnpm -r run build
+
+      - name: Run tests
+        run: pnpm run test
+
+      - name: Resolve target packages (dep order)
+        id: targets
+        run: |
+          case "${{ github.event.inputs.package }}" in
+            all)
+              # Must be in dependency order: reader → ledger → analyze → cli.
+              echo "packages=reader ledger analyze cli" >> "$GITHUB_OUTPUT"
+              ;;
+            reader|ledger|analyze|cli)
+              echo "packages=${{ github.event.inputs.package }}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unknown package: ${{ github.event.inputs.package }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Bump versions
+        id: bump
+        run: |
+          VERSIONS=""
+          CUSTOM='${{ github.event.inputs.custom_version }}'
+          BUMP='${{ github.event.inputs.version }}'
+          PREID='${{ github.event.inputs.prerelease_id }}'
+          for pkg in ${{ steps.targets.outputs.packages }}; do
+            pushd "packages/$pkg" > /dev/null
+            if [ -n "$CUSTOM" ]; then
+              npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+            elif [ "$BUMP" = "none" ]; then
+              : # keep existing version (useful for first publish or re-publish)
+            elif [[ "$BUMP" == pre* ]]; then
+              npm version "$BUMP" --no-git-tag-version --preid="$PREID"
+            else
+              npm version "$BUMP" --no-git-tag-version
+            fi
+            NEW=$(node -p "require('./package.json').version")
+            VERSIONS+=" $pkg:$NEW"
+            popd > /dev/null
+          done
+          echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
+
+      # Per-package CHANGELOG.md generation. For each package being published,
+      # finds the last `<pkg>-v*` tag, collects Conventional Commits since then
+      # that touched `packages/<pkg>/**`, buckets them, and prepends a new
+      # versioned block. Skips silently for prereleases (version contains `-`)
+      # and for first publishes (no prior tag).
+      - name: Generate changelogs
+        if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          cat > /tmp/gen-changelog.mjs << 'GENEOF'
+          import { execSync } from 'node:child_process';
+          import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+          const [,, pkg, newVersion, today] = process.argv;
+          const path = `packages/${pkg}/CHANGELOG.md`;
+
+          if (newVersion.includes('-')) {
+            console.log(`prerelease ${pkg}@${newVersion}: skipping`);
+            process.exit(0);
+          }
+
+          const tagPrefix = `${pkg}-v`;
+          const tags = execSync(`git tag -l '${tagPrefix}*' --sort=-v:refname`, { encoding: 'utf-8' })
+            .trim().split('\n').filter(Boolean);
+          const semverRe = new RegExp(`^${tagPrefix.replace(/\./g, '\\.')}\\d+\\.\\d+\\.\\d+$`);
+          const lastTag = tags.find(t => semverRe.test(t));
+
+          if (!lastTag) {
+            console.log(`${pkg}: no prior stable tag, skipping`);
+            process.exit(0);
+          }
+
+          const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
+          if (existing.includes(`## [${newVersion}]`)) {
+            console.log(`${path} already has ${newVersion}, skipping`);
+            process.exit(0);
+          }
+
+          const log = execSync(
+            `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- packages/${pkg}`,
+            { encoding: 'utf-8' }
+          ).trim();
+
+          if (!log) {
+            console.log(`${pkg}: no commits since ${lastTag}, skipping`);
+            process.exit(0);
+          }
+
+          const commits = log.split('\0').filter(Boolean).map(record => {
+            const idx = record.indexOf('|');
+            const idx2 = record.indexOf('|', idx + 1);
+            return {
+              subject: record.slice(idx + 1, idx2).trim(),
+              body: record.slice(idx2 + 1).trim(),
+            };
+          });
+
+          const extractPR = (subject, body) => {
+            const m = (subject + ' ' + body).match(/#(\d+)/);
+            return m ? `(#${m[1]})` : '';
+          };
+
+          const formatTitle = (subject) => {
+            const cleaned = subject
+              .replace(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?!?:\s*/i, '')
+              .replace(/\s*\(#\d+\)\s*$/, '');
+            return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+          };
+
+          const getType = (subject) => {
+            const m = subject.match(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?(!)?:/i);
+            if (!m) return 'other';
+            const type = m[1].toLowerCase();
+            const scope = (m[2] || '').replace(/[()]/g, '');
+            if (m[3] === '!') return 'breaking';
+            if (type === 'feat') return 'feat';
+            if (type === 'fix') return 'fix';
+            if (type === 'refactor' || type === 'perf' || type === 'build') return 'changed';
+            if (type === 'test' || type === 'ci') return 'reliability';
+            if (type === 'chore' && scope === 'release') return 'release';
+            if (type === 'chore') return 'deps';
+            return 'other';
+          };
+
+          const cats = { breaking: [], feat: [], fix: [], changed: [], reliability: [], deps: [], release: [], other: [] };
+          for (const c of commits) {
+            const type = getType(c.subject);
+            cats[type].push({ title: formatTitle(c.subject), pr: extractPR(c.subject, c.body) });
+          }
+
+          const sections = [
+            ['Breaking Changes', cats.breaking, true],
+            ['Added', cats.feat, true],
+            ['Fixed', cats.fix, false],
+            ['Changed', cats.changed, false],
+            ['Reliability', cats.reliability, false],
+            ['Dependencies', cats.deps, false],
+          ];
+
+          const lines = [`## [${newVersion}] - ${today}`, ''];
+          let anyContent = false;
+          for (const [header, bucket, bold] of sections) {
+            if (bucket.length === 0) continue;
+            anyContent = true;
+            lines.push(`### ${header}`, '');
+            for (const c of bucket) {
+              const title = bold ? `**${c.title}**` : c.title;
+              lines.push(`- ${title}${c.pr ? ' ' + c.pr : ''}`);
+            }
+            lines.push('');
+          }
+          if (!anyContent) {
+            lines.push('### Released', '', `- v${newVersion}`, '');
+          }
+
+          const newEntry = lines.join('\n');
+
+          if (!existing) {
+            const header = `# Changelog\n\nAll notable changes to \`@relayburn/${pkg}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
+            writeFileSync(path, header + newEntry + '\n');
+          } else {
+            // Insert after the [Unreleased] block, before the first versioned entry.
+            const match = existing.match(/\n## \[\d/);
+            const insertAt = match ? match.index : -1;
+            if (insertAt === -1) {
+              writeFileSync(path, existing.trimEnd() + '\n\n' + newEntry + '\n');
+            } else {
+              writeFileSync(path, existing.slice(0, insertAt + 1) + newEntry + '\n' + existing.slice(insertAt + 1));
+            }
+          }
+          console.log(`${path} updated with ${newVersion}`);
+          GENEOF
+
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            pkg="${entry%%:*}"
+            version="${entry##*:}"
+            node /tmp/gen-changelog.mjs "$pkg" "$version" "$TODAY"
+          done
+
+      - name: Commit version bumps
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/*/package.json packages/*/CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+          else
+            MSG="chore(release):"
+            for entry in ${{ steps.bump.outputs.versions }}; do
+              pkg="${entry%%:*}"
+              version="${entry##*:}"
+              MSG+=" @relayburn/$pkg@$version"
+            done
+            git commit -m "$MSG"
+          fi
+
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
+      # Authentication note: this workflow does NOT use an NPM_TOKEN. It relies
+      # on npm's OIDC trusted-publisher flow — the `id-token: write` permission
+      # above lets `npm publish --provenance` exchange the GitHub workflow's
+      # OIDC identity for a short-lived publish token. Each package must be
+      # registered as a trusted publisher on npmjs.com under this
+      # repo/workflow path for the first publish.
+      #
+      # Pipeline: `pnpm pack` rewrites workspace:* deps to concrete versions
+      # inside the tarball's package.json, then `npm publish <tarball>`
+      # uploads it using npm's native auth. This decouples workspace-aware
+      # packing from publish-time auth.
+      - name: Pack + publish
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/packs"
+          mkdir -p "$PACK_DIR"
+
+          COMMON_FLAGS="--access public --tag ${{ github.event.inputs.tag }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            COMMON_FLAGS+=" --dry-run"
+          else
+            COMMON_FLAGS+=" --provenance"
+          fi
+
+          for pkg in ${{ steps.targets.outputs.packages }}; do
+            echo "==> Packing @relayburn/$pkg"
+            pnpm --filter "@relayburn/$pkg" pack --pack-destination "$PACK_DIR"
+            TARBALL=$(ls -1t "$PACK_DIR"/relayburn-$pkg-*.tgz | head -n1)
+            if [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
+              echo "::error::could not find packed tarball for $pkg in $PACK_DIR" >&2
+              ls -la "$PACK_DIR" >&2 || true
+              exit 1
+            fi
+            echo "==> Publishing $TARBALL $COMMON_FLAGS"
+            npm publish "$TARBALL" $COMMON_FLAGS
+          done
+
+      # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
+      # lightweight tags are skipped by --follow-tags.
+      - name: Tag + push
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        run: |
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            pkg="${entry%%:*}"
+            version="${entry##*:}"
+            git tag -a "$pkg-v$version" -m "@relayburn/$pkg@$version"
+          done
+          git push origin HEAD --follow-tags
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published"
+            echo ""
+            for entry in ${{ steps.bump.outputs.versions }}; do
+              pkg="${entry%%:*}"
+              version="${entry##*:}"
+              echo "- \`@relayburn/$pkg@$version\`"
+            done
+            echo ""
+            echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
+            echo "- **dry run**: \`${{ github.event.inputs.dry_run }}\`"
+            echo ""
+            if [ "${{ github.event.inputs.dry_run }}" != "true" ]; then
+              echo "Next step: verify the published artifact by running the \`Verify Publish\` workflow."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # One GitHub Release per package tag. Runs in parallel across packages;
+  # each cell is gated on whether its package was published.
+  create-release:
+    name: Release @relayburn/${{ matrix.package }}
+    needs: publish
+    if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [reader, ledger, analyze, cli]
+    steps:
+      - name: Check if this package was published
+        id: check
+        run: |
+          VERSIONS='${{ needs.publish.outputs.versions }}'
+          for entry in $VERSIONS; do
+            pkg="${entry%%:*}"
+            ver="${entry##*:}"
+            if [ "$pkg" = "${{ matrix.package }}" ]; then
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              echo "version=$ver" >> "$GITHUB_OUTPUT"
+              if [[ "$ver" == *-* ]]; then
+                echo "prerelease=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "prerelease=false" >> "$GITHUB_OUTPUT"
+              fi
+              exit 0
+            fi
+          done
+          echo "published=false" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.check.outputs.published == 'true'
+        uses: actions/checkout@v4
+        with:
+          # Need the tag that the publish job just pushed.
+          ref: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+
+      # Prefer the per-package CHANGELOG section that was generated and
+      # committed during publish. Falls back to auto-generated notes for
+      # prereleases and first publishes (where no CHANGELOG entry exists).
+      - name: Extract changelog notes
+        if: steps.check.outputs.published == 'true'
+        id: notes
+        run: |
+          pkg="${{ matrix.package }}"
+          ver="${{ steps.check.outputs.version }}"
+          file="packages/$pkg/CHANGELOG.md"
+          out=/tmp/release-notes.md
+          : > "$out"
+          if [ -f "$file" ]; then
+            awk -v prefix="## [$ver]" '
+              index($0, prefix) == 1 { flag=1; print; next }
+              /^## \[/ && flag { exit }
+              flag { print }
+            ' "$file" > "$out"
+          fi
+          if [ -s "$out" ]; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (stable, with changelog)
+        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+          name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }}"
+          body_path: /tmp/release-notes.md
+
+      - name: Create GitHub Release (stable, auto notes)
+        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+          name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }}"
+          generate_release_notes: true
+
+      - name: Create GitHub Release (prerelease)
+        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+          name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }} (prerelease)"
+          prerelease: true
+          generate_release_notes: true

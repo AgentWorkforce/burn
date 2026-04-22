@@ -10,13 +10,21 @@
     "./schema": "./dist/schema.js",
     "./paths": "./dist/paths.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md", "CHANGELOG.md", "package.json"],
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean"
   },
   "engines": { "node": ">=22" },
   "dependencies": {
-    "@relayburn/reader": "0.0.0"
+    "@relayburn/reader": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/ledger"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

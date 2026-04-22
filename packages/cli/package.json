@@ -8,15 +8,23 @@
   "bin": {
     "burn": "./dist/cli.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md", "CHANGELOG.md", "package.json"],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && chmod +x dist/cli.js",
     "clean": "tsc --build --clean"
   },
   "engines": { "node": ">=22" },
   "dependencies": {
-    "@relayburn/reader": "0.0.0",
-    "@relayburn/ledger": "0.0.0",
-    "@relayburn/analyze": "0.0.0"
+    "@relayburn/reader": "workspace:*",
+    "@relayburn/ledger": "workspace:*",
+    "@relayburn/analyze": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

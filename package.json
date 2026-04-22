@@ -4,16 +4,13 @@
   "version": "0.0.0",
   "description": "Token usage & cost attribution for agent CLIs",
   "type": "module",
-  "workspaces": [
-    "packages/*"
-  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc --build",
     "test": "node --test --test-reporter=spec 'packages/*/dist/**/*.test.js'",
-    "test:ts": "tsc --build && npm run test",
+    "test:ts": "tsc --build && pnpm run test",
     "clean": "tsc --build --clean",
     "pricing:update": "node scripts/update-pricing.mjs"
   },
