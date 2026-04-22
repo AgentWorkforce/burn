@@ -412,4 +412,86 @@ describe('parseClaudeSessionIncremental', () => {
     assert.equal(second.turns[0]!.messageId, 'msg_inprog_1');
     assert.equal(second.turns[0]!.stopReason, 'end_turn');
   });
+
+  it('preserves the user prompt across a resume so keyword refinement still applies', async () => {
+    // Regression: when an incomplete assistant message forces endOffset to
+    // back up past the user prompt, the resumed call re-reads the assistant
+    // line without seeing the prompt. We carry lastUserText forward so the
+    // classifier still has keyword context (and can reach 'debugging' instead
+    // of falling back to 'coding').
+    const working = path.join(tmp, 'session.jsonl');
+    const sessionId = '44444444-4444-4444-4444-444444444444';
+    const lines = [
+      JSON.stringify({
+        parentUuid: null,
+        isSidechain: false,
+        type: 'user',
+        message: { role: 'user', content: 'fix the bug in auth.ts' },
+        uuid: 'u-user-1',
+        timestamp: '2026-04-20T00:00:00.000Z',
+        cwd: '/tmp/project',
+        sessionId,
+      }),
+      // Incomplete assistant (no stop_reason).
+      JSON.stringify({
+        parentUuid: 'u-user-1',
+        isSidechain: false,
+        message: {
+          model: 'claude-sonnet-4-6',
+          id: 'msg_resume_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tu_edit_1', name: 'Edit', input: { file_path: '/auth.ts' } }],
+          stop_reason: null,
+          usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } },
+        },
+        type: 'assistant',
+        uuid: 'u-asst-1',
+        timestamp: '2026-04-20T00:00:01.000Z',
+        cwd: '/tmp/project',
+        sessionId,
+      }),
+    ];
+    await writeFile(working, lines.join('\n') + '\n', 'utf8');
+
+    const first = await parseClaudeSessionIncremental(working);
+    assert.equal(first.turns.length, 0, 'incomplete turn is deferred');
+    assert.equal(first.lastUserText, 'fix the bug in auth.ts');
+
+    // Append the completion line for msg_resume_1.
+    const tail =
+      JSON.stringify({
+        parentUuid: 'u-asst-1',
+        isSidechain: false,
+        message: {
+          model: 'claude-sonnet-4-6',
+          id: 'msg_resume_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tu_edit_1', name: 'Edit', input: { file_path: '/auth.ts' } }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } },
+        },
+        type: 'assistant',
+        uuid: 'u-asst-1',
+        timestamp: '2026-04-20T00:00:01.000Z',
+        cwd: '/tmp/project',
+        sessionId,
+      }) + '\n';
+    const prev = await readFile(working, 'utf8');
+    await writeFile(working, prev + tail, 'utf8');
+
+    const second = await parseClaudeSessionIncremental(working, {
+      startOffset: first.endOffset,
+      lastUserText: first.lastUserText,
+    });
+    assert.equal(second.turns.length, 1);
+    const t = second.turns[0]!;
+    assert.equal(t.messageId, 'msg_resume_1');
+    assert.equal(t.activity, 'debugging', 'user prompt mentions "bug" so edit turn is debugging, not coding');
+
+    // Without lastUserText the prompt is lost and the turn falls back to coding.
+    const withoutSeed = await parseClaudeSessionIncremental(working, { startOffset: first.endOffset });
+    assert.equal(withoutSeed.turns[0]!.activity, 'coding');
+  });
 });

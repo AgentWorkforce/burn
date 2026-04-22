@@ -9,6 +9,10 @@ export interface ClaudeCursor {
   inode: number;
   offsetBytes: number;
   mtimeMs: number;
+  // The last user prompt text as of `offsetBytes`. Carried across calls so
+  // the activity classifier keeps keyword context when `offsetBytes` backed
+  // up past a user message to defer an incomplete assistant turn.
+  lastUserText?: string;
 }
 
 export interface CodexCursor {

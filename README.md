@@ -104,6 +104,9 @@ interface TurnRecord {
   toolCalls: ToolCall[];
   filesTouched?: string[];
   subagent?: { isSidechain: boolean };
+  activity?: ActivityCategory;  // what kind of work this turn did
+  retries?: number;              // edit→bash→edit cycles within the turn
+  hasEdits?: boolean;            // at least one Edit/Write/NotebookEdit call
 }
 ```
 
@@ -135,6 +138,36 @@ Three content modes:
 Set via `RELAYBURN_CONTENT_STORE=<mode>` or the config file.
 
 Content lives on your machine. Burn makes no outbound requests beyond optional pricing updates. If the device you run on is sensitive to conversation leak (shared dev machines, cloud-synced home directories, compliance contexts), switch to `hash-only`.
+
+## Activity classification
+
+Every turn is tagged with an `activity` label so cost can be compared like-for-like. "Sonnet cost more than Haiku last month" isn't useful on its own; "Sonnet and Haiku both attempted 43 refactoring turns, Sonnet landed them first-try 75% of the time vs. Haiku's 60%" is. That's what per-turn activity enables.
+
+Classification is deterministic and rule-based — no LLM in the loop. Every turn with the same tool calls and prompt text produces the same label.
+
+Twelve categories, from codeburn's taxonomy so cross-tool comparison stays possible:
+
+| Category | Trigger |
+|---|---|
+| `planning` | `ExitPlanMode` tool, or planning/roadmap keywords with no tool use |
+| `delegation` | `Agent` / `Task` spawn — dominates other signals |
+| `testing` | `Bash` matching `pytest`, `vitest`, `bun test`, `jest`, `go test`, `cargo test`, `npm test`, etc. |
+| `git` | `Bash` matching `git push/pull/commit/merge/rebase/checkout/cherry-pick/...` |
+| `build-deploy` | `Bash` matching `docker build`, `cargo build`, `npm run build`, `kubectl apply`, `terraform apply`, etc. |
+| `coding` | `Edit` / `Write` / `NotebookEdit` with no stronger keyword signal |
+| `debugging` | Edit turn where prompt mentions bug/error/crash/traceback, or any tool call errored this turn |
+| `refactoring` | Edit turn with keywords: `refactor`, `cleanup`, `rename`, `extract`, `restructure` |
+| `feature` | Edit turn with keywords: `add`, `create`, `implement`, `new`, `introduce` |
+| `exploration` | `Read` / `Grep` / `Glob` / `WebFetch` / `WebSearch` without edits |
+| `brainstorming` | No tool use; prompt asks *what if*, *think through*, *should we*, *design* |
+| `conversation` | No tool use, no category keywords — the fallback |
+
+Two companion fields fall out of the same pass:
+
+- `hasEdits` — true when a turn called any file-mutating tool. Lets `coding`/`refactoring`/`feature`/`debugging` share a cross-cutting filter.
+- `retries` — count of edit→bash→edit cycles *within a single turn*. Non-zero values surface reactive edits (wrote, tested, fixed) without waiting for whole-session retry analysis. Cross-turn retry loops are tracked separately.
+
+Together these make `oneShotRate = oneShotTurns / editTurns` computable directly on the ledger (a "one-shot turn" has `hasEdits && retries === 0`), which is the secondary quality signal feeding model comparison.
 
 ## Packages
 
