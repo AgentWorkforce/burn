@@ -54,6 +54,7 @@ async function runContentPrune(args: ParsedArgs): Promise<number> {
 
 function parseRetention(s: string): number | 'forever' | null {
   const trimmed = s.trim().toLowerCase();
+  if (trimmed === '') return null;
   if (trimmed === 'forever') return 'forever';
   const n = Number(trimmed);
   if (!Number.isFinite(n)) return null;
