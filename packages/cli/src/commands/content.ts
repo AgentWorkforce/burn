@@ -27,10 +27,19 @@ export async function runContent(args: ParsedArgs): Promise<number> {
 
 async function runContentPrune(args: ParsedArgs): Promise<number> {
   const cfg = await loadConfig();
-  const retention =
-    typeof args.flags['days'] === 'string'
-      ? parseRetention(args.flags['days'])
-      : cfg.content.retentionDays;
+  let retention: number | 'forever';
+  if (typeof args.flags['days'] === 'string') {
+    const parsed = parseRetention(args.flags['days']);
+    if (parsed === null) {
+      process.stderr.write(
+        `burn: invalid --days value: ${JSON.stringify(args.flags['days'])} (expected a number or "forever")\n\n${CONTENT_HELP}`,
+      );
+      return 2;
+    }
+    retention = parsed;
+  } else {
+    retention = cfg.content.retentionDays;
+  }
   const ms = retentionMs(retention);
   if (ms === null) {
     process.stdout.write(`content retention=forever — nothing to prune\n`);
@@ -43,11 +52,11 @@ async function runContentPrune(args: ParsedArgs): Promise<number> {
   return 0;
 }
 
-function parseRetention(s: string): number | 'forever' {
+function parseRetention(s: string): number | 'forever' | null {
   const trimmed = s.trim().toLowerCase();
   if (trimmed === 'forever') return 'forever';
   const n = Number(trimmed);
-  if (!Number.isFinite(n)) throw new Error(`invalid --days value: ${s}`);
+  if (!Number.isFinite(n)) return null;
   if (n < 0) return 'forever';
   return n;
 }
