@@ -12,7 +12,7 @@ import * as path from 'node:path';
 import type { ContentRecord } from '@relayburn/reader';
 
 import { withLock } from './lock.js';
-import { contentDir, contentFilePath } from './paths.js';
+import { contentDir, contentFilePath, isValidSessionId } from './paths.js';
 
 export interface PruneOptions {
   olderThanMs: number;
@@ -34,6 +34,12 @@ export async function appendContent(records: ContentRecord[]): Promise<void> {
   for (const r of records) {
     const key = r.sessionId;
     if (!key) continue;
+    if (!isValidSessionId(key)) {
+      process.stderr.write(
+        `[burn] skipping content record with unsafe sessionId: ${JSON.stringify(key)}\n`,
+      );
+      continue;
+    }
     let bucket = grouped.get(key);
     if (!bucket) {
       bucket = [];
@@ -104,21 +110,35 @@ export async function pruneContent(options: PruneOptions): Promise<PruneResult> 
   let bytesFreed = 0;
   for (const name of entries) {
     if (!name.endsWith('.jsonl')) continue;
+    const sessionId = name.slice(0, -'.jsonl'.length);
+    if (!isValidSessionId(sessionId)) continue;
     const full = path.join(dir, name);
-    let st: Awaited<ReturnType<typeof stat>>;
-    try {
-      st = await stat(full);
-    } catch {
-      continue;
-    }
-    if (!st.isFile()) continue;
-    if (st.mtimeMs >= cutoff) continue;
-    try {
-      await unlink(full);
+    // Acquire the same per-session lock used by appendSessionContent so a
+    // prune cannot race with an in-flight write for this session. We re-stat
+    // inside the lock to ensure we're deciding on the post-write mtime.
+    const outcome = await withLock(`content.${sessionId}`, async () => {
+      let st: Awaited<ReturnType<typeof stat>>;
+      try {
+        st = await stat(full);
+      } catch {
+        return null;
+      }
+      if (!st.isFile()) return null;
+      // Inclusive cutoff: files whose mtime equals now - olderThanMs are
+      // eligible. This also makes `pruneContent({olderThanMs: 0})` clear the
+      // directory reliably.
+      if (st.mtimeMs > cutoff) return null;
+      try {
+        await unlink(full);
+        return { size: st.size };
+      } catch {
+        // raced with another deleter or was already gone
+        return null;
+      }
+    });
+    if (outcome) {
       filesDeleted++;
-      bytesFreed += st.size;
-    } catch {
-      // ignore — may have been removed concurrently
+      bytesFreed += outcome.size;
     }
   }
   return { filesDeleted, bytesFreed };

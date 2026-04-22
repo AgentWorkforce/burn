@@ -59,7 +59,10 @@ export async function opportunisticPrune(): Promise<void> {
     const ms = retentionMs(cfg.content.retentionDays);
     if (ms === null) return;
     await pruneContent({ olderThanMs: ms });
-  } catch {
-    // best-effort; don't fail CLI operations on prune errors
+  } catch (err) {
+    // Best-effort — never fail a CLI operation because of prune, but surface
+    // the reason on stderr so persistent failures are diagnosable.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[burn] opportunistic content prune failed: ${msg}\n`);
   }
 }

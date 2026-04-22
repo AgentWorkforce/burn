@@ -144,6 +144,9 @@ export async function parseOpencodeSessionIncremental(
     seen.add(m.id);
   }
 
+  // TODO(#33-followup): content capture for OpenCode sessions. The result
+  // shape carries a `content` array so appendContent wiring in the CLI stays
+  // a no-op once capture lands.
   return { turns, content: [], seenMessageIds: seen };
 }
 

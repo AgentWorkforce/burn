@@ -42,12 +42,28 @@ export async function loadConfig(): Promise<BurnConfig> {
 }
 
 async function readConfigFile(): Promise<RawConfig | null> {
+  let raw: string;
   try {
-    const raw = await readFile(configPath(), 'utf8');
+    raw = await readFile(configPath(), 'utf8');
+  } catch (err) {
+    // Missing config file is the common case and not worth mentioning.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(
+        `[burn] warning: could not read ${configPath()}: ${(err as Error).message}\n`,
+      );
+    }
+    return null;
+  }
+  try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') return parsed as RawConfig;
-  } catch {
-    // missing file or invalid JSON — fall back to defaults
+    process.stderr.write(
+      `[burn] warning: ${configPath()} is not a JSON object; using defaults\n`,
+    );
+  } catch (err) {
+    process.stderr.write(
+      `[burn] warning: invalid JSON in ${configPath()} (${(err as Error).message}); using defaults\n`,
+    );
   }
   return null;
 }

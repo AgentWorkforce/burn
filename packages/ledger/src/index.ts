@@ -13,6 +13,7 @@ export {
   configPath,
   contentDir,
   contentFilePath,
+  isValidSessionId,
 } from './paths.js';
 export {
   appendContent,

@@ -105,7 +105,13 @@ export async function parseClaudeSession(
     string,
     { type?: string; taskDescription?: string }
   >();
-  const userContent: ContentRecord[] = [];
+  // Track content with a monotonic sequence tied to line-read order so user
+  // and assistant records can be merged back into chronological order at the
+  // end (one TurnRecord may span multiple lines; we key its assistant content
+  // to the seq of its first appearance).
+  const userPending: Array<{ seq: number; record: ContentRecord }> = [];
+  const firstSeq = new Map<string, number>();
+  let seq = 0;
 
   const rl = createInterface({
     input: createReadStream(filePath, { encoding: 'utf8' }),
@@ -126,21 +132,27 @@ export async function parseClaudeSession(
       const rec = parsed as Record<string, unknown>;
 
       if (rec.type === 'assistant') {
-        ingestAssistant(rec as unknown as AssistantLine, working, order);
+        const al = rec as unknown as AssistantLine;
+        const mid = al.message?.id;
+        if (captureContent && typeof mid === 'string' && !firstSeq.has(mid)) {
+          firstSeq.set(mid, seq);
+        }
+        ingestAssistant(al, working, order);
       } else if (rec.type === 'user') {
         const ul = rec as unknown as UserLine;
         captureSubagentFromToolResult(ul, subagentByToolUseId);
         if (captureContent) {
-          for (const c of extractUserContent(ul)) userContent.push(c);
+          for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
         }
       }
+      seq++;
     }
   } finally {
     rl.close();
   }
 
   const turns: TurnRecord[] = [];
-  const content: ContentRecord[] = captureContent ? [...userContent] : [];
+  const assistantPending: Array<{ seq: number; sub: number; record: ContentRecord }> = [];
   for (let i = 0; i < order.length; i++) {
     const id = order[i]!;
     const w = working.get(id);
@@ -172,10 +184,29 @@ export async function parseClaudeSession(
     turns.push(record);
 
     if (captureContent) {
-      for (const c of extractAssistantContent(w)) content.push(c);
+      const seqForMsg = firstSeq.get(w.messageId) ?? 0;
+      extractAssistantContent(w).forEach((r, sub) => {
+        // sub starts at 1 so user content at the same seq sorts before assistant
+        assistantPending.push({ seq: seqForMsg, sub: sub + 1, record: r });
+      });
     }
   }
+
+  const content: ContentRecord[] = captureContent
+    ? mergeContentByOrder(userPending, assistantPending)
+    : [];
   return { turns, content };
+}
+
+function mergeContentByOrder(
+  userPending: Array<{ seq: number; record: ContentRecord }>,
+  assistantPending: Array<{ seq: number; sub: number; record: ContentRecord }>,
+): ContentRecord[] {
+  const merged: Array<{ seq: number; sub: number; record: ContentRecord }> = [];
+  for (const u of userPending) merged.push({ seq: u.seq, sub: 0, record: u.record });
+  for (const a of assistantPending) merged.push(a);
+  merged.sort((a, b) => a.seq - b.seq || a.sub - b.sub);
+  return merged.map((m) => m.record);
 }
 
 function ingestAssistant(
@@ -464,8 +495,9 @@ export async function parseClaudeSessionIncremental(
     { type?: string; taskDescription?: string }
   >();
   const messageIdFirstOffset = new Map<string, number>();
-  // Track user-line content records along with their line start offsets so we
-  // can include only those fully within the committed range.
+  // User content tagged with the byte offset of its line so we can (a) drop
+  // records past endOffset and (b) interleave them with assistant content by
+  // source-order at emit time.
   const pendingUserContent: Array<{ offset: number; record: ContentRecord }> = [];
 
   let p = 0;
@@ -524,12 +556,7 @@ export async function parseClaudeSessionIncremental(
   const endOffset = earliestIncompleteOffset ?? cursorOffset;
 
   const turns: TurnRecord[] = [];
-  const content: ContentRecord[] = [];
-  if (captureContent) {
-    for (const { offset, record } of pendingUserContent) {
-      if (offset < endOffset) content.push(record);
-    }
-  }
+  const assistantPending: Array<{ offset: number; sub: number; record: ContentRecord }> = [];
   for (let i = 0; i < order.length; i++) {
     const id = order[i]!;
     const w = working.get(id);
@@ -560,8 +587,22 @@ export async function parseClaudeSessionIncremental(
     record.stopReason = w.stopReason;
     turns.push(record);
     if (captureContent) {
-      for (const c of extractAssistantContent(w)) content.push(c);
+      const msgOffset = messageIdFirstOffset.get(w.messageId) ?? 0;
+      extractAssistantContent(w).forEach((r, sub) => {
+        assistantPending.push({ offset: msgOffset, sub: sub + 1, record: r });
+      });
     }
+  }
+
+  let content: ContentRecord[] = [];
+  if (captureContent) {
+    const merged: Array<{ offset: number; sub: number; record: ContentRecord }> = [];
+    for (const u of pendingUserContent) {
+      if (u.offset < endOffset) merged.push({ offset: u.offset, sub: 0, record: u.record });
+    }
+    for (const a of assistantPending) merged.push(a);
+    merged.sort((a, b) => a.offset - b.offset || a.sub - b.sub);
+    content = merged.map((m) => m.record);
   }
 
   return { turns, content, endOffset };

@@ -110,6 +110,20 @@ describe('parseClaudeSession content capture', () => {
     assert.equal(asst!.source, 'claude-code');
   });
 
+  it('preserves chronological order across interleaved user/assistant turns', async () => {
+    const { content } = await parseClaudeSession(
+      path.join(FIXTURES, 'interleaved-turns.jsonl'),
+      { contentMode: 'full' },
+    );
+    const sequence = content.map((c) => `${c.role}:${c.text ?? ''}`);
+    assert.deepEqual(sequence, [
+      'user:first question',
+      'assistant:first answer',
+      'user:second question',
+      'assistant:second answer',
+    ]);
+  });
+
   it('captures thinking and tool_use blocks from a multi-block turn', async () => {
     const { content } = await parseClaudeSession(
       path.join(FIXTURES, 'multi-block-turn.jsonl'),

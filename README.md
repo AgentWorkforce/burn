@@ -118,6 +118,7 @@ A **content sidecar** (enabled by default) stores the full conversation separate
 - User prompts and assistant responses.
 - Tool inputs and outputs, verbatim.
 - Lives at `~/.relayburn/content/<sessionId>.jsonl` — separate from the main ledger so aggregate queries stay fast.
+- **Currently captured for Claude Code sessions only.** Codex and OpenCode readers flow through the same `content.store` modes but do not yet populate content records; this is tracked as a follow-up.
 
 Content is stored because it meaningfully strengthens several attribution and diagnostic paths — tool-call sizing becomes exact (no delta estimation), outcome inference gets a real signal, CLAUDE.md adherence checking becomes possible, and waste patterns can surface the specific error text that caused a retry loop rather than just a count.
 

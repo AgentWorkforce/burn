@@ -125,6 +125,42 @@ describe('content sidecar', () => {
     const result = await pruneContent({ olderThanMs: 1000 });
     assert.deepEqual(result, { filesDeleted: 0, bytesFreed: 0 });
   });
+
+  it('pruneContent with olderThanMs=0 clears the directory (inclusive cutoff)', async () => {
+    await appendContent([
+      record({ sessionId: 's-1', messageId: 'a' }),
+      record({ sessionId: 's-2', messageId: 'b' }),
+    ]);
+    // Force files to appear older-or-equal to "now" — any eligible mtime
+    // relative to cutoff=Date.now().
+    const now = new Date();
+    await __setContentFileMtimeForTesting('s-1', now);
+    await __setContentFileMtimeForTesting('s-2', now);
+    const result = await pruneContent({ olderThanMs: 0 });
+    assert.equal(result.filesDeleted, 2);
+    const files = await readdir(contentDir());
+    assert.deepEqual(files, []);
+  });
+
+  it('rejects content records with path-traversal sessionId instead of writing outside content/', async () => {
+    const bad = record({ sessionId: '../escape', messageId: 'm' });
+    const origWrite = process.stderr.write.bind(process.stderr);
+    let stderr = '';
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      stderr += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await appendContent([bad, record({ sessionId: 's-safe', messageId: 'm' })]);
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    assert.ok(stderr.includes('unsafe sessionId'));
+    const files = await readdir(contentDir());
+    assert.deepEqual(files, ['s-safe.jsonl']);
+    // The escape path must not exist.
+    await assert.rejects(() => stat(path.join(tmp, 'escape.jsonl')), { code: 'ENOENT' });
+  });
 });
 
 describe('loadConfig', () => {
@@ -194,7 +230,33 @@ describe('loadConfig', () => {
     assert.equal(cfg.content.store, 'full');
   });
 
+  it('warns on invalid JSON in config file and falls back to defaults', async () => {
+    await writeFile(configPath(), '{ this is not json', 'utf8');
+    const origWrite = process.stderr.write.bind(process.stderr);
+    let stderr = '';
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      stderr += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stderr.write;
+    let cfg;
+    try {
+      cfg = await loadConfig();
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    assert.ok(stderr.includes('invalid JSON'));
+    assert.deepEqual(cfg, DEFAULT_CONFIG);
+  });
+
   it('writes files with the right sidecar path', async () => {
     assert.equal(contentFilePath('sess-42'), path.join(tmp, 'content', 'sess-42.jsonl'));
+  });
+
+  it('contentFilePath rejects invalid sessionIds', () => {
+    assert.throws(() => contentFilePath('../escape'));
+    assert.throws(() => contentFilePath('has/slash'));
+    assert.throws(() => contentFilePath(''));
+    assert.throws(() => contentFilePath('.'));
+    assert.throws(() => contentFilePath('..'));
   });
 });

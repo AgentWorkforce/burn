@@ -361,6 +361,9 @@ export async function parseCodexSessionIncremental(
   };
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
 
+  // TODO(#33-followup): content capture for Codex sessions. The incremental
+  // result preserves the { turns, content } shape so that wiring the reader
+  // output into appendContent is a no-op when full content arrives.
   return { turns, content: [], endOffset: committedEndOffset, resume };
 }
 
