@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
+import { classifyActivity } from './classifier.js';
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type {
@@ -111,6 +112,9 @@ export async function parseClaudeSession(
   // to the seq of its first appearance).
   const userPending: Array<{ seq: number; record: ContentRecord }> = [];
   const firstSeq = new Map<string, number>();
+  const userTextByMessageId = new Map<string, string>();
+  const erroredToolUseIds = new Set<string>();
+  let currentUserText = '';
   let seq = 0;
 
   const rl = createInterface({
@@ -137,9 +141,15 @@ export async function parseClaudeSession(
         if (captureContent && typeof mid === 'string' && !firstSeq.has(mid)) {
           firstSeq.set(mid, seq);
         }
+        if (typeof mid === 'string' && !userTextByMessageId.has(mid)) {
+          userTextByMessageId.set(mid, currentUserText);
+        }
         ingestAssistant(al, working, order);
       } else if (rec.type === 'user') {
         const ul = rec as unknown as UserLine;
+        const prompt = extractPlainUserText(ul);
+        if (prompt) currentUserText = prompt;
+        collectErroredToolUseIds(ul, erroredToolUseIds);
         captureSubagentFromToolResult(ul, subagentByToolUseId);
         if (captureContent) {
           for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
@@ -181,6 +191,7 @@ export async function parseClaudeSession(
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (subagent) record.subagent = subagent;
     if (w.stopReason !== undefined) record.stopReason = w.stopReason;
+    applyClassification(record, w, userTextByMessageId, erroredToolUseIds);
     turns.push(record);
 
     if (captureContent) {
@@ -455,6 +466,67 @@ function resolveSubagent(
   return undefined;
 }
 
+function extractPlainUserText(line: UserLine): string | undefined {
+  const body = line.message?.content;
+  if (typeof body === 'string') {
+    return body.length > 0 ? body : undefined;
+  }
+  if (!Array.isArray(body)) return undefined;
+  const parts: string[] = [];
+  for (const block of body) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'text') {
+      const b = block as { text?: string };
+      if (typeof b.text === 'string' && b.text.length > 0) parts.push(b.text);
+    }
+  }
+  return parts.length > 0 ? parts.join('\n') : undefined;
+}
+
+function collectErroredToolUseIds(line: UserLine, into: Set<string>): void {
+  const body = line.message?.content;
+  if (!Array.isArray(body)) return;
+  for (const block of body) {
+    if (!block || typeof block !== 'object' || block.type !== 'tool_result') continue;
+    const tr = block as { tool_use_id?: string; is_error?: boolean };
+    if (tr.is_error === true && typeof tr.tool_use_id === 'string') {
+      into.add(tr.tool_use_id);
+    }
+  }
+}
+
+function applyClassification(
+  record: TurnRecord,
+  w: WorkingRecord,
+  userTextByMessageId: Map<string, string>,
+  erroredToolUseIds: Set<string>,
+): void {
+  const userText = userTextByMessageId.get(w.messageId) ?? '';
+  const assistantText = extractAssistantTextForClassification(w.blocks);
+  const text = [userText, assistantText].filter((s) => s.length > 0).join('\n');
+  const hasFailedTool = record.toolCalls.some((tc) => erroredToolUseIds.has(tc.id));
+  const result = classifyActivity({
+    toolCalls: record.toolCalls,
+    text,
+    hasFailedTool,
+  });
+  record.activity = result.activity;
+  record.retries = result.retries;
+  record.hasEdits = result.hasEdits;
+}
+
+function extractAssistantTextForClassification(blocks: ContentBlock[]): string {
+  const parts: string[] = [];
+  for (const b of blocks) {
+    if (!b || typeof b !== 'object') continue;
+    if (b.type === 'text') {
+      const tb = b as { text?: string };
+      if (typeof tb.text === 'string' && tb.text.length > 0) parts.push(tb.text);
+    }
+  }
+  return parts.join('\n');
+}
+
 export interface ParseIncrementalOptions extends ParseOptions {
   startOffset?: number;
 }
@@ -495,6 +567,9 @@ export async function parseClaudeSessionIncremental(
     { type?: string; taskDescription?: string }
   >();
   const messageIdFirstOffset = new Map<string, number>();
+  const userTextByMessageId = new Map<string, string>();
+  const erroredToolUseIds = new Set<string>();
+  let currentUserText = '';
   // User content tagged with the byte offset of its line so we can (a) drop
   // records past endOffset and (b) interleave them with assistant content by
   // source-order at emit time.
@@ -526,9 +601,15 @@ export async function parseClaudeSessionIncremental(
       if (msgId && !messageIdFirstOffset.has(msgId)) {
         messageIdFirstOffset.set(msgId, lineStartOffset);
       }
+      if (msgId && !userTextByMessageId.has(msgId)) {
+        userTextByMessageId.set(msgId, currentUserText);
+      }
       ingestAssistant(line, working, order);
     } else if (rec.type === 'user') {
       const ul = rec as unknown as UserLine;
+      const prompt = extractPlainUserText(ul);
+      if (prompt) currentUserText = prompt;
+      collectErroredToolUseIds(ul, erroredToolUseIds);
       captureSubagentFromToolResult(ul, subagentByToolUseId);
       if (captureContent) {
         for (const c of extractUserContent(ul)) {
@@ -585,6 +666,7 @@ export async function parseClaudeSessionIncremental(
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (subagent) record.subagent = subagent;
     record.stopReason = w.stopReason;
+    applyClassification(record, w, userTextByMessageId, erroredToolUseIds);
     turns.push(record);
     if (captureContent) {
       const msgOffset = messageIdFirstOffset.get(w.messageId) ?? 0;

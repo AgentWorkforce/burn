@@ -29,6 +29,20 @@ export interface Subagent {
   parentToolUseId?: string;
 }
 
+export type ActivityCategory =
+  | 'planning'
+  | 'delegation'
+  | 'testing'
+  | 'git'
+  | 'build-deploy'
+  | 'coding'
+  | 'debugging'
+  | 'refactoring'
+  | 'feature'
+  | 'exploration'
+  | 'brainstorming'
+  | 'conversation';
+
 export interface TurnRecord {
   v: 1;
   source: SourceKind;
@@ -45,6 +59,9 @@ export interface TurnRecord {
   filesTouched?: string[];
   subagent?: Subagent;
   stopReason?: string;
+  activity?: ActivityCategory;
+  retries?: number;
+  hasEdits?: boolean;
 }
 
 export type ContentRole = 'user' | 'assistant' | 'tool_result';
