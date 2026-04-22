@@ -224,6 +224,32 @@ describe('loadConfig', () => {
     assert.equal(cfg.content.retentionDays, 'forever');
   });
 
+  it('treats empty RELAYBURN_CONTENT_TTL_DAYS as unset (does not wipe content)', async () => {
+    // Previously `Number('') === 0` made empty string mean "0 days" which
+    // would trigger opportunisticPrune to delete all content. It should now
+    // be treated as not-set, falling through to the default (90 days).
+    process.env['RELAYBURN_CONTENT_TTL_DAYS'] = '';
+    const cfg = await loadConfig();
+    assert.equal(cfg.content.retentionDays, 90);
+  });
+
+  it('whitespace-only RELAYBURN_CONTENT_TTL_DAYS is also treated as unset', async () => {
+    process.env['RELAYBURN_CONTENT_TTL_DAYS'] = '   ';
+    const cfg = await loadConfig();
+    assert.equal(cfg.content.retentionDays, 90);
+  });
+
+  it('empty env does not override config file retentionDays', async () => {
+    await writeFile(
+      configPath(),
+      JSON.stringify({ content: { retentionDays: 7 } }),
+      'utf8',
+    );
+    process.env['RELAYBURN_CONTENT_TTL_DAYS'] = '';
+    const cfg = await loadConfig();
+    assert.equal(cfg.content.retentionDays, 7);
+  });
+
   it('ignores invalid content.store values and falls back', async () => {
     process.env['RELAYBURN_CONTENT_STORE'] = 'nonsense';
     const cfg = await loadConfig();
@@ -258,5 +284,15 @@ describe('loadConfig', () => {
     assert.throws(() => contentFilePath(''));
     assert.throws(() => contentFilePath('.'));
     assert.throws(() => contentFilePath('..'));
+  });
+
+  it('contentFilePath rejects sessionIds longer than the filesystem-safe cap', () => {
+    // Cap at 128 keeps `${id}.jsonl` and `content.${id}.lock` safely under
+    // the common 255-byte filename limit.
+    const tooLong = 'a'.repeat(129);
+    assert.throws(() => contentFilePath(tooLong));
+    // A 128-char id is still accepted.
+    const maxOk = 'a'.repeat(128);
+    assert.doesNotThrow(() => contentFilePath(maxOk));
   });
 });

@@ -106,6 +106,11 @@ function normalizeRetention(v: unknown): number | 'forever' | null {
   }
   if (typeof v === 'string') {
     const s = v.trim().toLowerCase();
+    // Empty string means "not set" — important because `RELAYBURN_CONTENT_TTL_DAYS=`
+    // (or a CI/CD pipeline producing an empty value) would otherwise parse as
+    // `Number('') === 0` and, combined with opportunisticPrune on every CLI
+    // invocation, silently wipe the entire content sidecar.
+    if (s === '') return null;
     if (s === 'forever') return 'forever';
     const n = Number(s);
     if (Number.isFinite(n)) {

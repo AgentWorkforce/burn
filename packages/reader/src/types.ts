@@ -58,7 +58,10 @@ export interface ContentToolUse {
 
 export interface ContentToolResult {
   toolUseId: string;
-  content: string | unknown;
+  // Tool results arrive in multiple shapes: plain string output, structured
+  // objects (e.g. image blocks), arrays of blocks. We pass the value through
+  // verbatim; downstream consumers narrow as needed.
+  content: unknown;
   isError?: boolean;
 }
 
