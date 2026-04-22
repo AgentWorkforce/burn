@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { classifyActivity, countRetries } from './classifier.js';
+import { classifyActivity, countRetries, normalizeToolName } from './classifier.js';
 import type { ToolCall } from './types.js';
 
 const tc = (name: string, target?: string, id = name): ToolCall => {
@@ -232,5 +232,66 @@ describe('classifyActivity — hasEdits flag', () => {
   it('is false when only read-only or bash tools are present', () => {
     assert.equal(classifyActivity({ toolCalls: [tc('Read', '/a.ts')] }).hasEdits, false);
     assert.equal(classifyActivity({ toolCalls: [tc('Bash', 'ls')] }).hasEdits, false);
+  });
+});
+
+describe('classifyActivity — cross-harness tool aliasing', () => {
+  it('treats codex apply_patch as an edit', () => {
+    const r = classifyActivity({ toolCalls: [tc('apply_patch', '/a.ts')] });
+    assert.equal(r.hasEdits, true);
+    assert.equal(r.activity, 'coding');
+  });
+
+  it('treats codex exec_command as bash for test/git/build detection', () => {
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('exec_command', 'pytest -q')] }).activity,
+      'testing',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('exec_command', 'git push origin main')] }).activity,
+      'git',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('shell', 'npm run build')] }).activity,
+      'build-deploy',
+    );
+  });
+
+  it('treats opencode lowercase tool names the same as claude names', () => {
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('edit', '/a.ts')] }).hasEdits,
+      true,
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('bash', 'vitest')] }).activity,
+      'testing',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('read', '/a.ts'), tc('grep', 'foo')] }).activity,
+      'exploration',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('task', 'explore')] }).activity,
+      'delegation',
+    );
+  });
+
+  it('counts retries across harness-normalized edit/bash cycles', () => {
+    // Codex style: apply_patch → exec_command → apply_patch → exec_command → apply_patch
+    assert.equal(
+      countRetries([
+        tc('apply_patch', '/a.ts', '1'),
+        tc('exec_command', 'pytest', '2'),
+        tc('apply_patch', '/a.ts', '3'),
+        tc('exec_command', 'pytest', '4'),
+        tc('apply_patch', '/a.ts', '5'),
+      ]),
+      2,
+    );
+  });
+
+  it('normalizeToolName returns the name unchanged when no alias exists', () => {
+    assert.equal(normalizeToolName('Edit'), 'Edit');
+    assert.equal(normalizeToolName('mcp_thing'), 'mcp_thing');
   });
 });

@@ -12,7 +12,7 @@ export type {
   ContentToolResult,
   ContentStoreMode,
 } from './types.js';
-export { classifyActivity, countRetries } from './classifier.js';
+export { classifyActivity, countRetries, normalizeToolName } from './classifier.js';
 export type { ClassificationInput, ClassificationResult } from './classifier.js';
 export { parseClaudeSession, parseClaudeSessionIncremental } from './claude.js';
 export type {

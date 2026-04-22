@@ -26,6 +26,32 @@ const READ_ONLY_TOOLS = new Set([
   'LS',
 ]);
 
+// Map harness-specific tool names to the canonical (Claude Code) names the
+// rule tables above are written against. The classifier is rule-based and
+// deterministic, so adding a new harness is just adding its tool names here.
+const TOOL_ALIASES: Record<string, string> = {
+  // Codex
+  apply_patch: 'Edit',
+  exec_command: 'Bash',
+  shell: 'Bash',
+  read_file: 'Read',
+  write_file: 'Write',
+  update_plan: 'ExitPlanMode',
+  // OpenCode (lowercase names)
+  read: 'Read',
+  write: 'Write',
+  edit: 'Edit',
+  bash: 'Bash',
+  grep: 'Grep',
+  glob: 'Glob',
+  webfetch: 'WebFetch',
+  task: 'Task',
+};
+
+export function normalizeToolName(name: string): string {
+  return TOOL_ALIASES[name] ?? name;
+}
+
 // Bash command heuristics. Match on the first non-env token after stripping
 // leading environment assignments (e.g. "CI=1 pytest" → "pytest").
 const TEST_PATTERNS: RegExp[] = [
@@ -76,7 +102,7 @@ export function classifyActivity(input: ClassificationInput): ClassificationResu
   const toolCalls = input.toolCalls ?? [];
   const text = input.text ?? '';
   const hasFailedTool = input.hasFailedTool === true;
-  const hasEdits = toolCalls.some((t) => EDIT_TOOLS.has(t.name));
+  const hasEdits = toolCalls.some((t) => EDIT_TOOLS.has(normalizeToolName(t.name)));
   const retries = countRetries(toolCalls);
 
   const activity = pickCategory({ toolCalls, text, hasFailedTool, hasEdits });
@@ -92,10 +118,10 @@ interface PickInput {
 
 function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): ActivityCategory {
   // Priority 1: delegation — spawning a subagent dominates whatever else happened.
-  if (toolCalls.some((t) => DELEGATION_TOOLS.has(t.name))) return 'delegation';
+  if (toolCalls.some((t) => DELEGATION_TOOLS.has(normalizeToolName(t.name)))) return 'delegation';
 
   // Priority 2: explicit plan-mode marker.
-  if (toolCalls.some((t) => t.name === 'ExitPlanMode')) return 'planning';
+  if (toolCalls.some((t) => normalizeToolName(t.name) === 'ExitPlanMode')) return 'planning';
 
   // Priority 3: edits present. Let keyword refinement pick a sub-category;
   // default to coding if nothing stronger fires.
@@ -110,7 +136,7 @@ function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): 
   if (hasFailedTool) return 'debugging';
 
   // Priority 5: bash commands with recognizable patterns.
-  const bashCalls = toolCalls.filter((t) => t.name === 'Bash');
+  const bashCalls = toolCalls.filter((t) => normalizeToolName(t.name) === 'Bash');
   for (const call of bashCalls) {
     const cmd = stripEnv(call.target ?? '');
     if (!cmd) continue;
@@ -124,7 +150,7 @@ function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): 
   if (toolCalls.length > 0) {
     const refined = refineByKeywords(text, false);
     if (refined) return refined;
-    if (toolCalls.some((t) => READ_ONLY_TOOLS.has(t.name))) return 'exploration';
+    if (toolCalls.some((t) => READ_ONLY_TOOLS.has(normalizeToolName(t.name)))) return 'exploration';
     return 'exploration';
   }
 
@@ -159,13 +185,14 @@ export function countRetries(toolCalls: ToolCall[]): number {
   let seenEdit = false;
   let seenBashAfterEdit = false;
   for (const tc of toolCalls) {
-    if (EDIT_TOOLS.has(tc.name)) {
+    const name = normalizeToolName(tc.name);
+    if (EDIT_TOOLS.has(name)) {
       if (seenEdit && seenBashAfterEdit) {
         retries++;
         seenBashAfterEdit = false;
       }
       seenEdit = true;
-    } else if (tc.name === 'Bash' && seenEdit) {
+    } else if (name === 'Bash' && seenEdit) {
       seenBashAfterEdit = true;
     }
   }

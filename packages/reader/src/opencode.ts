@@ -1,6 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { classifyActivity } from './classifier.js';
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type {
@@ -50,6 +51,8 @@ interface ToolPart {
   tool?: string;
   state?: {
     input?: Record<string, unknown>;
+    status?: string;
+    metadata?: { exit?: number; [k: string]: unknown };
     [k: string]: unknown;
   };
 }
@@ -60,10 +63,24 @@ interface StepFinishPart {
   tokens?: MessageTokens;
 }
 
+interface TextPart {
+  type: 'text';
+  text?: string;
+  synthetic?: boolean;
+}
+
 type Part =
   | ToolPart
   | StepFinishPart
+  | TextPart
   | { type: string; [k: string]: unknown };
+
+interface UserMessage {
+  id: string;
+  sessionID: string;
+  role: 'user';
+  time: { created: number };
+}
 
 export interface ParseOpencodeResult {
   turns: TurnRecord[];
@@ -100,7 +117,9 @@ export async function parseOpencodeSessionIncremental(
   const storageRoot = path.resolve(sessionFilePath, '..', '..', '..');
   const messages = await readMessages(storageRoot, session.id);
   const assistants = messages.filter(isCompleteAssistant);
+  const users = messages.filter(isCompleteUser);
   assistants.sort((a, b) => a.time.created - b.time.created);
+  users.sort((a, b) => a.time.created - b.time.created);
 
   const isSidechain = typeof session.parentID === 'string' && session.parentID.length > 0;
   const seen = new Set<string>(options.seenMessageIds ?? []);
@@ -110,7 +129,7 @@ export async function parseOpencodeSessionIncremental(
     const m = assistants[i]!;
     if (seen.has(m.id)) continue;
     const parts = await readParts(storageRoot, m.id);
-    const { toolCalls, filesTouched } = extractToolsAndFiles(parts);
+    const { toolCalls, filesTouched, erroredCallIds } = extractToolsAndFiles(parts);
     const stopReason = lastStepFinishReason(parts);
 
     const model = buildModel(m.providerID, m.modelID);
@@ -140,6 +159,21 @@ export async function parseOpencodeSessionIncremental(
       record.subagent = sub;
     }
     if (stopReason !== undefined) record.stopReason = stopReason;
+
+    const userMessage = findPrecedingUser(users, m.time.created);
+    const userText = userMessage ? await readUserText(storageRoot, userMessage.id) : '';
+    const assistantText = extractAssistantText(parts);
+    const cText = [userText, assistantText].filter((s) => s.length > 0).join('\n');
+    const hasFailedTool = toolCalls.some((tc) => erroredCallIds.has(tc.id));
+    const classified = classifyActivity({
+      toolCalls,
+      text: cText,
+      hasFailedTool,
+    });
+    record.activity = classified.activity;
+    record.retries = classified.retries;
+    record.hasEdits = classified.hasEdits;
+
     turns.push(record);
     seen.add(m.id);
   }
@@ -167,7 +201,7 @@ async function readSession(sessionFilePath: string): Promise<SessionInfo | null>
 async function readMessages(
   storageRoot: string,
   sessionId: string,
-): Promise<Array<AssistantMessage | { role: string; id: string }>> {
+): Promise<Array<AssistantMessage | UserMessage | { role: string; id: string }>> {
   const dir = path.join(storageRoot, 'message', sessionId);
   let entries: string[];
   try {
@@ -175,7 +209,7 @@ async function readMessages(
   } catch {
     return [];
   }
-  const out: Array<AssistantMessage | { role: string; id: string }> = [];
+  const out: Array<AssistantMessage | UserMessage | { role: string; id: string }> = [];
   for (const name of entries) {
     if (!name.endsWith('.json')) continue;
     const full = path.join(dir, name);
@@ -185,7 +219,7 @@ async function readMessages(
       const role = parsed.role;
       const id = parsed.id;
       if (typeof role !== 'string' || typeof id !== 'string') continue;
-      out.push(parsed as unknown as AssistantMessage | { role: string; id: string });
+      out.push(parsed as unknown as AssistantMessage | UserMessage | { role: string; id: string });
     } catch {
       continue;
     }
@@ -220,10 +254,12 @@ async function readParts(storageRoot: string, messageId: string): Promise<Part[]
 function extractToolsAndFiles(parts: Part[]): {
   toolCalls: ToolCall[];
   filesTouched: string[];
+  erroredCallIds: Set<string>;
 } {
   const toolCalls: ToolCall[] = [];
   const seen = new Set<string>();
   const files = new Set<string>();
+  const erroredCallIds = new Set<string>();
   for (const p of parts) {
     if (p.type !== 'tool') continue;
     const tp = p as ToolPart;
@@ -240,8 +276,65 @@ function extractToolsAndFiles(parts: Part[]): {
     if (target !== undefined) call.target = target;
     toolCalls.push(call);
     if (target !== undefined && isFileTool(tp.tool)) files.add(target);
+    if (isFailedTool(tp)) erroredCallIds.add(tp.callID);
   }
-  return { toolCalls, filesTouched: [...files] };
+  return { toolCalls, filesTouched: [...files], erroredCallIds };
+}
+
+function isFailedTool(tp: ToolPart): boolean {
+  const state = tp.state;
+  if (!state) return false;
+  if (state.status === 'error') return true;
+  // For bash-family tools, a non-zero exit code in metadata is a failure
+  // even though state.status is reported as 'completed'.
+  const exit = state.metadata?.exit;
+  if (typeof exit === 'number' && exit !== 0) return true;
+  return false;
+}
+
+function extractAssistantText(parts: Part[]): string {
+  const chunks: string[] = [];
+  for (const p of parts) {
+    if (p.type !== 'text') continue;
+    const tp = p as TextPart;
+    if (tp.synthetic === true) continue;
+    if (typeof tp.text === 'string' && tp.text.length > 0) chunks.push(tp.text);
+  }
+  return chunks.join('\n');
+}
+
+function findPrecedingUser(users: UserMessage[], tsCreated: number): UserMessage | undefined {
+  let best: UserMessage | undefined;
+  for (const u of users) {
+    if (u.time.created <= tsCreated) best = u;
+    else break;
+  }
+  return best;
+}
+
+async function readUserText(storageRoot: string, userMessageId: string): Promise<string> {
+  const parts = await readParts(storageRoot, userMessageId);
+  const chunks: string[] = [];
+  for (const p of parts) {
+    if (p.type !== 'text') continue;
+    const tp = p as TextPart;
+    // Skip harness-injected prompts (agent-mode nudges, etc.) — they'd bias
+    // classification toward whatever the injection talks about rather than
+    // the user's real intent.
+    if (tp.synthetic === true) continue;
+    if (typeof tp.text === 'string' && tp.text.length > 0) chunks.push(tp.text);
+  }
+  return chunks.join('\n');
+}
+
+function isCompleteUser(m: { role: string; id: string }): m is UserMessage {
+  if (m.role !== 'user') return false;
+  const u = m as Partial<UserMessage>;
+  return (
+    typeof u.sessionID === 'string' &&
+    typeof u.time?.created === 'number' &&
+    Number.isFinite(u.time.created)
+  );
 }
 
 function pickTarget(name: string, input: Record<string, unknown>): string | undefined {
