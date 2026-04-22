@@ -11,7 +11,7 @@ const FIXTURES = path.resolve(__dirname, '..', '..', '..', 'tests', 'fixtures', 
 
 describe('parseCodexSession', () => {
   it('parses a simple one-turn session', async () => {
-    const turns = await parseCodexSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'simple-turn.jsonl'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.equal(t.v, 1);
@@ -35,7 +35,7 @@ describe('parseCodexSession', () => {
   });
 
   it('extracts function and custom tool calls and maps filesTouched from patch_apply_end', async () => {
-    const turns = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.equal(t.model, 'gpt-5.3-codex');
@@ -66,7 +66,7 @@ describe('parseCodexSession', () => {
   });
 
   it('computes per-turn usage as delta of cumulative totals across multiple turns', async () => {
-    const turns = await parseCodexSession(path.join(FIXTURES, 'multi-turn.jsonl'));
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'multi-turn.jsonl'));
     assert.equal(turns.length, 2);
 
     const [t1, t2] = turns;
@@ -101,13 +101,13 @@ describe('parseCodexSession', () => {
   it('produces stable argsHash for identical tool inputs', async () => {
     const a = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
     const b = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
-    assert.equal(a[0]!.toolCalls[0]!.argsHash, b[0]!.toolCalls[0]!.argsHash);
-    assert.notEqual(a[0]!.toolCalls[0]!.argsHash, a[0]!.toolCalls[1]!.argsHash);
+    assert.equal(a.turns[0]!.toolCalls[0]!.argsHash, b.turns[0]!.toolCalls[0]!.argsHash);
+    assert.notEqual(a.turns[0]!.toolCalls[0]!.argsHash, a.turns[0]!.toolCalls[1]!.argsHash);
   });
 
   it('respects sessionPath option', async () => {
     const file = path.join(FIXTURES, 'simple-turn.jsonl');
-    const turns = await parseCodexSession(file, { sessionPath: file });
+    const { turns } = await parseCodexSession(file, { sessionPath: file });
     assert.equal(turns[0]!.sessionPath, file);
   });
 });
@@ -117,7 +117,7 @@ describe('parseCodexSessionIncremental', () => {
     const file = path.join(FIXTURES, 'multi-turn.jsonl');
     const expected = await parseCodexSession(file);
     const { turns, endOffset } = await parseCodexSessionIncremental(file);
-    assert.equal(turns.length, expected.length);
+    assert.equal(turns.length, expected.turns.length);
     const raw = await readFile(file);
     assert.equal(endOffset, raw.length);
   });
@@ -167,7 +167,7 @@ describe('parseCodexSessionIncremental', () => {
       assert.equal(resumed.turns[0]!.messageId, 'turn_multi_2');
       // The second turn's usage must match the delta computed in the full parse
       const full = await parseCodexSession(fullPath);
-      assert.deepEqual(resumed.turns[0]!.usage, full[1]!.usage);
+      assert.deepEqual(resumed.turns[0]!.usage, full.turns[1]!.usage);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

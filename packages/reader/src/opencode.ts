@@ -3,10 +3,18 @@ import * as path from 'node:path';
 
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
-import type { Subagent, ToolCall, TurnRecord, Usage } from './types.js';
+import type {
+  ContentRecord,
+  ContentStoreMode,
+  Subagent,
+  ToolCall,
+  TurnRecord,
+  Usage,
+} from './types.js';
 
 export interface ParseOpencodeOptions {
   sessionPath?: string;
+  contentMode?: ContentStoreMode;
 }
 
 interface SessionInfo {
@@ -57,12 +65,17 @@ type Part =
   | StepFinishPart
   | { type: string; [k: string]: unknown };
 
+export interface ParseOpencodeResult {
+  turns: TurnRecord[];
+  content: ContentRecord[];
+}
+
 export async function parseOpencodeSession(
   sessionFilePath: string,
   options: ParseOpencodeOptions = {},
-): Promise<TurnRecord[]> {
-  const { turns } = await parseOpencodeSessionIncremental(sessionFilePath, options);
-  return turns;
+): Promise<ParseOpencodeResult> {
+  const { turns, content } = await parseOpencodeSessionIncremental(sessionFilePath, options);
+  return { turns, content };
 }
 
 export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
@@ -71,6 +84,7 @@ export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
 
 export interface ParseOpencodeIncrementalResult {
   turns: TurnRecord[];
+  content: ContentRecord[];
   seenMessageIds: Set<string>;
 }
 
@@ -79,7 +93,9 @@ export async function parseOpencodeSessionIncremental(
   options: ParseOpencodeIncrementalOptions = {},
 ): Promise<ParseOpencodeIncrementalResult> {
   const session = await readSession(sessionFilePath);
-  if (!session) return { turns: [], seenMessageIds: new Set(options.seenMessageIds ?? []) };
+  if (!session) {
+    return { turns: [], content: [], seenMessageIds: new Set(options.seenMessageIds ?? []) };
+  }
 
   const storageRoot = path.resolve(sessionFilePath, '..', '..', '..');
   const messages = await readMessages(storageRoot, session.id);
@@ -128,7 +144,7 @@ export async function parseOpencodeSessionIncremental(
     seen.add(m.id);
   }
 
-  return { turns, seenMessageIds: seen };
+  return { turns, content: [], seenMessageIds: seen };
 }
 
 async function readSession(sessionFilePath: string): Promise<SessionInfo | null> {

@@ -1,0 +1,65 @@
+import { loadConfig, pruneContent, retentionMs } from '@relayburn/ledger';
+
+import type { ParsedArgs } from '../args.js';
+
+const CONTENT_HELP = `burn content — manage the content sidecar
+
+Usage:
+  burn content prune [--days <n>]
+
+Examples:
+  burn content prune
+  burn content prune --days 30
+`;
+
+export async function runContent(args: ParsedArgs): Promise<number> {
+  const sub = args.positional[0];
+  if (!sub || sub === 'help' || sub === '--help' || sub === '-h') {
+    process.stdout.write(CONTENT_HELP);
+    return 0;
+  }
+  if (sub === 'prune') {
+    return runContentPrune(args);
+  }
+  process.stderr.write(`unknown content subcommand: ${sub}\n\n${CONTENT_HELP}`);
+  return 1;
+}
+
+async function runContentPrune(args: ParsedArgs): Promise<number> {
+  const cfg = await loadConfig();
+  const retention =
+    typeof args.flags['days'] === 'string'
+      ? parseRetention(args.flags['days'])
+      : cfg.content.retentionDays;
+  const ms = retentionMs(retention);
+  if (ms === null) {
+    process.stdout.write(`content retention=forever — nothing to prune\n`);
+    return 0;
+  }
+  const result = await pruneContent({ olderThanMs: ms });
+  process.stdout.write(
+    `pruned ${result.filesDeleted} content file${result.filesDeleted === 1 ? '' : 's'} (${result.bytesFreed} bytes)\n`,
+  );
+  return 0;
+}
+
+function parseRetention(s: string): number | 'forever' {
+  const trimmed = s.trim().toLowerCase();
+  if (trimmed === 'forever') return 'forever';
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) throw new Error(`invalid --days value: ${s}`);
+  if (n < 0) return 'forever';
+  return n;
+}
+
+export async function opportunisticPrune(): Promise<void> {
+  try {
+    const cfg = await loadConfig();
+    if (cfg.content.store === 'off') return;
+    const ms = retentionMs(cfg.content.retentionDays);
+    if (ms === null) return;
+    await pruneContent({ olderThanMs: ms });
+  } catch {
+    // best-effort; don't fail CLI operations on prune errors
+  }
+}

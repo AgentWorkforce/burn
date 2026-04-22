@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import { parseClaudeSession } from '@relayburn/reader';
-import { appendTurns, stamp } from '@relayburn/ledger';
+import { appendContent, appendTurns, loadConfig, stamp } from '@relayburn/ledger';
 import type { Enrichment } from '@relayburn/ledger';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
@@ -52,8 +52,13 @@ async function ingestSession(cwd: string, sessionId: string): Promise<void> {
     process.stderr.write(`[burn] no session file found at ${file}\n`);
     return;
   }
-  const turns = await parseClaudeSession(file, { sessionPath: file });
+  const cfg = await loadConfig();
+  const { turns, content } = await parseClaudeSession(file, {
+    sessionPath: file,
+    contentMode: cfg.content.store,
+  });
   if (turns.length === 0) return;
   await appendTurns(turns);
+  if (content.length > 0) await appendContent(content);
   process.stderr.write(`[burn] ingested ${turns.length} turns from ${file}\n`);
 }

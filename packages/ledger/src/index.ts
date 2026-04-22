@@ -10,7 +10,19 @@ export {
   ledgerContentIndexPath,
   lockPath,
   pricingOverridePath,
+  configPath,
+  contentDir,
+  contentFilePath,
 } from './paths.js';
+export {
+  appendContent,
+  readContent,
+  pruneContent,
+  __setContentFileMtimeForTesting,
+} from './content.js';
+export type { PruneOptions, PruneResult, ReadContentSelector } from './content.js';
+export { loadConfig, retentionMs, DEFAULT_CONFIG } from './config.js';
+export type { BurnConfig, ContentConfig } from './config.js';
 export type {
   Enrichment,
   LedgerLine,

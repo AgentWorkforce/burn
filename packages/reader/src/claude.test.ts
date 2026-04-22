@@ -12,7 +12,7 @@ const FIXTURES = path.resolve(__dirname, '..', '..', '..', 'tests', 'fixtures', 
 
 describe('parseClaudeSession', () => {
   it('parses a simple one-turn session', async () => {
-    const turns = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.equal(t.v, 1);
@@ -34,7 +34,7 @@ describe('parseClaudeSession', () => {
   });
 
   it('dedupes a multi-block assistant message and keeps usage once', async () => {
-    const turns = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
     assert.equal(turns.length, 1, 'four assistant lines with same messageId must collapse to one turn');
     const t = turns[0]!;
     assert.equal(t.messageId, 'msg_multi_1');
@@ -56,7 +56,7 @@ describe('parseClaudeSession', () => {
   });
 
   it('extracts filesTouched only for Read/Edit/Write, not Grep/Bash', async () => {
-    const turns = await parseClaudeSession(path.join(FIXTURES, 'files-touched.jsonl'));
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'files-touched.jsonl'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.equal(t.toolCalls.length, 3);
@@ -64,7 +64,7 @@ describe('parseClaudeSession', () => {
   });
 
   it('marks sidechain turns as subagent', async () => {
-    const turns = await parseClaudeSession(path.join(FIXTURES, 'sidechain-turn.jsonl'));
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'sidechain-turn.jsonl'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.ok(t.subagent);
@@ -74,8 +74,55 @@ describe('parseClaudeSession', () => {
   it('produces stable argsHash for identical tool inputs', async () => {
     const a = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
     const b = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
-    assert.equal(a[0]!.toolCalls[0]!.argsHash, b[0]!.toolCalls[0]!.argsHash);
-    assert.notEqual(a[0]!.toolCalls[0]!.argsHash, a[0]!.toolCalls[1]!.argsHash);
+    assert.equal(a.turns[0]!.toolCalls[0]!.argsHash, b.turns[0]!.toolCalls[0]!.argsHash);
+    assert.notEqual(a.turns[0]!.toolCalls[0]!.argsHash, a.turns[0]!.toolCalls[1]!.argsHash);
+  });
+});
+
+describe('parseClaudeSession content capture', () => {
+  it('returns empty content array when contentMode is off (default)', async () => {
+    const { content } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    assert.deepEqual(content, []);
+  });
+
+  it('returns empty content array when contentMode is hash-only', async () => {
+    const { content } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'), {
+      contentMode: 'hash-only',
+    });
+    assert.deepEqual(content, []);
+  });
+
+  it('captures user text and assistant text when contentMode is full', async () => {
+    const { content } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'), {
+      contentMode: 'full',
+    });
+    assert.equal(content.length, 2);
+    const user = content.find((c) => c.role === 'user');
+    assert.ok(user);
+    assert.equal(user!.kind, 'text');
+    assert.equal(user!.text, 'hello');
+    assert.equal(user!.sessionId, '11111111-1111-1111-1111-111111111111');
+    const asst = content.find((c) => c.role === 'assistant');
+    assert.ok(asst);
+    assert.equal(asst!.kind, 'text');
+    assert.equal(asst!.text, 'Hello!');
+    assert.equal(asst!.messageId, 'msg_simple_1');
+    assert.equal(asst!.source, 'claude-code');
+  });
+
+  it('captures thinking and tool_use blocks from a multi-block turn', async () => {
+    const { content } = await parseClaudeSession(
+      path.join(FIXTURES, 'multi-block-turn.jsonl'),
+      { contentMode: 'full' },
+    );
+    const asstBlocks = content.filter((c) => c.role === 'assistant');
+    const kinds = asstBlocks.map((c) => c.kind).sort();
+    // Thinking block has empty text so it's omitted; we should see text + 2 tool_use.
+    assert.deepEqual(kinds, ['text', 'tool_use', 'tool_use']);
+    const toolUses = asstBlocks.filter((c) => c.kind === 'tool_use');
+    assert.equal(toolUses[0]!.toolUse!.name, 'Bash');
+    assert.deepEqual(toolUses[0]!.toolUse!.input, { command: 'ls -la /tmp/project' });
+    assert.equal(toolUses[1]!.toolUse!.name, 'Agent');
   });
 });
 
@@ -167,6 +214,57 @@ describe('parseClaudeSessionIncremental', () => {
     assert.equal(turns.length, 1, 'only the complete message is emitted');
     assert.equal(turns[0]!.messageId, 'msg_done_1');
     assert.equal(endOffset, inprogLineStart, 'endOffset backs up to start of in-progress line');
+  });
+
+  it('does not emit content for in-progress messages, emits it once they complete', async () => {
+    const src = path.join(FIXTURES, 'incomplete-then-complete.jsonl');
+    const working = path.join(tmp, 'session.jsonl');
+    await copyFile(src, working);
+    const first = await parseClaudeSessionIncremental(working, { contentMode: 'full' });
+    // Only the completed message's assistant content is emitted.
+    const asst = first.content.filter((c) => c.role === 'assistant');
+    assert.ok(asst.every((c) => c.messageId === 'msg_done_1'));
+
+    // Append the completion line for msg_inprog_1
+    const tailLine =
+      JSON.stringify({
+        parentUuid: 'u-asst-1',
+        isSidechain: false,
+        message: {
+          model: 'claude-sonnet-4-6',
+          id: 'msg_inprog_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'done now' }],
+          stop_reason: 'end_turn',
+          usage: {
+            input_tokens: 7,
+            output_tokens: 3,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+          },
+        },
+        type: 'assistant',
+        uuid: 'u-asst-2',
+        timestamp: '2026-04-20T00:00:02.000Z',
+        cwd: '/tmp/project',
+        sessionId: '33333333-3333-3333-3333-333333333333',
+      }) + '\n';
+    const prev = await readFile(working, 'utf8');
+    await writeFile(working, prev + tailLine, 'utf8');
+
+    const second = await parseClaudeSessionIncremental(working, {
+      startOffset: first.endOffset,
+      contentMode: 'full',
+    });
+    const laterAsst = second.content.filter((c) => c.role === 'assistant');
+    // endOffset backs up to the start of the in-progress line on first pass,
+    // so the second pass re-reads both the "working..." streamed block and
+    // the completing "done now" block — both belong to msg_inprog_1.
+    assert.ok(laterAsst.length >= 1);
+    assert.ok(laterAsst.every((c) => c.messageId === 'msg_inprog_1'));
+    assert.ok(laterAsst.some((c) => c.text === 'done now'));
   });
 
   it('skips incomplete turns and re-emits them after stop_reason arrives', async () => {

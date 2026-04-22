@@ -34,3 +34,15 @@ export function lockPath(name: string): string {
 export function pricingOverridePath(): string {
   return path.join(ledgerHome(), 'models.dev.json');
 }
+
+export function configPath(): string {
+  return path.join(ledgerHome(), 'config.json');
+}
+
+export function contentDir(): string {
+  return path.join(ledgerHome(), 'content');
+}
+
+export function contentFilePath(sessionId: string): string {
+  return path.join(contentDir(), `${sessionId}.jsonl`);
+}

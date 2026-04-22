@@ -14,7 +14,7 @@ function sessionFile(fixture: string, sessionId: string): string {
 
 describe('parseOpencodeSession', () => {
   it('parses a simple one-turn session', async () => {
-    const turns = await parseOpencodeSession(sessionFile('simple', 'ses_simple'));
+    const { turns } = await parseOpencodeSession(sessionFile('simple', 'ses_simple'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.equal(t.v, 1);
@@ -40,7 +40,7 @@ describe('parseOpencodeSession', () => {
   });
 
   it('extracts tool calls and filesTouched only for file tools', async () => {
-    const turns = await parseOpencodeSession(sessionFile('with-tool', 'ses_tool'));
+    const { turns } = await parseOpencodeSession(sessionFile('with-tool', 'ses_tool'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.equal(t.toolCalls.length, 3);
@@ -56,7 +56,7 @@ describe('parseOpencodeSession', () => {
   });
 
   it('emits per-turn (not cumulative) usage across multiple turns', async () => {
-    const turns = await parseOpencodeSession(sessionFile('multi-turn', 'ses_multi'));
+    const { turns } = await parseOpencodeSession(sessionFile('multi-turn', 'ses_multi'));
     assert.equal(turns.length, 2);
     const [t1, t2] = turns;
     assert.equal(t1!.messageId, 'msg_multi_a1');
@@ -89,7 +89,7 @@ describe('parseOpencodeSession', () => {
   });
 
   it('marks turns in a session with parentID as sidechain', async () => {
-    const turns = await parseOpencodeSession(sessionFile('multi-turn', 'ses_child'));
+    const { turns } = await parseOpencodeSession(sessionFile('multi-turn', 'ses_child'));
     assert.equal(turns.length, 1);
     const t = turns[0]!;
     assert.ok(t.subagent);
@@ -100,13 +100,13 @@ describe('parseOpencodeSession', () => {
   it('produces stable argsHash for identical tool inputs', async () => {
     const a = await parseOpencodeSession(sessionFile('with-tool', 'ses_tool'));
     const b = await parseOpencodeSession(sessionFile('with-tool', 'ses_tool'));
-    assert.equal(a[0]!.toolCalls[0]!.argsHash, b[0]!.toolCalls[0]!.argsHash);
-    assert.notEqual(a[0]!.toolCalls[0]!.argsHash, a[0]!.toolCalls[1]!.argsHash);
+    assert.equal(a.turns[0]!.toolCalls[0]!.argsHash, b.turns[0]!.toolCalls[0]!.argsHash);
+    assert.notEqual(a.turns[0]!.toolCalls[0]!.argsHash, a.turns[0]!.toolCalls[1]!.argsHash);
   });
 
   it('respects sessionPath option', async () => {
     const file = sessionFile('simple', 'ses_simple');
-    const turns = await parseOpencodeSession(file, { sessionPath: file });
+    const { turns } = await parseOpencodeSession(file, { sessionPath: file });
     assert.equal(turns[0]!.sessionPath, file);
   });
 });

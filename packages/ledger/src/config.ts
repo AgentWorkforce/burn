@@ -1,0 +1,106 @@
+import { readFile } from 'node:fs/promises';
+
+import type { ContentStoreMode } from '@relayburn/reader';
+
+import { configPath } from './paths.js';
+
+export interface ContentConfig {
+  store: ContentStoreMode;
+  retentionDays: number | 'forever';
+}
+
+export interface BurnConfig {
+  content: ContentConfig;
+}
+
+const DEFAULT_RETENTION_DAYS = 90;
+
+export const DEFAULT_CONFIG: BurnConfig = {
+  content: { store: 'full', retentionDays: DEFAULT_RETENTION_DAYS },
+};
+
+interface RawConfig {
+  content?: {
+    store?: unknown;
+    retentionDays?: unknown;
+  };
+}
+
+export async function loadConfig(): Promise<BurnConfig> {
+  const fromFile = await readConfigFile();
+  const store = pickStore(
+    process.env['RELAYBURN_CONTENT_STORE'],
+    fromFile?.content?.store,
+    DEFAULT_CONFIG.content.store,
+  );
+  const retentionDays = pickRetention(
+    process.env['RELAYBURN_CONTENT_TTL_DAYS'],
+    fromFile?.content?.retentionDays,
+    DEFAULT_CONFIG.content.retentionDays,
+  );
+  return { content: { store, retentionDays } };
+}
+
+async function readConfigFile(): Promise<RawConfig | null> {
+  try {
+    const raw = await readFile(configPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed as RawConfig;
+  } catch {
+    // missing file or invalid JSON — fall back to defaults
+  }
+  return null;
+}
+
+function pickStore(
+  env: string | undefined,
+  fromFile: unknown,
+  fallback: ContentStoreMode,
+): ContentStoreMode {
+  const envMode = normalizeStore(env);
+  if (envMode !== null) return envMode;
+  const fileMode = normalizeStore(fromFile);
+  if (fileMode !== null) return fileMode;
+  return fallback;
+}
+
+function normalizeStore(v: unknown): ContentStoreMode | null {
+  if (typeof v !== 'string') return null;
+  const s = v.toLowerCase();
+  if (s === 'full' || s === 'hash-only' || s === 'off') return s;
+  return null;
+}
+
+function pickRetention(
+  env: string | undefined,
+  fromFile: unknown,
+  fallback: number | 'forever',
+): number | 'forever' {
+  const envRet = normalizeRetention(env);
+  if (envRet !== null) return envRet;
+  const fileRet = normalizeRetention(fromFile);
+  if (fileRet !== null) return fileRet;
+  return fallback;
+}
+
+function normalizeRetention(v: unknown): number | 'forever' | null {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    if (v < 0) return 'forever';
+    return v;
+  }
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (s === 'forever') return 'forever';
+    const n = Number(s);
+    if (Number.isFinite(n)) {
+      if (n < 0) return 'forever';
+      return n;
+    }
+  }
+  return null;
+}
+
+export function retentionMs(r: number | 'forever'): number | null {
+  if (r === 'forever') return null;
+  return r * 24 * 60 * 60 * 1000;
+}
