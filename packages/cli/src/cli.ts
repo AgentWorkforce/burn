@@ -6,6 +6,7 @@ import { runCodexWrapper } from './commands/codex.js';
 import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
+import { runRebuild } from './commands/rebuild.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
 
@@ -19,7 +20,8 @@ Usage:
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]
   burn content prune [--days <n>]
-  burn rebuild-index
+  burn rebuild         --index | --reclassify [--force]
+  burn rebuild-index   (alias for 'burn rebuild --index')
 
 Examples:
   burn summary --since 24h
@@ -29,7 +31,7 @@ Examples:
   burn codex    --tag workflow=refactor
   burn opencode --tag workflow=refactor
   burn content prune --days 30
-  burn rebuild-index
+  burn rebuild --reclassify
 `;
 
 async function main(): Promise<number> {
@@ -59,6 +61,8 @@ async function main(): Promise<number> {
       return runOpencodeWrapper(args);
     case 'content':
       return runContent(args);
+    case 'rebuild':
+      return runRebuild(args);
     case 'rebuild-index':
       return runRebuildIndex();
     default:

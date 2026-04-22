@@ -210,6 +210,17 @@ This is observed data, not counterfactual: it tells you what happened when you a
 
 Output formats: TTY table (default), `--json` for scripts, `--csv` for spreadsheets.
 
+### `burn rebuild --reclassify` — backfill activity labels on old turns
+
+Ingested turns are classified at write time. If you upgrade burn or a classifier rule changes, already-ingested turns keep the label they had when they were written. Run `burn rebuild --reclassify` to re-run the classifier across the whole ledger using whatever signals are still available (tool calls from the ledger, user prompts and errored tool_results from the content sidecar when present).
+
+```
+burn rebuild --reclassify           # only fills in turns with no activity set
+burn rebuild --reclassify --force   # overwrite every turn's activity
+```
+
+Default is non-destructive — turns that already have an activity stay as-is, so re-running is safe. `--force` is useful after a rule change when you want the whole ledger to reflect the new rules. The ledger is rewritten atomically under the same lock that `ingest` uses.
+
 ## Install (local dev)
 
 ```bash
