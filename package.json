@@ -7,6 +7,7 @@
   "engines": {
     "node": ">=22"
   },
+  "packageManager": "pnpm@10.17.1",
   "scripts": {
     "build": "tsc --build",
     "dev": "tsc --build --watch --preserveWatchOutput",
