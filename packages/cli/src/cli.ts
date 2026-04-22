@@ -6,12 +6,14 @@ import { runCodexWrapper } from './commands/codex.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
+import { runLimits } from './commands/limits.js';
 
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
   burn by-tool       [--since 7d] [--project <path>] [--session <id>]
+  burn limits        [--watch [5s]] [--json]
   burn claude        [--tag k=v ...] [-- <claude args>]
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]
@@ -38,6 +40,8 @@ async function main(): Promise<number> {
       return runSummary(args);
     case 'by-tool':
       return runByTool(args);
+    case 'limits':
+      return runLimits(args);
     case 'claude':
       return runClaudeWrapper(args);
     case 'codex':
