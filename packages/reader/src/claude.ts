@@ -600,7 +600,14 @@ export async function parseClaudeSessionIncremental(
     for (const u of pendingUserContent) {
       if (u.offset < endOffset) merged.push({ offset: u.offset, sub: 0, record: u.record });
     }
-    for (const a of assistantPending) merged.push(a);
+    // Filter assistant content by the same endOffset boundary. TurnRecords
+    // past endOffset are still emitted (appendTurns dedups by messageId), but
+    // appendContent has no dedup, so content emitted past endOffset would be
+    // re-emitted and duplicated when the next incremental call resumes from
+    // endOffset and re-processes the same bytes.
+    for (const a of assistantPending) {
+      if (a.offset < endOffset) merged.push(a);
+    }
     merged.sort((a, b) => a.offset - b.offset || a.sub - b.sub);
     content = merged.map((m) => m.record);
   }

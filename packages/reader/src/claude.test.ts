@@ -281,6 +281,93 @@ describe('parseClaudeSessionIncremental', () => {
     assert.ok(laterAsst.some((c) => c.text === 'done now'));
   });
 
+  it('defers assistant content for a complete message that appears after an in-progress one', async () => {
+    // Construct a session where msg_done_1 (complete) is followed by an
+    // in-progress msg_inprog_1 and then a trailing complete msg_after_1.
+    // endOffset backs up to msg_inprog_1's start, so msg_after_1's content
+    // must NOT be emitted yet — otherwise it would be duplicated on the next
+    // incremental pass (there's no content-level dedup in appendContent).
+    const working = path.join(tmp, 'session.jsonl');
+    const lines = [
+      JSON.stringify({
+        parentUuid: null,
+        isSidechain: false,
+        type: 'user',
+        message: { role: 'user', content: 'hi' },
+        uuid: 'u-user-1',
+        timestamp: '2026-04-20T00:00:00.000Z',
+        cwd: '/tmp/project',
+        sessionId: 'sess-dup',
+      }),
+      JSON.stringify({
+        parentUuid: 'u-user-1',
+        isSidechain: false,
+        message: {
+          model: 'claude-sonnet-4-6',
+          id: 'msg_done_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'done' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } },
+        },
+        type: 'assistant',
+        uuid: 'u-asst-1',
+        timestamp: '2026-04-20T00:00:01.000Z',
+        cwd: '/tmp/project',
+        sessionId: 'sess-dup',
+      }),
+      JSON.stringify({
+        parentUuid: 'u-asst-1',
+        isSidechain: false,
+        message: {
+          model: 'claude-sonnet-4-6',
+          id: 'msg_inprog_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'working...' }],
+          stop_reason: null,
+          usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } },
+        },
+        type: 'assistant',
+        uuid: 'u-asst-2',
+        timestamp: '2026-04-20T00:00:02.000Z',
+        cwd: '/tmp/project',
+        sessionId: 'sess-dup',
+      }),
+      JSON.stringify({
+        parentUuid: 'u-asst-2',
+        isSidechain: false,
+        message: {
+          model: 'claude-sonnet-4-6',
+          id: 'msg_after_1',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'after' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } },
+        },
+        type: 'assistant',
+        uuid: 'u-asst-3',
+        timestamp: '2026-04-20T00:00:03.000Z',
+        cwd: '/tmp/project',
+        sessionId: 'sess-dup',
+      }),
+    ];
+    await writeFile(working, lines.join('\n') + '\n', 'utf8');
+
+    const { content, endOffset } = await parseClaudeSessionIncremental(working, {
+      contentMode: 'full',
+    });
+    const messageIds = content.filter((c) => c.role === 'assistant').map((c) => c.messageId);
+    // Only msg_done_1 content should be committed this pass.
+    assert.deepEqual(messageIds, ['msg_done_1']);
+    // endOffset is before msg_inprog_1's first byte, so msg_after_1's bytes
+    // are in the deferred region and will be re-read on the next call.
+    const buf = await readFile(working);
+    assert.ok(endOffset < buf.length);
+  });
+
   it('skips incomplete turns and re-emits them after stop_reason arrives', async () => {
     const src = path.join(FIXTURES, 'incomplete-then-complete.jsonl');
     const working = path.join(tmp, 'session.jsonl');
