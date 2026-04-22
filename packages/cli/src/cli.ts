@@ -3,6 +3,7 @@ import { parseArgs } from './args.js';
 import { runByTool } from './commands/by-tool.js';
 import { runClaudeWrapper } from './commands/claude.js';
 import { runCodexWrapper } from './commands/codex.js';
+import { runContent, opportunisticPrune } from './commands/content.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
@@ -15,6 +16,7 @@ Usage:
   burn claude        [--tag k=v ...] [-- <claude args>]
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]
+  burn content prune [--days <n>]
   burn rebuild-index
 
 Examples:
@@ -23,6 +25,7 @@ Examples:
   burn claude   --tag workflow=refactor -- --resume
   burn codex    --tag workflow=refactor
   burn opencode --tag workflow=refactor
+  burn content prune --days 30
   burn rebuild-index
 `;
 
@@ -33,6 +36,11 @@ async function main(): Promise<number> {
     return 0;
   }
   const args = parseArgs(rest);
+  // Opportunistic content-sidecar retention prune on every invocation.
+  // Best-effort; never fails the CLI.
+  if (cmd !== 'content') {
+    await opportunisticPrune();
+  }
   switch (cmd) {
     case 'summary':
       return runSummary(args);
@@ -44,6 +52,8 @@ async function main(): Promise<number> {
       return runCodexWrapper(args);
     case 'opencode':
       return runOpencodeWrapper(args);
+    case 'content':
+      return runContent(args);
     case 'rebuild-index':
       return runRebuildIndex();
     default:

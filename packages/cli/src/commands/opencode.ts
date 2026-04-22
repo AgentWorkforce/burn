@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 
 import { parseOpencodeSession } from '@relayburn/reader';
-import { appendTurns, stamp } from '@relayburn/ledger';
+import { appendContent, appendTurns, loadConfig, stamp } from '@relayburn/ledger';
 import type { Enrichment } from '@relayburn/ledger';
 
 import type { ParsedArgs } from '../args.js';
@@ -38,10 +38,15 @@ export async function runOpencodeWrapper(args: ParsedArgs): Promise<number> {
     return code;
   }
 
+  const cfg = await loadConfig();
   for (const file of newFiles) {
-    const turns = await parseOpencodeSession(file, { sessionPath: file });
+    const { turns, content } = await parseOpencodeSession(file, {
+      sessionPath: file,
+      contentMode: cfg.content.store,
+    });
     if (turns.length === 0) continue;
     await appendTurns(turns);
+    if (content.length > 0) await appendContent(content);
     const sessionId = turns[0]!.sessionId;
     if (sessionId) await stamp({ sessionId }, tags);
     process.stderr.write(`[burn] ingested ${turns.length} turns from ${file}\n`);

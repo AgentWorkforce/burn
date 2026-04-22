@@ -2,10 +2,17 @@ import { open } from 'node:fs/promises';
 
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
-import type { ToolCall, TurnRecord, Usage } from './types.js';
+import type {
+  ContentRecord,
+  ContentStoreMode,
+  ToolCall,
+  TurnRecord,
+  Usage,
+} from './types.js';
 
 export interface ParseCodexOptions {
   sessionPath?: string;
+  contentMode?: ContentStoreMode;
 }
 
 export interface ParseCodexIncrementalOptions extends ParseCodexOptions {
@@ -22,6 +29,7 @@ export interface CodexResumeState {
 
 export interface ParseCodexIncrementalResult {
   turns: TurnRecord[];
+  content: ContentRecord[];
   endOffset: number;
   resume: CodexResumeState;
 }
@@ -108,12 +116,20 @@ interface FinalizedTurn extends Omit<OpenTurn, 'startCumulative' | 'seenCallIds'
   filesTouched: string[];
 }
 
+export interface ParseCodexResult {
+  turns: TurnRecord[];
+  content: ContentRecord[];
+}
+
 export async function parseCodexSession(
   filePath: string,
   options: ParseCodexOptions = {},
-): Promise<TurnRecord[]> {
-  const { turns } = await parseCodexSessionIncremental(filePath, { ...options, startOffset: 0 });
-  return turns;
+): Promise<ParseCodexResult> {
+  const { turns, content } = await parseCodexSessionIncremental(filePath, {
+    ...options,
+    startOffset: 0,
+  });
+  return { turns, content };
 }
 
 export async function parseCodexSessionIncremental(
@@ -130,6 +146,7 @@ export async function parseCodexSessionIncremental(
     if (startOffset >= size) {
       return {
         turns: [],
+        content: [],
         endOffset: startOffset,
         resume: cloneResume(options.resume),
       };
@@ -344,7 +361,10 @@ export async function parseCodexSessionIncremental(
   };
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
 
-  return { turns, endOffset: committedEndOffset, resume };
+  // TODO(#33-followup): content capture for Codex sessions. The incremental
+  // result preserves the { turns, content } shape so that wiring the reader
+  // output into appendContent is a no-op when full content arrives.
+  return { turns, content: [], endOffset: committedEndOffset, resume };
 }
 
 function cloneResume(r: CodexResumeState | undefined): CodexResumeState {

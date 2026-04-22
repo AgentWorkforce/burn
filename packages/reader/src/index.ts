@@ -4,16 +4,24 @@ export type {
   ToolCall,
   Subagent,
   TurnRecord,
+  ContentRecord,
+  ContentRole,
+  ContentKind,
+  ContentToolUse,
+  ContentToolResult,
+  ContentStoreMode,
 } from './types.js';
 export { parseClaudeSession, parseClaudeSessionIncremental } from './claude.js';
 export type {
   ParseOptions,
+  ParseResult,
   ParseIncrementalOptions,
   ParseIncrementalResult,
 } from './claude.js';
 export { parseCodexSession, parseCodexSessionIncremental } from './codex.js';
 export type {
   ParseCodexOptions,
+  ParseCodexResult,
   ParseCodexIncrementalOptions,
   ParseCodexIncrementalResult,
   CodexResumeState,
@@ -21,6 +29,7 @@ export type {
 export { parseOpencodeSession, parseOpencodeSessionIncremental } from './opencode.js';
 export type {
   ParseOpencodeOptions,
+  ParseOpencodeResult,
   ParseOpencodeIncrementalOptions,
   ParseOpencodeIncrementalResult,
 } from './opencode.js';

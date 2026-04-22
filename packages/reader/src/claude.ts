@@ -4,7 +4,14 @@ import { createInterface } from 'node:readline';
 
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
-import type { Subagent, ToolCall, TurnRecord, Usage } from './types.js';
+import type {
+  ContentRecord,
+  ContentStoreMode,
+  Subagent,
+  ToolCall,
+  TurnRecord,
+  Usage,
+} from './types.js';
 
 interface AssistantLine {
   type: 'assistant';
@@ -78,18 +85,33 @@ interface WorkingRecord {
 
 export interface ParseOptions {
   sessionPath?: string;
+  contentMode?: ContentStoreMode;
+}
+
+export interface ParseResult {
+  turns: TurnRecord[];
+  content: ContentRecord[];
 }
 
 export async function parseClaudeSession(
   filePath: string,
   options: ParseOptions = {},
-): Promise<TurnRecord[]> {
+): Promise<ParseResult> {
+  const contentMode = options.contentMode ?? 'off';
+  const captureContent = contentMode === 'full';
   const working = new Map<string, WorkingRecord>();
   const order: string[] = [];
   const subagentByToolUseId = new Map<
     string,
     { type?: string; taskDescription?: string }
   >();
+  // Track content with a monotonic sequence tied to line-read order so user
+  // and assistant records can be merged back into chronological order at the
+  // end (one TurnRecord may span multiple lines; we key its assistant content
+  // to the seq of its first appearance).
+  const userPending: Array<{ seq: number; record: ContentRecord }> = [];
+  const firstSeq = new Map<string, number>();
+  let seq = 0;
 
   const rl = createInterface({
     input: createReadStream(filePath, { encoding: 'utf8' }),
@@ -110,16 +132,27 @@ export async function parseClaudeSession(
       const rec = parsed as Record<string, unknown>;
 
       if (rec.type === 'assistant') {
-        ingestAssistant(rec as unknown as AssistantLine, working, order);
+        const al = rec as unknown as AssistantLine;
+        const mid = al.message?.id;
+        if (captureContent && typeof mid === 'string' && !firstSeq.has(mid)) {
+          firstSeq.set(mid, seq);
+        }
+        ingestAssistant(al, working, order);
       } else if (rec.type === 'user') {
-        captureSubagentFromToolResult(rec as unknown as UserLine, subagentByToolUseId);
+        const ul = rec as unknown as UserLine;
+        captureSubagentFromToolResult(ul, subagentByToolUseId);
+        if (captureContent) {
+          for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
+        }
       }
+      seq++;
     }
   } finally {
     rl.close();
   }
 
   const turns: TurnRecord[] = [];
+  const assistantPending: Array<{ seq: number; sub: number; record: ContentRecord }> = [];
   for (let i = 0; i < order.length; i++) {
     const id = order[i]!;
     const w = working.get(id);
@@ -149,8 +182,31 @@ export async function parseClaudeSession(
     if (subagent) record.subagent = subagent;
     if (w.stopReason !== undefined) record.stopReason = w.stopReason;
     turns.push(record);
+
+    if (captureContent) {
+      const seqForMsg = firstSeq.get(w.messageId) ?? 0;
+      extractAssistantContent(w).forEach((r, sub) => {
+        // sub starts at 1 so user content at the same seq sorts before assistant
+        assistantPending.push({ seq: seqForMsg, sub: sub + 1, record: r });
+      });
+    }
   }
-  return turns;
+
+  const content: ContentRecord[] = captureContent
+    ? mergeContentByOrder(userPending, assistantPending)
+    : [];
+  return { turns, content };
+}
+
+function mergeContentByOrder(
+  userPending: Array<{ seq: number; record: ContentRecord }>,
+  assistantPending: Array<{ seq: number; sub: number; record: ContentRecord }>,
+): ContentRecord[] {
+  const merged: Array<{ seq: number; sub: number; record: ContentRecord }> = [];
+  for (const u of userPending) merged.push({ seq: u.seq, sub: 0, record: u.record });
+  for (const a of assistantPending) merged.push(a);
+  merged.sort((a, b) => a.seq - b.seq || a.sub - b.sub);
+  return merged.map((m) => m.record);
 }
 
 function ingestAssistant(
@@ -201,6 +257,118 @@ function captureSubagentFromToolResult(
       }
     }
   }
+}
+
+function extractAssistantContent(w: WorkingRecord): ContentRecord[] {
+  const out: ContentRecord[] = [];
+  if (!w.sessionId || !w.messageId) return out;
+  const ts = w.firstTs;
+  for (const block of w.blocks) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'text') {
+      const b = block as { text?: string };
+      if (typeof b.text === 'string' && b.text.length > 0) {
+        out.push({
+          v: 1,
+          source: 'claude-code',
+          sessionId: w.sessionId,
+          messageId: w.messageId,
+          ts,
+          role: 'assistant',
+          kind: 'text',
+          text: b.text,
+        });
+      }
+    } else if (block.type === 'thinking') {
+      const b = block as { thinking?: string };
+      if (typeof b.thinking === 'string' && b.thinking.length > 0) {
+        out.push({
+          v: 1,
+          source: 'claude-code',
+          sessionId: w.sessionId,
+          messageId: w.messageId,
+          ts,
+          role: 'assistant',
+          kind: 'thinking',
+          text: b.thinking,
+        });
+      }
+    } else if (block.type === 'tool_use') {
+      const b = block as { id?: string; name?: string; input?: Record<string, unknown> };
+      if (typeof b.id === 'string' && typeof b.name === 'string') {
+        out.push({
+          v: 1,
+          source: 'claude-code',
+          sessionId: w.sessionId,
+          messageId: w.messageId,
+          ts,
+          role: 'assistant',
+          kind: 'tool_use',
+          toolUse: { id: b.id, name: b.name, input: b.input ?? {} },
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function extractUserContent(line: UserLine): ContentRecord[] {
+  const out: ContentRecord[] = [];
+  const sessionId = line.sessionId;
+  const messageId = line.uuid;
+  const ts = line.timestamp ?? '';
+  if (!sessionId || !messageId) return out;
+  const body = line.message?.content;
+  if (typeof body === 'string') {
+    if (body.length > 0) {
+      out.push({
+        v: 1,
+        source: 'claude-code',
+        sessionId,
+        messageId,
+        ts,
+        role: 'user',
+        kind: 'text',
+        text: body,
+      });
+    }
+    return out;
+  }
+  if (!Array.isArray(body)) return out;
+  for (const block of body) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'tool_result') {
+      const tr = block as { tool_use_id?: string; content?: unknown; is_error?: boolean };
+      if (typeof tr.tool_use_id !== 'string') continue;
+      const record: ContentRecord = {
+        v: 1,
+        source: 'claude-code',
+        sessionId,
+        messageId,
+        ts,
+        role: 'tool_result',
+        kind: 'tool_result',
+        toolResult: { toolUseId: tr.tool_use_id, content: tr.content ?? '' },
+      };
+      if (tr.is_error === true) record.toolResult!.isError = true;
+      out.push(record);
+    } else if (block.type === 'text') {
+      const b = block as { text?: string };
+      if (typeof b.text === 'string' && b.text.length > 0) {
+        out.push({
+          v: 1,
+          source: 'claude-code',
+          sessionId,
+          messageId,
+          ts,
+          role: 'user',
+          kind: 'text',
+          text: b.text,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 function toUsage(u: ClaudeUsage | undefined): Usage {
@@ -293,6 +461,7 @@ export interface ParseIncrementalOptions extends ParseOptions {
 
 export interface ParseIncrementalResult {
   turns: TurnRecord[];
+  content: ContentRecord[];
   endOffset: number;
 }
 
@@ -301,6 +470,8 @@ export async function parseClaudeSessionIncremental(
   options: ParseIncrementalOptions = {},
 ): Promise<ParseIncrementalResult> {
   const startOffset = options.startOffset ?? 0;
+  const contentMode = options.contentMode ?? 'off';
+  const captureContent = contentMode === 'full';
   const handle = await open(filePath, 'r');
   let buf: Buffer;
   let size: number;
@@ -308,7 +479,7 @@ export async function parseClaudeSessionIncremental(
     const st = await handle.stat();
     size = st.size;
     if (startOffset >= size) {
-      return { turns: [], endOffset: startOffset };
+      return { turns: [], content: [], endOffset: startOffset };
     }
     const length = size - startOffset;
     buf = Buffer.allocUnsafe(length);
@@ -324,6 +495,10 @@ export async function parseClaudeSessionIncremental(
     { type?: string; taskDescription?: string }
   >();
   const messageIdFirstOffset = new Map<string, number>();
+  // User content tagged with the byte offset of its line so we can (a) drop
+  // records past endOffset and (b) interleave them with assistant content by
+  // source-order at emit time.
+  const pendingUserContent: Array<{ offset: number; record: ContentRecord }> = [];
 
   let p = 0;
   let cursorOffset = startOffset; // position just past the last complete \n
@@ -353,7 +528,13 @@ export async function parseClaudeSessionIncremental(
       }
       ingestAssistant(line, working, order);
     } else if (rec.type === 'user') {
-      captureSubagentFromToolResult(rec as unknown as UserLine, subagentByToolUseId);
+      const ul = rec as unknown as UserLine;
+      captureSubagentFromToolResult(ul, subagentByToolUseId);
+      if (captureContent) {
+        for (const c of extractUserContent(ul)) {
+          pendingUserContent.push({ offset: lineStartOffset, record: c });
+        }
+      }
     }
   }
 
@@ -375,6 +556,7 @@ export async function parseClaudeSessionIncremental(
   const endOffset = earliestIncompleteOffset ?? cursorOffset;
 
   const turns: TurnRecord[] = [];
+  const assistantPending: Array<{ offset: number; sub: number; record: ContentRecord }> = [];
   for (let i = 0; i < order.length; i++) {
     const id = order[i]!;
     const w = working.get(id);
@@ -404,7 +586,31 @@ export async function parseClaudeSessionIncremental(
     if (subagent) record.subagent = subagent;
     record.stopReason = w.stopReason;
     turns.push(record);
+    if (captureContent) {
+      const msgOffset = messageIdFirstOffset.get(w.messageId) ?? 0;
+      extractAssistantContent(w).forEach((r, sub) => {
+        assistantPending.push({ offset: msgOffset, sub: sub + 1, record: r });
+      });
+    }
   }
 
-  return { turns, endOffset };
+  let content: ContentRecord[] = [];
+  if (captureContent) {
+    const merged: Array<{ offset: number; sub: number; record: ContentRecord }> = [];
+    for (const u of pendingUserContent) {
+      if (u.offset < endOffset) merged.push({ offset: u.offset, sub: 0, record: u.record });
+    }
+    // Filter assistant content by the same endOffset boundary. TurnRecords
+    // past endOffset are still emitted (appendTurns dedups by messageId), but
+    // appendContent has no dedup, so content emitted past endOffset would be
+    // re-emitted and duplicated when the next incremental call resumes from
+    // endOffset and re-processes the same bytes.
+    for (const a of assistantPending) {
+      if (a.offset < endOffset) merged.push(a);
+    }
+    merged.sort((a, b) => a.offset - b.offset || a.sub - b.sub);
+    content = merged.map((m) => m.record);
+  }
+
+  return { turns, content, endOffset };
 }

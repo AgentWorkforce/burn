@@ -7,9 +7,11 @@ import {
   parseCodexSessionIncremental,
   parseOpencodeSessionIncremental,
 } from '@relayburn/reader';
-import type { CodexResumeState } from '@relayburn/reader';
+import type { CodexResumeState, ContentStoreMode } from '@relayburn/reader';
 import {
+  appendContent,
   appendTurns,
+  loadConfig,
   loadCursors,
   saveCursors,
   type ClaudeCursor,
@@ -35,7 +37,8 @@ export interface IngestReport {
 export async function ingestClaudeProjects(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestClaudeInto(cursors, report);
+  const contentMode = await resolveContentMode();
+  await ingestClaudeInto(cursors, report, contentMode);
   await saveCursors(cursors);
   return report;
 }
@@ -43,7 +46,8 @@ export async function ingestClaudeProjects(): Promise<IngestReport> {
 export async function ingestCodexSessions(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestCodexInto(cursors, report);
+  const contentMode = await resolveContentMode();
+  await ingestCodexInto(cursors, report, contentMode);
   await saveCursors(cursors);
   return report;
 }
@@ -51,7 +55,8 @@ export async function ingestCodexSessions(): Promise<IngestReport> {
 export async function ingestOpencodeSessions(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestOpencodeInto(cursors, report);
+  const contentMode = await resolveContentMode();
+  await ingestOpencodeInto(cursors, report, contentMode);
   await saveCursors(cursors);
   return report;
 }
@@ -59,16 +64,23 @@ export async function ingestOpencodeSessions(): Promise<IngestReport> {
 export async function ingestAll(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
-  await ingestClaudeInto(cursors, report);
-  await ingestCodexInto(cursors, report);
-  await ingestOpencodeInto(cursors, report);
+  const contentMode = await resolveContentMode();
+  await ingestClaudeInto(cursors, report, contentMode);
+  await ingestCodexInto(cursors, report, contentMode);
+  await ingestOpencodeInto(cursors, report, contentMode);
   await saveCursors(cursors);
   return report;
+}
+
+async function resolveContentMode(): Promise<ContentStoreMode> {
+  const cfg = await loadConfig();
+  return cfg.content.store;
 }
 
 async function ingestClaudeInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
+  contentMode: ContentStoreMode,
 ): Promise<void> {
   const projects = await listDirs(CLAUDE_PROJECTS);
   for (const projectDir of projects) {
@@ -92,14 +104,18 @@ async function ingestClaudeInto(
           continue;
         }
 
-        const { turns, endOffset } = await parseClaudeSessionIncremental(file, {
+        const { turns, content, endOffset } = await parseClaudeSessionIncremental(file, {
           startOffset,
           sessionPath: file,
+          contentMode,
         });
         if (turns.length > 0) {
           await appendTurns(turns);
           report.appendedTurns += turns.length;
           report.ingestedSessions++;
+        }
+        if (content.length > 0) {
+          await appendContent(content);
         }
         const next: ClaudeCursor = {
           kind: 'claude',
@@ -119,6 +135,7 @@ async function ingestClaudeInto(
 async function ingestCodexInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
+  contentMode: ContentStoreMode,
 ): Promise<void> {
   for (const file of await walkJsonl(CODEX_SESSIONS)) {
     report.scannedSessions++;
@@ -149,16 +166,18 @@ async function ingestCodexInto(
       const opts: Parameters<typeof parseCodexSessionIncremental>[1] = {
         startOffset,
         sessionPath: file,
+        contentMode,
       };
       if (resume !== undefined) opts.resume = resume;
-      const { turns, endOffset, resume: nextResume } = await parseCodexSessionIncremental(
-        file,
-        opts,
-      );
+      const { turns, content, endOffset, resume: nextResume } =
+        await parseCodexSessionIncremental(file, opts);
       if (turns.length > 0) {
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
+      }
+      if (content.length > 0) {
+        await appendContent(content);
       }
       const next: CodexCursor = {
         kind: 'codex',
@@ -181,6 +200,7 @@ async function ingestCodexInto(
 async function ingestOpencodeInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
+  contentMode: ContentStoreMode,
 ): Promise<void> {
   for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
     report.scannedSessions++;
@@ -204,14 +224,19 @@ async function ingestOpencodeInto(
         continue;
       }
 
-      const { turns, seenMessageIds: nextSeen } = await parseOpencodeSessionIncremental(file, {
-        sessionPath: file,
-        seenMessageIds,
-      });
+      const { turns, content, seenMessageIds: nextSeen } =
+        await parseOpencodeSessionIncremental(file, {
+          sessionPath: file,
+          seenMessageIds,
+          contentMode,
+        });
       if (turns.length > 0) {
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
+      }
+      if (content.length > 0) {
+        await appendContent(content);
       }
       const next: OpencodeCursor = {
         kind: 'opencode',
