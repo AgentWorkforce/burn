@@ -66,15 +66,15 @@ jobs:
       versions: ${{ steps.bump.outputs.versions }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22.14.0'
           registry-url: 'https://registry.npmjs.org'
@@ -400,7 +400,7 @@ jobs:
 
       - name: Checkout
         if: steps.check.outputs.published == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Need the tag that the publish job just pushed.
           ref: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
@@ -432,7 +432,7 @@ jobs:
 
       - name: Create GitHub Release (stable, with changelog)
         if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
           name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }}"
@@ -440,7 +440,7 @@ jobs:
 
       - name: Create GitHub Release (stable, auto notes)
         if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
           name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }}"
@@ -448,7 +448,7 @@ jobs:
 
       - name: Create GitHub Release (prerelease)
         if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
           name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }} (prerelease)"
