@@ -185,8 +185,30 @@ Override ledger location with `RELAYBURN_HOME=/path/to/dir`.
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
 burn by-tool [--since 7d] [--project <path>] [--session <id>]
+burn compare [--models a,b] [--since 7d] [--project <path>] [--workflow <id>] [--min-sample <n>] [--json|--csv]
 burn claude  [--tag k=v ...] [-- <claude args>]
 ```
+
+### `burn compare` — model comparison by observed activity
+
+Looking at work you actually did, which model handled each activity category best?
+`burn compare` buckets every turn by `(model, activity)` and shows cost-per-turn, one-shot rate, and turn count side-by-side.
+
+```
+              claude-sonnet-4-6           claude-haiku-4-5
+Activity      Turns  Cost/turn  1-shot   Turns  Cost/turn  1-shot
+coding          243    $0.020    68%        89   $0.004    51%
+debugging       108    $0.031    41%        34   $0.008    28%
+refactoring      71    $0.024    75%        14   $0.006    64%
+testing          42    $0.012    89%        18   $0.003    83%
+exploration     118    $0.013     —         52   $0.003     —
+```
+
+One-shot rate = `turns with edits and zero intra-turn retries / edit turns`. It's `—` for categories that don't produce edits (`exploration`, `brainstorming`, etc.). Missing-data cells render as `—`, never `$0.00` or `0%`.
+
+This is observed data, not counterfactual: it tells you what happened when you actually used both models, not what *would have* happened if you'd picked differently. Cells with `turns < --min-sample` (default 5) are flagged as indicative; categories where only one model has data surface a coverage note beneath the table.
+
+Output formats: TTY table (default), `--json` for scripts, `--csv` for spreadsheets.
 
 ## Install (local dev)
 
