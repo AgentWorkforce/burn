@@ -11,7 +11,51 @@ import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
+const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
+
+Usage:
+  burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>]
+               [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+
+Flags:
+  --models      comma-separated list of model names to include (default: all)
+  --since       relative (e.g. 24h, 7d, 4w) or ISO timestamp; default: all time
+  --project     filter by project path or git-canonical projectKey
+  --session     filter by sessionId
+  --workflow    filter by stamped workflowId
+  --agent       filter by stamped agentId
+  --min-sample  insufficient-sample threshold; cells below this get flagged
+                in the coverage-notes block (default: 5)
+  --json        emit a stable JSON object (analyzedTurns, models, categories,
+                totals, cells[])
+  --csv         emit a CSV with one row per (model, category) pair
+  --help, -h    show this message
+
+Cell metrics:
+  Turns       count of turns in the (model, activity) bucket
+  Cost/turn   total cost / turn count, using the vendored pricing snapshot
+  1-shot      oneShotTurns / editTurns; — for categories without edits
+  JSON also exposes cacheHitRate and medianRetries per cell.
+
+Missing-data cells render "—", never $0.00 or 0%.
+
+Examples:
+  burn compare --since 30d
+  burn compare --models claude-sonnet-4-6,claude-haiku-4-5 --since 7d
+  burn compare --workflow wf-refactor --json
+`;
+
 export async function runCompare(args: ParsedArgs): Promise<number> {
+  const first = args.positional[0];
+  if (
+    args.flags['help'] === true ||
+    first === 'help' ||
+    first === '-h' ||
+    first === '--help'
+  ) {
+    process.stdout.write(COMPARE_HELP);
+    return 0;
+  }
   const q: Query = {};
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
