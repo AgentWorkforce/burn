@@ -4,3 +4,34 @@ export { costForTurn, costForUsage, sumCosts } from './cost.js';
 export type { CostBreakdown } from './cost.js';
 export { buildCompareTable, DEFAULT_MIN_SAMPLE } from './compare.js';
 export type { CompareCategory, CompareCell, CompareOptions, CompareTable } from './compare.js';
+export {
+  attributeClaudeMd,
+  buildAdviseRecommendations,
+  findClaudeMdFiles,
+  loadClaudeMdFile,
+  parseClaudeMd,
+  renderUnifiedDiffForRecommendation,
+} from './claude-md.js';
+export type {
+  AdviseRecommendation,
+  AttributeClaudeMdInput,
+  ClaudeMdAttributionResult,
+  MarkdownSection,
+  ParsedClaudeMd,
+  SectionCost,
+  SessionClaudeMdCost,
+} from './claude-md.js';
+export {
+  attributeContext,
+  describeAppliesTo,
+  findContextFiles,
+  loadContextFile,
+} from './context-md.js';
+export type {
+  AttributeContextInput,
+  ContextAttributionResult,
+  ContextFile,
+  ContextFileAttribution,
+  ContextFileKind,
+  ParsedContextFile,
+} from './context-md.js';
