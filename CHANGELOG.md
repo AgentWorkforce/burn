@@ -6,12 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## 2026-04-23 — `burn waste`: per-tool-call cost attribution
+
+**Versions:** `@relayburn/reader@0.4.0`, `@relayburn/ledger@0.4.0`, `@relayburn/analyze@0.4.0`, `@relayburn/cli@0.4.0`
+
+> `reader` and `ledger` had no functional changes — bumped for version parity across the workspace.
+
 ### Added
 
 - **`burn waste`** — per-tool-call and per-file cost attribution. Ranks the most expensive tool calls, files, Bash commands, and subagent calls by attributed cost: **initial** (turn after the tool call, where the result enters context as fresh `input`/`cacheCreate`) plus **persistence** (every subsequent turn it rides along in `cacheRead` until evicted). Closes [#3](https://github.com/AgentWorkforce/burn/issues/3). [cli, analyze]
   - `burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--all] [--json]` — top-N rankings by file, Bash command (collapsed by `argsHash`), and subagent (`subagent_type`). `--all` shows full lists; `--json` emits raw aggregations.
   - Sized attribution from the content sidecar when available (text length / 4 as a token estimate); even-split fallback (initial only) when it isn't, with a printed note.
   - Per-paying-turn model rates so cross-model sessions are priced correctly. Sibling normalization across simultaneously-entering tool_results so attributed cost never exceeds what was actually paid.
+
+### PRs in this release
+
+- [#50](https://github.com/AgentWorkforce/burn/pull/50) — Add `burn waste` plus the per-paying-turn pricing / sibling-normalization refactor
+
+## 2026-04-23 — `burn context`: agent context-file cost attribution
+
+**Versions:** `@relayburn/reader@0.3.0`, `@relayburn/ledger@0.3.0`, `@relayburn/analyze@0.3.0`, `@relayburn/cli@0.3.0`
+
+> `reader` and `ledger` had no functional changes — bumped for version parity across the workspace.
+
+### Added
 
 - **`burn context`** — cost attribution for agent context files across every agent `burn` ingests: `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. Answers "how much are my rules files costing me per session, and which sections are the most expensive?" Closes [#10](https://github.com/AgentWorkforce/burn/issues/10). [cli, analyze]
   - `burn context [--project <path>] [--since 7d] [--kind <k>] [--json]` — reports file size, per-session avg / p95 cost, window total across N sessions, and sections ranked by cost, per file. `--kind claude-md` / `--kind agents-md` narrows to one file kind.
@@ -20,6 +38,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   - Attribution math is direct: `file_tokens × cacheReadPrice` per turn whose `cacheRead` is large enough to hold the file (conservative eviction signal that skips the first turn, where the file lives in `cacheCreate`, and any turn where it's been compacted away).
   - Uses the git-canonical `projectKey` for ledger queries when available, so multiple worktrees of the same repo roll up together.
   - Section parser groups at H2 (with H1 fallback), treats top-level content as preamble, and skips headings inside fenced code blocks with strict CommonMark close matching. CRLF → LF normalization and trailing-newline handling so line numbers match what an editor shows.
+
+### Fixed
+
+- `attributeContext` deduplicates per-session `totalRidingTurns` using max-per-session rather than summing across files, so a session that reads multiple context files isn't double-counted.
 
 ## 2026-04-23 — `burn compare` and cross-harness classifier
 

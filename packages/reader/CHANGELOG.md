@@ -9,15 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0] - 2026-04-23
 
-### Changed
-
-- Bump packages to v0.3.0
+Synchronized version bump alongside `@relayburn/cli@0.4.0` / `@relayburn/analyze@0.4.0` / `@relayburn/ledger@0.4.0`. No functional changes in this package.
 
 ## [0.3.0] - 2026-04-23
 
-### Changed
-
-- Backfill 0.1.0 and 0.2.0 changelog entries for all four packages
+Synchronized version bump alongside `@relayburn/cli@0.3.0` / `@relayburn/analyze@0.3.0` / `@relayburn/ledger@0.3.0`. No functional changes in this package.
 
 ## [0.2.0] - 2026-04-23
 
