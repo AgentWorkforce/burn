@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn claude-md`** — CLAUDE.md hot-path cost attribution. Reports per-session average / p95 cost attributable to CLAUDE.md, aggregated over the query window, with a section-level ranked breakdown. Closes #10.
+  - Flags: `--project <path>`, `--since 7d`, `--json`.
+  - Detects root `CLAUDE.md` and nested `.claude/CLAUDE.md`.
+  - Uses the git-canonical `projectKey` (via `resolveProject`) for the ledger query when available, so multiple worktrees of the same repo roll up together; falls back to the filesystem path when no git remote is set.
+- **`burn claude-md advise`** — emits unified-diff TRIM hunks for the most expensive sections. Paths render POSIX-relative to the project root so they apply with `git apply` / `patch`. No `--apply` flag: burn never mutates CLAUDE.md.
+  - Flags: `--top <n>` (default 3), `--project <path>`, `--since 7d`.
+
 ## [0.2.0] - 2026-04-23
 
 ### Added

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`burn claude-md`** — CLAUDE.md hot-path cost attribution with per-section ranking. Answers "how much is my CLAUDE.md costing me per session, and which sections are the most expensive?" Closes [#10](https://github.com/AgentWorkforce/burn/issues/10). [cli, analyze]
+  - `burn claude-md [--project <path>] [--since 7d] [--json]` — reports file size, per-session avg / p95 cost, window total across N sessions, and sections ranked by cost.
+  - `burn claude-md advise [--top <n>]` — emits read-only unified-diff TRIM hunks for the most expensive sections. POSIX-relative paths so hunks apply with `git apply` / `patch`. No `--apply` flag: burn never mutates CLAUDE.md.
+  - Detects root `CLAUDE.md` and `.claude/CLAUDE.md`. Attribution math is direct: `claude_md_tokens × cacheReadPrice` per turn whose `cacheRead` is large enough to hold the file (conservative eviction signal that skips the first turn, where CLAUDE.md lives in `cacheCreate`, and any turn where the file has been compacted away).
+  - Uses the git-canonical `projectKey` for ledger queries when available, so multiple worktrees of the same repo roll up together.
+  - Section parser groups at H2 (with H1 fallback), treats top-level content as preamble, and skips headings inside fenced code blocks with strict CommonMark close matching. CRLF → LF normalization and trailing-newline handling so line numbers match what an editor shows.
+
 ## 2026-04-23 — `burn compare` and cross-harness classifier
 
 **Versions:** `@relayburn/reader@0.2.0`, `@relayburn/ledger@0.2.0`, `@relayburn/analyze@0.2.0`, `@relayburn/cli@0.2.0`
