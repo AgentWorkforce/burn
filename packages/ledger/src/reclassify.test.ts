@@ -175,6 +175,51 @@ describe('reclassifyLedger', () => {
     assert.equal(turns[0]!.activity, 'debugging');
   });
 
+  it('does not drop turns when appends and reclassify run concurrently', async () => {
+    // Contention regression. The bug we're guarding against: appendLines
+    // landing between reclassify's readFile and rename writes to the
+    // soon-orphaned old inode and gets dropped. On a fast SSD libuv usually
+    // drains queued appendFiles before reclassify starts reading, so this
+    // test does NOT reliably fail without the lock — but it does verify that
+    // the locked path correctly preserves every turn under heavy concurrent
+    // calls, which is the contract callers rely on.
+    const seed: TurnRecord[] = [];
+    for (let i = 0; i < 500; i++) {
+      seed.push(
+        fakeTurn({
+          sessionId: `sess-race-${i % 8}`,
+          messageId: `msg-seed-${i}`,
+          turnIndex: i,
+          ts: new Date(Date.UTC(2026, 3, 20, 0, 0, 0, i)).toISOString(),
+          toolCalls: [{ id: `tc-${i}`, name: 'apply_patch', argsHash: 'h', target: `/f${i}.ts` }],
+        }),
+      );
+    }
+    await appendTurns(seed);
+
+    const N = 20;
+    const lateTurns = Array.from({ length: N }, (_, j) =>
+      fakeTurn({
+        sessionId: `sess-race-late-${j}`,
+        messageId: `msg-late-${j}`,
+        ts: new Date(Date.UTC(2026, 3, 21, 0, 0, 0, j)).toISOString(),
+        toolCalls: [{ id: `late-${j}`, name: 'apply_patch', argsHash: 'h', target: `/late${j}.ts` }],
+      }),
+    );
+
+    await Promise.all([
+      reclassifyLedger({ force: true }),
+      ...lateTurns.map((t) => appendTurns([t])),
+    ]);
+
+    const turns = await queryAll();
+    const ids = new Set(turns.map((t) => t.messageId));
+    for (let j = 0; j < N; j++) {
+      assert.equal(ids.has(`msg-late-${j}`), true, `late append ${j} must survive concurrent reclassify`);
+    }
+    assert.equal(turns.length, seed.length + N);
+  });
+
   it('preserves stamp lines and blank lines verbatim', async () => {
     // Seed a turn + stamp
     await appendTurns([
