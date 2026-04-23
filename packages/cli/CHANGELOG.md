@@ -20,6 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`burn context advise`** — emits unified-diff TRIM hunks for the most expensive sections across all discovered context files. Paths render POSIX-relative to the project root so they apply with `git apply` / `patch`. No `--apply` flag: burn never mutates your context files.
   - Flags: `--top <n>` (default 3, per file), `--kind <k>`, `--project <path>`, `--since 7d`.
 
+## [0.2.1] - 2026-04-23
+
+### Added
+
+- **Add burn context: unified attribution across CLAUDE.md and AGENTS.md**
+- **Add burn claude-md: CLAUDE.md hot-path cost attribution** (#10)
+
+### Changed
+
+- Update packages/cli/src/commands/context.ts
+- Drop burn claude-md command, add --kind filter to burn context
+- Address review feedback on burn claude-md
+- Backfill 0.1.0 and 0.2.0 changelog entries for all four packages
+
+### Documentation
+
+- Document burn claude-md under [Unreleased] in per-package and root changelogs
+
 ## [0.2.0] - 2026-04-23
 
 ### Added
