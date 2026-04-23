@@ -59,7 +59,8 @@ describe('reclassifyLedger', () => {
   it('is a no-op when there is no ledger file yet', async () => {
     const report = await reclassifyLedger();
     assert.equal(report.scanned, 0);
-    assert.equal(report.reclassified, 0);
+    assert.equal(report.processed, 0);
+    assert.equal(report.changed, 0);
   });
 
   it('fills activity on previously unclassified turns using tool signal alone', async () => {
@@ -84,7 +85,8 @@ describe('reclassifyLedger', () => {
 
     const report = await reclassifyLedger();
     assert.equal(report.scanned, 3);
-    assert.equal(report.reclassified, 3);
+    assert.equal(report.processed, 3);
+    assert.equal(report.changed, 3);
     assert.equal(report.skipped, 0);
 
     const turns = await queryAll();
@@ -108,7 +110,8 @@ describe('reclassifyLedger', () => {
 
     const defaultRun = await reclassifyLedger();
     assert.equal(defaultRun.scanned, 1);
-    assert.equal(defaultRun.reclassified, 0);
+    assert.equal(defaultRun.processed, 0);
+    assert.equal(defaultRun.changed, 0);
     assert.equal(defaultRun.skipped, 1);
 
     const turnsAfter = await queryAll();
@@ -118,7 +121,8 @@ describe('reclassifyLedger', () => {
     // signal in the content sidecar for this turn. That's the point of the
     // default being non-destructive.
     const forcedRun = await reclassifyLedger({ force: true });
-    assert.equal(forcedRun.reclassified, 1);
+    assert.equal(forcedRun.processed, 1);
+    assert.equal(forcedRun.changed, 1);
     const turnsForced = await queryAll();
     assert.equal(turnsForced[0]!.activity, 'coding');
   });
@@ -162,7 +166,8 @@ describe('reclassifyLedger', () => {
     await appendContent(content);
 
     const report = await reclassifyLedger();
-    assert.equal(report.reclassified, 1);
+    assert.equal(report.processed, 1);
+    assert.equal(report.changed, 1);
 
     const turns = await queryAll();
     // pytest-by-bash would normally be 'testing', but the failed tool_result

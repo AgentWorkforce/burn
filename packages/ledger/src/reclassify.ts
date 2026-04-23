@@ -17,9 +17,16 @@ export interface ReclassifyOptions {
 }
 
 export interface ReclassifyReport {
+  // Total turn lines seen in the ledger.
   scanned: number;
-  reclassified: number;
+  // Turn lines the classifier was actually re-run on.
+  processed: number;
+  // Of the processed turns, how many ended up with a different activity label.
+  changed: number;
+  // Turn lines the classifier was NOT re-run on (default mode only: turns
+  // that already had an activity set).
   skipped: number;
+  // Breakdown of the `changed` count by the turn's new activity.
   changedByCategory: Record<string, number>;
 }
 
@@ -33,7 +40,8 @@ export async function reclassifyLedger(opts: ReclassifyOptions = {}): Promise<Re
   const force = opts.force === true;
   const report: ReclassifyReport = {
     scanned: 0,
-    reclassified: 0,
+    processed: 0,
+    changed: 0,
     skipped: 0,
     changedByCategory: {},
   };
@@ -104,9 +112,10 @@ export async function reclassifyLedger(opts: ReclassifyOptions = {}): Promise<Re
           text,
           hasFailedTool,
         });
+        report.processed++;
         const previous = rec.activity;
         if (result.activity !== previous) {
-          report.reclassified++;
+          report.changed++;
           report.changedByCategory[result.activity] =
             (report.changedByCategory[result.activity] ?? 0) + 1;
         }
@@ -118,7 +127,7 @@ export async function reclassifyLedger(opts: ReclassifyOptions = {}): Promise<Re
       }
     }
 
-    if (report.reclassified === 0 && lines.every((l) => !l.modified)) {
+    if (lines.every((l) => !l.modified)) {
       return report;
     }
 

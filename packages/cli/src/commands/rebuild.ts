@@ -30,14 +30,19 @@ export async function runRebuild(args: ParsedArgs): Promise<number> {
 
   if (doReclassify) {
     const report = await reclassifyLedger({ force });
+    const unchanged = report.processed - report.changed;
     lines.push(
-      `reclassified ${formatInt(report.reclassified)} of ${formatInt(report.scanned)} turns` +
-        ` (${formatInt(report.skipped)} skipped)`,
+      `reclassified ${formatInt(report.processed)} of ${formatInt(report.scanned)} turns` +
+        ` (${formatInt(report.skipped)} skipped, already classified)`,
     );
-    if (report.reclassified > 0) {
+    lines.push(
+      `  ${formatInt(report.changed)} ended up with a different activity label,` +
+        ` ${formatInt(unchanged)} unchanged`,
+    );
+    if (report.changed > 0) {
       const changes = Object.entries(report.changedByCategory).sort((a, b) => b[1] - a[1]);
       for (const [cat, n] of changes) {
-        lines.push(`  → ${cat}: ${formatInt(n)}`);
+        lines.push(`    → ${cat}: ${formatInt(n)}`);
       }
     }
   }
