@@ -111,6 +111,7 @@ export async function reclassifyLedger(opts: ReclassifyOptions = {}): Promise<Re
           toolCalls: rec.toolCalls,
           text,
           hasFailedTool,
+          reasoningTokens: rec.usage.reasoning,
         });
         report.processed++;
         const previous = rec.activity;

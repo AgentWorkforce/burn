@@ -35,11 +35,15 @@ export type ActivityCategory =
   | 'testing'
   | 'git'
   | 'build-deploy'
+  | 'deps'
+  | 'format'
   | 'coding'
+  | 'docs'
   | 'debugging'
   | 'refactoring'
   | 'feature'
   | 'exploration'
+  | 'reasoning'
   | 'brainstorming'
   | 'conversation';
 

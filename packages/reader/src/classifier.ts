@@ -7,6 +7,11 @@ export interface ClassificationInput {
   text?: string;
   // True if any tool_result block for this turn reported is_error.
   hasFailedTool?: boolean;
+  // Reasoning tokens billed on this turn. When > 0 and no tools / no keyword
+  // refinement fires, the turn is classified as 'reasoning' instead of
+  // 'conversation' — big reasoning-only turns are expensive and worth
+  // distinguishing from chit-chat.
+  reasoningTokens?: number;
 }
 
 export interface ClassificationResult {
@@ -67,10 +72,46 @@ const TEST_PATTERNS: RegExp[] = [
   /\bcargo\s+test\b/,
   /\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?test\b/,
   /\bnode\s+--test\b/,
+  // e2e / browser runners
+  /\bplaywright\b/,
+  /\bcypress\b/,
+  /\bpuppeteer\b/,
 ];
 
 const GIT_PATTERNS: RegExp[] = [
   /\bgit\s+(?:push|pull|fetch|commit|merge|rebase|checkout|cherry-pick|reset|revert|switch|tag|stash)\b/,
+];
+
+// Dependency-management commands live between "build" and "exploration" on the
+// priority ladder — they're purposeful actions (not incidental) but they're
+// also the clearest waste-pattern signal we can detect from bash alone.
+const DEPS_PATTERNS: RegExp[] = [
+  /\b(?:npm|yarn|pnpm|bun)\s+(?:install|add|remove|uninstall|update|upgrade|ci)\b/,
+  /\bpip\s+(?:install|uninstall)\b/,
+  /\bpip3\s+(?:install|uninstall)\b/,
+  /\bpython\s+-m\s+pip\s+(?:install|uninstall)\b/,
+  /\buv\s+(?:add|remove|sync|pip\s+install)\b/,
+  /\bpoetry\s+(?:add|remove|install|update)\b/,
+  /\bcargo\s+(?:add|remove|update)\b/,
+  /\bgo\s+(?:get|mod\s+(?:tidy|download))\b/,
+  /\bbundle\s+(?:install|update|add)\b/,
+  /\bgem\s+(?:install|uninstall)\b/,
+  /\bbrew\s+(?:install|uninstall|upgrade|update)\b/,
+  /\bapt(?:-get)?\s+(?:install|remove)\b/,
+];
+
+const FORMAT_PATTERNS: RegExp[] = [
+  /\bprettier\b/,
+  /\beslint\b.*--fix/,
+  /\bbiome\s+(?:format|check\s+--apply)/,
+  /\bblack\b/,
+  /\bruff\s+format\b/,
+  /\bisort\b/,
+  /\brustfmt\b/,
+  /\bcargo\s+fmt\b/,
+  /\bgofmt\b/,
+  /\bgoimports\b/,
+  /\bdprint\s+fmt\b/,
 ];
 
 const BUILD_DEPLOY_PATTERNS: RegExp[] = [
@@ -88,6 +129,19 @@ const BUILD_DEPLOY_PATTERNS: RegExp[] = [
   /\bdeploy\b/,
 ];
 
+// Files that count as "documentation" when edited. Matched against the
+// ToolCall.target on edit tools. Also recognizes docs/** and README* paths.
+const DOC_FILE_PATTERNS: RegExp[] = [
+  /\.md$/i,
+  /\.mdx$/i,
+  /\.rst$/i,
+  /\.adoc$/i,
+  /\.txt$/i,
+  /(?:^|\/)README(?:\.[^/]*)?$/i,
+  /(?:^|\/)CHANGELOG(?:\.[^/]*)?$/i,
+  /(?:^|\/)docs\//,
+];
+
 const DEBUG_RE =
   /\b(bug|error|crash|traceback|stack\s*trace|failure|failing|broken|fix\s+the|not\s+working|throws?)\b/i;
 const REFACTOR_RE =
@@ -102,10 +156,18 @@ export function classifyActivity(input: ClassificationInput): ClassificationResu
   const toolCalls = input.toolCalls ?? [];
   const text = input.text ?? '';
   const hasFailedTool = input.hasFailedTool === true;
+  const reasoningTokens = input.reasoningTokens ?? 0;
   const hasEdits = toolCalls.some((t) => EDIT_TOOLS.has(normalizeToolName(t.name)));
   const retries = countRetries(toolCalls);
 
-  const activity = pickCategory({ toolCalls, text, hasFailedTool, hasEdits });
+  const activity = pickCategory({
+    toolCalls,
+    text,
+    hasFailedTool,
+    hasEdits,
+    retries,
+    reasoningTokens,
+  });
   return { activity, retries, hasEdits };
 }
 
@@ -114,9 +176,18 @@ interface PickInput {
   text: string;
   hasFailedTool: boolean;
   hasEdits: boolean;
+  retries: number;
+  reasoningTokens: number;
 }
 
-function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): ActivityCategory {
+function pickCategory({
+  toolCalls,
+  text,
+  hasFailedTool,
+  hasEdits,
+  retries,
+  reasoningTokens,
+}: PickInput): ActivityCategory {
   // Priority 1: delegation — spawning a subagent dominates whatever else happened.
   if (toolCalls.some((t) => DELEGATION_TOOLS.has(normalizeToolName(t.name)))) return 'delegation';
 
@@ -124,10 +195,16 @@ function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): 
   if (toolCalls.some((t) => normalizeToolName(t.name) === 'ExitPlanMode')) return 'planning';
 
   // Priority 3: edits present. Let keyword refinement pick a sub-category;
-  // default to coding if nothing stronger fires.
+  // fall through to documentation / debugging / coding as appropriate.
   if (hasEdits) {
     const refined = refineByKeywords(text, hasFailedTool);
-    return refined ?? 'coding';
+    if (refined) return refined;
+    // >= 2 retries (edit→bash→edit→bash→edit) inside a single turn is almost
+    // always the model chasing a bug. Call it debugging even without an
+    // explicit error signal.
+    if (retries >= 2) return 'debugging';
+    if (allEditsAreDocs(toolCalls)) return 'docs';
+    return 'coding';
   }
 
   // Priority 4: a failed tool call on a non-edit turn is debugging — a failing
@@ -135,13 +212,16 @@ function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): 
   // neutrally running tests or pushing code.
   if (hasFailedTool) return 'debugging';
 
-  // Priority 5: bash commands with recognizable patterns.
+  // Priority 5: bash commands with recognizable patterns. Test/git match
+  // first so that 'npm test' doesn't collide with the generic npm deps rule.
   const bashCalls = toolCalls.filter((t) => normalizeToolName(t.name) === 'Bash');
   for (const call of bashCalls) {
     const cmd = stripEnv(call.target ?? '');
     if (!cmd) continue;
     if (TEST_PATTERNS.some((re) => re.test(cmd))) return 'testing';
     if (GIT_PATTERNS.some((re) => re.test(cmd))) return 'git';
+    if (DEPS_PATTERNS.some((re) => re.test(cmd))) return 'deps';
+    if (FORMAT_PATTERNS.some((re) => re.test(cmd))) return 'format';
     if (BUILD_DEPLOY_PATTERNS.some((re) => re.test(cmd))) return 'build-deploy';
   }
 
@@ -154,12 +234,26 @@ function pickCategory({ toolCalls, text, hasFailedTool, hasEdits }: PickInput): 
     return 'exploration';
   }
 
-  // Priority 6: no tools — keyword-only classification.
+  // Priority 7: no tools — keyword-only classification.
   const refined = refineByKeywords(text, hasFailedTool);
   if (refined) return refined;
   if (BRAINSTORM_RE.test(text)) return 'brainstorming';
   if (PLANNING_RE.test(text)) return 'planning';
+  // Reasoning-only turns (extended thinking, Codex reasoning tokens) with no
+  // tools and no user-text hook are distinct from chit-chat — they carry a
+  // very different cost profile.
+  if (reasoningTokens > 0) return 'reasoning';
   return 'conversation';
+}
+
+function allEditsAreDocs(toolCalls: ToolCall[]): boolean {
+  const edits = toolCalls.filter((t) => EDIT_TOOLS.has(normalizeToolName(t.name)));
+  if (edits.length === 0) return false;
+  return edits.every((t) => {
+    const target = t.target;
+    if (typeof target !== 'string' || target.length === 0) return false;
+    return DOC_FILE_PATTERNS.some((re) => re.test(target));
+  });
 }
 
 function refineByKeywords(text: string, hasFailedTool: boolean): ActivityCategory | null {

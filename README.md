@@ -145,22 +145,26 @@ Every turn is tagged with an `activity` label so cost can be compared like-for-l
 
 Classification is deterministic and rule-based — no LLM in the loop. Every turn with the same tool calls and prompt text produces the same label.
 
-Twelve categories, from codeburn's taxonomy so cross-tool comparison stays possible:
+Sixteen categories, chosen so cross-tool comparison stays possible:
 
 | Category | Trigger |
 |---|---|
 | `planning` | `ExitPlanMode` tool, or planning/roadmap keywords with no tool use |
 | `delegation` | `Agent` / `Task` spawn — dominates other signals |
-| `testing` | `Bash` matching `pytest`, `vitest`, `bun test`, `jest`, `go test`, `cargo test`, `npm test`, etc. |
+| `testing` | `Bash` matching `pytest`, `vitest`, `bun test`, `jest`, `go test`, `cargo test`, `npm test`, `playwright`, `cypress`, `puppeteer`, etc. |
 | `git` | `Bash` matching `git push/pull/commit/merge/rebase/checkout/cherry-pick/...` |
+| `deps` | `Bash` matching `npm install`, `pnpm add`, `pip install`, `uv add`, `cargo add`, `go get`, `brew install`, etc. |
+| `format` | `Bash` matching `prettier`, `eslint --fix`, `black`, `ruff format`, `cargo fmt`, `gofmt`, etc. |
 | `build-deploy` | `Bash` matching `docker build`, `cargo build`, `npm run build`, `kubectl apply`, `terraform apply`, etc. |
 | `coding` | `Edit` / `Write` / `NotebookEdit` with no stronger keyword signal |
-| `debugging` | Edit turn where prompt mentions bug/error/crash/traceback, or any tool call errored this turn |
+| `docs` | Edit turn where **every** edited file is a doc (`*.md`, `*.mdx`, `*.rst`, `*.adoc`, `*.txt`, `README*`, `CHANGELOG*`, anything under `docs/`) |
+| `debugging` | Edit turn where prompt mentions bug/error/crash/traceback, or any tool call errored this turn, or the turn contains ≥2 edit→bash→edit retry cycles |
 | `refactoring` | Edit turn with keywords: `refactor`, `cleanup`, `rename`, `extract`, `restructure` |
 | `feature` | Edit turn with keywords: `add`, `create`, `implement`, `new`, `introduce` |
 | `exploration` | `Read` / `Grep` / `Glob` / `WebFetch` / `WebSearch` without edits |
+| `reasoning` | No tool use, no keyword hit, but the turn billed reasoning tokens (extended thinking, Codex `reasoning_output_tokens`) |
 | `brainstorming` | No tool use; prompt asks *what if*, *think through*, *should we*, *design* |
-| `conversation` | No tool use, no category keywords — the fallback |
+| `conversation` | No tool use, no category keywords, no reasoning tokens — the fallback |
 
 Two companion fields fall out of the same pass:
 

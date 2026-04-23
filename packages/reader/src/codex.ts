@@ -411,6 +411,7 @@ export async function parseCodexSessionIncremental(
       toolCalls: f.toolCalls,
       text: cText,
       hasFailedTool,
+      reasoningTokens: f.usage.reasoning,
     });
     record.activity = classified.activity;
     record.retries = classified.retries;

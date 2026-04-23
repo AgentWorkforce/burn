@@ -169,6 +169,7 @@ export async function parseOpencodeSessionIncremental(
       toolCalls,
       text: cText,
       hasFailedTool,
+      reasoningTokens: usage.reasoning,
     });
     record.activity = classified.activity;
     record.retries = classified.retries;

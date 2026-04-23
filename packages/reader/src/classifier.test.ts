@@ -235,6 +235,111 @@ describe('classifyActivity — hasEdits flag', () => {
   });
 });
 
+describe('classifyActivity — new categories', () => {
+  it('classifies an edit turn touching only doc files as docs', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Edit', '/project/README.md'), tc('Write', '/project/docs/guide.md')],
+    });
+    assert.equal(r.activity, 'docs');
+    assert.equal(r.hasEdits, true);
+  });
+
+  it('stays coding when a code file is mixed in with docs', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Edit', '/project/README.md'), tc('Edit', '/project/src/a.ts')],
+    });
+    assert.equal(r.activity, 'coding');
+  });
+
+  it('classifies npm install / pip install / cargo add as deps', () => {
+    const cases = [
+      'npm install react',
+      'pnpm add lodash',
+      'yarn add -D typescript',
+      'pip install requests',
+      'uv add httpx',
+      'poetry add fastapi',
+      'cargo add serde',
+      'go get github.com/foo/bar',
+      'bundle install',
+      'brew install jq',
+    ];
+    for (const cmd of cases) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'deps', `expected deps for: ${cmd}`);
+    }
+  });
+
+  it('classifies formatter invocations as format', () => {
+    const cases = [
+      'prettier --write .',
+      'eslint . --fix',
+      'ruff format src/',
+      'black .',
+      'cargo fmt',
+      'gofmt -w .',
+      'rustfmt src/lib.rs',
+    ];
+    for (const cmd of cases) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'format', `expected format for: ${cmd}`);
+    }
+  });
+
+  it('keeps "npm test" as testing even though npm also triggers deps pattern', () => {
+    // Ordering matters: TEST_PATTERNS must be checked before DEPS_PATTERNS so
+    // `npm test` doesn't collide with `npm install`.
+    const r = classifyActivity({ toolCalls: [tc('Bash', 'npm test')] });
+    assert.equal(r.activity, 'testing');
+  });
+
+  it('classifies playwright / cypress / puppeteer bash commands as testing', () => {
+    for (const cmd of ['playwright test', 'cypress run', 'puppeteer']) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'testing', `expected testing for: ${cmd}`);
+    }
+  });
+
+  it('classifies high-retry edit turns as debugging even without error signal', () => {
+    // Edit → bash → edit → bash → edit → bash → edit = 3 retries inside one turn.
+    // Model is clearly chasing a bug, so call it debugging without needing an
+    // explicit "fix the bug" keyword.
+    const r = classifyActivity({
+      toolCalls: [
+        tc('Edit', '/a.ts', '1'),
+        tc('Bash', 'pytest', '2'),
+        tc('Edit', '/a.ts', '3'),
+        tc('Bash', 'pytest', '4'),
+        tc('Edit', '/a.ts', '5'),
+        tc('Bash', 'pytest', '6'),
+        tc('Edit', '/a.ts', '7'),
+      ],
+    });
+    assert.equal(r.activity, 'debugging');
+    assert.equal(r.hasEdits, true);
+    assert.ok(r.retries >= 2);
+  });
+
+  it('falls back to reasoning for tool-less turns with reasoning tokens', () => {
+    const r = classifyActivity({ toolCalls: [], reasoningTokens: 5000 });
+    assert.equal(r.activity, 'reasoning');
+  });
+
+  it('still returns conversation for tool-less turns with no reasoning and no keywords', () => {
+    const r = classifyActivity({ toolCalls: [], reasoningTokens: 0, text: 'thanks' });
+    assert.equal(r.activity, 'conversation');
+  });
+
+  it('keyword signal still wins over reasoning fallback', () => {
+    const r = classifyActivity({
+      toolCalls: [],
+      reasoningTokens: 10000,
+      text: 'fix the crash in the login handler',
+    });
+    assert.equal(r.activity, 'debugging');
+  });
+});
+
 describe('classifyActivity — cross-harness tool aliasing', () => {
   it('treats codex apply_patch as an edit', () => {
     const r = classifyActivity({ toolCalls: [tc('apply_patch', '/a.ts')] });

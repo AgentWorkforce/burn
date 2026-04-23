@@ -114,11 +114,10 @@ describe('parseCodexSession', () => {
   it('classifies activity and fills retries/hasEdits for codex turns', async () => {
     const { turns } = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
     const t = turns[0]!;
-    // apply_patch normalized → Edit, so hasEdits should be true and the
-    // category should be a coding-family label (no debug/refactor keywords
-    // in this fixture, so it falls through to 'coding').
+    // apply_patch normalized → Edit, so hasEdits should be true. Both patches
+    // target .md files (README.md, NEW.md), so this turn lands in 'docs'.
     assert.equal(t.hasEdits, true);
-    assert.equal(t.activity, 'coding');
+    assert.equal(t.activity, 'docs');
     assert.equal(typeof t.retries, 'number');
   });
 

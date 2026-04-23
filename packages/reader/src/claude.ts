@@ -509,6 +509,7 @@ function applyClassification(
     toolCalls: record.toolCalls,
     text,
     hasFailedTool,
+    reasoningTokens: record.usage.reasoning,
   });
   record.activity = result.activity;
   record.retries = result.retries;
