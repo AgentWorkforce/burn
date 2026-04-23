@@ -26,10 +26,17 @@ describe('classifyActivity — tool-pattern classification', () => {
   });
 
   it('classifies bash test runners as testing', () => {
-    const cases = ['pytest', 'vitest run', 'bun test', 'npm test', 'go test ./...', 'cargo test', 'node --test'];
+    const cases = ['pytest', 'vitest run', 'bun test', 'npm test', 'go test ./...', 'cargo test', 'node --test', 'make test'];
     for (const cmd of cases) {
       const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
       assert.equal(r.activity, 'testing', `expected 'testing' for ${cmd}, got ${r.activity}`);
+    }
+  });
+
+  it('classifies read-only git / PR inspection commands as review', () => {
+    for (const cmd of ['git status', 'git diff --stat', 'git show HEAD~1', 'gh pr diff 123', 'gh pr view 123']) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'review', cmd);
     }
   });
 
@@ -46,10 +53,23 @@ describe('classifyActivity — tool-pattern classification', () => {
   });
 
   it('classifies build and deploy commands as build-deploy', () => {
-    for (const cmd of ['npm run build', 'docker build .', 'cargo build --release', 'kubectl apply -f k8s/', 'terraform apply']) {
+    for (const cmd of ['npm run build', 'docker build .', 'cargo build --release', 'kubectl apply -f k8s/', 'terraform apply', 'make build']) {
       const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
       assert.equal(r.activity, 'build-deploy', cmd);
     }
+  });
+
+  it('classifies lint / typecheck commands as verification', () => {
+    const cases = ['npm run lint', 'eslint .', 'ruff check src/', 'cargo check', 'tsc --noEmit', 'make lint', 'prettier --check .', 'cargo fmt --check'];
+    for (const cmd of cases) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'verification', `expected verification for: ${cmd}`);
+    }
+  });
+
+  it('avoids build-deploy false positives for non-deploy shell commands', () => {
+    assert.equal(classifyActivity({ toolCalls: [tc('Bash', 'make lint')] }).activity, 'verification');
+    assert.equal(classifyActivity({ toolCalls: [tc('Bash', 'kubectl logs deploy/api')] }).activity, 'exploration');
   });
 
   it('classifies plain edit turns as coding', () => {
@@ -142,6 +162,14 @@ describe('classifyActivity — keyword refinement', () => {
       text: 'add a new route for /admin',
     });
     assert.equal(r.activity, 'feature');
+  });
+
+  it('promotes read-only turns to review when the prompt explicitly asks for review', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Read', '/a.ts'), tc('Grep', 'auth')],
+      text: 'review this authentication change for risks',
+    });
+    assert.equal(r.activity, 'review');
   });
 });
 
@@ -251,6 +279,14 @@ describe('classifyActivity — new categories', () => {
     assert.equal(r.activity, 'coding');
   });
 
+  it('keeps doc-only edits as docs even when the prompt uses feature wording', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Edit', '/project/README.md')],
+      text: 'add an installation section to the README',
+    });
+    assert.equal(r.activity, 'docs');
+  });
+
   it('classifies npm install / pip install / cargo add as deps', () => {
     const cases = [
       'npm install react',
@@ -274,6 +310,7 @@ describe('classifyActivity — new categories', () => {
     const cases = [
       'prettier --write .',
       'eslint . --fix',
+      'biome check src/ --apply',
       'ruff format src/',
       'black .',
       'cargo fmt',
@@ -347,6 +384,11 @@ describe('classifyActivity — cross-harness tool aliasing', () => {
     assert.equal(r.activity, 'coding');
   });
 
+  it('treats codex subagent management tools as delegation', () => {
+    assert.equal(classifyActivity({ toolCalls: [tc('spawn_agent')] }).activity, 'delegation');
+    assert.equal(classifyActivity({ toolCalls: [tc('wait_agent')] }).activity, 'delegation');
+  });
+
   it('treats codex exec_command as bash for test/git/build detection', () => {
     assert.equal(
       classifyActivity({ toolCalls: [tc('exec_command', 'pytest -q')] }).activity,
@@ -359,6 +401,14 @@ describe('classifyActivity — cross-harness tool aliasing', () => {
     assert.equal(
       classifyActivity({ toolCalls: [tc('shell', 'npm run build')] }).activity,
       'build-deploy',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('exec_command', 'git diff --stat')] }).activity,
+      'review',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('shell', 'cargo check')] }).activity,
+      'verification',
     );
   });
 

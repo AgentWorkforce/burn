@@ -145,16 +145,18 @@ Every turn is tagged with an `activity` label so cost can be compared like-for-l
 
 Classification is deterministic and rule-based — no LLM in the loop. Every turn with the same tool calls and prompt text produces the same label.
 
-Sixteen categories, chosen so cross-tool comparison stays possible:
+Eighteen categories, chosen so cross-tool comparison stays possible:
 
 | Category | Trigger |
 |---|---|
 | `planning` | `ExitPlanMode` tool, or planning/roadmap keywords with no tool use |
 | `delegation` | `Agent` / `Task` spawn — dominates other signals |
 | `testing` | `Bash` matching `pytest`, `vitest`, `bun test`, `jest`, `go test`, `cargo test`, `npm test`, `playwright`, `cypress`, `puppeteer`, etc. |
+| `review` | Read-only inspection work: `git status/diff/show/log/blame`, `gh pr diff/view/checks`, or explicit review/audit keywords |
 | `git` | `Bash` matching `git push/pull/commit/merge/rebase/checkout/cherry-pick/...` |
 | `deps` | `Bash` matching `npm install`, `pnpm add`, `pip install`, `uv add`, `cargo add`, `go get`, `brew install`, etc. |
-| `format` | `Bash` matching `prettier`, `eslint --fix`, `black`, `ruff format`, `cargo fmt`, `gofmt`, etc. |
+| `format` | `Bash` matching mutating formatter commands such as `prettier --write`, `eslint --fix`, `black`, `ruff format`, `cargo fmt`, `gofmt`, etc. |
+| `verification` | `Bash` matching lint/typecheck/static-analysis commands: `npm run lint`, `eslint`, `ruff check`, `cargo check`, `tsc --noEmit`, `prettier --check`, etc. |
 | `build-deploy` | `Bash` matching `docker build`, `cargo build`, `npm run build`, `kubectl apply`, `terraform apply`, etc. |
 | `coding` | `Edit` / `Write` / `NotebookEdit` with no stronger keyword signal |
 | `docs` | Edit turn where **every** edited file is a doc (`*.md`, `*.mdx`, `*.rst`, `*.adoc`, `*.txt`, `README*`, `CHANGELOG*`, anything under `docs/`) |
@@ -165,6 +167,8 @@ Sixteen categories, chosen so cross-tool comparison stays possible:
 | `reasoning` | No tool use, no keyword hit, but the turn billed reasoning tokens (extended thinking, Codex `reasoning_output_tokens`) |
 | `brainstorming` | No tool use; prompt asks *what if*, *think through*, *should we*, *design* |
 | `conversation` | No tool use, no category keywords, no reasoning tokens — the fallback |
+
+Keyword refinement can also promote non-edit turns out of `exploration` when the ask is explicit, especially for `review`, `debugging`, `refactoring`, and `feature`. Doc-only edit turns stay `docs` unless the turn actually hit a failure signal.
 
 Two companion fields fall out of the same pass:
 

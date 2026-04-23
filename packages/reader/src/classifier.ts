@@ -42,6 +42,13 @@ const TOOL_ALIASES: Record<string, string> = {
   read_file: 'Read',
   write_file: 'Write',
   update_plan: 'ExitPlanMode',
+  spawn_agent: 'Agent',
+  send_input: 'Task',
+  wait_agent: 'Task',
+  close_agent: 'Task',
+  resume_agent: 'Task',
+  view_image: 'Read',
+  read_mcp_resource: 'Read',
   // OpenCode (lowercase names)
   read: 'Read',
   write: 'Write',
@@ -72,10 +79,22 @@ const TEST_PATTERNS: RegExp[] = [
   /\bcargo\s+test\b/,
   /\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?test\b/,
   /\bnode\s+--test\b/,
+  /\bmake\s+test\b/,
+  /\bctest\b/,
   // e2e / browser runners
   /\bplaywright\b/,
   /\bcypress\b/,
   /\bpuppeteer\b/,
+];
+
+const REVIEW_PATTERNS: RegExp[] = [
+  /\bgit\s+status\b/,
+  /\bgit\s+diff\b/,
+  /\bgit\s+show\b/,
+  /\bgit\s+log\b/,
+  /\bgit\s+blame\b/,
+  /\bgh\s+pr\s+(?:view|diff|checks)\b/,
+  /\bgh\s+run\s+view\b/,
 ];
 
 const GIT_PATTERNS: RegExp[] = [
@@ -101,32 +120,56 @@ const DEPS_PATTERNS: RegExp[] = [
 ];
 
 const FORMAT_PATTERNS: RegExp[] = [
-  /\bprettier\b/,
-  /\beslint\b.*--fix/,
-  /\bbiome\s+(?:format|check\s+--apply)/,
-  /\bblack\b/,
+  /\bprettier\b.*(?:--write|-w)(?:\s|$)/,
+  /\beslint\b.*--fix\b/,
+  /\bbiome\s+format\b/,
+  /\bbiome\s+check\b.*--apply\b/,
+  /\bblack\b(?!.*--check\b)/,
   /\bruff\s+format\b/,
   /\bisort\b/,
   /\brustfmt\b/,
-  /\bcargo\s+fmt\b/,
+  /\bcargo\s+fmt\b(?!.*--check\b)/,
   /\bgofmt\b/,
   /\bgoimports\b/,
   /\bdprint\s+fmt\b/,
+];
+
+const VERIFICATION_PATTERNS: RegExp[] = [
+  /\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?lint\b/,
+  /\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?typecheck\b/,
+  /\bprettier\b.*--check\b/,
+  /\beslint\b(?!.*--fix\b)/,
+  /\bbiome\s+check\b(?!.*--apply\b)/,
+  /\bblack\b.*--check\b/,
+  /\bruff\s+check\b/,
+  /\bflake8\b/,
+  /\bmypy\b/,
+  /\bpyright\b/,
+  /\btsc\b(?!\s+--build\b)/,
+  /\bcargo\s+check\b/,
+  /\bcargo\s+fmt\b.*--check\b/,
+  /\bgolangci-lint\b/,
+  /\bshellcheck\b/,
+  /\bhadolint\b/,
+  /\bterraform\s+validate\b/,
+  /\bmake\s+(?:lint|check|typecheck|verify)\b/,
 ];
 
 const BUILD_DEPLOY_PATTERNS: RegExp[] = [
   /\bdocker\s+(?:build|compose\s+build|push)\b/,
   /\bcargo\s+build\b/,
   /\bgo\s+build\b/,
-  /\bmake(?:\s|$)/,
+  /\bmake\s+(?:build|release|dist|package|deploy)\b/,
   /\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?build\b/,
   /\b(?:webpack|vite|next|rollup|esbuild)\s+build\b/,
   /\btsc\s+--build\b/,
   /\bpm2\s+/,
   /\bkubectl\s+(?:apply|rollout|set)\b/,
+  /\bhelm\s+(?:install|upgrade)\b/,
   /\bterraform\s+(?:apply|plan)\b/,
+  /\bterraform\s+destroy\b/,
   /\bserverless\s+deploy\b/,
-  /\bdeploy\b/,
+  /\b(?:vercel|netlify|flyctl|railway|sst)\s+(?:deploy|up)\b/,
 ];
 
 // Files that count as "documentation" when edited. Matched against the
@@ -144,6 +187,7 @@ const DOC_FILE_PATTERNS: RegExp[] = [
 
 const DEBUG_RE =
   /\b(bug|error|crash|traceback|stack\s*trace|failure|failing|broken|fix\s+the|not\s+working|throws?)\b/i;
+const REVIEW_RE = /\b(review|audit|inspect|look\s+over|code\s+review|pr\s+review)\b/i;
 const REFACTOR_RE =
   /\b(refactor|refactoring|cleanup|clean\s+up|rename|extract|restructure|move\s+this|reorganize)\b/i;
 const FEATURE_RE =
@@ -197,13 +241,14 @@ function pickCategory({
   // Priority 3: edits present. Let keyword refinement pick a sub-category;
   // fall through to documentation / debugging / coding as appropriate.
   if (hasEdits) {
-    const refined = refineByKeywords(text, hasFailedTool);
-    if (refined) return refined;
+    if (hasFailedTool) return 'debugging';
     // >= 2 retries (edit→bash→edit→bash→edit) inside a single turn is almost
     // always the model chasing a bug. Call it debugging even without an
     // explicit error signal.
     if (retries >= 2) return 'debugging';
     if (allEditsAreDocs(toolCalls)) return 'docs';
+    const refined = refineEditByKeywords(text);
+    if (refined) return refined;
     return 'coding';
   }
 
@@ -219,23 +264,25 @@ function pickCategory({
     const cmd = stripEnv(call.target ?? '');
     if (!cmd) continue;
     if (TEST_PATTERNS.some((re) => re.test(cmd))) return 'testing';
+    if (REVIEW_PATTERNS.some((re) => re.test(cmd))) return 'review';
     if (GIT_PATTERNS.some((re) => re.test(cmd))) return 'git';
     if (DEPS_PATTERNS.some((re) => re.test(cmd))) return 'deps';
     if (FORMAT_PATTERNS.some((re) => re.test(cmd))) return 'format';
+    if (VERIFICATION_PATTERNS.some((re) => re.test(cmd))) return 'verification';
     if (BUILD_DEPLOY_PATTERNS.some((re) => re.test(cmd))) return 'build-deploy';
   }
 
   // Priority 6: any tools used at all → exploration (read-only, MCP, skills,
   // or un-patterned bash). Keyword hints can still promote the category.
   if (toolCalls.length > 0) {
-    const refined = refineByKeywords(text, false);
+    const refined = refineIntentByKeywords(text);
     if (refined) return refined;
     if (toolCalls.some((t) => READ_ONLY_TOOLS.has(normalizeToolName(t.name)))) return 'exploration';
     return 'exploration';
   }
 
   // Priority 7: no tools — keyword-only classification.
-  const refined = refineByKeywords(text, hasFailedTool);
+  const refined = hasFailedTool ? 'debugging' : refineIntentByKeywords(text);
   if (refined) return refined;
   if (BRAINSTORM_RE.test(text)) return 'brainstorming';
   if (PLANNING_RE.test(text)) return 'planning';
@@ -256,10 +303,18 @@ function allEditsAreDocs(toolCalls: ToolCall[]): boolean {
   });
 }
 
-function refineByKeywords(text: string, hasFailedTool: boolean): ActivityCategory | null {
-  if (hasFailedTool) return 'debugging';
+function refineEditByKeywords(text: string): ActivityCategory | null {
   if (!text) return null;
   if (DEBUG_RE.test(text)) return 'debugging';
+  if (REFACTOR_RE.test(text)) return 'refactoring';
+  if (FEATURE_RE.test(text)) return 'feature';
+  return null;
+}
+
+function refineIntentByKeywords(text: string): ActivityCategory | null {
+  if (!text) return null;
+  if (DEBUG_RE.test(text)) return 'debugging';
+  if (REVIEW_RE.test(text)) return 'review';
   if (REFACTOR_RE.test(text)) return 'refactoring';
   if (FEATURE_RE.test(text)) return 'feature';
   return null;
