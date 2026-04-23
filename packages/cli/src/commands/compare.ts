@@ -75,6 +75,12 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
 
   const wantJson = args.flags['json'] === true;
   const wantCsv = args.flags['csv'] === true;
+  if (wantJson && wantCsv) {
+    process.stderr.write(
+      `burn: --json and --csv are mutually exclusive; pick one.\n`,
+    );
+    return 2;
+  }
 
   await ingestAll();
   const pricing = await loadPricing();
@@ -108,11 +114,13 @@ function toJson(t: CompareTable, analyzedTurns: number): object {
         turns: c.turns,
         editTurns: c.editTurns,
         oneShotTurns: c.oneShotTurns,
+        pricedTurns: c.pricedTurns,
         totalCost: round(c.totalCost, 6),
         costPerTurn: c.costPerTurn !== null ? round(c.costPerTurn, 6) : null,
         oneShotRate: c.oneShotRate !== null ? round(c.oneShotRate, 4) : null,
         cacheHitRate: c.cacheHitRate !== null ? round(c.cacheHitRate, 4) : null,
         medianRetries: c.medianRetries,
+        noData: c.noData,
         insufficientSample: c.insufficientSample,
       });
     }
@@ -134,11 +142,13 @@ function renderCsv(t: CompareTable): string {
     'turns',
     'editTurns',
     'oneShotTurns',
+    'pricedTurns',
     'totalCost',
     'costPerTurn',
     'oneShotRate',
     'cacheHitRate',
     'medianRetries',
+    'noData',
     'insufficientSample',
   ];
   const rows: string[] = [header.join(',')];
@@ -152,11 +162,13 @@ function renderCsv(t: CompareTable): string {
           String(c.turns),
           String(c.editTurns),
           String(c.oneShotTurns),
+          String(c.pricedTurns),
           numCsv(c.totalCost, 6),
           c.costPerTurn !== null ? numCsv(c.costPerTurn, 6) : '',
           c.oneShotRate !== null ? numCsv(c.oneShotRate, 4) : '',
           c.cacheHitRate !== null ? numCsv(c.cacheHitRate, 4) : '',
           c.medianRetries !== null ? String(c.medianRetries) : '',
+          c.noData ? 'true' : 'false',
           c.insufficientSample ? 'true' : 'false',
         ].join(','),
       );
@@ -187,9 +199,14 @@ function formatPct(p: number): string {
 }
 
 function cellFields(c: CompareCell): [string, string, string] {
-  if (c.turns === 0) return [DASH, DASH, DASH];
+  if (c.noData) return [DASH, DASH, DASH];
   const turns = formatInt(c.turns);
+  // Cost dashes when no turns in the cell were priced (unknown/unpriced model)
+  // — distinct from $0.00 which would be a meaningful "free" claim.
   const cost = c.costPerTurn !== null ? formatUsd(c.costPerTurn) : DASH;
+  // One-shot rate dashes for categories that don't produce edits
+  // (exploration, brainstorming, planning, delegation, testing, git, deps,
+  // format, build-deploy, verification, review, reasoning, conversation).
   const oneShot = c.oneShotRate !== null ? formatPct(c.oneShotRate) : DASH;
   return [turns, cost, oneShot];
 }
@@ -255,11 +272,11 @@ function renderTty(t: CompareTable, analyzedTurns: number): string {
   const NOTE_LIMIT = 8;
   const notes: string[] = [];
   for (const cat of t.categories) {
-    const anyHasData = t.models.some((m) => t.cells[m]![cat]!.turns > 0);
+    const anyHasData = t.models.some((m) => !t.cells[m]![cat]!.noData);
     if (!anyHasData) continue;
     for (const m of t.models) {
       const c = t.cells[m]![cat]!;
-      if (c.turns === 0) {
+      if (c.noData) {
         notes.push(`no ${displayModelName(m)} data in '${cat}' — no comparison available.`);
       } else if (c.insufficientSample) {
         notes.push(
@@ -292,7 +309,11 @@ function renderRow(row: string[], widths: number[], sep: string): string {
 }
 
 function displayModelName(m: string): string {
-  // Strip provider prefix (e.g. "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6").
+  // Strip provider prefix (e.g. "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6")
+  // for display brevity. Aggregation in buildCompareTable always uses the
+  // raw model name, so two providers that ship a model with the same suffix
+  // would still aggregate separately and only collide visually in the TTY
+  // header. Use --json for the unambiguous identifier.
   const i = m.indexOf('/');
   return i >= 0 ? m.slice(i + 1) : m;
 }

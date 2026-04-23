@@ -8,11 +8,27 @@ export interface CompareCell {
   turns: number;
   editTurns: number;
   oneShotTurns: number;
+  // Number of turns whose model had pricing in the active table. When this is
+  // less than `turns`, totalCost / costPerTurn under-count what the cell
+  // actually consumed.
+  pricedTurns: number;
   totalCost: number;
+  // null when no priced turns; cells with unpriced models render as "—",
+  // never as "$0.00".
   costPerTurn: number | null;
+  // null for categories with no edits (exploration, brainstorming, planning,
+  // delegation, testing, git, deps, format, build-deploy, verification,
+  // review, reasoning, conversation) and for empty cells.
   oneShotRate: number | null;
   cacheHitRate: number | null;
   medianRetries: number | null;
+  // True when the cell has zero turns. Distinct from `insufficientSample` so
+  // JSON/CSV consumers can tell "we never saw this combination" apart from
+  // "we have data but the sample is small." Only one of `noData` /
+  // `insufficientSample` is ever true at a time.
+  noData: boolean;
+  // True when 0 < turns < minSample. A cell with `noData: true` always has
+  // `insufficientSample: false`.
   insufficientSample: boolean;
 }
 
@@ -36,6 +52,7 @@ interface Accum {
   turns: number;
   editTurns: number;
   oneShotTurns: number;
+  pricedTurns: number;
   totalCost: number;
   retriesSamples: number[];
   cacheRead: number;
@@ -50,6 +67,17 @@ export function buildCompareTable(turns: EnrichedTurn[], opts: CompareOptions): 
   const modelTotals = new Map<string, { turns: number; totalCost: number }>();
   const modelSet = new Set<string>();
   const categorySet = new Set<string>();
+
+  // Pre-seed modelSet from the --models filter so a model the user explicitly
+  // asked about stays visible (as an all-empty column with coverage notes)
+  // even if zero turns matched. Without this, the "no <model> data" coverage
+  // signal silently disappears for filtered-but-absent models.
+  if (modelFilter) {
+    for (const m of modelFilter) {
+      modelSet.add(m);
+      modelTotals.set(m, { turns: 0, totalCost: 0 });
+    }
+  }
 
   for (const t of turns) {
     const model = t.model || 'unknown';
@@ -73,6 +101,7 @@ export function buildCompareTable(turns: EnrichedTurn[], opts: CompareOptions): 
     mt.turns++;
     const c = costForTurn(t, opts.pricing);
     if (c) {
+      acc.pricedTurns++;
       acc.totalCost += c.total;
       mt.totalCost += c.total;
     }
@@ -125,23 +154,29 @@ function toCell(acc: Accum | undefined, minSample: number): CompareCell {
       turns: 0,
       editTurns: 0,
       oneShotTurns: 0,
+      pricedTurns: 0,
       totalCost: 0,
       costPerTurn: null,
       oneShotRate: null,
       cacheHitRate: null,
       medianRetries: null,
-      insufficientSample: true,
+      noData: true,
+      insufficientSample: false,
     };
   }
   return {
     turns: acc.turns,
     editTurns: acc.editTurns,
     oneShotTurns: acc.oneShotTurns,
+    pricedTurns: acc.pricedTurns,
     totalCost: acc.totalCost,
-    costPerTurn: acc.totalCost / acc.turns,
+    // costPerTurn is null when none of the turns in this cell have pricing —
+    // emitting 0 would silently misrepresent unknown cost as free.
+    costPerTurn: acc.pricedTurns > 0 ? acc.totalCost / acc.pricedTurns : null,
     oneShotRate: acc.editTurns > 0 ? acc.oneShotTurns / acc.editTurns : null,
     cacheHitRate: acc.tokenDenominator > 0 ? acc.cacheRead / acc.tokenDenominator : null,
     medianRetries: acc.editTurns > 0 ? median(acc.retriesSamples) : null,
+    noData: false,
     insufficientSample: acc.turns < minSample,
   };
 }
@@ -151,6 +186,7 @@ function newAccum(): Accum {
     turns: 0,
     editTurns: 0,
     oneShotTurns: 0,
+    pricedTurns: 0,
     totalCost: 0,
     retriesSamples: [],
     cacheRead: 0,

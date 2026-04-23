@@ -15,7 +15,7 @@ const HELP = `burn — token usage & cost attribution for agent CLIs
 Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
   burn by-tool       [--since 7d] [--project <path>] [--session <id>]
-  burn compare       [--models a,b] [--since 7d] [--project <path>] [--workflow <id>] [--min-sample <n>] [--json|--csv]
+  burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn claude        [--tag k=v ...] [-- <claude args>]
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]

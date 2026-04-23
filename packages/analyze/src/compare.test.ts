@@ -74,7 +74,12 @@ describe('buildCompareTable', () => {
 
     const haikuExploration = t.cells['claude-haiku-4-5']!['exploration']!;
     assert.equal(haikuExploration.turns, 0);
-    assert.equal(haikuExploration.insufficientSample, true);
+    // No-data cells use noData=true, NOT insufficientSample=true. The two
+    // flags are mutually exclusive so JSON/CSV consumers can distinguish
+    // "we never saw this combination" from "we have data but the sample is
+    // small."
+    assert.equal(haikuExploration.noData, true);
+    assert.equal(haikuExploration.insufficientSample, false);
     assert.equal(haikuExploration.costPerTurn, null);
     assert.equal(haikuExploration.oneShotRate, null);
   });
@@ -93,15 +98,17 @@ describe('buildCompareTable', () => {
     assert.equal(cell.medianRetries, null);
   });
 
-  it('flags cells below minSample as insufficient', async () => {
+  it('flags cells below minSample as insufficient (and not as noData)', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: EnrichedTurn[] = [
       turn('claude-sonnet-4-6', 'refactoring', { hasEdits: true, retries: 0 }),
       turn('claude-sonnet-4-6', 'refactoring', { hasEdits: true, retries: 0 }),
     ];
     const t = buildCompareTable(turns, { pricing, minSample: 5 });
-    assert.equal(t.cells['claude-sonnet-4-6']!['refactoring']!.insufficientSample, true);
-    assert.equal(t.cells['claude-sonnet-4-6']!['refactoring']!.turns, 2);
+    const cell = t.cells['claude-sonnet-4-6']!['refactoring']!;
+    assert.equal(cell.insufficientSample, true);
+    assert.equal(cell.noData, false);
+    assert.equal(cell.turns, 2);
   });
 
   it('applies the --models filter', async () => {
@@ -116,6 +123,65 @@ describe('buildCompareTable', () => {
       models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
     });
     assert.deepEqual(t.models.sort(), ['claude-haiku-4-5', 'claude-sonnet-4-6']);
+  });
+
+  it('keeps explicitly-requested models visible even with zero matching turns', async () => {
+    // Without pre-seeding from opts.models, a model the user asked about
+    // disappears entirely (no all-empty column, no "no <model> data" note).
+    // The whole point of --models is to compare against a target — losing
+    // the column hides the gap instead of surfacing it.
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', { hasEdits: true, retries: 0 }),
+    ];
+    const t = buildCompareTable(turns, {
+      pricing,
+      models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+    });
+    assert.ok(t.models.includes('claude-haiku-4-5'), 'requested model must remain in the table');
+    const haikuCell = t.cells['claude-haiku-4-5']!['coding']!;
+    assert.equal(haikuCell.noData, true);
+    assert.equal(haikuCell.turns, 0);
+    assert.equal(t.totals['claude-haiku-4-5']!.turns, 0);
+  });
+
+  it('renders costPerTurn as null when no turn in the cell had pricing', async () => {
+    // costForTurn returns null for unknown models. If we divided totalCost
+    // (0) by turns (>0) we'd report $0.00 — falsely claiming a model is
+    // free. Instead expose pricedTurns and null out costPerTurn.
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      turn('definitely-not-a-model', 'coding', { hasEdits: true, retries: 0 }),
+      turn('definitely-not-a-model', 'coding', { hasEdits: true, retries: 1 }),
+    ];
+    const t = buildCompareTable(turns, { pricing });
+    const cell = t.cells['definitely-not-a-model']!['coding']!;
+    assert.equal(cell.turns, 2);
+    assert.equal(cell.pricedTurns, 0);
+    assert.equal(cell.totalCost, 0);
+    assert.equal(cell.costPerTurn, null);
+  });
+
+  it('uses pricedTurns (not turns) as the costPerTurn denominator', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', {
+        hasEdits: true,
+        retries: 0,
+        usage: { input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+      turn('claude-sonnet-4-6', 'coding', {
+        hasEdits: true,
+        retries: 0,
+        usage: { input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ];
+    const t = buildCompareTable(turns, { pricing });
+    const cell = t.cells['claude-sonnet-4-6']!['coding']!;
+    assert.equal(cell.pricedTurns, 2);
+    assert.equal(cell.turns, 2);
+    assert.ok(cell.costPerTurn !== null);
+    assert.ok(Math.abs(cell.costPerTurn! - cell.totalCost / 2) < 1e-9);
   });
 
   it('groups turns missing activity under "unclassified"', async () => {
