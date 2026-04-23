@@ -136,10 +136,16 @@ jobs:
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
 
       # Per-package CHANGELOG.md generation. For each package being published,
-      # finds the last `<pkg>-v*` tag, collects Conventional Commits since then
-      # that touched `packages/<pkg>/**`, buckets them, and prepends a new
+      # finds the last `<pkg>-v*` tag, collects commits since then that
+      # touched `packages/<pkg>/**`, buckets them, and prepends a new
       # versioned block. Skips silently for prereleases (version contains `-`)
       # and for first publishes (no prior tag).
+      #
+      # Bucketing prefers Conventional Commits prefixes (feat:/fix:/refactor:
+      # etc.) but also infers from imperative-style subjects ("Add X" → feat,
+      # "Fix Y" → fix, "Refactor Z" → changed). Anything still unclassified
+      # goes into the Changed section as a fallback so commits never get
+      # silently dropped from the changelog.
       - name: Generate changelogs
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
         run: |
@@ -206,31 +212,47 @@ jobs:
 
           const getType = (subject) => {
             const m = subject.match(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?(!)?:/i);
-            if (!m) return 'other';
-            const type = m[1].toLowerCase();
-            const scope = (m[2] || '').replace(/[()]/g, '');
-            if (m[3] === '!') return 'breaking';
-            if (type === 'feat') return 'feat';
-            if (type === 'fix') return 'fix';
-            if (type === 'refactor' || type === 'perf' || type === 'build') return 'changed';
-            if (type === 'test' || type === 'ci') return 'reliability';
-            if (type === 'chore' && scope === 'release') return 'release';
-            if (type === 'chore') return 'deps';
+            if (m) {
+              const type = m[1].toLowerCase();
+              const scope = (m[2] || '').replace(/[()]/g, '');
+              if (m[3] === '!') return 'breaking';
+              if (type === 'feat') return 'feat';
+              if (type === 'fix') return 'fix';
+              if (type === 'refactor' || type === 'perf' || type === 'build') return 'changed';
+              if (type === 'test' || type === 'ci') return 'reliability';
+              if (type === 'chore' && scope === 'release') return 'release';
+              if (type === 'chore') return 'deps';
+              return 'other';
+            }
+            // Imperative-verb inference for commits that don't follow
+            // Conventional Commits. Order matters — more specific verbs first.
+            const trimmed = subject.trim();
+            if (/^(add|implement|introduce|create|support|enable|expose|wire|allow)\b/i.test(trimmed)) return 'feat';
+            if (/^(fix|resolve|correct|patch|prevent|guard|stop)\b/i.test(trimmed)) return 'fix';
+            if (
+              /^(refactor|rename|extract|reorganize|restructure|simplify|move|split|consolidate|rewrite|replace)\b/i.test(trimmed) ||
+              /^(update|bump|upgrade|migrate|switch|tighten|loosen|tweak|adjust|improve|clarify|polish|cleanup|clean\s+up|harden)\b/i.test(trimmed)
+            ) return 'changed';
+            if (/^(test|cover|verify)\b/i.test(trimmed)) return 'reliability';
+            if (/^(document|docs?\b|readme)\b/i.test(trimmed)) return 'docs';
             return 'other';
           };
 
-          const cats = { breaking: [], feat: [], fix: [], changed: [], reliability: [], deps: [], release: [], other: [] };
+          const cats = { breaking: [], feat: [], fix: [], changed: [], reliability: [], deps: [], release: [], docs: [], other: [] };
           for (const c of commits) {
             const type = getType(c.subject);
             cats[type].push({ title: formatTitle(c.subject), pr: extractPR(c.subject, c.body) });
           }
 
+          // Anything that didn't match a typed bucket goes into "Changed" so
+          // commits never get silently dropped from the changelog.
           const sections = [
             ['Breaking Changes', cats.breaking, true],
             ['Added', cats.feat, true],
             ['Fixed', cats.fix, false],
-            ['Changed', cats.changed, false],
+            ['Changed', [...cats.changed, ...cats.other], false],
             ['Reliability', cats.reliability, false],
+            ['Documentation', cats.docs, false],
             ['Dependencies', cats.deps, false],
           ];
 
