@@ -253,6 +253,128 @@ describe('attributeWaste', () => {
     assert.equal(result.sessionTotals[0]!.attributionMethod, 'even-split');
   });
 
+  it('caps sibling initial cost at the next turn\'s actual newContent', async () => {
+    // Two large tool_results sized 6000 + 4000 = 10000 tokens enter on the
+    // same next turn, but turn N+1 only paid for 5000 newContent. The summed
+    // initialTokens across the two siblings must not exceed 5000, and the
+    // share must be proportional to size.
+    const pricing = await loadBuiltinPricing();
+    const sessionId = 's-cap';
+    const turns: TurnRecord[] = [
+      turn({
+        sessionId,
+        messageId: 'msg-0',
+        turnIndex: 0,
+        toolCalls: [tc('tu_big', 'Read', '/big.ts'), tc('tu_med', 'Read', '/med.ts')],
+      }),
+      turn({
+        sessionId,
+        messageId: 'msg-1',
+        turnIndex: 1,
+        usage: { input: 5000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set(sessionId, [
+      toolResultContent(sessionId, 'tu_big', 'x'.repeat(6000 * 4), '2026-04-20T00:00:00.100Z'),
+      toolResultContent(sessionId, 'tu_med', 'y'.repeat(4000 * 4), '2026-04-20T00:00:00.101Z'),
+    ]);
+    const result = attributeWaste(turns, { pricing, contentBySession });
+    const summed = result.attributions.reduce((s, a) => s + a.initialTokens, 0);
+    assert.ok(summed <= 5000 + 1e-6, `summed=${summed} > newContent=5000`);
+    const big = result.attributions.find((a) => a.toolUseId === 'tu_big')!;
+    const med = result.attributions.find((a) => a.toolUseId === 'tu_med')!;
+    // Proportional by size: 6/10 vs 4/10 of the 5000 cap.
+    assert.ok(Math.abs(big.initialTokens - 3000) < 1e-6);
+    assert.ok(Math.abs(med.initialTokens - 2000) < 1e-6);
+  });
+
+  it('caps sibling persistence at the turn\'s actual cacheRead', async () => {
+    // Two cached tool_results of 4000 + 4000 ride along on a turn whose
+    // cacheRead is only 5000. Their summed persistenceTokens for that turn
+    // must not exceed 5000, allocated proportionally by size (so 2500 each).
+    const pricing = await loadBuiltinPricing();
+    const sessionId = 's-persist-cap';
+    const turns: TurnRecord[] = [
+      turn({
+        sessionId,
+        messageId: 'msg-0',
+        turnIndex: 0,
+        toolCalls: [tc('tu_a', 'Read', '/a.ts'), tc('tu_b', 'Read', '/b.ts')],
+      }),
+      turn({
+        sessionId,
+        messageId: 'msg-1',
+        turnIndex: 1,
+        usage: { input: 8000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+      turn({
+        sessionId,
+        messageId: 'msg-2',
+        turnIndex: 2,
+        // Both results pass the per-result eviction test (cacheRead >= 4000)
+        // but the proportional allocation should sum to <= 5000, not 8000.
+        usage: { input: 50, output: 5, reasoning: 0, cacheRead: 5000, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set(sessionId, [
+      toolResultContent(sessionId, 'tu_a', 'x'.repeat(4000 * 4), '2026-04-20T00:00:00.100Z'),
+      toolResultContent(sessionId, 'tu_b', 'y'.repeat(4000 * 4), '2026-04-20T00:00:00.101Z'),
+    ]);
+    const result = attributeWaste(turns, { pricing, contentBySession });
+    const summedPersist = result.attributions.reduce((s, a) => s + a.persistenceTokens, 0);
+    assert.ok(summedPersist <= 5000 + 1e-6, `summedPersist=${summedPersist} > cacheRead=5000`);
+    for (const a of result.attributions) {
+      assert.ok(Math.abs(a.persistenceTokens - 2500) < 1e-6);
+    }
+  });
+
+  it('uses the paying turn\'s model rate, not the emit turn\'s', async () => {
+    // Emit on Sonnet, pay (initial + persistence) on Haiku. The attributed
+    // cost should reflect Haiku's rates, not Sonnet's.
+    const pricing = await loadBuiltinPricing();
+    const sonnet = pricing['claude-sonnet-4-6']!;
+    const haiku = pricing['claude-haiku-4-5']!;
+    assert.ok(haiku.input !== sonnet.input, 'test prerequisite: rates differ');
+
+    const sessionId = 's-cross-model';
+    const TOK = 4000;
+    const turns: TurnRecord[] = [
+      turn({
+        sessionId,
+        model: 'claude-sonnet-4-6',
+        messageId: 'msg-0',
+        turnIndex: 0,
+        toolCalls: [tc('tu_x', 'Read', '/x.ts')],
+      }),
+      turn({
+        sessionId,
+        model: 'claude-haiku-4-5',
+        messageId: 'msg-1',
+        turnIndex: 1,
+        usage: { input: TOK, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+      turn({
+        sessionId,
+        model: 'claude-haiku-4-5',
+        messageId: 'msg-2',
+        turnIndex: 2,
+        usage: { input: 50, output: 5, reasoning: 0, cacheRead: TOK + 100, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set(sessionId, [
+      toolResultContent(sessionId, 'tu_x', 'z'.repeat(TOK * 4), '2026-04-20T00:00:00.100Z'),
+    ]);
+    const result = attributeWaste(turns, { pricing, contentBySession });
+    const a = result.attributions[0]!;
+    const expectedInitial = (TOK / 1_000_000) * haiku.input;
+    const expectedPersistence = (TOK / 1_000_000) * haiku.cacheRead;
+    assert.ok(Math.abs(a.initialCost - expectedInitial) < 1e-9, `initialCost=${a.initialCost} expected=${expectedInitial}`);
+    assert.ok(Math.abs(a.persistenceCost - expectedPersistence) < 1e-9, `persistenceCost=${a.persistenceCost} expected=${expectedPersistence}`);
+  });
+
   it('grand total + unattributed = session grand total within rounding', async () => {
     const pricing = await loadBuiltinPricing();
     const sessionId = 's-totals';

@@ -1,4 +1,4 @@
-import type { ContentRecord, ToolCall, TurnRecord } from '@relayburn/reader';
+import type { ContentRecord, TurnRecord } from '@relayburn/reader';
 
 import type { ModelCost, PricingTable } from './pricing.js';
 
@@ -134,14 +134,11 @@ function attributeSession(
   if (turns.length === 0) return { attributions: [], method: 'even-split' };
 
   // Build tool-result size index by toolUseId across the full session.
-  // Tool results land in the user turn that follows the assistant turn that
-  // emitted the tool_use; we index ALL of them and look up by toolUseId.
   const sizeByToolUseId = new Map<string, number>();
   if (toolResultsByTurnTs) {
     for (const perTurn of toolResultsByTurnTs.values()) {
       for (const [toolUseId, text] of perTurn.toolResultText) {
-        const tokens = estimateTokens(text);
-        sizeByToolUseId.set(toolUseId, tokens);
+        sizeByToolUseId.set(toolUseId, estimateTokens(text));
       }
     }
   }
@@ -150,195 +147,131 @@ function attributeSession(
   const method: 'sized' | 'even-split' = haveAnySizes ? 'sized' : 'even-split';
 
   const attributions: ToolAttribution[] = [];
+  // Attributions emitted at the immediately-prior turn that have not yet been
+  // charged initial cost. They will be charged at this iteration using the
+  // current (paying) turn's model rate and (input + cacheCreate) mix.
+  let pendingInitial: ToolAttribution[] = [];
+  // Attributions whose initial cost has already been paid; eligible to ride
+  // along (persistence) on subsequent turns until the cacheRead eviction
+  // signal drops them.
+  const ridingActive: ToolAttribution[] = [];
 
-  for (let i = 0; i < turns.length; i++) {
-    const turn = turns[i]!;
-    if (turn.toolCalls.length === 0) continue;
-    const rate = lookupRate(turn.model, pricing);
-    if (!rate) continue;
+  for (const turn of turns) {
+    const turnRate = lookupRate(turn.model, pricing);
 
-    const next = turns[i + 1];
-    const tail = turns.slice(i + 2);
+    // 1) Initial cost: this turn pays for tool_results emitted on the previous
+    //    turn (they enter context now as fresh `input` and/or `cacheCreate`).
+    //    Use THIS turn's rate and (input/cacheCreate) mix — not the emit turn's.
+    if (pendingInitial.length > 0 && turnRate) {
+      const newContent =
+        turn.usage.input + turn.usage.cacheCreate5m + turn.usage.cacheCreate1h;
+      if (newContent > 0) {
+        const inputShare = turn.usage.input / newContent;
+        const createShare = 1 - inputShare;
+        const perTokenPrice = inputShare * turnRate.input + createShare * turnRate.cacheWrite;
+        if (haveAnySizes) {
+          const siblingTotal = pendingInitial.reduce((s, a) => s + a.resultTokens, 0);
+          if (siblingTotal > 0) {
+            // Cap the sibling group at what turn N+1 actually paid for new
+            // content — otherwise multiple tool_results entering on the same
+            // turn could over-attribute past the actual paid total.
+            const cap = Math.min(siblingTotal, newContent);
+            for (const a of pendingInitial) {
+              const tokens = (a.resultTokens / siblingTotal) * cap;
+              const cost = (tokens / PER_MILLION) * perTokenPrice;
+              a.initialCost = cost;
+              a.initialTokens = tokens;
+              a.totalCost += cost;
+            }
+          }
+        } else {
+          // Even-split mode: with no per-result sizes, divide this turn's
+          // (input + cacheCreate) cost evenly across the prior emit's tool
+          // calls. This is a strict subset of by-tool's totals.
+          const k = pendingInitial.length;
+          const tokensPerCall = newContent / k;
+          const costPerCall =
+            ((turn.usage.input / PER_MILLION) * turnRate.input +
+              ((turn.usage.cacheCreate5m + turn.usage.cacheCreate1h) / PER_MILLION) *
+                turnRate.cacheWrite) /
+            k;
+          for (const a of pendingInitial) {
+            a.initialTokens = tokensPerCall;
+            a.initialCost = costPerCall;
+            a.totalCost += costPerCall;
+          }
+        }
+      }
+    }
 
-    if (haveAnySizes) {
-      attributeToolCallsSized(
-        turn,
-        next,
-        tail,
-        sizeByToolUseId,
-        rate,
-        attributions,
-      );
-    } else {
-      attributeToolCallsEvenSplit(
-        turn,
-        next,
-        tail,
-        rate,
-        attributions,
-      );
+    // 2) Persistence cost: every still-cached prior tool_result rides along
+    //    in this turn's cacheRead. Allocate cacheRead proportionally by size
+    //    so the sum across active results never exceeds the actual cacheRead
+    //    tokens. Eviction signal: a result is dropped from the active set
+    //    once the turn's cacheRead falls below that single result's size.
+    if (haveAnySizes && ridingActive.length > 0 && turnRate && turn.usage.cacheRead > 0) {
+      const stillCached: ToolAttribution[] = [];
+      for (const a of ridingActive) {
+        if (a.resultTokens > 0 && turn.usage.cacheRead >= a.resultTokens) {
+          stillCached.push(a);
+        }
+      }
+      if (stillCached.length > 0) {
+        const activeTotal = stillCached.reduce((s, a) => s + a.resultTokens, 0);
+        const allocatable = Math.min(turn.usage.cacheRead, activeTotal);
+        for (const a of stillCached) {
+          const tokens = (a.resultTokens / activeTotal) * allocatable;
+          const cost = (tokens / PER_MILLION) * turnRate.cacheRead;
+          a.persistenceTokens += tokens;
+          a.persistenceCost += cost;
+          a.totalCost += cost;
+          a.ridingTurns += 1;
+        }
+      }
+    }
+
+    // 3) Promote yesterday's pendingInitial into the riding-active set, then
+    //    emit attributions for this turn's own tool_uses (they'll pay initial
+    //    next iteration).
+    if (pendingInitial.length > 0) {
+      ridingActive.push(...pendingInitial);
+      pendingInitial = [];
+    }
+    if (turn.toolCalls.length > 0) {
+      const subagentType = turn.subagent?.type;
+      for (const tc of turn.toolCalls) {
+        const sizeTokens = sizeByToolUseId.get(tc.id) ?? 0;
+        const a: ToolAttribution = {
+          toolUseId: tc.id,
+          toolName: tc.name,
+          target: tc.target,
+          argsHash: tc.argsHash,
+          sessionId: turn.sessionId,
+          emitTurnIndex: turn.turnIndex,
+          emitTs: turn.ts,
+          model: turn.model,
+          project: turn.project,
+          projectKey: turn.projectKey,
+          subagentType:
+            tc.name === 'Agent' || tc.name === 'Task'
+              ? subagentType ?? tc.target
+              : undefined,
+          resultTokens: sizeTokens,
+          resultBytesEstimated: haveAnySizes,
+          initialCost: 0,
+          initialTokens: 0,
+          persistenceCost: 0,
+          persistenceTokens: 0,
+          ridingTurns: 0,
+          totalCost: 0,
+        };
+        attributions.push(a);
+        pendingInitial.push(a);
+      }
     }
   }
 
   return { attributions, method };
-}
-
-function attributeToolCallsSized(
-  turn: TurnRecord,
-  next: TurnRecord | undefined,
-  tail: TurnRecord[],
-  sizeByToolUseId: Map<string, number>,
-  rate: ModelCost,
-  attributions: ToolAttribution[],
-): void {
-  const subagentType = turn.subagent?.type;
-  for (const tc of turn.toolCalls) {
-    const sizeTokens = sizeByToolUseId.get(tc.id) ?? 0;
-    const initial = computeInitialCostSized(sizeTokens, next, rate);
-    const persistence = computePersistenceCostSized(sizeTokens, tail, turn.model, attributions, rate);
-
-    const total = initial.cost + persistence.cost;
-    attributions.push({
-      toolUseId: tc.id,
-      toolName: tc.name,
-      target: tc.target,
-      argsHash: tc.argsHash,
-      sessionId: turn.sessionId,
-      emitTurnIndex: turn.turnIndex,
-      emitTs: turn.ts,
-      model: turn.model,
-      project: turn.project,
-      projectKey: turn.projectKey,
-      subagentType: tc.name === 'Agent' || tc.name === 'Task' ? subagentType ?? tc.target : undefined,
-      resultTokens: sizeTokens,
-      resultBytesEstimated: true,
-      initialCost: initial.cost,
-      initialTokens: initial.tokens,
-      persistenceCost: persistence.cost,
-      persistenceTokens: persistence.tokens,
-      ridingTurns: persistence.ridingTurns,
-      totalCost: total,
-    });
-  }
-}
-
-interface InitialResult {
-  cost: number;
-  tokens: number;
-}
-
-function computeInitialCostSized(
-  sizeTokens: number,
-  next: TurnRecord | undefined,
-  rate: ModelCost,
-): InitialResult {
-  if (!next || sizeTokens === 0) return { cost: 0, tokens: 0 };
-  // The tool_result enters context at the next turn. The next turn pays for it
-  // as either fresh `input` or `cacheCreate` (depending on the prefix-cache
-  // boundary the SDK chose). We use the next turn's actual mix to weight.
-  const newContent = next.usage.input + next.usage.cacheCreate5m + next.usage.cacheCreate1h;
-  if (newContent === 0) return { cost: 0, tokens: 0 };
-  const tokens = Math.min(sizeTokens, newContent);
-  const inputShare = newContent === 0 ? 1 : next.usage.input / newContent;
-  const createShare = 1 - inputShare;
-  const perTokenPrice = inputShare * rate.input + createShare * rate.cacheWrite;
-  return { cost: (tokens / PER_MILLION) * perTokenPrice, tokens };
-}
-
-interface PersistenceResult {
-  cost: number;
-  tokens: number;
-  ridingTurns: number;
-}
-
-function computePersistenceCostSized(
-  sizeTokens: number,
-  tail: TurnRecord[],
-  emitModel: string,
-  _attributions: ToolAttribution[],
-  rate: ModelCost,
-): PersistenceResult {
-  if (sizeTokens === 0 || tail.length === 0) {
-    return { cost: 0, tokens: 0, ridingTurns: 0 };
-  }
-  let cost = 0;
-  let tokens = 0;
-  let ridingTurns = 0;
-  for (const t of tail) {
-    // If cacheRead drops below the result's size, the content has aged out.
-    // We use this as a conservative eviction signal.
-    if (t.usage.cacheRead < sizeTokens) break;
-    const turnRate = t.model === emitModel ? rate : null;
-    const cacheReadPrice = turnRate ? turnRate.cacheRead : rate.cacheRead;
-    cost += (sizeTokens / PER_MILLION) * cacheReadPrice;
-    tokens += sizeTokens;
-    ridingTurns++;
-  }
-  return { cost, tokens, ridingTurns };
-}
-
-function attributeToolCallsEvenSplit(
-  turn: TurnRecord,
-  next: TurnRecord | undefined,
-  tail: TurnRecord[],
-  rate: ModelCost,
-  attributions: ToolAttribution[],
-): void {
-  const subagentType = turn.subagent?.type;
-  const k = turn.toolCalls.length;
-  // Initial: even-split next turn's (input + cacheCreate) cost across this
-  // turn's tool calls. This matches the per-tool-name behavior of by-tool but
-  // attributes per tool_use_id so we can group by file/argsHash later.
-  let initialPerCall = 0;
-  let initialTokensPerCall = 0;
-  if (next && k > 0) {
-    const inputCost = (next.usage.input / PER_MILLION) * rate.input;
-    const createCost =
-      ((next.usage.cacheCreate5m + next.usage.cacheCreate1h) / PER_MILLION) * rate.cacheWrite;
-    initialPerCall = (inputCost + createCost) / k;
-    initialTokensPerCall =
-      (next.usage.input + next.usage.cacheCreate5m + next.usage.cacheCreate1h) / k;
-  }
-
-  // Persistence in even-split mode is approximate. We don't know the
-  // per-tool-result size, so we attribute this turn's cacheRead share equally
-  // across all tool calls observed so far. To keep totals additive, each tool
-  // call gets `cacheRead_T / total_in_flight_at_T` per ride-along turn. But
-  // computing total_in_flight requires a session-wide pass — we do it after.
-  // For now record placeholder zeros; even-split persistence is filled in by
-  // the caller using a second pass. To avoid that complexity we DO a second
-  // pass right here when we see the full attributions list.
-
-  for (const tc of turn.toolCalls) {
-    attributions.push({
-      toolUseId: tc.id,
-      toolName: tc.name,
-      target: tc.target,
-      argsHash: tc.argsHash,
-      sessionId: turn.sessionId,
-      emitTurnIndex: turn.turnIndex,
-      emitTs: turn.ts,
-      model: turn.model,
-      project: turn.project,
-      projectKey: turn.projectKey,
-      subagentType:
-        tc.name === 'Agent' || tc.name === 'Task' ? subagentType ?? tc.target : undefined,
-      resultTokens: 0,
-      resultBytesEstimated: false,
-      initialCost: initialPerCall,
-      initialTokens: initialTokensPerCall,
-      // Persistence is not allocated in even-split mode (would over-attribute
-      // baseline overhead like system prompt and CLAUDE.md). Initial only is
-      // a strict subset of by-tool's totals.
-      persistenceCost: 0,
-      persistenceTokens: 0,
-      ridingTurns: 0,
-      totalCost: initialPerCall,
-    });
-  }
-
-  // tail unused in even-split mode (see comment above)
-  void tail;
 }
 
 function indexToolResults(

@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **`burn waste`** — per-tool-call and per-file cost attribution. Ranks the most expensive tool calls, files, Bash commands, and subagent calls by attributed cost: **initial** (turn after the tool call, where the result enters context as fresh `input`/`cacheCreate`) plus **persistence** (every subsequent turn it rides along in `cacheRead` until evicted). Closes [#3](https://github.com/AgentWorkforce/burn/issues/3). [cli, analyze]
+  - `burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--all] [--json]` — top-N rankings by file, Bash command (collapsed by `argsHash`), and subagent (`subagent_type`). `--all` shows full lists; `--json` emits raw aggregations.
+  - Sized attribution from the content sidecar when available (text length / 4 as a token estimate); even-split fallback (initial only) when it isn't, with a printed note.
+  - Per-paying-turn model rates so cross-model sessions are priced correctly. Sibling normalization across simultaneously-entering tool_results so attributed cost never exceeds what was actually paid.
+
 - **`burn context`** — cost attribution for agent context files across every agent `burn` ingests: `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. Answers "how much are my rules files costing me per session, and which sections are the most expensive?" Closes [#10](https://github.com/AgentWorkforce/burn/issues/10). [cli, analyze]
   - `burn context [--project <path>] [--since 7d] [--kind <k>] [--json]` — reports file size, per-session avg / p95 cost, window total across N sessions, and sections ranked by cost, per file. `--kind claude-md` / `--kind agents-md` narrows to one file kind.
   - `burn context advise [--top <n>]` — emits read-only unified-diff TRIM hunks for the most expensive sections across every discovered file. POSIX-relative paths so hunks apply with `git apply` / `patch`. No `--apply` flag: burn never mutates your context files.
