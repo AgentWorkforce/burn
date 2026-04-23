@@ -111,6 +111,57 @@ jobs:
               ;;
           esac
 
+      # Catch the failure mode that bit us on 2026-04-23: a previous publish
+      # run shipped @relayburn/*@0.3.0 to npm but failed at the Tag + push
+      # step, so neither the *-v0.3.0 tag nor the chore(release) commit
+      # landed. The next run cloned at 0.2.0, bumped to 0.3.0 again, and
+      # got "cannot publish over previously published versions: 0.3.0".
+      # If the highest stable version on npm is greater than what
+      # package.json says, abort here with a clear remediation message
+      # rather than letting the bump produce a doomed version downstream.
+      - name: Verify local versions are in sync with npm
+        run: |
+          set -euo pipefail
+          for pkg in ${{ steps.targets.outputs.packages }}; do
+            LOCAL=$(node -p "require('./packages/$pkg/package.json').version")
+            REMOTE=$(npm view "@relayburn/$pkg" versions --json 2>/dev/null \
+              | node -e '
+                const raw = require("fs").readFileSync(0, "utf8").trim() || "[]";
+                const parsed = JSON.parse(raw);
+                const arr = Array.isArray(parsed) ? parsed : [parsed];
+                const stable = arr.filter((v) => typeof v === "string" && !v.includes("-"));
+                stable.sort((a, b) => {
+                  const pa = a.split(".").map(Number);
+                  const pb = b.split(".").map(Number);
+                  for (let i = 0; i < 3; i++) {
+                    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+                  }
+                  return 0;
+                });
+                process.stdout.write(stable.length ? stable[stable.length - 1] : "");
+              ' || echo "")
+            if [ -z "$REMOTE" ]; then
+              echo "@relayburn/$pkg: no stable releases on npm yet — OK"
+              continue
+            fi
+            CMP=$(node -e '
+              const [a, b] = process.argv.slice(1);
+              const pa = a.split(".").map(Number);
+              const pb = b.split(".").map(Number);
+              for (let i = 0; i < 3; i++) {
+                const da = pa[i] || 0;
+                const db = pb[i] || 0;
+                if (da !== db) { console.log(da < db ? -1 : 1); process.exit(0); }
+              }
+              console.log(0);
+            ' "$LOCAL" "$REMOTE")
+            if [ "$CMP" = "-1" ]; then
+              echo "::error title=npm/git version drift::@relayburn/$pkg: package.json is at $LOCAL but npm has $REMOTE published. A previous publish run likely succeeded on npm but failed before tagging. Bump packages/$pkg/package.json to >= $REMOTE on a branch, push, then re-run this workflow. (You may also want to tag the prior release commit as $pkg-v$REMOTE so the changelog generator picks the right baseline.)"
+              exit 1
+            fi
+            echo "@relayburn/$pkg: local=$LOCAL, npm=$REMOTE — OK"
+          done
+
       - name: Bump versions
         id: bump
         run: |
@@ -134,6 +185,25 @@ jobs:
             popd > /dev/null
           done
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
+
+      # Belt-and-suspenders alongside the parity check above: even if the
+      # local→npm baseline is in sync, the computed bump might collide with
+      # an existing version (e.g. someone manually published a one-off from
+      # another branch). Catch it before we waste a build + before npm
+      # rejects with a less specific error.
+      - name: Verify new versions are not yet published
+        run: |
+          set -euo pipefail
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            pkg="${entry%%:*}"
+            ver="${entry##*:}"
+            EXISTS=$(npm view "@relayburn/$pkg@$ver" version 2>/dev/null || true)
+            if [ -n "$EXISTS" ]; then
+              echo "::error title=Version already published::@relayburn/$pkg@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
+              exit 1
+            fi
+            echo "@relayburn/$pkg@$ver: unpublished — OK"
+          done
 
       # Per-package CHANGELOG.md generation. For each package being published,
       # finds the last `<pkg>-v*` tag, collects commits since then that
