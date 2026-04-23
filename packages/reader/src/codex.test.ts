@@ -110,6 +110,164 @@ describe('parseCodexSession', () => {
     const { turns } = await parseCodexSession(file, { sessionPath: file });
     assert.equal(turns[0]!.sessionPath, file);
   });
+
+  it('classifies activity and fills retries/hasEdits for codex turns', async () => {
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
+    const t = turns[0]!;
+    // apply_patch normalized → Edit, so hasEdits should be true. Both patches
+    // target .md files (README.md, NEW.md), so this turn lands in 'docs'.
+    assert.equal(t.hasEdits, true);
+    assert.equal(t.activity, 'docs');
+    assert.equal(typeof t.retries, 'number');
+  });
+
+  it('marks exec_command_end with non-zero exit as a failed tool → debugging', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-fail-'));
+    try {
+      const jsonl =
+        [
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.000Z',
+            type: 'session_meta',
+            payload: { id: 'sess_fail', cwd: '/tmp/proj', timestamp: '2026-04-22T00:00:00.000Z' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.100Z',
+            type: 'turn_context',
+            payload: { turn_id: 'turn_fail_1', cwd: '/tmp/proj', model: 'gpt-5.4' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.200Z',
+            type: 'response_item',
+            payload: {
+              type: 'message',
+              role: 'user',
+              content: [{ type: 'input_text', text: 'run the tests please' }],
+            },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.300Z',
+            type: 'event_msg',
+            payload: { type: 'task_started', turn_id: 'turn_fail_1' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:01.000Z',
+            type: 'response_item',
+            payload: {
+              type: 'function_call',
+              name: 'exec_command',
+              arguments: '{"cmd":"pytest -q"}',
+              call_id: 'call_fail_1',
+            },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:01.500Z',
+            type: 'event_msg',
+            payload: { type: 'exec_command_end', call_id: 'call_fail_1', turn_id: 'turn_fail_1', exit_code: 1 },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:02.000Z',
+            type: 'event_msg',
+            payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 50 } } },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:02.100Z',
+            type: 'event_msg',
+            payload: { type: 'task_complete', turn_id: 'turn_fail_1' },
+          }),
+          '',
+        ].join('\n');
+      const file = path.join(tmp, 'fail.jsonl');
+      await writeFile(file, jsonl, 'utf8');
+      const { turns } = await parseCodexSession(file);
+      assert.equal(turns.length, 1);
+      // pytest would be 'testing', but the failed exec_command promotes it to debugging.
+      assert.equal(turns[0]!.activity, 'debugging');
+      assert.equal(turns[0]!.hasEdits, false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the user prompt for keyword refinement, skipping codex boilerplate', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-kw-'));
+    try {
+      const jsonl =
+        [
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.000Z',
+            type: 'session_meta',
+            payload: { id: 'sess_kw', cwd: '/tmp/proj', timestamp: '2026-04-22T00:00:00.000Z' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.050Z',
+            type: 'turn_context',
+            payload: { turn_id: 'turn_kw_1', cwd: '/tmp/proj', model: 'gpt-5.4' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.100Z',
+            type: 'response_item',
+            payload: {
+              type: 'message',
+              role: 'user',
+              content: [
+                { type: 'input_text', text: '<environment_context><cwd>/tmp/proj</cwd></environment_context>' },
+                { type: 'input_text', text: 'refactor the auth module to extract the token helper' },
+              ],
+            },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.200Z',
+            type: 'event_msg',
+            payload: { type: 'task_started', turn_id: 'turn_kw_1' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:01.000Z',
+            type: 'response_item',
+            payload: {
+              type: 'custom_tool_call',
+              name: 'apply_patch',
+              input: '*** Begin Patch\n*** Update File: /tmp/proj/auth.ts\n@@\n+ok\n*** End Patch\n',
+              call_id: 'call_kw_1',
+            },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:01.200Z',
+            type: 'event_msg',
+            payload: {
+              type: 'patch_apply_end',
+              call_id: 'call_kw_1',
+              turn_id: 'turn_kw_1',
+              success: true,
+              changes: { '/tmp/proj/auth.ts': { type: 'update' } },
+            },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:02.000Z',
+            type: 'event_msg',
+            payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 50 } } },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:02.100Z',
+            type: 'event_msg',
+            payload: { type: 'task_complete', turn_id: 'turn_kw_1' },
+          }),
+          '',
+        ].join('\n');
+      const file = path.join(tmp, 'kw.jsonl');
+      await writeFile(file, jsonl, 'utf8');
+      const { turns } = await parseCodexSession(file);
+      assert.equal(turns.length, 1);
+      assert.equal(turns[0]!.activity, 'refactoring');
+      assert.equal(turns[0]!.hasEdits, true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('parseCodexSessionIncremental', () => {

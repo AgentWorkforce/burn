@@ -145,22 +145,30 @@ Every turn is tagged with an `activity` label so cost can be compared like-for-l
 
 Classification is deterministic and rule-based — no LLM in the loop. Every turn with the same tool calls and prompt text produces the same label.
 
-Twelve categories, from codeburn's taxonomy so cross-tool comparison stays possible:
+Eighteen categories, chosen so cross-tool comparison stays possible:
 
 | Category | Trigger |
 |---|---|
 | `planning` | `ExitPlanMode` tool, or planning/roadmap keywords with no tool use |
 | `delegation` | `Agent` / `Task` spawn — dominates other signals |
-| `testing` | `Bash` matching `pytest`, `vitest`, `bun test`, `jest`, `go test`, `cargo test`, `npm test`, etc. |
+| `testing` | `Bash` matching `pytest`, `vitest`, `bun test`, `jest`, `go test`, `cargo test`, `npm test`, `playwright`, `cypress`, `puppeteer`, etc. |
+| `review` | Read-only inspection work: `git status/diff/show/log/blame`, `gh pr diff/view/checks`, or explicit review/audit keywords |
 | `git` | `Bash` matching `git push/pull/commit/merge/rebase/checkout/cherry-pick/...` |
+| `deps` | `Bash` matching `npm install`, `pnpm add`, `pip install`, `uv add`, `cargo add`, `go get`, `brew install`, etc. |
+| `format` | `Bash` matching mutating formatter commands such as `prettier --write`, `eslint --fix`, `black`, `ruff format`, `cargo fmt`, `gofmt`, etc. |
+| `verification` | `Bash` matching lint/typecheck/static-analysis commands: `npm run lint`, `eslint`, `ruff check`, `cargo check`, `tsc --noEmit`, `prettier --check`, etc. |
 | `build-deploy` | `Bash` matching `docker build`, `cargo build`, `npm run build`, `kubectl apply`, `terraform apply`, etc. |
 | `coding` | `Edit` / `Write` / `NotebookEdit` with no stronger keyword signal |
-| `debugging` | Edit turn where prompt mentions bug/error/crash/traceback, or any tool call errored this turn |
+| `docs` | Edit turn where **every** edited file is a doc (`*.md`, `*.mdx`, `*.rst`, `*.adoc`, `*.txt`, `README*`, `CHANGELOG*`, anything under `docs/`) |
+| `debugging` | Edit turn where prompt mentions bug/error/crash/traceback, or any tool call errored this turn, or the turn contains ≥2 edit→bash→edit retry cycles |
 | `refactoring` | Edit turn with keywords: `refactor`, `cleanup`, `rename`, `extract`, `restructure` |
 | `feature` | Edit turn with keywords: `add`, `create`, `implement`, `new`, `introduce` |
 | `exploration` | `Read` / `Grep` / `Glob` / `WebFetch` / `WebSearch` without edits |
+| `reasoning` | No tool use, no keyword hit, but the turn billed reasoning tokens (extended thinking, Codex `reasoning_output_tokens`) |
 | `brainstorming` | No tool use; prompt asks *what if*, *think through*, *should we*, *design* |
-| `conversation` | No tool use, no category keywords — the fallback |
+| `conversation` | No tool use, no category keywords, no reasoning tokens — the fallback |
+
+Keyword refinement can also promote non-edit turns out of `exploration` when the ask is explicit, especially for `review`, `debugging`, `refactoring`, and `feature`. Doc-only edit turns stay `docs` unless the turn actually hit a failure signal.
 
 Two companion fields fall out of the same pass:
 
@@ -185,8 +193,43 @@ Override ledger location with `RELAYBURN_HOME=/path/to/dir`.
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
 burn by-tool [--since 7d] [--project <path>] [--session <id>]
+burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
 burn claude  [--tag k=v ...] [-- <claude args>]
 ```
+
+### `burn compare` — model comparison by observed activity
+
+Looking at work you actually did, which model handled each activity category best?
+`burn compare` buckets every turn by `(model, activity)` and shows cost-per-turn, one-shot rate, and turn count side-by-side.
+
+```
+              claude-sonnet-4-6           claude-haiku-4-5
+Activity      Turns  Cost/turn  1-shot   Turns  Cost/turn  1-shot
+coding          243    $0.020    68%        89   $0.004    51%
+debugging       108    $0.031    41%        34   $0.008    28%
+refactoring      71    $0.024    75%        14   $0.006    64%
+testing          42    $0.012    89%        18   $0.003    83%
+exploration     118    $0.013     —         52   $0.003     —
+```
+
+One-shot rate = `turns with edits and zero intra-turn retries / edit turns`. It's `—` for categories that don't produce edits (`exploration`, `brainstorming`, etc.). Missing-data cells render as `—`, never `$0.00` or `0%`.
+
+This is observed data, not counterfactual: it tells you what happened when you actually used both models, not what *would have* happened if you'd picked differently. Cells with `turns < --min-sample` (default 5) are flagged as indicative; categories where only one model has data surface a coverage note beneath the table. The JSON cell shape exposes both `noData` (we never saw this combination) and `insufficientSample` (we have data but not much) so consumers can tell them apart cleanly.
+
+Standard filters apply: `--session <id>` limits to a single session, `--agent <id>` limits to a stamped agent ID, `--workflow <id>` to a stamped workflow ID, `--project <path>` to a project path or git-canonical projectKey.
+
+Output formats: TTY table (default), `--json` for scripts, `--csv` for spreadsheets. `--json` and `--csv` are mutually exclusive.
+
+### `burn rebuild --reclassify` — backfill activity labels on old turns
+
+Ingested turns are classified at write time. If you upgrade burn or a classifier rule changes, already-ingested turns keep the label they had when they were written. Run `burn rebuild --reclassify` to re-run the classifier across the whole ledger using whatever signals are still available (tool calls from the ledger, user prompts and errored tool_results from the content sidecar when present).
+
+```
+burn rebuild --reclassify           # only fills in turns with no activity set
+burn rebuild --reclassify --force   # overwrite every turn's activity
+```
+
+Default is non-destructive — turns that already have an activity stay as-is, so re-running is safe. `--force` is useful after a rule change when you want the whole ledger to reflect the new rules. The ledger is rewritten atomically under the same lock that `ingest` uses.
 
 ## Install (local dev)
 

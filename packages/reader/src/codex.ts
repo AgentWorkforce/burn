@@ -1,5 +1,6 @@
 import { open } from 'node:fs/promises';
 
+import { classifyActivity } from './classifier.js';
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type {
@@ -89,8 +90,22 @@ interface CustomToolCallPayload {
 interface PatchApplyEndPayload {
   type: 'patch_apply_end';
   turn_id?: string;
+  call_id?: string;
   success?: boolean;
   changes?: Record<string, unknown>;
+}
+
+interface ExecCommandEndPayload {
+  type: 'exec_command_end';
+  turn_id?: string;
+  call_id?: string;
+  exit_code?: number;
+}
+
+interface MessagePayload {
+  type: 'message';
+  role?: string;
+  content?: Array<{ type?: string; text?: string }>;
 }
 
 interface CumulativeUsage {
@@ -109,11 +124,19 @@ interface OpenTurn {
   toolCalls: ToolCall[];
   seenCallIds: Set<string>;
   filesTouched: Set<string>;
+  userText: string;
+  assistantText: string;
+  erroredCallIds: Set<string>;
 }
 
-interface FinalizedTurn extends Omit<OpenTurn, 'startCumulative' | 'seenCallIds' | 'filesTouched'> {
+interface FinalizedTurn
+  extends Omit<
+    OpenTurn,
+    'startCumulative' | 'seenCallIds' | 'filesTouched' | 'erroredCallIds'
+  > {
   usage: Usage;
   filesTouched: string[];
+  erroredCallIds: Set<string>;
 }
 
 export interface ParseCodexResult {
@@ -171,6 +194,7 @@ export async function parseCodexSessionIncremental(
     reasoning: options.resume?.cumulative.reasoning ?? 0,
   };
   let openTurn: OpenTurn | null = null;
+  let pendingUserText = '';
   const finalized: FinalizedTurn[] = [];
 
   // Commit snapshot — only advanced at task_complete boundaries.
@@ -261,7 +285,11 @@ export async function parseCodexSessionIncremental(
           toolCalls: [],
           seenCallIds: new Set(),
           filesTouched: new Set(),
+          userText: pendingUserText,
+          assistantText: '',
+          erroredCallIds: new Set(),
         };
+        pendingUserText = '';
         if (project !== undefined) openTurn.project = project;
         continue;
       }
@@ -284,10 +312,22 @@ export async function parseCodexSessionIncremental(
       if (pl.type === 'patch_apply_end') {
         const ev = payload as PatchApplyEndPayload;
         if (!openTurn || ev.turn_id !== openTurn.turnId) continue;
-        if (ev.success === false) continue;
+        if (ev.success === false) {
+          if (typeof ev.call_id === 'string') openTurn.erroredCallIds.add(ev.call_id);
+          continue;
+        }
         const changes = ev.changes;
         if (changes && typeof changes === 'object') {
           for (const file of Object.keys(changes)) openTurn.filesTouched.add(file);
+        }
+        continue;
+      }
+
+      if (pl.type === 'exec_command_end') {
+        const ev = payload as ExecCommandEndPayload;
+        if (!openTurn || ev.turn_id !== openTurn.turnId) continue;
+        if (typeof ev.exit_code === 'number' && ev.exit_code !== 0 && typeof ev.call_id === 'string') {
+          openTurn.erroredCallIds.add(ev.call_id);
         }
         continue;
       }
@@ -295,6 +335,20 @@ export async function parseCodexSessionIncremental(
     }
 
     if (rec.type === 'response_item') {
+      if (pl.type === 'message') {
+        const msg = payload as MessagePayload;
+        const text = collectMessageText(msg);
+        if (text.length === 0) continue;
+        if (msg.role === 'user') {
+          // User messages can arrive before task_started; buffer them so the
+          // next task_started picks them up as that turn's prompt text.
+          if (openTurn) openTurn.userText = appendText(openTurn.userText, text);
+          else pendingUserText = appendText(pendingUserText, text);
+        } else if (msg.role === 'assistant' && openTurn) {
+          openTurn.assistantText = appendText(openTurn.assistantText, text);
+        }
+        continue;
+      }
       if (!openTurn) continue;
       if (pl.type === 'function_call') {
         const fc = payload as FunctionCallPayload;
@@ -351,6 +405,17 @@ export async function parseCodexSessionIncremental(
       if (resolved.projectKey !== undefined) record.projectKey = resolved.projectKey;
     }
     if (f.filesTouched.length > 0) record.filesTouched = f.filesTouched;
+    const cText = [f.userText, f.assistantText].filter((s) => s.length > 0).join('\n');
+    const hasFailedTool = f.toolCalls.some((tc) => f.erroredCallIds.has(tc.id));
+    const classified = classifyActivity({
+      toolCalls: f.toolCalls,
+      text: cText,
+      hasFailedTool,
+      reasoningTokens: f.usage.reasoning,
+    });
+    record.activity = classified.activity;
+    record.retries = classified.retries;
+    record.hasEdits = classified.hasEdits;
     turns.push(record);
   }
 
@@ -400,9 +465,47 @@ function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTur
     toolCalls: open.toolCalls,
     usage,
     filesTouched: [...open.filesTouched],
+    userText: open.userText,
+    assistantText: open.assistantText,
+    erroredCallIds: open.erroredCallIds,
   };
   if (open.project !== undefined) out.project = open.project;
   return out;
+}
+
+// Codex user messages mix real prompts with harness boilerplate
+// (environment_context, AGENTS.md injections, permissions instructions,
+// collaboration_mode banners). Strip those so the classifier sees the text
+// the user actually typed — keyword refinement depends on it.
+const CODEX_BOILERPLATE_PATTERNS: RegExp[] = [
+  /^\s*<environment_context/i,
+  /^\s*<permissions/i,
+  /^\s*<collaboration_mode/i,
+  /^\s*<INSTRUCTIONS>/,
+  /^\s*#\s*AGENTS\.md/i,
+];
+
+function collectMessageText(msg: MessagePayload): string {
+  const content = msg.content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const text = block.text;
+    if (typeof text !== 'string' || text.length === 0) continue;
+    if (msg.role === 'user' && isCodexBoilerplate(text)) continue;
+    parts.push(text);
+  }
+  return parts.join('\n');
+}
+
+function isCodexBoilerplate(text: string): boolean {
+  return CODEX_BOILERPLATE_PATTERNS.some((re) => re.test(text));
+}
+
+function appendText(existing: string, next: string): string {
+  if (!existing) return next;
+  return existing + '\n' + next;
 }
 
 function safeParseJson(s: string | undefined): Record<string, unknown> | undefined {

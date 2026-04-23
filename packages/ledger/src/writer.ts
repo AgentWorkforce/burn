@@ -9,6 +9,7 @@ import {
   turnContentFingerprint,
   turnIdHash,
 } from './index-sidecar.js';
+import { withLock } from './lock.js';
 import { ledgerPath } from './paths.js';
 import type { Enrichment, LedgerLine, StampLine, StampSelector, TurnLine } from './schema.js';
 
@@ -21,7 +22,16 @@ async function appendLines(lines: LedgerLine[]): Promise<void> {
   const filePath = ledgerPath();
   await ensureDir(filePath);
   const payload = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
-  await appendFile(filePath, payload, { encoding: 'utf8' });
+  // Hold the same 'ledger' lock that reclassifyLedger acquires for its
+  // read-modify-write pass. Without this, an appendFile that lands between
+  // reclassify's readFile and rename would write to the soon-orphaned old
+  // inode, and its turns would be silently dropped when the rename swaps in
+  // the rewritten file. The race is hard to force in tests on a fast SSD
+  // (libuv tends to drain queued appendFiles before reclassify starts
+  // reading) but is real under heavier contention.
+  await withLock('ledger', async () => {
+    await appendFile(filePath, payload, { encoding: 'utf8' });
+  });
 }
 
 export async function appendTurns(turns: TurnRecord[]): Promise<void> {

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { classifyActivity, countRetries } from './classifier.js';
+import { classifyActivity, countRetries, normalizeToolName } from './classifier.js';
 import type { ToolCall } from './types.js';
 
 const tc = (name: string, target?: string, id = name): ToolCall => {
@@ -26,10 +26,17 @@ describe('classifyActivity — tool-pattern classification', () => {
   });
 
   it('classifies bash test runners as testing', () => {
-    const cases = ['pytest', 'vitest run', 'bun test', 'npm test', 'go test ./...', 'cargo test', 'node --test'];
+    const cases = ['pytest', 'vitest run', 'bun test', 'npm test', 'go test ./...', 'cargo test', 'node --test', 'make test'];
     for (const cmd of cases) {
       const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
       assert.equal(r.activity, 'testing', `expected 'testing' for ${cmd}, got ${r.activity}`);
+    }
+  });
+
+  it('classifies read-only git / PR inspection commands as review', () => {
+    for (const cmd of ['git status', 'git diff --stat', 'git show HEAD~1', 'gh pr diff 123', 'gh pr view 123']) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'review', cmd);
     }
   });
 
@@ -46,10 +53,23 @@ describe('classifyActivity — tool-pattern classification', () => {
   });
 
   it('classifies build and deploy commands as build-deploy', () => {
-    for (const cmd of ['npm run build', 'docker build .', 'cargo build --release', 'kubectl apply -f k8s/', 'terraform apply']) {
+    for (const cmd of ['npm run build', 'docker build .', 'cargo build --release', 'kubectl apply -f k8s/', 'terraform apply', 'make build']) {
       const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
       assert.equal(r.activity, 'build-deploy', cmd);
     }
+  });
+
+  it('classifies lint / typecheck commands as verification', () => {
+    const cases = ['npm run lint', 'eslint .', 'ruff check src/', 'cargo check', 'tsc --noEmit', 'make lint', 'prettier --check .', 'cargo fmt --check'];
+    for (const cmd of cases) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'verification', `expected verification for: ${cmd}`);
+    }
+  });
+
+  it('avoids build-deploy false positives for non-deploy shell commands', () => {
+    assert.equal(classifyActivity({ toolCalls: [tc('Bash', 'make lint')] }).activity, 'verification');
+    assert.equal(classifyActivity({ toolCalls: [tc('Bash', 'kubectl logs deploy/api')] }).activity, 'exploration');
   });
 
   it('classifies plain edit turns as coding', () => {
@@ -143,6 +163,14 @@ describe('classifyActivity — keyword refinement', () => {
     });
     assert.equal(r.activity, 'feature');
   });
+
+  it('promotes read-only turns to review when the prompt explicitly asks for review', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Read', '/a.ts'), tc('Grep', 'auth')],
+      text: 'review this authentication change for risks',
+    });
+    assert.equal(r.activity, 'review');
+  });
 });
 
 describe('classifyActivity — no-tool fallback', () => {
@@ -232,5 +260,193 @@ describe('classifyActivity — hasEdits flag', () => {
   it('is false when only read-only or bash tools are present', () => {
     assert.equal(classifyActivity({ toolCalls: [tc('Read', '/a.ts')] }).hasEdits, false);
     assert.equal(classifyActivity({ toolCalls: [tc('Bash', 'ls')] }).hasEdits, false);
+  });
+});
+
+describe('classifyActivity — new categories', () => {
+  it('classifies an edit turn touching only doc files as docs', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Edit', '/project/README.md'), tc('Write', '/project/docs/guide.md')],
+    });
+    assert.equal(r.activity, 'docs');
+    assert.equal(r.hasEdits, true);
+  });
+
+  it('stays coding when a code file is mixed in with docs', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Edit', '/project/README.md'), tc('Edit', '/project/src/a.ts')],
+    });
+    assert.equal(r.activity, 'coding');
+  });
+
+  it('keeps doc-only edits as docs even when the prompt uses feature wording', () => {
+    const r = classifyActivity({
+      toolCalls: [tc('Edit', '/project/README.md')],
+      text: 'add an installation section to the README',
+    });
+    assert.equal(r.activity, 'docs');
+  });
+
+  it('classifies npm install / pip install / cargo add as deps', () => {
+    const cases = [
+      'npm install react',
+      'pnpm add lodash',
+      'yarn add -D typescript',
+      'pip install requests',
+      'uv add httpx',
+      'poetry add fastapi',
+      'cargo add serde',
+      'go get github.com/foo/bar',
+      'bundle install',
+      'brew install jq',
+    ];
+    for (const cmd of cases) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'deps', `expected deps for: ${cmd}`);
+    }
+  });
+
+  it('classifies formatter invocations as format', () => {
+    const cases = [
+      'prettier --write .',
+      'eslint . --fix',
+      'biome check src/ --apply',
+      'ruff format src/',
+      'black .',
+      'cargo fmt',
+      'gofmt -w .',
+      'rustfmt src/lib.rs',
+    ];
+    for (const cmd of cases) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'format', `expected format for: ${cmd}`);
+    }
+  });
+
+  it('keeps "npm test" as testing even though npm also triggers deps pattern', () => {
+    // Ordering matters: TEST_PATTERNS must be checked before DEPS_PATTERNS so
+    // `npm test` doesn't collide with `npm install`.
+    const r = classifyActivity({ toolCalls: [tc('Bash', 'npm test')] });
+    assert.equal(r.activity, 'testing');
+  });
+
+  it('classifies playwright / cypress / puppeteer bash commands as testing', () => {
+    for (const cmd of ['playwright test', 'cypress run', 'puppeteer']) {
+      const r = classifyActivity({ toolCalls: [tc('Bash', cmd)] });
+      assert.equal(r.activity, 'testing', `expected testing for: ${cmd}`);
+    }
+  });
+
+  it('classifies high-retry edit turns as debugging even without error signal', () => {
+    // Edit → bash → edit → bash → edit → bash → edit = 3 retries inside one turn.
+    // Model is clearly chasing a bug, so call it debugging without needing an
+    // explicit "fix the bug" keyword.
+    const r = classifyActivity({
+      toolCalls: [
+        tc('Edit', '/a.ts', '1'),
+        tc('Bash', 'pytest', '2'),
+        tc('Edit', '/a.ts', '3'),
+        tc('Bash', 'pytest', '4'),
+        tc('Edit', '/a.ts', '5'),
+        tc('Bash', 'pytest', '6'),
+        tc('Edit', '/a.ts', '7'),
+      ],
+    });
+    assert.equal(r.activity, 'debugging');
+    assert.equal(r.hasEdits, true);
+    assert.ok(r.retries >= 2);
+  });
+
+  it('falls back to reasoning for tool-less turns with reasoning tokens', () => {
+    const r = classifyActivity({ toolCalls: [], reasoningTokens: 5000 });
+    assert.equal(r.activity, 'reasoning');
+  });
+
+  it('still returns conversation for tool-less turns with no reasoning and no keywords', () => {
+    const r = classifyActivity({ toolCalls: [], reasoningTokens: 0, text: 'thanks' });
+    assert.equal(r.activity, 'conversation');
+  });
+
+  it('keyword signal still wins over reasoning fallback', () => {
+    const r = classifyActivity({
+      toolCalls: [],
+      reasoningTokens: 10000,
+      text: 'fix the crash in the login handler',
+    });
+    assert.equal(r.activity, 'debugging');
+  });
+});
+
+describe('classifyActivity — cross-harness tool aliasing', () => {
+  it('treats codex apply_patch as an edit', () => {
+    const r = classifyActivity({ toolCalls: [tc('apply_patch', '/a.ts')] });
+    assert.equal(r.hasEdits, true);
+    assert.equal(r.activity, 'coding');
+  });
+
+  it('treats codex subagent management tools as delegation', () => {
+    assert.equal(classifyActivity({ toolCalls: [tc('spawn_agent')] }).activity, 'delegation');
+    assert.equal(classifyActivity({ toolCalls: [tc('wait_agent')] }).activity, 'delegation');
+  });
+
+  it('treats codex exec_command as bash for test/git/build detection', () => {
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('exec_command', 'pytest -q')] }).activity,
+      'testing',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('exec_command', 'git push origin main')] }).activity,
+      'git',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('shell', 'npm run build')] }).activity,
+      'build-deploy',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('exec_command', 'git diff --stat')] }).activity,
+      'review',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('shell', 'cargo check')] }).activity,
+      'verification',
+    );
+  });
+
+  it('treats opencode lowercase tool names the same as claude names', () => {
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('edit', '/a.ts')] }).hasEdits,
+      true,
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('bash', 'vitest')] }).activity,
+      'testing',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('read', '/a.ts'), tc('grep', 'foo')] }).activity,
+      'exploration',
+    );
+    assert.equal(
+      classifyActivity({ toolCalls: [tc('task', 'explore')] }).activity,
+      'delegation',
+    );
+  });
+
+  it('counts retries across harness-normalized edit/bash cycles', () => {
+    // Codex style: apply_patch → exec_command → apply_patch → exec_command → apply_patch
+    assert.equal(
+      countRetries([
+        tc('apply_patch', '/a.ts', '1'),
+        tc('exec_command', 'pytest', '2'),
+        tc('apply_patch', '/a.ts', '3'),
+        tc('exec_command', 'pytest', '4'),
+        tc('apply_patch', '/a.ts', '5'),
+      ]),
+      2,
+    );
+  });
+
+  it('normalizeToolName returns the name unchanged when no alias exists', () => {
+    assert.equal(normalizeToolName('Edit'), 'Edit');
+    assert.equal(normalizeToolName('mcp_thing'), 'mcp_thing');
   });
 });

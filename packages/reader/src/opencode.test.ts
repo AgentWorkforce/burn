@@ -109,6 +109,92 @@ describe('parseOpencodeSession', () => {
     const { turns } = await parseOpencodeSession(file, { sessionPath: file });
     assert.equal(turns[0]!.sessionPath, file);
   });
+
+  it('classifies activity for opencode turns via aliased tool names', async () => {
+    const { turns } = await parseOpencodeSession(sessionFile('with-tool', 'ses_tool'));
+    const t = turns[0]!;
+    // `edit` is aliased to Edit → hasEdits=true, defaults to 'coding'.
+    assert.equal(t.hasEdits, true);
+    assert.equal(t.activity, 'coding');
+  });
+
+  it('marks opencode turns with an errored tool part as debugging', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fail-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_fail');
+      const partAsstDir = path.join(storage, 'part', 'msg_fail_asst');
+      const partUserDir = path.join(storage, 'part', 'msg_fail_user');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await mkdir(partUserDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_fail.json'),
+        JSON.stringify({ id: 'ses_fail', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_fail_user.json'),
+        JSON.stringify({
+          id: 'msg_fail_user',
+          sessionID: 'ses_fail',
+          role: 'user',
+          time: { created: 1_776_988_000_000 },
+        }),
+      );
+      await writeFile(
+        path.join(partUserDir, 'prt_fail_user_1.json'),
+        JSON.stringify({
+          id: 'prt_fail_user_1',
+          sessionID: 'ses_fail',
+          messageID: 'msg_fail_user',
+          type: 'text',
+          text: 'please check why the build is broken',
+        }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_fail_asst.json'),
+        JSON.stringify({
+          id: 'msg_fail_asst',
+          sessionID: 'ses_fail',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-haiku-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+          tokens: { input: 10, output: 20, cache: { read: 0, write: 0 } },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_fail_asst_1.json'),
+        JSON.stringify({
+          id: 'prt_fail_asst_1',
+          sessionID: 'ses_fail',
+          messageID: 'msg_fail_asst',
+          type: 'tool',
+          callID: 'call_fail_bash',
+          tool: 'bash',
+          state: {
+            status: 'completed',
+            input: { command: 'npm run build' },
+            output: 'command not found: foo',
+            metadata: { exit: 1 },
+          },
+        }),
+      );
+      const file = path.join(sessionDir, 'ses_fail.json');
+      const { turns } = await parseOpencodeSession(file);
+      assert.equal(turns.length, 1);
+      // Non-zero exit on a bash call flags hasFailedTool → debugging wins.
+      assert.equal(turns[0]!.activity, 'debugging');
+      assert.equal(turns[0]!.hasEdits, false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('parseOpencodeSessionIncremental', () => {
