@@ -89,6 +89,44 @@ describe('parseClaudeMd', () => {
     assert.equal(parsed.sections[0]!.heading, '## Real heading');
     assert.equal(parsed.sections[1]!.heading, '## Another real heading');
   });
+
+  it('a "```python" line inside a 3-backtick fence does not close the fence', () => {
+    // A line that starts with backticks but has trailing non-whitespace must
+    // NOT be treated as a closing fence (per CommonMark). Otherwise nested
+    // code samples inside a CLAUDE.md fence corrupt the section boundaries.
+    const text = [
+      '```',
+      '## inside block',
+      '````python',
+      '## should-be-inside',
+      '```',
+      '## should-be-outside',
+    ].join('\n');
+    const parsed = parseClaudeMd('/p/CLAUDE.md', text);
+    const headings = parsed.sections
+      .filter((s) => s.level > 0)
+      .map((s) => s.heading);
+    assert.deepEqual(headings, ['## should-be-outside']);
+  });
+
+  it('does not count a trailing newline as an extra line', () => {
+    const parsed = parseClaudeMd('/p/CLAUDE.md', '## Section\nbody\n');
+    assert.equal(parsed.totalLines, 2);
+    assert.equal(parsed.sections[0]!.endLine, 2);
+  });
+
+  it('normalizes CRLF line endings', () => {
+    const parsed = parseClaudeMd('/p/CLAUDE.md', '## A\r\nbody\r\n## B\r\nb\r\n');
+    assert.equal(parsed.sections.length, 2);
+    assert.equal(parsed.sections[0]!.heading, '## A');
+    assert.equal(parsed.sections[1]!.heading, '## B');
+  });
+
+  it('returns zero sections for empty input', () => {
+    const parsed = parseClaudeMd('/p/CLAUDE.md', '');
+    assert.equal(parsed.totalLines, 0);
+    assert.equal(parsed.sections.length, 0);
+  });
 });
 
 describe('attributeClaudeMd', () => {
@@ -198,6 +236,44 @@ describe('attributeClaudeMd', () => {
     assert.equal(result.totalCost, 0);
     assert.equal(result.sessionCosts.length, 0);
   });
+
+  it('includes zero-cost sessions in sessionCount so avg/p95 are not biased upward', async () => {
+    const pricing = await loadBuiltinPricing();
+    const text = '## Body\n' + 'x'.repeat(4000);
+    const parsed = parseClaudeMd('/p/CLAUDE.md', text);
+    const turns: TurnRecord[] = [
+      // Session A: CLAUDE.md in cache
+      turn({ sessionId: 's-A', messageId: 'm', turnIndex: 0, usage: { input: 10, output: 10, reasoning: 0, cacheRead: parsed.tokens + 500, cacheCreate5m: 0, cacheCreate1h: 0 } }),
+      // Session B: no cacheRead — zero attributed cost but should still count.
+      turn({ sessionId: 's-B', messageId: 'm', turnIndex: 0, usage: { input: 500, output: 10, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 } }),
+    ];
+    const result = attributeClaudeMd({ files: [parsed], turns, pricing });
+    assert.equal(result.sessionCount, 2);
+    const b = result.sessionCosts.find((s) => s.sessionId === 's-B')!;
+    assert.equal(b.cost, 0);
+    assert.equal(b.ridingTurns, 0);
+    // Average should be half of session A's cost.
+    const a = result.sessionCosts.find((s) => s.sessionId === 's-A')!;
+    assert.ok(Math.abs(result.perSessionAvg - a.cost / 2) < 1e-9);
+  });
+
+  it('sum of section costs stays ≤ totalCost (byte-share is additive)', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Many small sections would over-allocate if we used ceil(bytes/4)/tokens.
+    const parts: string[] = [];
+    for (let i = 0; i < 20; i++) parts.push(`## Section ${i}\n${'x'.repeat(123)}\n`);
+    const parsed = parseClaudeMd('/p/CLAUDE.md', parts.join(''));
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 5; i++) {
+      turns.push(turn({ sessionId: 's-sum', messageId: `m${i}`, turnIndex: i, usage: { input: 10, output: 10, reasoning: 0, cacheRead: parsed.tokens + 500, cacheCreate5m: 0, cacheCreate1h: 0 } }));
+    }
+    const result = attributeClaudeMd({ files: [parsed], turns, pricing });
+    const sumOfSectionCosts = result.sectionCosts.reduce((a, b) => a + b.totalCost, 0);
+    assert.ok(sumOfSectionCosts <= result.totalCost + 1e-9);
+    // Shares should sum to exactly 1 (bytes are additive).
+    const sumShares = result.sectionCosts.reduce((a, b) => a + b.tokenShare, 0);
+    assert.ok(Math.abs(sumShares - 1) < 1e-9);
+  });
 });
 
 describe('findClaudeMdFiles', () => {
@@ -215,8 +291,16 @@ describe('findClaudeMdFiles', () => {
     await writeFile(path.join(tmp, '.claude', 'CLAUDE.md'), '# Nested');
     const files = await findClaudeMdFiles(tmp);
     assert.equal(files.length, 2);
-    assert.ok(files.some((f) => f.endsWith('/CLAUDE.md') && !f.includes('.claude')));
-    assert.ok(files.some((f) => f.endsWith('.claude/CLAUDE.md')));
+    assert.ok(
+      files.some(
+        (f) => path.basename(f) === 'CLAUDE.md' && path.basename(path.dirname(f)) !== '.claude',
+      ),
+    );
+    assert.ok(
+      files.some(
+        (f) => path.basename(f) === 'CLAUDE.md' && path.basename(path.dirname(f)) === '.claude',
+      ),
+    );
   });
 
   it('loads parsed content via loadClaudeMdFile', async () => {
@@ -250,5 +334,26 @@ describe('buildAdviseRecommendations + renderUnifiedDiffForRecommendation', () =
     assert.ok(diff.includes('--- a/'));
     assert.ok(diff.includes('+++ b/'));
     assert.ok(diff.includes('@@ -1,2 +1,0 @@'));
+  });
+
+  it('emits a project-relative POSIX path in the diff header when baseDir is given', async () => {
+    const pricing = await loadBuiltinPricing();
+    const text = '## Only\nbody\n';
+    const parsed = parseClaudeMd('/home/u/repo/CLAUDE.md', text);
+    const turns: TurnRecord[] = [
+      turn({ sessionId: 's', messageId: 'm', turnIndex: 0, usage: { input: 10, output: 10, reasoning: 0, cacheRead: parsed.tokens + 100, cacheCreate5m: 0, cacheCreate1h: 0 } }),
+    ];
+    const attribution = attributeClaudeMd({ files: [parsed], turns, pricing });
+    const recs = buildAdviseRecommendations(attribution, 1);
+    const diff = renderUnifiedDiffForRecommendation(
+      '/home/u/repo/CLAUDE.md',
+      text,
+      recs[0]!,
+      '/home/u/repo',
+    );
+    // Should NOT have a leading slash ("--- a//...") and should be relative.
+    assert.ok(diff.includes('--- a/CLAUDE.md'));
+    assert.ok(diff.includes('+++ b/CLAUDE.md'));
+    assert.ok(!diff.includes('a//'));
   });
 });

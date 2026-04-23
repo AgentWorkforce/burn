@@ -83,10 +83,37 @@ export async function loadClaudeMdFile(filePath: string): Promise<ParsedClaudeMd
 }
 
 export function parseClaudeMd(filePath: string, text: string): ParsedClaudeMd {
-  const lines = text.split('\n');
+  // Normalize CRLF → LF and drop a single trailing newline so `totalLines`
+  // and per-section `endLine` match what a user sees in an editor. Empty text
+  // => 0 lines.
+  const normalized = text.replace(/\r\n/g, '\n');
+  const trimmedEnd = normalized.endsWith('\n')
+    ? normalized.slice(0, -1)
+    : normalized;
+  const lines = trimmedEnd.length === 0 ? [] : trimmedEnd.split('\n');
   const totalLines = lines.length;
-  const bytes = Buffer.byteLength(text, 'utf8');
-  const tokens = estimateTokens(text);
+  // All byte-counts downstream are derived from `normalized` so section bytes
+  // are additive (Σ section.bytes == totalBytes exactly). This avoids
+  // non-additive ceil() rounding when computing per-section shares.
+  const totalBytes = Buffer.byteLength(normalized, 'utf8');
+  const tokens = Math.max(0, Math.ceil(totalBytes / CHARS_PER_TOKEN));
+
+  // Precompute per-line byte lengths (excluding the trailing \n); the
+  // "weight" of line i on disk is lineBytes[i] + 1 for the newline, except
+  // the last line if the normalized text has no trailing newline.
+  const lineBytes = lines.map((l) => Buffer.byteLength(l, 'utf8'));
+  const hadTrailingNewline = normalized.endsWith('\n');
+  const lineWithNewlineWeight = (idx: number): number => {
+    const base = lineBytes[idx] ?? 0;
+    const isLast = idx === totalLines - 1;
+    if (isLast && !hadTrailingNewline) return base;
+    return base + 1;
+  };
+  const rangeBytes = (startLine1: number, endLine1: number): number => {
+    let sum = 0;
+    for (let i = startLine1 - 1; i <= endLine1 - 1; i++) sum += lineWithNewlineWeight(i);
+    return sum;
+  };
 
   const headings = findHeadings(lines);
   // Choose the grouping level:
@@ -99,17 +126,17 @@ export function parseClaudeMd(filePath: string, text: string): ParsedClaudeMd {
 
   const sections: MarkdownSection[] = [];
   if (groupingLevel === 0) {
-    if (totalLines > 0 && bytes > 0) {
+    if (totalLines > 0 && totalBytes > 0) {
       sections.push({
         heading: '(preamble)',
         level: 0,
         startLine: 1,
         endLine: totalLines,
-        bytes,
+        bytes: totalBytes,
         tokens,
       });
     }
-    return { path: filePath, totalLines, bytes, tokens, sections, groupingLevel };
+    return { path: filePath, totalLines, bytes: totalBytes, tokens, sections, groupingLevel };
   }
 
   // Only headings AT the grouping level become top-level sections. Higher-
@@ -120,16 +147,15 @@ export function parseClaudeMd(filePath: string, text: string): ParsedClaudeMd {
   // Preamble: content before the first grouping heading.
   const firstStart = groupHeadings[0]?.line ?? totalLines + 1;
   if (firstStart > 1) {
-    const preambleLines = lines.slice(0, firstStart - 1);
-    const preambleBytes = Buffer.byteLength(preambleLines.join('\n'), 'utf8');
-    if (preambleBytes > 0) {
+    const pbBytes = rangeBytes(1, firstStart - 1);
+    if (pbBytes > 0) {
       sections.push({
         heading: '(preamble)',
         level: 0,
         startLine: 1,
         endLine: firstStart - 1,
-        bytes: preambleBytes,
-        tokens: Math.max(0, Math.ceil(preambleBytes / CHARS_PER_TOKEN)),
+        bytes: pbBytes,
+        tokens: Math.max(0, Math.ceil(pbBytes / CHARS_PER_TOKEN)),
       });
     }
   }
@@ -138,18 +164,17 @@ export function parseClaudeMd(filePath: string, text: string): ParsedClaudeMd {
     const h = groupHeadings[i]!;
     const next = groupHeadings[i + 1];
     const endLine = next ? next.line - 1 : totalLines;
-    const sectionLines = lines.slice(h.line - 1, endLine);
-    const sectionBytes = Buffer.byteLength(sectionLines.join('\n'), 'utf8');
+    const secBytes = rangeBytes(h.line, endLine);
     sections.push({
       heading: h.text,
       level: h.level,
       startLine: h.line,
       endLine,
-      bytes: sectionBytes,
-      tokens: Math.max(0, Math.ceil(sectionBytes / CHARS_PER_TOKEN)),
+      bytes: secBytes,
+      tokens: Math.max(0, Math.ceil(secBytes / CHARS_PER_TOKEN)),
     });
   }
-  return { path: filePath, totalLines, bytes, tokens, sections, groupingLevel };
+  return { path: filePath, totalLines, bytes: totalBytes, tokens, sections, groupingLevel };
 }
 
 interface HeadingInfo {
@@ -160,26 +185,33 @@ interface HeadingInfo {
 
 function findHeadings(lines: string[]): HeadingInfo[] {
   const out: HeadingInfo[] = [];
-  let inFence = false;
-  let fenceMarker = '';
+  let fenceChar = ''; // '`' or '~' while inside a fence, '' otherwise
+  let fenceLen = 0; // length of the opening fence run
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     const trimmed = line.trim();
-    // Skip headings inside fenced code blocks. Match opening/closing fences
-    // (``` or ~~~, possibly followed by a language tag).
-    const fenceMatch = trimmed.match(/^(```+|~~~+)/);
-    if (fenceMatch) {
-      const marker = fenceMatch[1]!;
-      if (!inFence) {
-        inFence = true;
-        fenceMarker = marker;
-      } else if (trimmed.startsWith(fenceMarker.charAt(0).repeat(fenceMarker.length))) {
-        inFence = false;
-        fenceMarker = '';
+    if (fenceChar === '') {
+      // Opening fence: line starts with 3+ backticks or tildes.
+      const open = trimmed.match(/^(`{3,}|~{3,})/);
+      if (open) {
+        fenceChar = open[1]!.charAt(0);
+        fenceLen = open[1]!.length;
+      }
+      // An info string after the opening run is allowed, so we keep scanning
+      // only if we're already inside a fence.
+      if (fenceChar !== '') continue;
+    } else {
+      // Closing fence per CommonMark: a run of the same fence character, at
+      // least as long as the opening run, followed only by whitespace. Lines
+      // that start with fence chars but have other trailing content (e.g.
+      // "```python" nested inside a 3-backtick block) do NOT close.
+      const closeRe = new RegExp(`^${fenceChar === '`' ? '`' : '~'}{${fenceLen},}\\s*$`);
+      if (closeRe.test(trimmed)) {
+        fenceChar = '';
+        fenceLen = 0;
       }
       continue;
     }
-    if (inFence) continue;
     const m = line.match(/^(#{1,6})\s+(.*\S)\s*$/);
     if (m) {
       const hashes = m[1]!;
@@ -225,6 +257,7 @@ export function attributeClaudeMd(
     for (const t of turns) {
       const rate = lookupRate(t.model, input.pricing);
       if (!rate) continue;
+      modelCounts.set(t.model, (modelCounts.get(t.model) ?? 0) + 1);
       // Treat CLAUDE.md as residing in cache once any turn reads enough cached
       // tokens to fit it. This is conservative: if a turn's cacheRead is below
       // claude_md_tokens, the file may have been compacted away or this is the
@@ -232,19 +265,19 @@ export function attributeClaudeMd(
       if (t.usage.cacheRead < totalTokens) continue;
       cost += (totalTokens / PER_MILLION) * rate.cacheRead;
       ridingTurns++;
-      modelCounts.set(t.model, (modelCounts.get(t.model) ?? 0) + 1);
     }
-    if (cost > 0) {
-      const dominantModel = pickDominantModel(modelCounts);
-      sessionCosts.push({
-        sessionId,
-        cost,
-        ridingTurns,
-        totalTurns: turns.length,
-        model: dominantModel,
-      });
-      totalCost += cost;
-    }
+    // Record every session in the query window — including those with zero
+    // attributed cost — so `perSessionAvg`/`perSessionP95`/`sessionCount`
+    // reflect the whole window, not only sessions where CLAUDE.md was cached.
+    const dominantModel = pickDominantModel(modelCounts);
+    sessionCosts.push({
+      sessionId,
+      cost,
+      ridingTurns,
+      totalTurns: turns.length,
+      model: dominantModel,
+    });
+    totalCost += cost;
   }
 
   const sessionCostValues = sessionCosts.map((s) => s.cost).sort((a, b) => a - b);
@@ -253,10 +286,14 @@ export function attributeClaudeMd(
     : sessionCostValues.reduce((a, b) => a + b, 0) / sessionCostValues.length;
   const perSessionP95 = percentile(sessionCostValues, 0.95);
 
+  // Use bytes (additive) rather than per-section token counts (each ceil()ed
+  // independently, so they can sum to more than `totalTokens`) for the share.
+  // This keeps Σ sectionCost ≤ totalCost exactly.
+  const totalBytes = input.files.reduce((sum, f) => sum + f.bytes, 0);
   const sectionCosts: SectionCost[] = [];
   for (const f of input.files) {
     for (const section of f.sections) {
-      const tokenShare = section.tokens / totalTokens;
+      const tokenShare = totalBytes > 0 ? section.bytes / totalBytes : 0;
       const totalSecCost = totalCost * tokenShare;
       const perSessionSecCost = perSessionAvg * tokenShare;
       sectionCosts.push({
@@ -311,10 +348,6 @@ function lookupRate(model: string, pricing: PricingTable): ModelCost | undefined
   return undefined;
 }
 
-function estimateTokens(text: string): number {
-  return Math.max(0, Math.ceil(Buffer.byteLength(text, 'utf8') / CHARS_PER_TOKEN));
-}
-
 export interface AdviseRecommendation {
   filePath: string;
   section: MarkdownSection;
@@ -341,13 +374,15 @@ export function renderUnifiedDiffForRecommendation(
   filePath: string,
   fileText: string,
   rec: AdviseRecommendation,
+  baseDir?: string,
 ): string {
-  const lines = fileText.split('\n');
+  const normalized = fileText.replace(/\r\n/g, '\n');
+  const trimmedEnd = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
+  const lines = trimmedEnd.length === 0 ? [] : trimmedEnd.split('\n');
   const start = rec.section.startLine;
   const end = rec.section.endLine;
   const removed = lines.slice(start - 1, end);
-  // Use the path inside the project for relative display.
-  const display = filePath;
+  const display = toPosixRelative(filePath, baseDir);
   const header = [`--- a/${display}`, `+++ b/${display}`];
   // Hunk header: original = start, count = removed.length; new = start, count = 0
   const hunk = `@@ -${start},${removed.length} +${start},0 @@`;
@@ -360,4 +395,16 @@ export function renderUnifiedDiffForRecommendation(
     hunk,
     body,
   ].join('\n');
+}
+
+function toPosixRelative(filePath: string, baseDir?: string): string {
+  let p = filePath;
+  if (baseDir) {
+    const rel = path.relative(baseDir, filePath);
+    if (rel && !rel.startsWith('..')) p = rel;
+  }
+  // Convert Windows separators to POSIX for diff-friendly paths, and strip
+  // a leading separator so diff headers aren't `--- a//abs/path`.
+  p = p.split(path.sep).join('/').replace(/^\/+/, '');
+  return p;
 }

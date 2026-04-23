@@ -14,6 +14,7 @@ import {
   type SectionCost,
 } from '@relayburn/analyze';
 import { queryAll, type Query } from '@relayburn/ledger';
+import { resolveProject } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -67,7 +68,12 @@ async function gatherAttribution(
     return null;
   }
 
-  const q: Query = { project: projectPath };
+  // Prefer the git-canonical projectKey (rolls up across worktrees and
+  // machines with the same remote) and fall back to the filesystem path when
+  // the project has no git remote. `Query.project` matches on either
+  // `turn.project` or `turn.projectKey`.
+  const resolved = resolveProject(projectPath);
+  const q: Query = { project: resolved.projectKey ?? projectPath };
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
 
   await ingestAll();
@@ -152,7 +158,7 @@ async function runAdvise(args: ParsedArgs): Promise<number> {
       textCache.set(filePath, text);
     }
     for (const rec of fileRecs) {
-      out.push(renderUnifiedDiffForRecommendation(filePath, text, rec));
+      out.push(renderUnifiedDiffForRecommendation(filePath, text, rec, projectPath));
       out.push('');
     }
   }
