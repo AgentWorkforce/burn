@@ -19,6 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `parseClaudeMd` normalizes CRLF → LF and strips a single trailing newline so `totalLines` and section `endLine` match what an editor shows. Empty input returns zero sections.
 - Strict CommonMark fence-close matching: a line must contain only fence characters (length ≥ opening run) plus optional whitespace to close. A `` ````python `` line nested inside a 3-backtick block no longer closes the fence and corrupts section boundaries.
 
+## [0.2.1] - 2026-04-23
+
+### Added
+
+- **Add burn context: unified attribution across CLAUDE.md and AGENTS.md**
+- **Add burn claude-md: CLAUDE.md hot-path cost attribution** (#10)
+
+### Fixed
+
+- Fix totalRidingTurns dedup in attributeContext to use max per session
+
+### Changed
+
+- Address review feedback on burn claude-md
+- Backfill 0.1.0 and 0.2.0 changelog entries for all four packages
+
+### Documentation
+
+- Document burn claude-md under [Unreleased] in per-package and root changelogs
+
 ## [0.2.0] - 2026-04-23
 
 ### Added
