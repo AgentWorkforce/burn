@@ -50,7 +50,7 @@ const VALID_KINDS: ContextFileKind[] = ['claude-md', 'agents-md'];
 
 export async function runContext(args: ParsedArgs): Promise<number> {
   const sub = args.positional[0];
-  if (sub === 'help' || sub === '--help' || sub === '-h') {
+  if (args.flags['help'] === true || sub === 'help' || sub === '--help' || sub === '-h') {
     process.stdout.write(HELP);
     return 0;
   }
