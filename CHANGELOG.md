@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   - Detects root `CLAUDE.md` and `.claude/CLAUDE.md`. Attribution math is direct: `claude_md_tokens × cacheReadPrice` per turn whose `cacheRead` is large enough to hold the file (conservative eviction signal that skips the first turn, where CLAUDE.md lives in `cacheCreate`, and any turn where the file has been compacted away).
   - Uses the git-canonical `projectKey` for ledger queries when available, so multiple worktrees of the same repo roll up together.
   - Section parser groups at H2 (with H1 fallback), treats top-level content as preamble, and skips headings inside fenced code blocks with strict CommonMark close matching. CRLF → LF normalization and trailing-newline handling so line numbers match what an editor shows.
+- **`burn context`** — unified context-file cost report across every agent `burn` ingests: `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`. Each file is attributed against only the turns whose harness actually reads it (Claude Code for CLAUDE.md; Codex and OpenCode for AGENTS.md) — no cross-attribution. Ranks sections per file and emits a grand total across all files. `burn context advise` emits TRIM hunks for every file's top sections. [cli, analyze]
 
 ## 2026-04-23 — `burn compare` and cross-harness classifier
 

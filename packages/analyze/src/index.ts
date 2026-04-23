@@ -21,3 +21,17 @@ export type {
   SectionCost,
   SessionClaudeMdCost,
 } from './claude-md.js';
+export {
+  attributeContext,
+  describeAppliesTo,
+  findContextFiles,
+  loadContextFile,
+} from './context-md.js';
+export type {
+  AttributeContextInput,
+  ContextAttributionResult,
+  ContextFile,
+  ContextFileAttribution,
+  ContextFileKind,
+  ParsedContextFile,
+} from './context-md.js';
