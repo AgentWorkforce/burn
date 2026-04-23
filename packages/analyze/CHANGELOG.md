@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `parseClaudeMd` normalizes CRLF → LF and strips a single trailing newline so `totalLines` and section `endLine` match what an editor shows. Empty input returns zero sections.
 - Strict CommonMark fence-close matching: a line must contain only fence characters (length ≥ opening run) plus optional whitespace to close. A `` ````python `` line nested inside a 3-backtick block no longer closes the fence and corrupts section boundaries.
 
+## [0.4.0] - 2026-04-23
+
+### Added
+
+- **Add burn waste: per-tool-call and per-file cost attribution** (#3)
+
+### Changed
+
+- Bump packages to v0.3.0
+- Refactor waste attribution: per-paying-turn pricing, sibling normalization, single forward pass (#50)
+
 ## [0.3.0] - 2026-04-23
 
 ### Added

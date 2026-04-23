@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`burn context advise`** — emits unified-diff TRIM hunks for the most expensive sections across all discovered context files. Paths render POSIX-relative to the project root so they apply with `git apply` / `patch`. No `--apply` flag: burn never mutates your context files.
   - Flags: `--top <n>` (default 3, per file), `--kind <k>`, `--project <path>`, `--since 7d`.
 
+## [0.4.0] - 2026-04-23
+
+### Added
+
+- **Add burn waste: per-tool-call and per-file cost attribution** (#3)
+
+### Changed
+
+- Bump packages to v0.3.0
+- Refactor waste attribution: per-paying-turn pricing, sibling normalization, single forward pass (#50)
+
 ## [0.3.0] - 2026-04-23
 
 ### Added
