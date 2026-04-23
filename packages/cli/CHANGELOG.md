@@ -9,15 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`burn claude-md`** — CLAUDE.md hot-path cost attribution. Reports per-session average / p95 cost attributable to CLAUDE.md, aggregated over the query window, with a section-level ranked breakdown. Closes #10.
-  - Flags: `--project <path>`, `--since 7d`, `--json`.
-  - Detects root `CLAUDE.md` and nested `.claude/CLAUDE.md`.
+- **`burn context`** — cost attribution for agent context files across every agent `burn` ingests. Discovers `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`; attributes each against only the turns whose harness actually reads it (Claude Code for CLAUDE.md; Codex and OpenCode for AGENTS.md). Per-file ranked section tables plus a grand total across all context files. Closes #10.
+  - Flags: `--project <path>`, `--since 7d`, `--kind <claude-md|agents-md>`, `--json`.
   - Uses the git-canonical `projectKey` (via `resolveProject`) for the ledger query when available, so multiple worktrees of the same repo roll up together; falls back to the filesystem path when no git remote is set.
-- **`burn claude-md advise`** — emits unified-diff TRIM hunks for the most expensive sections. Paths render POSIX-relative to the project root so they apply with `git apply` / `patch`. No `--apply` flag: burn never mutates CLAUDE.md.
-  - Flags: `--top <n>` (default 3), `--project <path>`, `--since 7d`.
-- **`burn context`** — unified context-file cost report covering every agent we ingest. Discovers `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`; attributes each against only the turns whose harness actually reads it (Claude Code for CLAUDE.md; Codex and OpenCode for AGENTS.md). Per-file ranked section tables plus a grand total across all context files. `burn claude-md` is retained as a narrower view.
-  - Flags: `--project <path>`, `--since 7d`, `--json`.
-- **`burn context advise`** — emits TRIM hunks across all discovered context files (not just CLAUDE.md). Same read-only contract as `burn claude-md advise`.
+- **`burn context advise`** — emits unified-diff TRIM hunks for the most expensive sections across all discovered context files. Paths render POSIX-relative to the project root so they apply with `git apply` / `patch`. No `--apply` flag: burn never mutates your context files.
+  - Flags: `--top <n>` (default 3, per file), `--kind <k>`, `--project <path>`, `--since 7d`.
 
 ## [0.2.0] - 2026-04-23
 

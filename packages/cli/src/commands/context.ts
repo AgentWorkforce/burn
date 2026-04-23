@@ -12,6 +12,7 @@ import {
   type AdviseRecommendation,
   type ContextAttributionResult,
   type ContextFileAttribution,
+  type ContextFileKind,
   type ParsedContextFile,
   type SectionCost,
 } from '@relayburn/analyze';
@@ -25,8 +26,8 @@ import type { ParsedArgs } from '../args.js';
 const HELP = `burn context — cost attribution for agent context files (CLAUDE.md, AGENTS.md, …)
 
 Usage:
-  burn context        [--project <path>] [--since 7d] [--json]
-  burn context advise [--project <path>] [--since 7d] [--top <n>]
+  burn context        [--project <path>] [--since 7d] [--kind <k>] [--json]
+  burn context advise [--project <path>] [--since 7d] [--kind <k>] [--top <n>]
 
 What it does:
   Discovers context files in the project (CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)
@@ -35,11 +36,17 @@ What it does:
   AGENTS.md, Codex/OpenCode don't pay for CLAUDE.md — so turns are filtered by
   source per file.
 
+Flags:
+  --kind <k>   narrow to a single file kind: "claude-md" or "agents-md"
+
 Examples:
   burn context
   burn context --since 30d
+  burn context --kind claude-md
   burn context advise --top 3
 `;
+
+const VALID_KINDS: ContextFileKind[] = ['claude-md', 'agents-md'];
 
 export async function runContext(args: ParsedArgs): Promise<number> {
   const sub = args.positional[0];
@@ -62,11 +69,23 @@ async function gatherAttribution(
   files: ParsedContextFile[];
   attribution: ContextAttributionResult;
 } | null> {
-  const found = await findContextFiles(projectPath);
-  if (found.length === 0) {
+  const kindFilter = parseKindFlag(args.flags['kind']);
+  if (kindFilter === 'invalid') {
     process.stderr.write(
-      `no context files found at ${projectPath} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n`,
+      `burn: invalid --kind value: ${JSON.stringify(args.flags['kind'])} (expected one of: ${VALID_KINDS.join(', ')})\n`,
     );
+    return null;
+  }
+  let found = await findContextFiles(projectPath);
+  if (kindFilter) found = found.filter((f) => f.kind === kindFilter);
+  if (found.length === 0) {
+    if (kindFilter) {
+      process.stderr.write(`no ${kindFilter} context files found at ${projectPath}\n`);
+    } else {
+      process.stderr.write(
+        `no context files found at ${projectPath} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n`,
+      );
+    }
     return null;
   }
   const files: ParsedContextFile[] = [];
@@ -251,4 +270,11 @@ function parseTopN(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) return 3;
   return Math.floor(n);
+}
+
+function parseKindFlag(v: unknown): ContextFileKind | null | 'invalid' {
+  if (v === undefined || v === true) return null;
+  if (typeof v !== 'string') return 'invalid';
+  if (v === 'claude-md' || v === 'agents-md') return v;
+  return 'invalid';
 }

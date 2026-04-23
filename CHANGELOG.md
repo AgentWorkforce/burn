@@ -8,13 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
-- **`burn claude-md`** — CLAUDE.md hot-path cost attribution with per-section ranking. Answers "how much is my CLAUDE.md costing me per session, and which sections are the most expensive?" Closes [#10](https://github.com/AgentWorkforce/burn/issues/10). [cli, analyze]
-  - `burn claude-md [--project <path>] [--since 7d] [--json]` — reports file size, per-session avg / p95 cost, window total across N sessions, and sections ranked by cost.
-  - `burn claude-md advise [--top <n>]` — emits read-only unified-diff TRIM hunks for the most expensive sections. POSIX-relative paths so hunks apply with `git apply` / `patch`. No `--apply` flag: burn never mutates CLAUDE.md.
-  - Detects root `CLAUDE.md` and `.claude/CLAUDE.md`. Attribution math is direct: `claude_md_tokens × cacheReadPrice` per turn whose `cacheRead` is large enough to hold the file (conservative eviction signal that skips the first turn, where CLAUDE.md lives in `cacheCreate`, and any turn where the file has been compacted away).
+- **`burn context`** — cost attribution for agent context files across every agent `burn` ingests: `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. Answers "how much are my rules files costing me per session, and which sections are the most expensive?" Closes [#10](https://github.com/AgentWorkforce/burn/issues/10). [cli, analyze]
+  - `burn context [--project <path>] [--since 7d] [--kind <k>] [--json]` — reports file size, per-session avg / p95 cost, window total across N sessions, and sections ranked by cost, per file. `--kind claude-md` / `--kind agents-md` narrows to one file kind.
+  - `burn context advise [--top <n>]` — emits read-only unified-diff TRIM hunks for the most expensive sections across every discovered file. POSIX-relative paths so hunks apply with `git apply` / `patch`. No `--apply` flag: burn never mutates your context files.
+  - Each file is attributed against only the turns whose harness actually reads it (Claude Code for CLAUDE.md; Codex and OpenCode for AGENTS.md) — a Codex session never pays for CLAUDE.md, a Claude Code session never pays for AGENTS.md.
+  - Attribution math is direct: `file_tokens × cacheReadPrice` per turn whose `cacheRead` is large enough to hold the file (conservative eviction signal that skips the first turn, where the file lives in `cacheCreate`, and any turn where it's been compacted away).
   - Uses the git-canonical `projectKey` for ledger queries when available, so multiple worktrees of the same repo roll up together.
   - Section parser groups at H2 (with H1 fallback), treats top-level content as preamble, and skips headings inside fenced code blocks with strict CommonMark close matching. CRLF → LF normalization and trailing-newline handling so line numbers match what an editor shows.
-- **`burn context`** — unified context-file cost report across every agent `burn` ingests: `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`. Each file is attributed against only the turns whose harness actually reads it (Claude Code for CLAUDE.md; Codex and OpenCode for AGENTS.md) — no cross-attribution. Ranks sections per file and emits a grand total across all files. `burn context advise` emits TRIM hunks for every file's top sections. [cli, analyze]
 
 ## 2026-04-23 — `burn compare` and cross-harness classifier
 
