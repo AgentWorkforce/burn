@@ -130,6 +130,55 @@ describe('attributeContext', () => {
     );
   });
 
+  it('totalRidingTurns dedups by max per session, not by (session, count) pair', async () => {
+    // Two Claude Code files of very different sizes applied to the same
+    // session. A small 500-token file rides along in every turn whose
+    // cacheRead >= 500; the larger 9000-token file only rides along in
+    // turns whose cacheRead >= 9000. The smaller file's rides are a
+    // strict superset of the larger's, so totalRidingTurns for this
+    // session should equal the larger count (the superset), NOT the sum.
+    const pricing = await loadBuiltinPricing();
+    const small = parseClaudeMd('/p/CLAUDE.md', '## S\n' + 'x'.repeat(2000));
+    const big = parseClaudeMd('/p/.claude/CLAUDE.md', '## B\n' + 'y'.repeat(36000));
+    const files: ParsedContextFile[] = [
+      {
+        file: { kind: 'claude-md', path: '/p/CLAUDE.md', appliesTo: ['claude-code'] },
+        parsed: small,
+      },
+      {
+        file: { kind: 'claude-md', path: '/p/.claude/CLAUDE.md', appliesTo: ['claude-code'] },
+        parsed: big,
+      },
+    ];
+    // 5 turns where both files fit; 3 more turns where only the small fits.
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 5; i++) {
+      turns.push(turn({
+        sessionId: 's-both',
+        messageId: `m-${i}`,
+        turnIndex: i,
+        source: 'claude-code',
+        usage: { input: 10, output: 10, reasoning: 0, cacheRead: big.tokens + 1000, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }));
+    }
+    for (let i = 5; i < 8; i++) {
+      turns.push(turn({
+        sessionId: 's-both',
+        messageId: `m-${i}`,
+        turnIndex: i,
+        source: 'claude-code',
+        usage: { input: 10, output: 10, reasoning: 0, cacheRead: small.tokens + 500, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }));
+    }
+    const result = attributeContext({ files, turns, pricing });
+    const smallAttr = result.perFile.find((p) => p.parsed === small)!;
+    const bigAttr = result.perFile.find((p) => p.parsed === big)!;
+    assert.equal(smallAttr.attribution.sessionCosts[0]!.ridingTurns, 8); // all 8
+    assert.equal(bigAttr.attribution.sessionCosts[0]!.ridingTurns, 5); // only 5
+    // Correct: max(8, 5) = 8. Incorrect (old bug): 8 + 5 = 13.
+    assert.equal(result.totalRidingTurns, 8);
+  });
+
   it('does not cross-attribute: Codex turn must not pay for CLAUDE.md', async () => {
     const pricing = await loadBuiltinPricing();
     const claudeMd = parseClaudeMd('/p/CLAUDE.md', '## C\n' + 'x'.repeat(4000));

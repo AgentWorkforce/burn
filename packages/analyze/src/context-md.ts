@@ -86,7 +86,13 @@ export async function loadContextFile(file: ContextFile): Promise<ParsedContextF
 
 export function attributeContext(input: AttributeContextInput): ContextAttributionResult {
   const perFile: ContextFileAttribution[] = [];
-  const ridingTurnKeys = new Set<string>();
+  // Per-session max ridingTurns across every file. The eviction check is
+  // `cacheRead >= file_tokens`, so a smaller file always rides along for a
+  // superset of the turns that a larger file rides along for (same source,
+  // same session). Taking the max per session gives the correct count of
+  // distinct turns without double-counting when CLAUDE.md + .claude/CLAUDE.md
+  // both attribute to the same Claude Code session.
+  const maxRidingBySession = new Map<string, number>();
 
   for (const { file, parsed } of input.files) {
     const filteredTurns = input.turns.filter((t) => file.appliesTo.includes(t.source));
@@ -98,21 +104,15 @@ export function attributeContext(input: AttributeContextInput): ContextAttributi
     perFile.push({ file, parsed, attribution });
 
     for (const sc of attribution.sessionCosts) {
-      if (sc.ridingTurns > 0) ridingTurnKeys.add(`${sc.sessionId}:${sc.ridingTurns}`);
+      const prev = maxRidingBySession.get(sc.sessionId) ?? 0;
+      if (sc.ridingTurns > prev) maxRidingBySession.set(sc.sessionId, sc.ridingTurns);
     }
   }
 
   const grandTotal = perFile.reduce((sum, f) => sum + f.attribution.totalCost, 0);
 
-  // Rough estimate — avoids double-counting the same session across files that
-  // share a source (e.g. CLAUDE.md + .claude/CLAUDE.md both apply to Claude
-  // Code), by keying on session-ridingTurn-count which is stable per session.
   let totalRidingTurns = 0;
-  for (const key of ridingTurnKeys) {
-    const parts = key.split(':');
-    const n = Number(parts[parts.length - 1]);
-    if (Number.isFinite(n)) totalRidingTurns += n;
-  }
+  for (const n of maxRidingBySession.values()) totalRidingTurns += n;
 
   return { perFile, grandTotal, totalRidingTurns };
 }
