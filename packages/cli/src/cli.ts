@@ -10,12 +10,14 @@ import { runOpencodeWrapper } from './commands/opencode.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
+import { runWaste } from './commands/waste.js';
 
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
   burn by-tool       [--since 7d] [--project <path>] [--session <id>]
+  burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--all] [--json]
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn claude        [--tag k=v ...] [-- <claude args>]
@@ -28,6 +30,7 @@ Usage:
 Examples:
   burn summary --since 24h
   burn by-tool --since 7d
+  burn waste --since 7d
   burn context --since 30d
   burn context --kind claude-md
   burn context advise --top 3
@@ -56,6 +59,8 @@ async function main(): Promise<number> {
       return runSummary(args);
     case 'by-tool':
       return runByTool(args);
+    case 'waste':
+      return runWaste(args);
     case 'context':
       return runContext(args);
     case 'compare':

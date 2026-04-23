@@ -9,13 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`burn waste`** — ranks tool calls, files, Bash commands, and subagent calls by their attributed cost. Splits each `tool_use`'s cost into **initial** (the turn after the tool call, where the result enters context) and **persistence** (every subsequent turn where it rides along in `cacheRead` until evicted). Sized attribution when the content sidecar is enabled; even-split fallback (initial only) with a printed note when it isn't. Closes #3.
+  - Flags: `--since 7d`, `--project <path>`, `--session <id>`, `--workflow <id>`, `--all` (full lists, not just top-N), `--json` (raw aggregations for downstream tooling).
+  - Per-paying-turn model pricing: cross-model sessions (e.g. Sonnet → Haiku) attribute each turn's costs at that turn's rate.
+  - Sibling normalization: multiple tool_results entering on the same turn share the turn's `newContent` proportionally; cached tool_results share each turn's `cacheRead` proportionally — so attributed cost never exceeds what was actually paid.
+
 - **`burn context`** — cost attribution for agent context files across every agent `burn` ingests. Discovers `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`; attributes each against only the turns whose harness actually reads it (Claude Code for CLAUDE.md; Codex and OpenCode for AGENTS.md). Per-file ranked section tables plus a grand total across all context files. Closes #10.
   - Flags: `--project <path>`, `--since 7d`, `--kind <claude-md|agents-md>`, `--json`.
   - Uses the git-canonical `projectKey` (via `resolveProject`) for the ledger query when available, so multiple worktrees of the same repo roll up together; falls back to the filesystem path when no git remote is set.
 - **`burn context advise`** — emits unified-diff TRIM hunks for the most expensive sections across all discovered context files. Paths render POSIX-relative to the project root so they apply with `git apply` / `patch`. No `--apply` flag: burn never mutates your context files.
   - Flags: `--top <n>` (default 3, per file), `--kind <k>`, `--project <path>`, `--since 7d`.
 
-## [0.2.1] - 2026-04-23
+## [0.3.0] - 2026-04-23
 
 ### Added
 
