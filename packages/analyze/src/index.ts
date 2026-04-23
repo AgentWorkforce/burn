@@ -19,3 +19,34 @@ export type {
   ToolAttribution,
   WasteResult,
 } from './waste.js';
+export {
+  attributeClaudeMd,
+  buildAdviseRecommendations,
+  findClaudeMdFiles,
+  loadClaudeMdFile,
+  parseClaudeMd,
+  renderUnifiedDiffForRecommendation,
+} from './claude-md.js';
+export type {
+  AdviseRecommendation,
+  AttributeClaudeMdInput,
+  ClaudeMdAttributionResult,
+  MarkdownSection,
+  ParsedClaudeMd,
+  SectionCost,
+  SessionClaudeMdCost,
+} from './claude-md.js';
+export {
+  attributeContext,
+  describeAppliesTo,
+  findContextFiles,
+  loadContextFile,
+} from './context-md.js';
+export type {
+  AttributeContextInput,
+  ContextAttributionResult,
+  ContextFile,
+  ContextFileAttribution,
+  ContextFileKind,
+  ParsedContextFile,
+} from './context-md.js';

@@ -5,6 +5,7 @@ import { runClaudeWrapper } from './commands/claude.js';
 import { runCodexWrapper } from './commands/codex.js';
 import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
+import { runContext } from './commands/context.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
@@ -17,6 +18,7 @@ Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
   burn by-tool       [--since 7d] [--project <path>] [--session <id>]
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--all] [--json]
+  burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn claude        [--tag k=v ...] [-- <claude args>]
   burn codex         [--tag k=v ...] [-- <codex args>]
@@ -29,6 +31,9 @@ Examples:
   burn summary --since 24h
   burn by-tool --since 7d
   burn waste --since 7d
+  burn context --since 30d
+  burn context --kind claude-md
+  burn context advise --top 3
   burn compare --since 30d --models claude-sonnet-4-6,claude-haiku-4-5
   burn claude   --tag workflow=refactor -- --resume
   burn codex    --tag workflow=refactor
@@ -56,6 +61,8 @@ async function main(): Promise<number> {
       return runByTool(args);
     case 'waste':
       return runWaste(args);
+    case 'context':
+      return runContext(args);
     case 'compare':
       return runCompare(args);
     case 'claude':
