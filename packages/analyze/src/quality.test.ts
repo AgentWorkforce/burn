@@ -45,6 +45,14 @@ describe('inferOutcome', () => {
     assert.equal(o.reason, 'single-exchange');
   });
 
+  it('marks a one-turn assistant-ended session (user asks → assistant answers) as completed/medium', () => {
+    const turns = [turn({ messageId: 'm1', turnIndex: 0, stopReason: 'end_turn' })];
+    const o = inferOutcome('s', turns, undefined, FIXED_NOW);
+    assert.equal(o.outcome, 'completed');
+    assert.equal(o.confidence, 'medium');
+    assert.equal(o.reason, 'single-exchange');
+  });
+
   it('marks a very-short session as unknown/low', () => {
     const turns = [turn({ messageId: 'm1', turnIndex: 0, stopReason: 'tool_use' })];
     const o = inferOutcome('s', turns, undefined, FIXED_NOW);

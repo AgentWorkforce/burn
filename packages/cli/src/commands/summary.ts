@@ -75,12 +75,21 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
 async function loadContentForQuality(
   turns: EnrichedTurn[],
 ): Promise<Map<string, ContentRecord[]>> {
-  const sessionIds = new Set(turns.map((t) => t.sessionId));
+  const sessionIds = [...new Set(turns.map((t) => t.sessionId))];
   const bySession = new Map<string, ContentRecord[]>();
-  for (const sessionId of sessionIds) {
-    const records = await readContent({ sessionId });
-    if (records.length > 0) bySession.set(sessionId, records);
+  // Sequential reads across thousands of sessions (many with no sidecar at
+  // all → ENOENT path) dominate runtime on large summaries. Cap concurrency
+  // so we don't fan out unboundedly on huge ledgers but still overlap I/O.
+  const concurrency = Math.min(8, sessionIds.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < sessionIds.length) {
+      const sessionId = sessionIds[next++]!;
+      const records = await readContent({ sessionId });
+      if (records.length > 0) bySession.set(sessionId, records);
+    }
   }
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
   return bySession;
 }
 

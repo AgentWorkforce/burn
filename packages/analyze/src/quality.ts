@@ -65,13 +65,17 @@ export interface ComputeQualityOptions {
   now?: number;
 }
 
-// Phrases observed in agentsview's give-up heuristic. Kept case-insensitive.
+// Phrases observed in agentsview's give-up heuristic plus additions from
+// real Claude/Codex sessions. Kept case-insensitive.
 const GIVE_UP_PATTERNS = [
   "i'm unable to",
   'i am unable to',
   "i can't proceed",
   'i cannot proceed',
   "i don't have access",
+  'i cannot access',
+  'unable to verify',
+  "doesn't appear to exist",
 ];
 
 const RECENT_WINDOW_MS = 10 * 60 * 1000;
@@ -131,9 +135,13 @@ export function inferOutcome(
   const endedRole = endingRole(turns);
   const failureStreak = trailingFailureStreak(turns);
 
-  // Single-exchange "hi → hello" sessions are usually intentional; treat them
-  // as completed at medium confidence instead of "too-short/unknown".
-  if (messageCount === 2 && endedRole === 'assistant') {
+  // A single assistant turn that reached end_turn is almost always an
+  // intentional one-shot exchange (user asked, assistant answered — e.g.
+  // "hi → hello", or a single tool-mediated round trip that produces two
+  // assistant turns). Treat these as completed at medium confidence rather
+  // than falling through to "too-short/unknown". TurnRecord counts assistant
+  // turns only, so messageCount <= 2 covers both shapes.
+  if (messageCount <= 2 && endedRole === 'assistant') {
     return {
       sessionId,
       outcome: 'completed',
