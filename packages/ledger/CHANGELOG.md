@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-24
+
 ### Added
 
 - **`buildClaudeHookSettings({ burnBin? })`** — spawner-side primitive returning `{ sessionId, settings }`: a fresh UUID plus a JSON string wiring every Claude Code hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) to `burn ingest --runtime claude --quiet`. Sits alongside `stamp` so orchestrators get both integration primitives from one package; spawners can inject hooks per-invocation via Claude's `--settings` flag rather than mutating `~/.claude/settings.json` globally. Closes [#7](https://github.com/AgentWorkforce/burn/issues/7).

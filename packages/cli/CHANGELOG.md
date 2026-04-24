@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-24
+
 ### Added
 
 - **`burn ingest --runtime claude [--quiet]`** — hook-driven ingest. Reads a Claude Code hook payload JSON on stdin, extracts `session_id` + `transcript_path`, and incrementally parses the transcript via the existing cursor + dedup machinery. Safe to fire on every hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`); hook failures never propagate a non-zero exit back to Claude Code. Paired with `buildClaudeHookSettings` in `@relayburn/ledger` for spawner-integrated hook installation. Tool-call failures ride in the normal `PostToolUse` payload (surfaced as `ToolCall.isError` on the `TurnRecord`); no phantom `PostToolUseFailure` event is registered. Closes [#7](https://github.com/AgentWorkforce/burn/issues/7).
