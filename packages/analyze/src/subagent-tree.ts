@@ -1,0 +1,295 @@
+import type { TurnRecord } from '@relayburn/reader';
+
+import { costForTurn } from './cost.js';
+import type { PricingTable } from './pricing.js';
+
+export interface SubagentTreeNode {
+  // Stable id: the session id for the main-thread root, or the subagent's
+  // agentId (root user uuid) for subagent invocations.
+  nodeId: string;
+  // Human-readable label: 'main', or '<subagentType>'. Falls back to
+  // '(unknown)' for sidechain turns whose tree fields couldn't be resolved
+  // from passive data.
+  label: string;
+  // Agent/Task subagent_type from the spawning tool input, when known.
+  subagentType?: string;
+  // Agent/Task description from the spawning tool input, when known.
+  description?: string;
+  // Distinct models used by turns at this node (not including descendants).
+  // Most invocations use a single model; we surface the set for visibility.
+  models: string[];
+  // Direct turn count and cost at this node only.
+  selfTurns: number;
+  selfCost: number;
+  // Rolled-up turn count and cost including all descendants.
+  cumulativeTurns: number;
+  cumulativeCost: number;
+  // 0 for the main-thread root, 1 for first-level subagent, etc.
+  depth: number;
+  children: SubagentTreeNode[];
+}
+
+export interface BuildSubagentTreeOptions {
+  pricing: PricingTable;
+}
+
+// Build per-session subagent trees. Each session produces one tree whose root
+// represents the main thread (non-sidechain turns). Children are subagent
+// invocations grouped by `subagent.agentId`, nested by `parentAgentId`.
+//
+// Sessions with sidechain turns whose tree fields are absent (e.g. incomplete
+// incremental ingest) still emit a tree; those turns attach to a synthetic
+// '(unresolved)' node under the main root so their cost isn't dropped.
+export function buildSubagentTree(
+  turns: TurnRecord[],
+  opts: BuildSubagentTreeOptions,
+): Map<string, SubagentTreeNode> {
+  const bySession = new Map<string, TurnRecord[]>();
+  for (const t of turns) {
+    let list = bySession.get(t.sessionId);
+    if (!list) {
+      list = [];
+      bySession.set(t.sessionId, list);
+    }
+    list.push(t);
+  }
+
+  const out = new Map<string, SubagentTreeNode>();
+  for (const [sessionId, sessionTurns] of bySession) {
+    const root = buildSessionTree(sessionId, sessionTurns, opts.pricing);
+    out.set(sessionId, root);
+  }
+  return out;
+}
+
+interface MutableNode extends SubagentTreeNode {
+  children: MutableNode[];
+}
+
+function buildSessionTree(
+  sessionId: string,
+  turns: TurnRecord[],
+  pricing: PricingTable,
+): SubagentTreeNode {
+  const root: MutableNode = {
+    nodeId: sessionId,
+    label: 'main',
+    models: [],
+    selfTurns: 0,
+    selfCost: 0,
+    cumulativeTurns: 0,
+    cumulativeCost: 0,
+    depth: 0,
+    children: [],
+  };
+  const byId = new Map<string, MutableNode>();
+  byId.set(sessionId, root);
+
+  const mainModels = new Set<string>();
+  const modelsByNode = new Map<string, Set<string>>();
+  modelsByNode.set(sessionId, mainModels);
+
+  // Collect sidechain turns that arrived without a resolvable agentId so we
+  // can still show their cost. Bucketed under a synthetic node named
+  // '(unresolved)'.
+  let unresolved: MutableNode | undefined;
+  let unresolvedModels: Set<string> | undefined;
+
+  for (const t of turns) {
+    const cost = costForTurn(t, pricing)?.total ?? 0;
+    if (!t.subagent) {
+      root.selfTurns++;
+      root.selfCost += cost;
+      if (t.model) mainModels.add(t.model);
+      continue;
+    }
+    const agentId = t.subagent.agentId;
+    if (!agentId) {
+      if (!unresolved) {
+        unresolved = {
+          nodeId: `${sessionId}:__unresolved`,
+          label: '(unresolved)',
+          models: [],
+          selfTurns: 0,
+          selfCost: 0,
+          cumulativeTurns: 0,
+          cumulativeCost: 0,
+          depth: 1,
+          children: [],
+        };
+        unresolvedModels = new Set<string>();
+        root.children.push(unresolved);
+      }
+      unresolved.selfTurns++;
+      unresolved.selfCost += cost;
+      if (t.model && unresolvedModels) unresolvedModels.add(t.model);
+      continue;
+    }
+    let node = byId.get(agentId);
+    if (!node) {
+      node = {
+        nodeId: agentId,
+        label: t.subagent.subagentType ?? '(unknown)',
+        models: [],
+        selfTurns: 0,
+        selfCost: 0,
+        cumulativeTurns: 0,
+        cumulativeCost: 0,
+        // depth is assigned during the parent-attach pass below.
+        depth: -1,
+        children: [],
+      };
+      if (t.subagent.subagentType !== undefined) node.subagentType = t.subagent.subagentType;
+      if (t.subagent.description !== undefined) node.description = t.subagent.description;
+      byId.set(agentId, node);
+      modelsByNode.set(agentId, new Set<string>());
+    } else {
+      // Turns in the same invocation may fill in richer tree fields on
+      // subsequent turns if we didn't have them on the first one. Backfill.
+      if (node.subagentType === undefined && t.subagent.subagentType !== undefined) {
+        node.subagentType = t.subagent.subagentType;
+        if (node.label === '(unknown)') node.label = t.subagent.subagentType;
+      }
+      if (node.description === undefined && t.subagent.description !== undefined) {
+        node.description = t.subagent.description;
+      }
+    }
+    node.selfTurns++;
+    node.selfCost += cost;
+    if (t.model) modelsByNode.get(agentId)!.add(t.model);
+  }
+
+  // Attach each invocation node to its parent (by parentAgentId, falling
+  // back to the session root when missing).
+  const parentByNode = new Map<string, string>();
+  for (const t of turns) {
+    if (!t.subagent?.agentId) continue;
+    if (parentByNode.has(t.subagent.agentId)) continue;
+    parentByNode.set(t.subagent.agentId, t.subagent.parentAgentId ?? sessionId);
+  }
+  for (const [id, parentId] of parentByNode) {
+    const node = byId.get(id);
+    if (!node) continue;
+    const parent = byId.get(parentId) ?? root;
+    parent.children.push(node);
+  }
+
+  // Assign depth BFS from the root.
+  const queue: Array<{ node: MutableNode; depth: number }> = [{ node: root, depth: 0 }];
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    node.depth = depth;
+    for (const child of node.children) {
+      queue.push({ node: child, depth: depth + 1 });
+    }
+  }
+
+  // Finalize model arrays and fold cumulative cost/turns from leaves up.
+  root.models = [...mainModels].sort();
+  for (const [id, models] of modelsByNode) {
+    const node = byId.get(id);
+    if (node) node.models = [...models].sort();
+  }
+  if (unresolved && unresolvedModels) {
+    unresolved.models = [...unresolvedModels].sort();
+  }
+  foldCumulative(root);
+  // Sort children by cumulativeCost desc so rendering surfaces the expensive
+  // branches first.
+  sortTree(root);
+  return root;
+}
+
+function foldCumulative(node: MutableNode): void {
+  let cost = node.selfCost;
+  let turns = node.selfTurns;
+  for (const c of node.children) {
+    foldCumulative(c);
+    cost += c.cumulativeCost;
+    turns += c.cumulativeTurns;
+  }
+  node.cumulativeCost = cost;
+  node.cumulativeTurns = turns;
+}
+
+function sortTree(node: MutableNode): void {
+  node.children.sort((a, b) => b.cumulativeCost - a.cumulativeCost);
+  for (const c of node.children) sortTree(c);
+}
+
+export interface SubagentTypeStats {
+  subagentType: string;
+  invocations: number;
+  turns: number;
+  totalCost: number;
+  medianCost: number;
+  p95Cost: number;
+  meanCost: number;
+}
+
+// Aggregate subagent invocations across sessions by `subagentType`, reporting
+// per-invocation cost distribution. An "invocation" is the unique agentId
+// within a session — all turns of the same spawned subagent count once.
+export function aggregateSubagentTypeStats(
+  turns: TurnRecord[],
+  opts: BuildSubagentTreeOptions,
+): SubagentTypeStats[] {
+  const byInvocation = new Map<string, { type: string; turns: number; cost: number }>();
+  for (const t of turns) {
+    const sub = t.subagent;
+    if (!sub?.agentId) continue;
+    const type = sub.subagentType ?? '(unknown)';
+    // Key on session+agentId so the same agentId in a different session can't
+    // collide.
+    const key = `${t.sessionId}:${sub.agentId}`;
+    let inv = byInvocation.get(key);
+    if (!inv) {
+      inv = { type, turns: 0, cost: 0 };
+      byInvocation.set(key, inv);
+    } else if (inv.type === '(unknown)' && type !== '(unknown)') {
+      inv.type = type;
+    }
+    inv.turns++;
+    inv.cost += costForTurn(t, opts.pricing)?.total ?? 0;
+  }
+  const byType = new Map<string, number[]>();
+  const totalsByType = new Map<string, { turns: number; total: number }>();
+  for (const inv of byInvocation.values()) {
+    let arr = byType.get(inv.type);
+    if (!arr) {
+      arr = [];
+      byType.set(inv.type, arr);
+    }
+    arr.push(inv.cost);
+    let sums = totalsByType.get(inv.type);
+    if (!sums) {
+      sums = { turns: 0, total: 0 };
+      totalsByType.set(inv.type, sums);
+    }
+    sums.turns += inv.turns;
+    sums.total += inv.cost;
+  }
+  const out: SubagentTypeStats[] = [];
+  for (const [type, costs] of byType) {
+    const totals = totalsByType.get(type)!;
+    costs.sort((a, b) => a - b);
+    out.push({
+      subagentType: type,
+      invocations: costs.length,
+      turns: totals.turns,
+      totalCost: totals.total,
+      medianCost: percentile(costs, 0.5),
+      p95Cost: percentile(costs, 0.95),
+      meanCost: costs.length > 0 ? totals.total / costs.length : 0,
+    });
+  }
+  return out.sort((a, b) => b.totalCost - a.totalCost);
+}
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  // Nearest-rank with clamp at array bounds; matches the usual "summary table"
+  // expectation (p50 of [1,2,3] = 2, p95 of a short list = max).
+  const rank = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[rank]!;
+}

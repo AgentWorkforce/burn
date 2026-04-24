@@ -19,6 +19,15 @@ export type {
   ToolAttribution,
   WasteResult,
 } from './waste.js';
+export {
+  aggregateSubagentTypeStats,
+  buildSubagentTree,
+} from './subagent-tree.js';
+export type {
+  BuildSubagentTreeOptions,
+  SubagentTreeNode,
+  SubagentTypeStats,
+} from './subagent-tree.js';
 export { detectPatterns } from './patterns.js';
 export type {
   CompactionLoss,

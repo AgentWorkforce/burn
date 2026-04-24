@@ -71,6 +71,41 @@ describe('parseClaudeSession', () => {
     assert.equal(t.subagent!.isSidechain, true);
   });
 
+  it('reconstructs a nested subagent tree from parentUuid chains', async () => {
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'nested-subagent.jsonl'));
+    // 2 main + 2 outer sidechain + 1 inner sidechain = 5 turns
+    assert.equal(turns.length, 5);
+
+    const byId = new Map(turns.map((t) => [t.messageId, t] as const));
+    const main1 = byId.get('msg_main_1')!;
+    const sub1_1 = byId.get('msg_sub1_1')!;
+    const sub1_2 = byId.get('msg_sub1_2')!;
+    const sub2_1 = byId.get('msg_sub2_1')!;
+
+    // Main thread: no subagent marker.
+    assert.equal(main1.subagent, undefined);
+
+    // Outer subagent (first-level): parent is main thread, tagged with session id.
+    assert.ok(sub1_1.subagent);
+    assert.equal(sub1_1.subagent!.isSidechain, true);
+    assert.equal(sub1_1.subagent!.agentId, 'u-sub1-user');
+    assert.equal(sub1_1.subagent!.parentToolUseId, 'toolu_outer');
+    assert.equal(sub1_1.subagent!.subagentType, 'Explore');
+    assert.equal(sub1_1.subagent!.description, 'Research the codebase');
+    assert.equal(sub1_1.subagent!.parentAgentId, '55555555-5555-5555-5555-555555555555');
+
+    // All turns of the same invocation share the agentId.
+    assert.equal(sub1_2.subagent!.agentId, 'u-sub1-user');
+    assert.equal(sub1_2.subagent!.parentToolUseId, 'toolu_outer');
+
+    // Inner subagent: parent is the outer subagent invocation.
+    assert.ok(sub2_1.subagent);
+    assert.equal(sub2_1.subagent!.agentId, 'u-sub2-user');
+    assert.equal(sub2_1.subagent!.parentAgentId, 'u-sub1-user');
+    assert.equal(sub2_1.subagent!.parentToolUseId, 'toolu_inner');
+    assert.equal(sub2_1.subagent!.subagentType, 'code-reviewer');
+  });
+
   it('produces stable argsHash for identical tool inputs', async () => {
     const a = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
     const b = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));

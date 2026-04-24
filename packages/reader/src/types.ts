@@ -36,7 +36,22 @@ export interface Subagent {
   isSidechain: boolean;
   type?: string;
   taskDescription?: string;
+  // The tool_use id of the Agent/Task call in the parent thread that spawned
+  // this subagent. Set on every turn of the spawned subagent so all of its
+  // turns share a single parent link.
   parentToolUseId?: string;
+  // Stable id for this subagent invocation. For Claude sessions reconstructed
+  // from JSONL alone, this is the uuid of the subagent's first user message
+  // (the one with no parent inside the sidechain) — all turns of the same
+  // invocation share it.
+  agentId?: string;
+  // agentId of the parent subagent, or undefined when the parent is the main
+  // thread. Together with agentId this forms a parent→child tree.
+  parentAgentId?: string;
+  // The `subagent_type` field from the spawning Agent/Task tool input.
+  subagentType?: string;
+  // The `description` field from the spawning Agent/Task tool input.
+  description?: string;
 }
 
 export type ActivityCategory =
