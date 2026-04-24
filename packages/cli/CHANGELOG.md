@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Opportunistically loads per-session content sidecars (when available) so give-up phrase detection can downgrade assistant-ended confidence. Sidecar reads run with a concurrency cap of 8 so large ledgers don't serialize I/O.
 - **`burn rebuild --content`** — re-parses source session files to populate missing content sidecars. Skips sessions that already have content on disk, leaves cursors and ledger rows untouched. Primary use: backfill content for historical Codex and OpenCode sessions ingested before content capture was implemented for those adapters (#33 follow-up), or to restore a sidecar that was pruned.
 
+## [0.7.0] - 2026-04-24
+
+### Added
+
+- **Add content capture for Codex and OpenCode parsers (#33 follow-up)** (#33)
+
+### Changed
+
+- Update packages/cli/src/commands/rebuild.ts
+
 ## [0.6.0] - 2026-04-24
 
 ### Added

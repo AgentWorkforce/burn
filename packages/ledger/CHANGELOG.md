@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `listContentSessionIds()` — enumerate sessionIds that have a non-empty content sidecar on disk. Used by `burn rebuild --content` to skip sessions whose content is already populated.
 
+## [0.7.0] - 2026-04-24
+
+### Added
+
+- **Add content capture for Codex and OpenCode parsers (#33 follow-up)** (#33)
+
 ## [0.6.0] - 2026-04-24
 
 ### Added
