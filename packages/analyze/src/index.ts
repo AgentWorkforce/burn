@@ -19,6 +19,16 @@ export type {
   ToolAttribution,
   WasteResult,
 } from './waste.js';
+export { detectPatterns } from './patterns.js';
+export type {
+  CompactionLoss,
+  DetectPatternsOptions,
+  EditRevertCycle,
+  FailureRun,
+  PatternsResult,
+  RetryLoop,
+  SessionPatternSummary,
+} from './patterns.js';
 export {
   attributeClaudeMd,
   buildAdviseRecommendations,

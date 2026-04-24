@@ -1,17 +1,25 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import type { TurnRecord } from '@relayburn/reader';
+import type { CompactionEvent, TurnRecord } from '@relayburn/reader';
 
 import {
   appendHashes,
+  compactionIdHash,
   loadIndex,
   turnContentFingerprint,
   turnIdHash,
 } from './index-sidecar.js';
 import { withLock } from './lock.js';
 import { ledgerPath } from './paths.js';
-import type { Enrichment, LedgerLine, StampLine, StampSelector, TurnLine } from './schema.js';
+import type {
+  CompactionLine,
+  Enrichment,
+  LedgerLine,
+  StampLine,
+  StampSelector,
+  TurnLine,
+} from './schema.js';
 
 async function ensureDir(filePath: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -58,6 +66,31 @@ export async function appendTurns(turns: TurnRecord[]): Promise<void> {
   const lines: TurnLine[] = fresh.map((record) => ({ v: 1, kind: 'turn', record }));
   await appendLines(lines);
   await appendHashes(newIds, newContent);
+}
+
+export async function appendCompactions(events: CompactionEvent[]): Promise<void> {
+  if (events.length === 0) return;
+  // Dedup piggybacks on the ledger-id index. Compaction ids share the same
+  // namespace as turn ids — they hash different inputs so collisions are not
+  // a practical concern, and we get crash-safe persistence for free.
+  const idx = await loadIndex();
+  const fresh: CompactionEvent[] = [];
+  const newIds: string[] = [];
+  for (const e of events) {
+    const id = compactionIdHash(e);
+    if (idx.ids.has(id)) continue;
+    fresh.push(e);
+    newIds.push(id);
+    idx.ids.add(id);
+  }
+  if (fresh.length === 0) return;
+  const lines: CompactionLine[] = fresh.map((record) => ({
+    v: 1,
+    kind: 'compaction',
+    record,
+  }));
+  await appendLines(lines);
+  await appendHashes(newIds, []);
 }
 
 export async function stamp(

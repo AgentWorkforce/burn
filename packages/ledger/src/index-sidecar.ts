@@ -4,7 +4,7 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import { createInterface } from 'node:readline';
 import * as path from 'node:path';
 
-import type { TurnRecord } from '@relayburn/reader';
+import type { CompactionEvent, TurnRecord } from '@relayburn/reader';
 
 import { withLock } from './lock.js';
 import {
@@ -12,7 +12,7 @@ import {
   ledgerIndexPath,
   ledgerPath,
 } from './paths.js';
-import { isTurnLine } from './schema.js';
+import { isCompactionLine, isTurnLine } from './schema.js';
 
 export const CONTENT_WINDOW = 10_000;
 
@@ -23,6 +23,13 @@ export function turnIdHash(t: {
 }): string {
   return createHash('sha256')
     .update(`${t.source}|${t.sessionId}|${t.messageId}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function compactionIdHash(e: CompactionEvent): string {
+  return createHash('sha256')
+    .update(`${e.source}|${e.sessionId}|${e.ts}`)
     .digest('hex')
     .slice(0, 16);
 }
@@ -125,13 +132,16 @@ export async function rebuildIndex(): Promise<{ ids: number; content: number }> 
         } catch {
           continue;
         }
-        if (!isTurnLine(parsed)) continue;
-        const r = parsed.record;
-        ids.add(turnIdHash(r));
-        const cf = turnContentFingerprint(r);
-        if (!contentSeen.has(cf)) {
-          contentSeen.add(cf);
-          contentOrder.push(cf);
+        if (isTurnLine(parsed)) {
+          const r = parsed.record;
+          ids.add(turnIdHash(r));
+          const cf = turnContentFingerprint(r);
+          if (!contentSeen.has(cf)) {
+            contentSeen.add(cf);
+            contentOrder.push(cf);
+          }
+        } else if (isCompactionLine(parsed)) {
+          ids.add(compactionIdHash(parsed.record));
         }
       }
     } finally {

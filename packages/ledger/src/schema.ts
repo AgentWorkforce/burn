@@ -1,4 +1,4 @@
-import type { TurnRecord } from '@relayburn/reader';
+import type { CompactionEvent, TurnRecord } from '@relayburn/reader';
 
 export type Enrichment = Record<string, string>;
 
@@ -29,7 +29,13 @@ export interface StampLine {
   enrichment: Enrichment;
 }
 
-export type LedgerLine = TurnLine | StampLine;
+export interface CompactionLine {
+  v: 1;
+  kind: 'compaction';
+  record: CompactionEvent;
+}
+
+export type LedgerLine = TurnLine | StampLine | CompactionLine;
 
 export function isTurnLine(line: unknown): line is TurnLine {
   return (
@@ -45,6 +51,15 @@ export function isStampLine(line: unknown): line is StampLine {
     !!line &&
     typeof line === 'object' &&
     (line as { kind?: string }).kind === 'stamp' &&
+    (line as { v?: number }).v === 1
+  );
+}
+
+export function isCompactionLine(line: unknown): line is CompactionLine {
+  return (
+    !!line &&
+    typeof line === 'object' &&
+    (line as { kind?: string }).kind === 'compaction' &&
     (line as { v?: number }).v === 1
   );
 }

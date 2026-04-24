@@ -77,6 +77,45 @@ describe('parseClaudeSession', () => {
     assert.equal(a.turns[0]!.toolCalls[0]!.argsHash, b.turns[0]!.toolCalls[0]!.argsHash);
     assert.notEqual(a.turns[0]!.toolCalls[0]!.argsHash, a.turns[0]!.toolCalls[1]!.argsHash);
   });
+
+  it('marks ToolCall.isError when a later tool_result has is_error=true', async () => {
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'retry-loop.jsonl'));
+    assert.equal(turns.length, 4);
+    for (const t of turns) {
+      assert.equal(t.toolCalls.length, 1);
+      assert.equal(t.toolCalls[0]!.name, 'Bash');
+      assert.equal(t.toolCalls[0]!.isError, true, `turn ${t.turnIndex} should be flagged errored`);
+    }
+  });
+
+  it('extracts editPreHash and editPostHash from Edit tool calls', async () => {
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'edit-revert.jsonl'));
+    const edits = turns
+      .flatMap((t) => t.toolCalls)
+      .filter((tc) => tc.name === 'Edit');
+    assert.equal(edits.length, 2);
+    // First edit: old=FOO=1, new=FOO=2. Second edit: old=FOO=2, new=FOO=1.
+    // Revert detected when second.postHash === first.preHash.
+    assert.ok(edits[0]!.editPreHash);
+    assert.ok(edits[0]!.editPostHash);
+    assert.equal(edits[1]!.editPostHash, edits[0]!.editPreHash);
+    assert.equal(edits[1]!.editPreHash, edits[0]!.editPostHash);
+  });
+
+  it('emits a CompactionEvent anchored to the preceding turn when a compact_boundary system record appears', async () => {
+    const { turns, events } = await parseClaudeSession(
+      path.join(FIXTURES, 'compact-boundary.jsonl'),
+    );
+    assert.equal(events.length, 1);
+    const ev = events[0]!;
+    assert.equal(ev.source, 'claude-code');
+    assert.equal(ev.sessionId, 'compact-session');
+    assert.equal(ev.precedingMessageId, 'msg_c_1');
+    // tokensBeforeCompact = cacheRead of the turn right before compaction.
+    const preceding = turns.find((t) => t.messageId === 'msg_c_1')!;
+    assert.equal(ev.tokensBeforeCompact, preceding.usage.cacheRead);
+    assert.equal(ev.tokensBeforeCompact, 9000);
+  });
 });
 
 describe('parseClaudeSession content capture', () => {
