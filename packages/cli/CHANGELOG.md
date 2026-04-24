@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`burn summary --quality`** — appends a quality rollup to the summary output: outcome counts (completed / abandoned / errored / unknown) plus the weighted one-shot edit rate across the matched sessions. Closes [#6](https://github.com/AgentWorkforce/burn/issues/6).
   - Opportunistically loads per-session content sidecars (when available) so give-up phrase detection can downgrade assistant-ended confidence. Sidecar reads run with a concurrency cap of 8 so large ledgers don't serialize I/O.
 
+## [0.6.0] - 2026-04-24
+
+### Added
+
+- **Add outcome inference + one-shot rate quality signals (closes #6)** (#6)
+- **Implement waste-pattern detectors (retry loops, failure runs, compaction loss, edit-revert)** (#11)
+
+### Changed
+
+- Address PR #53 review comments (#53)
+
+### Documentation
+
+- Document quality signals in CHANGELOGs (#53)
+
 ## [0.5.0] - 2026-04-24
 
 ### Changed
