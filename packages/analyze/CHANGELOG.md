@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Quality signals module.** `computeQuality(turns, opts)` returns two orthogonal per-session signals — `SessionOutcome` (outcome inference) and `OneShotMetrics` (one-shot rate) — for answering "was this work good enough that a cheaper model could have done it." Closes [#6](https://github.com/AgentWorkforce/burn/issues/6). Also exported individually as `inferOutcome` and `computeOneShotRate`.
+  - **Outcome inference** classifies each session as `completed` / `abandoned` / `errored` / `unknown` with explicit `high` / `medium` / `low` confidence and a reason code (`single-exchange`, `too-short`, `recent`, `user-ended`, `user-ended-long`, `failure-streak`, `give-up`, `assistant-ended`, `unknown-ending`, `empty`). Works from turn metadata alone; an optional `contentBySession` map downgrades `assistant-ended` to `give-up/low` when the last assistant text matches known give-up phrases (e.g. `"i'm unable to"`, `"i cannot access"`, `"doesn't appear to exist"`).
+  - **One-shot rate** is `oneShotTurns / editTurns` per session, where a one-shot turn is an edit turn with zero retries. Sidechain (subagent) turns are excluded from the denominator so their retry counts don't poison the parent session's rate. Also returns `totalRetries` as a raw volume signal.
+  - Computed lazily at query time, never persisted to the ledger — upgrading the rules later does not require a rebuild. Requires no prompt storage; the give-up downgrade runs opportunistically when content is available.
+  - Handles sources that don't record `stopReason` (e.g. Codex): the final-turn ending role is reported as `'unknown'` and the session is classified `completed/low` with reason `unknown-ending` rather than being swept into `abandoned`.
+
 ## [0.4.0] - 2026-04-23
 
 ### Added

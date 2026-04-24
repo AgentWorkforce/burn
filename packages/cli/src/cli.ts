@@ -16,7 +16,7 @@ import { runWaste } from './commands/waste.js';
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
-  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
+  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--quality]
   burn by-tool       [--since 7d] [--project <path>] [--session <id>]
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]]
