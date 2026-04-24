@@ -408,12 +408,108 @@ jobs:
             node /tmp/gen-changelog.mjs "$pkg" "$version" "$TODAY"
           done
 
+      # Root CHANGELOG.md gets the same Unreleased→[x.y.z] promotion the
+      # per-package files just got, but driven by the highest version bumped
+      # in this release (packages move in lockstep today; using max also
+      # handles future drift). No git-log fallback — the root file is a
+      # hand-curated cross-package narrative, so an empty [Unreleased] means
+      # "no narrative-worthy changes this release" and we leave the file
+      # alone rather than inventing bullets.
+      - name: Generate root changelog
+        if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          cat > /tmp/gen-root-changelog.mjs << 'GENEOF'
+          import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+          const [,, versionsRaw, today] = process.argv;
+          const path = 'CHANGELOG.md';
+
+          const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((e) => {
+            const [pkg, ver] = e.split(':');
+            return { pkg, ver };
+          });
+          if (entries.length === 0) {
+            console.log('root changelog: no versions bumped, skipping');
+            process.exit(0);
+          }
+          if (entries.some((e) => e.ver.includes('-'))) {
+            console.log('root changelog: prerelease bump, skipping');
+            process.exit(0);
+          }
+
+          // Pick the highest version across packages bumped in this release.
+          const cmp = (a, b) => {
+            const pa = a.split('.').map(Number);
+            const pb = b.split('.').map(Number);
+            for (let i = 0; i < 3; i++) {
+              const da = pa[i] || 0;
+              const db = pb[i] || 0;
+              if (da !== db) return da - db;
+            }
+            return 0;
+          };
+          const newVersion = entries.map((e) => e.ver).sort(cmp).slice(-1)[0];
+
+          if (!existsSync(path)) {
+            console.log(`root changelog: ${path} not found, skipping`);
+            process.exit(0);
+          }
+          const existing = readFileSync(path, 'utf-8');
+          if (existing.includes(`## [${newVersion}]`)) {
+            console.log(`root changelog: already has ${newVersion}, skipping`);
+            process.exit(0);
+          }
+
+          // Same slicer as the per-package generator: header → body → next ##.
+          function splitAtUnreleased(raw) {
+            const headerRe = /^## \[Unreleased\][^\n]*\n/m;
+            const headerMatch = raw.match(headerRe);
+            if (!headerMatch) return null;
+            const headerStart = headerMatch.index;
+            const afterHeader = headerStart + headerMatch[0].length;
+            const tail = raw.slice(afterHeader);
+            const nextMatch = tail.match(/^## \[/m);
+            const bodyEnd = nextMatch ? afterHeader + nextMatch.index : raw.length;
+            return {
+              before: raw.slice(0, headerStart),
+              headerLine: headerMatch[0],
+              body: raw.slice(afterHeader, bodyEnd),
+              after: raw.slice(bodyEnd),
+            };
+          }
+
+          const parts = splitAtUnreleased(existing);
+          if (!parts) {
+            console.log('root changelog: no [Unreleased] header, skipping');
+            process.exit(0);
+          }
+          const body = parts.body.trim();
+          if (body.length === 0) {
+            console.log(`root changelog: [Unreleased] is empty, skipping ${newVersion} stamp`);
+            process.exit(0);
+          }
+
+          const newEntry = `## [${newVersion}] - ${today}\n\n${body}\n`;
+          const rebuilt =
+            parts.before +
+            parts.headerLine +
+            '\n' +
+            newEntry +
+            (parts.after.startsWith('\n') ? '' : '\n') +
+            parts.after;
+          writeFileSync(path, rebuilt);
+          console.log(`root changelog: promoted [Unreleased] into ${newVersion}`);
+          GENEOF
+
+          node /tmp/gen-root-changelog.mjs "${{ steps.bump.outputs.versions }}" "$TODAY"
+
       - name: Commit version bumps
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/*/package.json packages/*/CHANGELOG.md
+          git add packages/*/package.json packages/*/CHANGELOG.md CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No version changes to commit."
           else
