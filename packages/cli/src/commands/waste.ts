@@ -3,10 +3,12 @@ import {
   aggregateByFile,
   aggregateBySubagent,
   attributeWaste,
+  detectPatterns,
   loadPricing,
   type FileAggregation,
+  type PatternsResult,
 } from '@relayburn/analyze';
-import { queryAll, readContent, type Query } from '@relayburn/ledger';
+import { queryAll, queryCompactions, readContent, type Query } from '@relayburn/ledger';
 import type { ContentRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
@@ -14,6 +16,8 @@ import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
 const DEFAULT_TOP_N = 10;
+const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts'] as const;
+type PatternKind = (typeof PATTERN_KINDS)[number];
 
 export async function runWaste(args: ParsedArgs): Promise<number> {
   const q: Query = {};
@@ -25,6 +29,16 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll(q);
+
+  const patternsFlag = args.flags['patterns'];
+  if (patternsFlag !== undefined) {
+    const selected = resolvePatternSelection(patternsFlag);
+    const compactions = selected.has('compaction')
+      ? await queryCompactions(q)
+      : [];
+    const patterns = detectPatterns(turns, { pricing, compactions });
+    return renderPatterns(args, patterns, selected, turns.length);
+  }
 
   const sessionIds = new Set(turns.map((t) => t.sessionId));
   const contentBySession = new Map<string, ContentRecord[]>();
@@ -161,4 +175,168 @@ function renderSubagentTable(subagents: ReturnType<typeof aggregateBySubagent>, 
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + '…';
+}
+
+function resolvePatternSelection(flag: string | true): Set<PatternKind> {
+  if (flag === true) return new Set(PATTERN_KINDS);
+  const set = new Set<PatternKind>();
+  for (const raw of flag.split(',').map((s) => s.trim()).filter(Boolean)) {
+    if ((PATTERN_KINDS as readonly string[]).includes(raw)) {
+      set.add(raw as PatternKind);
+    } else {
+      throw new Error(
+        `unknown --patterns value "${raw}". Valid: ${PATTERN_KINDS.join(', ')}`,
+      );
+    }
+  }
+  if (set.size === 0) return new Set(PATTERN_KINDS);
+  return set;
+}
+
+function renderPatterns(
+  args: ParsedArgs,
+  patterns: PatternsResult,
+  selected: Set<PatternKind>,
+  turnsAnalyzed: number,
+): number {
+  const retryLoops = selected.has('retries') ? patterns.retryLoops : [];
+  const failureRuns = selected.has('failures') ? patterns.failureRuns : [];
+  const compactions = selected.has('compaction') ? patterns.compactions : [];
+  const editReverts = selected.has('reverts') ? patterns.editReverts : [];
+
+  if (args.flags['json'] === true) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          turnsAnalyzed,
+          retryLoops,
+          failureRuns,
+          compactions,
+          editReverts,
+          sessionSummaries: patterns.sessionSummaries,
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    return 0;
+  }
+
+  const showAll = args.flags['all'] === true;
+  const limit = showAll ? Number.POSITIVE_INFINITY : DEFAULT_TOP_N;
+
+  const out: string[] = [];
+  out.push('');
+  out.push(`turns analyzed: ${formatInt(turnsAnalyzed)}`);
+  out.push(
+    `sessions with patterns: ${formatInt(patterns.sessionSummaries.length)}  /  total pattern cost: ${formatUsd(
+      patterns.sessionSummaries.reduce((s, r) => s + r.totalPatternCost, 0),
+    )}`,
+  );
+  out.push('');
+
+  if (selected.has('retries')) {
+    out.push('Retry loops (≥3 identical failing tool calls in a row)');
+    out.push(renderRetryTable(retryLoops, limit));
+    out.push('');
+  }
+  if (selected.has('failures')) {
+    out.push('Consecutive tool-failure runs (≥3 distinct tools failing in sequence)');
+    out.push(renderFailureTable(failureRuns, limit));
+    out.push('');
+  }
+  if (selected.has('compaction')) {
+    out.push('Compaction-loss events');
+    out.push(renderCompactionTable(compactions, limit));
+    out.push('');
+  }
+  if (selected.has('reverts')) {
+    out.push('Edit-revert cycles (file returned to a prior state)');
+    out.push(renderRevertTable(editReverts, limit));
+    out.push('');
+  }
+
+  process.stdout.write(out.join('\n'));
+  return 0;
+}
+
+function renderRetryTable(loops: PatternsResult['retryLoops'], limit: number): string {
+  if (loops.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'tool', 'target', 'attempts', 'turns', 'cost'],
+  ];
+  const slice = [...loops].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const r of slice) {
+    rows.push([
+      r.sessionId.slice(0, 8),
+      r.tool,
+      truncate(r.target ?? '—', 40),
+      String(r.attempts),
+      `${r.startTurnIndex}–${r.endTurnIndex}`,
+      formatUsd(r.cost),
+    ]);
+  }
+  return table(rows);
+}
+
+function renderFailureTable(runs: PatternsResult['failureRuns'], limit: number): string {
+  if (runs.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'length', 'turns', 'tools', 'cost'],
+  ];
+  const slice = [...runs].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const r of slice) {
+    rows.push([
+      r.sessionId.slice(0, 8),
+      String(r.length),
+      `${r.startTurnIndex}–${r.endTurnIndex}`,
+      truncate(r.toolsInvolved.join(', '), 40),
+      formatUsd(r.cost),
+    ]);
+  }
+  return table(rows);
+}
+
+function renderCompactionTable(
+  events: PatternsResult['compactions'],
+  limit: number,
+): string {
+  if (events.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'ts', 'cacheLost(tok)', 'cost'],
+  ];
+  const slice = [...events]
+    .sort((a, b) => b.cacheLostCost - a.cacheLostCost)
+    .slice(0, limit);
+  for (const e of slice) {
+    rows.push([
+      e.sessionId.slice(0, 8),
+      e.ts,
+      formatInt(e.tokensBeforeCompact),
+      formatUsd(e.cacheLostCost),
+    ]);
+  }
+  return table(rows);
+}
+
+function renderRevertTable(
+  cycles: PatternsResult['editReverts'],
+  limit: number,
+): string {
+  if (cycles.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'file', 'firstEdit', 'revert', 'span', 'cost'],
+  ];
+  const slice = [...cycles].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const c of slice) {
+    rows.push([
+      c.sessionId.slice(0, 8),
+      truncate(c.filePath, 40),
+      String(c.firstEditTurnIndex),
+      String(c.revertTurnIndex),
+      String(c.spanTurns),
+      formatUsd(c.cost),
+    ]);
+  }
+  return table(rows);
 }

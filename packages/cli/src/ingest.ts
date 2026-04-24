@@ -9,6 +9,7 @@ import {
 } from '@relayburn/reader';
 import type { CodexResumeState, ContentStoreMode } from '@relayburn/reader';
 import {
+  appendCompactions,
   appendContent,
   appendTurns,
   loadConfig,
@@ -111,10 +112,8 @@ async function ingestClaudeInto(
         };
         const priorUserText = rotated ? undefined : priorClaude?.lastUserText;
         if (priorUserText) parseOpts.lastUserText = priorUserText;
-        const { turns, content, endOffset, lastUserText } = await parseClaudeSessionIncremental(
-          file,
-          parseOpts,
-        );
+        const { turns, content, events, endOffset, lastUserText } =
+          await parseClaudeSessionIncremental(file, parseOpts);
         if (turns.length > 0) {
           await appendTurns(turns);
           report.appendedTurns += turns.length;
@@ -122,6 +121,9 @@ async function ingestClaudeInto(
         }
         if (content.length > 0) {
           await appendContent(content);
+        }
+        if (events.length > 0) {
+          await appendCompactions(events);
         }
         const next: ClaudeCursor = {
           kind: 'claude',

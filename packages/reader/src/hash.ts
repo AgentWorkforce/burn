@@ -15,3 +15,11 @@ export function stableStringify(value: unknown): string {
 export function argsHash(input: unknown): string {
   return createHash('sha256').update(stableStringify(input)).digest('hex').slice(0, 16);
 }
+
+// Short hash of a raw string (Edit old_string / new_string, Write content).
+// Uses the same 16-char truncation as argsHash so detector output is visually
+// consistent. Never call with undefined — pre/post may be legitimately empty
+// and the empty-string hash is meaningful.
+export function contentHash(s: string): string {
+  return createHash('sha256').update(s).digest('hex').slice(0, 16);
+}

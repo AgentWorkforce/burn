@@ -2,10 +2,11 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
-import type { SourceKind, TurnRecord } from '@relayburn/reader';
+import type { CompactionEvent, SourceKind, TurnRecord } from '@relayburn/reader';
 
 import { ledgerPath } from './paths.js';
 import {
+  isCompactionLine,
   isStampLine,
   isTurnLine,
   stampMatches,
@@ -105,5 +106,28 @@ export async function* query(q: Query = {}): AsyncIterable<EnrichedTurn> {
 export async function queryAll(q: Query = {}): Promise<EnrichedTurn[]> {
   const out: EnrichedTurn[] = [];
   for await (const t of query(q)) out.push(t);
+  return out;
+}
+
+function compactionPasses(e: CompactionEvent, q: Query): boolean {
+  if (q.since && e.ts < q.since) return false;
+  if (q.until && e.ts > q.until) return false;
+  if (q.sessionId && e.sessionId !== q.sessionId) return false;
+  if (q.source && e.source !== q.source) return false;
+  // project and enrichment don't filter compaction events (they live at the
+  // session level; callers that need project-scoping should pre-filter by
+  // sessionId from a turn query).
+  return true;
+}
+
+export async function queryCompactions(q: Query = {}): Promise<CompactionEvent[]> {
+  const filePath = ledgerPath();
+  if (!(await fileExists(filePath))) return [];
+  const out: CompactionEvent[] = [];
+  for await (const parsed of streamLines(filePath)) {
+    if (!isCompactionLine(parsed)) continue;
+    if (!compactionPasses(parsed.record, q)) continue;
+    out.push(parsed.record);
+  }
   return out;
 }

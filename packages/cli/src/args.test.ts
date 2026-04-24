@@ -31,4 +31,15 @@ describe('parseArgs', () => {
     const a = parseArgs(['foo', '--since', '1h', 'bar']);
     assert.deepEqual(a.positional, ['foo', 'bar']);
   });
+
+  it('parses --foo=bar inline value form', () => {
+    const a = parseArgs(['--patterns=retries,failures', '--json']);
+    assert.equal(a.flags['patterns'], 'retries,failures');
+    assert.equal(a.flags['json'], true);
+  });
+
+  it('treats --foo= as empty string value', () => {
+    const a = parseArgs(['--patterns=']);
+    assert.equal(a.flags['patterns'], '');
+  });
 });

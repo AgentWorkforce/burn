@@ -4,8 +4,9 @@ import { createInterface } from 'node:readline';
 
 import { classifyActivity } from './classifier.js';
 import { resolveProject } from './git.js';
-import { argsHash } from './hash.js';
+import { argsHash, contentHash } from './hash.js';
 import type {
+  CompactionEvent,
   ContentRecord,
   ContentStoreMode,
   Subagent,
@@ -92,6 +93,7 @@ export interface ParseOptions {
 export interface ParseResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  events: CompactionEvent[];
 }
 
 export async function parseClaudeSession(
@@ -114,6 +116,10 @@ export async function parseClaudeSession(
   const firstSeq = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
+  const events: CompactionEvent[] = [];
+  // Track the most recent completed assistant messageId so a compact_boundary
+  // system record can be anchored to the turn right before it.
+  let lastAssistantMessageId: string | undefined;
   let currentUserText = '';
   let seq = 0;
 
@@ -144,6 +150,7 @@ export async function parseClaudeSession(
         if (typeof mid === 'string' && !userTextByMessageId.has(mid)) {
           userTextByMessageId.set(mid, currentUserText);
         }
+        if (typeof mid === 'string') lastAssistantMessageId = mid;
         ingestAssistant(al, working, order);
       } else if (rec.type === 'user') {
         const ul = rec as unknown as UserLine;
@@ -153,6 +160,20 @@ export async function parseClaudeSession(
         captureSubagentFromToolResult(ul, subagentByToolUseId);
         if (captureContent) {
           for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
+        }
+      } else if (rec.type === 'system' && rec['subtype'] === 'compact_boundary') {
+        const sl = rec as { sessionId?: string; timestamp?: string };
+        const sessionId = sl.sessionId ?? '';
+        const ts = sl.timestamp ?? '';
+        if (sessionId) {
+          const ev: CompactionEvent = {
+            v: 1,
+            source: 'claude-code',
+            sessionId,
+            ts,
+          };
+          if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
+          events.push(ev);
         }
       }
       seq++;
@@ -167,7 +188,7 @@ export async function parseClaudeSession(
     const id = order[i]!;
     const w = working.get(id);
     if (!w) continue;
-    const toolCalls = extractToolCalls(w.blocks);
+    const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
     const filesTouched = extractFilesTouched(toolCalls);
     const subagent = resolveSubagent(w, toolCalls, subagentByToolUseId);
 
@@ -203,10 +224,12 @@ export async function parseClaudeSession(
     }
   }
 
+  annotateCompactionEvents(events, turns);
+
   const content: ContentRecord[] = captureContent
     ? mergeContentByOrder(userPending, assistantPending)
     : [];
-  return { turns, content };
+  return { turns, content, events };
 }
 
 function mergeContentByOrder(
@@ -395,7 +418,10 @@ function toUsage(u: ClaudeUsage | undefined): Usage {
   return { input, output, reasoning: 0, cacheRead, cacheCreate5m: create5m, cacheCreate1h: create1h };
 }
 
-function extractToolCalls(blocks: ContentBlock[]): ToolCall[] {
+function extractToolCalls(
+  blocks: ContentBlock[],
+  erroredToolUseIds: Set<string>,
+): ToolCall[] {
   const out: ToolCall[] = [];
   const seen = new Set<string>();
   for (const b of blocks) {
@@ -412,9 +438,40 @@ function extractToolCalls(blocks: ContentBlock[]): ToolCall[] {
     };
     const target = pickTarget(tu.name, input);
     if (target !== undefined) call.target = target;
+    if (erroredToolUseIds.has(tu.id)) call.isError = true;
+    applyEditHashes(call, input);
     out.push(call);
   }
   return out;
+}
+
+function applyEditHashes(call: ToolCall, input: Record<string, unknown>): void {
+  if (call.name === 'Edit' || call.name === 'NotebookEdit') {
+    const oldStr = input['old_string'];
+    const newStr = input['new_string'];
+    if (typeof oldStr === 'string') call.editPreHash = contentHash(oldStr);
+    if (typeof newStr === 'string') call.editPostHash = contentHash(newStr);
+  } else if (call.name === 'Write') {
+    const content = input['content'];
+    if (typeof content === 'string') call.editPostHash = contentHash(content);
+  }
+}
+
+function annotateCompactionEvents(
+  events: CompactionEvent[],
+  turns: TurnRecord[],
+): void {
+  if (events.length === 0) return;
+  const byMessageId = new Map<string, TurnRecord>();
+  for (const t of turns) byMessageId.set(t.messageId, t);
+  for (const ev of events) {
+    if (ev.precedingMessageId) {
+      const t = byMessageId.get(ev.precedingMessageId);
+      if (t) {
+        ev.tokensBeforeCompact = t.usage.cacheRead;
+      }
+    }
+  }
 }
 
 function pickTarget(name: string, input: Record<string, unknown>): string | undefined {
@@ -540,6 +597,7 @@ export interface ParseIncrementalOptions extends ParseOptions {
 export interface ParseIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  events: CompactionEvent[];
   endOffset: number;
   // Carry forward to the next incremental call; see `lastUserText` option.
   lastUserText: string;
@@ -562,6 +620,7 @@ export async function parseClaudeSessionIncremental(
       return {
         turns: [],
         content: [],
+        events: [],
         endOffset: startOffset,
         lastUserText: options.lastUserText ?? '',
       };
@@ -582,6 +641,8 @@ export async function parseClaudeSessionIncremental(
   const messageIdFirstOffset = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
+  const events: Array<{ offset: number; event: CompactionEvent }> = [];
+  let lastAssistantMessageId: string | undefined;
   // Seed from the prior call so an in-progress turn whose user prompt lives
   // before `startOffset` still classifies against that prompt on resume.
   let currentUserText = options.lastUserText ?? '';
@@ -619,6 +680,7 @@ export async function parseClaudeSessionIncremental(
       if (msgId && !userTextByMessageId.has(msgId)) {
         userTextByMessageId.set(msgId, currentUserText);
       }
+      if (msgId) lastAssistantMessageId = msgId;
       ingestAssistant(line, working, order);
     } else if (rec.type === 'user') {
       const ul = rec as unknown as UserLine;
@@ -630,6 +692,20 @@ export async function parseClaudeSessionIncremental(
         for (const c of extractUserContent(ul)) {
           pendingUserContent.push({ offset: lineStartOffset, record: c });
         }
+      }
+    } else if (rec.type === 'system' && rec['subtype'] === 'compact_boundary') {
+      const sl = rec as { sessionId?: string; timestamp?: string };
+      const sessionId = sl.sessionId ?? '';
+      const ts = sl.timestamp ?? '';
+      if (sessionId) {
+        const ev: CompactionEvent = {
+          v: 1,
+          source: 'claude-code',
+          sessionId,
+          ts,
+        };
+        if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
+        events.push({ offset: lineStartOffset, event: ev });
       }
     }
   }
@@ -658,7 +734,7 @@ export async function parseClaudeSessionIncremental(
     const w = working.get(id);
     if (!w) continue;
     if (w.stopReason === undefined) continue; // defer in-progress messages
-    const toolCalls = extractToolCalls(w.blocks);
+    const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
     const filesTouched = extractFilesTouched(toolCalls);
     const subagent = resolveSubagent(w, toolCalls, subagentByToolUseId);
     const record: TurnRecord = {
@@ -709,5 +785,21 @@ export async function parseClaudeSessionIncremental(
     content = merged.map((m) => m.record);
   }
 
-  return { turns, content, endOffset, lastUserText: currentUserText };
+  // Only emit compaction events whose bytes fall before endOffset — mirrors
+  // the content-dedup rule. appendCompactions does its own dedup by id hash,
+  // but we still don't want to emit an event past endOffset and then re-emit
+  // it on the next incremental pass.
+  const emittedEvents: CompactionEvent[] = [];
+  for (const e of events) {
+    if (e.offset < endOffset) emittedEvents.push(e.event);
+  }
+  annotateCompactionEvents(emittedEvents, turns);
+
+  return {
+    turns,
+    content,
+    events: emittedEvents,
+    endOffset,
+    lastUserText: currentUserText,
+  };
 }

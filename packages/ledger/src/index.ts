@@ -1,5 +1,5 @@
-export { appendTurns, stamp } from './writer.js';
-export { query, queryAll } from './reader.js';
+export { appendCompactions, appendTurns, stamp } from './writer.js';
+export { query, queryAll, queryCompactions } from './reader.js';
 export type { Query, EnrichedTurn } from './reader.js';
 export {
   ledgerHome,
@@ -20,6 +20,7 @@ export type { PruneOptions, PruneResult, ReadContentSelector } from './content.j
 export { loadConfig, retentionMs, DEFAULT_CONFIG } from './config.js';
 export type { BurnConfig, ContentConfig } from './config.js';
 export type {
+  CompactionLine,
   Enrichment,
   LedgerLine,
   MessageIdRange,
@@ -27,7 +28,7 @@ export type {
   StampSelector,
   TurnLine,
 } from './schema.js';
-export { isStampLine, isTurnLine, stampMatches } from './schema.js';
+export { isCompactionLine, isStampLine, isTurnLine, stampMatches } from './schema.js';
 export { loadHwm, saveHwm } from './hwm.js';
 export type { HwmEntry, HwmMap } from './hwm.js';
 export { loadCursors, saveCursors } from './cursors.js';

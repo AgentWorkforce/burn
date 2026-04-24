@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Quality signals: outcome inference + one-shot rate.** Two orthogonal per-session signals for the "was this work good enough that a cheaper model could have done it" question. Closes [#6](https://github.com/AgentWorkforce/burn/issues/6). [cli, analyze]
+  - `@relayburn/analyze` — new `computeQuality(turns, opts)` returning `SessionOutcome[]` (classifies sessions as `completed` / `abandoned` / `errored` / `unknown` with explicit confidence and a reason code) and `OneShotMetrics[]` (edit turns / one-shot edit turns / retry volume, excluding sidechain subagent turns). Give-up phrase detection on the last assistant text downgrades confidence when the content sidecar is available, but is never required.
+  - `burn summary --quality` — appends a quality rollup (outcome counts + weighted one-shot rate) to summary output. Content sidecar reads run with a concurrency cap of 8 so large ledgers don't serialize I/O.
+  - Both signals are computed lazily at query time (never persisted) so future rule changes don't require a rebuild.
+  - Sources that don't record `stopReason` (e.g. Codex) are classified `completed/low` with reason `unknown-ending` rather than being swept into `abandoned`.
+
+### PRs in this release
+
+- [#53](https://github.com/AgentWorkforce/burn/pull/53) — Add quality signals (outcome inference + one-shot rate)
+
 ## 2026-04-23 — `burn waste`: per-tool-call cost attribution
 
 **Versions:** `@relayburn/reader@0.4.0`, `@relayburn/ledger@0.4.0`, `@relayburn/analyze@0.4.0`, `@relayburn/cli@0.4.0`
