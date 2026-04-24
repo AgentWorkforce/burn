@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Computed lazily at query time, never persisted to the ledger — upgrading the rules later does not require a rebuild. Requires no prompt storage; the give-up downgrade runs opportunistically when content is available.
   - Handles sources that don't record `stopReason` (e.g. Codex): the final-turn ending role is reported as `'unknown'` and the session is classified `completed/low` with reason `unknown-ending` rather than being swept into `abandoned`.
 
+## [0.5.0] - 2026-04-24
+
+### Changed
+
+- Clean up changelogs: move [Unreleased] content into 0.3.0/0.4.0 sections
+
 ## [0.4.0] - 2026-04-23
 
 ### Added

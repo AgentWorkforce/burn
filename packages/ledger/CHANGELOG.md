@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-24
+
+### Changed
+
+- Clean up changelogs: move [Unreleased] content into 0.3.0/0.4.0 sections
+
 ## [0.4.0] - 2026-04-23
 
 Synchronized version bump alongside `@relayburn/cli@0.4.0` / `@relayburn/analyze@0.4.0` / `@relayburn/reader@0.4.0`. No functional changes in this package.
