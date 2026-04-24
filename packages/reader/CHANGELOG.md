@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Subagent tree reconstruction from Claude JSONL.** `parseClaudeSession` / `parseClaudeSessionIncremental` now walk `parentUuid` chains to resolve the subagent invocation each sidechain turn belongs to. `TurnRecord.subagent` gains `agentId` (stable id per invocation — the root user uuid), `parentAgentId` (the enclosing invocation's agentId, or the session id for first-level subagents), `parentToolUseId` (the Agent/Task `tool_use.id` that spawned the invocation), `subagentType`, and `description` (both lifted from the spawning Agent/Task tool input). Tool_result continuations within the same invocation are distinguished from nested spawns via `tool_use_id` matching, so long subagent chains don't get mis-split. Walk results are memoized per uuid so deeply nested trees stay linear. `Subagent.isSidechain` is unchanged — existing consumers keep working. Closes [#8](https://github.com/AgentWorkforce/burn/issues/8).
 
+## [0.8.0] - 2026-04-24
+
+### Added
+
+- **Add Claude hook-based ingest and settings**
+
 ## [0.7.0] - 2026-04-24
 
 ### Added

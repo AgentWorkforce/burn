@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Subagent tree + per-type statistics.** `buildSubagentTree(turns, { pricing })` returns a per-session `SubagentTreeNode` hierarchy: main thread at the root, subagent invocations nested by `parentAgentId`, with `selfCost` / `selfTurns` per node and `cumulativeCost` / `cumulativeTurns` rolled up from leaves. Sidechain turns that arrived without resolvable tree fields attach under a synthetic `(unresolved)` node so their cost isn't dropped. `aggregateSubagentTypeStats(turns, { pricing })` reports invocations, turns, total / median / p95 / mean cost per `subagentType` across sessions (counted once per unique `sessionId + agentId`, not per turn). New exported types: `SubagentTreeNode`, `SubagentTypeStats`, `BuildSubagentTreeOptions`. Consumes the new `TurnRecord.subagent` fields from `@relayburn/reader`. Closes [#8](https://github.com/AgentWorkforce/burn/issues/8).
 
+## [0.8.0] - 2026-04-24
+
+### Added
+
+- **Add Claude hook-based ingest and settings**
+
 ## [0.6.0] - 2026-04-24
 
 ### Added
