@@ -26,7 +26,10 @@ Usage:
   burn plans set-reset-day <id> <day>                     change a plan's reset day
 
 Built-in presets:
-${BUILTIN_PRESETS.map((p) => `  ${p.preset.padEnd(14)} ${p.plan.name} ($${p.plan.budgetUsd}/mo, resets day ${p.plan.resetDay})`).join('\n')}
+${BUILTIN_PRESETS.map((p) => {
+  const note = p.plan.provider === 'cursor' ? ' — spend tracking unavailable (see #22)' : '';
+  return `  ${p.preset.padEnd(14)} ${p.plan.name} ($${p.plan.budgetUsd}/mo, resets day ${p.plan.resetDay})${note}`;
+}).join('\n')}
 
 Examples:
   burn plans add --provider claude --preset max
@@ -154,6 +157,12 @@ async function runAdd(args: ParsedArgs): Promise<number> {
   }
   await savePlans([...existing, plan]);
   process.stdout.write(`added ${plan.id}: ${plan.name} ($${plan.budgetUsd}/mo, resets day ${plan.resetDay})\n`);
+  if (plan.provider === 'cursor') {
+    process.stdout.write(
+      'note: Cursor moved usage tracking server-side in early 2026 (see #22), so this ' +
+        "plan's spend will report as $0 until Cursor exposes a local data source again.\n",
+    );
+  }
   return 0;
 }
 

@@ -143,8 +143,13 @@ function matchesProvider(provider: Plan['provider'], turn: TurnRecord): boolean 
     case 'claude':
       return turn.source === 'claude-code' || turn.source === 'anthropic-api';
     case 'cursor':
-      // No reader emits `cursor` turns yet (see SourceKind in @relayburn/reader);
-      // this branch will start picking up spend once a Cursor adapter lands.
+      // Cursor spend is structurally unobservable from a local-first tool:
+      // Cursor moved usage tracking server-side around 2026-01 and the
+      // `tokenCount` fields in their local SQLite went to zero. See #22 for
+      // the full investigation — the issue is closed wontfix. The cursor
+      // preset is kept so users on Cursor Pro can still register their
+      // monthly budget and reset day, but `spentUsd` will always be 0
+      // (and the projection therefore $0) until Cursor reverses course.
       return turn.source === ('cursor' as TurnRecord['source']);
     case 'custom':
       // Custom plans count every turn the ledger has — the user opts in by
