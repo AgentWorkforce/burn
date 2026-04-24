@@ -39,6 +39,10 @@ export function configPath(): string {
   return path.join(ledgerHome(), 'config.json');
 }
 
+export function plansPath(): string {
+  return path.join(ledgerHome(), 'plans.json');
+}
+
 export function contentDir(): string {
   return path.join(ledgerHome(), 'content');
 }

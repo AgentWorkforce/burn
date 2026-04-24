@@ -50,6 +50,7 @@ function noTokenDeps(): LimitsDeps {
     fetchUsage: async () => ({}),
     now: fakeNow,
     loadForecast: async () => null,
+    loadPlanStatuses: async () => [],
   };
 }
 
@@ -59,6 +60,7 @@ function tokenDeps(usage: UsageResponse, forecast: ForecastInput | null = null):
     fetchUsage: async () => usage,
     now: fakeNow,
     loadForecast: async () => forecast,
+    loadPlanStatuses: async () => [],
   };
 }
 
@@ -188,6 +190,120 @@ describe('burn limits', () => {
     );
     assert.equal(result, 2);
     assert.match(stderr, /invalid --watch value/);
+  });
+
+  it('renders Monthly plan block when a plan status is provided', async () => {
+    const usage: UsageResponse = {
+      five_hour: { percent_used: 30, reset_at: '2026-04-24T13:00:00.000Z' },
+    };
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => usage,
+      now: fakeNow,
+      loadForecast: async () => null,
+      loadPlanStatuses: async () => [
+        {
+          usage: {
+            plan: {
+              id: 'claude-max',
+              provider: 'claude',
+              name: 'Claude Max',
+              budgetUsd: 200,
+              resetDay: 1,
+            },
+            cycleStart: new Date('2026-04-01T00:00:00.000Z'),
+            cycleEnd: new Date('2026-05-01T00:00:00.000Z'),
+            spentUsd: 87.42,
+            daysElapsed: 13,
+            daysInCycle: 30,
+            projectedEndOfCycleUsd: 201.73,
+            overBudget: true,
+            runwayDays: 29,
+            resetAt: '2026-05-01T00:00:00.000Z',
+            limitedData: false,
+          },
+        },
+      ],
+    };
+    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    assert.match(stdout, /Monthly plan \(Claude Max\):/);
+    // 87.42 / 200 = 43.71% → rounds to 44%
+    assert.match(stdout, /Spent:\s+\$87\.42 \/ \$200\.00\s+\(44%\)/);
+    assert.match(stdout, /Elapsed:\s+13 \/ 30 days/);
+    assert.match(stdout, /Projected: \$201.73 end-of-cycle \(\$1\.73 over\)/);
+    assert.match(stdout, /Runway:\s+29 more days/);
+  });
+
+  it('annotates plan projection as "(limited data)" when daysElapsed < 7', async () => {
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => ({}),
+      now: fakeNow,
+      loadForecast: async () => null,
+      loadPlanStatuses: async () => [
+        {
+          usage: {
+            plan: {
+              id: 'claude-pro',
+              provider: 'claude',
+              name: 'Claude Pro',
+              budgetUsd: 20,
+              resetDay: 1,
+            },
+            cycleStart: new Date('2026-04-22T00:00:00.000Z'),
+            cycleEnd: new Date('2026-05-22T00:00:00.000Z'),
+            spentUsd: 1,
+            daysElapsed: 2,
+            daysInCycle: 30,
+            projectedEndOfCycleUsd: 15,
+            overBudget: false,
+            runwayDays: null,
+            resetAt: '2026-05-22T00:00:00.000Z',
+            limitedData: true,
+          },
+        },
+      ],
+    };
+    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    assert.match(stdout, /\(limited data\)/);
+  });
+
+  it('emits plan statuses in --json output', async () => {
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => ({}),
+      now: fakeNow,
+      loadForecast: async () => null,
+      loadPlanStatuses: async () => [
+        {
+          usage: {
+            plan: {
+              id: 'claude-pro',
+              provider: 'claude',
+              name: 'Claude Pro',
+              budgetUsd: 20,
+              resetDay: 1,
+            },
+            cycleStart: new Date('2026-04-01T00:00:00.000Z'),
+            cycleEnd: new Date('2026-05-01T00:00:00.000Z'),
+            spentUsd: 5.5,
+            daysElapsed: 23,
+            daysInCycle: 30,
+            projectedEndOfCycleUsd: 7.17,
+            overBudget: false,
+            runwayDays: null,
+            resetAt: '2026-05-01T00:00:00.000Z',
+            limitedData: false,
+          },
+        },
+      ],
+    };
+    const { stdout } = await captureStdout(() => runLimits(args({ json: true }), deps));
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.plans.length, 1);
+    assert.equal(parsed.plans[0].id, 'claude-pro');
+    assert.equal(parsed.plans[0].budgetUsd, 20);
+    assert.equal(parsed.plans[0].limitedData, false);
   });
 
   it('renders very-low projected % without double-normalizing back to 0..1', async () => {
