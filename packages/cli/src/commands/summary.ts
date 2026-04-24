@@ -1,6 +1,16 @@
-import { computeQuality, loadPricing } from '@relayburn/analyze';
+import {
+  aggregateSubagentTypeStats,
+  buildSubagentTree,
+  computeQuality,
+  loadPricing,
+} from '@relayburn/analyze';
 import { costForTurn, sumCosts } from '@relayburn/analyze';
-import type { CostBreakdown, OutcomeLabel, QualityResult } from '@relayburn/analyze';
+import type {
+  CostBreakdown,
+  OutcomeLabel,
+  QualityResult,
+  SubagentTreeNode,
+} from '@relayburn/analyze';
 import { queryAll, readContent, type Query } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 import type { ContentRecord } from '@relayburn/reader';
@@ -17,9 +27,19 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
   if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
 
+  const subagentTreeFlag = args.flags['subagent-tree'];
+  const subagentTypeFlag = args.flags['by-subagent-type'] === true;
+
   const ingestReport = await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll(q);
+
+  if (subagentTreeFlag !== undefined) {
+    return renderSubagentTreeMode(args, turns, pricing, subagentTreeFlag, q);
+  }
+  if (subagentTypeFlag) {
+    return renderSubagentTypeMode(args, turns, pricing);
+  }
 
   const rowsByModel = aggregateByModel(turns, pricing);
   const totalCost = sumCosts(rowsByModel.map((r) => r.cost));
@@ -137,6 +157,112 @@ interface ModelRow {
   turns: number;
   usage: EnrichedTurn['usage'];
   cost: CostBreakdown;
+}
+
+function renderSubagentTreeMode(
+  args: ParsedArgs,
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+  flag: string | true,
+  q: Query,
+): number {
+  // Accept either `--subagent-tree <id>` or `--subagent-tree` with --session.
+  const sessionId = typeof flag === 'string' ? flag : q.sessionId;
+  if (!sessionId) {
+    process.stderr.write('burn: --subagent-tree requires a session id (positional or --session)\n');
+    return 2;
+  }
+  const sessionTurns = turns.filter((t) => t.sessionId === sessionId);
+  if (sessionTurns.length === 0) {
+    process.stdout.write(`no turns found for session ${sessionId}\n`);
+    return 0;
+  }
+  const trees = buildSubagentTree(sessionTurns, { pricing });
+  const root = trees.get(sessionId);
+  if (!root) {
+    process.stdout.write(`no turns found for session ${sessionId}\n`);
+    return 0;
+  }
+  if (args.flags['json'] === true) {
+    process.stdout.write(JSON.stringify(root, null, 2) + '\n');
+    return 0;
+  }
+  const out: string[] = [];
+  out.push('');
+  out.push(`session: ${sessionId}`);
+  out.push(`total: ${formatUsd(root.cumulativeCost)} across ${formatInt(root.cumulativeTurns)} turn${root.cumulativeTurns === 1 ? '' : 's'}`);
+  out.push('');
+  for (const line of renderTree(root)) out.push(line);
+  out.push('');
+  process.stdout.write(out.join('\n'));
+  return 0;
+}
+
+function renderSubagentTypeMode(
+  args: ParsedArgs,
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+): number {
+  const stats = aggregateSubagentTypeStats(turns, { pricing });
+  if (args.flags['json'] === true) {
+    process.stdout.write(JSON.stringify(stats, null, 2) + '\n');
+    return 0;
+  }
+  const out: string[] = [];
+  out.push('');
+  out.push(`subagent invocations: ${formatInt(stats.reduce((a, s) => a + s.invocations, 0))}`);
+  out.push('');
+  if (stats.length === 0) {
+    out.push('  (no subagent turns in range)');
+    out.push('');
+    process.stdout.write(out.join('\n'));
+    return 0;
+  }
+  const rows: string[][] = [
+    ['subagentType', 'invocations', 'turns', 'total', 'median', 'p95', 'mean'],
+  ];
+  for (const s of stats) {
+    rows.push([
+      s.subagentType,
+      formatInt(s.invocations),
+      formatInt(s.turns),
+      formatUsd(s.totalCost),
+      formatUsd(s.medianCost),
+      formatUsd(s.p95Cost),
+      formatUsd(s.meanCost),
+    ]);
+  }
+  out.push(table(rows));
+  out.push('');
+  process.stdout.write(out.join('\n'));
+  return 0;
+}
+
+function renderTree(root: SubagentTreeNode): string[] {
+  const out: string[] = [];
+  out.push(renderNodeLine(root, ''));
+  renderChildren(root, '', out);
+  return out;
+}
+
+function renderChildren(node: SubagentTreeNode, prefix: string, out: string[]): void {
+  const n = node.children.length;
+  for (let i = 0; i < n; i++) {
+    const c = node.children[i]!;
+    const isLast = i === n - 1;
+    const branch = isLast ? '└─ ' : '├─ ';
+    out.push(renderNodeLine(c, prefix + branch));
+    const childPrefix = prefix + (isLast ? '   ' : '│  ');
+    renderChildren(c, childPrefix, out);
+  }
+}
+
+function renderNodeLine(node: SubagentTreeNode, indent: string): string {
+  const label = node.label;
+  const model = node.models.length > 0 ? ` (${node.models.join(', ')})` : '';
+  const cost = formatUsd(node.cumulativeCost);
+  const turns = `[${formatInt(node.cumulativeTurns)} turn${node.cumulativeTurns === 1 ? '' : 's'}]`;
+  return `${indent}${label}${model}  ${cost}  ${turns}`;
 }
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {

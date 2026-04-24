@@ -70,6 +70,30 @@ interface UserLine {
   timestamp?: string;
   cwd?: string;
   uuid?: string;
+  parentUuid?: string | null;
+}
+
+// Line-level registry used to walk `parentUuid` chains across the session when
+// resolving subagent invocation roots. Only assistant lines that carry an
+// Agent/Task tool_use block are tagged with `agentToolUse`; that's the signal
+// that a child user line with sidechain=true is the root of a new invocation —
+// but only when the child user line is *not* the tool_result coming back from
+// that spawn (continuation within the same invocation).
+interface LineNode {
+  uuid: string;
+  parentUuid?: string;
+  kind: 'user' | 'assistant';
+  isSidechain: boolean;
+  agentToolUse?: {
+    id: string;
+    subagentType?: string;
+    description?: string;
+  };
+  // tool_use ids for which this user line carries a tool_result block. Used
+  // to distinguish a subagent spawn (child is the initial prompt) from a
+  // parent-thread continuation after the subagent completed (child is the
+  // tool_result for the Agent/Task call).
+  toolResultIds?: Set<string>;
 }
 
 interface WorkingRecord {
@@ -82,6 +106,9 @@ interface WorkingRecord {
   usage: Usage;
   blocks: ContentBlock[];
   stopReason?: string;
+  // uuid of the first assistant line carrying this messageId; used as the
+  // starting point when walking parentUuid chains to resolve subagent roots.
+  firstAssistantUuid?: string;
   parentAssistantUuid?: string;
 }
 
@@ -104,10 +131,8 @@ export async function parseClaudeSession(
   const captureContent = contentMode === 'full';
   const working = new Map<string, WorkingRecord>();
   const order: string[] = [];
-  const subagentByToolUseId = new Map<
-    string,
-    { type?: string; taskDescription?: string }
-  >();
+  const nodesByUuid = new Map<string, LineNode>();
+  const invocationCache = new Map<string, InvocationInfo | null>();
   // Track content with a monotonic sequence tied to line-read order so user
   // and assistant records can be merged back into chronological order at the
   // end (one TurnRecord may span multiple lines; we key its assistant content
@@ -151,13 +176,13 @@ export async function parseClaudeSession(
           userTextByMessageId.set(mid, currentUserText);
         }
         if (typeof mid === 'string') lastAssistantMessageId = mid;
-        ingestAssistant(al, working, order);
+        ingestAssistant(al, working, order, nodesByUuid);
       } else if (rec.type === 'user') {
         const ul = rec as unknown as UserLine;
+        registerUserNode(ul, nodesByUuid);
         const prompt = extractPlainUserText(ul);
         if (prompt) currentUserText = prompt;
         collectErroredToolUseIds(ul, erroredToolUseIds);
-        captureSubagentFromToolResult(ul, subagentByToolUseId);
         if (captureContent) {
           for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
         }
@@ -190,7 +215,7 @@ export async function parseClaudeSession(
     if (!w) continue;
     const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
     const filesTouched = extractFilesTouched(toolCalls);
-    const subagent = resolveSubagent(w, toolCalls, subagentByToolUseId);
+    const subagent = resolveSubagent(w, nodesByUuid, invocationCache);
 
     const record: TurnRecord = {
       v: 1,
@@ -247,6 +272,7 @@ function ingestAssistant(
   line: AssistantLine,
   working: Map<string, WorkingRecord>,
   order: string[],
+  nodesByUuid?: Map<string, LineNode>,
 ): void {
   const msg = line.message;
   if (!msg || typeof msg.id !== 'string') return;
@@ -264,6 +290,7 @@ function ingestAssistant(
       blocks: [],
     };
     if (line.cwd !== undefined) w.cwd = line.cwd;
+    if (typeof line.uuid === 'string') w.firstAssistantUuid = line.uuid;
     if (line.parentUuid) w.parentAssistantUuid = line.parentUuid;
     working.set(messageId, w);
     order.push(messageId);
@@ -275,20 +302,114 @@ function ingestAssistant(
   if (Array.isArray(msg.content)) {
     for (const block of msg.content) w.blocks.push(block);
   }
+  registerAssistantNode(line, nodesByUuid);
 }
 
-function captureSubagentFromToolResult(
-  line: UserLine,
-  into: Map<string, { type?: string; taskDescription?: string }>,
+function makeLineNode(
+  line: { uuid?: string; parentUuid?: string | null; isSidechain?: boolean },
+  kind: 'user' | 'assistant',
+): LineNode | undefined {
+  if (typeof line.uuid !== 'string') return undefined;
+  const node: LineNode = {
+    uuid: line.uuid,
+    kind,
+    isSidechain: line.isSidechain === true,
+  };
+  if (typeof line.parentUuid === 'string' && line.parentUuid.length > 0) {
+    node.parentUuid = line.parentUuid;
+  }
+  return node;
+}
+
+function registerAssistantNode(
+  line: AssistantLine,
+  nodesByUuid?: Map<string, LineNode>,
 ): void {
-  const content = line.message?.content;
-  if (!Array.isArray(content)) return;
-  for (const block of content) {
-    if (block && typeof block === 'object' && block.type === 'tool_result') {
+  if (!nodesByUuid) return;
+  const node = makeLineNode(line, 'assistant');
+  if (!node) return;
+  // Only the *first* Agent/Task tool_use in a line is captured — a single
+  // assistant line typically carries a single content block, so this is
+  // unambiguous in practice.
+  if (Array.isArray(line.message?.content)) {
+    for (const block of line.message!.content) {
+      if (!block || typeof block !== 'object' || block.type !== 'tool_use') continue;
+      const tu = block as { id?: string; name?: string; input?: Record<string, unknown> };
+      if (tu.name !== 'Agent' && tu.name !== 'Task') continue;
+      if (typeof tu.id !== 'string') continue;
+      const input = tu.input ?? {};
+      const subagentType = typeof input['subagent_type'] === 'string' ? (input['subagent_type'] as string) : undefined;
+      const description = typeof input['description'] === 'string' ? (input['description'] as string) : undefined;
+      const at: LineNode['agentToolUse'] = { id: tu.id };
+      if (subagentType !== undefined) at.subagentType = subagentType;
+      if (description !== undefined) at.description = description;
+      node.agentToolUse = at;
+      break;
+    }
+  }
+  nodesByUuid.set(node.uuid, node);
+}
+
+function registerUserNode(
+  line: UserLine,
+  nodesByUuid?: Map<string, LineNode>,
+): void {
+  if (!nodesByUuid) return;
+  const node = makeLineNode(line, 'user');
+  if (!node) return;
+  const body = line.message?.content;
+  if (Array.isArray(body)) {
+    for (const block of body) {
+      if (!block || typeof block !== 'object' || block.type !== 'tool_result') continue;
       const tr = block as { tool_use_id?: string };
-      if (typeof tr.tool_use_id === 'string' && !into.has(tr.tool_use_id)) {
-        into.set(tr.tool_use_id, {});
-      }
+      if (typeof tr.tool_use_id !== 'string') continue;
+      if (!node.toolResultIds) node.toolResultIds = new Set();
+      node.toolResultIds.add(tr.tool_use_id);
+    }
+  }
+  nodesByUuid.set(node.uuid, node);
+}
+
+// Light pre-scan of [0, endOffset) that registers LineNodes only — no turn
+// emission, no classification, no content capture. Used by the incremental
+// parser so resuming ingest can still resolve parentUuid chains that reach
+// back before the resume point.
+async function prescanNodes(
+  filePath: string,
+  endOffset: number,
+  nodesByUuid: Map<string, LineNode>,
+): Promise<void> {
+  if (endOffset <= 0) return;
+  const handle = await open(filePath, 'r');
+  let buf: Buffer;
+  try {
+    const st = await handle.stat();
+    const length = Math.min(endOffset, st.size);
+    if (length <= 0) return;
+    buf = Buffer.allocUnsafe(length);
+    await handle.read(buf, 0, length, 0);
+  } finally {
+    await handle.close();
+  }
+  let p = 0;
+  while (p < buf.length) {
+    const nlIdx = buf.indexOf(0x0a, p);
+    if (nlIdx === -1) break;
+    const text = buf.subarray(p, nlIdx).toString('utf8').trim();
+    p = nlIdx + 1;
+    if (!text) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const rec = parsed as Record<string, unknown>;
+    if (rec.type === 'assistant') {
+      registerAssistantNode(rec as unknown as AssistantLine, nodesByUuid);
+    } else if (rec.type === 'user') {
+      registerUserNode(rec as unknown as UserLine, nodesByUuid);
     }
   }
 }
@@ -514,12 +635,87 @@ function extractFilesTouched(toolCalls: ToolCall[]): string[] {
 
 function resolveSubagent(
   w: WorkingRecord,
-  _toolCalls: ToolCall[],
-  _subagentIndex: Map<string, { type?: string; taskDescription?: string }>,
+  nodesByUuid?: Map<string, LineNode>,
+  invocationCache?: Map<string, InvocationInfo | null>,
 ): Subagent | undefined {
-  if (w.isSidechain) {
-    return { isSidechain: true };
+  if (!w.isSidechain) return undefined;
+  const sub: Subagent = { isSidechain: true };
+  if (!nodesByUuid || !w.firstAssistantUuid) return sub;
+  const info = resolveInvocation(w.firstAssistantUuid, nodesByUuid, invocationCache);
+  if (!info) return sub;
+  sub.agentId = info.rootUuid;
+  if (info.parentToolUseId !== undefined) {
+    sub.parentToolUseId = info.parentToolUseId;
   }
+  if (info.subagentType !== undefined) sub.subagentType = info.subagentType;
+  if (info.description !== undefined) sub.description = info.description;
+  if (info.parentAgentId !== undefined) {
+    sub.parentAgentId = info.parentAgentId;
+  } else {
+    // First-level subagent: parent is the main thread. Use the session id as a
+    // stable anchor so callers can build parent→child trees without a null
+    // sentinel.
+    sub.parentAgentId = w.sessionId;
+  }
+  return sub;
+}
+
+interface InvocationInfo {
+  rootUuid: string;
+  parentToolUseId?: string;
+  subagentType?: string;
+  description?: string;
+  parentAgentId?: string;
+}
+
+// Walk the parentUuid chain starting from `startUuid` looking for the user
+// line that is the root of a subagent invocation: a user message whose
+// immediate parent is an assistant line carrying an Agent/Task tool_use block.
+// Returns undefined if no such boundary is found before the chain runs out
+// (e.g. partial/incremental data, or `startUuid` belongs to the main thread).
+// `cache` memoizes results per startUuid so the recursive parent-invocation
+// resolution doesn't re-walk the outer chain once per inner turn.
+function resolveInvocation(
+  startUuid: string,
+  nodes: Map<string, LineNode>,
+  cache?: Map<string, InvocationInfo | null>,
+  depth = 0,
+): InvocationInfo | undefined {
+  // Cycle / pathological-data guard; real chains are shallow.
+  if (depth > 64) return undefined;
+  if (cache) {
+    const cached = cache.get(startUuid);
+    if (cached !== undefined) return cached ?? undefined;
+  }
+  let node = nodes.get(startUuid);
+  // Guard against parentUuid cycles (A→B→A) in malformed JSONL — the depth
+  // guard only covers recursion, not the while-loop walk.
+  const visited = new Set<string>();
+  while (node) {
+    if (visited.has(node.uuid)) break;
+    visited.add(node.uuid);
+    const parent = node.parentUuid ? nodes.get(node.parentUuid) : undefined;
+    if (!parent) break;
+    if (
+      node.kind === 'user' &&
+      parent.kind === 'assistant' &&
+      parent.agentToolUse &&
+      !(node.toolResultIds && node.toolResultIds.has(parent.agentToolUse.id))
+    ) {
+      const out: InvocationInfo = { rootUuid: node.uuid };
+      if (parent.agentToolUse.id) out.parentToolUseId = parent.agentToolUse.id;
+      if (parent.agentToolUse.subagentType !== undefined) out.subagentType = parent.agentToolUse.subagentType;
+      if (parent.agentToolUse.description !== undefined) out.description = parent.agentToolUse.description;
+      if (parent.isSidechain) {
+        const parentInvocation = resolveInvocation(parent.uuid, nodes, cache, depth + 1);
+        if (parentInvocation) out.parentAgentId = parentInvocation.rootUuid;
+      }
+      if (cache) cache.set(startUuid, out);
+      return out;
+    }
+    node = parent;
+  }
+  if (cache) cache.set(startUuid, null);
   return undefined;
 }
 
@@ -634,10 +830,15 @@ export async function parseClaudeSessionIncremental(
 
   const working = new Map<string, WorkingRecord>();
   const order: string[] = [];
-  const subagentByToolUseId = new Map<
-    string,
-    { type?: string; taskDescription?: string }
-  >();
+  const nodesByUuid = new Map<string, LineNode>();
+  const invocationCache = new Map<string, InvocationInfo | null>();
+  // When resuming mid-file, populate nodesByUuid from the already-ingested
+  // prefix so new sidechain turns can still resolve their invocation root via
+  // parentUuid chains that point back before startOffset. Without this,
+  // subagent tree fields come up empty on the primary incremental ingest path.
+  if (startOffset > 0) {
+    await prescanNodes(filePath, startOffset, nodesByUuid);
+  }
   const messageIdFirstOffset = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
@@ -681,13 +882,13 @@ export async function parseClaudeSessionIncremental(
         userTextByMessageId.set(msgId, currentUserText);
       }
       if (msgId) lastAssistantMessageId = msgId;
-      ingestAssistant(line, working, order);
+      ingestAssistant(line, working, order, nodesByUuid);
     } else if (rec.type === 'user') {
       const ul = rec as unknown as UserLine;
+      registerUserNode(ul, nodesByUuid);
       const prompt = extractPlainUserText(ul);
       if (prompt) currentUserText = prompt;
       collectErroredToolUseIds(ul, erroredToolUseIds);
-      captureSubagentFromToolResult(ul, subagentByToolUseId);
       if (captureContent) {
         for (const c of extractUserContent(ul)) {
           pendingUserContent.push({ offset: lineStartOffset, record: c });
@@ -736,7 +937,7 @@ export async function parseClaudeSessionIncremental(
     if (w.stopReason === undefined) continue; // defer in-progress messages
     const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
     const filesTouched = extractFilesTouched(toolCalls);
-    const subagent = resolveSubagent(w, toolCalls, subagentByToolUseId);
+    const subagent = resolveSubagent(w, nodesByUuid, invocationCache);
     const record: TurnRecord = {
       v: 1,
       source: 'claude-code',

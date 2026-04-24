@@ -71,6 +71,41 @@ describe('parseClaudeSession', () => {
     assert.equal(t.subagent!.isSidechain, true);
   });
 
+  it('reconstructs a nested subagent tree from parentUuid chains', async () => {
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'nested-subagent.jsonl'));
+    // 2 main + 2 outer sidechain + 1 inner sidechain = 5 turns
+    assert.equal(turns.length, 5);
+
+    const byId = new Map(turns.map((t) => [t.messageId, t] as const));
+    const main1 = byId.get('msg_main_1')!;
+    const sub1_1 = byId.get('msg_sub1_1')!;
+    const sub1_2 = byId.get('msg_sub1_2')!;
+    const sub2_1 = byId.get('msg_sub2_1')!;
+
+    // Main thread: no subagent marker.
+    assert.equal(main1.subagent, undefined);
+
+    // Outer subagent (first-level): parent is main thread, tagged with session id.
+    assert.ok(sub1_1.subagent);
+    assert.equal(sub1_1.subagent!.isSidechain, true);
+    assert.equal(sub1_1.subagent!.agentId, 'u-sub1-user');
+    assert.equal(sub1_1.subagent!.parentToolUseId, 'toolu_outer');
+    assert.equal(sub1_1.subagent!.subagentType, 'Explore');
+    assert.equal(sub1_1.subagent!.description, 'Research the codebase');
+    assert.equal(sub1_1.subagent!.parentAgentId, '55555555-5555-5555-5555-555555555555');
+
+    // All turns of the same invocation share the agentId.
+    assert.equal(sub1_2.subagent!.agentId, 'u-sub1-user');
+    assert.equal(sub1_2.subagent!.parentToolUseId, 'toolu_outer');
+
+    // Inner subagent: parent is the outer subagent invocation.
+    assert.ok(sub2_1.subagent);
+    assert.equal(sub2_1.subagent!.agentId, 'u-sub2-user');
+    assert.equal(sub2_1.subagent!.parentAgentId, 'u-sub1-user');
+    assert.equal(sub2_1.subagent!.parentToolUseId, 'toolu_inner');
+    assert.equal(sub2_1.subagent!.subagentType, 'code-reviewer');
+  });
+
   it('produces stable argsHash for identical tool inputs', async () => {
     const a = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
     const b = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
@@ -532,5 +567,43 @@ describe('parseClaudeSessionIncremental', () => {
     // Without lastUserText the prompt is lost and the turn falls back to coding.
     const withoutSeed = await parseClaudeSessionIncremental(working, { startOffset: first.endOffset });
     assert.equal(withoutSeed.turns[0]!.activity, 'coding');
+  });
+
+  it('resolves subagent tree fields for sidechain turns discovered after the spawn line (prescan)', async () => {
+    // First incremental pass ingests the main thread + Agent spawn line.
+    // Second pass starts beyond them and must still populate agentId /
+    // parentAgentId / parentToolUseId on the sidechain turns via the
+    // prescan that registers prior parentUuid nodes.
+    const src = path.join(FIXTURES, 'nested-subagent.jsonl');
+    const full = await readFile(src, 'utf8');
+    const working = path.join(tmp, 'session.jsonl');
+
+    const lines = full.split('\n').filter((l) => l.length > 0);
+    // Write only through the outer Agent spawn line on pass 1.
+    const prefixLines = lines.slice(0, 2);
+    await writeFile(working, prefixLines.join('\n') + '\n', 'utf8');
+    const first = await parseClaudeSessionIncremental(working);
+    assert.ok(first.turns.length >= 1);
+
+    // Append the rest of the file: sidechain spawns + tool_results.
+    await writeFile(working, full, 'utf8');
+    const second = await parseClaudeSessionIncremental(working, {
+      startOffset: first.endOffset,
+    });
+
+    const byId = new Map(second.turns.map((t) => [t.messageId, t] as const));
+    const sub1_1 = byId.get('msg_sub1_1');
+    const sub2_1 = byId.get('msg_sub2_1');
+    assert.ok(sub1_1, 'outer sidechain turn should be emitted on pass 2');
+    assert.ok(sub2_1, 'inner sidechain turn should be emitted on pass 2');
+
+    assert.equal(sub1_1!.subagent!.agentId, 'u-sub1-user');
+    assert.equal(sub1_1!.subagent!.parentToolUseId, 'toolu_outer');
+    assert.equal(sub1_1!.subagent!.subagentType, 'Explore');
+    assert.equal(sub1_1!.subagent!.parentAgentId, '55555555-5555-5555-5555-555555555555');
+
+    assert.equal(sub2_1!.subagent!.agentId, 'u-sub2-user');
+    assert.equal(sub2_1!.subagent!.parentAgentId, 'u-sub1-user');
+    assert.equal(sub2_1!.subagent!.parentToolUseId, 'toolu_inner');
   });
 });
