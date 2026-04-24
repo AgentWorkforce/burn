@@ -238,7 +238,7 @@ function attributeSession(
       pendingInitial = [];
     }
     if (turn.toolCalls.length > 0) {
-      const subagentType = turn.subagent?.type;
+      const subagentType = turn.subagent?.subagentType;
       for (const tc of turn.toolCalls) {
         const sizeTokens = sizeByToolUseId.get(tc.id) ?? 0;
         const a: ToolAttribution = {

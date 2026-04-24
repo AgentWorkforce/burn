@@ -34,8 +34,6 @@ export interface ToolCall {
 
 export interface Subagent {
   isSidechain: boolean;
-  type?: string;
-  taskDescription?: string;
   // The tool_use id of the Agent/Task call in the parent thread that spawned
   // this subagent. Set on every turn of the spawned subagent so all of its
   // turns share a single parent link.
