@@ -18,11 +18,8 @@ Flags:
   --force       with --reclassify, overwrite activity even if already set
   --content     re-parse source session files to populate missing content
                 sidecars. Skips sessions that already have content on disk.
-                Does not touch cursors or existing ledger rows. Only adapters
-                whose parser emits content records benefit — today that is
-                Claude sessions only; codex and opencode parsers have content
-                capture marked TODO(#33-followup) and will not produce
-                records from this command until that lands.
+                Does not touch cursors or existing ledger rows.
+
 `;
 
 export async function runRebuild(args: ParsedArgs): Promise<number> {
