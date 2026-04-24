@@ -46,3 +46,8 @@ export {
 } from './index-sidecar.js';
 export { reclassifyLedger } from './reclassify.js';
 export type { ReclassifyOptions, ReclassifyReport } from './reclassify.js';
+export { buildClaudeHookSettings } from './hook-settings.js';
+export type {
+  BuildClaudeHookSettingsOptions,
+  ClaudeHookSettingsResult,
+} from './hook-settings.js';

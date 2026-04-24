@@ -9,19 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `listContentSessionIds()` — enumerate sessionIds that have a non-empty content sidecar on disk. Used by `burn rebuild --content` to skip sessions whose content is already populated.
+- **`buildClaudeHookSettings({ burnBin? })`** — spawner-side primitive returning `{ sessionId, settings }`: a fresh UUID plus a JSON string wiring every Claude Code hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) to `burn ingest --runtime claude --quiet`. Sits alongside `stamp` so orchestrators get both integration primitives from one package; spawners can inject hooks per-invocation via Claude's `--settings` flag rather than mutating `~/.claude/settings.json` globally. Closes [#7](https://github.com/AgentWorkforce/burn/issues/7).
 
 ## [0.7.0] - 2026-04-24
 
 ### Added
 
-- **Add content capture for Codex and OpenCode parsers (#33 follow-up)** (#33)
+- **Content capture for Codex and OpenCode sessions** lands in the ledger via the reader's expanded emitters; no schema change in this package. Supporting helper `listContentSessionIds()` enumerates sessionIds with a non-empty sidecar on disk, used by `burn rebuild --content` to skip already-populated sessions.
 
 ## [0.6.0] - 2026-04-24
 
 ### Added
 
-- **Implement waste-pattern detectors (retry loops, failure runs, compaction loss, edit-revert)** (#11)
+- **Waste-pattern detector ledger queries.** Analyze consumers read `toolCalls[].isError` and `retries` directly off stored `TurnRecord`s — no schema change, just the query shape the detectors (retry loops, failure runs, compaction loss, edit-revert) operate on. Closes [#11](https://github.com/AgentWorkforce/burn/issues/11).
 
 ## [0.5.0] - 2026-04-24
 

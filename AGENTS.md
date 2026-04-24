@@ -30,11 +30,13 @@ pnpm run pricing:update   # refresh the vendored models.dev snapshot
 
 Tests run from `dist/` so a stale build will lie. If a test fails unexpectedly, rebuild before debugging.
 
-## Commit messages drive the changelog
+## Changelog
 
-The publish workflow (`.github/workflows/publish.yml`) auto-generates per-package CHANGELOG entries by parsing `git log` since the last `<pkg>-v*` tag. **You do not need to manually edit CHANGELOG.md** — the release workflow inserts a new section under `[Unreleased]` at publish time.
+Curate `[Unreleased]` in the relevant per-package `packages/*/CHANGELOG.md` as you land PRs — write the entry the way you'd want it to read in a release note. At publish time, the workflow (`.github/workflows/publish.yml`) **promotes** your `[Unreleased]` block verbatim into `## [x.y.z] - DATE` and resets `[Unreleased]` to empty. No double-writing, no post-release hand-editing.
 
-It buckets commits by their subject's leading verb. Use one of these to land in the right section:
+The root `CHANGELOG.md` is the cross-package narrative — update it under `[Unreleased]` when the work spans packages or warrants a top-level summary.
+
+**Fallback — git-log inference.** If `[Unreleased]` is empty at release time, the workflow reconstructs an entry from `git log` subjects since the last `<pkg>-v*` tag. This is only a safety net; prefer hand-curated entries. The inference buckets by leading verb:
 
 | Subject starts with… | Lands in section |
 |---|---|
@@ -47,7 +49,7 @@ It buckets commits by their subject's leading verb. Use one of these to land in 
 
 Conventional Commits (`feat:`, `fix:`, `refactor:`, `chore(release):`, etc.) also work and take precedence over verb inference. Either style is fine; mixing is fine.
 
-Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to land under **Breaking Changes**.
+Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to land under **Breaking Changes** (fallback path only — for curated entries, write the section yourself).
 
 ## Releases
 

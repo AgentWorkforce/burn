@@ -7,6 +7,7 @@ import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
 import { runContext } from './commands/context.js';
 import { runDiagnose } from './commands/diagnose.js';
+import { runIngest } from './commands/ingest.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
@@ -26,6 +27,7 @@ Usage:
   burn claude        [--tag k=v ...] [-- <claude args>]
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]
+  burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
   burn content prune [--days <n>]
   burn rebuild         --index | --reclassify [--force]
   burn rebuild-index   (alias for 'burn rebuild --index')
@@ -78,6 +80,8 @@ async function main(): Promise<number> {
       return runCodexWrapper(args);
     case 'opencode':
       return runOpencodeWrapper(args);
+    case 'ingest':
+      return runIngest(args);
     case 'content':
       return runContent(args);
     case 'rebuild':

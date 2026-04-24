@@ -9,34 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`burn summary --quality`** — appends a quality rollup to the summary output: outcome counts (completed / abandoned / errored / unknown) plus the weighted one-shot edit rate across the matched sessions. Closes [#6](https://github.com/AgentWorkforce/burn/issues/6).
-  - Opportunistically loads per-session content sidecars (when available) so give-up phrase detection can downgrade assistant-ended confidence. Sidecar reads run with a concurrency cap of 8 so large ledgers don't serialize I/O.
-- **`burn rebuild --content`** — re-parses source session files to populate missing content sidecars. Skips sessions that already have content on disk, leaves cursors and ledger rows untouched. Primary use: backfill content for historical Codex and OpenCode sessions ingested before content capture was implemented for those adapters (#33 follow-up), or to restore a sidecar that was pruned.
+- **`burn ingest --runtime claude [--quiet]`** — hook-driven ingest. Reads a Claude Code hook payload JSON on stdin, extracts `session_id` + `transcript_path`, and incrementally parses the transcript via the existing cursor + dedup machinery. Safe to fire on every hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`); hook failures never propagate a non-zero exit back to Claude Code. Paired with `buildClaudeHookSettings` in `@relayburn/ledger` for spawner-integrated hook installation. Tool-call failures ride in the normal `PostToolUse` payload (surfaced as `ToolCall.isError` on the `TurnRecord`); no phantom `PostToolUseFailure` event is registered. Closes [#7](https://github.com/AgentWorkforce/burn/issues/7).
 
 ## [0.7.0] - 2026-04-24
 
 ### Added
 
-- **Add content capture for Codex and OpenCode parsers (#33 follow-up)** (#33)
-
-### Changed
-
-- Update packages/cli/src/commands/rebuild.ts
+- **Content capture for Codex and OpenCode sessions** (#33 follow-up). Codex and OpenCode sessions now write `ContentRecord`s to the sidecar when `content.store = full`, matching the Claude Code surface. This unlocks sized per-tool-call attribution (`burn waste`) and outcome-signal analysis on non-Claude harnesses.
+- **`burn rebuild --content`** — re-parses source session files to populate missing content sidecars. Skips sessions that already have content on disk, leaves cursors and ledger rows untouched. Primary use: backfill content for historical Codex and OpenCode sessions ingested before content capture landed for those adapters, or to restore a sidecar that was pruned.
 
 ## [0.6.0] - 2026-04-24
 
 ### Added
 
-- **Add outcome inference + one-shot rate quality signals (closes #6)** (#6)
-- **Implement waste-pattern detectors (retry loops, failure runs, compaction loss, edit-revert)** (#11)
-
-### Changed
-
-- Address PR #53 review comments (#53)
-
-### Documentation
-
-- Document quality signals in CHANGELOGs (#53)
+- **`burn summary --quality`** — appends a quality rollup to the summary output: outcome counts (completed / abandoned / errored / unknown) plus the weighted one-shot edit rate across the matched sessions. Closes [#6](https://github.com/AgentWorkforce/burn/issues/6).
+  - Opportunistically loads per-session content sidecars (when available) so give-up phrase detection can downgrade assistant-ended confidence. Sidecar reads run with a concurrency cap of 8 so large ledgers don't serialize I/O.
+- **Waste-pattern detectors** surfaced via the analyze module (retry loops, failure runs, compaction loss, edit-revert). Closes [#11](https://github.com/AgentWorkforce/burn/issues/11).
 
 ## [0.5.0] - 2026-04-24
 

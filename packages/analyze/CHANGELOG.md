@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-24
+
 ### Added
 
 - **Quality signals module.** `computeQuality(turns, opts)` returns two orthogonal per-session signals — `SessionOutcome` (outcome inference) and `OneShotMetrics` (one-shot rate) — for answering "was this work good enough that a cheaper model could have done it." Closes [#6](https://github.com/AgentWorkforce/burn/issues/6). Also exported individually as `inferOutcome` and `computeOneShotRate`.
@@ -14,22 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **One-shot rate** is `oneShotTurns / editTurns` per session, where a one-shot turn is an edit turn with zero retries. Sidechain (subagent) turns are excluded from the denominator so their retry counts don't poison the parent session's rate. Also returns `totalRetries` as a raw volume signal.
   - Computed lazily at query time, never persisted to the ledger — upgrading the rules later does not require a rebuild. Requires no prompt storage; the give-up downgrade runs opportunistically when content is available.
   - Handles sources that don't record `stopReason` (e.g. Codex): the final-turn ending role is reported as `'unknown'` and the session is classified `completed/low` with reason `unknown-ending` rather than being swept into `abandoned`.
-
-## [0.6.0] - 2026-04-24
-
-### Added
-
-- **Add outcome inference + one-shot rate quality signals (closes #6)** (#6)
-- **Implement waste-pattern detectors (retry loops, failure runs, compaction loss, edit-revert)** (#11)
-
-### Changed
-
-- Address PR #53 review comments (#53)
-- Handle sessions with unknown stopReason (Codex)
-
-### Documentation
-
-- Document quality signals in CHANGELOGs (#53)
+- **Waste-pattern detectors** — retry loops, failure runs, compaction loss, edit-revert. Closes [#11](https://github.com/AgentWorkforce/burn/issues/11).
 
 ## [0.5.0] - 2026-04-24
 

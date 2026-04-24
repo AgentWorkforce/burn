@@ -7,21 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Content capture for Codex and OpenCode parsers** (#33 follow-up). Both parsers now emit `ContentRecord` entries when `contentMode === 'full'`, matching the shape the Claude parser already produced. Covers `text` (user/assistant), `thinking` (codex reasoning), `tool_use`, and — most importantly for `burn waste` attribution — `tool_result` keyed by the same `call_id` / `callID` the tool call carries. In codex, content only emits for turns that commit at `task_complete`; uncommitted content is dropped and will be re-emitted once the turn commits. Removes the `TODO(#33-followup)` markers in `codex.ts` and `opencode.ts`.
-
 ## [0.7.0] - 2026-04-24
 
 ### Added
 
-- **Add content capture for Codex and OpenCode parsers (#33 follow-up)** (#33)
+- **Content capture for Codex and OpenCode parsers** (#33 follow-up). Both parsers now emit `ContentRecord` entries when `contentMode === 'full'`, matching the shape the Claude parser already produced. Covers `text` (user/assistant), `thinking` (codex reasoning), `tool_use`, and — most importantly for `burn waste` attribution — `tool_result` keyed by the same `call_id` / `callID` the tool call carries. In codex, content only emits for turns that commit at `task_complete`; uncommitted content is dropped and will be re-emitted once the turn commits. Removes the `TODO(#33-followup)` markers in `codex.ts` and `opencode.ts`.
 
 ## [0.6.0] - 2026-04-24
 
 ### Added
 
-- **Implement waste-pattern detectors (retry loops, failure runs, compaction loss, edit-revert)** (#11)
+- **Waste-pattern detectors** — reader-side signals (`toolCalls[].isError`, per-turn `retries`) feeding the analyze-side detectors for retry loops, failure runs, compaction loss, and edit-revert. Closes [#11](https://github.com/AgentWorkforce/burn/issues/11).
 
 ## [0.5.0] - 2026-04-24
 

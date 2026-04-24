@@ -8,15 +8,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **Hook-based Claude Code ingest.** Spawners can now install burn's ingest hooks per-invocation via Claude Code's `--settings` flag, removing any need to mutate `~/.claude/settings.json` globally. Closes [#7](https://github.com/AgentWorkforce/burn/issues/7). [cli, ledger]
+  - `@relayburn/ledger` — new `buildClaudeHookSettings({ burnBin? })` returns `{ sessionId, settings }`: a fresh UUID plus a JSON string wiring every Claude Code hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) to `burn ingest --runtime claude --quiet`. Sits alongside `stamp` so spawners get both primitives from one package.
+  - `burn ingest --runtime claude [--quiet]` — new CLI command that reads a hook payload JSON on stdin, extracts `session_id` + `transcript_path`, and incrementally parses the transcript via the existing cursor + dedup machinery. Safe to fire on every hook event; hook failures never propagate a non-zero exit back to Claude Code.
+  - Tool-call failures ride in the regular `PostToolUse` payload (surfaced as `ToolCall.isError` on the resulting `TurnRecord`); no phantom `PostToolUseFailure` event is registered.
+
+## 2026-04-24 — Content capture everywhere + `burn rebuild --content`
+
+**Versions:** `@relayburn/reader@0.7.0`, `@relayburn/ledger@0.7.0`, `@relayburn/analyze@0.7.0`, `@relayburn/cli@0.7.0`
+
+### Added
+
+- **Content capture for Codex and OpenCode parsers** (#33 follow-up). Both parsers now emit `ContentRecord` entries when `contentMode === 'full'`, matching the shape the Claude parser already produced. Covers `text` (user/assistant), `thinking` (Codex reasoning), `tool_use`, and — most importantly for `burn waste` attribution — `tool_result` keyed by the same `call_id` / `callID` the tool call carries. In Codex, content only emits for turns that commit at `task_complete`; uncommitted content is dropped and will be re-emitted once the turn commits. [reader]
+- **`burn rebuild --content`** — re-parses source session files to populate missing content sidecars. Skips sessions that already have content on disk, leaves cursors and ledger rows untouched. Primary use: backfill content for historical Codex and OpenCode sessions ingested before content capture was implemented for those adapters, or to restore a sidecar that was pruned. [cli]
+- **`listContentSessionIds()`** — ledger helper enumerating sessionIds with a non-empty content sidecar on disk. Drives `burn rebuild --content`'s skip path. [ledger]
+
+## 2026-04-24 — Quality signals + waste-pattern detectors
+
+**Versions:** `@relayburn/reader@0.6.0`, `@relayburn/ledger@0.6.0`, `@relayburn/analyze@0.6.0`, `@relayburn/cli@0.6.0`
+
+### Added
+
 - **Quality signals: outcome inference + one-shot rate.** Two orthogonal per-session signals for the "was this work good enough that a cheaper model could have done it" question. Closes [#6](https://github.com/AgentWorkforce/burn/issues/6). [cli, analyze]
   - `@relayburn/analyze` — new `computeQuality(turns, opts)` returning `SessionOutcome[]` (classifies sessions as `completed` / `abandoned` / `errored` / `unknown` with explicit confidence and a reason code) and `OneShotMetrics[]` (edit turns / one-shot edit turns / retry volume, excluding sidechain subagent turns). Give-up phrase detection on the last assistant text downgrades confidence when the content sidecar is available, but is never required.
   - `burn summary --quality` — appends a quality rollup (outcome counts + weighted one-shot rate) to summary output. Content sidecar reads run with a concurrency cap of 8 so large ledgers don't serialize I/O.
   - Both signals are computed lazily at query time (never persisted) so future rule changes don't require a rebuild.
   - Sources that don't record `stopReason` (e.g. Codex) are classified `completed/low` with reason `unknown-ending` rather than being swept into `abandoned`.
+- **Waste-pattern detectors** — retry loops, failure runs, compaction loss, edit-revert. Closes [#11](https://github.com/AgentWorkforce/burn/issues/11). [analyze, reader]
 
 ### PRs in this release
 
 - [#53](https://github.com/AgentWorkforce/burn/pull/53) — Add quality signals (outcome inference + one-shot rate)
+
+## 2026-04-24 — Changelog hygiene
+
+**Versions:** `@relayburn/reader@0.5.0`, `@relayburn/ledger@0.5.0`, `@relayburn/analyze@0.5.0`, `@relayburn/cli@0.5.0`
+
+Housekeeping bump only — folds prior `[Unreleased]` content into the correct historical release sections. No functional changes in any package.
 
 ## 2026-04-23 — `burn waste`: per-tool-call cost attribution
 

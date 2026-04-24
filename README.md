@@ -80,6 +80,29 @@ The wrapper pre-assigns a session ID, passes `--session-id` to Claude, applies a
 burn claude --tag workflow=refactor --tag persona=senior-eng -- --resume abc
 ```
 
+### Hook-based ingest for orchestrators
+
+If your code already controls the Claude Code spawn, you can install burn's hooks per-invocation via Claude's `--settings` flag — no global `~/.claude/settings.json` mutation needed. Hook payloads land on stdin and get forwarded to `burn ingest`, which incrementally parses the transcript with the same cursor+dedup machinery as `burn claude`.
+
+```ts
+import { buildClaudeHookSettings, stamp } from '@relayburn/ledger';
+
+const { sessionId, settings } = buildClaudeHookSettings();
+
+await stamp(
+  { sessionId },
+  { workflowId: 'wf-refactor-auth', agentId: 'ag-42', persona: 'senior-eng' },
+);
+
+spawn('claude', [
+  '--session-id', sessionId,
+  '--settings', settings,
+  ...existingArgs,
+]);
+```
+
+`buildClaudeHookSettings({ burnBin? })` returns a fresh UUID and a JSON string wiring every Claude Code hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) to `burn ingest --runtime claude --quiet`. The command is safe to re-fire on every hook — the ledger's cursor and dedup index keep ingestion idempotent, so the hook path and the JSONL-reader path are reconcilable against the same session. Tool-call failures ride in the normal `PostToolUse` payload (surfaced as `ToolCall.isError` on the resulting `TurnRecord`), not a distinct `PostToolUseFailure` event.
+
 ## Data model
 
 One `TurnRecord` per distinct `message.id` in the session log. Cost is never stored, only `usage` — so pricing corrections don't require a migration.
