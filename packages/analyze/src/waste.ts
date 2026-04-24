@@ -238,7 +238,6 @@ function attributeSession(
       pendingInitial = [];
     }
     if (turn.toolCalls.length > 0) {
-      const subagentType = turn.subagent?.subagentType;
       for (const tc of turn.toolCalls) {
         const sizeTokens = sizeByToolUseId.get(tc.id) ?? 0;
         const a: ToolAttribution = {
@@ -252,10 +251,13 @@ function attributeSession(
           model: turn.model,
           project: turn.project,
           projectKey: turn.projectKey,
+          // For Agent/Task spawns, identify the *spawned* subagent. The
+          // spawning tool call's own input carries `subagent_type`, which
+          // `pickTarget` already resolves into `tc.target`. Don't reach for
+          // `turn.subagent` here — that describes the invocation this turn
+          // belongs to (the parent), not what it's spawning.
           subagentType:
-            tc.name === 'Agent' || tc.name === 'Task'
-              ? subagentType ?? tc.target
-              : undefined,
+            tc.name === 'Agent' || tc.name === 'Task' ? tc.target : undefined,
           resultTokens: sizeTokens,
           resultBytesEstimated: haveAnySizes,
           initialCost: 0,
