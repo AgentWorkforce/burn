@@ -38,7 +38,7 @@ The root `CHANGELOG.md` is the cross-package narrative. Packages release in lock
 
 The publish workflow promotes the root `[Unreleased]` block the same way it does per-package files: at release time it stamps `## [x.y.z] - DATE` (using `max` of the versions bumped in the run) and resets `[Unreleased]` to empty. **No git-log fallback for the root file** — an empty `[Unreleased]` at release time means "no narrative-worthy changes this release" and the file is left alone. So if you want the root to record a release, write the bullet under `[Unreleased]` *before* the publish run.
 
-**Fallback — git-log inference.** If `[Unreleased]` is empty at release time, the workflow reconstructs an entry from `git log` subjects since the last `<pkg>-v*` tag. This is only a safety net; prefer hand-curated entries. The inference buckets by leading verb:
+**Fallback — git-log inference (per-package CHANGELOGs only).** If a package's `[Unreleased]` block is empty at release time, the workflow reconstructs an entry for `packages/<pkg>/CHANGELOG.md` from `git log` subjects since the last `<pkg>-v*` tag. This is only a safety net; prefer hand-curated entries. **The root `CHANGELOG.md` does not get this fallback** — see the previous paragraph. The inference buckets by leading verb:
 
 | Subject starts with… | Lands in section |
 |---|---|

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { queryAll } from '@relayburn/ledger';
 
 import type { ParsedArgs } from '../args.js';
+import { ingestAll } from '../ingest.js';
 
 const USAGE_ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
 const ANTHROPIC_OAUTH_BETA = 'oauth-2025-04-20';
@@ -52,21 +53,27 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
   const now = deps.now ?? (() => new Date());
   const loadForecast = deps.loadForecast ?? loadForecastFromLedger;
 
+  // Resolve the OAuth token once per invocation, not per render. The macOS
+  // Keychain path spawns `security`, which is expensive enough that calling
+  // it on every --watch tick (every 5s by default) would dominate the loop.
+  let token: string | null = null;
+  if (!noApi) {
+    token = await loadToken();
+    if (!token) {
+      process.stderr.write(
+        'burn limits: no Claude OAuth token found. Run `claude /login` to authenticate, ' +
+          'or set CLAUDE_CODE_OAUTH_TOKEN.\n',
+      );
+      return 2;
+    }
+  }
+
   const fetchOnce = makeCachingFetcher(fetchUsage, CACHE_TTL_MS, now);
 
   const renderOnce = async (): Promise<{ exitCode: number; output: string }> => {
     let usage: UsageResponse | null = null;
     let usageError: string | null = null;
-    if (!noApi) {
-      const token = await loadToken();
-      if (!token) {
-        return {
-          exitCode: 2,
-          output:
-            'burn limits: no Claude OAuth token found. Run `claude /login` to authenticate, ' +
-            'or set CLAUDE_CODE_OAUTH_TOKEN.\n',
-        };
-      }
+    if (token !== null) {
       try {
         usage = await fetchOnce(token);
       } catch (err) {
@@ -188,7 +195,10 @@ function renderTty(opts: {
     } else {
       const parts = [`burn rate ${formatTokensPerMinute(rate)}`];
       if (projectedPercent !== null) {
-        parts.push(`projected ${formatPercent(projectedPercent)} at reset`);
+        // projectedPercent is already on the 0..100 scale (projectFromOauth
+        // normalizes + caps); skip formatPercent's auto-detect heuristic so
+        // small values like 1.01 don't get re-multiplied to 101.
+        parts.push(`projected ${projectedPercent.toFixed(0)}% at reset`);
       }
       lines.push(`  ${parts.join(', ')}`);
     }
@@ -255,7 +265,7 @@ function forecastWindowStartMs(fiveHour: UsageWindow | undefined, now: Date): nu
   return now.getTime() - SESSION_DURATION_MS;
 }
 
-function makeCachingFetcher(
+export function makeCachingFetcher(
   fetchUsage: (token: string) => Promise<UsageResponse>,
   ttlMs: number,
   now: () => Date,
@@ -419,6 +429,13 @@ async function loadForecastFromLedger(
   windowStartMs: number,
   nowMs: number,
 ): Promise<ForecastInput | null> {
+  // Match the convention used by every other read-only command (summary,
+  // by-tool, diagnose, …): sweep new session logs into the ledger before
+  // querying, so the forecast reflects what just happened in the active
+  // claude session rather than whatever the last burn invocation captured.
+  // ingestAll is incremental via cursors, so the watch loop calling this
+  // every ~5s stays cheap on a steady-state ledger.
+  await ingestAll();
   const since = new Date(windowStartMs).toISOString();
   const turns = await queryAll({ since, source: 'claude-code' });
   if (turns.length === 0) return null;
