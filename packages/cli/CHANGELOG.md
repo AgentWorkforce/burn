@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-04-24
+
 ### Added
 
 - **`burn limits`** — Claude quota-window tracker. Pairs the OAuth `usage` endpoint snapshot (`five_hour`, `seven_day`, `seven_day_opus`, `extra_usage`) with a local-ledger forecast (burn rate + linearly-extrapolated projected % at reset). Supports `--watch [5s]`, `--json`, `--no-api` (offline), `--no-forecast`. Reads the OAuth token from `CLAUDE_CODE_OAUTH_TOKEN`, `~/.claude/.credentials.json`, or macOS Keychain without persisting it; responses cached ≤30s in-process. Token-missing exits 2 with a one-line message. (#5)
