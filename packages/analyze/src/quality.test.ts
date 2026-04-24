@@ -126,6 +126,47 @@ describe('inferOutcome', () => {
     assert.equal(o.reason, 'assistant-ended');
   });
 
+  it('classifies sessions with no stopReason (e.g. Codex) as completed/low/unknown-ending', () => {
+    // Codex parser never sets stopReason; without the fallback, the default
+    // classifier would mark these as abandoned/medium (false negative).
+    const turns = [
+      turn({ messageId: 'm1', turnIndex: 0, source: 'codex' }),
+      turn({ messageId: 'm2', turnIndex: 1, source: 'codex' }),
+      turn({ messageId: 'm3', turnIndex: 2, source: 'codex' }),
+    ];
+    const o = inferOutcome('s', turns, undefined, FIXED_NOW);
+    assert.equal(o.outcome, 'completed');
+    assert.equal(o.confidence, 'low');
+    assert.equal(o.reason, 'unknown-ending');
+  });
+
+  it('still detects trailing failure streak for sources without stopReason', () => {
+    const turns = [
+      turn({ messageId: 'm1', turnIndex: 0, source: 'codex' }),
+      turn({
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'codex',
+        toolCalls: [tc('u1', 'Bash', { isError: true })],
+      }),
+      turn({
+        messageId: 'm3',
+        turnIndex: 2,
+        source: 'codex',
+        toolCalls: [tc('u2', 'Bash', { isError: true })],
+      }),
+      turn({
+        messageId: 'm4',
+        turnIndex: 3,
+        source: 'codex',
+        toolCalls: [tc('u3', 'Bash', { isError: true })],
+      }),
+    ];
+    const o = inferOutcome('s', turns, undefined, FIXED_NOW);
+    assert.equal(o.outcome, 'errored');
+    assert.equal(o.reason, 'failure-streak');
+  });
+
   it('downgrades assistant-ended to completed/low when last assistant text has a give-up phrase', () => {
     const turns = [
       turn({ messageId: 'm1', turnIndex: 0, stopReason: 'end_turn' }),

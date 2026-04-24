@@ -33,6 +33,7 @@ export interface SessionOutcome {
     | 'failure-streak'
     | 'give-up'
     | 'assistant-ended'
+    | 'unknown-ending'
     | 'empty';
 }
 
@@ -183,6 +184,20 @@ export function inferOutcome(
     };
   }
 
+  if (endedRole === 'unknown') {
+    // Source doesn't record stop reason (e.g. Codex) — we can't distinguish
+    // a natural stop from a mid-tool-call abandonment. Default to completed
+    // at low confidence rather than misclassifying every such session as
+    // abandoned.
+    return {
+      sessionId,
+      outcome: 'completed',
+      confidence: 'low',
+      isRecent: false,
+      reason: 'unknown-ending',
+    };
+  }
+
   // Assistant-ended successfully — default completed. Give-up phrase in the
   // last assistant text downgrades confidence (but doesn't change the label;
   // we still don't know if the user would have agreed it was done).
@@ -221,14 +236,17 @@ export function computeOneShotRate(
   };
 }
 
-function endingRole(turns: TurnRecord[]): 'user' | 'assistant' {
+function endingRole(turns: TurnRecord[]): 'user' | 'assistant' | 'unknown' {
   // TurnRecord represents assistant turns; a ToolUse turn is followed by a
   // user tool_result (which may or may not prompt another assistant turn).
   // We infer "ended-with-assistant" when the final turn reached a natural
   // stop (`end_turn`) — i.e. it wasn't still waiting for a tool_result.
-  // Anything else we treat as user-ended (session died after a tool_use,
-  // before the assistant had a chance to respond to the result).
+  // A non-'end_turn' stop reason means user-ended (session died after a
+  // tool_use, before the assistant had a chance to respond). When the
+  // source doesn't record stopReason at all (e.g. Codex), return 'unknown'
+  // so the caller can avoid the false-negative "abandoned" classification.
   const last = turns[turns.length - 1]!;
+  if (last.stopReason === undefined) return 'unknown';
   return last.stopReason === 'end_turn' ? 'assistant' : 'user';
 }
 
