@@ -8,6 +8,7 @@ import { runContent, opportunisticPrune } from './commands/content.js';
 import { runContext } from './commands/context.js';
 import { runDiagnose } from './commands/diagnose.js';
 import { runIngest } from './commands/ingest.js';
+import { runLimits } from './commands/limits.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
@@ -23,6 +24,7 @@ Usage:
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]]
   burn diagnose      <session-id> [--json]
+  burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn claude        [--tag k=v ...] [-- <claude args>]
@@ -41,6 +43,9 @@ Examples:
   burn waste --since 7d
   burn waste --patterns --since 7d
   burn diagnose <session-id>
+  burn limits
+  burn limits --watch
+  burn limits --no-api
   burn context --since 30d
   burn context --kind claude-md
   burn context advise --top 3
@@ -73,6 +78,8 @@ async function main(): Promise<number> {
       return runWaste(args);
     case 'diagnose':
       return runDiagnose(args);
+    case 'limits':
+      return runLimits(args);
     case 'context':
       return runContext(args);
     case 'compare':

@@ -4,6 +4,7 @@ export { runWaste } from './commands/waste.js';
 export { runContext } from './commands/context.js';
 export { runClaudeWrapper } from './commands/claude.js';
 export { runIngest } from './commands/ingest.js';
+export { runLimits } from './commands/limits.js';
 export { parseArgs } from './args.js';
 export { ingestClaudeProjects, ingestOpencodeSessions, ingestAll } from './ingest.js';
 export { runOpencodeWrapper } from './commands/opencode.js';
