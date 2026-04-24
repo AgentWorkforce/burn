@@ -53,6 +53,10 @@ interface ToolPart {
     input?: Record<string, unknown>;
     status?: string;
     metadata?: { exit?: number; [k: string]: unknown };
+    // Tool output, written by opencode once the tool completes. Typically a
+    // string but can be structured for some tools; we pass it through to the
+    // sidecar unchanged and let downstream stringify as needed.
+    output?: unknown;
     [k: string]: unknown;
   };
 }
@@ -121,9 +125,11 @@ export async function parseOpencodeSessionIncremental(
   assistants.sort((a, b) => a.time.created - b.time.created);
   users.sort((a, b) => a.time.created - b.time.created);
 
+  const captureContent = options.contentMode === 'full';
   const isSidechain = typeof session.parentID === 'string' && session.parentID.length > 0;
   const seen = new Set<string>(options.seenMessageIds ?? []);
   const turns: TurnRecord[] = [];
+  const content: ContentRecord[] = [];
 
   for (let i = 0; i < assistants.length; i++) {
     const m = assistants[i]!;
@@ -177,12 +183,106 @@ export async function parseOpencodeSessionIncremental(
 
     turns.push(record);
     seen.add(m.id);
+
+    if (captureContent) {
+      const assistantTs = new Date(m.time.created).toISOString();
+      if (userMessage) {
+        const userTs = new Date(userMessage.time.created).toISOString();
+        for (const t of await readUserTextParts(storageRoot, userMessage.id)) {
+          content.push({
+            v: 1,
+            source: 'opencode',
+            sessionId: m.sessionID,
+            messageId: userMessage.id,
+            ts: userTs,
+            role: 'user',
+            kind: 'text',
+            text: t,
+          });
+        }
+      }
+      for (const rec of extractAssistantContent(parts, m.sessionID, m.id, assistantTs)) {
+        content.push(rec);
+      }
+    }
   }
 
-  // TODO(#33-followup): content capture for OpenCode sessions. The result
-  // shape carries a `content` array so appendContent wiring in the CLI stays
-  // a no-op once capture lands.
-  return { turns, content: [], seenMessageIds: seen };
+  return { turns, content, seenMessageIds: seen };
+}
+
+function extractAssistantContent(
+  parts: Part[],
+  sessionId: string,
+  messageId: string,
+  ts: string,
+): ContentRecord[] {
+  const out: ContentRecord[] = [];
+  for (const p of parts) {
+    if (p.type === 'text') {
+      const tp = p as TextPart;
+      if (tp.synthetic === true) continue;
+      if (typeof tp.text === 'string' && tp.text.length > 0) {
+        out.push({
+          v: 1,
+          source: 'opencode',
+          sessionId,
+          messageId,
+          ts,
+          role: 'assistant',
+          kind: 'text',
+          text: tp.text,
+        });
+      }
+      continue;
+    }
+    if (p.type === 'tool') {
+      const tp = p as ToolPart;
+      if (typeof tp.callID !== 'string' || typeof tp.tool !== 'string') continue;
+      const input = tp.state?.input ?? {};
+      out.push({
+        v: 1,
+        source: 'opencode',
+        sessionId,
+        messageId,
+        ts,
+        role: 'assistant',
+        kind: 'tool_use',
+        toolUse: { id: tp.callID, name: tp.tool, input },
+      });
+      const state = tp.state;
+      if (state && Object.prototype.hasOwnProperty.call(state, 'output')) {
+        const result: ContentRecord = {
+          v: 1,
+          source: 'opencode',
+          sessionId,
+          messageId,
+          ts,
+          role: 'tool_result',
+          kind: 'tool_result',
+          toolResult: { toolUseId: tp.callID, content: state.output ?? '' },
+        };
+        if (state.status === 'error') result.toolResult!.isError = true;
+        else {
+          const exit = state.metadata?.exit;
+          if (typeof exit === 'number' && exit !== 0) result.toolResult!.isError = true;
+        }
+        out.push(result);
+      }
+    }
+  }
+  return out;
+}
+
+async function readUserTextParts(storageRoot: string, userMessageId: string): Promise<string[]> {
+  const parts = await readParts(storageRoot, userMessageId);
+  const out: string[] = [];
+  for (const p of parts) {
+    if (p.type !== 'text') continue;
+    const tp = p as TextPart;
+    if (tp.synthetic === true) continue;
+    if (typeof tp.text === 'string' && tp.text.length > 0) out.push(tp.text);
+  }
+  return out;
 }
 
 async function readSession(sessionFilePath: string): Promise<SessionInfo | null> {

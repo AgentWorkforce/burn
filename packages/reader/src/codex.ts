@@ -108,6 +108,24 @@ interface MessagePayload {
   content?: Array<{ type?: string; text?: string }>;
 }
 
+interface ReasoningPayload {
+  type: 'reasoning';
+  summary?: Array<{ type?: string; text?: string }>;
+  content?: Array<{ type?: string; text?: string }> | null;
+}
+
+interface FunctionCallOutputPayload {
+  type: 'function_call_output';
+  call_id?: string;
+  output?: unknown;
+}
+
+interface CustomToolCallOutputPayload {
+  type: 'custom_tool_call_output';
+  call_id?: string;
+  output?: unknown;
+}
+
 interface CumulativeUsage {
   input: number;
   output: number;
@@ -127,6 +145,9 @@ interface OpenTurn {
   userText: string;
   assistantText: string;
   erroredCallIds: Set<string>;
+  // Captured only when contentMode === 'full'. Emitted alongside the turn
+  // once task_complete commits it; dropped if the turn never commits.
+  content: ContentRecord[];
 }
 
 interface FinalizedTurn
@@ -181,6 +202,8 @@ export async function parseCodexSessionIncremental(
     await handle.close();
   }
 
+  const captureContent = options.contentMode === 'full';
+
   let sessionId = options.resume?.sessionId ?? '';
   let sessionCwd: string | undefined = options.resume?.sessionCwd;
   const turnContexts = new Map<string, TurnContextPayload>();
@@ -195,6 +218,10 @@ export async function parseCodexSessionIncremental(
   };
   let openTurn: OpenTurn | null = null;
   let pendingUserText = '';
+  // User content (and any stray records) that arrive before the next
+  // task_started. Attached to the turn on open, so they only flush if the
+  // turn itself eventually commits.
+  let pendingContent: ContentRecord[] = [];
   const finalized: FinalizedTurn[] = [];
 
   // Commit snapshot — only advanced at task_complete boundaries.
@@ -288,8 +315,17 @@ export async function parseCodexSessionIncremental(
           userText: pendingUserText,
           assistantText: '',
           erroredCallIds: new Set(),
+          content: [],
         };
         pendingUserText = '';
+        if (captureContent && pendingContent.length > 0) {
+          // Re-stamp pre-turn content with this turn's id so sidecar records
+          // group under the turn that absorbed them, matching how
+          // `pendingUserText` folds into `openTurn.userText`.
+          for (const c of pendingContent) c.messageId = turnId;
+          openTurn.content.push(...pendingContent);
+          pendingContent = [];
+        }
         if (project !== undefined) openTurn.project = project;
         continue;
       }
@@ -335,6 +371,7 @@ export async function parseCodexSessionIncremental(
     }
 
     if (rec.type === 'response_item') {
+      const itemTs = rec.timestamp ?? '';
       if (pl.type === 'message') {
         const msg = payload as MessagePayload;
         const text = collectMessageText(msg);
@@ -344,9 +381,70 @@ export async function parseCodexSessionIncremental(
           // next task_started picks them up as that turn's prompt text.
           if (openTurn) openTurn.userText = appendText(openTurn.userText, text);
           else pendingUserText = appendText(pendingUserText, text);
+          if (captureContent) {
+            pushContent(openTurn, pendingContent, {
+              v: 1,
+              source: 'codex',
+              sessionId,
+              messageId: openTurn?.turnId ?? '',
+              ts: itemTs,
+              role: 'user',
+              kind: 'text',
+              text,
+            });
+          }
         } else if (msg.role === 'assistant' && openTurn) {
           openTurn.assistantText = appendText(openTurn.assistantText, text);
+          if (captureContent) {
+            openTurn.content.push({
+              v: 1,
+              source: 'codex',
+              sessionId,
+              messageId: openTurn.turnId,
+              ts: itemTs,
+              role: 'assistant',
+              kind: 'text',
+              text,
+            });
+          }
         }
+        continue;
+      }
+      if (pl.type === 'reasoning' && openTurn && captureContent) {
+        const rp = payload as ReasoningPayload;
+        const text = collectReasoningText(rp);
+        if (text.length > 0) {
+          openTurn.content.push({
+            v: 1,
+            source: 'codex',
+            sessionId,
+            messageId: openTurn.turnId,
+            ts: itemTs,
+            role: 'assistant',
+            kind: 'thinking',
+            text,
+          });
+        }
+        continue;
+      }
+      if (pl.type === 'function_call_output' || pl.type === 'custom_tool_call_output') {
+        // Tool outputs can appear outside an open turn if codex streams them
+        // after task_complete. Attribution only requires the call_id linkage,
+        // which is preserved either way; we attach to the open turn when we
+        // have one, or buffer as pre-turn content otherwise.
+        if (!captureContent) continue;
+        const out = payload as FunctionCallOutputPayload | CustomToolCallOutputPayload;
+        if (typeof out.call_id !== 'string') continue;
+        pushContent(openTurn, pendingContent, {
+          v: 1,
+          source: 'codex',
+          sessionId,
+          messageId: openTurn?.turnId ?? '',
+          ts: itemTs,
+          role: 'tool_result',
+          kind: 'tool_result',
+          toolResult: { toolUseId: out.call_id, content: out.output ?? '' },
+        });
         continue;
       }
       if (!openTurn) continue;
@@ -364,6 +462,18 @@ export async function parseCodexSessionIncremental(
         const target = pickFunctionCallTarget(fc.name, parsedArgs);
         if (target !== undefined) call.target = target;
         openTurn.toolCalls.push(call);
+        if (captureContent) {
+          openTurn.content.push({
+            v: 1,
+            source: 'codex',
+            sessionId,
+            messageId: openTurn.turnId,
+            ts: itemTs,
+            role: 'assistant',
+            kind: 'tool_use',
+            toolUse: { id: fc.call_id, name: fc.name, input: parsedArgs ?? {} },
+          });
+        }
       } else if (pl.type === 'custom_tool_call') {
         const ct = payload as CustomToolCallPayload;
         if (typeof ct.name !== 'string' || typeof ct.call_id !== 'string') continue;
@@ -378,6 +488,18 @@ export async function parseCodexSessionIncremental(
         const target = pickCustomToolTarget(ct.name, input);
         if (target !== undefined) call.target = target;
         openTurn.toolCalls.push(call);
+        if (captureContent) {
+          openTurn.content.push({
+            v: 1,
+            source: 'codex',
+            sessionId,
+            messageId: openTurn.turnId,
+            ts: itemTs,
+            role: 'assistant',
+            kind: 'tool_use',
+            toolUse: { id: ct.call_id, name: ct.name, input: { input } },
+          });
+        }
       }
     }
   }
@@ -385,6 +507,7 @@ export async function parseCodexSessionIncremental(
   // Only emit turns committed up to the last task_complete boundary.
   const committed = finalized.slice(0, committedFinalizedCount);
   const turns: TurnRecord[] = [];
+  const content: ContentRecord[] = [];
   for (let i = 0; i < committed.length; i++) {
     const f = committed[i]!;
     const record: TurnRecord = {
@@ -417,6 +540,7 @@ export async function parseCodexSessionIncremental(
     record.retries = classified.retries;
     record.hasEdits = classified.hasEdits;
     turns.push(record);
+    if (captureContent) content.push(...f.content);
   }
 
   const resume: CodexResumeState = {
@@ -426,10 +550,31 @@ export async function parseCodexSessionIncremental(
   };
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
 
-  // TODO(#33-followup): content capture for Codex sessions. The incremental
-  // result preserves the { turns, content } shape so that wiring the reader
-  // output into appendContent is a no-op when full content arrives.
-  return { turns, content: [], endOffset: committedEndOffset, resume };
+  return { turns, content, endOffset: committedEndOffset, resume };
+}
+
+function pushContent(
+  openTurn: OpenTurn | null,
+  pending: ContentRecord[],
+  record: ContentRecord,
+): void {
+  if (openTurn) openTurn.content.push(record);
+  else pending.push(record);
+}
+
+function collectReasoningText(rp: ReasoningPayload): string {
+  const parts: string[] = [];
+  if (Array.isArray(rp.summary)) {
+    for (const s of rp.summary) {
+      if (s && typeof s.text === 'string' && s.text.length > 0) parts.push(s.text);
+    }
+  }
+  if (Array.isArray(rp.content)) {
+    for (const c of rp.content) {
+      if (c && typeof c.text === 'string' && c.text.length > 0) parts.push(c.text);
+    }
+  }
+  return parts.join('\n');
 }
 
 function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
@@ -468,6 +613,7 @@ function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTur
     userText: open.userText,
     assistantText: open.assistantText,
     erroredCallIds: open.erroredCallIds,
+    content: open.content,
   };
   if (open.project !== undefined) out.project = open.project;
   return out;

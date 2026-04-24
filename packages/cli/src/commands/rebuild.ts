@@ -1,5 +1,6 @@
 import { rebuildIndex, reclassifyLedger } from '@relayburn/ledger';
 
+import { reingestMissingContent } from '../ingest.js';
 import { formatInt } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
@@ -8,20 +9,26 @@ const REBUILD_HELP = `burn rebuild — rebuild derived ledger artifacts
 Usage:
   burn rebuild --index
   burn rebuild --reclassify [--force]
+  burn rebuild --content
   burn rebuild --index --reclassify [--force]
 
 Flags:
   --index       rebuild the sidecar index (equivalent to 'burn rebuild-index')
   --reclassify  re-run the activity classifier on every ledger turn
   --force       with --reclassify, overwrite activity even if already set
+  --content     re-parse source session files to populate missing content
+                sidecars. Skips sessions that already have content on disk.
+                Does not touch cursors or existing ledger rows.
+
 `;
 
 export async function runRebuild(args: ParsedArgs): Promise<number> {
   const doIndex = args.flags['index'] === true;
   const doReclassify = args.flags['reclassify'] === true;
+  const doContent = args.flags['content'] === true;
   const force = args.flags['force'] === true;
 
-  if (!doIndex && !doReclassify) {
+  if (!doIndex && !doReclassify && !doContent) {
     process.stdout.write(REBUILD_HELP);
     return 0;
   }
@@ -45,6 +52,17 @@ export async function runRebuild(args: ParsedArgs): Promise<number> {
         lines.push(`    → ${cat}: ${formatInt(n)}`);
       }
     }
+  }
+
+  if (doContent) {
+    const r = await reingestMissingContent();
+    lines.push(
+      `reingested content for ${formatInt(r.reingestedSessions)} sessions` +
+        ` (${formatInt(r.scannedFiles)} files scanned,` +
+        ` ${formatInt(r.skippedExisting)} already had content,` +
+        ` ${formatInt(r.appendedContent)} records appended,` +
+        ` ${formatInt(r.failed)} failed)`,
+    );
   }
 
   // Rebuild index after reclassify — ids/fingerprints are unchanged by

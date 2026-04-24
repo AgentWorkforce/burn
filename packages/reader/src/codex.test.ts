@@ -351,3 +351,199 @@ describe('parseCodexSessionIncremental', () => {
     }
   });
 });
+
+describe('parseCodexSession content capture', () => {
+  async function withFixture<T>(body: (file: string) => Promise<T>): Promise<T> {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-content-'));
+    try {
+      const file = path.join(tmp, 'session.jsonl');
+      const lines = [
+        {
+          timestamp: '2026-04-20T01:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'sess_content_1', cwd: '/tmp/project', timestamp: '2026-04-20T01:00:00.000Z' },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.050Z',
+          type: 'turn_context',
+          payload: { turn_id: 'turn_content_1', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.100Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'list files' }],
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.200Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn_content_1' },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.300Z',
+          type: 'response_item',
+          payload: {
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: 'planning the ls' }],
+            content: null,
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.400Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'shell',
+            arguments: '{"cmd":"ls"}',
+            call_id: 'call_fc_1',
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.500Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call_output',
+            call_id: 'call_fc_1',
+            output: 'README.md\npackage.json\n',
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.600Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            name: 'apply_patch',
+            input: '*** Begin Patch\n*** Add File: /tmp/project/X\n',
+            call_id: 'call_ct_1',
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.700Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call_output',
+            call_id: 'call_ct_1',
+            output: '{"success":true}',
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.800Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'done.' }],
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.900Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 20, reasoning_output_tokens: 10 } },
+          },
+        },
+        {
+          timestamp: '2026-04-20T01:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'task_complete', turn_id: 'turn_content_1' },
+        },
+      ];
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      return await body(file);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }
+
+  it('returns empty content when contentMode is off (default)', async () => {
+    await withFixture(async (file) => {
+      const { content } = await parseCodexSession(file);
+      assert.deepEqual(content, []);
+    });
+  });
+
+  it('returns empty content when contentMode is hash-only', async () => {
+    await withFixture(async (file) => {
+      const { content } = await parseCodexSession(file, { contentMode: 'hash-only' });
+      assert.deepEqual(content, []);
+    });
+  });
+
+  it('emits tool_result for function_call_output with matching toolUseId', async () => {
+    await withFixture(async (file) => {
+      const { turns, content } = await parseCodexSession(file, { contentMode: 'full' });
+      assert.equal(turns.length, 1);
+      const tr = content.find((c) => c.kind === 'tool_result' && c.toolResult?.toolUseId === 'call_fc_1');
+      assert.ok(tr, 'tool_result for function_call_output is emitted');
+      assert.equal(tr!.source, 'codex');
+      assert.equal(tr!.toolResult!.content, 'README.md\npackage.json\n');
+      const toolIds = new Set(turns[0]!.toolCalls.map((tc) => tc.id));
+      assert.ok(toolIds.has('call_fc_1'), 'attributor can join tool_result to a toolCall');
+    });
+  });
+
+  it('emits tool_result for custom_tool_call_output', async () => {
+    await withFixture(async (file) => {
+      const { content } = await parseCodexSession(file, { contentMode: 'full' });
+      const tr = content.find((c) => c.kind === 'tool_result' && c.toolResult?.toolUseId === 'call_ct_1');
+      assert.ok(tr);
+      assert.equal(tr!.toolResult!.content, '{"success":true}');
+    });
+  });
+
+  it('captures user/assistant text, reasoning, and tool_use blocks', async () => {
+    await withFixture(async (file) => {
+      const { content } = await parseCodexSession(file, { contentMode: 'full' });
+      const user = content.find((c) => c.role === 'user' && c.kind === 'text');
+      assert.equal(user!.text, 'list files');
+      assert.equal(user!.messageId, 'turn_content_1', 'pre-turn user content re-anchors to the turn it opens');
+      const asst = content.find((c) => c.role === 'assistant' && c.kind === 'text');
+      assert.equal(asst!.text, 'done.');
+      const thinking = content.find((c) => c.kind === 'thinking');
+      assert.equal(thinking!.text, 'planning the ls');
+      const toolUses = content.filter((c) => c.kind === 'tool_use');
+      assert.equal(toolUses.length, 2);
+      assert.deepEqual(
+        toolUses.map((t) => t.toolUse!.name).sort(),
+        ['apply_patch', 'shell'],
+      );
+    });
+  });
+
+  it('drops content when the enclosing turn never commits', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-uncommitted-'));
+    try {
+      const file = path.join(tmp, 'session.jsonl');
+      const lines = [
+        { timestamp: '2026-04-20T01:00:00.000Z', type: 'session_meta', payload: { id: 'sess_u', cwd: '/tmp', timestamp: '2026-04-20T01:00:00.000Z' } },
+        { timestamp: '2026-04-20T01:00:00.050Z', type: 'turn_context', payload: { turn_id: 'turn_u', cwd: '/tmp', model: 'gpt-5.4' } },
+        { timestamp: '2026-04-20T01:00:00.200Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn_u' } },
+        {
+          timestamp: '2026-04-20T01:00:00.400Z',
+          type: 'response_item',
+          payload: { type: 'function_call', name: 'shell', arguments: '{"cmd":"ls"}', call_id: 'call_u_1' },
+        },
+        {
+          timestamp: '2026-04-20T01:00:00.500Z',
+          type: 'response_item',
+          payload: { type: 'function_call_output', call_id: 'call_u_1', output: 'should-be-dropped' },
+        },
+        // no task_complete — turn is still open
+      ];
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { turns, content } = await parseCodexSession(file, { contentMode: 'full' });
+      assert.equal(turns.length, 0);
+      assert.equal(content.length, 0, 'uncommitted content is not emitted');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});

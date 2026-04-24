@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `listContentSessionIds()` — enumerate sessionIds that have a non-empty content sidecar on disk. Used by `burn rebuild --content` to skip sessions whose content is already populated.
+
 ## [0.6.0] - 2026-04-24
 
 ### Added

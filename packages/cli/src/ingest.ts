@@ -12,6 +12,7 @@ import {
   appendCompactions,
   appendContent,
   appendTurns,
+  listContentSessionIds,
   loadConfig,
   loadCursors,
   saveCursors,
@@ -263,6 +264,145 @@ async function ingestOpencodeInto(
 
 function emptyReport(): IngestReport {
   return { scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 };
+}
+
+export interface ReingestContentReport {
+  scannedFiles: number;
+  skippedExisting: number;
+  reingestedSessions: number;
+  appendedContent: number;
+  failed: number;
+}
+
+// Re-parse source session files to populate missing content sidecars. Used by
+// `burn rebuild --content` to fix up historical sessions ingested before the
+// sidecar was written (or where the sidecar was pruned). Does NOT touch
+// cursors, ledger turns, or compactions — only writes content records for
+// sessions that currently have no sidecar on disk.
+export async function reingestMissingContent(): Promise<ReingestContentReport> {
+  const existing = await listContentSessionIds();
+  const report: ReingestContentReport = {
+    scannedFiles: 0,
+    skippedExisting: 0,
+    reingestedSessions: 0,
+    appendedContent: 0,
+    failed: 0,
+  };
+  await reingestClaudeContent(existing, report);
+  await reingestCodexContent(existing, report);
+  await reingestOpencodeContent(existing, report);
+  return report;
+}
+
+async function reingestClaudeContent(
+  existing: Set<string>,
+  report: ReingestContentReport,
+): Promise<void> {
+  const projects = await listDirs(CLAUDE_PROJECTS);
+  for (const projectDir of projects) {
+    const files = await listJsonlFiles(projectDir);
+    for (const file of files) {
+      report.scannedFiles++;
+      const sessionId = path.basename(file, '.jsonl');
+      if (existing.has(sessionId)) {
+        report.skippedExisting++;
+        continue;
+      }
+      try {
+        const { content } = await parseClaudeSessionIncremental(file, {
+          startOffset: 0,
+          sessionPath: file,
+          contentMode: 'full',
+        });
+        const filtered = content.filter((c) => !existing.has(c.sessionId));
+        if (filtered.length > 0) {
+          await appendContent(filtered);
+          report.appendedContent += filtered.length;
+          report.reingestedSessions++;
+          for (const c of filtered) existing.add(c.sessionId);
+        }
+      } catch (err) {
+        report.failed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[burn] reingest skipped ${file}: ${msg}\n`);
+      }
+    }
+  }
+}
+
+async function reingestCodexContent(
+  existing: Set<string>,
+  report: ReingestContentReport,
+): Promise<void> {
+  for (const file of await walkJsonl(CODEX_SESSIONS)) {
+    report.scannedFiles++;
+    const derived = deriveCodexSessionId(file);
+    if (derived && existing.has(derived)) {
+      report.skippedExisting++;
+      continue;
+    }
+    try {
+      const { content } = await parseCodexSessionIncremental(file, {
+        startOffset: 0,
+        sessionPath: file,
+        contentMode: 'full',
+      });
+      const filtered = content.filter((c) => !existing.has(c.sessionId));
+      if (filtered.length > 0) {
+        await appendContent(filtered);
+        report.appendedContent += filtered.length;
+        report.reingestedSessions++;
+        for (const c of filtered) existing.add(c.sessionId);
+      }
+    } catch (err) {
+      report.failed++;
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] reingest skipped ${file}: ${msg}\n`);
+    }
+  }
+}
+
+async function reingestOpencodeContent(
+  existing: Set<string>,
+  report: ReingestContentReport,
+): Promise<void> {
+  for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
+    report.scannedFiles++;
+    const sessionId = path.basename(file, '.json');
+    if (existing.has(sessionId)) {
+      report.skippedExisting++;
+      continue;
+    }
+    try {
+      const { content } = await parseOpencodeSessionIncremental(file, {
+        sessionPath: file,
+        seenMessageIds: new Set<string>(),
+        contentMode: 'full',
+      });
+      const filtered = content.filter((c) => !existing.has(c.sessionId));
+      if (filtered.length > 0) {
+        await appendContent(filtered);
+        report.appendedContent += filtered.length;
+        report.reingestedSessions++;
+        for (const c of filtered) existing.add(c.sessionId);
+      }
+    } catch (err) {
+      report.failed++;
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] reingest skipped ${file}: ${msg}\n`);
+    }
+  }
+}
+
+// Codex filenames are `rollout-<timestamp>-<uuid>.jsonl` where the UUID is the
+// session id. Extract it for a cheap skip check before parsing. If the pattern
+// doesn't match, return null and fall back to post-filtering.
+function deriveCodexSessionId(file: string): string | null {
+  const base = path.basename(file, '.jsonl');
+  const m = base.match(
+    /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/,
+  );
+  return m ? m[1]! : null;
 }
 
 async function listDirs(parent: string): Promise<string[]> {
