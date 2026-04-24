@@ -29,6 +29,15 @@ export type {
   RetryLoop,
   SessionPatternSummary,
 } from './patterns.js';
+export { computeQuality, computeOneShotRate, inferOutcome } from './quality.js';
+export type {
+  ComputeQualityOptions,
+  OneShotMetrics,
+  OutcomeConfidence,
+  OutcomeLabel,
+  QualityResult,
+  SessionOutcome,
+} from './quality.js';
 export {
   attributeClaudeMd,
   buildAdviseRecommendations,

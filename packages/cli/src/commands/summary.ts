@@ -1,8 +1,9 @@
-import { loadPricing } from '@relayburn/analyze';
+import { computeQuality, loadPricing } from '@relayburn/analyze';
 import { costForTurn, sumCosts } from '@relayburn/analyze';
-import type { CostBreakdown } from '@relayburn/analyze';
-import { queryAll, type Query } from '@relayburn/ledger';
+import type { CostBreakdown, OutcomeLabel, QualityResult } from '@relayburn/analyze';
+import { queryAll, readContent, type Query } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
+import type { ContentRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -60,8 +61,66 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   );
   lines.push('');
 
+  if (args.flags['quality'] === true) {
+    const contentBySession = await loadContentForQuality(turns);
+    const quality = computeQuality(turns, { contentBySession });
+    lines.push(renderQuality(quality));
+    lines.push('');
+  }
+
   process.stdout.write(lines.join('\n'));
   return 0;
+}
+
+async function loadContentForQuality(
+  turns: EnrichedTurn[],
+): Promise<Map<string, ContentRecord[]>> {
+  const sessionIds = new Set(turns.map((t) => t.sessionId));
+  const bySession = new Map<string, ContentRecord[]>();
+  for (const sessionId of sessionIds) {
+    const records = await readContent({ sessionId });
+    if (records.length > 0) bySession.set(sessionId, records);
+  }
+  return bySession;
+}
+
+function renderQuality(q: QualityResult): string {
+  if (q.outcomes.length === 0) return 'quality: (no sessions)';
+  const counts = outcomeCounts(q);
+  const oneShotOverall = weightedOneShotRate(q);
+  const summary = [
+    `quality — sessions: ${q.outcomes.length}`,
+    `  outcomes: ${counts.completed} completed / ${counts.abandoned} abandoned / ${counts.errored} errored / ${counts.unknown} unknown`,
+    oneShotOverall === undefined
+      ? '  one-shot rate: n/a (no edit turns)'
+      : `  one-shot rate: ${(oneShotOverall * 100).toFixed(1)}% across ${counts.editTurns} edit turns`,
+  ];
+  return summary.join('\n');
+}
+
+function outcomeCounts(q: QualityResult): Record<OutcomeLabel, number> & {
+  editTurns: number;
+} {
+  const counts: Record<OutcomeLabel, number> & { editTurns: number } = {
+    completed: 0,
+    abandoned: 0,
+    errored: 0,
+    unknown: 0,
+    editTurns: 0,
+  };
+  for (const o of q.outcomes) counts[o.outcome]++;
+  for (const m of q.oneShot) counts.editTurns += m.editTurns;
+  return counts;
+}
+
+function weightedOneShotRate(q: QualityResult): number | undefined {
+  let edit = 0;
+  let oneShot = 0;
+  for (const m of q.oneShot) {
+    edit += m.editTurns;
+    oneShot += m.oneShotTurns;
+  }
+  return edit > 0 ? oneShot / edit : undefined;
 }
 
 interface ModelRow {
