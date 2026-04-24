@@ -15,7 +15,12 @@ export {
   contentFilePath,
   isValidSessionId,
 } from './paths.js';
-export { appendContent, readContent, pruneContent } from './content.js';
+export {
+  appendContent,
+  listContentSessionIds,
+  pruneContent,
+  readContent,
+} from './content.js';
 export type { PruneOptions, PruneResult, ReadContentSelector } from './content.js';
 export { loadConfig, retentionMs, DEFAULT_CONFIG } from './config.js';
 export type { BurnConfig, ContentConfig } from './config.js';

@@ -144,6 +144,32 @@ export async function pruneContent(options: PruneOptions): Promise<PruneResult> 
   return { filesDeleted, bytesFreed };
 }
 
+export async function listContentSessionIds(): Promise<Set<string>> {
+  const dir = contentDir();
+  const out = new Set<string>();
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out;
+    throw err;
+  }
+  for (const name of entries) {
+    if (!name.endsWith('.jsonl')) continue;
+    const sessionId = name.slice(0, -'.jsonl'.length);
+    if (!isValidSessionId(sessionId)) continue;
+    // An empty sidecar signals "attempted but nothing written" and should be
+    // re-parsed rather than treated as already-populated.
+    try {
+      const st = await stat(path.join(dir, name));
+      if (st.size > 0) out.add(sessionId);
+    } catch {
+      // raced with deletion; ignore
+    }
+  }
+  return out;
+}
+
 // Test helper: set the mtime/atime on a session's content file.
 export async function __setContentFileMtimeForTesting(
   sessionId: string,

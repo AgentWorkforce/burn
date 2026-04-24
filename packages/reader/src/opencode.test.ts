@@ -225,3 +225,161 @@ describe('parseOpencodeSessionIncremental', () => {
     assert.equal(r.turns.length, 0);
   });
 });
+
+describe('parseOpencodeSession content capture', () => {
+  async function withFixture<T>(body: (file: string) => Promise<T>): Promise<T> {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-content-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_content');
+      const partAsstDir = path.join(storage, 'part', 'msg_content_asst');
+      const partUserDir = path.join(storage, 'part', 'msg_content_user');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await mkdir(partUserDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_content.json'),
+        JSON.stringify({ id: 'ses_content', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_content_user.json'),
+        JSON.stringify({
+          id: 'msg_content_user',
+          sessionID: 'ses_content',
+          role: 'user',
+          time: { created: 1_776_988_000_000 },
+        }),
+      );
+      await writeFile(
+        path.join(partUserDir, 'prt_user_a.json'),
+        JSON.stringify({
+          id: 'prt_user_a',
+          sessionID: 'ses_content',
+          messageID: 'msg_content_user',
+          type: 'text',
+          text: 'run tests',
+        }),
+      );
+      // Synthetic user prompts (agent-mode nudges) must not appear in content.
+      await writeFile(
+        path.join(partUserDir, 'prt_user_b.json'),
+        JSON.stringify({
+          id: 'prt_user_b',
+          sessionID: 'ses_content',
+          messageID: 'msg_content_user',
+          type: 'text',
+          text: '<synthetic nudge>',
+          synthetic: true,
+        }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_content_asst.json'),
+        JSON.stringify({
+          id: 'msg_content_asst',
+          sessionID: 'ses_content',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-6',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+          tokens: { input: 100, output: 20, cache: { read: 0, write: 0 } },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_asst_a.json'),
+        JSON.stringify({
+          id: 'prt_asst_a',
+          sessionID: 'ses_content',
+          messageID: 'msg_content_asst',
+          type: 'text',
+          text: 'running now.',
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_asst_b.json'),
+        JSON.stringify({
+          id: 'prt_asst_b',
+          sessionID: 'ses_content',
+          messageID: 'msg_content_asst',
+          type: 'tool',
+          callID: 'call_oc_bash',
+          tool: 'bash',
+          state: {
+            status: 'completed',
+            input: { command: 'npm test' },
+            output: '10 passed',
+            metadata: { exit: 0 },
+          },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_asst_c.json'),
+        JSON.stringify({
+          id: 'prt_asst_c',
+          sessionID: 'ses_content',
+          messageID: 'msg_content_asst',
+          type: 'tool',
+          callID: 'call_oc_fail',
+          tool: 'bash',
+          state: {
+            status: 'completed',
+            input: { command: 'lint' },
+            output: 'ERR',
+            metadata: { exit: 2 },
+          },
+        }),
+      );
+      const file = path.join(sessionDir, 'ses_content.json');
+      return await body(file);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }
+
+  it('returns empty content when contentMode is off (default)', async () => {
+    await withFixture(async (file) => {
+      const { content } = await parseOpencodeSession(file);
+      assert.deepEqual(content, []);
+    });
+  });
+
+  it('returns empty content when contentMode is hash-only', async () => {
+    await withFixture(async (file) => {
+      const { content } = await parseOpencodeSession(file, { contentMode: 'hash-only' });
+      assert.deepEqual(content, []);
+    });
+  });
+
+  it('emits tool_result for each tool part, keyed by callID', async () => {
+    await withFixture(async (file) => {
+      const { turns, content } = await parseOpencodeSession(file, { contentMode: 'full' });
+      assert.equal(turns.length, 1);
+      const toolResults = content.filter((c) => c.kind === 'tool_result');
+      assert.equal(toolResults.length, 2);
+      const byId = new Map(toolResults.map((t) => [t.toolResult!.toolUseId, t]));
+      assert.equal(byId.get('call_oc_bash')!.toolResult!.content, '10 passed');
+      assert.equal(byId.get('call_oc_fail')!.toolResult!.content, 'ERR');
+      assert.equal(byId.get('call_oc_fail')!.toolResult!.isError, true, 'exit!=0 flags isError');
+      assert.equal(byId.get('call_oc_bash')!.toolResult!.isError, undefined);
+      const turnToolIds = new Set(turns[0]!.toolCalls.map((tc) => tc.id));
+      assert.ok(turnToolIds.has('call_oc_bash'));
+      assert.ok(turnToolIds.has('call_oc_fail'));
+    });
+  });
+
+  it('captures user text (skipping synthetic) and assistant text + tool_use', async () => {
+    await withFixture(async (file) => {
+      const { content } = await parseOpencodeSession(file, { contentMode: 'full' });
+      const userTexts = content.filter((c) => c.role === 'user' && c.kind === 'text').map((c) => c.text);
+      assert.deepEqual(userTexts, ['run tests']);
+      const asstText = content.find((c) => c.role === 'assistant' && c.kind === 'text');
+      assert.equal(asstText!.text, 'running now.');
+      const toolUses = content.filter((c) => c.kind === 'tool_use');
+      assert.equal(toolUses.length, 2);
+    });
+  });
+});
