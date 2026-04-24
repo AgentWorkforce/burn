@@ -45,8 +45,9 @@ export interface Subagent {
   // (the one with no parent inside the sidechain) — all turns of the same
   // invocation share it.
   agentId?: string;
-  // agentId of the parent subagent, or undefined when the parent is the main
-  // thread. Together with agentId this forms a parent→child tree.
+  // agentId of the parent subagent, or the sessionId when the parent is the
+  // main thread (for first-level subagents). Together with agentId this forms
+  // a parent→child tree.
   parentAgentId?: string;
   // The `subagent_type` field from the spawning Agent/Task tool input.
   subagentType?: string;

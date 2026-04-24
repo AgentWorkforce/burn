@@ -131,10 +131,6 @@ export async function parseClaudeSession(
   const captureContent = contentMode === 'full';
   const working = new Map<string, WorkingRecord>();
   const order: string[] = [];
-  const subagentByToolUseId = new Map<
-    string,
-    { type?: string; taskDescription?: string }
-  >();
   const nodesByUuid = new Map<string, LineNode>();
   const invocationCache = new Map<string, InvocationInfo | null>();
   // Track content with a monotonic sequence tied to line-read order so user
@@ -187,7 +183,6 @@ export async function parseClaudeSession(
         const prompt = extractPlainUserText(ul);
         if (prompt) currentUserText = prompt;
         collectErroredToolUseIds(ul, erroredToolUseIds);
-        captureSubagentFromToolResult(ul, subagentByToolUseId);
         if (captureContent) {
           for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
         }
@@ -220,7 +215,7 @@ export async function parseClaudeSession(
     if (!w) continue;
     const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
     const filesTouched = extractFilesTouched(toolCalls);
-    const subagent = resolveSubagent(w, toolCalls, subagentByToolUseId, nodesByUuid, invocationCache);
+    const subagent = resolveSubagent(w, nodesByUuid, invocationCache);
 
     const record: TurnRecord = {
       v: 1,
@@ -375,18 +370,46 @@ function registerUserNode(
   nodesByUuid.set(node.uuid, node);
 }
 
-function captureSubagentFromToolResult(
-  line: UserLine,
-  into: Map<string, { type?: string; taskDescription?: string }>,
-): void {
-  const content = line.message?.content;
-  if (!Array.isArray(content)) return;
-  for (const block of content) {
-    if (block && typeof block === 'object' && block.type === 'tool_result') {
-      const tr = block as { tool_use_id?: string };
-      if (typeof tr.tool_use_id === 'string' && !into.has(tr.tool_use_id)) {
-        into.set(tr.tool_use_id, {});
-      }
+// Light pre-scan of [0, endOffset) that registers LineNodes only — no turn
+// emission, no classification, no content capture. Used by the incremental
+// parser so resuming ingest can still resolve parentUuid chains that reach
+// back before the resume point.
+async function prescanNodes(
+  filePath: string,
+  endOffset: number,
+  nodesByUuid: Map<string, LineNode>,
+): Promise<void> {
+  if (endOffset <= 0) return;
+  const handle = await open(filePath, 'r');
+  let buf: Buffer;
+  try {
+    const st = await handle.stat();
+    const length = Math.min(endOffset, st.size);
+    if (length <= 0) return;
+    buf = Buffer.allocUnsafe(length);
+    await handle.read(buf, 0, length, 0);
+  } finally {
+    await handle.close();
+  }
+  let p = 0;
+  while (p < buf.length) {
+    const nlIdx = buf.indexOf(0x0a, p);
+    if (nlIdx === -1) break;
+    const text = buf.subarray(p, nlIdx).toString('utf8').trim();
+    p = nlIdx + 1;
+    if (!text) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const rec = parsed as Record<string, unknown>;
+    if (rec.type === 'assistant') {
+      registerAssistantNode(rec as unknown as AssistantLine, nodesByUuid);
+    } else if (rec.type === 'user') {
+      registerUserNode(rec as unknown as UserLine, nodesByUuid);
     }
   }
 }
@@ -612,8 +635,6 @@ function extractFilesTouched(toolCalls: ToolCall[]): string[] {
 
 function resolveSubagent(
   w: WorkingRecord,
-  _toolCalls: ToolCall[],
-  _subagentIndex: Map<string, { type?: string; taskDescription?: string }>,
   nodesByUuid?: Map<string, LineNode>,
   invocationCache?: Map<string, InvocationInfo | null>,
 ): Subagent | undefined {
@@ -667,7 +688,12 @@ function resolveInvocation(
     if (cached !== undefined) return cached ?? undefined;
   }
   let node = nodes.get(startUuid);
+  // Guard against parentUuid cycles (A→B→A) in malformed JSONL — the depth
+  // guard only covers recursion, not the while-loop walk.
+  const visited = new Set<string>();
   while (node) {
+    if (visited.has(node.uuid)) break;
+    visited.add(node.uuid);
     const parent = node.parentUuid ? nodes.get(node.parentUuid) : undefined;
     if (!parent) break;
     if (
@@ -804,12 +830,15 @@ export async function parseClaudeSessionIncremental(
 
   const working = new Map<string, WorkingRecord>();
   const order: string[] = [];
-  const subagentByToolUseId = new Map<
-    string,
-    { type?: string; taskDescription?: string }
-  >();
   const nodesByUuid = new Map<string, LineNode>();
   const invocationCache = new Map<string, InvocationInfo | null>();
+  // When resuming mid-file, populate nodesByUuid from the already-ingested
+  // prefix so new sidechain turns can still resolve their invocation root via
+  // parentUuid chains that point back before startOffset. Without this,
+  // subagent tree fields come up empty on the primary incremental ingest path.
+  if (startOffset > 0) {
+    await prescanNodes(filePath, startOffset, nodesByUuid);
+  }
   const messageIdFirstOffset = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
@@ -860,7 +889,6 @@ export async function parseClaudeSessionIncremental(
       const prompt = extractPlainUserText(ul);
       if (prompt) currentUserText = prompt;
       collectErroredToolUseIds(ul, erroredToolUseIds);
-      captureSubagentFromToolResult(ul, subagentByToolUseId);
       if (captureContent) {
         for (const c of extractUserContent(ul)) {
           pendingUserContent.push({ offset: lineStartOffset, record: c });
@@ -909,7 +937,7 @@ export async function parseClaudeSessionIncremental(
     if (w.stopReason === undefined) continue; // defer in-progress messages
     const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
     const filesTouched = extractFilesTouched(toolCalls);
-    const subagent = resolveSubagent(w, toolCalls, subagentByToolUseId, nodesByUuid, invocationCache);
+    const subagent = resolveSubagent(w, nodesByUuid, invocationCache);
     const record: TurnRecord = {
       v: 1,
       source: 'claude-code',

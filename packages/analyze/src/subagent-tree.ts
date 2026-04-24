@@ -160,7 +160,9 @@ function buildSessionTree(
   }
 
   // Attach each invocation node to its parent (by parentAgentId, falling
-  // back to the session root when missing).
+  // back to the session root when missing). Malformed data where a node is
+  // its own parent or participates in a cycle gets redirected to the root
+  // so foldCumulative / sortTree can't recurse infinitely.
   const parentByNode = new Map<string, string>();
   for (const t of turns) {
     if (!t.subagent?.agentId) continue;
@@ -170,7 +172,8 @@ function buildSessionTree(
   for (const [id, parentId] of parentByNode) {
     const node = byId.get(id);
     if (!node) continue;
-    const parent = byId.get(parentId) ?? root;
+    const resolvedParentId = resolveParentOrRoot(id, parentId, parentByNode, sessionId);
+    const parent = byId.get(resolvedParentId) ?? root;
     parent.children.push(node);
   }
 
@@ -215,6 +218,28 @@ function foldCumulative(node: MutableNode): void {
 function sortTree(node: MutableNode): void {
   node.children.sort((a, b) => b.cumulativeCost - a.cumulativeCost);
   for (const c of node.children) sortTree(c);
+}
+
+// If `id` is its own parent, or walking up the parent chain revisits a node,
+// the tree is malformed — redirect such a node straight to the session root
+// so later recursion can't loop.
+function resolveParentOrRoot(
+  id: string,
+  parentId: string,
+  parentByNode: Map<string, string>,
+  sessionId: string,
+): string {
+  if (parentId === id) return sessionId;
+  const seen = new Set<string>([id]);
+  let cursor = parentId;
+  while (cursor !== sessionId) {
+    if (seen.has(cursor)) return sessionId;
+    seen.add(cursor);
+    const next = parentByNode.get(cursor);
+    if (next === undefined) return parentId;
+    cursor = next;
+  }
+  return parentId;
 }
 
 export interface SubagentTypeStats {
