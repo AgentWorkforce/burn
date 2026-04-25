@@ -3,7 +3,8 @@ import * as path from 'node:path';
 
 import type { TurnRecord } from '@relayburn/reader';
 
-import type { ModelCost, PricingTable } from './pricing.js';
+import { lookupModelRate } from './cost.js';
+import type { PricingTable } from './pricing.js';
 
 const PER_MILLION = 1_000_000;
 const CHARS_PER_TOKEN = 4;
@@ -255,7 +256,7 @@ export function attributeClaudeMd(
     let ridingTurns = 0;
     const modelCounts = new Map<string, number>();
     for (const t of turns) {
-      const rate = lookupRate(t.model, input.pricing);
+      const rate = lookupModelRate(t.model, input.pricing);
       if (!rate) continue;
       modelCounts.set(t.model, (modelCounts.get(t.model) ?? 0) + 1);
       // Treat CLAUDE.md as residing in cache once any turn reads enough cached
@@ -335,17 +336,6 @@ function percentile(sorted: number[], p: number): number {
   if (sorted.length === 1) return sorted[0]!;
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
   return sorted[idx]!;
-}
-
-function lookupRate(model: string, pricing: PricingTable): ModelCost | undefined {
-  const direct = pricing[model];
-  if (direct) return direct;
-  const i = model.indexOf('/');
-  if (i >= 0) {
-    const stripped = pricing[model.slice(i + 1)];
-    if (stripped) return stripped;
-  }
-  return undefined;
 }
 
 export interface AdviseRecommendation {

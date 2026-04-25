@@ -1,6 +1,7 @@
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
 
-import type { ModelCost, PricingTable } from './pricing.js';
+import { lookupModelRate } from './cost.js';
+import type { PricingTable } from './pricing.js';
 
 const PER_MILLION = 1_000_000;
 const CHARS_PER_TOKEN = 4;
@@ -157,7 +158,7 @@ function attributeSession(
   const ridingActive: ToolAttribution[] = [];
 
   for (const turn of turns) {
-    const turnRate = lookupRate(turn.model, pricing);
+    const turnRate = lookupModelRate(turn.model, pricing);
 
     // 1) Initial cost: this turn pays for tool_results emitted on the previous
     //    turn (they enter context now as fresh `input` and/or `cacheCreate`).
@@ -337,19 +338,8 @@ function estimateTokens(text: string): number {
   return Math.max(0, Math.ceil(text.length / CHARS_PER_TOKEN));
 }
 
-function lookupRate(model: string, pricing: PricingTable): ModelCost | undefined {
-  const direct = pricing[model];
-  if (direct) return direct;
-  const i = model.indexOf('/');
-  if (i >= 0) {
-    const stripped = pricing[model.slice(i + 1)];
-    if (stripped) return stripped;
-  }
-  return undefined;
-}
-
 function costForTurnLocal(turn: TurnRecord, pricing: PricingTable): number | null {
-  const rate = lookupRate(turn.model, pricing);
+  const rate = lookupModelRate(turn.model, pricing);
   if (!rate) return null;
   const u = turn.usage;
   return (

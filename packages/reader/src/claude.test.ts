@@ -137,6 +137,55 @@ describe('parseClaudeSession', () => {
     assert.equal(edits[1]!.editPreHash, edits[0]!.editPostHash);
   });
 
+  it('attaches per-turn fidelity metadata with full coverage on a normal turn', async () => {
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    const t = turns[0]!;
+    assert.ok(t.fidelity, 'fidelity should be populated');
+    assert.equal(t.fidelity!.granularity, 'per-turn');
+    // simple-turn carries input_tokens, output_tokens, cache_read, cache_creation
+    assert.equal(t.fidelity!.coverage.hasInputTokens, true);
+    assert.equal(t.fidelity!.coverage.hasOutputTokens, true);
+    assert.equal(t.fidelity!.coverage.hasCacheReadTokens, true);
+    assert.equal(t.fidelity!.coverage.hasCacheCreateTokens, true);
+    // Claude session logs do not surface a separate reasoning token count.
+    assert.equal(t.fidelity!.coverage.hasReasoningTokens, false);
+    // Coverage is capability-level — Claude always surfaces tool calls and
+    // tool-result events when they exist, so both flags are true even on a
+    // turn that happened to make none.
+    assert.equal(t.fidelity!.coverage.hasToolCalls, true);
+    assert.equal(t.fidelity!.coverage.hasToolResultEvents, true);
+    assert.equal(t.fidelity!.coverage.hasSessionRelationships, true);
+    // Required fields present → derived class is full.
+    assert.equal(t.fidelity!.class, 'full');
+  });
+
+  it('marks hasOutputTokens=false when the upstream usage block omits output_tokens', async () => {
+    // Crucial coverage-vs-zero distinction: usage.output is `0` in the
+    // TurnRecord (because we have to put *something* there), but
+    // `coverage.hasOutputTokens` is false so downstream consumers can tell
+    // "we don't know" from "actually zero".
+    const { turns } = await parseClaudeSession(
+      path.join(FIXTURES, 'missing-output-tokens.jsonl'),
+    );
+    const t = turns[0]!;
+    assert.equal(t.usage.output, 0);
+    assert.ok(t.fidelity);
+    assert.equal(t.fidelity!.coverage.hasInputTokens, true);
+    assert.equal(t.fidelity!.coverage.hasOutputTokens, false);
+    assert.equal(t.fidelity!.coverage.hasCacheReadTokens, false);
+    assert.equal(t.fidelity!.coverage.hasCacheCreateTokens, false);
+    // Output missing → strictly less than usage-only → partial.
+    assert.equal(t.fidelity!.class, 'partial');
+  });
+
+  it('flips hasToolCalls to true when the turn has tool_use blocks', async () => {
+    const { turns } = await parseClaudeSession(path.join(FIXTURES, 'multi-block-turn.jsonl'));
+    const t = turns[0]!;
+    assert.ok(t.fidelity);
+    assert.equal(t.fidelity!.coverage.hasToolCalls, true);
+    assert.equal(t.fidelity!.class, 'full');
+  });
+
   it('emits a CompactionEvent anchored to the preceding turn when a compact_boundary system record appears', async () => {
     const { turns, events } = await parseClaudeSession(
       path.join(FIXTURES, 'compact-boundary.jsonl'),
