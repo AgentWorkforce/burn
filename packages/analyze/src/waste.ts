@@ -1,5 +1,6 @@
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
 
+import { costForTurn } from './cost.js';
 import type { ModelCost, PricingTable } from './pricing.js';
 
 const PER_MILLION = 1_000_000;
@@ -90,8 +91,12 @@ export function attributeWaste(
 
     let sessionGrand = 0;
     for (const t of sessionTurns) {
-      const cost = costForTurnLocal(t, pricing);
-      if (cost !== null) sessionGrand += cost;
+      // Use the canonical `costForTurn` so waste-attribution totals stay
+      // consistent with `cost.ts` for sessions involving reasoning tokens
+      // (Codex `included_in_output`, models with a separate reasoning tariff,
+      // etc.). Returns null for unknown models — skip those, same as before.
+      const breakdown = costForTurn(t, pricing);
+      if (breakdown !== null) sessionGrand += breakdown.total;
     }
 
     let sessionAttributed = 0;
@@ -346,19 +351,6 @@ function lookupRate(model: string, pricing: PricingTable): ModelCost | undefined
     if (stripped) return stripped;
   }
   return undefined;
-}
-
-function costForTurnLocal(turn: TurnRecord, pricing: PricingTable): number | null {
-  const rate = lookupRate(turn.model, pricing);
-  if (!rate) return null;
-  const u = turn.usage;
-  return (
-    (u.input / PER_MILLION) * rate.input +
-    (u.output / PER_MILLION) * rate.output +
-    (u.reasoning / PER_MILLION) * rate.output +
-    (u.cacheRead / PER_MILLION) * rate.cacheRead +
-    ((u.cacheCreate5m + u.cacheCreate1h) / PER_MILLION) * rate.cacheWrite
-  );
 }
 
 export interface FileAggregation {

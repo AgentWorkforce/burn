@@ -375,6 +375,48 @@ describe('attributeWaste', () => {
     assert.ok(Math.abs(a.persistenceCost - expectedPersistence) < 1e-9, `persistenceCost=${a.persistenceCost} expected=${expectedPersistence}`);
   });
 
+  it("session grand total honors source-aware reasoning semantics (Codex doesn't double-bill)", async () => {
+    // Regression test: `attributeWaste` must use the canonical `costForTurn`
+    // so it inherits per-source reasoning-billing semantics (`included_in_output`
+    // for Codex). Otherwise waste's `sessionGrand` overstates Codex spend by
+    // `reasoning × output_rate`, contradicting `costForTurn` totals.
+    const pricing = await loadBuiltinPricing();
+    // Pick a model that exists in the snapshot under both Anthropic and openai
+    // routes is not required — we just need a known Codex model. `gpt-5-codex`
+    // is the canonical Codex model in the issue. Fall back to an Anthropic
+    // model if it's missing from the snapshot.
+    const codexModel = pricing['gpt-5-codex'] ? 'gpt-5-codex' : 'claude-sonnet-4-6';
+    const sessionId = 's-codex-reasoning';
+    const turns: TurnRecord[] = [
+      turn({
+        sessionId,
+        messageId: 'msg-0',
+        turnIndex: 0,
+        source: 'codex',
+        model: codexModel,
+        usage: {
+          input: 1000,
+          // Codex's `output_tokens` already includes reasoning. Reasoning
+          // must NOT be billed on top.
+          output: 500,
+          reasoning: 200,
+          cacheRead: 0,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+      }),
+    ];
+    const result = attributeWaste(turns, { pricing });
+
+    const rate = pricing[codexModel]!;
+    const expected =
+      (1000 / 1_000_000) * rate.input + (500 / 1_000_000) * rate.output;
+    assert.ok(
+      Math.abs(result.grandTotal - expected) < 1e-9,
+      `Codex sessionGrand should not include reasoning at output rate: got=${result.grandTotal} expected=${expected}`,
+    );
+  });
+
   it('grand total + unattributed = session grand total within rounding', async () => {
     const pricing = await loadBuiltinPricing();
     const sessionId = 's-totals';
