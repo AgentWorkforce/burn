@@ -3,10 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
-import { queryAll } from '@relayburn/ledger';
+import { loadPlans, queryAll } from '@relayburn/ledger';
+import type { Plan } from '@relayburn/ledger';
 
 import type { ParsedArgs } from '../args.js';
+import { formatUsd } from '../format.js';
 import { ingestAll } from '../ingest.js';
+import { statusForPlans, type PlanStatus } from './plans.js';
 
 const USAGE_ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
 const ANTHROPIC_OAUTH_BETA = 'oauth-2025-04-20';
@@ -40,6 +43,7 @@ export interface LimitsDeps {
   fetchUsage?: (token: string) => Promise<UsageResponse>;
   now?: () => Date;
   loadForecast?: (windowStartMs: number, nowMs: number) => Promise<ForecastInput | null>;
+  loadPlanStatuses?: () => Promise<PlanStatus[]>;
 }
 
 export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promise<number> {
@@ -52,6 +56,7 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
   const fetchUsage = deps.fetchUsage ?? fetchUsageFromApi;
   const now = deps.now ?? (() => new Date());
   const loadForecast = deps.loadForecast ?? loadForecastFromLedger;
+  const loadPlanStatuses = deps.loadPlanStatuses ?? defaultLoadPlanStatuses;
 
   // Resolve the OAuth token once per invocation, not per render. The macOS
   // Keychain path spawns `security`, which is expensive enough that calling
@@ -95,6 +100,18 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
       ? projectFromOauth(usage.five_hour.percent_used, forecast.data)
       : null;
 
+    // Match the resilience pattern used for `fetchOnce` above: a malformed
+    // ~/.relayburn/plans.json (user-editable) shouldn't crash the whole
+    // command — and especially shouldn't terminate the --watch loop. Warn
+    // once on stderr and degrade to an empty plan list.
+    let planStatuses: PlanStatus[] = [];
+    try {
+      planStatuses = await loadPlanStatuses();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] warning: could not load plans (${msg})\n`);
+    }
+
     if (json) {
       return {
         exitCode: usageError ? 1 : 0,
@@ -113,6 +130,21 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
                   projectedPercentAtReset: projectedPercent,
                 }
               : null,
+            plans: planStatuses.map((s) => ({
+              id: s.usage.plan.id,
+              provider: s.usage.plan.provider,
+              name: s.usage.plan.name,
+              budgetUsd: s.usage.plan.budgetUsd,
+              resetDay: s.usage.plan.resetDay,
+              spentUsd: s.usage.spentUsd,
+              daysElapsed: s.usage.daysElapsed,
+              daysInCycle: s.usage.daysInCycle,
+              projectedEndOfCycleUsd: s.usage.projectedEndOfCycleUsd,
+              overBudget: s.usage.overBudget,
+              runwayDays: s.usage.runwayDays,
+              resetAt: s.usage.resetAt,
+              limitedData: s.usage.limitedData,
+            })),
           },
           null,
           2,
@@ -122,7 +154,7 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
 
     return {
       exitCode: usageError ? 1 : 0,
-      output: renderTty({ usage, usageError, forecast, projectedPercent, now: nowDate }),
+      output: renderTty({ usage, usageError, forecast, projectedPercent, planStatuses, now: nowDate }),
     };
   };
 
@@ -151,9 +183,10 @@ function renderTty(opts: {
   usageError: string | null;
   forecast: { window: ForecastWindow; data: ForecastInput } | null;
   projectedPercent: number | null;
+  planStatuses: PlanStatus[];
   now: Date;
 }): string {
-  const { usage, usageError, forecast, projectedPercent, now } = opts;
+  const { usage, usageError, forecast, projectedPercent, planStatuses, now } = opts;
   const lines: string[] = [];
   lines.push('Claude');
 
@@ -201,6 +234,26 @@ function renderTty(opts: {
         parts.push(`projected ${projectedPercent.toFixed(0)}% at reset`);
       }
       lines.push(`  ${parts.join(', ')}`);
+    }
+  }
+
+  for (const status of planStatuses) {
+    lines.push('');
+    lines.push(`Monthly plan (${status.usage.plan.name}):`);
+    const u = status.usage;
+    const spentPct = u.plan.budgetUsd > 0 ? (u.spentUsd / u.plan.budgetUsd) * 100 : 0;
+    lines.push(
+      `  Spent:     ${formatUsd(u.spentUsd)} / ${formatUsd(u.plan.budgetUsd)}   (${spentPct.toFixed(0)}%)`,
+    );
+    lines.push(`  Elapsed:   ${u.daysElapsed} / ${u.daysInCycle} days`);
+    const projected = formatUsd(u.projectedEndOfCycleUsd);
+    const overOrUnder = u.overBudget
+      ? `${formatUsd(u.projectedEndOfCycleUsd - u.plan.budgetUsd)} over`
+      : `${(((u.plan.budgetUsd - u.projectedEndOfCycleUsd) / u.plan.budgetUsd) * 100).toFixed(0)}% under`;
+    const limited = u.limitedData ? '  (limited data)' : '';
+    lines.push(`  Projected: ${projected} end-of-cycle (${overOrUnder})${limited}`);
+    if (u.runwayDays !== null) {
+      lines.push(`  Runway:    ${u.runwayDays} more day${u.runwayDays === 1 ? '' : 's'} at current rate`);
     }
   }
 
@@ -423,6 +476,12 @@ async function safeBody(res: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+async function defaultLoadPlanStatuses(): Promise<PlanStatus[]> {
+  const plans: Plan[] = await loadPlans();
+  if (plans.length === 0) return [];
+  return statusForPlans(plans);
 }
 
 async function loadForecastFromLedger(

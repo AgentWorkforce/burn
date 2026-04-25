@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`burn limits`** — Claude quota-window tracker. Pairs the OAuth `usage` endpoint snapshot (`five_hour`, `seven_day`, `seven_day_opus`, `extra_usage`) with a local-ledger forecast (burn rate + linearly-extrapolated projected % at reset). Supports `--watch [5s]`, `--json`, `--no-api` (offline), `--no-forecast`. Reads the OAuth token from `CLAUDE_CODE_OAUTH_TOKEN`, `~/.claude/.credentials.json`, or macOS Keychain without persisting it; responses cached ≤30s in-process. Token-missing exits 2 with a one-line message. (#5)
+- **`burn plans`** — monthly plan budget tracking. Subcommands: `add --provider <p> --preset <name>` (built-in presets: claude/pro $20, claude/max $200, cursor/pro $20), `add --provider custom --id <id> --name <"…"> --budget <usd> [--reset-day <1-31>]`, `remove <id>`, `set-reset-day <id> <day>`. Bare `burn plans` lists configured plans with current cycle spend, projected end-of-cycle, and elapsed days; `--json` emits the raw `PlanUsage` shape. Plans persist to `~/.relayburn/plans.json`. (#39)
+- **`burn limits` integrates plan status** when plans are configured: a `Monthly plan (<name>):` block per plan reports cycle spend / budget / elapsed / projected end-of-cycle (`$X over` or `Y% under`) plus `Runway: N more days at current rate` when over-pace. Projections with fewer than 7 days of cycle data render with a `(limited data)` marker so users don't anchor on noise from the first week. The `--json` payload gains a `plans[]` array with the full numeric breakdown. (#39)
 
 ## [0.9.0] - 2026-04-24
 

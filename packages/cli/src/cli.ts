@@ -10,6 +10,7 @@ import { runDiagnose } from './commands/diagnose.js';
 import { runIngest } from './commands/ingest.js';
 import { runLimits } from './commands/limits.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
+import { runPlans } from './commands/plans.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
@@ -25,6 +26,7 @@ Usage:
                      [--patterns[=retries,failures,compaction,reverts]]
   burn diagnose      <session-id> [--json]
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
+  burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn claude        [--tag k=v ...] [-- <claude args>]
@@ -46,6 +48,9 @@ Examples:
   burn limits
   burn limits --watch
   burn limits --no-api
+  burn plans
+  burn plans add --provider claude --preset max
+  burn plans set-reset-day claude-max 15
   burn context --since 30d
   burn context --kind claude-md
   burn context advise --top 3
@@ -80,6 +85,8 @@ async function main(): Promise<number> {
       return runDiagnose(args);
     case 'limits':
       return runLimits(args);
+    case 'plans':
+      return runPlans(args);
     case 'context':
       return runContext(args);
     case 'compare':

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`computePlanUsage(plan, turns, { pricing, now })`** (#39) — aggregates spend over a plan's current cycle and returns a `PlanUsage`: `spentUsd`, `daysElapsed`, `daysInCycle`, `projectedEndOfCycleUsd` (linear extrapolation from observed rate), `overBudget`, `runwayDays` (days of budget left at the current daily rate, only populated when the projection exceeds budget), `resetAt`, and `limitedData` (true when fewer than 7 days have elapsed in the cycle, so renderers can mark projections as low-confidence per the issue's acceptance). Provider-aware filtering: `claude` plans count `claude-code` + `anthropic-api` turns, `cursor` plans count `cursor` turns (no reader emits these yet — see SourceKind), `custom` plans count every turn.
+- **`cycleBounds(resetDay, now)`** — exposed for callers that need the cycle window without a full `PlanUsage`. UTC-anchored, clamps `resetDay > 28` to the actual last-day-of-month so February with `resetDay: 31` resolves to Feb 28/29, handles year-boundary crossings, and never returns a zero-length cycle.
+
 ## [0.9.0] - 2026-04-24
 
 ### Added

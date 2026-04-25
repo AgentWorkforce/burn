@@ -11,6 +11,7 @@ export {
   lockPath,
   pricingOverridePath,
   configPath,
+  plansPath,
   contentDir,
   contentFilePath,
   isValidSessionId,
@@ -51,3 +52,11 @@ export type {
   BuildClaudeHookSettingsOptions,
   ClaudeHookSettingsResult,
 } from './hook-settings.js';
+export {
+  BUILTIN_PRESETS,
+  findPreset,
+  loadPlans,
+  normalizePlan,
+  savePlans,
+} from './plans.js';
+export type { Plan, PlanPreset, PlanProvider, PlansFile } from './plans.js';
