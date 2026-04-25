@@ -9,8 +9,10 @@ import type {
   CompactionEvent,
   ContentRecord,
   ContentStoreMode,
+  SessionRelationshipRecord,
   Subagent,
   ToolCall,
+  ToolResultEventRecord,
   TurnRecord,
   Usage,
 } from './types.js';
@@ -121,6 +123,12 @@ export interface ParseResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   events: CompactionEvent[];
+  // Normalized execution-graph metadata (#42). `relationships` describes how
+  // sessions relate (root + one row per discovered subagent invocation in
+  // this PR; fork/continuation arrive in follow-up work). `toolResultEvents`
+  // is the chronological tool_result stream keyed by `toolUseId`.
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
 }
 
 export async function parseClaudeSession(
@@ -147,6 +155,17 @@ export async function parseClaudeSession(
   let lastAssistantMessageId: string | undefined;
   let currentUserText = '';
   let seq = 0;
+  // Execution graph (#42). Tool-result chronology events are emitted as user
+  // lines carrying `tool_result` blocks are read so chronology matches log
+  // order even within a single user line carrying multiple results. The
+  // counter is shared across the whole file for this parse pass.
+  const toolResultEvents: ToolResultEventRecord[] = [];
+  const toolResultCounters = new Map<string, number>(); // toolUseId -> next callIndex
+  let nextEventIndex = 0;
+  // Per-session relationship rows. Roots emit on the first line we see for a
+  // sessionId; subagent rows are derived after working records are resolved.
+  const relationships: SessionRelationshipRecord[] = [];
+  const seenRootSessionIds = new Set<string>();
 
   const rl = createInterface({
     input: createReadStream(filePath, { encoding: 'utf8' }),
@@ -176,6 +195,9 @@ export async function parseClaudeSession(
           userTextByMessageId.set(mid, currentUserText);
         }
         if (typeof mid === 'string') lastAssistantMessageId = mid;
+        if (typeof al.sessionId === 'string' && al.sessionId.length > 0) {
+          recordRoot(relationships, seenRootSessionIds, al.sessionId, al.timestamp);
+        }
         ingestAssistant(al, working, order, nodesByUuid);
       } else if (rec.type === 'user') {
         const ul = rec as unknown as UserLine;
@@ -183,6 +205,15 @@ export async function parseClaudeSession(
         const prompt = extractPlainUserText(ul);
         if (prompt) currentUserText = prompt;
         collectErroredToolUseIds(ul, erroredToolUseIds);
+        if (typeof ul.sessionId === 'string' && ul.sessionId.length > 0) {
+          recordRoot(relationships, seenRootSessionIds, ul.sessionId, ul.timestamp);
+        }
+        nextEventIndex = collectToolResultEvents(
+          ul,
+          toolResultEvents,
+          toolResultCounters,
+          nextEventIndex,
+        );
         if (captureContent) {
           for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
         }
@@ -250,11 +281,13 @@ export async function parseClaudeSession(
   }
 
   annotateCompactionEvents(events, turns);
+  collectSubagentRelationships(turns, relationships);
+  annotateSpawnEvents(toolResultEvents, turns);
 
   const content: ContentRecord[] = captureContent
     ? mergeContentByOrder(userPending, assistantPending)
     : [];
-  return { turns, content, events };
+  return { turns, content, events, relationships, toolResultEvents };
 }
 
 function mergeContentByOrder(
@@ -578,6 +611,160 @@ function applyEditHashes(call: ToolCall, input: Record<string, unknown>): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Execution graph helpers (#42).
+// ---------------------------------------------------------------------------
+
+function recordRoot(
+  out: SessionRelationshipRecord[],
+  seen: Set<string>,
+  sessionId: string,
+  ts?: string,
+): void {
+  if (seen.has(sessionId)) return;
+  seen.add(sessionId);
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    relationshipType: 'root',
+  };
+  if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+  out.push(row);
+}
+
+// Walk a user line's tool_result blocks and emit one ToolResultEventRecord
+// per block. Status follows from is_error: errored vs completed; `running` /
+// `cancelled` are reserved for future progress / queue events that Claude
+// historical logs don't expose by default. Returns the next eventIndex.
+function collectToolResultEvents(
+  line: UserLine,
+  out: ToolResultEventRecord[],
+  counters: Map<string, number>,
+  startIndex: number,
+): number {
+  let nextIndex = startIndex;
+  const sessionId = line.sessionId;
+  if (typeof sessionId !== 'string' || sessionId.length === 0) return nextIndex;
+  const body = line.message?.content;
+  if (!Array.isArray(body)) return nextIndex;
+  const messageId = typeof line.uuid === 'string' ? line.uuid : undefined;
+  const ts = typeof line.timestamp === 'string' ? line.timestamp : undefined;
+  for (const block of body) {
+    if (!block || typeof block !== 'object' || block.type !== 'tool_result') continue;
+    const tr = block as {
+      tool_use_id?: string;
+      content?: unknown;
+      is_error?: boolean;
+    };
+    if (typeof tr.tool_use_id !== 'string' || tr.tool_use_id.length === 0) continue;
+    const callIndex = counters.get(tr.tool_use_id) ?? 0;
+    counters.set(tr.tool_use_id, callIndex + 1);
+    const isError = tr.is_error === true;
+    const record: ToolResultEventRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId,
+      toolUseId: tr.tool_use_id,
+      callIndex,
+      eventIndex: nextIndex++,
+      status: isError ? 'errored' : 'completed',
+      eventSource: 'tool_result',
+    };
+    if (messageId !== undefined) record.messageId = messageId;
+    if (ts !== undefined) record.ts = ts;
+    if (isError) record.isError = true;
+    const measured = measureToolResult(tr.content);
+    if (measured.length !== undefined) record.contentLength = measured.length;
+    if (measured.hash !== undefined) record.contentHash = measured.hash;
+    out.push(record);
+  }
+  return nextIndex;
+}
+
+function measureToolResult(content: unknown): { length?: number; hash?: string } {
+  // Hash the canonical JSON serialization. For pure strings we hash the bytes
+  // directly so callers can compare a tool_result to its raw text.
+  if (typeof content === 'string') {
+    return { length: content.length, hash: contentHash(content) };
+  }
+  if (content === undefined || content === null) {
+    return {};
+  }
+  try {
+    const serialized = JSON.stringify(content);
+    if (typeof serialized !== 'string') return {};
+    return { length: serialized.length, hash: contentHash(serialized) };
+  } catch {
+    return {};
+  }
+}
+
+// Walk the turns we just emitted and record one `subagent` relationship row
+// per distinct (subagent invocation) we see. Keyed by agentId so re-emitting
+// the same invocation across multiple turns produces a single row. The row
+// lives on the *child* session (which, in Claude's case, is the same file
+// session id) and points at `parentAgentId` as `relatedSessionId` for nested
+// invocations, or at the file's session id for first-level subagents.
+function collectSubagentRelationships(
+  turns: TurnRecord[],
+  out: SessionRelationshipRecord[],
+): void {
+  const seen = new Set<string>();
+  for (const t of turns) {
+    const sub = t.subagent;
+    if (!sub || !sub.isSidechain) continue;
+    const agentId = sub.agentId;
+    if (!agentId) continue;
+    if (seen.has(agentId)) continue;
+    seen.add(agentId);
+    const row: SessionRelationshipRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: t.sessionId,
+      relationshipType: 'subagent',
+      agentId,
+    };
+    // For first-level subagents, parentAgentId is set to the file's
+    // sessionId; for nested ones it's the enclosing invocation's agentId.
+    // Either way it's the right value to put on `relatedSessionId` so
+    // consumers can join child -> parent.
+    if (sub.parentAgentId !== undefined) row.relatedSessionId = sub.parentAgentId;
+    if (sub.parentToolUseId !== undefined) row.parentToolUseId = sub.parentToolUseId;
+    if (sub.subagentType !== undefined) row.subagentType = sub.subagentType;
+    if (sub.description !== undefined) row.description = sub.description;
+    if (typeof t.ts === 'string' && t.ts.length > 0) row.ts = t.ts;
+    out.push(row);
+  }
+}
+
+// Mark tool_result events whose toolUseId resolved to a subagent invocation
+// with the matching `agentId` so `ToolResultEventRecord` rows can be joined
+// to the spawned subagent without re-walking the chain.
+function annotateSpawnEvents(
+  events: ToolResultEventRecord[],
+  turns: TurnRecord[],
+): void {
+  if (events.length === 0) return;
+  const agentByParentToolUse = new Map<string, string>();
+  for (const t of turns) {
+    const sub = t.subagent;
+    if (!sub || !sub.isSidechain) continue;
+    if (sub.parentToolUseId && sub.agentId) {
+      // Only the first occurrence wins; all turns of one invocation share the
+      // same (parentToolUseId, agentId) pair, so order doesn't matter.
+      if (!agentByParentToolUse.has(sub.parentToolUseId)) {
+        agentByParentToolUse.set(sub.parentToolUseId, sub.agentId);
+      }
+    }
+  }
+  if (agentByParentToolUse.size === 0) return;
+  for (const ev of events) {
+    const agentId = agentByParentToolUse.get(ev.toolUseId);
+    if (agentId) ev.agentId = agentId;
+  }
+}
+
 function annotateCompactionEvents(
   events: CompactionEvent[],
   turns: TurnRecord[],
@@ -794,6 +981,12 @@ export interface ParseIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   events: CompactionEvent[];
+  // Execution graph (#42) — see ParseResult for shape. Both arrays follow
+  // the same endOffset dedup rule the rest of the incremental result uses:
+  // any record whose source line lives at or past endOffset is deferred to
+  // the next pass so we don't double-emit on resume.
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
   endOffset: number;
   // Carry forward to the next incremental call; see `lastUserText` option.
   lastUserText: string;
@@ -817,6 +1010,8 @@ export async function parseClaudeSessionIncremental(
         turns: [],
         content: [],
         events: [],
+        relationships: [],
+        toolResultEvents: [],
         endOffset: startOffset,
         lastUserText: options.lastUserText ?? '',
       };
@@ -851,6 +1046,21 @@ export async function parseClaudeSessionIncremental(
   // records past endOffset and (b) interleave them with assistant content by
   // source-order at emit time.
   const pendingUserContent: Array<{ offset: number; record: ContentRecord }> = [];
+  // Execution graph (#42) — same endOffset-deferred shape as content/events.
+  // Tool-result events are tagged with the offset of the user line that
+  // carried them so we can drop any past endOffset on this pass and re-emit
+  // them when the next call resumes from there.
+  const pendingToolResultEvents: Array<{
+    offset: number;
+    record: ToolResultEventRecord;
+  }> = [];
+  const toolResultCounters = new Map<string, number>();
+  let nextEventIndex = 0;
+  const pendingRelationships: Array<{
+    offset: number;
+    record: SessionRelationshipRecord;
+  }> = [];
+  const seenRootSessionIds = new Set<string>();
 
   let p = 0;
   let cursorOffset = startOffset; // position just past the last complete \n
@@ -882,6 +1092,15 @@ export async function parseClaudeSessionIncremental(
         userTextByMessageId.set(msgId, currentUserText);
       }
       if (msgId) lastAssistantMessageId = msgId;
+      if (typeof line.sessionId === 'string' && line.sessionId.length > 0) {
+        recordRootIncremental(
+          pendingRelationships,
+          seenRootSessionIds,
+          line.sessionId,
+          line.timestamp,
+          lineStartOffset,
+        );
+      }
       ingestAssistant(line, working, order, nodesByUuid);
     } else if (rec.type === 'user') {
       const ul = rec as unknown as UserLine;
@@ -889,6 +1108,25 @@ export async function parseClaudeSessionIncremental(
       const prompt = extractPlainUserText(ul);
       if (prompt) currentUserText = prompt;
       collectErroredToolUseIds(ul, erroredToolUseIds);
+      if (typeof ul.sessionId === 'string' && ul.sessionId.length > 0) {
+        recordRootIncremental(
+          pendingRelationships,
+          seenRootSessionIds,
+          ul.sessionId,
+          ul.timestamp,
+          lineStartOffset,
+        );
+      }
+      const harvested: ToolResultEventRecord[] = [];
+      nextEventIndex = collectToolResultEvents(
+        ul,
+        harvested,
+        toolResultCounters,
+        nextEventIndex,
+      );
+      for (const ev of harvested) {
+        pendingToolResultEvents.push({ offset: lineStartOffset, record: ev });
+      }
       if (captureContent) {
         for (const c of extractUserContent(ul)) {
           pendingUserContent.push({ offset: lineStartOffset, record: c });
@@ -996,11 +1234,49 @@ export async function parseClaudeSessionIncremental(
   }
   annotateCompactionEvents(emittedEvents, turns);
 
+  // Execution graph (#42). Mirror the same endOffset-defer rule so we don't
+  // double-emit on resume. We only annotate spawn agentIds onto events that
+  // were actually emitted.
+  const emittedRelationships: SessionRelationshipRecord[] = [];
+  for (const r of pendingRelationships) {
+    if (r.offset < endOffset) emittedRelationships.push(r.record);
+  }
+  // Subagent rows are derived from the turns we just emitted in this pass —
+  // they share an offset boundary with their parent assistant line, so the
+  // turn-level endOffset filter already handled it.
+  collectSubagentRelationships(turns, emittedRelationships);
+  const emittedToolResultEvents: ToolResultEventRecord[] = [];
+  for (const ev of pendingToolResultEvents) {
+    if (ev.offset < endOffset) emittedToolResultEvents.push(ev.record);
+  }
+  annotateSpawnEvents(emittedToolResultEvents, turns);
+
   return {
     turns,
     content,
     events: emittedEvents,
+    relationships: emittedRelationships,
+    toolResultEvents: emittedToolResultEvents,
     endOffset,
     lastUserText: currentUserText,
   };
+}
+
+function recordRootIncremental(
+  out: Array<{ offset: number; record: SessionRelationshipRecord }>,
+  seen: Set<string>,
+  sessionId: string,
+  ts: string | undefined,
+  offset: number,
+): void {
+  if (seen.has(sessionId)) return;
+  seen.add(sessionId);
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    relationshipType: 'root',
+  };
+  if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+  out.push({ offset, record: row });
 }

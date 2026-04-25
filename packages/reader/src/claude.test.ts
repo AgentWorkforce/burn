@@ -137,6 +137,68 @@ describe('parseClaudeSession', () => {
     assert.equal(edits[1]!.editPreHash, edits[0]!.editPostHash);
   });
 
+  it('emits ToolResultEventRecords for each tool_result block in chronological order', async () => {
+    const { toolResultEvents } = await parseClaudeSession(path.join(FIXTURES, 'retry-loop.jsonl'));
+    // retry-loop.jsonl has four Bash tool calls each followed by an errored
+    // tool_result. The fixture also includes user-only lines that don't
+    // contain tool_results, so we expect exactly 4 events here.
+    assert.equal(toolResultEvents.length, 4);
+    for (const ev of toolResultEvents) {
+      assert.equal(ev.v, 1);
+      assert.equal(ev.source, 'claude-code');
+      assert.equal(ev.eventSource, 'tool_result');
+      assert.equal(ev.status, 'errored');
+      assert.equal(ev.isError, true);
+      // contentLength + contentHash are populated for non-empty results.
+      assert.equal(typeof ev.contentLength, 'number');
+      assert.equal(typeof ev.contentHash, 'string');
+    }
+    // eventIndex is monotonically increasing.
+    for (let i = 1; i < toolResultEvents.length; i++) {
+      assert.ok(toolResultEvents[i]!.eventIndex > toolResultEvents[i - 1]!.eventIndex);
+    }
+  });
+
+  it('emits a root SessionRelationshipRecord per session and a subagent row per invocation', async () => {
+    const { relationships } = await parseClaudeSession(
+      path.join(FIXTURES, 'nested-subagent.jsonl'),
+    );
+    const roots = relationships.filter((r) => r.relationshipType === 'root');
+    const subs = relationships.filter((r) => r.relationshipType === 'subagent');
+    assert.equal(roots.length, 1);
+    assert.equal(roots[0]!.sessionId, '55555555-5555-5555-5555-555555555555');
+
+    // Two distinct invocations: outer (Explore) and inner (code-reviewer).
+    assert.equal(subs.length, 2);
+    const outer = subs.find((r) => r.subagentType === 'Explore')!;
+    const inner = subs.find((r) => r.subagentType === 'code-reviewer')!;
+    assert.ok(outer);
+    assert.ok(inner);
+
+    // Outer subagent: parent is the main session id.
+    assert.equal(outer.agentId, 'u-sub1-user');
+    assert.equal(outer.parentToolUseId, 'toolu_outer');
+    assert.equal(outer.relatedSessionId, '55555555-5555-5555-5555-555555555555');
+    assert.equal(outer.description, 'Research the codebase');
+
+    // Inner subagent: parent is the outer invocation's agentId.
+    assert.equal(inner.agentId, 'u-sub2-user');
+    assert.equal(inner.parentToolUseId, 'toolu_inner');
+    assert.equal(inner.relatedSessionId, 'u-sub1-user');
+  });
+
+  it('joins tool_result events back to their spawned subagent via agentId', async () => {
+    const { toolResultEvents } = await parseClaudeSession(
+      path.join(FIXTURES, 'nested-subagent.jsonl'),
+    );
+    const outerSpawn = toolResultEvents.find((e) => e.toolUseId === 'toolu_outer');
+    const innerSpawn = toolResultEvents.find((e) => e.toolUseId === 'toolu_inner');
+    assert.ok(outerSpawn, 'Agent/Task tool_result for the outer spawn must surface as an event');
+    assert.ok(innerSpawn, 'Agent/Task tool_result for the inner spawn must surface as an event');
+    assert.equal(outerSpawn!.agentId, 'u-sub1-user');
+    assert.equal(innerSpawn!.agentId, 'u-sub2-user');
+  });
+
   it('emits a CompactionEvent anchored to the preceding turn when a compact_boundary system record appears', async () => {
     const { turns, events } = await parseClaudeSession(
       path.join(FIXTURES, 'compact-boundary.jsonl'),

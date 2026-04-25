@@ -11,6 +11,8 @@ import type { CodexResumeState, ContentStoreMode } from '@relayburn/reader';
 import {
   appendCompactions,
   appendContent,
+  appendRelationships,
+  appendToolResultEvents,
   appendTurns,
   listContentSessionIds,
   loadConfig,
@@ -113,8 +115,15 @@ async function ingestClaudeInto(
         };
         const priorUserText = rotated ? undefined : priorClaude?.lastUserText;
         if (priorUserText) parseOpts.lastUserText = priorUserText;
-        const { turns, content, events, endOffset, lastUserText } =
-          await parseClaudeSessionIncremental(file, parseOpts);
+        const {
+          turns,
+          content,
+          events,
+          relationships,
+          toolResultEvents,
+          endOffset,
+          lastUserText,
+        } = await parseClaudeSessionIncremental(file, parseOpts);
         if (turns.length > 0) {
           await appendTurns(turns);
           report.appendedTurns += turns.length;
@@ -125,6 +134,12 @@ async function ingestClaudeInto(
         }
         if (events.length > 0) {
           await appendCompactions(events);
+        }
+        if (relationships.length > 0) {
+          await appendRelationships(relationships);
+        }
+        if (toolResultEvents.length > 0) {
+          await appendToolResultEvents(toolResultEvents);
         }
         const next: ClaudeCursor = {
           kind: 'claude',

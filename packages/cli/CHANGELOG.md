@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
+- **Execution-graph passthrough in ingest** (#42, first PR). `burn ingest` and `burn claude` (subcommand wrapper) now persist `SessionRelationshipRecord`s and `ToolResultEventRecord`s the Claude reader produces, alongside the existing turns / content / compaction lines. No new flags or output yet — this PR just lays the substrate so #8 (subagent tree), #11 (waste patterns), and future archive work can consume the graph instead of reconstructing it from `isSidechain` / `parentUuid`.
 
 ## [0.11.0] - 2026-04-25
 

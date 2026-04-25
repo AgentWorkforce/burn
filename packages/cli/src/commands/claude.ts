@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto';
 
 import { parseClaudeSession } from '@relayburn/reader';
 import {
+  appendCompactions,
   appendContent,
+  appendRelationships,
+  appendToolResultEvents,
   appendTurns,
   loadConfig,
   loadCursors,
@@ -61,13 +64,17 @@ export async function ingestSession(cwd: string, sessionId: string): Promise<voi
     return;
   }
   const cfg = await loadConfig();
-  const { turns, content } = await parseClaudeSession(file, {
-    sessionPath: file,
-    contentMode: cfg.content.store,
-  });
+  const { turns, content, events, relationships, toolResultEvents } =
+    await parseClaudeSession(file, {
+      sessionPath: file,
+      contentMode: cfg.content.store,
+    });
   if (turns.length === 0) return;
   await appendTurns(turns);
   if (content.length > 0) await appendContent(content);
+  if (events.length > 0) await appendCompactions(events);
+  if (relationships.length > 0) await appendRelationships(relationships);
+  if (toolResultEvents.length > 0) await appendToolResultEvents(toolResultEvents);
 
   // Persist a cursor so a later `burn summary` (which calls ingestAll) skips
   // this file instead of re-parsing and re-appending its content. Turns are

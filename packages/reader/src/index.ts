@@ -12,6 +12,11 @@ export type {
   ContentToolUse,
   ContentToolResult,
   ContentStoreMode,
+  RelationshipType,
+  SessionRelationshipRecord,
+  ToolResultStatus,
+  ToolResultEventSource,
+  ToolResultEventRecord,
 } from './types.js';
 export { classifyActivity, countRetries, normalizeToolName } from './classifier.js';
 export type { ClassificationInput, ClassificationResult } from './classifier.js';
