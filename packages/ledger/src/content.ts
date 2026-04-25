@@ -16,11 +16,22 @@ import { contentDir, contentFilePath, isValidSessionId } from './paths.js';
 
 export interface PruneOptions {
   olderThanMs: number;
+  // When provided, prune skips sessions for which the callback returns true —
+  // the source session file still exists upstream and `burn rebuild --content`
+  // can rederive the sidecar at any time, so deleting it would be silently
+  // lossy. The ledger package stays decoupled from adapter-specific paths;
+  // the caller (CLI) builds the source index and supplies the predicate.
+  isRecoverable?: (sessionId: string) => boolean | Promise<boolean>;
 }
 
 export interface PruneResult {
   filesDeleted: number;
   bytesFreed: number;
+  // Sidecars left in place because `isRecoverable(sessionId)` returned true.
+  // Counted separately from `filesDeleted` so callers can surface a "kept N
+  // recoverable sidecars" line and point users at `--force` if they really
+  // want to reclaim that disk.
+  skippedRecoverable: number;
 }
 
 export interface ReadContentSelector {
@@ -101,13 +112,15 @@ export async function pruneContent(options: PruneOptions): Promise<PruneResult> 
     entries = await readdir(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { filesDeleted: 0, bytesFreed: 0 };
+      return { filesDeleted: 0, bytesFreed: 0, skippedRecoverable: 0 };
     }
     throw err;
   }
   const cutoff = Date.now() - options.olderThanMs;
+  const isRecoverable = options.isRecoverable;
   let filesDeleted = 0;
   let bytesFreed = 0;
+  let skippedRecoverable = 0;
   for (const name of entries) {
     if (!name.endsWith('.jsonl')) continue;
     const sessionId = name.slice(0, -'.jsonl'.length);
@@ -116,7 +129,11 @@ export async function pruneContent(options: PruneOptions): Promise<PruneResult> 
     // Acquire the same per-session lock used by appendSessionContent so a
     // prune cannot race with an in-flight write for this session. We re-stat
     // inside the lock to ensure we're deciding on the post-write mtime.
-    const outcome = await withLock(`content.${sessionId}`, async () => {
+    type Outcome =
+      | { kind: 'deleted'; size: number }
+      | { kind: 'skippedRecoverable' }
+      | null;
+    const outcome: Outcome = await withLock(`content.${sessionId}`, async () => {
       let st: Awaited<ReturnType<typeof stat>>;
       try {
         st = await stat(full);
@@ -128,20 +145,38 @@ export async function pruneContent(options: PruneOptions): Promise<PruneResult> 
       // eligible. This also makes `pruneContent({olderThanMs: 0})` clear the
       // directory reliably.
       if (st.mtimeMs > cutoff) return null;
+      // Source-aware protection: if the upstream agent's session file still
+      // exists, the sidecar is recoverable via `burn rebuild --content`, so
+      // deleting it on retention alone is silently lossy. Callers opt in by
+      // supplying `isRecoverable`; the ledger package itself never reaches
+      // out to adapter-specific paths.
+      if (isRecoverable) {
+        try {
+          if (await isRecoverable(sessionId)) {
+            return { kind: 'skippedRecoverable' };
+          }
+        } catch {
+          // If the predicate throws, fall through to the existing behavior —
+          // we'd rather prune than fail-open and accumulate forever on a
+          // broken source index.
+        }
+      }
       try {
         await unlink(full);
-        return { size: st.size };
+        return { kind: 'deleted', size: st.size };
       } catch {
         // raced with another deleter or was already gone
         return null;
       }
     });
-    if (outcome) {
+    if (outcome?.kind === 'deleted') {
       filesDeleted++;
       bytesFreed += outcome.size;
+    } else if (outcome?.kind === 'skippedRecoverable') {
+      skippedRecoverable++;
     }
   }
-  return { filesDeleted, bytesFreed };
+  return { filesDeleted, bytesFreed, skippedRecoverable };
 }
 
 export async function listContentSessionIds(): Promise<Set<string>> {

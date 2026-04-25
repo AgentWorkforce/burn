@@ -72,6 +72,14 @@ export {
 } from './context-md.js';
 export { computePlanUsage, cycleBounds } from './plan-usage.js';
 export type { ComputePlanUsageOptions, PlanUsage } from './plan-usage.js';
+export {
+  emptyFidelitySummary,
+  hasMinimumFidelity,
+  summarizeFidelity,
+} from './fidelity.js';
+export type { FidelitySummary } from './fidelity.js';
+export { DEFAULT_RULES, resolveProvider } from './provider-reattribution.js';
+export type { ProviderResolution, ProviderRule } from './provider-reattribution.js';
 export type {
   AttributeContextInput,
   ContextAttributionResult,

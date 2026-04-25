@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `costForUsage(usage, model, pricing, { reasoningMode })` accepts an explicit override. `costForTurn` infers `included_in_output` for `source: 'codex'` automatically.
 - `flatten` is now exported so callers can build `PricingTable`s from in-memory `models.dev` payloads.
 
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **`summarizeFidelity(turns)` and `hasMinimumFidelity(fidelity, minimum)`** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). `summarizeFidelity` walks a slice of turns and returns a `FidelitySummary` with totals broken down by `class`, by `granularity`, and per-field `missingCoverage` counts plus an `unknown` bucket for records emitted before `TurnRecord.fidelity` existed. `hasMinimumFidelity` is the predicate behind a future "default exclude aggregate-only / cost-only" filter for `burn compare` and friends; treats `undefined` fidelity as passing for backward compat. Pure functions — no I/O, safe to call repeatedly.
+
+## [0.13.1] - 2026-04-25
+
+### Added
+
+- **Synthetic provider reattribution layer (#31).** `resolveProvider(model, rules?)` returns a `{ provider, normalizedModel, matchedRule }` for Synthetic-routed model IDs — the cross-collector reattribution pattern used when a Claude Code or OpenCode session uses a model dispatched through Synthetic.new. First pass covers three prefix shapes (`hf:*`, `accounts/fireworks/models/*`, `synthetic/*`) and exposes `DEFAULT_RULES` plus a `ProviderRule` type so future aggregators (OpenRouter, etc.) plug in via the same scaffolding. Pricing lookup in `costForTurn`, `attributeWaste`, and `attributeClaudeMd`/`attributeContext` all consult the reattribution layer before falling back to the existing `provider/model` strip, so a turn logged with `hf:deepseek-ai/deepseek-r1` resolves to the `deepseek-r1` rate instead of returning `null` across summary, waste, and context views. Reattribution stays query-time only — raw model strings are never mutated in the ledger. Octofriend SQLite fallback and other aggregator prefixes are deferred to follow-up issues.
+
 ## [0.11.0] - 2026-04-25
 
 ### Added

@@ -3,10 +3,12 @@ import {
   buildSubagentTree,
   computeQuality,
   loadPricing,
+  summarizeFidelity,
 } from '@relayburn/analyze';
 import { costForTurn, sumCosts } from '@relayburn/analyze';
 import type {
   CostBreakdown,
+  FidelitySummary,
   OutcomeLabel,
   QualityResult,
   SubagentTreeNode,
@@ -43,6 +45,31 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
 
   const rowsByModel = aggregateByModel(turns, pricing);
   const totalCost = sumCosts(rowsByModel.map((r) => r.cost));
+  const fidelity = summarizeFidelity(turns);
+
+  if (args.flags['json'] === true) {
+    // JSON contract: numeric usage fields are always numbers, but the
+    // companion `fidelity` block is the only honest answer to "are these
+    // zeros real?". Programmatic consumers should consult `missingCoverage`
+    // before trusting any aggregate.
+    const payload = {
+      ingest: {
+        ingestedSessions: ingestReport.ingestedSessions,
+        appendedTurns: ingestReport.appendedTurns,
+      },
+      turns: turns.length,
+      totalCost,
+      byModel: rowsByModel.map((r) => ({
+        model: r.model,
+        turns: r.turns,
+        usage: r.usage,
+        cost: r.cost,
+      })),
+      fidelity,
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+    return 0;
+  }
 
   const lines: string[] = [];
   lines.push('');
@@ -80,6 +107,15 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / reasoning ${formatUsd(totalCost.reasoning)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
   );
   lines.push('');
+
+  // Only print a fidelity line when *something* is below full — the common
+  // all-Claude case is full fidelity for every turn, and noise there would
+  // train people to ignore the line in cases that actually matter.
+  const fidelityNotice = renderFidelityNotice(fidelity);
+  if (fidelityNotice) {
+    lines.push(fidelityNotice);
+    lines.push('');
+  }
 
   if (args.flags['quality'] === true) {
     const contentBySession = await loadContentForQuality(turns);
@@ -263,6 +299,28 @@ function renderNodeLine(node: SubagentTreeNode, indent: string): string {
   const cost = formatUsd(node.cumulativeCost);
   const turns = `[${formatInt(node.cumulativeTurns)} turn${node.cumulativeTurns === 1 ? '' : 's'}]`;
   return `${indent}${label}${model}  ${cost}  ${turns}`;
+}
+
+function renderFidelityNotice(f: FidelitySummary): string | undefined {
+  // Returns undefined when every classified turn is full fidelity *and* no
+  // unknown turns exist — i.e. every number above is trustworthy. Otherwise
+  // surfaces a one-liner so the user knows which buckets to be skeptical of.
+  const nonFull =
+    f.byClass['usage-only'] +
+    f.byClass['aggregate-only'] +
+    f.byClass['cost-only'] +
+    f.byClass.partial;
+  if (nonFull === 0 && f.unknown === 0) return undefined;
+  const parts: string[] = [];
+  if (f.byClass.full > 0) parts.push(`${f.byClass.full} full`);
+  if (f.byClass['usage-only'] > 0) parts.push(`${f.byClass['usage-only']} usage-only`);
+  if (f.byClass['aggregate-only'] > 0) {
+    parts.push(`${f.byClass['aggregate-only']} aggregate-only`);
+  }
+  if (f.byClass['cost-only'] > 0) parts.push(`${f.byClass['cost-only']} cost-only`);
+  if (f.byClass.partial > 0) parts.push(`${f.byClass.partial} partial`);
+  if (f.unknown > 0) parts.push(`${f.unknown} unknown`);
+  return `fidelity: ${parts.join(' / ')} (use --json for per-field coverage)`;
 }
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {

@@ -7,9 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-04-25
+
+### Added
+
+- **Wire spawner-owned RELAYBURN_* env-var contract into burn claude/codex/opencode** (#63)
+
+## [0.15.0] - 2026-04-25
+
+### Changed
+
+- Protect recoverable sidecars from retention prune (#61)
+
+## [0.14.2] - 2026-04-25
+
+### Changed
+
+- Promote even-split note to a banner when it dominates (#60)
+
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **Add coverage and fidelity metadata to TurnRecord** (#41)
+
+## [0.13.1] - 2026-04-25
+
 ### Added
 
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
+- **Surface silent parser content-capture gaps at ingest time.** When `contentMode === 'full'` and an adapter's parser commits turns containing tool calls but emits zero `tool_result` ContentRecords for the session, ingest now prints a one-line warning naming the adapter, the affected session/tool-call counts, and pointing at #33. The warning is suppressed for `hash-only`/`off` content modes, for chat-only sessions (no tool calls), and after the first emit per adapter per `burn` invocation (so `--watch` loops stay quiet). Exit code unchanged. (#59)
+- **`burn summary --json` and fidelity counts** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). The default summary now prints a one-line `fidelity:` notice whenever any turn is below full or unsupported, with counts by class. `--json` emits a structured payload with `ingest`, `turns`, `totalCost`, `byModel`, and a `fidelity` block (totals by class + granularity, plus per-field `missingCoverage` counts) so programmatic consumers can distinguish numeric zero from "we don't know." Suppressed in the all-full common case to avoid noise.
+- **Spawner-owned tagging contract for `burn claude` / `burn codex` / `burn opencode`** (#63 strategy D, partial). Every wrapper now reads a fixed set of `RELAYBURN_*` env vars (`RELAYBURN_WORKFLOW_ID`, `RELAYBURN_STEP_ID`, `RELAYBURN_AGENT_ID`, `RELAYBURN_PARENT_AGENT_ID`, `RELAYBURN_PERSONA`, `RELAYBURN_TIER`) into the stamp bag alongside any `--tag k=v` flags, with `--tag` taking precedence on key collision. The merged values are re-exported on the child harness's environment under their canonical names so a transitive `burn …` invocation inside the child session inherits the same workflow/agent context without the orchestrator having to re-thread it. This gives Codex and OpenCode the same orchestrator-level attribution Claude already had via stamps, independent of whether the harness reports `isSidechain` / `parentID` natively.
+
+### Changed
+
+- **`burn waste` promotes the even-split caveat to a banner when it dominates.** When ≥ 50% of matched sessions used even-split attribution (no content sidecar), the report now emits a `⚠ attribution is degraded:` banner *above* the tables, softens the attributed-dollar line to `attributed ≈ … (approximate — see above)`, and suffixes each table heading with `(approximate)`. The banner points at `burn rebuild --content` for remediation. Below 50% the existing footer note is unchanged; fully-sized ledgers stay silent. `--json` output gains an `attributionDegraded: boolean` field so pipelines don't have to reverse-engineer the state from the session list. (#60)
+
+### Fixed
+
+- **`burn content prune` (and the opportunistic prune that runs on every CLI invocation) no longer deletes sidecars whose upstream source file still exists** — the data is recoverable via `burn rebuild --content`, so retention-only deletion was silently lossy. Default `burn content prune` now reports a `kept N recoverable sidecars whose source files still exist` line alongside the deletion count. Pass `--force` (or set `RELAYBURN_PRUNE_FORCE=1`) to bypass the check and reclaim disk regardless. (#61)
 
 ## [0.11.0] - 2026-04-25
 

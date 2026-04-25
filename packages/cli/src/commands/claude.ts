@@ -16,13 +16,19 @@ import * as path from 'node:path';
 import { stat } from 'node:fs/promises';
 
 import type { ParsedArgs } from '../args.js';
+import {
+  mergeSpawnTags,
+  readSpawnEnvTags,
+  spawnTagEnvOverrides,
+} from '../spawn-tags.js';
 
 export async function runClaudeWrapper(args: ParsedArgs): Promise<number> {
   const sessionId = randomUUID();
   const passthrough = args.passthrough;
   const claudeArgs = ['--session-id', sessionId, ...passthrough];
 
-  const tags: Enrichment = { ...args.tags };
+  const envTags = readSpawnEnvTags();
+  const tags: Enrichment = mergeSpawnTags(envTags, args.tags);
   tags['harness'] = 'claude';
   tags['burnSpawn'] = '1';
   tags['burnSpawnTs'] = new Date().toISOString();
@@ -34,7 +40,11 @@ export async function runClaudeWrapper(args: ParsedArgs): Promise<number> {
   const cwd = process.cwd();
   const child = spawn('claude', claudeArgs, {
     stdio: 'inherit',
-    env: { ...process.env, RELAYBURN_SESSION_ID: sessionId },
+    env: {
+      ...process.env,
+      ...spawnTagEnvOverrides(tags),
+      RELAYBURN_SESSION_ID: sessionId,
+    },
   });
 
   const code: number = await new Promise((resolve) => {
