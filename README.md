@@ -211,6 +211,16 @@ Together these make `oneShotRate = oneShotTurns / editTurns` computable directly
 
 Override ledger location with `RELAYBURN_HOME=/path/to/dir`.
 
+### Reasoning-token pricing semantics
+
+`usage.reasoning` on a `TurnRecord` is always preserved for observability, but how it's billed depends on the source and model:
+
+- **Codex (`source: 'codex'`)** — `output_tokens` already includes reasoning. `burn` does **not** double-bill reasoning on top of output. `usage.reasoning` is informational only. (Matches `ccusage`'s Codex semantics.)
+- **Models with a distinct `cost.reasoning` tariff in `models.dev`** — billed at that tariff (e.g. Alibaba Qwen reasoning models). The flattened `ModelCost` carries `reasoning` and `reasoningMode: 'separate'`.
+- **Everything else (Anthropic Claude, default)** — billed at the model's `output` rate. `reasoningMode: 'same_as_output'`.
+
+You can override per-call via `costForUsage(usage, model, pricing, { reasoningMode })`.
+
 ## CLI
 
 ```
