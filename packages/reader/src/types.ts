@@ -53,6 +53,52 @@ export interface Subagent {
   description?: string;
 }
 
+// Granularity of the upstream usage data backing this record. Distinguishes
+// per-turn token reporting from coarser shapes that some collectors are
+// limited to (e.g. session-only aggregates, cost-only bills).
+export type UsageGranularity =
+  | 'per-turn'
+  | 'per-message'
+  | 'per-session-aggregate'
+  | 'cost-only';
+
+// Availability flags — strictly about whether the upstream source supplies a
+// field, not about its numeric value. `hasOutputTokens: false` means "we do
+// not know output tokens for this record"; it never means "0 output tokens".
+// Numeric fields on `Usage` carry a `0` when the source actually reports zero
+// or when it doesn't report the field at all; the matching coverage flag is
+// the only honest way to tell those apart.
+export interface Coverage {
+  hasInputTokens: boolean;
+  hasOutputTokens: boolean;
+  hasReasoningTokens: boolean;
+  hasCacheReadTokens: boolean;
+  hasCacheCreateTokens: boolean;
+  hasToolCalls: boolean;
+  hasToolResultEvents: boolean;
+  hasSessionRelationships: boolean;
+  hasRawContent: boolean;
+}
+
+// Higher-level summary derived from `granularity` + `coverage`. Provided for
+// command convenience; downstream code that needs to gate behavior on a
+// specific field should still read `coverage` directly.
+export type FidelityClass =
+  | 'full'
+  | 'usage-only'
+  | 'aggregate-only'
+  | 'cost-only'
+  | 'partial';
+
+export interface Fidelity {
+  granularity: UsageGranularity;
+  coverage: Coverage;
+  // Convenience classification — derivable from granularity + coverage via
+  // `classifyFidelity`. Stored on the record so JSON consumers don't need to
+  // import the analyze helpers.
+  class: FidelityClass;
+}
+
 export type ActivityCategory =
   | 'planning'
   | 'delegation'
@@ -92,6 +138,57 @@ export interface TurnRecord {
   activity?: ActivityCategory;
   retries?: number;
   hasEdits?: boolean;
+  // Optional coverage / fidelity metadata. Absent on records emitted by older
+  // ledger writers (pre-issue #41); commands should treat absence as
+  // "unknown — best-effort full fidelity" rather than rejecting the record.
+  fidelity?: Fidelity;
+}
+
+// Per-user-turn block info, recorded between assistant turns. Lets attribution
+// recover per-tool-call cost as a delta against the next assistant turn's
+// `usage.input` / `cacheRead` numbers — the API never reports usage at the
+// `tool_use` granularity, but the size each `tool_result` contributed to
+// context is enough to allocate the input-side delta across the calls that
+// caused it. See issue #2.
+//
+// One `UserTurnRecord` per user line; `blocks` lists the individual content
+// blocks that line carried (one entry per `tool_result` block plus any
+// free-text the user typed). `precedingMessageId` and `followingMessageId`
+// place the user turn between two assistant turns in the parser's emit order
+// so consumers don't have to re-derive ordering from `parentUuid` chains.
+export interface UserTurnBlock {
+  // 'tool_result' for blocks returning to the model after a tool call;
+  // 'text' for plain user input or harness-injected text blocks.
+  kind: 'tool_result' | 'text';
+  // The `tool_use.id` this result is for (only set when kind === 'tool_result').
+  toolUseId?: string;
+  // Byte length of the block's content as it would be serialized into the
+  // request — `JSON.stringify`'d when content is structured, raw UTF-8 length
+  // when it's a plain string.
+  byteLen: number;
+  // Cheap heuristic (`Math.ceil(byteLen / 4)`) suitable for proportional
+  // allocation across tool calls within a user turn. Not a tokenizer; callers
+  // that need accuracy can re-tokenize from the content sidecar.
+  approxTokens: number;
+  // True iff the source carried `is_error: true` for this tool_result.
+  isError?: boolean;
+}
+
+export interface UserTurnRecord {
+  v: 1;
+  source: SourceKind;
+  sessionId: string;
+  // Stable per-line id (the JSONL `uuid` for Claude). Lets consumers dedupe
+  // and reference a specific user turn without juggling `parentUuid` chains.
+  userUuid: string;
+  ts: string;
+  // Message id of the assistant turn immediately before this user turn in
+  // the session log. Absent for the first user turn of a session.
+  precedingMessageId?: string;
+  // Message id of the assistant turn this user turn fed into. Absent when
+  // the user turn is trailing (no completed assistant turn after it yet).
+  followingMessageId?: string;
+  blocks: UserTurnBlock[];
 }
 
 // Emitted by session parsers when the agent harness performs context

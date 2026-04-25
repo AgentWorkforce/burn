@@ -547,3 +547,156 @@ describe('parseCodexSession content capture', () => {
     }
   });
 });
+
+describe('parseCodexSession user-turn block sizes (issue #81)', () => {
+  it('emits one UserTurnRecord per group of user-side blocks between assistant turns', async () => {
+    const { turns, userTurns } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    assert.equal(turns.length, 3);
+    // Three committed user-side groups: pre-turn-1 text, between 1 & 2, between 2 & 3.
+    // The trailing tool output after turn 3 has no following turn, so it isn't emitted.
+    assert.equal(userTurns.length, 3);
+
+    for (const u of userTurns) {
+      assert.equal(u.v, 1);
+      assert.equal(u.source, 'codex');
+      assert.equal(u.sessionId, 'sess_codex_utb');
+      assert.equal(typeof u.userUuid, 'string');
+      assert.ok(u.userUuid.length > 0, 'userUuid is non-empty');
+      assert.ok(u.ts.length > 0, 'ts populated');
+      assert.ok(u.blocks.length >= 1, 'at least one block');
+    }
+
+    const [pre, between12, between23] = userTurns;
+    // Pre-turn-1: free-text prompt with no preceding turn, following = turn_utb_1.
+    assert.equal(pre!.precedingMessageId, undefined);
+    assert.equal(pre!.followingMessageId, 'turn_utb_1');
+    assert.equal(pre!.blocks.length, 1);
+    assert.equal(pre!.blocks[0]!.kind, 'text');
+    assert.equal(pre!.blocks[0]!.byteLen, Buffer.byteLength('fix the build', 'utf8'));
+    assert.equal(pre!.blocks[0]!.approxTokens, Math.ceil(13 / 4));
+
+    // Between turn 1 and 2: tool output from turn 1 + inter-turn user text.
+    assert.equal(between12!.precedingMessageId, 'turn_utb_1');
+    assert.equal(between12!.followingMessageId, 'turn_utb_2');
+    assert.equal(between12!.blocks.length, 2);
+    const tr1 = between12!.blocks.find((b) => b.kind === 'tool_result');
+    assert.ok(tr1);
+    assert.equal(tr1!.toolUseId, 'call_b1');
+    assert.equal(tr1!.byteLen, Buffer.byteLength('a\n', 'utf8'));
+    assert.equal(tr1!.approxTokens, Math.ceil(2 / 4));
+    assert.equal(tr1!.isError, undefined, 'successful exec → no isError');
+    const txt = between12!.blocks.find((b) => b.kind === 'text');
+    assert.ok(txt);
+    assert.equal(txt!.byteLen, Buffer.byteLength('now run tests', 'utf8'));
+
+    // Between turn 2 and 3: errored function_call_output + custom_tool_call_output.
+    assert.equal(between23!.precedingMessageId, 'turn_utb_2');
+    assert.equal(between23!.followingMessageId, 'turn_utb_3');
+    assert.equal(between23!.blocks.length, 2);
+    const failBlock = between23!.blocks.find((b) => b.toolUseId === 'call_b2');
+    assert.ok(failBlock);
+    assert.equal(failBlock!.kind, 'tool_result');
+    assert.equal(failBlock!.byteLen, Buffer.byteLength('FAIL: 1 test broke', 'utf8'));
+    assert.equal(failBlock!.isError, true, 'non-zero exit → isError');
+    const patchBlock = between23!.blocks.find((b) => b.toolUseId === 'call_p1');
+    assert.ok(patchBlock);
+    assert.equal(patchBlock!.kind, 'tool_result');
+    assert.equal(patchBlock!.byteLen, Buffer.byteLength('patched', 'utf8'));
+    assert.equal(patchBlock!.isError, undefined);
+  });
+
+  it('reconciles per-turn input delta with sum of user-turn block tokens for the preceding gap', async () => {
+    // Codex reports `cumulative` token counts; per-turn usage is the delta. The
+    // non-cached input growth between turns N and N+1 should approximately
+    // equal `output(N) + sum(approxTokens of user turn between N and N+1)`.
+    // Issue #81: document the chosen reference (cumulative deltas via
+    // total_token_usage, not last_token_usage).
+    const { turns, userTurns } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    const byFollowing = new Map(userTurns.map((u) => [u.followingMessageId ?? '', u]));
+    for (let i = 1; i < turns.length; i++) {
+      const prev = turns[i - 1]!;
+      const cur = turns[i]!;
+      const u = byFollowing.get(cur.messageId);
+      const userTurnTokens = u
+        ? u.blocks.reduce((s, b) => s + b.approxTokens, 0)
+        : 0;
+      const lhs = cur.usage.input - prev.usage.output;
+      assert.ok(lhs > 0, `input(${i}) - output(${i - 1}) should be positive`);
+      // Order-of-magnitude check: the delta and the user turn tokens should
+      // be within a factor of ~3 of each other on the fixture (typical
+      // sessions sit closer; the loose bound absorbs cache/granularity slop).
+      const ratio = lhs / Math.max(userTurnTokens, 1);
+      assert.ok(
+        ratio >= 1 / 3 && ratio <= 3,
+        `input delta ${lhs} and user turn tokens ${userTurnTokens} differ by more than 3x`,
+      );
+    }
+  });
+
+  it('emits empty userTurns for sessions with no user-side blocks', async () => {
+    const { userTurns } = await parseCodexSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    assert.deepEqual(userTurns, []);
+  });
+});
+
+describe('parseCodexSessionIncremental user-turn dedup (issue #81)', () => {
+  it('emits userTurns once across resumed incremental passes', async () => {
+    const file = path.join(FIXTURES, 'user-turn-blocks.jsonl');
+    const raw = await readFile(file, 'utf8');
+    const lines = raw.split('\n');
+    // Cut just after task_complete of turn_utb_2 (the line containing
+    // task_complete is index 19 in 0-based after splitting, since lines 0-18
+    // cover session_meta through turn 2's task_complete). Find it dynamically.
+    const cutIdx = lines.findIndex((l) =>
+      l.includes('"task_complete"') && l.includes('"turn_utb_2"'),
+    );
+    assert.ok(cutIdx > 0);
+    const cutoff = Buffer.byteLength(lines.slice(0, cutIdx + 1).join('\n') + '\n', 'utf8');
+
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-utb-inc-'));
+    try {
+      const partialPath = path.join(tmp, 'partial.jsonl');
+      await writeFile(partialPath, raw.slice(0, cutoff), 'utf8');
+      const partial = await parseCodexSessionIncremental(partialPath);
+      // Pass 1 should have emitted: pre-turn-1 text user turn + between 1-2 user turn.
+      const firstIds = partial.userTurns.map((u) => u.userUuid).sort();
+      assert.equal(partial.userTurns.length, 2);
+      assert.equal(partial.endOffset, cutoff);
+
+      const fullPath = path.join(tmp, 'full.jsonl');
+      await writeFile(fullPath, raw, 'utf8');
+      const resumed = await parseCodexSessionIncremental(fullPath, {
+        startOffset: partial.endOffset,
+        resume: partial.resume,
+      });
+      const secondIds = resumed.userTurns.map((u) => u.userUuid).sort();
+
+      // Pass 2 should have emitted exactly the between-2-3 user turn.
+      assert.equal(resumed.userTurns.length, 1);
+      const between23 = resumed.userTurns[0]!;
+      assert.equal(between23.precedingMessageId, 'turn_utb_2');
+      assert.equal(between23.followingMessageId, 'turn_utb_3');
+      // Tool outputs from turn 2 (which are bytes BEFORE committedEndOffset)
+      // must be carried via the resume state's userTurnSlot, not re-read.
+      assert.equal(between23.blocks.length, 2);
+      const failBlock = between23.blocks.find((b) => b.toolUseId === 'call_b2');
+      assert.ok(failBlock);
+      assert.equal(failBlock!.isError, true);
+
+      // Combined emission must equal the single-pass full parse.
+      const fullPass = await parseCodexSession(fullPath);
+      const combined = [...firstIds, ...secondIds].sort();
+      const fullIds = fullPass.userTurns.map((u) => u.userUuid).sort();
+      assert.deepEqual(combined, fullIds);
+      assert.equal(new Set(combined).size, combined.length, 'no double-emit');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});

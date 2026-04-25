@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-04-25
+
 ### Added
 
 - **`@relayburn/mcp` package + `burn mcp-server`** (#26). Closes the loop between observation and decision: a running agent can self-query its own cost and quota state mid-session via MCP and adjust behavior (downgrade model, defer expensive subagent, abort) before hitting the 5-hour wall. None of the surveyed competitors do this — ccusage's MCP is for user-query, not agent-self-query.

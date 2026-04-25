@@ -3,16 +3,22 @@ import { open } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
 import { classifyActivity } from './classifier.js';
+import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash, contentHash } from './hash.js';
+import { makeTextBlock, makeToolResultBlock } from './userTurn.js';
 import type {
   CompactionEvent,
   ContentRecord,
   ContentStoreMode,
+  Coverage,
+  Fidelity,
   Subagent,
   ToolCall,
   TurnRecord,
   Usage,
+  UserTurnBlock,
+  UserTurnRecord,
 } from './types.js';
 
 interface AssistantLine {
@@ -104,6 +110,18 @@ interface WorkingRecord {
   cwd?: string;
   isSidechain: boolean;
   usage: Usage;
+  // Subset of `Coverage` derived from which usage fields the upstream message
+  // actually carried (vs defaulted to 0 by `toUsage`). The remaining coverage
+  // flags — tool calls, tool-result events, session relationships, raw
+  // content — are filled in at finalize time once we know what the turn
+  // contains. Kept partial here to keep `toUsage` purely about token data.
+  usageCoverage: Pick<
+    Coverage,
+    'hasInputTokens'
+    | 'hasOutputTokens'
+    | 'hasCacheReadTokens'
+    | 'hasCacheCreateTokens'
+  >;
   blocks: ContentBlock[];
   stopReason?: string;
   // uuid of the first assistant line carrying this messageId; used as the
@@ -121,6 +139,10 @@ export interface ParseResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   events: CompactionEvent[];
+  // Per-user-turn block info between assistant turns (issue #2). Ordered by
+  // appearance in the session log; entries reference adjacent assistant turns
+  // by `precedingMessageId` / `followingMessageId`.
+  userTurns: UserTurnRecord[];
 }
 
 export async function parseClaudeSession(
@@ -142,6 +164,14 @@ export async function parseClaudeSession(
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
   const events: CompactionEvent[] = [];
+  // Per-user-turn block info between assistant turns. Captured in source order
+  // so consumers can recover per-tool-call cost as a delta against the next
+  // assistant turn's input/cacheRead numbers (issue #2).
+  const userTurns: UserTurnRecord[] = [];
+  // The user-turn record that hasn't yet been linked to its following
+  // assistant turn — set when we read a user line, cleared when the next
+  // assistant turn with a new messageId arrives.
+  let pendingUserTurn: UserTurnRecord | undefined;
   // Track the most recent completed assistant messageId so a compact_boundary
   // system record can be anchored to the turn right before it.
   let lastAssistantMessageId: string | undefined;
@@ -169,6 +199,14 @@ export async function parseClaudeSession(
       if (rec.type === 'assistant') {
         const al = rec as unknown as AssistantLine;
         const mid = al.message?.id;
+        // Link any pending user-turn record to this assistant turn — but only
+        // the first time we see a new messageId, so multi-line assistant
+        // messages don't shadow the link. Once linked, the user turn is
+        // closed off.
+        if (typeof mid === 'string' && pendingUserTurn && !working.has(mid)) {
+          pendingUserTurn.followingMessageId = mid;
+          pendingUserTurn = undefined;
+        }
         if (captureContent && typeof mid === 'string' && !firstSeq.has(mid)) {
           firstSeq.set(mid, seq);
         }
@@ -183,6 +221,11 @@ export async function parseClaudeSession(
         const prompt = extractPlainUserText(ul);
         if (prompt) currentUserText = prompt;
         collectErroredToolUseIds(ul, erroredToolUseIds);
+        const userTurn = buildUserTurnRecord(ul, lastAssistantMessageId);
+        if (userTurn) {
+          userTurns.push(userTurn);
+          pendingUserTurn = userTurn;
+        }
         if (captureContent) {
           for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
         }
@@ -237,6 +280,7 @@ export async function parseClaudeSession(
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (subagent) record.subagent = subagent;
     if (w.stopReason !== undefined) record.stopReason = w.stopReason;
+    record.fidelity = buildClaudeFidelity(w.usageCoverage);
     applyClassification(record, w, userTextByMessageId, erroredToolUseIds);
     turns.push(record);
 
@@ -254,7 +298,7 @@ export async function parseClaudeSession(
   const content: ContentRecord[] = captureContent
     ? mergeContentByOrder(userPending, assistantPending)
     : [];
-  return { turns, content, events };
+  return { turns, content, events, userTurns };
 }
 
 function mergeContentByOrder(
@@ -280,13 +324,15 @@ function ingestAssistant(
 
   let w = working.get(messageId);
   if (!w) {
+    const initial = toUsage(msg.usage);
     w = {
       messageId,
       firstTs: line.timestamp ?? '',
       model: msg.model ?? '',
       sessionId: line.sessionId ?? '',
       isSidechain: line.isSidechain === true,
-      usage: toUsage(msg.usage),
+      usage: initial.usage,
+      usageCoverage: initial.coverage,
       blocks: [],
     };
     if (line.cwd !== undefined) w.cwd = line.cwd;
@@ -297,6 +343,12 @@ function ingestAssistant(
   } else {
     if (line.isSidechain === true) w.isSidechain = true;
     if (!w.model && msg.model) w.model = msg.model;
+    // Merge coverage from continuation lines so a usage field that arrives on
+    // a follow-up assistant line for the same messageId still flips its flag.
+    if (msg.usage !== undefined) {
+      const next = toUsage(msg.usage);
+      w.usageCoverage = mergeUsageCoverage(w.usageCoverage, next.coverage);
+    }
   }
   if (typeof msg.stop_reason === 'string') w.stopReason = msg.stop_reason;
   if (Array.isArray(msg.content)) {
@@ -373,25 +425,28 @@ function registerUserNode(
 // Light pre-scan of [0, endOffset) that registers LineNodes only — no turn
 // emission, no classification, no content capture. Used by the incremental
 // parser so resuming ingest can still resolve parentUuid chains that reach
-// back before the resume point.
+// back before the resume point. Returns the messageId of the last assistant
+// line seen so a resumed pass can anchor `precedingMessageId` on user turns
+// whose preceding assistant was already ingested in a prior pass.
 async function prescanNodes(
   filePath: string,
   endOffset: number,
   nodesByUuid: Map<string, LineNode>,
-): Promise<void> {
-  if (endOffset <= 0) return;
+): Promise<{ lastAssistantMessageId?: string }> {
+  if (endOffset <= 0) return {};
   const handle = await open(filePath, 'r');
   let buf: Buffer;
   try {
     const st = await handle.stat();
     const length = Math.min(endOffset, st.size);
-    if (length <= 0) return;
+    if (length <= 0) return {};
     buf = Buffer.allocUnsafe(length);
     await handle.read(buf, 0, length, 0);
   } finally {
     await handle.close();
   }
   let p = 0;
+  let lastAssistantMessageId: string | undefined;
   while (p < buf.length) {
     const nlIdx = buf.indexOf(0x0a, p);
     if (nlIdx === -1) break;
@@ -407,11 +462,17 @@ async function prescanNodes(
     if (!parsed || typeof parsed !== 'object') continue;
     const rec = parsed as Record<string, unknown>;
     if (rec.type === 'assistant') {
-      registerAssistantNode(rec as unknown as AssistantLine, nodesByUuid);
+      const al = rec as unknown as AssistantLine;
+      registerAssistantNode(al, nodesByUuid);
+      const mid = al.message?.id;
+      if (typeof mid === 'string') lastAssistantMessageId = mid;
     } else if (rec.type === 'user') {
       registerUserNode(rec as unknown as UserLine, nodesByUuid);
     }
   }
+  const out: { lastAssistantMessageId?: string } = {};
+  if (lastAssistantMessageId !== undefined) out.lastAssistantMessageId = lastAssistantMessageId;
+  return out;
 }
 
 function extractAssistantContent(w: WorkingRecord): ContentRecord[] {
@@ -526,17 +587,133 @@ function extractUserContent(line: UserLine): ContentRecord[] {
   return out;
 }
 
-function toUsage(u: ClaudeUsage | undefined): Usage {
+// Convert a user line into a `UserTurnRecord` carrying one block per
+// `tool_result` and one `text` block per free-text chunk. Returns undefined
+// when the line lacks a session id or uuid (we'd have nothing to anchor it
+// to), or carries no measurable blocks.
+//
+// Token estimate uses the `bytes/4` heuristic. The issue notes a tokenizer
+// could be wired in later (cl100k via @dqbd/tiktoken) — measure first; for
+// proportional allocation across blocks within the same user turn the
+// heuristic is fine, the constant cancels.
+function buildUserTurnRecord(
+  line: UserLine,
+  precedingMessageId: string | undefined,
+): UserTurnRecord | undefined {
+  const sessionId = line.sessionId;
+  const userUuid = line.uuid;
+  if (!sessionId || !userUuid) return undefined;
+  const blocks = extractUserTurnBlocks(line);
+  if (blocks.length === 0) return undefined;
+  const record: UserTurnRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    userUuid,
+    ts: line.timestamp ?? '',
+    blocks,
+  };
+  if (precedingMessageId !== undefined) record.precedingMessageId = precedingMessageId;
+  return record;
+}
+
+function extractUserTurnBlocks(line: UserLine): UserTurnBlock[] {
+  const out: UserTurnBlock[] = [];
+  const body = line.message?.content;
+  if (typeof body === 'string') {
+    if (body.length > 0) out.push(makeTextBlock(body));
+    return out;
+  }
+  if (!Array.isArray(body)) return out;
+  for (const block of body) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'tool_result') {
+      const tr = block as { tool_use_id?: string; content?: unknown; is_error?: boolean };
+      if (typeof tr.tool_use_id !== 'string') continue;
+      out.push(makeToolResultBlock(tr.tool_use_id, tr.content, tr.is_error === true));
+    } else if (block.type === 'text') {
+      const tb = block as { text?: string };
+      if (typeof tb.text === 'string' && tb.text.length > 0) out.push(makeTextBlock(tb.text));
+    }
+  }
+  return out;
+}
+
+interface UsageWithCoverage {
+  usage: Usage;
+  coverage: WorkingRecord['usageCoverage'];
+}
+
+function toUsage(u: ClaudeUsage | undefined): UsageWithCoverage {
   const input = u?.input_tokens ?? 0;
   const output = u?.output_tokens ?? 0;
   const cacheRead = u?.cache_read_input_tokens ?? 0;
   const create5m = u?.cache_creation?.ephemeral_5m_input_tokens ?? 0;
   const create1h = u?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
   const totalCreate = u?.cache_creation_input_tokens ?? 0;
+  // Coverage tracks *whether the field was supplied*, not whether it's > 0.
+  // A request with zero cache reads still has `hasCacheReadTokens: true` if
+  // the upstream message included `cache_read_input_tokens: 0`.
+  const coverage = {
+    hasInputTokens: u?.input_tokens !== undefined,
+    hasOutputTokens: u?.output_tokens !== undefined,
+    hasCacheReadTokens: u?.cache_read_input_tokens !== undefined,
+    hasCacheCreateTokens:
+      u?.cache_creation_input_tokens !== undefined ||
+      u?.cache_creation?.ephemeral_5m_input_tokens !== undefined ||
+      u?.cache_creation?.ephemeral_1h_input_tokens !== undefined,
+  };
   if (create5m === 0 && create1h === 0 && totalCreate > 0) {
-    return { input, output, reasoning: 0, cacheRead, cacheCreate5m: totalCreate, cacheCreate1h: 0 };
+    return {
+      usage: { input, output, reasoning: 0, cacheRead, cacheCreate5m: totalCreate, cacheCreate1h: 0 },
+      coverage,
+    };
   }
-  return { input, output, reasoning: 0, cacheRead, cacheCreate5m: create5m, cacheCreate1h: create1h };
+  return {
+    usage: { input, output, reasoning: 0, cacheRead, cacheCreate5m: create5m, cacheCreate1h: create1h },
+    coverage,
+  };
+}
+
+function mergeUsageCoverage(
+  a: WorkingRecord['usageCoverage'],
+  b: WorkingRecord['usageCoverage'],
+): WorkingRecord['usageCoverage'] {
+  // Multiple assistant lines for the same messageId can carry usage fields in
+  // either of them (Claude streams partials). Treat coverage as monotonic:
+  // once any line shows a field, the merged turn has it.
+  return {
+    hasInputTokens: a.hasInputTokens || b.hasInputTokens,
+    hasOutputTokens: a.hasOutputTokens || b.hasOutputTokens,
+    hasCacheReadTokens: a.hasCacheReadTokens || b.hasCacheReadTokens,
+    hasCacheCreateTokens: a.hasCacheCreateTokens || b.hasCacheCreateTokens,
+  };
+}
+
+function buildClaudeFidelity(
+  usageCoverage: WorkingRecord['usageCoverage'],
+): Fidelity {
+  // Coverage is *capability* not *presence*: a turn with no tool_use blocks
+  // still has `hasToolCalls: true`, because the question is "would this
+  // source surface tool calls if they happened?" — not "did this turn have
+  // tools?". Same logic for tool-result events, session relationships, and
+  // raw content. Numeric usage is the exception: those flags reflect which
+  // fields the upstream message actually carried, since Claude can omit them
+  // (e.g. cache_creation absent on cache-cold requests).
+  const coverage: Coverage = {
+    ...EMPTY_COVERAGE,
+    ...usageCoverage,
+    // Reasoning is not represented in Claude Code's JSONL session log — the
+    // model's thinking blocks are stored as content, not as a separate token
+    // count. Mark unavailable so command-level projections don't pretend
+    // otherwise.
+    hasReasoningTokens: false,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: true,
+    hasRawContent: true,
+  };
+  return makeFidelity('per-turn', coverage);
 }
 
 function extractToolCalls(
@@ -797,6 +974,10 @@ export interface ParseIncrementalResult {
   endOffset: number;
   // Carry forward to the next incremental call; see `lastUserText` option.
   lastUserText: string;
+  // Per-user-turn block info between assistant turns (issue #2). Filtered by
+  // `endOffset` like content/events so the next incremental pass re-reads any
+  // bytes past the cursor without double-emitting.
+  userTurns: UserTurnRecord[];
 }
 
 export async function parseClaudeSessionIncremental(
@@ -819,6 +1000,7 @@ export async function parseClaudeSessionIncremental(
         events: [],
         endOffset: startOffset,
         lastUserText: options.lastUserText ?? '',
+        userTurns: [],
       };
     }
     const length = size - startOffset;
@@ -836,14 +1018,21 @@ export async function parseClaudeSessionIncremental(
   // prefix so new sidechain turns can still resolve their invocation root via
   // parentUuid chains that point back before startOffset. Without this,
   // subagent tree fields come up empty on the primary incremental ingest path.
+  // Also captures the last assistant messageId before the resume point so
+  // user turns landing in this pass can record `precedingMessageId` even
+  // when their preceding assistant was already ingested previously.
+  let prescanLastAssistantMid: string | undefined;
   if (startOffset > 0) {
-    await prescanNodes(filePath, startOffset, nodesByUuid);
+    const prescan = await prescanNodes(filePath, startOffset, nodesByUuid);
+    prescanLastAssistantMid = prescan.lastAssistantMessageId;
   }
   const messageIdFirstOffset = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
   const events: Array<{ offset: number; event: CompactionEvent }> = [];
-  let lastAssistantMessageId: string | undefined;
+  // Seeded from the prescan so user turns whose preceding assistant turn
+  // lives before `startOffset` still get a `precedingMessageId`.
+  let lastAssistantMessageId: string | undefined = prescanLastAssistantMid;
   // Seed from the prior call so an in-progress turn whose user prompt lives
   // before `startOffset` still classifies against that prompt on resume.
   let currentUserText = options.lastUserText ?? '';
@@ -851,6 +1040,11 @@ export async function parseClaudeSessionIncremental(
   // records past endOffset and (b) interleave them with assistant content by
   // source-order at emit time.
   const pendingUserContent: Array<{ offset: number; record: ContentRecord }> = [];
+  // Per-user-turn records tagged with their line offset so we can drop any
+  // that fall past endOffset (avoiding double-emission on resume), mirroring
+  // the content/event handling.
+  const pendingUserTurns: Array<{ offset: number; record: UserTurnRecord }> = [];
+  let pendingUserTurnInc: UserTurnRecord | undefined;
 
   let p = 0;
   let cursorOffset = startOffset; // position just past the last complete \n
@@ -875,6 +1069,13 @@ export async function parseClaudeSessionIncremental(
       const line = rec as unknown as AssistantLine;
       const msgId =
         line.message && typeof line.message.id === 'string' ? line.message.id : undefined;
+      // Link any pending user-turn record to this assistant turn — first time
+      // we see a new messageId only, so multi-line assistant messages don't
+      // shadow the link.
+      if (msgId && pendingUserTurnInc && !messageIdFirstOffset.has(msgId)) {
+        pendingUserTurnInc.followingMessageId = msgId;
+        pendingUserTurnInc = undefined;
+      }
       if (msgId && !messageIdFirstOffset.has(msgId)) {
         messageIdFirstOffset.set(msgId, lineStartOffset);
       }
@@ -889,6 +1090,11 @@ export async function parseClaudeSessionIncremental(
       const prompt = extractPlainUserText(ul);
       if (prompt) currentUserText = prompt;
       collectErroredToolUseIds(ul, erroredToolUseIds);
+      const userTurn = buildUserTurnRecord(ul, lastAssistantMessageId);
+      if (userTurn) {
+        pendingUserTurns.push({ offset: lineStartOffset, record: userTurn });
+        pendingUserTurnInc = userTurn;
+      }
       if (captureContent) {
         for (const c of extractUserContent(ul)) {
           pendingUserContent.push({ offset: lineStartOffset, record: c });
@@ -958,6 +1164,7 @@ export async function parseClaudeSessionIncremental(
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (subagent) record.subagent = subagent;
     record.stopReason = w.stopReason;
+    record.fidelity = buildClaudeFidelity(w.usageCoverage);
     applyClassification(record, w, userTextByMessageId, erroredToolUseIds);
     turns.push(record);
     if (captureContent) {
@@ -996,11 +1203,20 @@ export async function parseClaudeSessionIncremental(
   }
   annotateCompactionEvents(emittedEvents, turns);
 
+  // Emit user turns whose bytes fall before endOffset, same dedup discipline
+  // as content/events. Trailing user turns past endOffset will be re-read on
+  // the next incremental call.
+  const emittedUserTurns: UserTurnRecord[] = [];
+  for (const u of pendingUserTurns) {
+    if (u.offset < endOffset) emittedUserTurns.push(u.record);
+  }
+
   return {
     turns,
     content,
     events: emittedEvents,
     endOffset,
     lastUserText: currentUserText,
+    userTurns: emittedUserTurns,
   };
 }
