@@ -9,7 +9,6 @@
   "references": [
     { "path": "../reader" },
     { "path": "../ledger" },
-    { "path": "../analyze" },
-    { "path": "../mcp" }
+    { "path": "../analyze" }
   ]
 }

@@ -32,12 +32,27 @@ importers:
       '@relayburn/ledger':
         specifier: workspace:*
         version: link:../ledger
+      '@relayburn/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       '@relayburn/reader':
         specifier: workspace:*
         version: link:../reader
 
   packages/ledger:
     dependencies:
+      '@relayburn/reader':
+        specifier: workspace:*
+        version: link:../reader
+
+  packages/mcp:
+    dependencies:
+      '@relayburn/analyze':
+        specifier: workspace:*
+        version: link:../analyze
+      '@relayburn/ledger':
+        specifier: workspace:*
+        version: link:../ledger
       '@relayburn/reader':
         specifier: workspace:*
         version: link:../reader

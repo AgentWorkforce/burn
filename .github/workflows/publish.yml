@@ -13,6 +13,7 @@ on:
           - reader
           - ledger
           - analyze
+          - mcp
           - cli
       version:
         description: 'Version bump type (ignored if custom_version is set)'
@@ -99,10 +100,10 @@ jobs:
         run: |
           case "${{ github.event.inputs.package }}" in
             all)
-              # Must be in dependency order: reader → ledger → analyze → cli.
-              echo "packages=reader ledger analyze cli" >> "$GITHUB_OUTPUT"
+              # Must be in dependency order: reader → ledger → analyze → mcp → cli.
+              echo "packages=reader ledger analyze mcp cli" >> "$GITHUB_OUTPUT"
               ;;
-            reader|ledger|analyze|cli)
+            reader|ledger|analyze|mcp|cli)
               echo "packages=${{ github.event.inputs.package }}" >> "$GITHUB_OUTPUT"
               ;;
             *)
@@ -606,7 +607,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [reader, ledger, analyze, cli]
+        package: [reader, ledger, analyze, mcp, cli]
     steps:
       - name: Check if this package was published
         id: check
