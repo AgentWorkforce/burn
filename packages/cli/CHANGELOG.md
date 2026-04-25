@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`burn archive build | rebuild | status`** — manage the new derived analytics archive (`~/.relayburn/archive.sqlite`). `build` applies any ledger tail not yet materialized, `rebuild` recreates from scratch, `status` reports schema version, row counts, and sync state. Both `build` and `status` accept `--json`. The archive is rebuildable from the canonical `ledger.jsonl` at any time, so `rm ~/.relayburn/archive.sqlite && burn archive rebuild` always reproduces the same state. Foundation for #40; rewiring `burn summary` / `compare` / `plans` to read from the archive lands in follow-up PRs.
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
 
 ## [0.11.0] - 2026-04-25
