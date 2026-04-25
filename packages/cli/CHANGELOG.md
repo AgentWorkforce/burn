@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
+- **Surface silent parser content-capture gaps at ingest time.** When `contentMode === 'full'` and an adapter's parser commits turns containing tool calls but emits zero `tool_result` ContentRecords for the session, ingest now prints a one-line warning naming the adapter, the affected session/tool-call counts, and pointing at #33. The warning is suppressed for `hash-only`/`off` content modes, for chat-only sessions (no tool calls), and after the first emit per adapter per `burn` invocation (so `--watch` loops stay quiet). Exit code unchanged. (#59)
 
 ## [0.11.0] - 2026-04-25
 
