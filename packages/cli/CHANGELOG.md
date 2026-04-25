@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-04-25
+
+### Changed
+
+- Surface silent parser content-capture gaps at ingest time (#59)
+
 ## [0.15.1] - 2026-04-25
 
 ### Added
