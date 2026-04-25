@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **Coverage and fidelity metadata on `TurnRecord`** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). New optional `TurnRecord.fidelity` field with three pieces: `granularity` (`per-turn` | `per-message` | `per-session-aggregate` | `cost-only`), per-field `coverage` flags (`hasInputTokens`, `hasOutputTokens`, `hasReasoningTokens`, `hasCacheReadTokens`, `hasCacheCreateTokens`, `hasToolCalls`, `hasToolResultEvents`, `hasSessionRelationships`, `hasRawContent`), and a derived `class` (`full` | `usage-only` | `aggregate-only` | `cost-only` | `partial`). Coverage is strictly about *availability*: `hasOutputTokens: false` means "we don't know," not "0 output tokens." New `EMPTY_COVERAGE`, `classifyFidelity`, and `makeFidelity` helpers exported alongside the types. The Claude parser populates fidelity on every turn; usage-coverage flags reflect which fields the upstream `usage` block actually carried (so a turn with no `cache_creation` reports `hasCacheCreateTokens: false`). Codex/OpenCode parsers do not yet populate fidelity — deferred to a follow-up. Older ledger writers leave `fidelity` undefined; downstream code treats absence as best-effort full fidelity for backward compat.
+
+## [0.13.1] - 2026-04-25
+
+### Changed
+
+- Bump packages to v0.13.0
+
 ## [0.9.0] - 2026-04-24
 
 ### Added

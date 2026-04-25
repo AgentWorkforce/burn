@@ -3,12 +3,15 @@ import { open } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
 import { classifyActivity } from './classifier.js';
+import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash, contentHash } from './hash.js';
 import type {
   CompactionEvent,
   ContentRecord,
   ContentStoreMode,
+  Coverage,
+  Fidelity,
   Subagent,
   ToolCall,
   TurnRecord,
@@ -104,6 +107,18 @@ interface WorkingRecord {
   cwd?: string;
   isSidechain: boolean;
   usage: Usage;
+  // Subset of `Coverage` derived from which usage fields the upstream message
+  // actually carried (vs defaulted to 0 by `toUsage`). The remaining coverage
+  // flags — tool calls, tool-result events, session relationships, raw
+  // content — are filled in at finalize time once we know what the turn
+  // contains. Kept partial here to keep `toUsage` purely about token data.
+  usageCoverage: Pick<
+    Coverage,
+    'hasInputTokens'
+    | 'hasOutputTokens'
+    | 'hasCacheReadTokens'
+    | 'hasCacheCreateTokens'
+  >;
   blocks: ContentBlock[];
   stopReason?: string;
   // uuid of the first assistant line carrying this messageId; used as the
@@ -237,6 +252,7 @@ export async function parseClaudeSession(
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (subagent) record.subagent = subagent;
     if (w.stopReason !== undefined) record.stopReason = w.stopReason;
+    record.fidelity = buildClaudeFidelity(w.usageCoverage);
     applyClassification(record, w, userTextByMessageId, erroredToolUseIds);
     turns.push(record);
 
@@ -280,13 +296,15 @@ function ingestAssistant(
 
   let w = working.get(messageId);
   if (!w) {
+    const initial = toUsage(msg.usage);
     w = {
       messageId,
       firstTs: line.timestamp ?? '',
       model: msg.model ?? '',
       sessionId: line.sessionId ?? '',
       isSidechain: line.isSidechain === true,
-      usage: toUsage(msg.usage),
+      usage: initial.usage,
+      usageCoverage: initial.coverage,
       blocks: [],
     };
     if (line.cwd !== undefined) w.cwd = line.cwd;
@@ -297,6 +315,12 @@ function ingestAssistant(
   } else {
     if (line.isSidechain === true) w.isSidechain = true;
     if (!w.model && msg.model) w.model = msg.model;
+    // Merge coverage from continuation lines so a usage field that arrives on
+    // a follow-up assistant line for the same messageId still flips its flag.
+    if (msg.usage !== undefined) {
+      const next = toUsage(msg.usage);
+      w.usageCoverage = mergeUsageCoverage(w.usageCoverage, next.coverage);
+    }
   }
   if (typeof msg.stop_reason === 'string') w.stopReason = msg.stop_reason;
   if (Array.isArray(msg.content)) {
@@ -526,17 +550,81 @@ function extractUserContent(line: UserLine): ContentRecord[] {
   return out;
 }
 
-function toUsage(u: ClaudeUsage | undefined): Usage {
+interface UsageWithCoverage {
+  usage: Usage;
+  coverage: WorkingRecord['usageCoverage'];
+}
+
+function toUsage(u: ClaudeUsage | undefined): UsageWithCoverage {
   const input = u?.input_tokens ?? 0;
   const output = u?.output_tokens ?? 0;
   const cacheRead = u?.cache_read_input_tokens ?? 0;
   const create5m = u?.cache_creation?.ephemeral_5m_input_tokens ?? 0;
   const create1h = u?.cache_creation?.ephemeral_1h_input_tokens ?? 0;
   const totalCreate = u?.cache_creation_input_tokens ?? 0;
+  // Coverage tracks *whether the field was supplied*, not whether it's > 0.
+  // A request with zero cache reads still has `hasCacheReadTokens: true` if
+  // the upstream message included `cache_read_input_tokens: 0`.
+  const coverage = {
+    hasInputTokens: u?.input_tokens !== undefined,
+    hasOutputTokens: u?.output_tokens !== undefined,
+    hasCacheReadTokens: u?.cache_read_input_tokens !== undefined,
+    hasCacheCreateTokens:
+      u?.cache_creation_input_tokens !== undefined ||
+      u?.cache_creation?.ephemeral_5m_input_tokens !== undefined ||
+      u?.cache_creation?.ephemeral_1h_input_tokens !== undefined,
+  };
   if (create5m === 0 && create1h === 0 && totalCreate > 0) {
-    return { input, output, reasoning: 0, cacheRead, cacheCreate5m: totalCreate, cacheCreate1h: 0 };
+    return {
+      usage: { input, output, reasoning: 0, cacheRead, cacheCreate5m: totalCreate, cacheCreate1h: 0 },
+      coverage,
+    };
   }
-  return { input, output, reasoning: 0, cacheRead, cacheCreate5m: create5m, cacheCreate1h: create1h };
+  return {
+    usage: { input, output, reasoning: 0, cacheRead, cacheCreate5m: create5m, cacheCreate1h: create1h },
+    coverage,
+  };
+}
+
+function mergeUsageCoverage(
+  a: WorkingRecord['usageCoverage'],
+  b: WorkingRecord['usageCoverage'],
+): WorkingRecord['usageCoverage'] {
+  // Multiple assistant lines for the same messageId can carry usage fields in
+  // either of them (Claude streams partials). Treat coverage as monotonic:
+  // once any line shows a field, the merged turn has it.
+  return {
+    hasInputTokens: a.hasInputTokens || b.hasInputTokens,
+    hasOutputTokens: a.hasOutputTokens || b.hasOutputTokens,
+    hasCacheReadTokens: a.hasCacheReadTokens || b.hasCacheReadTokens,
+    hasCacheCreateTokens: a.hasCacheCreateTokens || b.hasCacheCreateTokens,
+  };
+}
+
+function buildClaudeFidelity(
+  usageCoverage: WorkingRecord['usageCoverage'],
+): Fidelity {
+  // Coverage is *capability* not *presence*: a turn with no tool_use blocks
+  // still has `hasToolCalls: true`, because the question is "would this
+  // source surface tool calls if they happened?" — not "did this turn have
+  // tools?". Same logic for tool-result events, session relationships, and
+  // raw content. Numeric usage is the exception: those flags reflect which
+  // fields the upstream message actually carried, since Claude can omit them
+  // (e.g. cache_creation absent on cache-cold requests).
+  const coverage: Coverage = {
+    ...EMPTY_COVERAGE,
+    ...usageCoverage,
+    // Reasoning is not represented in Claude Code's JSONL session log — the
+    // model's thinking blocks are stored as content, not as a separate token
+    // count. Mark unavailable so command-level projections don't pretend
+    // otherwise.
+    hasReasoningTokens: false,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: true,
+    hasRawContent: true,
+  };
+  return makeFidelity('per-turn', coverage);
 }
 
 function extractToolCalls(
@@ -958,6 +1046,7 @@ export async function parseClaudeSessionIncremental(
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (subagent) record.subagent = subagent;
     record.stopReason = w.stopReason;
+    record.fidelity = buildClaudeFidelity(w.usageCoverage);
     applyClassification(record, w, userTextByMessageId, erroredToolUseIds);
     turns.push(record);
     if (captureContent) {
