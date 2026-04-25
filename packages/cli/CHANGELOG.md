@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`burn waste` promotes the even-split caveat to a banner when it dominates.** When ≥ 50% of matched sessions used even-split attribution (no content sidecar), the report now emits a `⚠ attribution is degraded:` banner *above* the tables, softens the attributed-dollar line to `attributed ≈ … (approximate — see above)`, and suffixes each table heading with `(approximate)`. The banner points at `burn rebuild --content` for remediation. Below 50% the existing footer note is unchanged; fully-sized ledgers stay silent. `--json` output gains an `attributionDegraded: boolean` field so pipelines don't have to reverse-engineer the state from the session list. (#60)
 
+### Fixed
+
+- **`burn content prune` (and the opportunistic prune that runs on every CLI invocation) no longer deletes sidecars whose upstream source file still exists** — the data is recoverable via `burn rebuild --content`, so retention-only deletion was silently lossy. Default `burn content prune` now reports a `kept N recoverable sidecars whose source files still exist` line alongside the deletion count. Pass `--force` (or set `RELAYBURN_PRUNE_FORCE=1`) to bypass the check and reclaim disk regardless. (#61)
+
 ## [0.11.0] - 2026-04-25
 
 ### Added
