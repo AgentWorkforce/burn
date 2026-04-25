@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Derived analytics archive** (#40, foundation PR). New `archive.sqlite` materialized read model alongside the canonical `ledger.jsonl`, exposed via `buildArchive()`, `rebuildArchive()`, `getArchiveStatus()`, and `openArchive()`. Schema covers `sessions`, `turns`, `tool_calls`, `compactions`, and a reserved `tool_result_events` table for the future content-sidecar bridge (#33). Stamps are folded into materialized columns (`workflow_id`, `agent_id`, `persona`, `tier`) plus a JSON blob, so consumers no longer have to fold the full stamp set on every query. Build is incremental keyed off `archive_state.ledger_offset_bytes`, and rebuild-from-zero is deterministic — deleting `archive.sqlite` and rebuilding always reproduces the same row counts. Backed by `node:sqlite` so no native build step. New `archivePath()` exported alongside the existing path helpers.
 
-
+## [0.11.0] - 2026-04-25
 
 ### Added
 

@@ -314,6 +314,54 @@ describe('archive', () => {
     }
   });
 
+  it('rebuildArchive populates both last_built_at and last_rebuild_at', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-rb', messageId: 'mrb-1' })]);
+    const before = await getArchiveStatus();
+    assert.equal(before.lastRebuildAt, null);
+
+    await rebuildArchive();
+    const after = await getArchiveStatus();
+    assert.ok(after.lastBuiltAt, 'lastBuiltAt should be populated after rebuild');
+    assert.ok(after.lastRebuildAt, 'lastRebuildAt should be populated after rebuild');
+  });
+
+  it('buildArchive only updates lastBuiltAt, not lastRebuildAt', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-bo', messageId: 'mbo-1' })]);
+    await buildArchive();
+    const status = await getArchiveStatus();
+    assert.ok(status.lastBuiltAt, 'lastBuiltAt should be populated after build');
+    assert.equal(status.lastRebuildAt, null, 'lastRebuildAt should remain null after a non-rebuild build');
+  });
+
+  it('partial trailing line: ledger cursor advances only past complete lines', async () => {
+    // Write a complete turn first.
+    await appendTurns([fakeTurn({ sessionId: 's-p', messageId: 'mp-1' })]);
+    await buildArchive();
+    const after1 = await getArchiveStatus();
+
+    // Append a partial line (no trailing newline) directly to the ledger,
+    // simulating a writer that crashed mid-write.
+    const { appendFile } = await import('node:fs/promises');
+    const partial = '{"v":1,"kind":"turn"';
+    await appendFile(ledgerPath(), partial);
+
+    // Build should advance the cursor only past the previous newline; the
+    // partial fragment must remain unconsumed so the next build can re-read
+    // it once the writer has completed it.
+    await buildArchive();
+    const after2 = await getArchiveStatus();
+    assert.equal(
+      after2.ledgerOffsetBytes,
+      after1.ledgerOffsetBytes,
+      'cursor must not advance past a partial trailing line',
+    );
+    const ledgerStat = await stat(ledgerPath());
+    assert.ok(
+      after2.ledgerOffsetBytes < ledgerStat.size,
+      'ledger size includes the partial fragment but cursor must stay short of EOF',
+    );
+  });
+
   it('schema version bump: an old archive_version triggers a clean rebuild on open', async () => {
     await appendTurns([fakeTurn({ sessionId: 's-v', messageId: 'mv-1' })]);
     await buildArchive();

@@ -289,7 +289,7 @@ export async function rebuildArchive(): Promise<BuildResult> {
     // we don't accidentally read stale committed-but-not-checkpointed data.
     await unlink(`${dbPath}-wal`).catch(() => undefined);
     await unlink(`${dbPath}-shm`).catch(() => undefined);
-    const result = await buildArchiveLocked();
+    const result = await buildArchiveLocked({ isRebuild: true });
     return { ...result, rebuiltFromZero: true };
   });
 }
@@ -307,7 +307,7 @@ export async function buildArchive(): Promise<BuildResult> {
   return withLock('archive', () => buildArchiveLocked());
 }
 
-async function buildArchiveLocked(): Promise<BuildResult> {
+async function buildArchiveLocked(opts: { isRebuild?: boolean } = {}): Promise<BuildResult> {
   const ledger = ledgerPath();
   const db = await openArchive();
   try {
@@ -318,7 +318,20 @@ async function buildArchiveLocked(): Promise<BuildResult> {
       .get() as { ledger_offset_bytes?: number | bigint; ledger_mtime_ms?: number | bigint } | undefined;
     let startOffset = stateRow ? Number(stateRow.ledger_offset_bytes ?? 0) : 0;
 
+    const nowIso = new Date().toISOString();
+
     if (!(await fileExists(ledger))) {
+      // No ledger on disk: still stamp build/rebuild timestamps so `archive
+      // status` reflects this run, but leave the cursor at zero.
+      if (opts.isRebuild) {
+        db.prepare(
+          `UPDATE archive_state SET last_built_at = ?, last_rebuild_at = ? WHERE id = 1`,
+        ).run(nowIso, nowIso);
+      } else {
+        db.prepare(
+          `UPDATE archive_state SET last_built_at = ? WHERE id = 1`,
+        ).run(nowIso);
+      }
       return {
         scannedBytes: 0,
         turnsApplied: 0,
@@ -348,13 +361,33 @@ async function buildArchiveLocked(): Promise<BuildResult> {
 
     const result = await applyLedgerRange(db, ledger, startOffset);
 
-    db.prepare(
-      `UPDATE archive_state
-       SET ledger_offset_bytes = ?, ledger_mtime_ms = ?, last_built_at = ?
-       WHERE id = 1`,
-    ).run(ledgerStat.size, Math.floor(ledgerStat.mtimeMs), new Date().toISOString());
+    // Use the parser's safe boundary (last newline-terminated byte) as the
+    // ledger cursor — NOT `ledgerStat.size` — so a partial trailing line gets
+    // re-read on the next build instead of being silently skipped. mtime
+    // tracks the on-disk file as observed at this build, which is fine even
+    // if the cursor is short of EOF.
+    if (opts.isRebuild) {
+      db.prepare(
+        `UPDATE archive_state
+         SET ledger_offset_bytes = ?, ledger_mtime_ms = ?, last_built_at = ?, last_rebuild_at = ?
+         WHERE id = 1`,
+      ).run(result.safeOffset, Math.floor(ledgerStat.mtimeMs), nowIso, nowIso);
+    } else {
+      db.prepare(
+        `UPDATE archive_state
+         SET ledger_offset_bytes = ?, ledger_mtime_ms = ?, last_built_at = ?
+         WHERE id = 1`,
+      ).run(result.safeOffset, Math.floor(ledgerStat.mtimeMs), nowIso);
+    }
 
-    return { ...result, rebuiltFromZero: false };
+    return {
+      scannedBytes: result.scannedBytes,
+      turnsApplied: result.turnsApplied,
+      sessionsTouched: result.sessionsTouched,
+      stampsApplied: result.stampsApplied,
+      compactionsApplied: result.compactionsApplied,
+      rebuiltFromZero: false,
+    };
   } finally {
     db.close();
   }
@@ -366,6 +399,13 @@ interface ApplyResult {
   sessionsTouched: number;
   stampsApplied: number;
   compactionsApplied: number;
+  /**
+   * Byte offset of the parser's last newline boundary inside the ledger.
+   * Equals `startOffset` when nothing was scanned. The caller stamps this
+   * (NOT the file size) as the ledger cursor so a partial trailing line is
+   * re-read on the next build instead of being silently skipped.
+   */
+  safeOffset: number;
 }
 
 /**
@@ -418,6 +458,7 @@ async function applyLedgerRange(
       sessionsTouched: 0,
       stampsApplied: 0,
       compactionsApplied: 0,
+      safeOffset,
     };
   }
 
@@ -591,9 +632,10 @@ async function applyLedgerRange(
 
     rebuildSessions(db, sessionsTouched);
 
-    db.prepare('UPDATE archive_state SET ledger_offset_bytes = ? WHERE id = 1').run(
-      safeOffset,
-    );
+    // NOTE: the ledger cursor is intentionally NOT written here. The caller
+    // (`buildArchiveLocked`) writes `safeOffset` after this transaction
+    // commits, so that the cursor stamp lives alongside the mtime /
+    // last_built_at update in a single coherent UPDATE.
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -615,6 +657,7 @@ async function applyLedgerRange(
     sessionsTouched: distinctSessionIds.size,
     stampsApplied: newStamps.length,
     compactionsApplied: compactionLines.length,
+    safeOffset,
   };
 }
 
