@@ -1,6 +1,7 @@
 import type { TurnRecord, Usage } from '@relayburn/reader';
 
 import type { ModelCost, PricingTable } from './pricing.js';
+import { resolveProvider } from './provider-reattribution.js';
 
 export interface CostBreakdown {
   model: string;
@@ -45,6 +46,16 @@ export function costForTurn(turn: TurnRecord, pricing: PricingTable): CostBreakd
 function lookup(model: string, pricing: PricingTable): ModelCost | undefined {
   const direct = pricing[model];
   if (direct) return direct;
+  // Reattribution layer (issue #31): Synthetic-routed model IDs carry prefixes
+  // like `hf:deepseek-ai/...` or `accounts/fireworks/models/...` that don't
+  // match models.dev. Strip the routing prefix and try the residual id so the
+  // underlying model's price applies whether the call went direct or through
+  // the aggregator.
+  const reattributed = resolveProvider(model);
+  if (reattributed.normalizedModel !== model) {
+    const viaReattributed = pricing[reattributed.normalizedModel];
+    if (viaReattributed) return viaReattributed;
+  }
   const stripped = stripProviderPrefix(model);
   if (stripped !== model) {
     const viaStripped = pricing[stripped];
