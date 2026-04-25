@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
+- **Spawner-owned tagging contract for `burn claude` / `burn codex` / `burn opencode`** (#63 strategy D, partial). Every wrapper now reads a fixed set of `RELAYBURN_*` env vars (`RELAYBURN_WORKFLOW_ID`, `RELAYBURN_STEP_ID`, `RELAYBURN_AGENT_ID`, `RELAYBURN_PARENT_AGENT_ID`, `RELAYBURN_PERSONA`, `RELAYBURN_TIER`) into the stamp bag alongside any `--tag k=v` flags, with `--tag` taking precedence on key collision. The merged values are re-exported on the child harness's environment under their canonical names so a transitive `burn …` invocation inside the child session inherits the same workflow/agent context without the orchestrator having to re-thread it. This gives Codex and OpenCode the same orchestrator-level attribution Claude already had via stamps, independent of whether the harness reports `isSidechain` / `parentID` natively.
 
 ## [0.11.0] - 2026-04-25
 
