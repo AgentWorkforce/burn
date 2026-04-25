@@ -127,8 +127,13 @@ function sumTokens(turns: EnrichedTurn[]): number {
 
 function normalizePercent(raw: number | undefined): number | null {
   if (raw === undefined || !Number.isFinite(raw)) return null;
-  // Endpoint returns 0..100; tolerate 0..1 just in case a future shape drifts.
-  return raw > 1.5 ? raw : raw * 100;
+  // Anthropic's OAuth usage endpoint documents and returns the 0..100 scale
+  // (e.g. percent_used: 34 means 34%). Pass it through unchanged. An earlier
+  // version tried to auto-detect 0..1 vs 0..100 with a > 1.5 threshold, but
+  // that misclassifies legitimately-low values like 1% as 0..1 scale and
+  // inflates them 100x — turning "1% used" into "100% used → over-budget"
+  // and causing false alarms early in a quota window (Devin review on #67).
+  return raw;
 }
 
 function projectPercentAtReset(

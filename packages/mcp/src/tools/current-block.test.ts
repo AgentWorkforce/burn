@@ -107,6 +107,20 @@ describe('createCurrentBlockTool', () => {
     assert.notEqual(result.burnRateTokensPerMin, null);
   });
 
+  it('preserves low percent_used values as-is on the 0..100 scale (regression: Devin review on #67)', async () => {
+    // 1% used early in the window must stay 1%, not get inflated to 100%
+    // by an over-eager 0..1 normalization heuristic.
+    const tool = createCurrentBlockTool({
+      now: () => NOW,
+      loadOauthToken: async () => 'tok',
+      fetchUsage: async () => ({ five_hour: { percent_used: 1, reset_at: RESET_AT } }),
+      queryTurns: async () => [],
+    });
+    const result = (await tool.handler({})) as CurrentBlockResult;
+    assert.equal(result.percentUsed, 1);
+    assert.equal(result.advice, 'on-track');
+  });
+
   it('declares its tool surface (name, description, schema)', () => {
     const tool = createCurrentBlockTool({});
     assert.equal(tool.name, 'burn__currentBlock');
