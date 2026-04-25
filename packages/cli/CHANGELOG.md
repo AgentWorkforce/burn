@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **Add coverage and fidelity metadata to TurnRecord** (#41)
+
 ## [0.13.1] - 2026-04-25
 
 ### Added
