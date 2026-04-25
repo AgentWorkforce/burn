@@ -8,13 +8,19 @@ import { appendContent, appendTurns, loadConfig, stamp } from '@relayburn/ledger
 import type { Enrichment } from '@relayburn/ledger';
 
 import type { ParsedArgs } from '../args.js';
+import {
+  mergeSpawnTags,
+  readSpawnEnvTags,
+  spawnTagEnvOverrides,
+} from '../spawn-tags.js';
 import { walkOpencodeSessions } from '../walk.js';
 
 const OPENCODE_STORAGE = path.join(homedir(), '.local', 'share', 'opencode', 'storage');
 const OPENCODE_SESSION_ROOT = path.join(OPENCODE_STORAGE, 'session');
 
 export async function runOpencodeWrapper(args: ParsedArgs): Promise<number> {
-  const tags: Enrichment = { ...args.tags };
+  const envTags = readSpawnEnvTags();
+  const tags: Enrichment = mergeSpawnTags(envTags, args.tags);
   tags['harness'] = 'opencode';
   tags['burnSpawn'] = '1';
   const spawnStartTs = Date.now();
@@ -23,7 +29,10 @@ export async function runOpencodeWrapper(args: ParsedArgs): Promise<number> {
   const preSnapshot = await snapshotSessionFiles();
   process.stderr.write(`[burn] opencode spawn: tracking ${preSnapshot.size} existing sessions\n`);
 
-  const child = spawn('opencode', args.passthrough, { stdio: 'inherit', env: process.env });
+  const child = spawn('opencode', args.passthrough, {
+    stdio: 'inherit',
+    env: { ...process.env, ...spawnTagEnvOverrides(tags) },
+  });
   const code: number = await new Promise((resolve) => {
     child.on('exit', (c) => resolve(c ?? 0));
     child.on('error', (err) => {
