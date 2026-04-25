@@ -53,6 +53,52 @@ export interface Subagent {
   description?: string;
 }
 
+// Granularity of the upstream usage data backing this record. Distinguishes
+// per-turn token reporting from coarser shapes that some collectors are
+// limited to (e.g. session-only aggregates, cost-only bills).
+export type UsageGranularity =
+  | 'per-turn'
+  | 'per-message'
+  | 'per-session-aggregate'
+  | 'cost-only';
+
+// Availability flags — strictly about whether the upstream source supplies a
+// field, not about its numeric value. `hasOutputTokens: false` means "we do
+// not know output tokens for this record"; it never means "0 output tokens".
+// Numeric fields on `Usage` carry a `0` when the source actually reports zero
+// or when it doesn't report the field at all; the matching coverage flag is
+// the only honest way to tell those apart.
+export interface Coverage {
+  hasInputTokens: boolean;
+  hasOutputTokens: boolean;
+  hasReasoningTokens: boolean;
+  hasCacheReadTokens: boolean;
+  hasCacheCreateTokens: boolean;
+  hasToolCalls: boolean;
+  hasToolResultEvents: boolean;
+  hasSessionRelationships: boolean;
+  hasRawContent: boolean;
+}
+
+// Higher-level summary derived from `granularity` + `coverage`. Provided for
+// command convenience; downstream code that needs to gate behavior on a
+// specific field should still read `coverage` directly.
+export type FidelityClass =
+  | 'full'
+  | 'usage-only'
+  | 'aggregate-only'
+  | 'cost-only'
+  | 'partial';
+
+export interface Fidelity {
+  granularity: UsageGranularity;
+  coverage: Coverage;
+  // Convenience classification — derivable from granularity + coverage via
+  // `classifyFidelity`. Stored on the record so JSON consumers don't need to
+  // import the analyze helpers.
+  class: FidelityClass;
+}
+
 export type ActivityCategory =
   | 'planning'
   | 'delegation'
@@ -92,6 +138,10 @@ export interface TurnRecord {
   activity?: ActivityCategory;
   retries?: number;
   hasEdits?: boolean;
+  // Optional coverage / fidelity metadata. Absent on records emitted by older
+  // ledger writers (pre-issue #41); commands should treat absence as
+  // "unknown — best-effort full fidelity" rather than rejecting the record.
+  fidelity?: Fidelity;
 }
 
 // Emitted by session parsers when the agent harness performs context

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`summarizeFidelity(turns)` and `hasMinimumFidelity(fidelity, minimum)`** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). `summarizeFidelity` walks a slice of turns and returns a `FidelitySummary` with totals broken down by `class`, by `granularity`, and per-field `missingCoverage` counts plus an `unknown` bucket for records emitted before `TurnRecord.fidelity` existed. `hasMinimumFidelity` is the predicate behind a future "default exclude aggregate-only / cost-only" filter for `burn compare` and friends; treats `undefined` fidelity as passing for backward compat. Pure functions — no I/O, safe to call repeatedly.
+
 ## [0.11.0] - 2026-04-25
 
 ### Added
