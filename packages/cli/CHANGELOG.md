@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
 
+### Changed
+
+- **`burn waste` promotes the even-split caveat to a banner when it dominates.** When ≥ 50% of matched sessions used even-split attribution (no content sidecar), the report now emits a `⚠ attribution is degraded:` banner *above* the tables, softens the attributed-dollar line to `attributed ≈ … (approximate — see above)`, and suffixes each table heading with `(approximate)`. The banner points at `burn rebuild --content` for remediation. Below 50% the existing footer note is unchanged; fully-sized ledgers stay silent. `--json` output gains an `attributionDegraded: boolean` field so pipelines don't have to reverse-engineer the state from the session list. (#60)
+
 ## [0.11.0] - 2026-04-25
 
 ### Added
