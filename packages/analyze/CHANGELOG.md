@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Synthetic provider reattribution layer (#31).** `resolveProvider(model, rules?)` returns a `{ provider, normalizedModel, matchedRule }` for Synthetic-routed model IDs — the cross-collector reattribution pattern used when a Claude Code or OpenCode session uses a model dispatched through Synthetic.new. First pass covers three prefix shapes (`hf:*`, `accounts/fireworks/models/*`, `synthetic/*`) and exposes `DEFAULT_RULES` plus a `ProviderRule` type so future aggregators (OpenRouter, etc.) plug in via the same scaffolding. Pricing lookup in `costForTurn`, `attributeWaste`, and `attributeClaudeMd`/`attributeContext` all consult the reattribution layer before falling back to the existing `provider/model` strip, so a turn logged with `hf:deepseek-ai/deepseek-r1` resolves to the `deepseek-r1` rate instead of returning `null` across summary, waste, and context views. Reattribution stays query-time only — raw model strings are never mutated in the ledger. Octofriend SQLite fallback and other aggregator prefixes are deferred to follow-up issues.
+
 ## [0.11.0] - 2026-04-25
 
 ### Added
