@@ -150,7 +150,7 @@ A **content sidecar** (enabled by default) stores the full conversation separate
 
 Content is stored because it meaningfully strengthens several attribution and diagnostic paths — tool-call sizing becomes exact (no delta estimation), outcome inference gets a real signal, CLAUDE.md adherence checking becomes possible, and waste patterns can surface the specific error text that caused a retry loop rather than just a count.
 
-Retention defaults to 90 days for the sidecar, forever for the main ledger. Configure via `RELAYBURN_CONTENT_TTL_DAYS`.
+Retention defaults to 90 days for the sidecar, forever for the main ledger. Configure via `RELAYBURN_CONTENT_TTL_DAYS`. Prune is **source-aware**: a sidecar whose upstream session file (`~/.claude/projects/…`, `~/.codex/sessions/…`, `~/.local/share/opencode/storage/…`) still exists is left in place, because `burn rebuild --content` can rederive it. Run `burn content prune --force` (or set `RELAYBURN_PRUNE_FORCE=1`) to delete recoverable sidecars anyway.
 
 Three content modes:
 

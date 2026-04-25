@@ -116,6 +116,7 @@ describe('content sidecar', () => {
     const result = await pruneContent({ olderThanMs: ninety });
     assert.equal(result.filesDeleted, 1);
     assert.ok(result.bytesFreed > 0);
+    assert.equal(result.skippedRecoverable, 0);
 
     const files = await readdir(contentDir());
     assert.deepEqual(files, ['s-new.jsonl']);
@@ -123,7 +124,7 @@ describe('content sidecar', () => {
 
   it('pruneContent returns zero counts when content dir does not exist', async () => {
     const result = await pruneContent({ olderThanMs: 1000 });
-    assert.deepEqual(result, { filesDeleted: 0, bytesFreed: 0 });
+    assert.deepEqual(result, { filesDeleted: 0, bytesFreed: 0, skippedRecoverable: 0 });
   });
 
   it('pruneContent with olderThanMs=0 clears the directory (inclusive cutoff)', async () => {
@@ -140,6 +141,87 @@ describe('content sidecar', () => {
     assert.equal(result.filesDeleted, 2);
     const files = await readdir(contentDir());
     assert.deepEqual(files, []);
+  });
+
+  it('pruneContent skips sessions whose source is recoverable via isRecoverable', async () => {
+    await appendContent([
+      record({ sessionId: 's-recoverable', messageId: 'm' }),
+      record({ sessionId: 's-orphaned', messageId: 'm' }),
+    ]);
+    // Both files predate the retention cutoff.
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await __setContentFileMtimeForTesting('s-recoverable', longAgo);
+    await __setContentFileMtimeForTesting('s-orphaned', longAgo);
+
+    const ninety = 90 * 24 * 60 * 60 * 1000;
+    const sources = new Set(['s-recoverable']);
+    const result = await pruneContent({
+      olderThanMs: ninety,
+      isRecoverable: (id) => sources.has(id),
+    });
+
+    assert.equal(result.filesDeleted, 1);
+    assert.equal(result.skippedRecoverable, 1);
+    assert.ok(result.bytesFreed > 0);
+
+    const files = await readdir(contentDir());
+    assert.deepEqual(files.sort(), ['s-recoverable.jsonl']);
+  });
+
+  it('pruneContent supports an async isRecoverable predicate', async () => {
+    await appendContent([record({ sessionId: 's-async', messageId: 'm' })]);
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await __setContentFileMtimeForTesting('s-async', longAgo);
+
+    const ninety = 90 * 24 * 60 * 60 * 1000;
+    const result = await pruneContent({
+      olderThanMs: ninety,
+      isRecoverable: async (id) => {
+        await Promise.resolve();
+        return id === 's-async';
+      },
+    });
+
+    assert.equal(result.filesDeleted, 0);
+    assert.equal(result.skippedRecoverable, 1);
+    const files = await readdir(contentDir());
+    assert.deepEqual(files, ['s-async.jsonl']);
+  });
+
+  it('pruneContent without isRecoverable applies retention unchanged (force-equivalent)', async () => {
+    await appendContent([
+      record({ sessionId: 's-orphan-1', messageId: 'm' }),
+      record({ sessionId: 's-orphan-2', messageId: 'm' }),
+    ]);
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await __setContentFileMtimeForTesting('s-orphan-1', longAgo);
+    await __setContentFileMtimeForTesting('s-orphan-2', longAgo);
+
+    const ninety = 90 * 24 * 60 * 60 * 1000;
+    // Omitting isRecoverable is the `--force` / no-source-index path.
+    const result = await pruneContent({ olderThanMs: ninety });
+    assert.equal(result.filesDeleted, 2);
+    assert.equal(result.skippedRecoverable, 0);
+    const files = await readdir(contentDir());
+    assert.deepEqual(files, []);
+  });
+
+  it('pruneContent treats a throwing isRecoverable as fail-closed-to-prune', async () => {
+    await appendContent([record({ sessionId: 's-throws', messageId: 'm' })]);
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await __setContentFileMtimeForTesting('s-throws', longAgo);
+
+    const ninety = 90 * 24 * 60 * 60 * 1000;
+    const result = await pruneContent({
+      olderThanMs: ninety,
+      isRecoverable: () => {
+        throw new Error('source index broken');
+      },
+    });
+    // A broken source index must not let pruned-but-source-still-exists
+    // sidecars accumulate forever; we fall through to the existing rule.
+    assert.equal(result.filesDeleted, 1);
+    assert.equal(result.skippedRecoverable, 0);
   });
 
   it('rejects content records with path-traversal sessionId instead of writing outside content/', async () => {

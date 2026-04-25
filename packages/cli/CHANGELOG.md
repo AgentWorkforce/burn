@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
 
+### Fixed
+
+- **`burn content prune` (and the opportunistic prune that runs on every CLI invocation) no longer deletes sidecars whose upstream source file still exists** — the data is recoverable via `burn rebuild --content`, so retention-only deletion was silently lossy. Default `burn content prune` now reports a `kept N recoverable sidecars whose source files still exist` line alongside the deletion count. Pass `--force` (or set `RELAYBURN_PRUNE_FORCE=1`) to bypass the check and reclaim disk regardless. (#61)
+
 ## [0.11.0] - 2026-04-25
 
 ### Added
