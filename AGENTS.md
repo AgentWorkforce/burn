@@ -5,16 +5,17 @@ Pairs with [`README.md`](./README.md) — README is what burn does, this file is
 
 ## Layout
 
-pnpm workspace, four published packages in dependency order:
+pnpm workspace, five published packages in dependency order:
 
 ```
 @relayburn/reader   — pure parsers (Claude Code / Codex / OpenCode session logs → TurnRecord)
 @relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
-@relayburn/cli      — `burn` binary (summary, by-tool, compare, claude/codex/opencode wrappers, …)
+@relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
+@relayburn/cli      — `burn` binary (summary, by-tool, compare, claude/codex/opencode wrappers, mcp-server, …)
 ```
 
-`reader → ledger → analyze → cli`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
+`reader → ledger → analyze → mcp → cli`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
 
 ## Common commands
 

@@ -2,9 +2,15 @@
 
 Cross-package narrative for the relayburn monorepo. The per-package CHANGELOGs at `packages/*/CHANGELOG.md` are authoritative for exactly what shipped in each package; this file is the unified view.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Packages are released in lockstep, so each version below applies to all four (`reader`, `ledger`, `analyze`, `cli`).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Packages are released in lockstep, so each version below applies to all five (`reader`, `ledger`, `analyze`, `mcp`, `cli`).
 
 ## [Unreleased]
+
+### Added
+
+- **`@relayburn/mcp` package + `burn mcp-server`** (#26). Closes the loop between observation and decision: a running agent can self-query its own cost and quota state mid-session via MCP and adjust behavior (downgrade model, defer expensive subagent, abort) before hitting the 5-hour wall. None of the surveyed competitors do this — ccusage's MCP is for user-query, not agent-self-query.
+  - `@relayburn/mcp` (new) — minimal JSON-RPC 2.0 stdio MCP server with no external SDK runtime dep. Exports `startStdioServer`, `buildMcpConfig({sessionId})`, `createSessionCostTool`, `createCurrentBlockTool`. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only by construction.
+  - `@relayburn/cli` — `burn mcp-server [--session-id <uuid>]` subcommand. Spawners use `buildMcpConfig` to inject the server into `claude --mcp-config <…>` so the registered tools default to the running session.
 
 ## [0.11.0] - 2026-04-25
 

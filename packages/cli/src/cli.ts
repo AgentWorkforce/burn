@@ -9,6 +9,7 @@ import { runContext } from './commands/context.js';
 import { runDiagnose } from './commands/diagnose.js';
 import { runIngest } from './commands/ingest.js';
 import { runLimits } from './commands/limits.js';
+import { runMcpServer } from './commands/mcp-server.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runPlans } from './commands/plans.js';
 import { runRebuild } from './commands/rebuild.js';
@@ -33,6 +34,7 @@ Usage:
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
+  burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
   burn content prune [--days <n>]
   burn rebuild         --index | --reclassify [--force]
   burn rebuild-index   (alias for 'burn rebuild --index')
@@ -99,6 +101,8 @@ async function main(): Promise<number> {
       return runOpencodeWrapper(args);
     case 'ingest':
       return runIngest(args);
+    case 'mcp-server':
+      return runMcpServer(args);
     case 'content':
       return runContent(args);
     case 'rebuild':

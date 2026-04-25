@@ -1,12 +1,13 @@
 {
-  "name": "@relayburn/cli",
+  "name": "@relayburn/mcp",
   "version": "0.11.0",
-  "description": "burn CLI — spawn wrapper + summary/by-tool over the relayburn ledger",
+  "description": "MCP (Model Context Protocol) server exposing read-only relayburn ledger queries for in-session self-query",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "burn": "./dist/cli.js"
+  "exports": {
+    ".": "./dist/index.js",
+    "./config": "./dist/config.js"
   },
   "files": [
     "dist",
@@ -15,7 +16,7 @@
     "package.json"
   ],
   "scripts": {
-    "build": "tsc --build && chmod +x dist/cli.js",
+    "build": "tsc --build",
     "clean": "tsc --build --clean"
   },
   "engines": {
@@ -24,13 +25,12 @@
   "dependencies": {
     "@relayburn/reader": "workspace:*",
     "@relayburn/ledger": "workspace:*",
-    "@relayburn/analyze": "workspace:*",
-    "@relayburn/mcp": "workspace:*"
+    "@relayburn/analyze": "workspace:*"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/AgentWorkforce/burn",
-    "directory": "packages/cli"
+    "directory": "packages/mcp"
   },
   "publishConfig": {
     "access": "public"
