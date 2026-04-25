@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-04-25
+
 ### Added
 
 - **Per-user-turn block-size capture for Claude sessions** ([#2](https://github.com/AgentWorkforce/burn/issues/2)). `parseClaudeSession` / `parseClaudeSessionIncremental` now return a `userTurns: UserTurnRecord[]` alongside `turns`, recording each user-turn's content blocks (`tool_result` and free-text) with `byteLen`, `approxTokens` (bytes/4 heuristic), `toolUseId`, and `isError`. Each `UserTurnRecord` carries `precedingMessageId` / `followingMessageId` so consumers can place the user turn between two assistant turns without re-walking `parentUuid` chains. This is the prerequisite for per-tool-call cost attribution (`burn waste`): combined with the existing per-turn `usage`, callers can recover the input-side delta caused by individual tool calls (Anthropic only reports usage at message granularity). Additive — no on-disk schema change, existing `TurnRecord` consumers are unaffected. Codex and OpenCode parsers are scoped for follow-up.
