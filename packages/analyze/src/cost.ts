@@ -1,6 +1,7 @@
 import type { TurnRecord, Usage } from '@relayburn/reader';
 
 import type { ModelCost, PricingTable } from './pricing.js';
+import { resolveProvider } from './provider-reattribution.js';
 
 export interface CostBreakdown {
   model: string;
@@ -19,7 +20,7 @@ export function costForUsage(
   model: string,
   pricing: PricingTable,
 ): CostBreakdown | null {
-  const rate = lookup(model, pricing);
+  const rate = lookupModelRate(model, pricing);
   if (!rate) return null;
   const input = (usage.input / PER_MILLION) * rate.input;
   const output = (usage.output / PER_MILLION) * rate.output;
@@ -42,9 +43,18 @@ export function costForTurn(turn: TurnRecord, pricing: PricingTable): CostBreakd
   return costForUsage(turn.usage, turn.model, pricing);
 }
 
-function lookup(model: string, pricing: PricingTable): ModelCost | undefined {
+// Shared lookup: direct match → synthetic reattribution (issue #31, e.g.
+// `hf:deepseek-ai/...`, `accounts/fireworks/models/...`) → generic
+// `provider/model` strip. Used by costForUsage here and by attributeWaste /
+// attributeClaudeMd so synthetic-routed turns price consistently across views.
+export function lookupModelRate(model: string, pricing: PricingTable): ModelCost | undefined {
   const direct = pricing[model];
   if (direct) return direct;
+  const reattributed = resolveProvider(model);
+  if (reattributed.normalizedModel !== model) {
+    const viaReattributed = pricing[reattributed.normalizedModel];
+    if (viaReattributed) return viaReattributed;
+  }
   const stripped = stripProviderPrefix(model);
   if (stripped !== model) {
     const viaStripped = pricing[stripped];
