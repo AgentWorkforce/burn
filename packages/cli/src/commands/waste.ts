@@ -5,8 +5,11 @@ import {
   attributeWaste,
   detectPatterns,
   loadPricing,
+  type BashAggregation,
   type FileAggregation,
   type PatternsResult,
+  type SubagentAggregation,
+  type WasteResult,
 } from '@relayburn/analyze';
 import { queryAll, queryCompactions, readContent, type Query } from '@relayburn/ledger';
 import type { ContentRecord } from '@relayburn/reader';
@@ -18,6 +21,23 @@ import type { ParsedArgs } from '../args.js';
 const DEFAULT_TOP_N = 10;
 const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
+
+// When even-split sessions reach this fraction of the matched set, the
+// attribution caveat is promoted from a footer note to a top banner and
+// every dollar table heading is suffixed with "(approximate)". Below this
+// fraction the current footer note is preserved. (#60)
+const EVEN_SPLIT_DEGRADED_THRESHOLD = 0.5;
+
+export function isAttributionDegraded(
+  result: WasteResult,
+  threshold: number = EVEN_SPLIT_DEGRADED_THRESHOLD,
+): boolean {
+  if (result.sessionTotals.length === 0) return false;
+  const evenSplit = result.sessionTotals.filter(
+    (s) => s.attributionMethod === 'even-split',
+  ).length;
+  return evenSplit / result.sessionTotals.length >= threshold;
+}
 
 export async function runWaste(args: ParsedArgs): Promise<number> {
   const q: Query = {};
@@ -51,6 +71,7 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   const files = aggregateByFile(result.attributions);
   const bashes = aggregateByBash(result.attributions);
   const subagents = aggregateBySubagent(result.attributions);
+  const degraded = isAttributionDegraded(result);
 
   if (args.flags['json'] === true) {
     process.stdout.write(
@@ -60,6 +81,7 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
           grandTotal: result.grandTotal,
           attributedTotal: result.attributedTotal,
           unattributedTotal: result.unattributedTotal,
+          attributionDegraded: degraded,
           sessions: result.sessionTotals,
           files,
           bash: bashes,
@@ -75,26 +97,89 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   const showAll = args.flags['all'] === true;
   const limit = showAll ? Number.POSITIVE_INFINITY : DEFAULT_TOP_N;
 
+  process.stdout.write(
+    formatWasteReport({
+      turnsAnalyzed: turns.length,
+      result,
+      files,
+      bashes,
+      subagents,
+      limit,
+      degraded,
+    }),
+  );
+  return 0;
+}
+
+interface FormatWasteReportInput {
+  turnsAnalyzed: number;
+  result: WasteResult;
+  files: FileAggregation[];
+  bashes: BashAggregation[];
+  subagents: SubagentAggregation[];
+  limit: number;
+  degraded: boolean;
+}
+
+export function formatWasteReport(input: FormatWasteReportInput): string {
+  const { turnsAnalyzed, result, files, bashes, subagents, limit, degraded } = input;
+  const evenSplitSessions = result.sessionTotals.filter(
+    (s) => s.attributionMethod === 'even-split',
+  );
+
   const out: string[] = [];
   out.push('');
-  out.push(`turns analyzed: ${formatInt(turns.length)}`);
+  out.push(`turns analyzed: ${formatInt(turnsAnalyzed)}`);
   out.push(`session grand total: ${formatUsd(result.grandTotal)}`);
-  out.push(
-    `attributed to tool calls: ${formatUsd(result.attributedTotal)}  /  unattributed (output, system overhead, untracked): ${formatUsd(result.unattributedTotal)}`,
-  );
-  const evenSplitSessions = result.sessionTotals.filter((s) => s.attributionMethod === 'even-split');
-  if (evenSplitSessions.length > 0 && evenSplitSessions.length === result.sessionTotals.length) {
+
+  if (degraded) {
+    // Banner above the tables. Numbers are formatted with thousands
+    // separators since at degraded scale they're often 5-6 digits.
+    const total = result.sessionTotals.length;
+    const ev = evenSplitSessions.length;
+    const pct = total > 0 ? (ev / total) * 100 : 0;
+    out.push('');
     out.push(
-      'note: no content sidecar data found — using even-split (initial cost only). Enable content.store=full in your config to get persistence attribution.',
+      `⚠ attribution is degraded: ${formatInt(ev)} of ${formatInt(total)} sessions (${pct.toFixed(1)}%) have no content`,
     );
-  } else if (evenSplitSessions.length > 0) {
     out.push(
-      `note: ${evenSplitSessions.length}/${result.sessionTotals.length} sessions used even-split (no content sidecar).`,
+      '  sidecar, so file / bash / subagent costs for those sessions are approximate',
     );
+    out.push(
+      "  (even-split over turn N+1 input/cacheCreate). Run 'burn rebuild --content'",
+    );
+    out.push(
+      "  to backfill sidecars from source session files, or see 'burn content' for",
+    );
+    out.push('  why capture is disabled.');
+    out.push('');
+    out.push(
+      `attributed ≈ ${formatUsd(result.attributedTotal)}  (approximate — see above)`,
+    );
+    out.push(
+      `unattributed ${formatUsd(result.unattributedTotal)}  (output, system overhead, untracked)`,
+    );
+  } else {
+    out.push(
+      `attributed to tool calls: ${formatUsd(result.attributedTotal)}  /  unattributed (output, system overhead, untracked): ${formatUsd(result.unattributedTotal)}`,
+    );
+    if (
+      evenSplitSessions.length > 0 &&
+      evenSplitSessions.length === result.sessionTotals.length
+    ) {
+      out.push(
+        'note: no content sidecar data found — using even-split (initial cost only). Enable content.store=full in your config to get persistence attribution.',
+      );
+    } else if (evenSplitSessions.length > 0) {
+      out.push(
+        `note: ${evenSplitSessions.length}/${result.sessionTotals.length} sessions used even-split (no content sidecar).`,
+      );
+    }
   }
   out.push('');
 
-  out.push('Top files by cumulative cost');
+  const approxSuffix = degraded ? ' (approximate)' : '';
+  out.push(`Top files by cumulative cost${approxSuffix}`);
   if (files.length === 0) {
     out.push('  (no Read/Edit/Write tool calls)');
   } else {
@@ -102,7 +187,7 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   }
   out.push('');
 
-  out.push('Top Bash commands by cost');
+  out.push(`Top Bash commands by cost${approxSuffix}`);
   if (bashes.length === 0) {
     out.push('  (no Bash tool calls)');
   } else {
@@ -110,7 +195,7 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   }
   out.push('');
 
-  out.push('Top subagent calls by cost');
+  out.push(`Top subagent calls by cost${approxSuffix}`);
   if (subagents.length === 0) {
     out.push('  (no Agent/Task tool calls)');
   } else {
@@ -118,8 +203,7 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   }
   out.push('');
 
-  process.stdout.write(out.join('\n'));
-  return 0;
+  return out.join('\n');
 }
 
 function renderFileTable(files: FileAggregation[], limit: number, attributed: number): string {
@@ -142,7 +226,7 @@ function renderFileTable(files: FileAggregation[], limit: number, attributed: nu
   return table(rows);
 }
 
-function renderBashTable(bashes: ReturnType<typeof aggregateByBash>, limit: number): string {
+function renderBashTable(bashes: BashAggregation[], limit: number): string {
   const rows: string[][] = [['command', 'calls', 'initial(tok)', 'persist(tok)', 'cost']];
   const slice = bashes.slice(0, limit);
   for (const b of slice) {
@@ -157,7 +241,7 @@ function renderBashTable(bashes: ReturnType<typeof aggregateByBash>, limit: numb
   return table(rows);
 }
 
-function renderSubagentTable(subagents: ReturnType<typeof aggregateBySubagent>, limit: number): string {
+function renderSubagentTable(subagents: SubagentAggregation[], limit: number): string {
   const rows: string[][] = [['subagent', 'calls', 'initial(tok)', 'persist(tok)', 'cost']];
   const slice = subagents.slice(0, limit);
   for (const s of slice) {
