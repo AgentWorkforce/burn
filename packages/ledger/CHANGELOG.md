@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-04-25
+
 ### Added
 
 - **Plans config primitives** (#39). New `Plan` / `PlansFile` / `PlanProvider` types, `loadPlans()` / `savePlans()` against `~/.relayburn/plans.json`, `BUILTIN_PRESETS` covering claude/pro ($20), claude/max ($200), cursor/pro ($20), and `findPreset(provider, name)`. `normalizePlan` validates each row (positive `budgetUsd`, integer `resetDay` 1-31, known `provider`) so a malformed file throws once at load rather than producing garbage downstream. New `plansPath()` exported alongside the existing path helpers.

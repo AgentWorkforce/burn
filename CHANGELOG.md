@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-04-25
+
 ### Added
 
 - **Plan-based monthly quota tracking** (#39). Complement to `burn limits`'s 5-hour OAuth window: track spend against monthly plan budgets (Claude Pro/Max, Cursor Pro, or any custom plan) and surface projected end-of-cycle spend, runway-days-at-current-rate, and over/under-budget delta. Configure with `burn plans add --provider claude --preset max`; the status flows automatically into `burn limits` output as a `Monthly plan` block alongside the 5-hour view. Projections with fewer than 7 days of cycle data are marked `(limited data)` so users don't anchor on first-week noise. Plans persist to `~/.relayburn/plans.json` and respect a custom `resetDay` 1-31 (with end-of-month clamping for short months).
