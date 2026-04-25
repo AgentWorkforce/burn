@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/ledger",
-  "version": "0.11.0",
+  "version": "0.14.0",
   "description": "Append-only JSONL ledger + stamp API for relayburn",
   "type": "module",
   "main": "./dist/index.js",

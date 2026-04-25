@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Lock recovery gap closed.** `withLock` previously gave up after 50×20ms = 1 second of retries while declaring a lockfile stale only after 30 seconds, leaving a 29-second window where any orphan lock from a crashed `burn` process would hard-fail every acquirer with `could not acquire lock after 50 attempts`. The acquire loop is now a two-phase fast/slow schedule (1s of 20ms retries for normal contention, then 10s of 250ms retries to outlast the stale window), and the stale threshold drops from 30s to 5s. A single CLI invocation now self-heals through an orphan in well under a second instead of failing for half a minute. Timeout error messages also distinguish "held by live process" from "lock appears stale but unlink kept failing" so the failure mode is obvious. Closes [#62](https://github.com/AgentWorkforce/burn/issues/62).
 
+## [0.13.1] - 2026-04-25
+
+### Changed
+
+- Bump packages to v0.13.0
+
 ## [0.11.0] - 2026-04-25
 
 ### Added

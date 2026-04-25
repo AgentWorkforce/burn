@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **Add coverage and fidelity metadata to TurnRecord** (#41)
+
+## [0.13.1] - 2026-04-25
+
 ### Added
 
 - **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
+- **`burn summary --json` and fidelity counts** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). The default summary now prints a one-line `fidelity:` notice whenever any turn is below full or unsupported, with counts by class. `--json` emits a structured payload with `ingest`, `turns`, `totalCost`, `byModel`, and a `fidelity` block (totals by class + granularity, plus per-field `missingCoverage` counts) so programmatic consumers can distinguish numeric zero from "we don't know." Suppressed in the all-full common case to avoid noise.
 
 ## [0.11.0] - 2026-04-25
 
