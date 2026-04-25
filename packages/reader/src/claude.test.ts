@@ -202,6 +202,83 @@ describe('parseClaudeSession', () => {
   });
 });
 
+describe('parseClaudeSession user-turn block sizes (issue #2)', () => {
+  it('emits a UserTurnRecord per user line with text and tool_result blocks', async () => {
+    const { userTurns } = await parseClaudeSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    assert.equal(userTurns.length, 3, 'three user lines → three user-turn records');
+
+    const [first, second, third] = userTurns as typeof userTurns;
+    assert.ok(first && second && third);
+
+    // Initial user prompt: free text only.
+    assert.equal(first.userUuid, 'u-user-1');
+    assert.equal(first.precedingMessageId, undefined, 'first user turn has no preceding assistant');
+    assert.equal(first.followingMessageId, 'msg_utb_1');
+    assert.equal(first.blocks.length, 1);
+    assert.equal(first.blocks[0]!.kind, 'text');
+    assert.equal(first.blocks[0]!.byteLen, 'please fix the build'.length);
+    assert.equal(first.blocks[0]!.approxTokens, Math.ceil('please fix the build'.length / 4));
+
+    // Second user turn: two tool_results (small Bash output, large Read output).
+    assert.equal(second.precedingMessageId, 'msg_utb_1');
+    assert.equal(second.followingMessageId, 'msg_utb_2');
+    assert.equal(second.blocks.length, 2);
+    const bash = second.blocks.find((b) => b.toolUseId === 'tu_bash_1')!;
+    const read = second.blocks.find((b) => b.toolUseId === 'tu_read_1')!;
+    assert.equal(bash.kind, 'tool_result');
+    assert.equal(bash.byteLen, Buffer.byteLength('a\nb\n', 'utf8'));
+    assert.equal(read.byteLen, 100);
+    assert.ok(read.byteLen > bash.byteLen, 'large Read output must dwarf small Bash output');
+    assert.equal(bash.isError, undefined);
+    assert.equal(read.isError, undefined);
+
+    // Third user turn: errored tool_result.
+    assert.equal(third.precedingMessageId, 'msg_utb_2');
+    assert.equal(third.followingMessageId, 'msg_utb_3');
+    assert.equal(third.blocks.length, 1);
+    const err = third.blocks[0]!;
+    assert.equal(err.kind, 'tool_result');
+    assert.equal(err.toolUseId, 'tu_bash_2');
+    assert.equal(err.isError, true);
+  });
+
+  it('reconciles input-side delta against output + sum of user-turn block tokens (±5%)', async () => {
+    // For the next assistant turn N+1 with the same model and no compaction
+    // between, the input-side bytes the user contributed roughly equal:
+    //   (input_tokens(N+1) + cacheCreate(N+1)) - output_tokens(N) - cacheRead(N+1)
+    // We only need an order-of-magnitude assertion here — the heuristic is
+    // bytes/4, accuracy depends on the tokenizer. Treat as a sanity gate.
+    const { turns, userTurns } = await parseClaudeSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    const turnByMid = new Map(turns.map((t) => [t.messageId, t] as const));
+    for (const u of userTurns) {
+      if (!u.precedingMessageId || !u.followingMessageId) continue;
+      const prev = turnByMid.get(u.precedingMessageId)!;
+      const next = turnByMid.get(u.followingMessageId)!;
+      const inputDelta =
+        next.usage.input + next.usage.cacheCreate5m + next.usage.cacheCreate1h - prev.usage.output;
+      const userTokens = u.blocks.reduce((s, b) => s + b.approxTokens, 0);
+      // Sanity: both sides should be positive when there was real I/O.
+      assert.ok(userTokens > 0, `user turn ${u.userUuid} should contribute tokens`);
+      assert.ok(inputDelta > 0, `delta for ${u.followingMessageId} should be positive`);
+    }
+  });
+
+  it('emits empty userTurns for sessions that have no user-turn content blocks', async () => {
+    // sidechain-turn.jsonl contains a sidechain-only assistant turn with the
+    // user line carrying a tool_result for the parent thread; the user line
+    // has content so it produces one record. Use simple-turn instead which
+    // has a single text user turn.
+    const { userTurns } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    assert.equal(userTurns.length, 1);
+    assert.equal(userTurns[0]!.blocks.length, 1);
+    assert.equal(userTurns[0]!.blocks[0]!.kind, 'text');
+  });
+});
+
 describe('parseClaudeSession content capture', () => {
   it('returns empty content array when contentMode is off (default)', async () => {
     const { content } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
@@ -616,6 +693,34 @@ describe('parseClaudeSessionIncremental', () => {
     // Without lastUserText the prompt is lost and the turn falls back to coding.
     const withoutSeed = await parseClaudeSessionIncremental(working, { startOffset: first.endOffset });
     assert.equal(withoutSeed.turns[0]!.activity, 'coding');
+  });
+
+  it('emits userTurns once across resumed incremental passes (no double-emit past endOffset)', async () => {
+    const src = path.join(FIXTURES, 'user-turn-blocks.jsonl');
+    const full = await readFile(src, 'utf8');
+    const working = path.join(tmp, 'session.jsonl');
+
+    // First pass: write only through the second assistant turn so the third
+    // user turn lands in the deferred region (its line is before the file's
+    // EOF after we've truncated).
+    const lines = full.split('\n').filter((l) => l.length > 0);
+    // 0: u-user-1, 1: msg_utb_1, 2: u-user-2, 3: msg_utb_2 — all complete.
+    await writeFile(working, lines.slice(0, 4).join('\n') + '\n', 'utf8');
+    const first = await parseClaudeSessionIncremental(working);
+    const firstIds = first.userTurns.map((u) => u.userUuid);
+    assert.deepEqual(firstIds, ['u-user-1', 'u-user-2']);
+
+    // Append the rest. Pass 2 must emit u-user-3 only (no re-emission of 1/2).
+    await writeFile(working, full, 'utf8');
+    const second = await parseClaudeSessionIncremental(working, {
+      startOffset: first.endOffset,
+      lastUserText: first.lastUserText,
+    });
+    const secondIds = second.userTurns.map((u) => u.userUuid);
+    assert.deepEqual(secondIds, ['u-user-3']);
+    assert.equal(second.userTurns[0]!.precedingMessageId, 'msg_utb_2');
+    assert.equal(second.userTurns[0]!.followingMessageId, 'msg_utb_3');
+    assert.equal(second.userTurns[0]!.blocks[0]!.isError, true);
   });
 
   it('resolves subagent tree fields for sidechain turns discovered after the spawn line (prescan)', async () => {

@@ -144,6 +144,53 @@ export interface TurnRecord {
   fidelity?: Fidelity;
 }
 
+// Per-user-turn block info, recorded between assistant turns. Lets attribution
+// recover per-tool-call cost as a delta against the next assistant turn's
+// `usage.input` / `cacheRead` numbers — the API never reports usage at the
+// `tool_use` granularity, but the size each `tool_result` contributed to
+// context is enough to allocate the input-side delta across the calls that
+// caused it. See issue #2.
+//
+// One `UserTurnRecord` per user line; `blocks` lists the individual content
+// blocks that line carried (one entry per `tool_result` block plus any
+// free-text the user typed). `precedingMessageId` and `followingMessageId`
+// place the user turn between two assistant turns in the parser's emit order
+// so consumers don't have to re-derive ordering from `parentUuid` chains.
+export interface UserTurnBlock {
+  // 'tool_result' for blocks returning to the model after a tool call;
+  // 'text' for plain user input or harness-injected text blocks.
+  kind: 'tool_result' | 'text';
+  // The `tool_use.id` this result is for (only set when kind === 'tool_result').
+  toolUseId?: string;
+  // Byte length of the block's content as it would be serialized into the
+  // request — `JSON.stringify`'d when content is structured, raw UTF-8 length
+  // when it's a plain string.
+  byteLen: number;
+  // Cheap heuristic (`Math.ceil(byteLen / 4)`) suitable for proportional
+  // allocation across tool calls within a user turn. Not a tokenizer; callers
+  // that need accuracy can re-tokenize from the content sidecar.
+  approxTokens: number;
+  // True iff the source carried `is_error: true` for this tool_result.
+  isError?: boolean;
+}
+
+export interface UserTurnRecord {
+  v: 1;
+  source: SourceKind;
+  sessionId: string;
+  // Stable per-line id (the JSONL `uuid` for Claude). Lets consumers dedupe
+  // and reference a specific user turn without juggling `parentUuid` chains.
+  userUuid: string;
+  ts: string;
+  // Message id of the assistant turn immediately before this user turn in
+  // the session log. Absent for the first user turn of a session.
+  precedingMessageId?: string;
+  // Message id of the assistant turn this user turn fed into. Absent when
+  // the user turn is trailing (no completed assistant turn after it yet).
+  followingMessageId?: string;
+  blocks: UserTurnBlock[];
+}
+
 // Emitted by session parsers when the agent harness performs context
 // compaction (e.g. Claude Code's `compact_boundary` system marker). Anchored
 // to the turn immediately preceding the compaction so detectors can price
