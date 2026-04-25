@@ -268,6 +268,30 @@ describe('burn limits', () => {
     assert.match(stdout, /\(limited data\)/);
   });
 
+  it('survives loadPlanStatuses throwing (malformed plans.json) and warns on stderr', async () => {
+    // Regression for the unprotected loadPlanStatuses call: a malformed
+    // user-editable plans.json should warn and degrade to an empty list,
+    // not crash the command (especially under --watch).
+    const usage: UsageResponse = {
+      five_hour: { percent_used: 30, reset_at: '2026-04-24T13:00:00.000Z' },
+    };
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => usage,
+      now: fakeNow,
+      loadForecast: async () => null,
+      loadPlanStatuses: async () => {
+        throw new Error('invalid JSON in /home/u/.relayburn/plans.json: Unexpected token');
+      },
+    };
+    const { result, stdout, stderr } = await captureStdout(() => runLimits(args(), deps));
+    assert.equal(result, 0);
+    assert.match(stderr, /could not load plans.*invalid JSON/);
+    // 5-hour quota block must still render — the OAuth fetch isn't gated on plans.
+    assert.match(stdout, /5-hour\s+30% used/);
+    assert.doesNotMatch(stdout, /Monthly plan/);
+  });
+
   it('emits plan statuses in --json output', async () => {
     const deps: LimitsDeps = {
       loadToken: async () => 'tok',

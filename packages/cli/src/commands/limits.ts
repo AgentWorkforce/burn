@@ -100,7 +100,17 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
       ? projectFromOauth(usage.five_hour.percent_used, forecast.data)
       : null;
 
-    const planStatuses = await loadPlanStatuses();
+    // Match the resilience pattern used for `fetchOnce` above: a malformed
+    // ~/.relayburn/plans.json (user-editable) shouldn't crash the whole
+    // command — and especially shouldn't terminate the --watch loop. Warn
+    // once on stderr and degrade to an empty plan list.
+    let planStatuses: PlanStatus[] = [];
+    try {
+      planStatuses = await loadPlanStatuses();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] warning: could not load plans (${msg})\n`);
+    }
 
     if (json) {
       return {
