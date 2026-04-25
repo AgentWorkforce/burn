@@ -35,7 +35,7 @@ Tests run from `dist/` so a stale build will lie. If a test fails unexpectedly, 
 
 Curate `[Unreleased]` in the relevant per-package `packages/*/CHANGELOG.md` as you land PRs — write the entry the way you'd want it to read in a release note. At publish time, the workflow (`.github/workflows/publish.yml`) **promotes** your `[Unreleased]` block verbatim into `## [x.y.z] - DATE` and resets `[Unreleased]` to empty. No double-writing, no post-release hand-editing.
 
-The root `CHANGELOG.md` is the cross-package narrative. Packages release in lockstep, so each release in the root file is a single `## [x.y.z] - YYYY-MM-DD` header that applies to all four packages — no `**Versions:** ...` lines, no per-bullet `[reader, cli]` tags. Update `[Unreleased]` only when the work spans packages or warrants a top-level summary; single-package work belongs only in that package's CHANGELOG.
+The root `CHANGELOG.md` is the cross-package narrative. Packages release in lockstep, so each release in the root file is a single `## [x.y.z] - YYYY-MM-DD` header that applies to all five packages — no `**Versions:** ...` lines, no per-bullet `[reader, cli]` tags. Update `[Unreleased]` only when the work spans packages or warrants a top-level summary; single-package work belongs only in that package's CHANGELOG.
 
 The publish workflow promotes the root `[Unreleased]` block the same way it does per-package files: at release time it stamps `## [x.y.z] - DATE` (using `max` of the versions bumped in the run) and resets `[Unreleased]` to empty. **No git-log fallback for the root file** — an empty `[Unreleased]` at release time means "no narrative-worthy changes this release" and the file is left alone. So if you want the root to record a release, write the bullet under `[Unreleased]` *before* the publish run.
 
@@ -58,7 +58,7 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 
 ```bash
 # from GitHub Actions: workflow_dispatch → "Publish Package"
-#   package: all | reader | ledger | analyze | cli
+#   package: all | reader | ledger | analyze | mcp | cli
 #   version: patch | minor | major | prepatch | … | none (re-publish current)
 #   custom_version: 0.3.1 (overrides version type)
 #   tag: latest | next | beta | alpha
@@ -67,7 +67,7 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 
 The workflow:
 1. Builds + tests the whole workspace.
-2. Bumps `package.json` versions in dep order (reader → ledger → analyze → cli).
+2. Bumps `package.json` versions in dep order (reader → ledger → analyze → mcp → cli).
 3. Generates changelog entries from `git log <pkg>-v<last>..HEAD -- packages/<pkg>`.
 4. Publishes via `pnpm pack` + `npm publish` using OIDC trusted-publisher auth (no `NPM_TOKEN`).
 5. Tags `<pkg>-v<version>` and creates a GitHub Release with the changelog body.
