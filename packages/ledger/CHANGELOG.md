@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-04-25
+
 ### Changed
 
 - **`pruneContent` accepts an optional `isRecoverable(sessionId)` callback** and skips sidecars whose source session file still exists. The ledger package stays decoupled from adapter-specific paths — the predicate is supplied by the caller. `PruneResult` now carries a `skippedRecoverable` count alongside `filesDeleted` / `bytesFreed`. Without `isRecoverable` (or with a throwing predicate), retention is applied unchanged. (#61)

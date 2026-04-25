@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-04-25
+
+### Changed
+
+- Protect recoverable sidecars from retention prune (#61)
+
 ## [0.14.2] - 2026-04-25
 
 ### Changed
