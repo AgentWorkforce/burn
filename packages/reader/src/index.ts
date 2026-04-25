@@ -36,6 +36,7 @@ export type {
   ParseCodexIncrementalOptions,
   ParseCodexIncrementalResult,
   CodexResumeState,
+  PersistedUserTurnSlot,
 } from './codex.js';
 export { parseOpencodeSession, parseOpencodeSessionIncremental } from './opencode.js';
 export type {

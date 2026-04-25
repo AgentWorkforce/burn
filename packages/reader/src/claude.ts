@@ -6,6 +6,7 @@ import { classifyActivity } from './classifier.js';
 import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash, contentHash } from './hash.js';
+import { makeTextBlock, makeToolResultBlock } from './userTurn.js';
 import type {
   CompactionEvent,
   ContentRecord,
@@ -629,46 +630,13 @@ function extractUserTurnBlocks(line: UserLine): UserTurnBlock[] {
     if (block.type === 'tool_result') {
       const tr = block as { tool_use_id?: string; content?: unknown; is_error?: boolean };
       if (typeof tr.tool_use_id !== 'string') continue;
-      const byteLen = measureContentBytes(tr.content);
-      const b: UserTurnBlock = {
-        kind: 'tool_result',
-        toolUseId: tr.tool_use_id,
-        byteLen,
-        approxTokens: bytesToApproxTokens(byteLen),
-      };
-      if (tr.is_error === true) b.isError = true;
-      out.push(b);
+      out.push(makeToolResultBlock(tr.tool_use_id, tr.content, tr.is_error === true));
     } else if (block.type === 'text') {
       const tb = block as { text?: string };
       if (typeof tb.text === 'string' && tb.text.length > 0) out.push(makeTextBlock(tb.text));
     }
   }
   return out;
-}
-
-function makeTextBlock(text: string): UserTurnBlock {
-  const byteLen = Buffer.byteLength(text, 'utf8');
-  return { kind: 'text', byteLen, approxTokens: bytesToApproxTokens(byteLen) };
-}
-
-// Measures the wire-shape byte length of a `tool_result.content` value:
-// a plain string is measured as UTF-8; structured content is JSON-stringified
-// first (matching how it'd be serialized into the request body).
-function measureContentBytes(content: unknown): number {
-  if (content === undefined || content === null) return 0;
-  if (typeof content === 'string') return Buffer.byteLength(content, 'utf8');
-  try {
-    return Buffer.byteLength(JSON.stringify(content), 'utf8');
-  } catch {
-    // Circular references, BigInts, etc. — fall back to a coerced string so
-    // we still return a usable signal rather than zero.
-    return Buffer.byteLength(String(content), 'utf8');
-  }
-}
-
-function bytesToApproxTokens(byteLen: number): number {
-  if (byteLen <= 0) return 0;
-  return Math.ceil(byteLen / 4);
 }
 
 interface UsageWithCoverage {

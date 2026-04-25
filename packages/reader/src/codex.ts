@@ -9,7 +9,10 @@ import type {
   ToolCall,
   TurnRecord,
   Usage,
+  UserTurnBlock,
+  UserTurnRecord,
 } from './types.js';
+import { makeTextBlock, makeToolResultBlock } from './userTurn.js';
 
 export interface ParseCodexOptions {
   sessionPath?: string;
@@ -26,11 +29,24 @@ export interface CodexResumeState {
   sessionId: string;
   sessionCwd?: string;
   turnContexts: Record<string, { turn_id?: string; cwd?: string; model?: string }>;
+  // The user-turn slot in flight as of the last task_complete commit. Codex
+  // user turns span the gap between two assistant turns, so the slot must
+  // survive across resumed parses — tool outputs from the most recently
+  // committed turn live here until the next task_started stamps `following`
+  // and the subsequent task_complete commits the record. Issue #81.
+  userTurnSlot?: PersistedUserTurnSlot;
+}
+
+export interface PersistedUserTurnSlot {
+  blocks: UserTurnBlock[];
+  precedingMessageId?: string;
+  ts: string;
 }
 
 export interface ParseCodexIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  userTurns: UserTurnRecord[];
   endOffset: number;
   resume: CodexResumeState;
 }
@@ -160,20 +176,27 @@ interface FinalizedTurn
   erroredCallIds: Set<string>;
 }
 
+interface UserTurnSlot {
+  blocks: UserTurnBlock[];
+  precedingMessageId?: string;
+  ts: string;
+}
+
 export interface ParseCodexResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  userTurns: UserTurnRecord[];
 }
 
 export async function parseCodexSession(
   filePath: string,
   options: ParseCodexOptions = {},
 ): Promise<ParseCodexResult> {
-  const { turns, content } = await parseCodexSessionIncremental(filePath, {
+  const { turns, content, userTurns } = await parseCodexSessionIncremental(filePath, {
     ...options,
     startOffset: 0,
   });
-  return { turns, content };
+  return { turns, content, userTurns };
 }
 
 export async function parseCodexSessionIncremental(
@@ -191,6 +214,7 @@ export async function parseCodexSessionIncremental(
       return {
         turns: [],
         content: [],
+        userTurns: [],
         endOffset: startOffset,
         resume: cloneResume(options.resume),
       };
@@ -224,6 +248,18 @@ export async function parseCodexSessionIncremental(
   let pendingContent: ContentRecord[] = [];
   const finalized: FinalizedTurn[] = [];
 
+  // The user-turn slot accumulates user-side blocks (free text + tool outputs)
+  // for the gap between two assistant turns. Lifecycle: blocks accrue during
+  // an open turn or between turns; `precedingMessageId` is stamped at
+  // task_complete; `followingMessageId` is stamped + the record is pushed to
+  // `userTurns` at the next task_started; the record is committed (counted
+  // toward `committedUserTurnsCount`) at the following turn's task_complete.
+  // See issue #81.
+  let userTurnSlot: UserTurnSlot = options.resume?.userTurnSlot
+    ? cloneSlot(options.resume.userTurnSlot)
+    : { blocks: [], ts: '' };
+  const userTurns: UserTurnRecord[] = [];
+
   // Commit snapshot — only advanced at task_complete boundaries.
   let committedEndOffset = startOffset;
   let committedCumulative: CumulativeUsage = { ...cumulative };
@@ -231,6 +267,8 @@ export async function parseCodexSessionIncremental(
   let committedSessionCwd = sessionCwd;
   let committedTurnContexts = new Map(turnContexts);
   let committedFinalizedCount = 0;
+  let committedUserTurnsCount = 0;
+  let committedUserTurnSlot: UserTurnSlot = cloneSlot(userTurnSlot);
 
   let p = 0;
   while (p < buf.length) {
@@ -302,6 +340,15 @@ export async function parseCodexSessionIncremental(
         if (openTurn) {
           finalized.push(finalizeTurn(openTurn, cumulative));
         }
+        // Close the user-turn slot that bridges the previous assistant turn
+        // and this one. `precedingMessageId` was stamped at the previous
+        // task_complete (or left undef at session start); now we know
+        // `followingMessageId`. The record is committed for emission at this
+        // turn's task_complete.
+        if (userTurnSlot.blocks.length > 0) {
+          userTurns.push(buildCodexUserTurnRecord(userTurnSlot, sessionId, turnId, ts));
+        }
+        userTurnSlot = { blocks: [], ts: '' };
         const ctx = turnContexts.get(turnId);
         const project = ctx?.cwd ?? sessionCwd;
         openTurn = {
@@ -333,6 +380,22 @@ export async function parseCodexSessionIncremental(
       if (pl.type === 'task_complete') {
         const ev = payload as TaskCompletePayload;
         if (openTurn && ev.turn_id === openTurn.turnId) {
+          // Apply isError to any tool-result blocks accumulated during this
+          // turn — exec_command_end / patch_apply_end fired before now and
+          // populated `erroredCallIds`, but the function_call_output /
+          // custom_tool_call_output payloads themselves don't carry status.
+          for (const b of userTurnSlot.blocks) {
+            if (
+              b.kind === 'tool_result' &&
+              b.toolUseId !== undefined &&
+              openTurn.erroredCallIds.has(b.toolUseId)
+            ) {
+              b.isError = true;
+            }
+          }
+          // Stamp preceding so the next task_started knows this turn closed
+          // off the slot and the record can be linked.
+          userTurnSlot.precedingMessageId = openTurn.turnId;
           finalized.push(finalizeTurn(openTurn, cumulative));
           openTurn = null;
           committedEndOffset = lineEndOffset;
@@ -341,6 +404,8 @@ export async function parseCodexSessionIncremental(
           committedSessionCwd = sessionCwd;
           committedTurnContexts = new Map(turnContexts);
           committedFinalizedCount = finalized.length;
+          committedUserTurnsCount = userTurns.length;
+          committedUserTurnSlot = cloneSlot(userTurnSlot);
         }
         continue;
       }
@@ -381,6 +446,10 @@ export async function parseCodexSessionIncremental(
           // next task_started picks them up as that turn's prompt text.
           if (openTurn) openTurn.userText = appendText(openTurn.userText, text);
           else pendingUserText = appendText(pendingUserText, text);
+          // Capture the user prose as a UserTurnBlock for the slot bridging
+          // the previous and next assistant turn (issue #81).
+          userTurnSlot.blocks.push(makeTextBlock(text));
+          if (!userTurnSlot.ts && itemTs) userTurnSlot.ts = itemTs;
           if (captureContent) {
             pushContent(openTurn, pendingContent, {
               v: 1,
@@ -432,9 +501,17 @@ export async function parseCodexSessionIncremental(
         // after task_complete. Attribution only requires the call_id linkage,
         // which is preserved either way; we attach to the open turn when we
         // have one, or buffer as pre-turn content otherwise.
-        if (!captureContent) continue;
         const out = payload as FunctionCallOutputPayload | CustomToolCallOutputPayload;
         if (typeof out.call_id !== 'string') continue;
+        // Always capture the output as a UserTurnBlock for the slot bridging
+        // the open turn (or its predecessor) and the next assistant turn —
+        // attribution doesn't require contentMode and shouldn't pay its cost.
+        // isError is filled in at task_complete using `erroredCallIds`, since
+        // exec_command_end / patch_apply_end ordering relative to the output
+        // payload isn't guaranteed.
+        userTurnSlot.blocks.push(makeToolResultBlock(out.call_id, out.output));
+        if (!userTurnSlot.ts && itemTs) userTurnSlot.ts = itemTs;
+        if (!captureContent) continue;
         pushContent(openTurn, pendingContent, {
           v: 1,
           source: 'codex',
@@ -547,10 +624,19 @@ export async function parseCodexSessionIncremental(
     cumulative: { ...committedCumulative },
     sessionId: committedSessionId,
     turnContexts: Object.fromEntries(committedTurnContexts),
+    userTurnSlot: cloneSlot(committedUserTurnSlot),
   };
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
 
-  return { turns, content, endOffset: committedEndOffset, resume };
+  const emittedUserTurns = userTurns.slice(0, committedUserTurnsCount);
+
+  return {
+    turns,
+    content,
+    userTurns: emittedUserTurns,
+    endOffset: committedEndOffset,
+    resume,
+  };
 }
 
 function pushContent(
@@ -583,6 +669,7 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
       cumulative: { input: 0, output: 0, cacheRead: 0, reasoning: 0 },
       sessionId: '',
       turnContexts: {},
+      userTurnSlot: { blocks: [], ts: '' },
     };
   }
   const out: CodexResumeState = {
@@ -591,7 +678,47 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
     turnContexts: { ...r.turnContexts },
   };
   if (r.sessionCwd !== undefined) out.sessionCwd = r.sessionCwd;
+  if (r.userTurnSlot) out.userTurnSlot = cloneSlot(r.userTurnSlot);
+  else out.userTurnSlot = { blocks: [], ts: '' };
   return out;
+}
+
+function cloneSlot(s: UserTurnSlot | PersistedUserTurnSlot): UserTurnSlot {
+  const out: UserTurnSlot = {
+    blocks: s.blocks.map((b) => ({ ...b })),
+    ts: s.ts,
+  };
+  if (s.precedingMessageId !== undefined) out.precedingMessageId = s.precedingMessageId;
+  return out;
+}
+
+// Build a UserTurnRecord for a slot whose `following` is now known.
+// `userUuid` is synthesized from the surrounding assistant turn ids — Codex
+// doesn't carry a stable per-line uuid for tool outputs, but the
+// (preceding, following) pair is unique within a session and stable across
+// resumes. When preceding is unset (session-start slot), we substitute
+// "start". Issue #81.
+function buildCodexUserTurnRecord(
+  slot: UserTurnSlot,
+  sessionId: string,
+  followingMessageId: string,
+  fallbackTs: string,
+): UserTurnRecord {
+  const precedingTag = slot.precedingMessageId ?? 'start';
+  const userUuid = `${sessionId}:${precedingTag}->${followingMessageId}`;
+  const record: UserTurnRecord = {
+    v: 1,
+    source: 'codex',
+    sessionId,
+    userUuid,
+    ts: slot.ts || fallbackTs,
+    blocks: slot.blocks,
+    followingMessageId,
+  };
+  if (slot.precedingMessageId !== undefined) {
+    record.precedingMessageId = slot.precedingMessageId;
+  }
+  return record;
 }
 
 function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTurn {
