@@ -362,6 +362,412 @@ describe('archive', () => {
     );
   });
 
+  it('persists per-turn attribution_fidelity / tokens_present / cost_present columns and rolls them up onto sessions (#110)', async () => {
+    // Mixed-fidelity ledger: a Claude `full` turn (carries fidelity), a
+    // synthetic Codex turn that lacks fidelity entirely (older line), and a
+    // cost-only turn to exercise the cost_present column. The session's
+    // worst-fidelity rollup should be `cost-only` (NULL ignored, cost-only is
+    // worst); has_full_attribution should be 0 (some known-fidelity turn is
+    // not full).
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-mix',
+        messageId: 'mix-full',
+        fidelity: {
+          granularity: 'per-turn',
+          coverage: {
+            hasInputTokens: true,
+            hasOutputTokens: true,
+            hasReasoningTokens: false,
+            hasCacheReadTokens: true,
+            hasCacheCreateTokens: true,
+            hasToolCalls: true,
+            hasToolResultEvents: true,
+            hasSessionRelationships: true,
+            hasRawContent: true,
+          },
+          class: 'full',
+        },
+      }),
+      fakeTurn({
+        sessionId: 's-mix',
+        messageId: 'mix-codex-old',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+        // No fidelity field — simulates a Codex/OpenCode line written before
+        // the upstream fidelity work landed (#84/#89).
+      }),
+      fakeTurn({
+        sessionId: 's-mix',
+        messageId: 'mix-cost',
+        turnIndex: 2,
+        ts: '2026-04-20T00:00:02.000Z',
+        fidelity: {
+          granularity: 'cost-only',
+          coverage: {
+            hasInputTokens: false,
+            hasOutputTokens: false,
+            hasReasoningTokens: false,
+            hasCacheReadTokens: false,
+            hasCacheCreateTokens: false,
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+            hasSessionRelationships: false,
+            hasRawContent: false,
+          },
+          class: 'cost-only',
+        },
+      }),
+    ]);
+    await buildArchive();
+
+    const db = await openArchive();
+    try {
+      const rows = db
+        .prepare(
+          `SELECT message_id, attribution_fidelity, tokens_present, cost_present
+           FROM turns WHERE session_id = ? ORDER BY turn_index`,
+        )
+        .all('s-mix') as Array<{
+        message_id: string;
+        attribution_fidelity: string | null;
+        tokens_present: number | bigint | null;
+        cost_present: number | bigint | null;
+      }>;
+      assert.equal(rows.length, 3);
+
+      // Claude full turn — fidelity columns populated.
+      assert.equal(rows[0]!.message_id, 'mix-full');
+      assert.equal(rows[0]!.attribution_fidelity, 'full');
+      assert.equal(Number(rows[0]!.tokens_present), 1);
+      assert.equal(Number(rows[0]!.cost_present), 0);
+
+      // Older Codex turn — no fidelity → all three columns NULL (unknown,
+      // not zero / partial).
+      assert.equal(rows[1]!.message_id, 'mix-codex-old');
+      assert.equal(rows[1]!.attribution_fidelity, null);
+      assert.equal(rows[1]!.tokens_present, null);
+      assert.equal(rows[1]!.cost_present, null);
+
+      // Cost-only turn.
+      assert.equal(rows[2]!.message_id, 'mix-cost');
+      assert.equal(rows[2]!.attribution_fidelity, 'cost-only');
+      assert.equal(Number(rows[2]!.tokens_present), 0);
+      assert.equal(Number(rows[2]!.cost_present), 1);
+
+      // Session rollup: worst fidelity ignoring NULLs is 'cost-only';
+      // has_full_attribution = 0 because at least one known-fidelity turn
+      // (mix-cost) is not 'full'.
+      const sessionRow = db
+        .prepare(
+          'SELECT min_fidelity, has_full_attribution FROM sessions WHERE session_id = ?',
+        )
+        .get('s-mix') as {
+        min_fidelity: string | null;
+        has_full_attribution: number | bigint | null;
+      };
+      assert.equal(sessionRow.min_fidelity, 'cost-only');
+      assert.equal(Number(sessionRow.has_full_attribution), 0);
+    } finally {
+      db.close();
+    }
+
+    // Fidelity histogram on status: 1 full, 1 cost-only, 1 unknown.
+    const status = await getArchiveStatus();
+    assert.deepEqual(status.fidelityHistogram, {
+      full: 1,
+      'cost-only': 1,
+      unknown: 1,
+    });
+  });
+
+  it('session has_full_attribution is 1 only when every fidelity-tagged turn is full, NULL when none carry fidelity (#110)', async () => {
+    const fullCoverage = {
+      hasInputTokens: true,
+      hasOutputTokens: true,
+      hasReasoningTokens: false,
+      hasCacheReadTokens: true,
+      hasCacheCreateTokens: true,
+      hasToolCalls: true,
+      hasToolResultEvents: true,
+      hasSessionRelationships: true,
+      hasRawContent: true,
+    } as const;
+
+    await appendTurns([
+      // s-allfull: two full turns.
+      fakeTurn({
+        sessionId: 's-allfull',
+        messageId: 'af-1',
+        fidelity: { granularity: 'per-turn', coverage: { ...fullCoverage }, class: 'full' },
+      }),
+      fakeTurn({
+        sessionId: 's-allfull',
+        messageId: 'af-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+        fidelity: { granularity: 'per-turn', coverage: { ...fullCoverage }, class: 'full' },
+      }),
+      // s-nofid: no fidelity on any turn.
+      fakeTurn({ sessionId: 's-nofid', messageId: 'nf-1' }),
+      fakeTurn({
+        sessionId: 's-nofid',
+        messageId: 'nf-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+      }),
+    ]);
+    await buildArchive();
+
+    const db = await openArchive();
+    try {
+      const allfull = db
+        .prepare(
+          'SELECT min_fidelity, has_full_attribution FROM sessions WHERE session_id = ?',
+        )
+        .get('s-allfull') as {
+        min_fidelity: string | null;
+        has_full_attribution: number | bigint | null;
+      };
+      assert.equal(allfull.min_fidelity, 'full');
+      assert.equal(Number(allfull.has_full_attribution), 1);
+
+      const nofid = db
+        .prepare(
+          'SELECT min_fidelity, has_full_attribution FROM sessions WHERE session_id = ?',
+        )
+        .get('s-nofid') as {
+        min_fidelity: string | null;
+        has_full_attribution: number | bigint | null;
+      };
+      // No turn carries fidelity → both rollups NULL (unknown, not 0/full).
+      assert.equal(nofid.min_fidelity, null);
+      assert.equal(nofid.has_full_attribution, null);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rebuilding a fidelity-tagged ledger is idempotent: row counts and per-turn columns stable across rebuild (#110)', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-idem',
+        messageId: 'id-1',
+        fidelity: {
+          granularity: 'per-turn',
+          coverage: {
+            hasInputTokens: true,
+            hasOutputTokens: true,
+            hasReasoningTokens: false,
+            hasCacheReadTokens: true,
+            hasCacheCreateTokens: true,
+            hasToolCalls: true,
+            hasToolResultEvents: true,
+            hasSessionRelationships: true,
+            hasRawContent: true,
+          },
+          class: 'full',
+        },
+      }),
+      fakeTurn({
+        sessionId: 's-idem',
+        messageId: 'id-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+        fidelity: {
+          granularity: 'per-turn',
+          coverage: {
+            hasInputTokens: true,
+            hasOutputTokens: true,
+            hasReasoningTokens: false,
+            hasCacheReadTokens: false,
+            hasCacheCreateTokens: false,
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+            hasSessionRelationships: false,
+            hasRawContent: false,
+          },
+          class: 'usage-only',
+        },
+      }),
+    ]);
+    await buildArchive();
+    const before = await getArchiveStatus();
+
+    await rebuildArchive();
+    const after = await getArchiveStatus();
+
+    assert.deepEqual(after.rowCounts, before.rowCounts);
+    assert.deepEqual(after.fidelityHistogram, before.fidelityHistogram);
+    assert.deepEqual(after.fidelityHistogram, { full: 1, 'usage-only': 1 });
+
+    const db = await openArchive();
+    try {
+      const session = db
+        .prepare(
+          'SELECT min_fidelity, has_full_attribution FROM sessions WHERE session_id = ?',
+        )
+        .get('s-idem') as {
+        min_fidelity: string | null;
+        has_full_attribution: number | bigint | null;
+      };
+      // Worst class is `usage-only` (rank 4 < full=5); not all full → 0.
+      assert.equal(session.min_fidelity, 'usage-only');
+      assert.equal(Number(session.has_full_attribution), 0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('additive ALTER migration: opening an archive that pre-dates the fidelity columns adds them without dropping data (#110)', async () => {
+    // Build a normal archive at the current schema, then drop the new
+    // columns to simulate an archive built before #110 landed. Re-open via
+    // openArchive() and assert (a) data survives, (b) the columns exist
+    // again, and (c) a subsequent build populates them for new turns.
+    await appendTurns([
+      fakeTurn({ sessionId: 's-mig', messageId: 'mg-old' }),
+    ]);
+    await buildArchive();
+
+    // Drop the columns by recreating the tables without them. SQLite has no
+    // DROP COLUMN on older versions, so we round-trip through a temp table
+    // and recreate to mimic an older on-disk shape.
+    {
+      const db = new DatabaseSync(archivePath());
+      try {
+        db.exec('BEGIN');
+        db.exec(`
+          CREATE TABLE turns_old (
+            source                TEXT NOT NULL,
+            session_id            TEXT NOT NULL,
+            message_id            TEXT NOT NULL,
+            turn_index            INTEGER NOT NULL,
+            ts                    TEXT NOT NULL,
+            model                 TEXT NOT NULL,
+            project               TEXT,
+            project_key           TEXT,
+            activity              TEXT,
+            stop_reason           TEXT,
+            has_edits             INTEGER,
+            retries               INTEGER,
+            is_sidechain          INTEGER,
+            subagent_id           TEXT,
+            parent_subagent_id    TEXT,
+            parent_tool_use_id    TEXT,
+            subagent_type         TEXT,
+            input_tokens          INTEGER NOT NULL DEFAULT 0,
+            output_tokens         INTEGER NOT NULL DEFAULT 0,
+            reasoning_tokens      INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+            cache_create_5m_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_create_1h_tokens INTEGER NOT NULL DEFAULT 0,
+            workflow_id           TEXT,
+            agent_id              TEXT,
+            persona               TEXT,
+            tier                  TEXT,
+            enrichment_json       TEXT,
+            PRIMARY KEY (source, session_id, message_id)
+          );
+          INSERT INTO turns_old SELECT
+            source, session_id, message_id, turn_index, ts, model, project, project_key,
+            activity, stop_reason, has_edits, retries,
+            is_sidechain, subagent_id, parent_subagent_id, parent_tool_use_id, subagent_type,
+            input_tokens, output_tokens, reasoning_tokens,
+            cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
+            workflow_id, agent_id, persona, tier, enrichment_json
+          FROM turns;
+          DROP TABLE turns;
+          ALTER TABLE turns_old RENAME TO turns;
+
+          CREATE TABLE sessions_old (
+            source              TEXT NOT NULL,
+            session_id          TEXT NOT NULL,
+            project             TEXT,
+            project_key         TEXT,
+            started_at          TEXT,
+            ended_at            TEXT,
+            turn_count          INTEGER NOT NULL DEFAULT 0,
+            model_set_json      TEXT,
+            workflow_id         TEXT,
+            agent_id            TEXT,
+            parent_agent_id     TEXT,
+            has_subagent        INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (source, session_id)
+          );
+          INSERT INTO sessions_old SELECT
+            source, session_id, project, project_key, started_at, ended_at,
+            turn_count, model_set_json, workflow_id, agent_id, parent_agent_id, has_subagent
+          FROM sessions;
+          DROP TABLE sessions;
+          ALTER TABLE sessions_old RENAME TO sessions;
+        `);
+        db.exec('COMMIT');
+      } finally {
+        db.close();
+      }
+    }
+
+    // Re-opening must idempotently add the columns back without nuking
+    // existing rows. Existing rows have NULL in the new columns (unknown).
+    const db = await openArchive();
+    try {
+      const turnCols = (db.prepare('PRAGMA table_info(turns)').all() as Array<{
+        name: string;
+      }>).map((r) => r.name);
+      assert.ok(turnCols.includes('attribution_fidelity'));
+      assert.ok(turnCols.includes('tokens_present'));
+      assert.ok(turnCols.includes('cost_present'));
+
+      const sessionCols = (db.prepare('PRAGMA table_info(sessions)').all() as Array<{
+        name: string;
+      }>).map((r) => r.name);
+      assert.ok(sessionCols.includes('min_fidelity'));
+      assert.ok(sessionCols.includes('has_full_attribution'));
+
+      const turnRow = db
+        .prepare(
+          'SELECT message_id, attribution_fidelity FROM turns WHERE message_id = ?',
+        )
+        .get('mg-old') as { message_id: string; attribution_fidelity: string | null };
+      assert.equal(turnRow.message_id, 'mg-old');
+      assert.equal(turnRow.attribution_fidelity, null);
+    } finally {
+      db.close();
+    }
+
+    // A fresh build then populates the new columns for new turns without a
+    // full rebuild — this is the "ALTER strategy" promise from the issue.
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-mig',
+        messageId: 'mg-new',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+        fidelity: {
+          granularity: 'per-turn',
+          coverage: {
+            hasInputTokens: true,
+            hasOutputTokens: true,
+            hasReasoningTokens: false,
+            hasCacheReadTokens: true,
+            hasCacheCreateTokens: true,
+            hasToolCalls: true,
+            hasToolResultEvents: true,
+            hasSessionRelationships: true,
+            hasRawContent: true,
+          },
+          class: 'full',
+        },
+      }),
+    ]);
+    await buildArchive();
+
+    const status = await getArchiveStatus();
+    assert.equal(status.rowCounts.turns, 2);
+    assert.equal(status.fidelityHistogram['full'], 1);
+    assert.equal(status.fidelityHistogram['unknown'], 1);
+  });
+
   it('schema version bump: an old archive_version triggers a clean rebuild on open', async () => {
     await appendTurns([fakeTurn({ sessionId: 's-v', messageId: 'mv-1' })]);
     await buildArchive();
