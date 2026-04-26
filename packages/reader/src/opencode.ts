@@ -2,11 +2,14 @@ import { readFile, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { classifyActivity } from './classifier.js';
+import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash, contentHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
+  Coverage,
+  Fidelity,
   SessionRelationshipRecord,
   Subagent,
   ToolCall,
@@ -195,7 +198,16 @@ export async function parseOpencodeSessionIncremental(
 
     const model = buildModel(m.providerID, m.modelID);
     const project = m.path?.cwd ?? session.directory;
+    // Numeric usage is the assistant message's rolled-up totals — OpenCode
+    // already pre-aggregates step-finish tokens onto `m.tokens`, so we don't
+    // re-sum or we'd double-count. Coverage *flags* fold both sources together
+    // (issue #89): a turn whose `m.tokens` lacks cache but whose step-finish
+    // parts carry cache.read still honestly reports `hasCacheReadTokens: true`.
     const usage = toUsage(m.tokens);
+    let usageCoverage = coverageFromTokens(m.tokens);
+    for (const sf of stepFinishTokens(parts)) {
+      usageCoverage = mergeUsageCoverage(usageCoverage, coverageFromTokens(sf));
+    }
 
     const record: TurnRecord = {
       v: 1,
@@ -220,6 +232,7 @@ export async function parseOpencodeSessionIncremental(
       record.subagent = sub;
     }
     if (stopReason !== undefined) record.stopReason = stopReason;
+    record.fidelity = buildOpencodeFidelity(usageCoverage);
 
     const userMessage = findPrecedingUser(users, m.time.created);
     const userText = userMessage ? await readUserText(storageRoot, userMessage.id) : '';
@@ -726,6 +739,72 @@ function toUsage(t: MessageTokens | undefined): Usage {
     cacheCreate5m: cacheWrite,
     cacheCreate1h: 0,
   };
+}
+
+// Coverage tracks *whether the upstream message carried a field*, not whether
+// its numeric value is non-zero. A `tokens.input: 0` still flips
+// `hasInputTokens: true`. OpenCode collapses 5m/1h ephemeral spans into a
+// single `cache.write` count, so any presence of `cache.write` flips
+// `hasCacheCreateTokens`.
+type OpencodeUsageCoverage = Pick<
+  Coverage,
+  | 'hasInputTokens'
+  | 'hasOutputTokens'
+  | 'hasReasoningTokens'
+  | 'hasCacheReadTokens'
+  | 'hasCacheCreateTokens'
+>;
+
+function coverageFromTokens(t: MessageTokens | undefined): OpencodeUsageCoverage {
+  return {
+    hasInputTokens: t?.input !== undefined,
+    hasOutputTokens: t?.output !== undefined,
+    hasReasoningTokens: t?.reasoning !== undefined,
+    hasCacheReadTokens: t?.cache?.read !== undefined,
+    hasCacheCreateTokens: t?.cache?.write !== undefined,
+  };
+}
+
+function mergeUsageCoverage(
+  a: OpencodeUsageCoverage,
+  b: OpencodeUsageCoverage,
+): OpencodeUsageCoverage {
+  // Coverage is monotonic across the assistant message + its step-finish
+  // parts: once any source shows a field, the merged turn has it.
+  return {
+    hasInputTokens: a.hasInputTokens || b.hasInputTokens,
+    hasOutputTokens: a.hasOutputTokens || b.hasOutputTokens,
+    hasReasoningTokens: a.hasReasoningTokens || b.hasReasoningTokens,
+    hasCacheReadTokens: a.hasCacheReadTokens || b.hasCacheReadTokens,
+    hasCacheCreateTokens: a.hasCacheCreateTokens || b.hasCacheCreateTokens,
+  };
+}
+
+function stepFinishTokens(parts: Part[]): MessageTokens[] {
+  const out: MessageTokens[] = [];
+  for (const p of parts) {
+    if (p.type !== 'step-finish') continue;
+    const sf = p as StepFinishPart;
+    if (sf.tokens) out.push(sf.tokens);
+  }
+  return out;
+}
+
+function buildOpencodeFidelity(usageCoverage: OpencodeUsageCoverage): Fidelity {
+  // Numeric usage flags reflect *presence* on the upstream message (or its
+  // step-finish parts). Capability flags are always true: OpenCode captures
+  // tool calls, tool-result events (state.output + state.metadata),
+  // session relationships (session.parentID drives `isSidechain`), and full
+  // raw content when contentMode === 'full'.
+  const coverage: Coverage = {
+    ...EMPTY_COVERAGE,
+    ...usageCoverage,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: true,
+    hasRawContent: true,
+  };
+  return makeFidelity('per-turn', coverage);
 }
 
 function buildModel(providerID: string | undefined, modelID: string | undefined): string {

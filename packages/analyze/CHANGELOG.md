@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-04-26
+
+### Changed
+
+- Populate TurnRecord.fidelity from OpenCode parser (#89)
+
 ## [0.18.0] - 2026-04-26
 
 ### Fixed
