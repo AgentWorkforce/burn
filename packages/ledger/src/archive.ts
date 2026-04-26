@@ -43,11 +43,13 @@ import { archivePath, ledgerPath } from './paths.js';
 import {
   isCompactionLine,
   isStampLine,
+  isToolResultEventLine,
   isTurnLine,
   stampMatches,
   type CompactionLine,
   type Enrichment,
   type StampLine,
+  type ToolResultEventLine,
   type TurnLine,
 } from './schema.js';
 
@@ -56,7 +58,7 @@ import {
  * statement below changes shape; the next `buildArchive()` call will detect
  * the mismatch in `archive_state.archive_version` and rebuild from scratch.
  */
-export const ARCHIVE_VERSION = 1;
+export const ARCHIVE_VERSION = 2;
 
 /**
  * SQL statements that materialize the read model. These are intentionally
@@ -67,7 +69,11 @@ export const ARCHIVE_VERSION = 1;
  *  - sessions: one row per (source, sessionId)
  *  - turns: one row per ingested TurnRecord, with stamps folded in
  *  - tool_calls: one row per ToolCall attached to a turn
- *  - tool_result_events: reserved for future content-sidecar bridging (#33)
+ *  - tool_result_events: chronological tool-output / terminal-status events
+ *    materialized from `ToolResultEventLine` ledger lines (#101 / #42 / #77).
+ *    `content_length` / `content_hash` come straight from the canonical
+ *    record; the content sidecar (#33) carries the raw bytes when callers
+ *    need them.
  *  - archive_state: incremental build cursor + schema version
  */
 const SCHEMA_SQL = `
@@ -84,6 +90,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   agent_id            TEXT,
   parent_agent_id     TEXT,
   has_subagent        INTEGER NOT NULL DEFAULT 0,
+  -- Worst (lowest) fidelity class observed across the session's turns.
+  -- NULL iff every turn in the session lacks fidelity metadata (older lines
+  -- emitted before the upstream parser populated TurnRecord.fidelity).
+  -- Vocabulary matches FidelityClass: full | usage-only | partial |
+  -- aggregate-only | cost-only.
+  min_fidelity        TEXT,
+  -- 1 iff every known-fidelity turn in the session is class='full'. 0 iff
+  -- any turn is below 'full'. NULL iff the session has zero turns with
+  -- fidelity metadata to assert against. See issue #110 / #40.
+  has_full_attribution INTEGER,
   PRIMARY KEY (source, session_id)
 );
 
@@ -120,6 +136,22 @@ CREATE TABLE IF NOT EXISTS turns (
   persona               TEXT,
   tier                  TEXT,
   enrichment_json       TEXT,
+  -- Coverage / fidelity columns (issue #110, upstream #41 / PR #76). Mirror
+  -- TurnRecord.fidelity so SQL consumers can filter / group by them without
+  -- re-deriving in memory. NULL on rows from older ledger lines that pre-date
+  -- the upstream fidelity work — interpret NULL as "unknown" rather than
+  -- guessing.
+  --
+  -- attribution_fidelity: FidelityClass string —
+  --   full | usage-only | partial | aggregate-only | cost-only
+  attribution_fidelity  TEXT,
+  -- 1 iff the source surfaced any per-turn token count
+  -- (input OR output OR reasoning); 0 iff explicitly known to surface none;
+  -- NULL iff fidelity metadata is missing entirely.
+  tokens_present        INTEGER,
+  -- 1 iff this row is cost-only (granularity='cost-only'); 0 otherwise when
+  -- fidelity is present; NULL iff fidelity metadata is missing.
+  cost_present          INTEGER,
   PRIMARY KEY (source, session_id, message_id)
 );
 
@@ -129,6 +161,8 @@ CREATE INDEX IF NOT EXISTS idx_turns_model ON turns(model);
 CREATE INDEX IF NOT EXISTS idx_turns_activity ON turns(activity);
 CREATE INDEX IF NOT EXISTS idx_turns_project_key ON turns(project_key);
 CREATE INDEX IF NOT EXISTS idx_turns_workflow ON turns(workflow_id);
+-- idx_turns_attribution_fidelity is created in applyAdditiveMigrations()
+-- (which runs after the column is ensured) — see issue #110.
 
 CREATE TABLE IF NOT EXISTS tool_calls (
   source         TEXT NOT NULL,
@@ -146,8 +180,12 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_use_id ON tool_calls(tool_use_id);
 
--- Reserved for the content-sidecar bridge (#33) and the execution-graph work.
--- Created now so consumers can stably reference the table, populated later.
+-- Materialized from ToolResultEventLine (execution-graph #42 / #77) -- one
+-- row per chronological tool_result / terminal-status / progress event keyed
+-- on (source, session_id, message_id, tool_use_id, event_index). The content
+-- sidecar (#33) holds the raw bytes; this table carries metadata only
+-- (content_length, content_hash) so analyses can group / dedupe without
+-- loading sidecar JSONL.
 CREATE TABLE IF NOT EXISTS tool_result_events (
   source              TEXT NOT NULL,
   session_id          TEXT NOT NULL,
@@ -158,12 +196,17 @@ CREATE TABLE IF NOT EXISTS tool_result_events (
   status              TEXT,
   content_length      INTEGER,
   content_hash        TEXT,
+  is_error            INTEGER,
   subagent_session_id TEXT,
   agent_id            TEXT,
   event_source        TEXT,
   ts                  TEXT,
   PRIMARY KEY (source, session_id, message_id, tool_use_id, event_index)
 );
+
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_use_id ON tool_result_events(tool_use_id);
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_session ON tool_result_events(source, session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_subagent ON tool_result_events(subagent_session_id);
 
 CREATE TABLE IF NOT EXISTS compactions (
   source                TEXT NOT NULL,
@@ -199,8 +242,15 @@ export interface ArchiveStatus {
     sessions: number;
     turns: number;
     toolCalls: number;
+    toolResultEvents: number;
     compactions: number;
   };
+  /**
+   * Histogram of `turns.attribution_fidelity` values. Keys are the
+   * `FidelityClass` strings actually present plus `unknown` (NULL — turns
+   * emitted before upstream fidelity work landed). Absent keys are zero.
+   */
+  fidelityHistogram: Record<string, number>;
 }
 
 export interface BuildResult {
@@ -215,6 +265,8 @@ export interface BuildResult {
   stampsApplied: number;
   /** Compaction events ingested. */
   compactionsApplied: number;
+  /** Tool-result-event lines materialized into `tool_result_events`. */
+  toolResultEventsApplied: number;
   /** True iff the archive was rebuilt from zero before this build. */
   rebuiltFromZero: boolean;
 }
@@ -236,6 +288,7 @@ export async function openArchive(): Promise<DatabaseSync> {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA_SQL);
+  applyAdditiveMigrations(db);
 
   const versionRow = db
     .prepare('SELECT archive_version FROM archive_state WHERE id = 1')
@@ -256,12 +309,52 @@ export async function openArchive(): Promise<DatabaseSync> {
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA foreign_keys = ON');
     db.exec(SCHEMA_SQL);
+    applyAdditiveMigrations(db);
     db.prepare(
       `INSERT INTO archive_state (id, ledger_offset_bytes, ledger_mtime_ms, archive_version)
        VALUES (1, 0, 0, ?)`,
     ).run(ARCHIVE_VERSION);
   }
   return db;
+}
+
+/**
+ * Forward-migrate an existing archive that pre-dates a column added under the
+ * same `ARCHIVE_VERSION`. The schema constant uses `CREATE TABLE IF NOT
+ * EXISTS`, which is a no-op on an existing table — so a column added there
+ * later won't appear on already-built archives. We add it explicitly here.
+ *
+ * Strategy: idempotent `ALTER TABLE … ADD COLUMN` guarded by `PRAGMA
+ * table_info` so re-opens are cheap and don't double-add. Only used for
+ * additive, NULL-defaulted columns; anything else needs a `ARCHIVE_VERSION`
+ * bump and a clean rebuild.
+ *
+ * Added in #110: fidelity columns on `turns` and `sessions`.
+ */
+function applyAdditiveMigrations(db: DatabaseSync): void {
+  ensureColumn(db, 'turns', 'attribution_fidelity', 'TEXT');
+  ensureColumn(db, 'turns', 'tokens_present', 'INTEGER');
+  ensureColumn(db, 'turns', 'cost_present', 'INTEGER');
+  ensureColumn(db, 'sessions', 'min_fidelity', 'TEXT');
+  ensureColumn(db, 'sessions', 'has_full_attribution', 'INTEGER');
+  // Index on the fidelity column — `CREATE INDEX IF NOT EXISTS` is already
+  // idempotent so we can just rerun the SCHEMA_SQL one. But because the column
+  // may have just been added on this open, we need to (re)create the index
+  // here to cover that path explicitly.
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_turns_attribution_fidelity ON turns(attribution_fidelity)',
+  );
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  table: string,
+  column: string,
+  decl: string,
+): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -338,6 +431,7 @@ async function buildArchiveLocked(opts: { isRebuild?: boolean } = {}): Promise<B
         sessionsTouched: 0,
         stampsApplied: 0,
         compactionsApplied: 0,
+        toolResultEventsApplied: 0,
         rebuiltFromZero: false,
       };
     }
@@ -386,6 +480,7 @@ async function buildArchiveLocked(opts: { isRebuild?: boolean } = {}): Promise<B
       sessionsTouched: result.sessionsTouched,
       stampsApplied: result.stampsApplied,
       compactionsApplied: result.compactionsApplied,
+      toolResultEventsApplied: result.toolResultEventsApplied,
       rebuiltFromZero: false,
     };
   } finally {
@@ -399,6 +494,7 @@ interface ApplyResult {
   sessionsTouched: number;
   stampsApplied: number;
   compactionsApplied: number;
+  toolResultEventsApplied: number;
   /**
    * Byte offset of the parser's last newline boundary inside the ledger.
    * Equals `startOffset` when nothing was scanned. The caller stamps this
@@ -435,6 +531,7 @@ async function applyLedgerRange(
   const newStamps: StampLine[] = [];
   const turnLines: TurnLine[] = [];
   const compactionLines: CompactionLine[] = [];
+  const toolResultEventLines: ToolResultEventLine[] = [];
 
   let bytesScanned = 0;
   let safeOffset = startOffset;
@@ -448,16 +545,24 @@ async function applyLedgerRange(
       newStamps.push(parsed);
     } else if (isCompactionLine(parsed)) {
       compactionLines.push(parsed);
+    } else if (isToolResultEventLine(parsed)) {
+      toolResultEventLines.push(parsed);
     }
   }
 
-  if (turnLines.length === 0 && newStamps.length === 0 && compactionLines.length === 0) {
+  if (
+    turnLines.length === 0 &&
+    newStamps.length === 0 &&
+    compactionLines.length === 0 &&
+    toolResultEventLines.length === 0
+  ) {
     return {
       scannedBytes: bytesScanned,
       turnsApplied: 0,
       sessionsTouched: 0,
       stampsApplied: 0,
       compactionsApplied: 0,
+      toolResultEventsApplied: 0,
       safeOffset,
     };
   }
@@ -491,14 +596,16 @@ async function applyLedgerRange(
         is_sidechain, subagent_id, parent_subagent_id, parent_tool_use_id, subagent_type,
         input_tokens, output_tokens, reasoning_tokens,
         cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
-        workflow_id, agent_id, persona, tier, enrichment_json
+        workflow_id, agent_id, persona, tier, enrichment_json,
+        attribution_fidelity, tokens_present, cost_present
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?,
-        ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?,
+        ?, ?, ?
       )
       ON CONFLICT(source, session_id, message_id) DO UPDATE SET
         turn_index = excluded.turn_index,
@@ -525,7 +632,10 @@ async function applyLedgerRange(
         agent_id = excluded.agent_id,
         persona = excluded.persona,
         tier = excluded.tier,
-        enrichment_json = excluded.enrichment_json
+        enrichment_json = excluded.enrichment_json,
+        attribution_fidelity = excluded.attribution_fidelity,
+        tokens_present = excluded.tokens_present,
+        cost_present = excluded.cost_present
     `);
 
     const deleteToolCalls = db.prepare(
@@ -630,6 +740,45 @@ async function applyLedgerRange(
       }
     }
 
+    if (toolResultEventLines.length > 0) {
+      // INSERT OR REPLACE keyed on the table's PK (source, session_id,
+      // message_id, tool_use_id, event_index). The execution-graph record
+      // already carries `contentLength` and `contentHash`; if a future
+      // record lacks them we still write null and a follow-up can enrich
+      // from the content sidecar (#33). The table allows NULL for both.
+      const insertToolResultEvent = db.prepare(`
+        INSERT OR REPLACE INTO tool_result_events (
+          source, session_id, message_id, tool_use_id, call_index,
+          event_index, status, content_length, content_hash, is_error,
+          subagent_session_id, agent_id, event_source, ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const tre of toolResultEventLines) {
+        const r = tre.record;
+        insertToolResultEvent.run(
+          r.source,
+          r.sessionId,
+          // PK requires NOT NULL message_id; some event sources (queue events,
+          // subagent notifications) don't carry one. Substitute the empty
+          // string so the row still lands and so two NULL-message_id events
+          // for the same (source, sessionId, toolUseId, eventIndex) collide
+          // on the PK (which is the desired idempotent behavior).
+          r.messageId ?? '',
+          r.toolUseId,
+          r.callIndex ?? 0,
+          r.eventIndex,
+          r.status,
+          r.contentLength ?? null,
+          r.contentHash ?? null,
+          r.isError === undefined ? null : r.isError ? 1 : 0,
+          r.subagentSessionId ?? null,
+          r.agentId ?? null,
+          r.eventSource,
+          r.ts ?? null,
+        );
+      }
+    }
+
     rebuildSessions(db, sessionsTouched);
 
     // NOTE: the ledger cursor is intentionally NOT written here. The caller
@@ -657,6 +806,7 @@ async function applyLedgerRange(
     sessionsTouched: distinctSessionIds.size,
     stampsApplied: newStamps.length,
     compactionsApplied: compactionLines.length,
+    toolResultEventsApplied: toolResultEventLines.length,
     safeOffset,
   };
 }
@@ -685,10 +835,21 @@ function rebuildSessions(db: DatabaseSync, sessionsTouched: Set<string>): void {
 
   if (resolved.size === 0) return;
 
+  // Fidelity rollup details:
+  //  - min_fidelity is the *worst* class observed. Rank cost-only=1,
+  //    aggregate-only=2, partial=3, usage-only=4, full=5; we MIN the rank
+  //    across known-fidelity rows and map back to the label. Rows with NULL
+  //    attribution_fidelity are ignored — absence ≠ "worst", it's "unknown".
+  //    A session with no fidelity-tagged turns leaves min_fidelity NULL.
+  //  - has_full_attribution is 1 iff there is at least one fidelity-tagged
+  //    turn AND every such turn is class='full'. NULL when no turns carry
+  //    fidelity, 0 when at least one falls below 'full'. We deliberately do
+  //    NOT treat unknown-fidelity rows as failing — they're unknown.
   const upsertSession = db.prepare(`
     INSERT INTO sessions (
       source, session_id, project, project_key, started_at, ended_at,
-      turn_count, model_set_json, workflow_id, agent_id, parent_agent_id, has_subagent
+      turn_count, model_set_json, workflow_id, agent_id, parent_agent_id, has_subagent,
+      min_fidelity, has_full_attribution
     )
     SELECT
       source,
@@ -702,7 +863,27 @@ function rebuildSessions(db: DatabaseSync, sessionsTouched: Set<string>): void {
       MIN(workflow_id),
       MIN(agent_id),
       MIN(parent_subagent_id),
-      COALESCE(MAX(is_sidechain), 0)
+      COALESCE(MAX(is_sidechain), 0),
+      CASE MIN(CASE attribution_fidelity
+                 WHEN 'cost-only'      THEN 1
+                 WHEN 'aggregate-only' THEN 2
+                 WHEN 'partial'        THEN 3
+                 WHEN 'usage-only'     THEN 4
+                 WHEN 'full'           THEN 5
+                 ELSE NULL
+               END)
+        WHEN 1 THEN 'cost-only'
+        WHEN 2 THEN 'aggregate-only'
+        WHEN 3 THEN 'partial'
+        WHEN 4 THEN 'usage-only'
+        WHEN 5 THEN 'full'
+        ELSE NULL
+      END,
+      CASE
+        WHEN SUM(CASE WHEN attribution_fidelity IS NOT NULL THEN 1 ELSE 0 END) = 0 THEN NULL
+        WHEN SUM(CASE WHEN attribution_fidelity IS NOT NULL AND attribution_fidelity <> 'full' THEN 1 ELSE 0 END) = 0 THEN 1
+        ELSE 0
+      END
     FROM turns
     WHERE source = ? AND session_id = ?
     GROUP BY source, session_id
@@ -716,7 +897,9 @@ function rebuildSessions(db: DatabaseSync, sessionsTouched: Set<string>): void {
       workflow_id = excluded.workflow_id,
       agent_id = excluded.agent_id,
       parent_agent_id = excluded.parent_agent_id,
-      has_subagent = excluded.has_subagent
+      has_subagent = excluded.has_subagent,
+      min_fidelity = excluded.min_fidelity,
+      has_full_attribution = excluded.has_full_attribution
   `);
 
   for (const key of resolved) {
@@ -732,6 +915,20 @@ function writeTurn(
   t: TurnRecord,
   enrichment: Enrichment,
 ): void {
+  // Project the optional fidelity metadata onto the three persisted columns.
+  // Absence (older lines pre-#41 / pre-Codex/OpenCode #84/#89) → all NULL,
+  // which downstream queries should read as "unknown".
+  let attributionFidelity: string | null = null;
+  let tokensPresent: number | null = null;
+  let costPresent: number | null = null;
+  if (t.fidelity) {
+    attributionFidelity = t.fidelity.class;
+    const cov = t.fidelity.coverage;
+    tokensPresent =
+      cov.hasInputTokens || cov.hasOutputTokens || cov.hasReasoningTokens ? 1 : 0;
+    costPresent = t.fidelity.granularity === 'cost-only' ? 1 : 0;
+  }
+
   insertTurn.run(
     t.source,
     t.sessionId,
@@ -761,6 +958,9 @@ function writeTurn(
     enrichment['persona'] ?? null,
     enrichment['tier'] ?? null,
     JSON.stringify(enrichment),
+    attributionFidelity,
+    tokensPresent,
+    costPresent,
   );
 }
 
@@ -879,7 +1079,14 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
       upToDate: false,
       lastBuiltAt: null,
       lastRebuildAt: null,
-      rowCounts: { sessions: 0, turns: 0, toolCalls: 0, compactions: 0 },
+      rowCounts: {
+        sessions: 0,
+        turns: 0,
+        toolCalls: 0,
+        toolResultEvents: 0,
+        compactions: 0,
+      },
+      fidelityHistogram: {},
     };
   }
 
@@ -908,9 +1115,27 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
     const toolCalls = db.prepare('SELECT COUNT(*) AS n FROM tool_calls').get() as {
       n: number | bigint;
     };
+    const toolResultEvents = db
+      .prepare('SELECT COUNT(*) AS n FROM tool_result_events')
+      .get() as { n: number | bigint };
     const compactions = db.prepare('SELECT COUNT(*) AS n FROM compactions').get() as {
       n: number | bigint;
     };
+
+    // Fidelity histogram on `turns`. NULL bucket surfaces as `unknown` so
+    // JSON consumers can spot upstream gaps (Codex/OpenCode pre-#84/#89, or
+    // any older line that pre-dates `TurnRecord.fidelity`).
+    const fidelityRows = db
+      .prepare(
+        `SELECT COALESCE(attribution_fidelity, 'unknown') AS k, COUNT(*) AS n
+         FROM turns
+         GROUP BY COALESCE(attribution_fidelity, 'unknown')`,
+      )
+      .all() as Array<{ k: string; n: number | bigint }>;
+    const fidelityHistogram: Record<string, number> = {};
+    for (const r of fidelityRows) {
+      fidelityHistogram[r.k] = Number(r.n);
+    }
 
     return {
       archivePath: dbPath,
@@ -927,8 +1152,10 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
         sessions: Number(sessions.n),
         turns: Number(turns.n),
         toolCalls: Number(toolCalls.n),
+        toolResultEvents: Number(toolResultEvents.n),
         compactions: Number(compactions.n),
       },
+      fidelityHistogram,
     };
   } finally {
     db.close();

@@ -11,6 +11,7 @@ export {
   aggregateBySubagent,
 } from './waste.js';
 export type {
+  AttributionMethod,
   AttributeWasteOptions,
   BashAggregation,
   FileAggregation,

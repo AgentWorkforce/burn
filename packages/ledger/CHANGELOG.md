@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-04-26
+
+### Added
+
+- **User-turn ledger lines** (#2). New append-only `user_turn` ledger records persist parser-emitted `UserTurnRecord`s alongside raw turns without rewriting or mutating them. The ledger now exposes `appendUserTurns()` / `queryUserTurns()`, `UserTurnLine` / `isUserTurnLine()`, and `userTurnIdHash()` keyed by `(source, sessionId, userUuid)` through the existing dedup index; `rebuildIndex()` rehydrates those ids after index loss.
+
+## [0.26.0] - 2026-04-26
+
+### Added
+
+- **`CodexCursor` carries execution-graph commit state** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). Three optional fields — `rootSessionEmitted`, `nextEventIndex`, `toolResultCounters` — let `burn ingest` resume Codex sessions without re-emitting the root `SessionRelationshipRecord` or restarting `ToolResultEventRecord.eventIndex` at zero across `burn` invocations. Older cursor files are backward-compatible: missing fields default to "fresh" (root not emitted, indices start at zero), and the next ingest pass pre-loads them onto the writer's dedup index.
+
+## [0.25.0] - 2026-04-26
+
+### Added
+
+- **`tool_result_events` archive table is now populated** (#101). `buildArchive()` materializes `ToolResultEventLine` ledger lines into the previously-empty `tool_result_events` table during incremental builds, keyed on (`source`, `session_id`, `message_id`, `tool_use_id`, `event_index`). Columns mirror the canonical `ToolResultEventRecord`: `status`, `content_length`, `content_hash`, `subagent_session_id`, `agent_id`, `event_source`, `ts`, `call_index`. Cursor uses the same `archive_state.ledger_offset_bytes` as turns / stamps / compactions, so no parallel cursor and no extra disk read. `rebuildArchive()` replays tool-result events alongside the other line kinds and yields the same row count deterministically. New `idx_tool_result_events_use_id` / `_session` / `_subagent` indexes for the obvious join paths. `BuildResult.toolResultEventsApplied` and `ArchiveStatus.rowCounts.toolResultEvents` expose the new counts. Closes #101, refs #40, #42, #77.
+
+### Changed
+
+- **Bumped `ARCHIVE_VERSION` to 2** to pick up the new `tool_result_events` indexes on existing archives. The next `buildArchive()` call detects the version mismatch and rebuilds from scratch — safe because the archive is derived state.
+
+## [0.24.0] - 2026-04-26
+
+### Added
+
+- **Fidelity / coverage columns on the analytics archive** (#110, follow-up to #40 / #41 / #78). `turns` carries `attribution_fidelity` (the `FidelityClass` string from `TurnRecord.fidelity.class` — `full`, `usage-only`, `partial`, `aggregate-only`, `cost-only`), `tokens_present` (1 if the source surfaced any per-turn input/output/reasoning count), and `cost_present` (1 iff cost-only). `sessions` carries `min_fidelity` (the worst class observed across the session's known-fidelity turns) and `has_full_attribution` (1 iff every fidelity-tagged turn is `full`). Older lines that pre-date the upstream parser fidelity work (Codex/OpenCode pre-#84/#89) persist `NULL` rather than guessing — downstream queries should read `NULL` as "unknown". Migration is additive: `openArchive()` runs idempotent `ALTER TABLE … ADD COLUMN` guarded by `PRAGMA table_info`, so existing archives forward-migrate without a rebuild and `ARCHIVE_VERSION` stays at 1. `getArchiveStatus()` now returns a `fidelityHistogram` (counts per `attribution_fidelity` value, with `NULL` bucketed as `unknown`).
+
 ## [0.21.0] - 2026-04-26
 
 ### Added

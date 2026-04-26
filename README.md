@@ -265,14 +265,17 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 ## CLI
 
 ```
-burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
-burn by-tool [--since 7d] [--project <path>] [--session <id>]
+burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--by-provider]
+burn by-tool [--since 7d] [--project <path>] [--session <id>] [--provider <p>]
+burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>]
 burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
 burn claude  [--tag k=v ...] [-- <claude args>]
 burn codex   [--tag k=v ...] [-- <codex args>]
 burn opencode [--tag k=v ...] [-- <opencode args>]
 burn watch   [--interval <ms>] [--once]
 ```
+
+Provider filters are applied at query time; raw ledger model strings are not rewritten. `burn summary --by-provider --provider synthetic` groups Synthetic-routed turns under provider `synthetic` while pricing against the normalized model id. Recognized Synthetic model patterns are `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
 
 ### `burn compare` — model comparison by observed activity
 

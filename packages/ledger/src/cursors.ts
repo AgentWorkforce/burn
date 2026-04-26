@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
+import type { PersistedUserTurnSlot } from '@relayburn/reader';
+
 import { withLock } from './lock.js';
 import { cursorsPath } from './paths.js';
 
@@ -24,6 +26,10 @@ export interface CodexCursor {
   sessionId: string;
   sessionCwd?: string;
   turnContexts: Record<string, { turn_id?: string; cwd?: string; model?: string }>;
+  userTurnSlot?: PersistedUserTurnSlot;
+  rootSessionEmitted?: boolean;
+  nextEventIndex?: number;
+  toolResultCounters?: Record<string, number>;
 }
 
 export interface OpencodeCursor {

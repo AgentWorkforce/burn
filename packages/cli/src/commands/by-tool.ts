@@ -5,16 +5,22 @@ import type { EnrichedTurn } from '@relayburn/ledger';
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 export async function runByTool(args: ParsedArgs): Promise<number> {
   const q: Query = {};
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
+  const providerFilter = parseProviderFilter(args.flags['provider']);
+  if (providerFilter instanceof Error) {
+    process.stderr.write(providerFilter.message);
+    return 2;
+  }
 
   await ingestAll();
   const pricing = await loadPricing();
-  const turns = await queryAll(q);
+  const turns = filterTurnsByProvider(await queryAll(q), providerFilter);
 
   const { byTool, unattributed } = attributeCostToTools(turns, pricing);
 
