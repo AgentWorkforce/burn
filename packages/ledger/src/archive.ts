@@ -84,6 +84,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   agent_id            TEXT,
   parent_agent_id     TEXT,
   has_subagent        INTEGER NOT NULL DEFAULT 0,
+  -- Worst (lowest) fidelity class observed across the session's turns.
+  -- NULL iff every turn in the session lacks fidelity metadata (older lines
+  -- emitted before the upstream parser populated TurnRecord.fidelity).
+  -- Vocabulary matches FidelityClass: full | usage-only | partial |
+  -- aggregate-only | cost-only.
+  min_fidelity        TEXT,
+  -- 1 iff every known-fidelity turn in the session is class='full'. 0 iff
+  -- any turn is below 'full'. NULL iff the session has zero turns with
+  -- fidelity metadata to assert against. See issue #110 / #40.
+  has_full_attribution INTEGER,
   PRIMARY KEY (source, session_id)
 );
 
@@ -120,6 +130,22 @@ CREATE TABLE IF NOT EXISTS turns (
   persona               TEXT,
   tier                  TEXT,
   enrichment_json       TEXT,
+  -- Coverage / fidelity columns (issue #110, upstream #41 / PR #76). Mirror
+  -- TurnRecord.fidelity so SQL consumers can filter / group by them without
+  -- re-deriving in memory. NULL on rows from older ledger lines that pre-date
+  -- the upstream fidelity work — interpret NULL as "unknown" rather than
+  -- guessing.
+  --
+  -- attribution_fidelity: FidelityClass string —
+  --   full | usage-only | partial | aggregate-only | cost-only
+  attribution_fidelity  TEXT,
+  -- 1 iff the source surfaced any per-turn token count
+  -- (input OR output OR reasoning); 0 iff explicitly known to surface none;
+  -- NULL iff fidelity metadata is missing entirely.
+  tokens_present        INTEGER,
+  -- 1 iff this row is cost-only (granularity='cost-only'); 0 otherwise when
+  -- fidelity is present; NULL iff fidelity metadata is missing.
+  cost_present          INTEGER,
   PRIMARY KEY (source, session_id, message_id)
 );
 
@@ -129,6 +155,8 @@ CREATE INDEX IF NOT EXISTS idx_turns_model ON turns(model);
 CREATE INDEX IF NOT EXISTS idx_turns_activity ON turns(activity);
 CREATE INDEX IF NOT EXISTS idx_turns_project_key ON turns(project_key);
 CREATE INDEX IF NOT EXISTS idx_turns_workflow ON turns(workflow_id);
+-- idx_turns_attribution_fidelity is created in applyAdditiveMigrations()
+-- (which runs after the column is ensured) — see issue #110.
 
 CREATE TABLE IF NOT EXISTS tool_calls (
   source         TEXT NOT NULL,
@@ -201,6 +229,12 @@ export interface ArchiveStatus {
     toolCalls: number;
     compactions: number;
   };
+  /**
+   * Histogram of `turns.attribution_fidelity` values. Keys are the
+   * `FidelityClass` strings actually present plus `unknown` (NULL — turns
+   * emitted before upstream fidelity work landed). Absent keys are zero.
+   */
+  fidelityHistogram: Record<string, number>;
 }
 
 export interface BuildResult {
@@ -236,6 +270,7 @@ export async function openArchive(): Promise<DatabaseSync> {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA_SQL);
+  applyAdditiveMigrations(db);
 
   const versionRow = db
     .prepare('SELECT archive_version FROM archive_state WHERE id = 1')
@@ -256,12 +291,52 @@ export async function openArchive(): Promise<DatabaseSync> {
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA foreign_keys = ON');
     db.exec(SCHEMA_SQL);
+    applyAdditiveMigrations(db);
     db.prepare(
       `INSERT INTO archive_state (id, ledger_offset_bytes, ledger_mtime_ms, archive_version)
        VALUES (1, 0, 0, ?)`,
     ).run(ARCHIVE_VERSION);
   }
   return db;
+}
+
+/**
+ * Forward-migrate an existing archive that pre-dates a column added under the
+ * same `ARCHIVE_VERSION`. The schema constant uses `CREATE TABLE IF NOT
+ * EXISTS`, which is a no-op on an existing table — so a column added there
+ * later won't appear on already-built archives. We add it explicitly here.
+ *
+ * Strategy: idempotent `ALTER TABLE … ADD COLUMN` guarded by `PRAGMA
+ * table_info` so re-opens are cheap and don't double-add. Only used for
+ * additive, NULL-defaulted columns; anything else needs a `ARCHIVE_VERSION`
+ * bump and a clean rebuild.
+ *
+ * Added in #110: fidelity columns on `turns` and `sessions`.
+ */
+function applyAdditiveMigrations(db: DatabaseSync): void {
+  ensureColumn(db, 'turns', 'attribution_fidelity', 'TEXT');
+  ensureColumn(db, 'turns', 'tokens_present', 'INTEGER');
+  ensureColumn(db, 'turns', 'cost_present', 'INTEGER');
+  ensureColumn(db, 'sessions', 'min_fidelity', 'TEXT');
+  ensureColumn(db, 'sessions', 'has_full_attribution', 'INTEGER');
+  // Index on the fidelity column — `CREATE INDEX IF NOT EXISTS` is already
+  // idempotent so we can just rerun the SCHEMA_SQL one. But because the column
+  // may have just been added on this open, we need to (re)create the index
+  // here to cover that path explicitly.
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_turns_attribution_fidelity ON turns(attribution_fidelity)',
+  );
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  table: string,
+  column: string,
+  decl: string,
+): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -491,14 +566,16 @@ async function applyLedgerRange(
         is_sidechain, subagent_id, parent_subagent_id, parent_tool_use_id, subagent_type,
         input_tokens, output_tokens, reasoning_tokens,
         cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
-        workflow_id, agent_id, persona, tier, enrichment_json
+        workflow_id, agent_id, persona, tier, enrichment_json,
+        attribution_fidelity, tokens_present, cost_present
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?,
-        ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?,
+        ?, ?, ?
       )
       ON CONFLICT(source, session_id, message_id) DO UPDATE SET
         turn_index = excluded.turn_index,
@@ -525,7 +602,10 @@ async function applyLedgerRange(
         agent_id = excluded.agent_id,
         persona = excluded.persona,
         tier = excluded.tier,
-        enrichment_json = excluded.enrichment_json
+        enrichment_json = excluded.enrichment_json,
+        attribution_fidelity = excluded.attribution_fidelity,
+        tokens_present = excluded.tokens_present,
+        cost_present = excluded.cost_present
     `);
 
     const deleteToolCalls = db.prepare(
@@ -685,10 +765,21 @@ function rebuildSessions(db: DatabaseSync, sessionsTouched: Set<string>): void {
 
   if (resolved.size === 0) return;
 
+  // Fidelity rollup details:
+  //  - min_fidelity is the *worst* class observed. Rank cost-only=1,
+  //    aggregate-only=2, partial=3, usage-only=4, full=5; we MIN the rank
+  //    across known-fidelity rows and map back to the label. Rows with NULL
+  //    attribution_fidelity are ignored — absence ≠ "worst", it's "unknown".
+  //    A session with no fidelity-tagged turns leaves min_fidelity NULL.
+  //  - has_full_attribution is 1 iff there is at least one fidelity-tagged
+  //    turn AND every such turn is class='full'. NULL when no turns carry
+  //    fidelity, 0 when at least one falls below 'full'. We deliberately do
+  //    NOT treat unknown-fidelity rows as failing — they're unknown.
   const upsertSession = db.prepare(`
     INSERT INTO sessions (
       source, session_id, project, project_key, started_at, ended_at,
-      turn_count, model_set_json, workflow_id, agent_id, parent_agent_id, has_subagent
+      turn_count, model_set_json, workflow_id, agent_id, parent_agent_id, has_subagent,
+      min_fidelity, has_full_attribution
     )
     SELECT
       source,
@@ -702,7 +793,27 @@ function rebuildSessions(db: DatabaseSync, sessionsTouched: Set<string>): void {
       MIN(workflow_id),
       MIN(agent_id),
       MIN(parent_subagent_id),
-      COALESCE(MAX(is_sidechain), 0)
+      COALESCE(MAX(is_sidechain), 0),
+      CASE MIN(CASE attribution_fidelity
+                 WHEN 'cost-only'      THEN 1
+                 WHEN 'aggregate-only' THEN 2
+                 WHEN 'partial'        THEN 3
+                 WHEN 'usage-only'     THEN 4
+                 WHEN 'full'           THEN 5
+                 ELSE NULL
+               END)
+        WHEN 1 THEN 'cost-only'
+        WHEN 2 THEN 'aggregate-only'
+        WHEN 3 THEN 'partial'
+        WHEN 4 THEN 'usage-only'
+        WHEN 5 THEN 'full'
+        ELSE NULL
+      END,
+      CASE
+        WHEN SUM(CASE WHEN attribution_fidelity IS NOT NULL THEN 1 ELSE 0 END) = 0 THEN NULL
+        WHEN SUM(CASE WHEN attribution_fidelity IS NOT NULL AND attribution_fidelity <> 'full' THEN 1 ELSE 0 END) = 0 THEN 1
+        ELSE 0
+      END
     FROM turns
     WHERE source = ? AND session_id = ?
     GROUP BY source, session_id
@@ -716,7 +827,9 @@ function rebuildSessions(db: DatabaseSync, sessionsTouched: Set<string>): void {
       workflow_id = excluded.workflow_id,
       agent_id = excluded.agent_id,
       parent_agent_id = excluded.parent_agent_id,
-      has_subagent = excluded.has_subagent
+      has_subagent = excluded.has_subagent,
+      min_fidelity = excluded.min_fidelity,
+      has_full_attribution = excluded.has_full_attribution
   `);
 
   for (const key of resolved) {
@@ -732,6 +845,20 @@ function writeTurn(
   t: TurnRecord,
   enrichment: Enrichment,
 ): void {
+  // Project the optional fidelity metadata onto the three persisted columns.
+  // Absence (older lines pre-#41 / pre-Codex/OpenCode #84/#89) → all NULL,
+  // which downstream queries should read as "unknown".
+  let attributionFidelity: string | null = null;
+  let tokensPresent: number | null = null;
+  let costPresent: number | null = null;
+  if (t.fidelity) {
+    attributionFidelity = t.fidelity.class;
+    const cov = t.fidelity.coverage;
+    tokensPresent =
+      cov.hasInputTokens || cov.hasOutputTokens || cov.hasReasoningTokens ? 1 : 0;
+    costPresent = t.fidelity.granularity === 'cost-only' ? 1 : 0;
+  }
+
   insertTurn.run(
     t.source,
     t.sessionId,
@@ -761,6 +888,9 @@ function writeTurn(
     enrichment['persona'] ?? null,
     enrichment['tier'] ?? null,
     JSON.stringify(enrichment),
+    attributionFidelity,
+    tokensPresent,
+    costPresent,
   );
 }
 
@@ -880,6 +1010,7 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
       lastBuiltAt: null,
       lastRebuildAt: null,
       rowCounts: { sessions: 0, turns: 0, toolCalls: 0, compactions: 0 },
+      fidelityHistogram: {},
     };
   }
 
@@ -912,6 +1043,21 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
       n: number | bigint;
     };
 
+    // Fidelity histogram on `turns`. NULL bucket surfaces as `unknown` so
+    // JSON consumers can spot upstream gaps (Codex/OpenCode pre-#84/#89, or
+    // any older line that pre-dates `TurnRecord.fidelity`).
+    const fidelityRows = db
+      .prepare(
+        `SELECT COALESCE(attribution_fidelity, 'unknown') AS k, COUNT(*) AS n
+         FROM turns
+         GROUP BY COALESCE(attribution_fidelity, 'unknown')`,
+      )
+      .all() as Array<{ k: string; n: number | bigint }>;
+    const fidelityHistogram: Record<string, number> = {};
+    for (const r of fidelityRows) {
+      fidelityHistogram[r.k] = Number(r.n);
+    }
+
     return {
       archivePath: dbPath,
       exists: true,
@@ -929,6 +1075,7 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
         toolCalls: Number(toolCalls.n),
         compactions: Number(compactions.n),
       },
+      fidelityHistogram,
     };
   } finally {
     db.close();

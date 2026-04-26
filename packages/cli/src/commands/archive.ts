@@ -111,3 +111,7 @@ async function runStatus(args: ParsedArgs): Promise<number> {
   process.stdout.write(lines.join('\n') + '\n');
   return 0;
 }
+
+// Exported for tests; the `--json` shape includes `fidelityHistogram`
+// (issue #110). Text mode intentionally omits the histogram per the issue
+// scope — JSON-only surfacing for now.
