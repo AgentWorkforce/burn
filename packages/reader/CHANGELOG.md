@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Execution graph foundation: `SessionRelationshipRecord` and `ToolResultEventRecord`** (#42, first PR). Two new normalized record shapes that sit beside `TurnRecord` and preserve cross-source metadata that's currently flattened or lost: how sessions relate (`root` / `continuation` / `fork` / `subagent`) and chronological tool-result events keyed by `toolUseId`. Both carry `v: 1`, `source`, and a `sessionId`; relationship rows include `parentToolUseId` / `agentId` / `subagentType` / `description` for subagent edges; tool-result events carry `status` (`running` / `completed` / `errored` / `cancelled` / `unknown`), an `eventSource` discriminator (`tool_result` / `subagent_notification` / `queue_event` / `progress_event` / `function_call_output`), `contentLength` + `contentHash` (metadata only — no raw content), and `agentId` for spawn events.
+- **Claude passive reader populates the execution graph.** `parseClaudeSession` and `parseClaudeSessionIncremental` now return `relationships` and `toolResultEvents` alongside the existing `turns` / `content` / `events` arrays. Roots are emitted once per session id; one `subagent` row is emitted per distinct invocation discovered (joining to `Subagent.agentId`); each `tool_result` block in a user line becomes a `ToolResultEventRecord` with monotonic `eventIndex` and per-`toolUseId` `callIndex`. Spawn events (Agent/Task tool_results that map to a sidechain) are post-annotated with the resolved subagent's `agentId` so consumers can join the two record types. Incremental parser respects the same `endOffset` deferral the existing content/event paths use, so resumed ingest doesn't double-emit. Codex / OpenCode population deferred to follow-up PRs.
+
 ## [0.16.0] - 2026-04-25
 
 ### Added

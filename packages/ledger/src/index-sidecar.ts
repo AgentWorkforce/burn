@@ -4,7 +4,12 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import { createInterface } from 'node:readline';
 import * as path from 'node:path';
 
-import type { CompactionEvent, TurnRecord } from '@relayburn/reader';
+import type {
+  CompactionEvent,
+  SessionRelationshipRecord,
+  ToolResultEventRecord,
+  TurnRecord,
+} from '@relayburn/reader';
 
 import { withLock } from './lock.js';
 import {
@@ -12,7 +17,12 @@ import {
   ledgerIndexPath,
   ledgerPath,
 } from './paths.js';
-import { isCompactionLine, isTurnLine } from './schema.js';
+import {
+  isCompactionLine,
+  isSessionRelationshipLine,
+  isToolResultEventLine,
+  isTurnLine,
+} from './schema.js';
 
 export const CONTENT_WINDOW = 10_000;
 
@@ -32,6 +42,32 @@ export function compactionIdHash(e: CompactionEvent): string {
     .update(`${e.source}|${e.sessionId}|${e.ts}`)
     .digest('hex')
     .slice(0, 16);
+}
+
+// Stable id for a SessionRelationshipRecord. Roots dedupe per session, so
+// the type is enough for them; subagent / fork / continuation rows include
+// agentId (the per-invocation stable id) when available, falling back to
+// parentToolUseId for older records that didn't resolve agentId. Hashes
+// share the ids namespace with turnIdHash / compactionIdHash — different
+// inputs make a collision astronomically unlikely.
+export function relationshipIdHash(r: SessionRelationshipRecord): string {
+  const key = [
+    r.source,
+    r.sessionId,
+    r.relationshipType,
+    r.relatedSessionId ?? '',
+    r.agentId ?? '',
+    r.parentToolUseId ?? '',
+  ].join('|');
+  return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+// Stable id for a ToolResultEventRecord. (sessionId, toolUseId, eventIndex)
+// is the unique tuple — eventIndex is monotonic per parser pass and per
+// session so two passes that re-read the same line produce the same id.
+export function toolResultEventIdHash(r: ToolResultEventRecord): string {
+  const key = [r.source, r.sessionId, r.toolUseId, r.eventIndex].join('|');
+  return createHash('sha256').update(key).digest('hex').slice(0, 16);
 }
 
 export function turnContentFingerprint(t: TurnRecord): string {
@@ -142,6 +178,10 @@ export async function rebuildIndex(): Promise<{ ids: number; content: number }> 
           }
         } else if (isCompactionLine(parsed)) {
           ids.add(compactionIdHash(parsed.record));
+        } else if (isSessionRelationshipLine(parsed)) {
+          ids.add(relationshipIdHash(parsed.record));
+        } else if (isToolResultEventLine(parsed)) {
+          ids.add(toolResultEventIdHash(parsed.record));
         }
       }
     } finally {

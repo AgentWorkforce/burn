@@ -4,10 +4,19 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 
-import type { TurnRecord } from '@relayburn/reader';
+import type {
+  SessionRelationshipRecord,
+  ToolResultEventRecord,
+  TurnRecord,
+} from '@relayburn/reader';
 
-import { appendTurns, stamp } from './writer.js';
-import { queryAll } from './reader.js';
+import {
+  appendRelationships,
+  appendToolResultEvents,
+  appendTurns,
+  stamp,
+} from './writer.js';
+import { queryAll, queryRelationships, queryToolResultEvents } from './reader.js';
 import { ledgerContentIndexPath, ledgerIndexPath, ledgerPath } from './paths.js';
 import { __resetIndexCacheForTesting, rebuildIndex } from './index-sidecar.js';
 
@@ -206,6 +215,113 @@ describe('ledger', () => {
     assert.equal(byPath.length, 1);
   });
 
+  it('round-trips SessionRelationshipRecord through append + query', async () => {
+    const root: SessionRelationshipRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-root',
+      relationshipType: 'root',
+      ts: '2026-04-20T00:00:00.000Z',
+    };
+    const sub: SessionRelationshipRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-root',
+      relationshipType: 'subagent',
+      relatedSessionId: 's-root',
+      agentId: 'agent-1',
+      parentToolUseId: 'tu_outer',
+      subagentType: 'Explore',
+      ts: '2026-04-20T00:00:01.000Z',
+    };
+    await appendRelationships([root, sub]);
+    const got = await queryRelationships();
+    assert.equal(got.length, 2);
+    const r = got.find((x) => x.relationshipType === 'root')!;
+    const s = got.find((x) => x.relationshipType === 'subagent')!;
+    assert.equal(r.sessionId, 's-root');
+    assert.equal(s.agentId, 'agent-1');
+    assert.equal(s.subagentType, 'Explore');
+  });
+
+  it('relationship dedup is keyed on (source, sessionId, type, relatedSessionId, agentId, parentToolUseId)', async () => {
+    const sub: SessionRelationshipRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-x',
+      relationshipType: 'subagent',
+      relatedSessionId: 's-x',
+      agentId: 'agent-x',
+      parentToolUseId: 'tu_x',
+    };
+    await appendRelationships([sub]);
+    await appendRelationships([sub]);
+    const sizeAfter = (await stat(ledgerPath())).size;
+    await appendRelationships([sub]);
+    assert.equal((await stat(ledgerPath())).size, sizeAfter, 'duplicate relationships must not grow the ledger');
+    const got = await queryRelationships();
+    assert.equal(got.length, 1);
+  });
+
+  it('round-trips ToolResultEventRecord through append + query and dedupes by (sessionId, toolUseId, eventIndex)', async () => {
+    const ev1: ToolResultEventRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-tre',
+      toolUseId: 'tu_a',
+      callIndex: 0,
+      eventIndex: 0,
+      status: 'completed',
+      eventSource: 'tool_result',
+      contentLength: 12,
+      contentHash: 'abc1234567890def',
+    };
+    const ev2: ToolResultEventRecord = {
+      ...ev1,
+      eventIndex: 1,
+      status: 'errored',
+      isError: true,
+    };
+    await appendToolResultEvents([ev1, ev2]);
+    await appendToolResultEvents([ev1]); // dup
+    const got = await queryToolResultEvents();
+    assert.equal(got.length, 2);
+    const errored = got.find((e) => e.status === 'errored')!;
+    assert.equal(errored.isError, true);
+    assert.equal(errored.eventIndex, 1);
+  });
+
+  it('queryRelationships filters by source and sessionId (matching child or parent)', async () => {
+    await appendRelationships([
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-A',
+        relationshipType: 'root',
+      },
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-A',
+        relatedSessionId: 's-A',
+        relationshipType: 'subagent',
+        agentId: 'a-1',
+      },
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-B',
+        relationshipType: 'root',
+      },
+    ]);
+    const filteredA = await queryRelationships({ sessionId: 's-A' });
+    // Both the root row and the subagent row match s-A (the root via
+    // sessionId, the subagent via relatedSessionId).
+    assert.equal(filteredA.length, 2);
+    const filteredSrc = await queryRelationships({ source: 'codex' });
+    assert.equal(filteredSrc.length, 0);
+  });
+
   it('rebuildIndex recovers after index files are deleted', async () => {
     const t1 = fakeTurn({ messageId: 'r-1', ts: '2026-04-20T00:00:00.000Z' });
     const t2 = fakeTurn({
@@ -233,5 +349,43 @@ describe('ledger', () => {
     // Verify index files are populated
     const idsContent = await readFile(ledgerIndexPath(), 'utf8');
     assert.equal(idsContent.trim().split('\n').length, 2);
+  });
+
+  it('rebuildIndex re-indexes relationship and tool_result_event lines', async () => {
+    const turn = fakeTurn({ messageId: 'rebuild-1' });
+    const rel: SessionRelationshipRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-rebuild',
+      relationshipType: 'subagent',
+      agentId: 'a-rebuild',
+      relatedSessionId: 's-rebuild',
+    };
+    const ev: ToolResultEventRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-rebuild',
+      toolUseId: 'tu_rebuild',
+      eventIndex: 0,
+      status: 'completed',
+      eventSource: 'tool_result',
+    };
+    await appendTurns([turn]);
+    await appendRelationships([rel]);
+    await appendToolResultEvents([ev]);
+
+    await unlink(ledgerIndexPath());
+    await unlink(ledgerContentIndexPath());
+    __resetIndexCacheForTesting();
+
+    const { ids } = await rebuildIndex();
+    // 1 turn + 1 relationship + 1 tool_result_event = 3 ids.
+    assert.equal(ids, 3);
+
+    // After rebuild, re-appending the same auxiliary records must not duplicate.
+    const sizeBefore = (await stat(ledgerPath())).size;
+    await appendRelationships([rel]);
+    await appendToolResultEvents([ev]);
+    assert.equal((await stat(ledgerPath())).size, sizeBefore);
   });
 });

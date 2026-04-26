@@ -1,12 +1,19 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import type { CompactionEvent, TurnRecord } from '@relayburn/reader';
+import type {
+  CompactionEvent,
+  SessionRelationshipRecord,
+  ToolResultEventRecord,
+  TurnRecord,
+} from '@relayburn/reader';
 
 import {
   appendHashes,
   compactionIdHash,
   loadIndex,
+  relationshipIdHash,
+  toolResultEventIdHash,
   turnContentFingerprint,
   turnIdHash,
 } from './index-sidecar.js';
@@ -16,8 +23,10 @@ import type {
   CompactionLine,
   Enrichment,
   LedgerLine,
+  SessionRelationshipLine,
   StampLine,
   StampSelector,
+  ToolResultEventLine,
   TurnLine,
 } from './schema.js';
 
@@ -87,6 +96,54 @@ export async function appendCompactions(events: CompactionEvent[]): Promise<void
   const lines: CompactionLine[] = fresh.map((record) => ({
     v: 1,
     kind: 'compaction',
+    record,
+  }));
+  await appendLines(lines);
+  await appendHashes(newIds, []);
+}
+
+export async function appendRelationships(
+  records: SessionRelationshipRecord[],
+): Promise<void> {
+  if (records.length === 0) return;
+  const idx = await loadIndex();
+  const fresh: SessionRelationshipRecord[] = [];
+  const newIds: string[] = [];
+  for (const r of records) {
+    const id = relationshipIdHash(r);
+    if (idx.ids.has(id)) continue;
+    fresh.push(r);
+    newIds.push(id);
+    idx.ids.add(id);
+  }
+  if (fresh.length === 0) return;
+  const lines: SessionRelationshipLine[] = fresh.map((record) => ({
+    v: 1,
+    kind: 'relationship',
+    record,
+  }));
+  await appendLines(lines);
+  await appendHashes(newIds, []);
+}
+
+export async function appendToolResultEvents(
+  records: ToolResultEventRecord[],
+): Promise<void> {
+  if (records.length === 0) return;
+  const idx = await loadIndex();
+  const fresh: ToolResultEventRecord[] = [];
+  const newIds: string[] = [];
+  for (const r of records) {
+    const id = toolResultEventIdHash(r);
+    if (idx.ids.has(id)) continue;
+    fresh.push(r);
+    newIds.push(id);
+    idx.ids.add(id);
+  }
+  if (fresh.length === 0) return;
+  const lines: ToolResultEventLine[] = fresh.map((record) => ({
+    v: 1,
+    kind: 'tool_result_event',
     record,
   }));
   await appendLines(lines);

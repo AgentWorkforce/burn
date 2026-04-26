@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Execution-graph substrate** (#42, first PR). Two new normalized append-only record types — `SessionRelationshipRecord` (`root` / `continuation` / `fork` / `subagent` edges) and `ToolResultEventRecord` (per-`toolUseId` chronology with `status` + `eventSource` discriminator) — that sit beside `TurnRecord` and preserve passive-reader metadata that's currently flattened or lost. Both ride at `v: 1`. Foundation for #8 (subagent tree consumers) and #11 (waste / retry / terminal-outcome analysis); no new flags or output yet.
+  - `@relayburn/reader` — Claude passive parser populates `relationships` and `toolResultEvents` alongside the existing `turns` / `content` / `events` arrays. One root row per session id; one subagent row per discovered invocation (joining to `Subagent.agentId`); one `ToolResultEventRecord` per `tool_result` block with monotonic `eventIndex` + per-`toolUseId` `callIndex`. Spawn events post-annotated with the spawned subagent's `agentId` so consumers can join the two record types. Codex / OpenCode population deferred to follow-up PRs.
+  - `@relayburn/ledger` — two new line kinds (`relationship` / `tool_result_event`) with matching `appendRelationships` / `appendToolResultEvents` writers and `queryRelationships` / `queryToolResultEvents` readers. Both dedup through the existing `ledger-index` namespace; `rebuildIndex` re-indexes both. Old readers skip unknown kinds.
+  - `@relayburn/cli` — `burn ingest` (runtime + hook paths) and `burn claude` persist the new records when the Claude reader emits them, so the substrate lands automatically alongside turns.
+
 ## [0.18.0] - 2026-04-26
 
 ### Fixed
