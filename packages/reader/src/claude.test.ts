@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { parseClaudeSession, parseClaudeSessionIncremental } from './claude.js';
+import {
+  parseClaudeSession,
+  parseClaudeSessionIncremental,
+  reconcileClaudeSessionRelationships,
+} from './claude.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.resolve(__dirname, '..', '..', '..', 'tests', 'fixtures', 'claude');
@@ -823,3 +827,230 @@ describe('parseClaudeSessionIncremental', () => {
     assert.equal(sub2_1!.subagent!.parentToolUseId, 'toolu_inner');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fork / continuation relationships (#112).
+// ---------------------------------------------------------------------------
+
+describe('parseClaudeSession fork / continuation relationships (#112)', () => {
+  it('emits a continuation row from a /resume marker, with relatedSessionId set to the resumed-from id', async () => {
+    const file = path.join(FIXTURES, 'resume-marker.jsonl');
+    const { relationships } = await parseClaudeSessionIncremental(file, {
+      sessionPath: file,
+    });
+    const cont = relationships.find((r) => r.relationshipType === 'continuation');
+    assert.ok(cont, '/resume marker must produce a continuation row');
+    // The on-disk filename's session id is what consumers join on; relatedSessionId
+    // is the id named in the slash-command argument.
+    assert.equal(cont!.sessionId, 'resume-marker');
+    assert.equal(cont!.relatedSessionId, '11111111-1111-1111-1111-111111111111');
+    // Provenance: the line carries an in-log `sessionId` distinct from the file
+    // basename (`99999999-...` vs `resume-marker`), so it surfaces as
+    // `sourceSessionId`. `version` becomes `sourceVersion`.
+    assert.equal(cont!.sourceSessionId, '99999999-9999-9999-9999-999999999999');
+    assert.equal(cont!.sourceVersion, '2.1.97');
+  });
+
+  it('populates sourceSessionId and sourceVersion on existing root rows when the in-log id differs from the file id', async () => {
+    const file = path.join(FIXTURES, 'resume-marker.jsonl');
+    const { relationships } = await parseClaudeSession(file, { sessionPath: file });
+    const root = relationships.find((r) => r.relationshipType === 'root');
+    assert.ok(root, 'root row should still be emitted alongside the continuation row');
+    assert.equal(root!.sessionId, 'resume-marker');
+    assert.equal(root!.sourceSessionId, '99999999-9999-9999-9999-999999999999');
+    assert.equal(root!.sourceVersion, '2.1.97');
+  });
+
+  it('captures firstParentUuid from the first non-sidechain user line even when a sidechain user line precedes it', async () => {
+    const file = path.join(FIXTURES, 'sidechain-leading-then-main.jsonl');
+    const { evidence } = await parseClaudeSession(file, { sessionPath: file });
+    assert.equal(evidence.firstParentUuid, 'u-original-asst');
+  });
+
+  it('exposes per-file evidence so a cross-file pass can resolve fork / continuation', async () => {
+    const file = path.join(FIXTURES, 'resume-marker.jsonl');
+    const { evidence } = await parseClaudeSession(file, { sessionPath: file });
+    assert.equal(evidence.fileSessionId, 'resume-marker');
+    assert.equal(evidence.sourceVersion, '2.1.97');
+    assert.equal(evidence.hasResumeMarker, true);
+    assert.equal(evidence.resumeTargetSessionId, '11111111-1111-1111-1111-111111111111');
+    // The first non-sidechain line's parentUuid is null in this fixture, so
+    // the parser leaves firstParentUuid undefined.
+    assert.equal(evidence.firstParentUuid, undefined);
+    // Both line uuids show up (assistant + user).
+    assert.ok(evidence.seenUuids.includes('u-resume-1'));
+    assert.ok(evidence.seenUuids.includes('u-asst-r'));
+  });
+
+  it('reconcileClaudeSessionRelationships emits a continuation row when one file\'s first parentUuid lives in another file', async () => {
+    const originalFile = path.join(FIXTURES, 'original-session.jsonl');
+    const crossFile = path.join(FIXTURES, 'cross-file-parent.jsonl');
+    const { evidence: originalEv } = await parseClaudeSession(originalFile, {
+      sessionPath: originalFile,
+    });
+    const { evidence: crossEv, relationships: crossRows } = await parseClaudeSession(
+      crossFile,
+      { sessionPath: crossFile },
+    );
+
+    // Sanity: cross-file evidence carries the original's last assistant uuid.
+    assert.equal(crossEv.firstParentUuid, 'u-original-asst');
+    // The local pass alone produced no continuation row (no /resume marker).
+    assert.equal(
+      crossRows.find((r) => r.relationshipType === 'continuation'),
+      undefined,
+    );
+
+    const reconciled = reconcileClaudeSessionRelationships([
+      { evidence: originalEv },
+      { evidence: crossEv },
+    ]);
+    const cont = reconciled.find((r) => r.relationshipType === 'continuation');
+    assert.ok(cont, 'cross-file parentUuid match must produce a continuation row');
+    assert.equal(cont!.sessionId, 'cross-file-parent');
+    assert.equal(cont!.relatedSessionId, 'original-session');
+    assert.equal(cont!.sourceVersion, '2.1.97');
+  });
+
+  it('reconcileClaudeSessionRelationships emits fork rows when two files share a sourceSessionId', async () => {
+    const branchA = path.join(FIXTURES, 'fork-branch-a.jsonl');
+    const branchB = path.join(FIXTURES, 'fork-branch-b.jsonl');
+    const { evidence: evA, relationships: rowsA } = await parseClaudeSession(branchA, {
+      sessionPath: branchA,
+    });
+    const { evidence: evB, relationships: rowsB } = await parseClaudeSession(branchB, {
+      sessionPath: branchB,
+    });
+
+    // Each branch has a root row keyed on its own filename, with the shared
+    // in-log id surfaced as sourceSessionId.
+    const rootA = rowsA.find((r) => r.relationshipType === 'root');
+    const rootB = rowsB.find((r) => r.relationshipType === 'root');
+    assert.equal(rootA!.sessionId, 'fork-branch-a');
+    assert.equal(rootB!.sessionId, 'fork-branch-b');
+    assert.equal(rootA!.sourceSessionId, '00000000-0000-0000-0000-000000000fff');
+    assert.equal(rootB!.sourceSessionId, '00000000-0000-0000-0000-000000000fff');
+
+    const reconciled = reconcileClaudeSessionRelationships([
+      { evidence: evA },
+      { evidence: evB },
+    ]);
+    const forks = reconciled.filter((r) => r.relationshipType === 'fork');
+    assert.equal(forks.length, 2, 'each branch should get a fork row');
+    const sids = forks.map((r) => r.sessionId).sort();
+    assert.deepEqual(sids, ['fork-branch-a', 'fork-branch-b']);
+    for (const f of forks) {
+      assert.equal(f.relatedSessionId, '00000000-0000-0000-0000-000000000fff');
+      assert.equal(f.sourceSessionId, '00000000-0000-0000-0000-000000000fff');
+      assert.equal(f.sourceVersion, '2.1.97');
+    }
+  });
+
+  it('reconcileClaudeSessionRelationships does not emit a fork row when one file is a strict continuation of the other', async () => {
+    // Two files share a sourceSessionId but file B's firstParentUuid lives in
+    // file A — that's a continuation, not a fork. Reconciliation should emit
+    // exactly one continuation row and zero fork rows.
+    const fileA = path.join(FIXTURES, 'original-session.jsonl');
+    const fileB = path.join(FIXTURES, 'cross-file-parent.jsonl');
+    const { evidence: evA } = await parseClaudeSession(fileA, { sessionPath: fileA });
+    const { evidence: evB } = await parseClaudeSession(fileB, { sessionPath: fileB });
+    const reconciled = reconcileClaudeSessionRelationships([
+      { evidence: evA },
+      { evidence: evB },
+    ]);
+    assert.equal(
+      reconciled.filter((r) => r.relationshipType === 'fork').length,
+      0,
+      'strict continuation must not also be classified as a fork',
+    );
+    assert.equal(reconciled.filter((r) => r.relationshipType === 'continuation').length, 1);
+  });
+
+  it('re-parsing the same session produces relationship rows with stable hashes (dedup target)', async () => {
+    // Acceptance: re-ingesting the same session does not create duplicate
+    // relationship rows. The on-disk dedup is keyed by `relationshipIdHash`
+    // (source + sessionId + relationshipType + relatedSessionId + agentId +
+    // parentToolUseId), so the parser must produce equivalent rows on both
+    // passes for the writer's existing dedup to fold them. Reproduce the same
+    // canonical key here rather than importing from `@relayburn/ledger`, which
+    // already depends on `@relayburn/reader` (importing it back would create a
+    // cycle that breaks `tsc --build`).
+    const keyOf = (r: {
+      source: string;
+      sessionId: string;
+      relationshipType: string;
+      relatedSessionId?: string | undefined;
+      agentId?: string | undefined;
+      parentToolUseId?: string | undefined;
+    }) =>
+      [
+        r.source,
+        r.sessionId,
+        r.relationshipType,
+        r.relatedSessionId ?? '',
+        r.agentId ?? '',
+        r.parentToolUseId ?? '',
+      ].join('|');
+    const file = path.join(FIXTURES, 'resume-marker.jsonl');
+    const a = await parseClaudeSession(file, { sessionPath: file });
+    const b = await parseClaudeSession(file, { sessionPath: file });
+    const idsA = new Set(a.relationships.map(keyOf));
+    const idsB = new Set(b.relationships.map(keyOf));
+    assert.equal(idsA.size, a.relationships.length);
+    assert.deepEqual([...idsA].sort(), [...idsB].sort());
+  });
+
+  it('reconciliation skips a duplicate continuation when the local /resume already named the same parent', async () => {
+    // Local /resume + cross-file parentUuid pointing at the same parent should
+    // dedup at the reconciliation layer — we don't want two continuation rows
+    // for the same edge with identical hashes.
+    // Construct an in-memory evidence pair that matches the resume target
+    // exactly.
+    const parentEvidence = {
+      fileSessionId: '11111111-1111-1111-1111-111111111111',
+      inLogSessionIds: ['11111111-1111-1111-1111-111111111111'],
+      seenUuids: ['u-original-asst'],
+      hasResumeMarker: false,
+    };
+    const childEvidence = {
+      fileSessionId: 'resume-marker',
+      inLogSessionIds: ['99999999-9999-9999-9999-999999999999'],
+      seenUuids: [],
+      hasResumeMarker: true,
+      resumeTargetSessionId: '11111111-1111-1111-1111-111111111111',
+      firstParentUuid: 'u-original-asst',
+      sourceVersion: '2.1.97',
+    };
+    const reconciled = reconcileClaudeSessionRelationships([
+      { evidence: parentEvidence },
+      { evidence: childEvidence },
+    ]);
+    // The local parse already emitted a continuation for (resume-marker ->
+    // 11111111…); reconciliation should not add a duplicate edge here.
+    const continuations = reconciled.filter(
+      (r) =>
+        r.relationshipType === 'continuation' &&
+        r.sessionId === 'resume-marker' &&
+        r.relatedSessionId === '11111111-1111-1111-1111-111111111111',
+    );
+    assert.equal(continuations.length, 0);
+  });
+
+  it('preserves sourceSessionId / sourceVersion on subagent rows when the in-log id differs from the file basename', async () => {
+    // sub-rows need the same provenance stamp as roots so cross-source joins
+    // can group all rows from one log under a common version banner. We
+    // deliberately use a tmp filename whose basename differs from the
+    // in-log session id (`55555555-…`) so the mismatch surfaces as
+    // sourceSessionId on the subagent row.
+    const dir = await mkdtemp(path.join(tmpdir(), 'claude-sub-'));
+    const tmpFile = path.join(dir, 'session.jsonl');
+    const subSrc = path.join(FIXTURES, 'nested-subagent.jsonl');
+    await copyFile(subSrc, tmpFile);
+    const { relationships } = await parseClaudeSession(tmpFile, { sessionPath: tmpFile });
+    const sub = relationships.find((r) => r.relationshipType === 'subagent');
+    assert.ok(sub, 'fixture has subagent rows');
+    assert.equal(sub!.sourceSessionId, '55555555-5555-5555-5555-555555555555');
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+

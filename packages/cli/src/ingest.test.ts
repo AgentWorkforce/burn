@@ -1,13 +1,16 @@
 import { strict as assert } from 'node:assert';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
+import { queryUserTurns } from '@relayburn/ledger';
+import { ledgerPath } from '@relayburn/ledger';
 
 import {
   countToolCallGaps,
+  ingestClaudeProjects,
   ingestCodexSessions,
   resetIngestGapWarnings,
   setIngestGapWriter,
@@ -164,6 +167,50 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
   });
 });
 
+describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
+  let tmpHome: string;
+  let tmpRelay: string;
+  const originalHome = process.env['HOME'];
+  const originalRelay = process.env['RELAYBURN_HOME'];
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-ut-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-ut-relay-'));
+    process.env['HOME'] = tmpHome;
+    process.env['RELAYBURN_HOME'] = tmpRelay;
+    resetIngestGapWarnings();
+  });
+
+  after(async () => {
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
+    else delete process.env['RELAYBURN_HOME'];
+    resetIngestGapWarnings();
+    await rm(tmpHome, { recursive: true, force: true });
+    await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  it('writes user-turn lines for a Claude session and dedupes on re-ingest', async () => {
+    await writeClaudeSession(tmpHome, 'sess-ut-1', claudeSessionWithUserTurn());
+
+    await ingestClaudeProjects();
+    const first = await queryUserTurns();
+    assert.equal(first.length, 1, 'one user-turn line written');
+    assert.equal(first[0]!.userUuid, 'u-user-1');
+    assert.equal(first[0]!.blocks.length, 1);
+    assert.equal(first[0]!.blocks[0]!.kind, 'text');
+
+    // Re-ingest must be a no-op for already-persisted user turns.
+    const sizeBefore = (await stat(ledgerPath())).size;
+    await ingestClaudeProjects();
+    const sizeAfter = (await stat(ledgerPath())).size;
+    assert.equal(sizeAfter, sizeBefore, 'ledger must not grow on idempotent re-ingest');
+    const second = await queryUserTurns();
+    assert.equal(second.length, 1, 'still one user-turn line after re-ingest');
+  });
+});
+
 describe('ingestCodexSessions execution graph passthrough (#87)', () => {
   let tmpHome: string;
   let tmpRelay: string;
@@ -243,6 +290,68 @@ describe('ingestCodexSessions execution graph passthrough (#87)', () => {
 });
 
 // ---------- helpers ----------
+
+async function writeClaudeSession(home: string, sessionId: string, body: string): Promise<void> {
+  // Real claude layout is ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl.
+  const encoded = '-tmp-project'; // matches '/tmp/project' encoded as '-' joins
+  const dir = path.join(home, '.claude', 'projects', encoded);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${sessionId}.jsonl`), body, 'utf8');
+}
+
+// One user line + one assistant line — the parser emits a single
+// UserTurnRecord with a `text` block carrying the user's prompt.
+function claudeSessionWithUserTurn(): string {
+  const sid = '22222222-2222-2222-2222-222222222222';
+  const lines = [
+    {
+      type: 'permission-mode',
+      permissionMode: 'default',
+      sessionId: sid,
+    },
+    {
+      parentUuid: null,
+      isSidechain: false,
+      promptId: 'p-1',
+      type: 'user',
+      message: { role: 'user', content: 'please fix the build' },
+      uuid: 'u-user-1',
+      timestamp: '2026-04-20T00:00:00.000Z',
+      cwd: '/tmp/project',
+      sessionId: sid,
+      version: '2.1.96',
+    },
+    {
+      parentUuid: 'u-user-1',
+      isSidechain: false,
+      message: {
+        model: 'claude-sonnet-4-6',
+        id: 'msg_ut_1',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Hello!' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: {
+          input_tokens: 10,
+          cache_creation_input_tokens: 100,
+          cache_read_input_tokens: 500,
+          cache_creation: { ephemeral_5m_input_tokens: 80, ephemeral_1h_input_tokens: 20 },
+          output_tokens: 5,
+          service_tier: 'standard',
+        },
+      },
+      requestId: 'req_1',
+      type: 'assistant',
+      uuid: 'u-asst-1',
+      timestamp: '2026-04-20T00:00:01.000Z',
+      cwd: '/tmp/project',
+      sessionId: sid,
+      version: '2.1.96',
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
 
 function makeTurn(opts: { messageId: string; toolCallCount: number }): TurnRecord {
   return {

@@ -384,6 +384,201 @@ describe('parseOpencodeSession content capture', () => {
   });
 });
 
+describe('parseOpencodeSession fidelity (issue #89)', () => {
+  it('emits per-turn fidelity with full coverage when tokens are fully populated', async () => {
+    const { turns } = await parseOpencodeSession(sessionFile('simple', 'ses_simple'));
+    assert.equal(turns.length, 1);
+    const f = turns[0]!.fidelity;
+    assert.ok(f, 'fidelity is populated on every emitted turn');
+    assert.equal(f!.granularity, 'per-turn');
+    // The simple fixture's tokens block carries input/output/reasoning + cache.read/write,
+    // and OpenCode always exposes tool calls, tool-result events, session relationships,
+    // and raw content (when contentMode is full) — so the turn classifies as full.
+    assert.equal(f!.class, 'full');
+    assert.deepEqual(f!.coverage, {
+      hasInputTokens: true,
+      hasOutputTokens: true,
+      hasReasoningTokens: true,
+      hasCacheReadTokens: true,
+      hasCacheCreateTokens: true,
+      hasToolCalls: true,
+      hasToolResultEvents: true,
+      hasSessionRelationships: true,
+      hasRawContent: true,
+    });
+  });
+
+  it('emits partial fidelity for an assistant message with no tokens block', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fid-no-tokens-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_no_tokens');
+      const partAsstDir = path.join(storage, 'part', 'msg_no_tokens_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_no_tokens.json'),
+        JSON.stringify({ id: 'ses_no_tokens', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_no_tokens_asst.json'),
+        JSON.stringify({
+          id: 'msg_no_tokens_asst',
+          sessionID: 'ses_no_tokens',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-haiku-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+        }),
+      );
+      const { turns } = await parseOpencodeSession(
+        path.join(sessionDir, 'ses_no_tokens.json'),
+      );
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      assert.equal(f!.granularity, 'per-turn');
+      // Missing input/output → partial (not usage-only, not full).
+      assert.equal(f!.class, 'partial');
+      assert.equal(f!.coverage.hasInputTokens, false);
+      assert.equal(f!.coverage.hasOutputTokens, false);
+      assert.equal(f!.coverage.hasReasoningTokens, false);
+      assert.equal(f!.coverage.hasCacheReadTokens, false);
+      assert.equal(f!.coverage.hasCacheCreateTokens, false);
+      // Capability flags are still true — OpenCode would surface these if they
+      // existed; the turn just doesn't have the data.
+      assert.equal(f!.coverage.hasToolCalls, true);
+      assert.equal(f!.coverage.hasToolResultEvents, true);
+      assert.equal(f!.coverage.hasSessionRelationships, true);
+      assert.equal(f!.coverage.hasRawContent, true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('flips hasCacheReadTokens and hasCacheCreateTokens when cache fields are present', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fid-cache-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_cache');
+      const partAsstDir = path.join(storage, 'part', 'msg_cache_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_cache.json'),
+        JSON.stringify({ id: 'ses_cache', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_cache_asst.json'),
+        JSON.stringify({
+          id: 'msg_cache_asst',
+          sessionID: 'ses_cache',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+          tokens: {
+            input: 100,
+            output: 50,
+            cache: { read: 12000, write: 800 },
+          },
+        }),
+      );
+      const { turns } = await parseOpencodeSession(
+        path.join(sessionDir, 'ses_cache.json'),
+      );
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      assert.equal(f!.coverage.hasCacheReadTokens, true);
+      assert.equal(f!.coverage.hasCacheCreateTokens, true);
+      // Reasoning was not in the tokens block — coverage should be false even
+      // though `usage.reasoning` defaults to 0.
+      assert.equal(f!.coverage.hasReasoningTokens, false);
+      assert.equal(turns[0]!.usage.reasoning, 0);
+      // Full required = input + output + cacheRead + capability flags → class is full.
+      assert.equal(f!.class, 'full');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('every emitted turn carries a populated fidelity field across multi-turn sessions', async () => {
+    // Mirrors what `summarizeFidelity` checks downstream — `unknown === 0`
+    // means every turn has a non-undefined `fidelity`.
+    const { turns } = await parseOpencodeSession(sessionFile('multi-turn', 'ses_multi'));
+    assert.ok(turns.length > 0);
+    const unknown = turns.filter((t) => !t.fidelity).length;
+    assert.equal(unknown, 0, 'every OpenCode turn carries fidelity now');
+    for (const t of turns) {
+      assert.equal(t.fidelity!.granularity, 'per-turn');
+    }
+  });
+
+  it('rolls up coverage from step-finish parts when assistant tokens are partial', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fid-stepfinish-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_sf');
+      const partAsstDir = path.join(storage, 'part', 'msg_sf_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_sf.json'),
+        JSON.stringify({ id: 'ses_sf', directory: '/tmp/proj' }),
+      );
+      // Assistant message has only input/output; step-finish part carries cache.
+      await writeFile(
+        path.join(msgDir, 'msg_sf_asst.json'),
+        JSON.stringify({
+          id: 'msg_sf_asst',
+          sessionID: 'ses_sf',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+          tokens: { input: 5, output: 3 },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_sf_1.json'),
+        JSON.stringify({
+          id: 'prt_sf_1',
+          sessionID: 'ses_sf',
+          messageID: 'msg_sf_asst',
+          type: 'step-finish',
+          reason: 'end_turn',
+          tokens: { input: 5, output: 3, cache: { read: 1000, write: 200 } },
+        }),
+      );
+      const { turns } = await parseOpencodeSession(path.join(sessionDir, 'ses_sf.json'));
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      // Cache flags rolled up from the step-finish even though `m.tokens` lacked them.
+      assert.equal(f!.coverage.hasCacheReadTokens, true);
+      assert.equal(f!.coverage.hasCacheCreateTokens, true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('parseOpencodeSession user-turn block sizes (issue #86)', () => {
   it('emits one UserTurnRecord per gap between assistant turns', async () => {
     const file = sessionFile('user-turn-blocks', 'ses_utb');

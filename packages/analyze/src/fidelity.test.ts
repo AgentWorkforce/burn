@@ -1,7 +1,13 @@
 import { strict as assert } from 'node:assert';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
+import {
+  EMPTY_COVERAGE,
+  makeFidelity,
+  parseOpencodeSession,
+} from '@relayburn/reader';
 import type { Fidelity, TurnRecord } from '@relayburn/reader';
 
 import {
@@ -9,6 +15,17 @@ import {
   hasMinimumFidelity,
   summarizeFidelity,
 } from './fidelity.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const OPENCODE_FIXTURES = path.resolve(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'tests',
+  'fixtures',
+  'opencode',
+);
 
 function turn(fidelity?: Fidelity): Pick<TurnRecord, 'fidelity'> {
   // exactOptionalPropertyTypes refuses `{ fidelity: undefined }` for the
@@ -89,6 +106,26 @@ describe('summarizeFidelity', () => {
     assert.equal(s.missingCoverage.hasSessionRelationships, 1);
     // hasReasoningTokens missing on both (no source surfaces it in tests)
     assert.equal(s.missingCoverage.hasReasoningTokens, 2);
+  });
+});
+
+describe('summarizeFidelity over an OpenCode session (issue #89)', () => {
+  it('reports unknown === 0 for every turn produced by parseOpencodeSession', async () => {
+    const file = path.join(
+      OPENCODE_FIXTURES,
+      'multi-turn',
+      'storage',
+      'session',
+      'global',
+      'ses_multi.json',
+    );
+    const { turns } = await parseOpencodeSession(file);
+    assert.ok(turns.length > 0);
+    const summary = summarizeFidelity(turns);
+    assert.equal(summary.unknown, 0);
+    assert.equal(summary.total, turns.length);
+    // Every OpenCode turn carries per-turn granularity.
+    assert.equal(summary.byGranularity['per-turn'], turns.length);
   });
 });
 

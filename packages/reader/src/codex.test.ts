@@ -871,6 +871,195 @@ describe('parseCodexSessionIncremental execution graph dedup (#87)', () => {
   });
 });
 
+describe('parseCodexSession fidelity (issue #84)', () => {
+  it('emits per-turn full-fidelity coverage when token_count is present', async () => {
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    assert.equal(turns.length, 1);
+    const f = turns[0]!.fidelity;
+    assert.ok(f, 'fidelity is populated');
+    assert.equal(f!.granularity, 'per-turn');
+    // Full requires input + output + cacheRead + tool calls + tool results +
+    // session relationships. Codex has no parent-tracking signal yet (#63),
+    // so the strongest a Codex turn can claim today is `usage-only`.
+    assert.equal(f!.coverage.hasInputTokens, true);
+    assert.equal(f!.coverage.hasOutputTokens, true);
+    assert.equal(f!.coverage.hasReasoningTokens, true);
+    assert.equal(f!.coverage.hasCacheReadTokens, true);
+    assert.equal(f!.coverage.hasCacheCreateTokens, false);
+    assert.equal(f!.coverage.hasToolCalls, true);
+    assert.equal(f!.coverage.hasToolResultEvents, true);
+    assert.equal(f!.coverage.hasSessionRelationships, false);
+    assert.equal(f!.coverage.hasRawContent, true);
+    assert.equal(f!.class, 'usage-only');
+  });
+
+  it('reports class=partial when token_count is absent for a turn', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-fid-no-tc-'));
+    try {
+      const lines = [
+        {
+          timestamp: '2026-04-22T00:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'sess_fid_no_tc', cwd: '/tmp/proj', timestamp: '2026-04-22T00:00:00.000Z' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.050Z',
+          type: 'turn_context',
+          payload: { turn_id: 'turn_fid_no_tc', cwd: '/tmp/proj', model: 'gpt-5.4' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.200Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn_fid_no_tc' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.300Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'ok' }],
+          },
+        },
+        // intentionally no token_count between task_started and task_complete
+        {
+          timestamp: '2026-04-22T00:00:00.500Z',
+          type: 'event_msg',
+          payload: { type: 'task_complete', turn_id: 'turn_fid_no_tc' },
+        },
+      ];
+      const file = path.join(tmp, 'no-tc.jsonl');
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { turns } = await parseCodexSession(file);
+      assert.equal(turns.length, 1);
+      const t = turns[0]!;
+      const f = t.fidelity;
+      assert.ok(f);
+      assert.equal(f!.granularity, 'per-turn');
+      assert.equal(f!.class, 'partial');
+      // Numeric usage is still 0 (existing post-hoc default), but the coverage
+      // flag is the honest signal — see issue #84.
+      assert.equal(f!.coverage.hasInputTokens, false);
+      assert.equal(f!.coverage.hasOutputTokens, false);
+      assert.equal(f!.coverage.hasReasoningTokens, false);
+      assert.equal(f!.coverage.hasCacheReadTokens, false);
+      // Capability flags stay true even when this particular turn carries no
+      // tool activity — the source *would* surface them.
+      assert.equal(f!.coverage.hasToolCalls, true);
+      assert.equal(f!.coverage.hasToolResultEvents, true);
+      assert.equal(f!.coverage.hasRawContent, true);
+      // usage numerics still default to 0
+      assert.equal(t.usage.input, 0);
+      assert.equal(t.usage.output, 0);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps tool-result coverage true for turns with function_call + function_call_output', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-fid-tools-'));
+    try {
+      const lines = [
+        {
+          timestamp: '2026-04-22T00:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'sess_fid_tools', cwd: '/tmp/proj', timestamp: '2026-04-22T00:00:00.000Z' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.050Z',
+          type: 'turn_context',
+          payload: { turn_id: 'turn_fid_tools', cwd: '/tmp/proj', model: 'gpt-5.4' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.200Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn_fid_tools' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.400Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'shell',
+            arguments: '{"cmd":"ls"}',
+            call_id: 'call_fid_1',
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.500Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call_output',
+            call_id: 'call_fid_1',
+            output: 'README.md\n',
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.800Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: {
+                input_tokens: 100,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+              },
+            },
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.900Z',
+          type: 'event_msg',
+          payload: { type: 'task_complete', turn_id: 'turn_fid_tools' },
+        },
+      ];
+      const file = path.join(tmp, 'tools.jsonl');
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { turns } = await parseCodexSession(file);
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      assert.equal(f!.coverage.hasToolCalls, true);
+      assert.equal(f!.coverage.hasToolResultEvents, true);
+      // Sanity: token_count was present, so usage flags are on.
+      assert.equal(f!.coverage.hasInputTokens, true);
+      assert.equal(f!.coverage.hasReasoningTokens, true);
+      assert.equal(f!.class, 'usage-only');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('every turn carries fidelity (summarizeFidelity unknown bucket would be 0)', async () => {
+    // Mirrors `summarizeFidelity`'s behavior over a real session: any turn
+    // without a `fidelity` field would land in the `unknown` bucket. Asserting
+    // that no Codex turn lacks fidelity is the equivalent guarantee without a
+    // cross-package import.
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'multi-turn.jsonl'));
+    assert.ok(turns.length > 0);
+    for (const t of turns) {
+      assert.ok(t.fidelity, `turn ${t.messageId} carries fidelity`);
+      assert.equal(t.fidelity!.granularity, 'per-turn');
+    }
+  });
+
+  it('incremental parser also populates fidelity on emitted turns', async () => {
+    const file = path.join(FIXTURES, 'multi-turn.jsonl');
+    const { turns } = await parseCodexSessionIncremental(file);
+    assert.ok(turns.length > 0);
+    for (const t of turns) {
+      assert.ok(t.fidelity, `incremental turn ${t.messageId} carries fidelity`);
+      assert.equal(t.fidelity!.granularity, 'per-turn');
+    }
+  });
+});
+
 describe('parseCodexSessionIncremental user-turn dedup (issue #81)', () => {
   it('emits userTurns once across resumed incremental passes', async () => {
     const file = path.join(FIXTURES, 'user-turn-blocks.jsonl');

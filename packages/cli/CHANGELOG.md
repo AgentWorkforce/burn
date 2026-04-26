@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Execution-graph passthrough for Codex ingest** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `burn ingest` (and `burn codex`) now persist Codex `SessionRelationshipRecord`s and `ToolResultEventRecord`s the reader emits, alongside the existing turns / content lines, mirroring the Claude path landed in the previous release. The Codex cursor (`~/.relayburn/cursors.json`) gains `rootSessionEmitted`, `nextEventIndex`, and `toolResultCounters` so dedup of execution-graph rows survives across `burn` invocations even when the writer-side index isn't warm.
 
+## [0.22.0] - 2026-04-26
+
+### Changed
+
+- **`burn` ingest runs cross-file Claude relationship reconciliation at end of pass** ([#112](https://github.com/AgentWorkforce/burn/issues/112)). After parsing every Claude session file in an ingest pass, the CLI now feeds the per-file evidence through `reconcileClaudeSessionRelationships` and appends any resulting `fork` / `continuation` rows. Idempotent — the writer's `relationshipIdHash` dedup folds repeats on subsequent runs.
+
+## [0.21.0] - 2026-04-26
+
+### Added
+
+- **User-turn passthrough in ingest** (#94). `burn ingest`, `burn ingest --runtime claude` (hook path), and `burn claude` (subcommand wrapper) now persist `UserTurnRecord`s the Claude / Codex / OpenCode parsers produce, alongside the existing turns / content / compaction / relationship / tool-result-event lines. No new flags or output yet — this lays the substrate so per-tool-call cost attribution (#2) can read user-turn block sizes back out of the ledger instead of re-parsing source session files at query time.
+
 ## [0.20.0] - 2026-04-26
 
 ### Added
