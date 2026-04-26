@@ -7,6 +7,7 @@ import { after, beforeEach, describe, it } from 'node:test';
 import {
   ledgerPath,
   loadCursors,
+  queryUserTurns,
   readContent,
 } from '@relayburn/ledger';
 
@@ -117,6 +118,14 @@ describe('burn ingest (hook-driven)', () => {
     assert.ok(toolResult, 'tool_result content record exists');
     assert.equal(toolResult!.toolResult!.content, toolResponseText);
     assert.equal(toolResult!.toolResult!.toolUseId, 'toolu_1');
+
+    const userTurns = await queryUserTurns({ sessionId });
+    const toolResultUserTurn = userTurns.find((u) =>
+      u.blocks.some((b) => b.kind === 'tool_result' && b.toolUseId === 'toolu_1'),
+    );
+    assert.ok(toolResultUserTurn, 'tool_result user-turn block is persisted');
+    assert.equal(toolResultUserTurn!.precedingMessageId, 'msg-1');
+    assert.equal(toolResultUserTurn!.blocks[0]!.approxTokens, Math.ceil(toolResponseText.length / 4));
   });
 
   it('is idempotent across repeat hook invocations on the same transcript', async () => {

@@ -11,8 +11,14 @@ import {
   type SubagentAggregation,
   type WasteResult,
 } from '@relayburn/analyze';
-import { queryAll, queryCompactions, readContent, type Query } from '@relayburn/ledger';
-import type { ContentRecord } from '@relayburn/reader';
+import {
+  queryAll,
+  queryCompactions,
+  queryUserTurns,
+  readContent,
+  type Query,
+} from '@relayburn/ledger';
+import type { ContentRecord, UserTurnRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -69,12 +75,19 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
 
   const sessionIds = new Set(turns.map((t) => t.sessionId));
   const contentBySession = new Map<string, ContentRecord[]>();
+  const userTurnsBySession = new Map<string, UserTurnRecord[]>();
   for (const sessionId of sessionIds) {
     const records = await readContent({ sessionId });
     if (records.length > 0) contentBySession.set(sessionId, records);
+    const userTurns = await queryUserTurns({ sessionId });
+    if (userTurns.length > 0) userTurnsBySession.set(sessionId, userTurns);
   }
 
-  const result = attributeWaste(turns, { pricing, contentBySession });
+  const result = attributeWaste(turns, {
+    pricing,
+    contentBySession,
+    userTurnsBySession,
+  });
   const files = aggregateByFile(result.attributions);
   const bashes = aggregateByBash(result.attributions);
   const subagents = aggregateBySubagent(result.attributions);

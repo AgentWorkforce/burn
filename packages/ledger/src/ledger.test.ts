@@ -43,6 +43,27 @@ function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   };
 }
 
+function fakeUserTurn(overrides: Partial<UserTurnRecord> = {}): UserTurnRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId: 's-1',
+    userUuid: 'user-1',
+    ts: '2026-04-20T00:00:00.500Z',
+    precedingMessageId: 'msg-1',
+    followingMessageId: 'msg-2',
+    blocks: [
+      {
+        kind: 'tool_result',
+        toolUseId: 'tu-1',
+        byteLen: 4000,
+        approxTokens: 1000,
+      },
+    ],
+    ...overrides,
+  };
+}
+
 describe('ledger', () => {
   let tmpDir: string;
   const originalHome = process.env['RELAYBURN_HOME'];
@@ -298,6 +319,25 @@ describe('ledger', () => {
     assert.equal(errored.eventIndex, 1);
   });
 
+  it('round-trips UserTurnRecord through append + query and dedupes by (sessionId, userUuid)', async () => {
+    const u1 = fakeUserTurn();
+    const u2 = fakeUserTurn({
+      userUuid: 'user-2',
+      ts: '2026-04-20T00:00:01.000Z',
+      blocks: [{ kind: 'text', byteLen: 20, approxTokens: 5 }],
+    });
+    await appendUserTurns([u1, u2]);
+    await appendUserTurns([u1]);
+
+    const got = await queryUserTurns();
+    assert.equal(got.length, 2);
+    assert.equal(got[0]!.userUuid, 'user-1');
+    assert.equal(got[0]!.blocks[0]!.toolUseId, 'tu-1');
+
+    const filtered = await queryUserTurns({ sessionId: 's-1', source: 'codex' });
+    assert.equal(filtered.length, 0);
+  });
+
   it('queryRelationships filters by source and sessionId (matching child or parent)', async () => {
     await appendRelationships([
       {
@@ -471,7 +511,7 @@ describe('ledger', () => {
     assert.equal((await stat(ledgerPath())).size, sizeBefore);
   });
 
-  it('rebuildIndex re-indexes relationship and tool_result_event lines', async () => {
+  it('rebuildIndex re-indexes auxiliary append-only lines', async () => {
     const turn = fakeTurn({ messageId: 'rebuild-1' });
     const rel: SessionRelationshipRecord = {
       v: 1,
@@ -490,22 +530,28 @@ describe('ledger', () => {
       status: 'completed',
       eventSource: 'tool_result',
     };
+    const userTurn = fakeUserTurn({
+      sessionId: 's-rebuild',
+      userUuid: 'user-rebuild',
+    });
     await appendTurns([turn]);
     await appendRelationships([rel]);
     await appendToolResultEvents([ev]);
+    await appendUserTurns([userTurn]);
 
     await unlink(ledgerIndexPath());
     await unlink(ledgerContentIndexPath());
     __resetIndexCacheForTesting();
 
     const { ids } = await rebuildIndex();
-    // 1 turn + 1 relationship + 1 tool_result_event = 3 ids.
-    assert.equal(ids, 3);
+    // 1 turn + 1 relationship + 1 tool_result_event + 1 user_turn = 4 ids.
+    assert.equal(ids, 4);
 
     // After rebuild, re-appending the same auxiliary records must not duplicate.
     const sizeBefore = (await stat(ledgerPath())).size;
     await appendRelationships([rel]);
     await appendToolResultEvents([ev]);
+    await appendUserTurns([userTurn]);
     assert.equal((await stat(ledgerPath())).size, sizeBefore);
   });
 });

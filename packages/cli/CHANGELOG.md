@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Synthetic provider filters and grouping** (#31). `burn summary`, `burn by-tool`, and `burn waste` accept `--provider <name>`; `burn summary --by-provider` groups query-time reattributed turns under provider labels such as `synthetic` without rewriting raw ledger model strings. Synthetic routing recognizes `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
 
+## [0.27.0] - 2026-04-26
+
+### Changed
+
+- **Persist user-turn block-size records during ingest** (#2). `burn ingest`, passive ingest, and the Claude/Codex/OpenCode wrappers now append parser-emitted `UserTurnRecord`s for all three harnesses. Codex passive cursors also carry the in-flight user-turn slot so resumed ingest can complete a bridge record across file-growth boundaries. `burn waste` and `burn diagnose` load these records and use them as the sized fallback when content sidecars are missing.
+
+## [0.26.0] - 2026-04-26
+
+### Added
+
+- **Execution-graph passthrough for Codex ingest** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `burn ingest` (and `burn codex`) now persist Codex `SessionRelationshipRecord`s and `ToolResultEventRecord`s the reader emits, alongside the existing turns / content lines, mirroring the Claude path landed in the previous release. The Codex cursor (`~/.relayburn/cursors.json`) gains `rootSessionEmitted`, `nextEventIndex`, and `toolResultCounters` so dedup of execution-graph rows survives across `burn` invocations even when the writer-side index isn't warm.
+
+## [0.25.0] - 2026-04-26
+
+### Added
+
+- `burn archive status` (text + `--json`) now reports `tool_result_events` row counts alongside sessions / turns / tool_calls / compactions, and `burn archive build` / `rebuild` summary lines include the count of tool-result events materialized this run (#101).
+
+## [0.24.0] - 2026-04-26
+
+### Added
+
+- **`burn archive status --json` surfaces a fidelity histogram on `turns`** (#110). The JSON payload gains a `fidelityHistogram` field — counts per `attribution_fidelity` value across all materialized turns (`full`, `usage-only`, `partial`, `aggregate-only`, `cost-only`, plus `unknown` for rows with no fidelity metadata yet). Lets ops scripts spot upstream parser gaps without opening the SQLite directly. Text-mode output is unchanged for now.
+
+## [0.23.0] - 2026-04-26
+
+### Added
+
+- **Execution-graph passthrough for OpenCode ingest** ([#93](https://github.com/AgentWorkforce/burn/issues/93)). `burn ingest` (OpenCode path) now persists the `SessionRelationshipRecord`s and `ToolResultEventRecord`s the OpenCode reader produces — root / subagent edges from `session.parentID`, plus terminal-status tool-result events with `contentLength` / `contentHash` — via the existing `appendRelationships` / `appendToolResultEvents` writers. No new flags or output; closes the OpenCode arm of the gap that #77 closed for Claude.
+
+## [0.22.0] - 2026-04-26
+
+### Changed
+
+- **`burn` ingest runs cross-file Claude relationship reconciliation at end of pass** ([#112](https://github.com/AgentWorkforce/burn/issues/112)). After parsing every Claude session file in an ingest pass, the CLI now feeds the per-file evidence through `reconcileClaudeSessionRelationships` and appends any resulting `fork` / `continuation` rows. Idempotent — the writer's `relationshipIdHash` dedup folds repeats on subsequent runs.
+
 ## [0.21.0] - 2026-04-26
 
 ### Added

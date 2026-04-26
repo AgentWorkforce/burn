@@ -384,6 +384,201 @@ describe('parseOpencodeSession content capture', () => {
   });
 });
 
+describe('parseOpencodeSession fidelity (issue #89)', () => {
+  it('emits per-turn fidelity with full coverage when tokens are fully populated', async () => {
+    const { turns } = await parseOpencodeSession(sessionFile('simple', 'ses_simple'));
+    assert.equal(turns.length, 1);
+    const f = turns[0]!.fidelity;
+    assert.ok(f, 'fidelity is populated on every emitted turn');
+    assert.equal(f!.granularity, 'per-turn');
+    // The simple fixture's tokens block carries input/output/reasoning + cache.read/write,
+    // and OpenCode always exposes tool calls, tool-result events, session relationships,
+    // and raw content (when contentMode is full) — so the turn classifies as full.
+    assert.equal(f!.class, 'full');
+    assert.deepEqual(f!.coverage, {
+      hasInputTokens: true,
+      hasOutputTokens: true,
+      hasReasoningTokens: true,
+      hasCacheReadTokens: true,
+      hasCacheCreateTokens: true,
+      hasToolCalls: true,
+      hasToolResultEvents: true,
+      hasSessionRelationships: true,
+      hasRawContent: true,
+    });
+  });
+
+  it('emits partial fidelity for an assistant message with no tokens block', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fid-no-tokens-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_no_tokens');
+      const partAsstDir = path.join(storage, 'part', 'msg_no_tokens_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_no_tokens.json'),
+        JSON.stringify({ id: 'ses_no_tokens', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_no_tokens_asst.json'),
+        JSON.stringify({
+          id: 'msg_no_tokens_asst',
+          sessionID: 'ses_no_tokens',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-haiku-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+        }),
+      );
+      const { turns } = await parseOpencodeSession(
+        path.join(sessionDir, 'ses_no_tokens.json'),
+      );
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      assert.equal(f!.granularity, 'per-turn');
+      // Missing input/output → partial (not usage-only, not full).
+      assert.equal(f!.class, 'partial');
+      assert.equal(f!.coverage.hasInputTokens, false);
+      assert.equal(f!.coverage.hasOutputTokens, false);
+      assert.equal(f!.coverage.hasReasoningTokens, false);
+      assert.equal(f!.coverage.hasCacheReadTokens, false);
+      assert.equal(f!.coverage.hasCacheCreateTokens, false);
+      // Capability flags are still true — OpenCode would surface these if they
+      // existed; the turn just doesn't have the data.
+      assert.equal(f!.coverage.hasToolCalls, true);
+      assert.equal(f!.coverage.hasToolResultEvents, true);
+      assert.equal(f!.coverage.hasSessionRelationships, true);
+      assert.equal(f!.coverage.hasRawContent, true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('flips hasCacheReadTokens and hasCacheCreateTokens when cache fields are present', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fid-cache-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_cache');
+      const partAsstDir = path.join(storage, 'part', 'msg_cache_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_cache.json'),
+        JSON.stringify({ id: 'ses_cache', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_cache_asst.json'),
+        JSON.stringify({
+          id: 'msg_cache_asst',
+          sessionID: 'ses_cache',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+          tokens: {
+            input: 100,
+            output: 50,
+            cache: { read: 12000, write: 800 },
+          },
+        }),
+      );
+      const { turns } = await parseOpencodeSession(
+        path.join(sessionDir, 'ses_cache.json'),
+      );
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      assert.equal(f!.coverage.hasCacheReadTokens, true);
+      assert.equal(f!.coverage.hasCacheCreateTokens, true);
+      // Reasoning was not in the tokens block — coverage should be false even
+      // though `usage.reasoning` defaults to 0.
+      assert.equal(f!.coverage.hasReasoningTokens, false);
+      assert.equal(turns[0]!.usage.reasoning, 0);
+      // Full required = input + output + cacheRead + capability flags → class is full.
+      assert.equal(f!.class, 'full');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('every emitted turn carries a populated fidelity field across multi-turn sessions', async () => {
+    // Mirrors what `summarizeFidelity` checks downstream — `unknown === 0`
+    // means every turn has a non-undefined `fidelity`.
+    const { turns } = await parseOpencodeSession(sessionFile('multi-turn', 'ses_multi'));
+    assert.ok(turns.length > 0);
+    const unknown = turns.filter((t) => !t.fidelity).length;
+    assert.equal(unknown, 0, 'every OpenCode turn carries fidelity now');
+    for (const t of turns) {
+      assert.equal(t.fidelity!.granularity, 'per-turn');
+    }
+  });
+
+  it('rolls up coverage from step-finish parts when assistant tokens are partial', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fid-stepfinish-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_sf');
+      const partAsstDir = path.join(storage, 'part', 'msg_sf_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_sf.json'),
+        JSON.stringify({ id: 'ses_sf', directory: '/tmp/proj' }),
+      );
+      // Assistant message has only input/output; step-finish part carries cache.
+      await writeFile(
+        path.join(msgDir, 'msg_sf_asst.json'),
+        JSON.stringify({
+          id: 'msg_sf_asst',
+          sessionID: 'ses_sf',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+          tokens: { input: 5, output: 3 },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_sf_1.json'),
+        JSON.stringify({
+          id: 'prt_sf_1',
+          sessionID: 'ses_sf',
+          messageID: 'msg_sf_asst',
+          type: 'step-finish',
+          reason: 'end_turn',
+          tokens: { input: 5, output: 3, cache: { read: 1000, write: 200 } },
+        }),
+      );
+      const { turns } = await parseOpencodeSession(path.join(sessionDir, 'ses_sf.json'));
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      // Cache flags rolled up from the step-finish even though `m.tokens` lacked them.
+      assert.equal(f!.coverage.hasCacheReadTokens, true);
+      assert.equal(f!.coverage.hasCacheCreateTokens, true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('parseOpencodeSession user-turn block sizes (issue #86)', () => {
   it('emits one UserTurnRecord per gap between assistant turns', async () => {
     const file = sessionFile('user-turn-blocks', 'ses_utb');
@@ -491,5 +686,266 @@ describe('parseOpencodeSession user-turn block sizes (issue #86)', () => {
     assert.equal(u.precedingMessageId, 'msg_utb_a1');
     assert.equal(u.followingMessageId, 'msg_utb_a2');
     assert.equal(u.blocks.length, 3, 'tool outputs + inter-turn text are all present');
+  });
+});
+
+describe('parseOpencodeSession execution graph (#42 / #93)', () => {
+  it('emits exactly one root relationship for a non-subagent session', async () => {
+    const file = sessionFile('multi-turn', 'ses_multi');
+    const { relationships } = await parseOpencodeSession(file);
+    assert.equal(relationships.length, 1, 'one row, no subagent edge');
+    const root = relationships[0]!;
+    assert.equal(root.v, 1);
+    assert.equal(root.source, 'opencode');
+    assert.equal(root.sessionId, 'ses_multi');
+    assert.equal(root.relationshipType, 'root');
+    assert.equal(root.relatedSessionId, undefined);
+    assert.ok(root.ts, 'ts populated from earliest assistant');
+  });
+
+  it('emits a subagent relationship when session.parentID is set', async () => {
+    const file = sessionFile('multi-turn', 'ses_child');
+    const { relationships } = await parseOpencodeSession(file);
+    // root + subagent edge
+    assert.equal(relationships.length, 2);
+    const subRows = relationships.filter((r) => r.relationshipType === 'subagent');
+    assert.equal(subRows.length, 1, 'exactly one subagent row');
+    const sub = subRows[0]!;
+    assert.equal(sub.source, 'opencode');
+    assert.equal(sub.sessionId, 'ses_child', 'row is keyed on the child');
+    assert.equal(sub.relatedSessionId, 'ses_multi', 'parent session id mirrored to relatedSessionId');
+    const root = relationships.find((r) => r.relationshipType === 'root');
+    assert.ok(root);
+    assert.equal(root!.sessionId, 'ses_child');
+  });
+
+  it('emits root + subagent even when the session has no assistants on disk', async () => {
+    // Defensive: the session payload alone is enough to know root + parent.
+    // A session with parentID but zero assistant messages should still emit
+    // both rows (just without a ts).
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-rel-empty-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_empty_child.json'),
+        JSON.stringify({ id: 'ses_empty_child', parentID: 'ses_parent' }),
+      );
+      const file = path.join(sessionDir, 'ses_empty_child.json');
+      const { relationships, turns } = await parseOpencodeSession(file);
+      assert.equal(turns.length, 0);
+      assert.equal(relationships.length, 2);
+      const sub = relationships.find((r) => r.relationshipType === 'subagent');
+      assert.ok(sub);
+      assert.equal(sub!.relatedSessionId, 'ses_parent');
+      assert.equal(sub!.ts, undefined, 'ts unset when there are no assistants to anchor on');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('emits a tool_result event per resolved tool part with content size + hash', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-tre-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_tre');
+      const partAsstDir = path.join(storage, 'part', 'msg_tre_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_tre.json'),
+        JSON.stringify({ id: 'ses_tre', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_tre_asst.json'),
+        JSON.stringify({
+          id: 'msg_tre_asst',
+          sessionID: 'ses_tre',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+          time: { created: 1_777_000_000_000 },
+          tokens: { input: 5, output: 5, cache: { read: 0, write: 0 } },
+        }),
+      );
+      // Three tool parts:
+      //   1) read with a string output → completed, length+hash present
+      //   2) bash with state.status === 'error' → errored, isError=true
+      //   3) bash with status='completed' but exit 1 → errored (bash-family)
+      await writeFile(
+        path.join(partAsstDir, 'prt_tre_a.json'),
+        JSON.stringify({
+          id: 'prt_tre_a',
+          sessionID: 'ses_tre',
+          messageID: 'msg_tre_asst',
+          type: 'tool',
+          callID: 'call_read',
+          tool: 'read',
+          state: {
+            status: 'completed',
+            input: { filePath: '/x.ts' },
+            output: 'hello world',
+            metadata: {},
+          },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_tre_b.json'),
+        JSON.stringify({
+          id: 'prt_tre_b',
+          sessionID: 'ses_tre',
+          messageID: 'msg_tre_asst',
+          type: 'tool',
+          callID: 'call_err_status',
+          tool: 'webfetch',
+          state: {
+            status: 'error',
+            input: { url: 'https://x' },
+            output: 'fetch failed',
+            metadata: {},
+          },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_tre_c.json'),
+        JSON.stringify({
+          id: 'prt_tre_c',
+          sessionID: 'ses_tre',
+          messageID: 'msg_tre_asst',
+          type: 'tool',
+          callID: 'call_bash_exit',
+          tool: 'bash',
+          state: {
+            status: 'completed',
+            input: { command: 'false' },
+            output: 'oops',
+            metadata: { exit: 1 },
+          },
+        }),
+      );
+      const file = path.join(sessionDir, 'ses_tre.json');
+      const { toolResultEvents } = await parseOpencodeSession(file);
+      assert.equal(toolResultEvents.length, 3);
+      const byId = new Map(toolResultEvents.map((e) => [e.toolUseId, e]));
+
+      const ok = byId.get('call_read')!;
+      assert.equal(ok.v, 1);
+      assert.equal(ok.source, 'opencode');
+      assert.equal(ok.sessionId, 'ses_tre');
+      assert.equal(ok.messageId, 'msg_tre_asst');
+      assert.equal(ok.eventSource, 'tool_result');
+      assert.equal(ok.status, 'completed');
+      assert.equal(ok.isError, undefined);
+      assert.equal(ok.contentLength, 'hello world'.length);
+      assert.equal(typeof ok.contentHash, 'string');
+      assert.ok(ok.contentHash!.length > 0);
+      assert.equal(ok.callIndex, 0);
+      assert.equal(ok.eventIndex, 0);
+      assert.equal(ok.ts, new Date(1_777_000_000_000).toISOString());
+
+      const errStatus = byId.get('call_err_status')!;
+      assert.equal(errStatus.status, 'errored', 'state.status=error → errored');
+      assert.equal(errStatus.isError, true);
+      assert.equal(errStatus.contentLength, 'fetch failed'.length);
+
+      const errExit = byId.get('call_bash_exit')!;
+      assert.equal(errExit.status, 'errored', 'metadata.exit !== 0 → errored even when status=completed');
+      assert.equal(errExit.isError, true);
+      assert.equal(errExit.contentLength, 'oops'.length);
+
+      // Per-session monotonic eventIndex.
+      const indices = toolResultEvents.map((e) => e.eventIndex);
+      assert.deepEqual(
+        indices,
+        [...indices].sort((a, b) => a - b),
+        'eventIndex is monotonic',
+      );
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('hashes structured (non-string) tool output via JSON serialization', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-tre-struct-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_struct');
+      const partAsstDir = path.join(storage, 'part', 'msg_struct_asst');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await mkdir(partAsstDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_struct.json'),
+        JSON.stringify({ id: 'ses_struct', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_struct_asst.json'),
+        JSON.stringify({
+          id: 'msg_struct_asst',
+          sessionID: 'ses_struct',
+          role: 'assistant',
+          modelID: 'claude-sonnet-4-5',
+          time: { created: 1_777_000_001_000 },
+          tokens: { input: 5, output: 5, cache: { read: 0, write: 0 } },
+        }),
+      );
+      await writeFile(
+        path.join(partAsstDir, 'prt_struct.json'),
+        JSON.stringify({
+          id: 'prt_struct',
+          sessionID: 'ses_struct',
+          messageID: 'msg_struct_asst',
+          type: 'tool',
+          callID: 'call_struct',
+          tool: 'read',
+          state: {
+            status: 'completed',
+            input: { filePath: '/x.ts' },
+            output: { kind: 'image', size: 12 },
+            metadata: {},
+          },
+        }),
+      );
+      const file = path.join(sessionDir, 'ses_struct.json');
+      const { toolResultEvents } = await parseOpencodeSession(file);
+      assert.equal(toolResultEvents.length, 1);
+      const ev = toolResultEvents[0]!;
+      const expected = JSON.stringify({ kind: 'image', size: 12 });
+      assert.equal(ev.contentLength, expected.length);
+      assert.equal(typeof ev.contentHash, 'string');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not emit duplicate tool-result events on resumed incremental passes', async () => {
+    // Pass 1: process all assistants. Pass 2: feed back seenMessageIds, expect
+    // zero new tool-result events. The writer's hash-based dedup is the
+    // ultimate guard, but we want the parser to also avoid re-emitting events
+    // for already-processed assistant messages.
+    const file = sessionFile('multi-turn', 'ses_multi');
+    const first = await parseOpencodeSessionIncremental(file);
+    const second = await parseOpencodeSessionIncremental(file, {
+      seenMessageIds: first.seenMessageIds,
+    });
+    // ses_multi's a2 has a single bash tool call with a string output, so
+    // pass 1 should emit one event and pass 2 zero.
+    assert.ok(first.toolResultEvents.length >= 1, 'pass 1 emits the bash tool_result event');
+    assert.equal(second.toolResultEvents.length, 0, 'pass 2 emits nothing new');
+    assert.equal(second.turns.length, 0);
+    // Relationships are session-level and re-emit on every pass; the writer
+    // dedups them by hash. Both passes should report the root row.
+    assert.equal(first.relationships.length, 1);
+    assert.equal(second.relationships.length, 1);
   });
 });

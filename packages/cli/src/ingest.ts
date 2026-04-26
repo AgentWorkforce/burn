@@ -6,11 +6,13 @@ import {
   parseClaudeSessionIncremental,
   parseCodexSessionIncremental,
   parseOpencodeSessionIncremental,
+  reconcileClaudeSessionRelationships,
 } from '@relayburn/reader';
 import type {
   CodexResumeState,
   ContentRecord,
   ContentStoreMode,
+  ReconcileClaudeRelationshipsInput,
   TurnRecord,
 } from '@relayburn/reader';
 import {
@@ -193,7 +195,7 @@ function emitGapWarning(
   state.write(
     `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
       `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
-      `adapter, so burn waste will fall back to even-split attribution. See #33.\n`,
+      `adapter, so burn waste will use user-turn block sizes when available, then fall back to even-split attribution. See #33.\n`,
   );
 }
 
@@ -209,6 +211,11 @@ async function ingestClaudeInto(
   gap: GapStats,
 ): Promise<void> {
   const projects = await listDirs(claudeProjectsDir());
+  // Cross-file relationship reconciliation (#112). Collect per-file evidence
+  // from every successful parse this pass and run one reconciliation step at
+  // the end so fork / continuation rows that need cross-file knowledge get
+  // emitted alongside the per-file `root` / `subagent` / `/resume` rows.
+  const reconcileInputs: ReconcileClaudeRelationshipsInput[] = [];
   for (const projectDir of projects) {
     const files = await listJsonlFiles(projectDir);
     for (const file of files) {
@@ -225,7 +232,14 @@ async function ingestClaudeInto(
         const startOffset = rotated ? 0 : priorClaude.offsetBytes;
 
         if (!rotated && startOffset >= st.size) {
-          // nothing new; refresh mtime bookkeeping
+          // Nothing new; refresh mtime bookkeeping and skip reconciliation
+          // evidence — the file's relationships were emitted on the pass
+          // that last touched it, and the writer's `relationshipIdHash`
+          // dedup keeps subsequent passes idempotent. Cross-file detection
+          // for an unchanged-vs-changed pair runs on the changed file's
+          // pass when both happen to be active in the same window; one-off
+          // late-arriving relationships rely on a future modification of
+          // either file (or an explicit re-scan) to surface.
           priorClaude.mtimeMs = st.mtimeMs;
           continue;
         }
@@ -246,6 +260,7 @@ async function ingestClaudeInto(
           userTurns,
           endOffset,
           lastUserText,
+          evidence,
         } = await parseClaudeSessionIncremental(file, parseOpts);
         if (turns.length > 0) {
           await appendTurns(turns);
@@ -274,6 +289,13 @@ async function ingestClaudeInto(
         if (userTurns.length > 0) {
           await appendUserTurns(userTurns);
         }
+        // The incremental call only returned evidence for what it just read;
+        // for cross-file reconciliation we want the full picture, so re-derive
+        // evidence from the prefix when this pass started past offset 0.
+        // The `firstParentUuid` / `seenUuids` carried by the prescan are
+        // already populated when startOffset > 0, so the returned `evidence`
+        // is whole — no second pass needed.
+        reconcileInputs.push({ evidence });
         const next: ClaudeCursor = {
           kind: 'claude',
           inode: st.ino,
@@ -287,6 +309,13 @@ async function ingestClaudeInto(
         process.stderr.write(`[burn] skipping ${file}: ${msg}\n`);
       }
     }
+  }
+  // Cross-file reconciliation (#112). Emits `fork` / `continuation` rows
+  // beyond what each file's own parse pass could surface. The append writer's
+  // `relationshipIdHash` dedup handles re-runs with identical inputs.
+  if (reconcileInputs.length > 0) {
+    const reconciled = reconcileClaudeSessionRelationships(reconcileInputs);
+    if (reconciled.length > 0) await appendRelationships(reconciled);
   }
 }
 
@@ -315,6 +344,12 @@ async function ingestCodexInto(
             sessionId: priorCodex.sessionId,
             turnContexts: { ...priorCodex.turnContexts },
             ...(priorCodex.sessionCwd !== undefined ? { sessionCwd: priorCodex.sessionCwd } : {}),
+            ...(priorCodex.userTurnSlot !== undefined
+              ? { userTurnSlot: priorCodex.userTurnSlot }
+              : {}),
+            rootSessionEmitted: priorCodex.rootSessionEmitted === true,
+            nextEventIndex: priorCodex.nextEventIndex ?? 0,
+            toolResultCounters: { ...(priorCodex.toolResultCounters ?? {}) },
           };
 
       if (!rotated && startOffset >= st.size) {
@@ -328,8 +363,15 @@ async function ingestCodexInto(
         contentMode,
       };
       if (resume !== undefined) opts.resume = resume;
-      const { turns, content, userTurns, endOffset, resume: nextResume } =
-        await parseCodexSessionIncremental(file, opts);
+      const {
+        turns,
+        content,
+        userTurns,
+        relationships,
+        toolResultEvents,
+        endOffset,
+        resume: nextResume,
+      } = await parseCodexSessionIncremental(file, opts);
       if (turns.length > 0) {
         await appendTurns(turns);
         report.appendedTurns += turns.length;
@@ -345,6 +387,12 @@ async function ingestCodexInto(
       if (content.length > 0) {
         await appendContent(content);
       }
+      if (relationships.length > 0) {
+        await appendRelationships(relationships);
+      }
+      if (toolResultEvents.length > 0) {
+        await appendToolResultEvents(toolResultEvents);
+      }
       if (userTurns.length > 0) {
         await appendUserTurns(userTurns);
       }
@@ -358,6 +406,12 @@ async function ingestCodexInto(
         turnContexts: nextResume.turnContexts,
       };
       if (nextResume.sessionCwd !== undefined) next.sessionCwd = nextResume.sessionCwd;
+      if (nextResume.userTurnSlot !== undefined) next.userTurnSlot = nextResume.userTurnSlot;
+      if (nextResume.rootSessionEmitted === true) next.rootSessionEmitted = true;
+      if (nextResume.nextEventIndex !== undefined) next.nextEventIndex = nextResume.nextEventIndex;
+      if (nextResume.toolResultCounters && Object.keys(nextResume.toolResultCounters).length > 0) {
+        next.toolResultCounters = nextResume.toolResultCounters;
+      }
       cursors[file] = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -394,12 +448,18 @@ async function ingestOpencodeInto(
         continue;
       }
 
-      const { turns, content, userTurns, seenMessageIds: nextSeen } =
-        await parseOpencodeSessionIncremental(file, {
-          sessionPath: file,
-          seenMessageIds,
-          contentMode,
-        });
+      const {
+        turns,
+        content,
+        userTurns,
+        relationships,
+        toolResultEvents,
+        seenMessageIds: nextSeen,
+      } = await parseOpencodeSessionIncremental(file, {
+        sessionPath: file,
+        seenMessageIds,
+        contentMode,
+      });
       if (turns.length > 0) {
         await appendTurns(turns);
         report.appendedTurns += turns.length;
@@ -414,6 +474,12 @@ async function ingestOpencodeInto(
       }
       if (content.length > 0) {
         await appendContent(content);
+      }
+      if (relationships.length > 0) {
+        await appendRelationships(relationships);
+      }
+      if (toolResultEvents.length > 0) {
+        await appendToolResultEvents(toolResultEvents);
       }
       if (userTurns.length > 0) {
         await appendUserTurns(userTurns);

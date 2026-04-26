@@ -643,6 +643,424 @@ describe('parseCodexSession user-turn block sizes (issue #81)', () => {
   });
 });
 
+describe('parseCodexSession execution graph (#42 / #87)', () => {
+  it('emits exactly one root SessionRelationshipRecord per session', async () => {
+    const { relationships } = await parseCodexSession(
+      path.join(FIXTURES, 'simple-turn.jsonl'),
+    );
+    const roots = relationships.filter((r) => r.relationshipType === 'root');
+    assert.equal(roots.length, 1, 'exactly one root row');
+    assert.equal(roots[0]!.source, 'codex');
+    assert.equal(roots[0]!.sessionId, 'sess_simple_1');
+    assert.equal(roots[0]!.relatedSessionId, undefined);
+    assert.equal(roots[0]!.ts, '2026-04-20T00:00:00.000Z');
+  });
+
+  it('emits a ToolResultEventRecord per function_call_output / custom_tool_call_output', async () => {
+    const { toolResultEvents } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    // user-turn-blocks has 1 fc output in turn 1, 1 fc output + 1 ct output in
+    // turn 2, and 1 fc output in turn 3 — but turn 3's output lives between
+    // turn 3 and the end-of-file (no following task_complete? — there is one).
+    const byCall = new Map<string, number>();
+    for (const ev of toolResultEvents) {
+      byCall.set(ev.toolUseId, (byCall.get(ev.toolUseId) ?? 0) + 1);
+    }
+    assert.equal(byCall.get('call_b1'), 1);
+    assert.equal(byCall.get('call_b2'), 1);
+    assert.equal(byCall.get('call_p1'), 1);
+    assert.equal(byCall.get('call_b3'), 1);
+    for (const ev of toolResultEvents) {
+      assert.equal(ev.v, 1);
+      assert.equal(ev.source, 'codex');
+      assert.equal(ev.eventSource, 'function_call_output');
+      assert.equal(typeof ev.eventIndex, 'number');
+      assert.equal(typeof ev.contentLength, 'number');
+      assert.equal(typeof ev.contentHash, 'string');
+    }
+  });
+
+  it('eventIndex values are unique and session-monotonic', async () => {
+    const { toolResultEvents } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    const indices = toolResultEvents.map((e) => e.eventIndex);
+    const sorted = [...indices].sort((a, b) => a - b);
+    assert.deepEqual(indices, sorted, 'eventIndex emitted in ascending order');
+    assert.equal(new Set(indices).size, indices.length, 'no duplicates');
+  });
+
+  it('marks function_call_output as errored when exec_command_end has non-zero exit', async () => {
+    const { toolResultEvents } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    // call_b2 had `exec_command_end` exit_code=1 in the fixture.
+    const failed = toolResultEvents.find((e) => e.toolUseId === 'call_b2');
+    assert.ok(failed);
+    assert.equal(failed!.status, 'errored');
+    assert.equal(failed!.isError, true);
+
+    const ok = toolResultEvents.find((e) => e.toolUseId === 'call_b1');
+    assert.ok(ok);
+    assert.equal(ok!.status, 'completed');
+    assert.equal(ok!.isError, undefined);
+  });
+
+  it('marks function_call_output as completed when patch_apply_end succeeds', async () => {
+    const { toolResultEvents } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    const patched = toolResultEvents.find((e) => e.toolUseId === 'call_p1');
+    assert.ok(patched);
+    assert.equal(patched!.status, 'completed');
+    assert.equal(patched!.isError, undefined);
+  });
+
+  it('emits a subagent SessionRelationshipRecord with parentToolUseId set to the spawning call', async () => {
+    const { relationships } = await parseCodexSession(
+      path.join(FIXTURES, 'with-spawn-agent.jsonl'),
+    );
+    const subagents = relationships.filter((r) => r.relationshipType === 'subagent');
+    assert.equal(subagents.length, 1, 'one subagent row per spawn');
+    const sub = subagents[0]!;
+    assert.equal(sub.source, 'codex');
+    assert.equal(sub.sessionId, 'agent_inv_42', 'row is keyed on the child session');
+    assert.equal(sub.relatedSessionId, 'sess_spawn_1', 'parent is the codex session');
+    assert.equal(sub.parentToolUseId, 'call_spawn_1');
+    assert.equal(sub.agentId, 'agent_inv_42');
+    assert.equal(sub.subagentType, 'investigator');
+    assert.equal(sub.description, 'find why test_x fails');
+    assert.ok(typeof sub.ts === 'string' && sub.ts.length > 0);
+  });
+
+  it('annotates the spawn function_call_output event with the spawned agentId', async () => {
+    const { toolResultEvents } = await parseCodexSession(
+      path.join(FIXTURES, 'with-spawn-agent.jsonl'),
+    );
+    const spawnOutput = toolResultEvents.find(
+      (e) => e.toolUseId === 'call_spawn_1' && e.eventSource === 'function_call_output',
+    );
+    assert.ok(spawnOutput);
+    assert.equal(spawnOutput!.agentId, 'agent_inv_42');
+    assert.equal(spawnOutput!.subagentSessionId, 'agent_inv_42');
+  });
+
+  it('emits a subagent_notification ToolResultEventRecord joined back by toolUseId', async () => {
+    const { toolResultEvents } = await parseCodexSession(
+      path.join(FIXTURES, 'with-spawn-agent.jsonl'),
+    );
+    const notif = toolResultEvents.find(
+      (e) => e.eventSource === 'subagent_notification' && e.toolUseId === 'call_spawn_1',
+    );
+    assert.ok(notif, 'subagent terminal notification surfaces as ToolResultEventRecord');
+    assert.equal(notif!.status, 'completed');
+    assert.equal(notif!.agentId, 'agent_inv_42');
+    assert.equal(notif!.subagentSessionId, 'agent_inv_42');
+  });
+
+  it('emits exactly one root row even when re-parsing the file', async () => {
+    const file = path.join(FIXTURES, 'with-spawn-agent.jsonl');
+    const a = await parseCodexSession(file);
+    const b = await parseCodexSession(file);
+    const aRoots = a.relationships.filter((r) => r.relationshipType === 'root');
+    const bRoots = b.relationships.filter((r) => r.relationshipType === 'root');
+    assert.equal(aRoots.length, 1);
+    assert.equal(bRoots.length, 1);
+  });
+
+  it('does not emit relationships or events for uncommitted (no task_complete) turns', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-uncommitted-eg-'));
+    try {
+      const lines = [
+        { timestamp: '2026-04-23T00:00:00.000Z', type: 'session_meta', payload: { id: 'sess_u', cwd: '/tmp', timestamp: '2026-04-23T00:00:00.000Z' } },
+        { timestamp: '2026-04-23T00:00:00.050Z', type: 'turn_context', payload: { turn_id: 'turn_u', cwd: '/tmp', model: 'gpt-5.4' } },
+        { timestamp: '2026-04-23T00:00:00.200Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn_u' } },
+        { timestamp: '2026-04-23T00:00:00.400Z', type: 'response_item', payload: { type: 'function_call', name: 'spawn_agent', arguments: '{"subagent_type":"x"}', call_id: 'call_u_1' } },
+        { timestamp: '2026-04-23T00:00:00.500Z', type: 'response_item', payload: { type: 'function_call_output', call_id: 'call_u_1', output: '{"agent_id":"agent_u"}' } },
+        // no task_complete
+      ];
+      const file = path.join(tmp, 'session.jsonl');
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { turns, relationships, toolResultEvents } = await parseCodexSession(file);
+      assert.equal(turns.length, 0);
+      assert.equal(relationships.length, 0, 'root deferred until first task_complete');
+      assert.equal(toolResultEvents.length, 0, 'tool result events deferred too');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('parseCodexSessionIncremental execution graph dedup (#87)', () => {
+  it('produces no duplicate (sessionId, toolUseId, eventIndex) tuples after re-parse', async () => {
+    const file = path.join(FIXTURES, 'user-turn-blocks.jsonl');
+    const a = await parseCodexSessionIncremental(file);
+    const b = await parseCodexSessionIncremental(file);
+
+    const key = (e: { sessionId: string; toolUseId: string; eventIndex: number }) =>
+      `${e.sessionId}|${e.toolUseId}|${e.eventIndex}`;
+    const aKeys = new Set(a.toolResultEvents.map(key));
+    const bKeys = new Set(b.toolResultEvents.map(key));
+    // Two independent passes against the same file produce identical
+    // (and therefore deduplicable at the writer) tuples.
+    assert.deepEqual([...aKeys].sort(), [...bKeys].sort());
+  });
+
+  it('does not double-emit relationships or events across resumed passes', async () => {
+    const file = path.join(FIXTURES, 'user-turn-blocks.jsonl');
+    const raw = await readFile(file, 'utf8');
+    const lines = raw.split('\n');
+    const cutIdx = lines.findIndex((l) =>
+      l.includes('"task_complete"') && l.includes('"turn_utb_2"'),
+    );
+    assert.ok(cutIdx > 0);
+    const cutoff = Buffer.byteLength(lines.slice(0, cutIdx + 1).join('\n') + '\n', 'utf8');
+
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-eg-inc-'));
+    try {
+      const partialPath = path.join(tmp, 'partial.jsonl');
+      await writeFile(partialPath, raw.slice(0, cutoff), 'utf8');
+      const partial = await parseCodexSessionIncremental(partialPath);
+      // Partial pass should have emitted: 1 root + the tool result events
+      // for call_b1 / call_b2 / call_p1.
+      const partialRoots = partial.relationships.filter((r) => r.relationshipType === 'root');
+      assert.equal(partialRoots.length, 1);
+      const partialEventIds = partial.toolResultEvents.map((e) => e.toolUseId).sort();
+      assert.deepEqual(partialEventIds, ['call_b1', 'call_b2', 'call_p1']);
+
+      const fullPath = path.join(tmp, 'full.jsonl');
+      await writeFile(fullPath, raw, 'utf8');
+      const resumed = await parseCodexSessionIncremental(fullPath, {
+        startOffset: partial.endOffset,
+        resume: partial.resume,
+      });
+      // Resumed pass must NOT re-emit the root, must NOT re-emit the
+      // already-committed events, and must emit the tail event for call_b3.
+      const resumedRoots = resumed.relationships.filter((r) => r.relationshipType === 'root');
+      assert.equal(resumedRoots.length, 0, 'root row not duplicated across passes');
+      const resumedEventIds = resumed.toolResultEvents.map((e) => e.toolUseId).sort();
+      assert.deepEqual(resumedEventIds, ['call_b3']);
+
+      // eventIndex must remain monotonic across the two passes.
+      const indices = [
+        ...partial.toolResultEvents.map((e) => e.eventIndex),
+        ...resumed.toolResultEvents.map((e) => e.eventIndex),
+      ];
+      assert.equal(new Set(indices).size, indices.length, 'no duplicate eventIndex');
+      assert.deepEqual(indices, [...indices].sort((a, b) => a - b));
+
+      // Combined emission must equal the single-pass full parse (with
+      // identical eventIndex values, which is the dedup key at the writer).
+      const fullPass = await parseCodexSession(fullPath);
+      const key = (e: { sessionId: string; toolUseId: string; eventIndex: number }) =>
+        `${e.sessionId}|${e.toolUseId}|${e.eventIndex}`;
+      const combined = [
+        ...partial.toolResultEvents.map(key),
+        ...resumed.toolResultEvents.map(key),
+      ].sort();
+      const fullKeys = fullPass.toolResultEvents.map(key).sort();
+      assert.deepEqual(combined, fullKeys);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('parseCodexSession fidelity (issue #84)', () => {
+  it('emits per-turn full-fidelity coverage when token_count is present', async () => {
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    assert.equal(turns.length, 1);
+    const f = turns[0]!.fidelity;
+    assert.ok(f, 'fidelity is populated');
+    assert.equal(f!.granularity, 'per-turn');
+    // Full requires input + output + cacheRead + tool calls + tool results +
+    // session relationships. With #87 the Codex parser now emits root /
+    // subagent relationship rows, so a token-complete Codex turn satisfies
+    // the FULL_REQUIRED matrix.
+    assert.equal(f!.coverage.hasInputTokens, true);
+    assert.equal(f!.coverage.hasOutputTokens, true);
+    assert.equal(f!.coverage.hasReasoningTokens, true);
+    assert.equal(f!.coverage.hasCacheReadTokens, true);
+    assert.equal(f!.coverage.hasCacheCreateTokens, false);
+    assert.equal(f!.coverage.hasToolCalls, true);
+    assert.equal(f!.coverage.hasToolResultEvents, true);
+    assert.equal(f!.coverage.hasSessionRelationships, true);
+    assert.equal(f!.coverage.hasRawContent, true);
+    assert.equal(f!.class, 'full');
+  });
+
+  it('reports class=partial when token_count is absent for a turn', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-fid-no-tc-'));
+    try {
+      const lines = [
+        {
+          timestamp: '2026-04-22T00:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'sess_fid_no_tc', cwd: '/tmp/proj', timestamp: '2026-04-22T00:00:00.000Z' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.050Z',
+          type: 'turn_context',
+          payload: { turn_id: 'turn_fid_no_tc', cwd: '/tmp/proj', model: 'gpt-5.4' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.200Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn_fid_no_tc' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.300Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'ok' }],
+          },
+        },
+        // intentionally no token_count between task_started and task_complete
+        {
+          timestamp: '2026-04-22T00:00:00.500Z',
+          type: 'event_msg',
+          payload: { type: 'task_complete', turn_id: 'turn_fid_no_tc' },
+        },
+      ];
+      const file = path.join(tmp, 'no-tc.jsonl');
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { turns } = await parseCodexSession(file);
+      assert.equal(turns.length, 1);
+      const t = turns[0]!;
+      const f = t.fidelity;
+      assert.ok(f);
+      assert.equal(f!.granularity, 'per-turn');
+      assert.equal(f!.class, 'partial');
+      // Numeric usage is still 0 (existing post-hoc default), but the coverage
+      // flag is the honest signal — see issue #84.
+      assert.equal(f!.coverage.hasInputTokens, false);
+      assert.equal(f!.coverage.hasOutputTokens, false);
+      assert.equal(f!.coverage.hasReasoningTokens, false);
+      assert.equal(f!.coverage.hasCacheReadTokens, false);
+      // Capability flags stay true even when this particular turn carries no
+      // tool activity — the source *would* surface them.
+      assert.equal(f!.coverage.hasToolCalls, true);
+      assert.equal(f!.coverage.hasToolResultEvents, true);
+      assert.equal(f!.coverage.hasRawContent, true);
+      // usage numerics still default to 0
+      assert.equal(t.usage.input, 0);
+      assert.equal(t.usage.output, 0);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps tool-result coverage true for turns with function_call + function_call_output', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-fid-tools-'));
+    try {
+      const lines = [
+        {
+          timestamp: '2026-04-22T00:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'sess_fid_tools', cwd: '/tmp/proj', timestamp: '2026-04-22T00:00:00.000Z' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.050Z',
+          type: 'turn_context',
+          payload: { turn_id: 'turn_fid_tools', cwd: '/tmp/proj', model: 'gpt-5.4' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.200Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn_fid_tools' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.400Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'shell',
+            arguments: '{"cmd":"ls"}',
+            call_id: 'call_fid_1',
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.500Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call_output',
+            call_id: 'call_fid_1',
+            output: 'README.md\n',
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.800Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: {
+                input_tokens: 100,
+                cached_input_tokens: 0,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+              },
+            },
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.900Z',
+          type: 'event_msg',
+          payload: { type: 'task_complete', turn_id: 'turn_fid_tools' },
+        },
+      ];
+      const file = path.join(tmp, 'tools.jsonl');
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { turns } = await parseCodexSession(file);
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity;
+      assert.ok(f);
+      assert.equal(f!.coverage.hasToolCalls, true);
+      assert.equal(f!.coverage.hasToolResultEvents, true);
+      // Sanity: token_count was present, so usage flags are on.
+      assert.equal(f!.coverage.hasInputTokens, true);
+      assert.equal(f!.coverage.hasReasoningTokens, true);
+      assert.equal(f!.class, 'full');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('every turn carries fidelity (summarizeFidelity unknown bucket would be 0)', async () => {
+    // Mirrors `summarizeFidelity`'s behavior over a real session: any turn
+    // without a `fidelity` field would land in the `unknown` bucket. Asserting
+    // that no Codex turn lacks fidelity is the equivalent guarantee without a
+    // cross-package import.
+    const { turns } = await parseCodexSession(path.join(FIXTURES, 'multi-turn.jsonl'));
+    assert.ok(turns.length > 0);
+    for (const t of turns) {
+      assert.ok(t.fidelity, `turn ${t.messageId} carries fidelity`);
+      assert.equal(t.fidelity!.granularity, 'per-turn');
+    }
+  });
+
+  it('incremental parser also populates fidelity on emitted turns', async () => {
+    const file = path.join(FIXTURES, 'multi-turn.jsonl');
+    const { turns } = await parseCodexSessionIncremental(file);
+    assert.ok(turns.length > 0);
+    for (const t of turns) {
+      assert.ok(t.fidelity, `incremental turn ${t.messageId} carries fidelity`);
+      assert.equal(t.fidelity!.granularity, 'per-turn');
+    }
+  });
+});
+
 describe('parseCodexSessionIncremental user-turn dedup (issue #81)', () => {
   it('emits userTurns once across resumed incremental passes', async () => {
     const file = path.join(FIXTURES, 'user-turn-blocks.jsonl');
