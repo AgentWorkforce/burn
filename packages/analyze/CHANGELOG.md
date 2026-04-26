@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Reasoning-token pricing semantics** (#32). Two correctness bugs that distorted reported spend whenever reasoning tokens were involved:
+  - Codex `usage.reasoning` was double-billed at the output rate even though Codex's `output_tokens` already includes reasoning. `burn` now treats Codex turns as `included_in_output` and bills `output` only. On a 10-turn Codex sample (660k input / 53k output / 29k reasoning / 5.6M cacheRead), this drops the reported cost from $4.282607 to $3.846557 — about 11% off the Codex slice.
+  - `cost.reasoning` from the `models.dev` snapshot was discarded during `flatten()`, so any model with a distinct reasoning tariff (e.g. Alibaba Qwen reasoning models) couldn't be priced correctly. The flattener now preserves `reasoning` and tags the entry `reasoningMode: 'separate'`; `costForUsage` honors the distinct tariff.
+- **Waste-attribution session totals now honor the same reasoning-mode semantics** as `costForTurn`. `attributeWaste` previously had a private `costForTurnLocal` that unconditionally billed reasoning at the output rate, which double-billed Codex turns and ignored separate reasoning tariffs in `sessionGrand` / `grandCost` / `unattributedCost`. It now delegates to `costForTurn`, so waste totals match `cost.ts` for any session involving reasoning tokens (Devin review on #73).
+
+### Added
+
+- `ModelCost.reasoningMode: 'included_in_output' | 'separate' | 'same_as_output'` and optional `reasoning` per-million tariff. `ReasoningMode` and `CostForUsageOptions` are exported.
+- `costForUsage(usage, model, pricing, { reasoningMode })` accepts an explicit override. `costForTurn` infers `included_in_output` for `source: 'codex'` automatically.
+- `flatten` is now exported so callers can build `PricingTable`s from in-memory `models.dev` payloads.
+
 ## [0.14.0] - 2026-04-25
 
 ### Added
