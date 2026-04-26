@@ -70,8 +70,12 @@ export {
   findContextFiles,
   loadContextFile,
 } from './context-md.js';
-export { computePlanUsage, cycleBounds } from './plan-usage.js';
-export type { ComputePlanUsageOptions, PlanUsage } from './plan-usage.js';
+export { computePlanUsage, cycleBounds, planUsageFromArchive } from './plan-usage.js';
+export type {
+  ComputePlanUsageFromArchiveOptions,
+  ComputePlanUsageOptions,
+  PlanUsage,
+} from './plan-usage.js';
 export {
   emptyFidelitySummary,
   hasMinimumFidelity,
