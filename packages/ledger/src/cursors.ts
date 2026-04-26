@@ -24,6 +24,13 @@ export interface CodexCursor {
   sessionId: string;
   sessionCwd?: string;
   turnContexts: Record<string, { turn_id?: string; cwd?: string; model?: string }>;
+  // Execution-graph (#42 / #87) committed state. Persisted across `burn`
+  // invocations so `eventIndex` stays session-monotonic and the root
+  // SessionRelationshipRecord is emitted exactly once per session id, even
+  // when ingest resumes from a fresh process.
+  rootSessionEmitted?: boolean;
+  nextEventIndex?: number;
+  toolResultCounters?: Record<string, number>;
 }
 
 export interface OpencodeCursor {
