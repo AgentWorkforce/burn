@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Claude parser emits `fork` and `continuation` `SessionRelationshipRecord` rows** ([#112](https://github.com/AgentWorkforce/burn/issues/112)). Closes the deferred-work item from #77/#42: the Claude passive reader now populates the full `RelationshipType` lattice instead of only `root` / `subagent`. Per-file evidence — in-log `sessionId` mismatches against the on-disk filename, the first user line's `parentUuid`, the first non-empty `version` field, all in-file uuids, and `/resume` / `/continue` slash-command markers — is collected during the existing parse pass and surfaced as a new `evidence: ClaudeRelationshipEvidence` field on `ParseResult` / `ParseIncrementalResult`. A `/resume` marker emits a local `continuation` row with `relatedSessionId` set to the resumed-from id; a new exported `reconcileClaudeSessionRelationships(inputs)` helper takes per-file evidence from a multi-file pass and emits the cross-file `fork` / `continuation` rows that single-file parsers can't surface. Existing `root` / `subagent` rows are stamped with `sourceSessionId` (foreign in-log id) and `sourceVersion` whenever the file carries them. Reconciliation strategy is **append, not mutate**: a prior `root` row and a later `continuation` / `fork` row for the same session id produce different `relationshipIdHash` values, so both rows coexist on disk and consumers prefer the more specific row when both are present. Re-ingesting a session is idempotent — the writer's existing dedup folds duplicates. New `ParseOptions.fileSessionId` lets callers pin the canonical session id explicitly; when omitted but `sessionPath` is set, the parser derives it from the `.jsonl` basename.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added

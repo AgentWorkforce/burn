@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { open } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { classifyActivity } from './classifier.js';
@@ -38,6 +39,9 @@ interface AssistantLine {
   isSidechain?: boolean;
   uuid?: string;
   parentUuid?: string | null;
+  // Free-form version tag from the upstream Claude Code build, populated when
+  // present. Used by the relationship-evidence pass to fill `sourceVersion`.
+  version?: string;
 }
 
 type ContentBlock =
@@ -79,6 +83,7 @@ interface UserLine {
   cwd?: string;
   uuid?: string;
   parentUuid?: string | null;
+  version?: string;
 }
 
 // Line-level registry used to walk `parentUuid` chains across the session when
@@ -135,6 +140,52 @@ interface WorkingRecord {
 export interface ParseOptions {
   sessionPath?: string;
   contentMode?: ContentStoreMode;
+  // The session id derived from the on-disk filename (e.g. the `.jsonl`
+  // basename for Claude). When omitted but `sessionPath` is set, the parser
+  // derives it from the basename. Used as the authoritative "file session id"
+  // when comparing against in-log `sessionId` fields — a mismatch is the
+  // evidence channel for fork / continuation classification (#112).
+  fileSessionId?: string;
+}
+
+// Per-file relationship evidence (#112). Single-file parse passes can't see
+// across session files, so they collect the signals that a subsequent
+// `reconcileClaudeSessionRelationships` call needs to upgrade `root` rows to
+// `fork` / `continuation` once it has visibility into the rest of the corpus.
+//
+// Strictly metadata-only: no raw content, no token counts. Cheap to keep in
+// memory or thread through cursors.
+export interface ClaudeRelationshipEvidence {
+  // The on-disk session id for this file (the `.jsonl` basename for Claude),
+  // when known. Reconciliation skips files without it.
+  fileSessionId?: string;
+  // The first wall-clock timestamp seen on a line that carried `sessionId`
+  // for the file's session. Used to anchor any reconciled row's `ts` field.
+  firstTs?: string;
+  // Distinct in-log `sessionId` values observed in the file. When non-empty
+  // and not equal to `fileSessionId`, the first foreign id is reported as
+  // `sourceSessionId` on emitted relationship rows.
+  inLogSessionIds: string[];
+  // First non-empty `version` field observed on any line. Surfaced as
+  // `sourceVersion` on emitted relationship rows.
+  sourceVersion?: string;
+  // The `parentUuid` carried by the very first non-sidechain *user* line in
+  // the file. When this points to a uuid registered by a different file,
+  // it is the strongest evidence of a continuation across files. Only the
+  // first user line is considered: assistant lines reference earlier lines
+  // *inside* the same file, so their parentUuid is uninformative.
+  firstParentUuid?: string;
+  // All in-file uuids (user + assistant) so cross-file reconciliation can
+  // resolve `firstParentUuid` references back to a session id.
+  seenUuids: string[];
+  // True iff the file carried a `/resume` or `/continue` slash-command user
+  // line. The local parse already emits a `continuation` row in that case;
+  // reconciliation uses the same flag to skip a duplicate emit.
+  hasResumeMarker: boolean;
+  // The session id named by a `/resume <id>` marker, when one was carried
+  // and parses as a non-empty token. Used as `relatedSessionId` on the
+  // emitted continuation row.
+  resumeTargetSessionId?: string;
 }
 
 export interface ParseResult {
@@ -142,15 +193,23 @@ export interface ParseResult {
   content: ContentRecord[];
   events: CompactionEvent[];
   // Normalized execution-graph metadata (#42). `relationships` describes how
-  // sessions relate (root + one row per discovered subagent invocation in
-  // this PR; fork/continuation arrive in follow-up work). `toolResultEvents`
-  // is the chronological tool_result stream keyed by `toolUseId`.
+  // sessions relate (`root` + one row per discovered subagent invocation +
+  // `continuation` rows when the file carries a `/resume` marker). Cross-file
+  // fork / continuation rows are produced by `reconcileClaudeSessionRelationships`
+  // (#112) given the per-file `evidence` from multiple parses.
+  // `toolResultEvents` is the chronological tool_result stream keyed by
+  // `toolUseId`.
   relationships: SessionRelationshipRecord[];
   toolResultEvents: ToolResultEventRecord[];
   // Per-user-turn block info between assistant turns (issue #2). Ordered by
   // appearance in the session log; entries reference adjacent assistant turns
   // by `precedingMessageId` / `followingMessageId`.
   userTurns: UserTurnRecord[];
+  // Per-file relationship evidence (#112). Carries the signals needed by
+  // `reconcileClaudeSessionRelationships` to upgrade `root` rows to `fork` /
+  // `continuation` once cross-file knowledge is available. Always populated;
+  // a single-file caller can ignore it.
+  evidence: ClaudeRelationshipEvidence;
 }
 
 export async function parseClaudeSession(
@@ -196,6 +255,11 @@ export async function parseClaudeSession(
   // sessionId; subagent rows are derived after working records are resolved.
   const relationships: SessionRelationshipRecord[] = [];
   const seenRootSessionIds = new Set<string>();
+  // Relationship-evidence collector (#112). Populated as lines are read and
+  // surfaced in the parse result so a cross-file reconciliation pass can
+  // upgrade `root` rows to `fork` / `continuation`.
+  const fileSessionId = deriveFileSessionId(options);
+  const evidence = newEvidence(fileSessionId);
 
   const rl = createInterface({
     input: createReadStream(filePath, { encoding: 'utf8' }),
@@ -234,8 +298,9 @@ export async function parseClaudeSession(
         }
         if (typeof mid === 'string') lastAssistantMessageId = mid;
         if (typeof al.sessionId === 'string' && al.sessionId.length > 0) {
-          recordRoot(relationships, seenRootSessionIds, al.sessionId, al.timestamp);
+          recordRoot(relationships, seenRootSessionIds, al.sessionId, al.timestamp, fileSessionId);
         }
+        recordEvidenceFromLine(evidence, al);
         ingestAssistant(al, working, order, nodesByUuid);
       } else if (rec.type === 'user') {
         const ul = rec as unknown as UserLine;
@@ -244,8 +309,10 @@ export async function parseClaudeSession(
         if (prompt) currentUserText = prompt;
         collectErroredToolUseIds(ul, erroredToolUseIds);
         if (typeof ul.sessionId === 'string' && ul.sessionId.length > 0) {
-          recordRoot(relationships, seenRootSessionIds, ul.sessionId, ul.timestamp);
+          recordRoot(relationships, seenRootSessionIds, ul.sessionId, ul.timestamp, fileSessionId);
         }
+        recordEvidenceFromLine(evidence, ul);
+        recordResumeMarker(evidence, ul);
         nextEventIndex = collectToolResultEvents(
           ul,
           toolResultEvents,
@@ -327,11 +394,13 @@ export async function parseClaudeSession(
   annotateCompactionEvents(events, turns);
   collectSubagentRelationships(turns, relationships);
   annotateSpawnEvents(toolResultEvents, turns);
+  emitLocalContinuationFromResume(relationships, evidence);
+  annotateRelationshipsWithEvidence(relationships, evidence);
 
   const content: ContentRecord[] = captureContent
     ? mergeContentByOrder(userPending, assistantPending)
     : [];
-  return { turns, content, events, relationships, toolResultEvents, userTurns };
+  return { turns, content, events, relationships, toolResultEvents, userTurns, evidence };
 }
 
 function mergeContentByOrder(
@@ -460,11 +529,15 @@ function registerUserNode(
 // parser so resuming ingest can still resolve parentUuid chains that reach
 // back before the resume point. Returns the messageId of the last assistant
 // line seen so a resumed pass can anchor `precedingMessageId` on user turns
-// whose preceding assistant was already ingested in a prior pass.
+// whose preceding assistant was already ingested in a prior pass. Also
+// populates `evidence` (#112) with the relationship signals carried by the
+// already-ingested prefix — `firstParentUuid` and `inLogSessionIds` are file
+// invariants, so a resumed pass that reads only the tail must still see them.
 async function prescanNodes(
   filePath: string,
   endOffset: number,
   nodesByUuid: Map<string, LineNode>,
+  evidence: ClaudeRelationshipEvidence,
 ): Promise<{ lastAssistantMessageId?: string }> {
   if (endOffset <= 0) return {};
   const handle = await open(filePath, 'r');
@@ -497,10 +570,14 @@ async function prescanNodes(
     if (rec.type === 'assistant') {
       const al = rec as unknown as AssistantLine;
       registerAssistantNode(al, nodesByUuid);
+      recordEvidenceFromLine(evidence, al);
       const mid = al.message?.id;
       if (typeof mid === 'string') lastAssistantMessageId = mid;
     } else if (rec.type === 'user') {
-      registerUserNode(rec as unknown as UserLine, nodesByUuid);
+      const ul = rec as unknown as UserLine;
+      registerUserNode(ul, nodesByUuid);
+      recordEvidenceFromLine(evidence, ul);
+      recordResumeMarker(evidence, ul);
     }
   }
   const out: { lastAssistantMessageId?: string } = {};
@@ -792,18 +869,26 @@ function applyEditHashes(call: ToolCall, input: Record<string, unknown>): void {
 // Execution graph helpers (#42).
 // ---------------------------------------------------------------------------
 
+// Emit a `root` row for a session id. When the file's authoritative session
+// id is known and differs from the in-log id (`/resume` or fork), prefer the
+// file id as the canonical key — the in-log id is captured separately as
+// `sourceSessionId` provenance by `annotateRelationshipsWithEvidence`. This
+// keeps each on-disk session file pinned to exactly one root, which is what
+// downstream cross-file reconciliation joins on.
 function recordRoot(
   out: SessionRelationshipRecord[],
   seen: Set<string>,
   sessionId: string,
-  ts?: string,
+  ts: string | undefined,
+  fileSessionId: string | undefined,
 ): void {
-  if (seen.has(sessionId)) return;
-  seen.add(sessionId);
+  const canonical = fileSessionId ?? sessionId;
+  if (seen.has(canonical)) return;
+  seen.add(canonical);
   const row: SessionRelationshipRecord = {
     v: 1,
     source: 'claude-code',
-    sessionId,
+    sessionId: canonical,
     relationshipType: 'root',
   };
   if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
@@ -913,6 +998,281 @@ function collectSubagentRelationships(
     if (typeof t.ts === 'string' && t.ts.length > 0) row.ts = t.ts;
     out.push(row);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Fork / continuation helpers (#112).
+//
+// Single-file parsers can't see across session files, so they collect evidence
+// (in-log session id, version, first parentUuid, /resume markers, all uuids
+// touched) and surface it on the parse result. `reconcileClaudeSessionRelationships`
+// takes the per-file evidence from a multi-file pass and emits or upgrades
+// `fork` / `continuation` rows.
+//
+// Reconciliation strategy: append, don't mutate. `relationshipIdHash` keys on
+// `relationshipType`, so a `root` row already in the ledger and a later
+// `continuation` row for the same session id produce *different* hashes —
+// both rows coexist after a follow-up reconciliation pass. Consumers that
+// care about "is this session a child of another?" prefer the more specific
+// row (fork / continuation > root) when both are present for a session id.
+// This keeps the ledger append-only and re-ingest idempotent.
+// ---------------------------------------------------------------------------
+
+function deriveFileSessionId(options: ParseOptions): string | undefined {
+  if (typeof options.fileSessionId === 'string' && options.fileSessionId.length > 0) {
+    return options.fileSessionId;
+  }
+  if (typeof options.sessionPath === 'string' && options.sessionPath.length > 0) {
+    const base = basename(options.sessionPath, '.jsonl');
+    return base.length > 0 ? base : undefined;
+  }
+  return undefined;
+}
+
+function newEvidence(fileSessionId?: string): ClaudeRelationshipEvidence {
+  const ev: ClaudeRelationshipEvidence = {
+    inLogSessionIds: [],
+    seenUuids: [],
+    hasResumeMarker: false,
+  };
+  if (fileSessionId !== undefined) ev.fileSessionId = fileSessionId;
+  return ev;
+}
+
+// Tracks whether the parser has already observed any non-sidechain user line.
+// Carried alongside `ClaudeRelationshipEvidence` so we only consider the very
+// first user line's `parentUuid` as the cross-file continuation signal.
+const evidenceUserSeen = new WeakSet<ClaudeRelationshipEvidence>();
+
+function recordEvidenceFromLine(
+  ev: ClaudeRelationshipEvidence,
+  line: {
+    type?: string;
+    sessionId?: string;
+    version?: string;
+    uuid?: string;
+    parentUuid?: string | null;
+    isSidechain?: boolean;
+    timestamp?: string;
+  },
+): void {
+  if (typeof line.uuid === 'string' && line.uuid.length > 0) {
+    ev.seenUuids.push(line.uuid);
+  }
+  if (typeof line.sessionId === 'string' && line.sessionId.length > 0) {
+    if (!ev.inLogSessionIds.includes(line.sessionId)) ev.inLogSessionIds.push(line.sessionId);
+    if (
+      ev.firstTs === undefined &&
+      typeof line.timestamp === 'string' &&
+      line.timestamp.length > 0
+    ) {
+      ev.firstTs = line.timestamp;
+    }
+  }
+  if (
+    ev.sourceVersion === undefined &&
+    typeof line.version === 'string' &&
+    line.version.length > 0
+  ) {
+    ev.sourceVersion = line.version;
+  }
+  // Cross-file continuation signal: only the very first non-sidechain user
+  // line carries it. Assistant `parentUuid` always points inside the same
+  // file (the prior user line), so it would never resolve cross-file.
+  // Subsequent user lines in the same session also point inside the file.
+  if (line.type === 'user' && !evidenceUserSeen.has(ev)) {
+    evidenceUserSeen.add(ev);
+    if (
+      line.isSidechain !== true &&
+      typeof line.parentUuid === 'string' &&
+      line.parentUuid.length > 0
+    ) {
+      ev.firstParentUuid = line.parentUuid;
+    }
+  }
+}
+
+// Detect a slash-command continuation marker on a user line. Claude historical
+// logs surface `/resume [sessionId]` and `/continue [sessionId]` as plain user
+// text when the harness records the command verbatim. We treat either as a
+// `continuation` signal; when an argument is present and looks like a session
+// token, we use it as `relatedSessionId` on the emitted continuation row.
+function recordResumeMarker(ev: ClaudeRelationshipEvidence, line: UserLine): void {
+  const text = extractPlainUserText(line);
+  if (typeof text !== 'string' || text.length === 0) return;
+  const trimmed = text.trim();
+  const match = trimmed.match(/^\/(resume|continue)(?:\s+(\S+))?/i);
+  if (!match) return;
+  ev.hasResumeMarker = true;
+  if (
+    ev.resumeTargetSessionId === undefined &&
+    typeof match[2] === 'string' &&
+    match[2].length > 0
+  ) {
+    ev.resumeTargetSessionId = match[2];
+  }
+}
+
+// When the file carries a `/resume` marker, emit a local `continuation` row
+// even without cross-file knowledge. The row is the file's own session id;
+// `relatedSessionId` is the resumed-from id when the marker carried one.
+// Cross-file reconciliation later may add a second row with a stronger
+// `relatedSessionId` once it can resolve `firstParentUuid` — both rows have
+// distinct hashes and coexist (see strategy doc above).
+function emitLocalContinuationFromResume(
+  out: SessionRelationshipRecord[],
+  ev: ClaudeRelationshipEvidence,
+): void {
+  if (!ev.hasResumeMarker) return;
+  if (ev.fileSessionId === undefined) return;
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId: ev.fileSessionId,
+    relationshipType: 'continuation',
+  };
+  if (ev.resumeTargetSessionId !== undefined) row.relatedSessionId = ev.resumeTargetSessionId;
+  if (ev.firstTs !== undefined) row.ts = ev.firstTs;
+  applyEvidenceProvenance(row, ev);
+  out.push(row);
+}
+
+// Stamp every emitted relationship row with the in-log `sourceSessionId` (when
+// it differs from the file's session id) and the first observed `version`.
+// Run *after* all rows are collected so subagent / continuation rows added
+// later in the parse pipeline get the same provenance as roots.
+function annotateRelationshipsWithEvidence(
+  rows: SessionRelationshipRecord[],
+  ev: ClaudeRelationshipEvidence,
+): void {
+  for (const r of rows) applyEvidenceProvenance(r, ev);
+}
+
+function applyEvidenceProvenance(
+  row: SessionRelationshipRecord,
+  ev: ClaudeRelationshipEvidence,
+): void {
+  if (row.sourceSessionId === undefined) {
+    const foreign = pickForeignSessionId(ev);
+    if (foreign !== undefined) row.sourceSessionId = foreign;
+  }
+  if (row.sourceVersion === undefined && ev.sourceVersion !== undefined) {
+    row.sourceVersion = ev.sourceVersion;
+  }
+}
+
+function pickForeignSessionId(ev: ClaudeRelationshipEvidence): string | undefined {
+  if (ev.fileSessionId === undefined) return undefined;
+  for (const id of ev.inLogSessionIds) {
+    if (id !== ev.fileSessionId) return id;
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-file reconciliation (#112).
+// ---------------------------------------------------------------------------
+
+export interface ReconcileClaudeRelationshipsInput {
+  evidence: ClaudeRelationshipEvidence;
+}
+
+// Walk a set of per-file evidences and emit `fork` / `continuation` rows
+// captured by cross-file matches. Output is *additional* relationship rows
+// to append alongside the per-file output of `parseClaudeSession`. Idempotent:
+// re-running with the same evidence produces the same rows, and the existing
+// `relationshipIdHash` dedup folds duplicates at write time.
+//
+// Rules:
+//   - Continuation: file F's `firstParentUuid` lives in another file G's
+//     `seenUuids`, *and* the two files have distinct session ids. Emit a
+//     `continuation` row keyed on F.fileSessionId, `relatedSessionId =
+//     G.fileSessionId`. Skipped when F already carried a local `/resume`
+//     marker that named G — the parse pass already emitted that row.
+//   - Fork: two files share the same `sourceSessionId`, neither is a
+//     continuation of the other, and neither's session id equals the shared
+//     `sourceSessionId`. Each file gets a `fork` row with `relatedSessionId`
+//     set to the shared `sourceSessionId`.
+export function reconcileClaudeSessionRelationships(
+  inputs: ReconcileClaudeRelationshipsInput[],
+): SessionRelationshipRecord[] {
+  const out: SessionRelationshipRecord[] = [];
+  const usable = inputs.filter((i) => i.evidence.fileSessionId !== undefined);
+  if (usable.length === 0) return out;
+
+  // uuid -> fileSessionId mapping for cross-file `firstParentUuid` resolution.
+  const uuidToFileSession = new Map<string, string>();
+  for (const i of usable) {
+    const sid = i.evidence.fileSessionId!;
+    for (const u of i.evidence.seenUuids) {
+      if (!uuidToFileSession.has(u)) uuidToFileSession.set(u, sid);
+    }
+  }
+
+  // Track which (sessionId, parentSessionId) pairs got a continuation row so
+  // fork detection can skip them.
+  const continuationOf = new Map<string, string>();
+
+  for (const i of usable) {
+    const ev = i.evidence;
+    const sid = ev.fileSessionId!;
+    if (ev.firstParentUuid === undefined) continue;
+    const parentSid = uuidToFileSession.get(ev.firstParentUuid);
+    if (!parentSid) continue;
+    if (parentSid === sid) continue;
+    continuationOf.set(sid, parentSid);
+    // Skip when the local parser already emitted a continuation row pointing
+    // at exactly this parent — avoids a duplicate hash collision at write
+    // time (the dedup index would silently drop one anyway).
+    if (ev.hasResumeMarker && ev.resumeTargetSessionId === parentSid) continue;
+    const row: SessionRelationshipRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: sid,
+      relatedSessionId: parentSid,
+      relationshipType: 'continuation',
+    };
+    if (ev.firstTs !== undefined) row.ts = ev.firstTs;
+    applyEvidenceProvenance(row, ev);
+    out.push(row);
+  }
+
+  // Fork: group files by foreign sourceSessionId and emit one row per file
+  // when the group has 2+ members and the file isn't a strict continuation
+  // of another file in the same group.
+  const bySourceSession = new Map<string, ClaudeRelationshipEvidence[]>();
+  for (const i of usable) {
+    const ev = i.evidence;
+    const foreign = pickForeignSessionId(ev);
+    if (foreign === undefined) continue;
+    if (foreign === ev.fileSessionId) continue;
+    const bucket = bySourceSession.get(foreign);
+    if (bucket) bucket.push(ev);
+    else bySourceSession.set(foreign, [ev]);
+  }
+  for (const [foreign, group] of bySourceSession) {
+    if (group.length < 2) continue;
+    for (const ev of group) {
+      const sid = ev.fileSessionId!;
+      // A file that's a continuation of another file in the group is not a
+      // fork from the shared source — it's a linear successor.
+      const parent = continuationOf.get(sid);
+      if (parent !== undefined && group.some((g) => g.fileSessionId === parent)) continue;
+      const row: SessionRelationshipRecord = {
+        v: 1,
+        source: 'claude-code',
+        sessionId: sid,
+        relatedSessionId: foreign,
+        relationshipType: 'fork',
+        sourceSessionId: foreign,
+      };
+      if (ev.firstTs !== undefined) row.ts = ev.firstTs;
+      if (ev.sourceVersion !== undefined) row.sourceVersion = ev.sourceVersion;
+      out.push(row);
+    }
+  }
+
+  return out;
 }
 
 // Mark tool_result events whose toolUseId resolved to a subagent invocation
@@ -1171,6 +1531,11 @@ export interface ParseIncrementalResult {
   // `endOffset` like content/events so the next incremental pass re-reads any
   // bytes past the cursor without double-emitting.
   userTurns: UserTurnRecord[];
+  // Per-file relationship evidence (#112). Reflects everything the parser saw
+  // in *this* pass (including the prescanned prefix when resuming). Cumulative
+  // — callers that drive multi-pass ingest can use the latest call's
+  // `evidence` when feeding `reconcileClaudeSessionRelationships`.
+  evidence: ClaudeRelationshipEvidence;
 }
 
 export async function parseClaudeSessionIncremental(
@@ -1196,6 +1561,7 @@ export async function parseClaudeSessionIncremental(
         endOffset: startOffset,
         lastUserText: options.lastUserText ?? '',
         userTurns: [],
+        evidence: newEvidence(deriveFileSessionId(options)),
       };
     }
     const length = size - startOffset;
@@ -1216,9 +1582,14 @@ export async function parseClaudeSessionIncremental(
   // Also captures the last assistant messageId before the resume point so
   // user turns landing in this pass can record `precedingMessageId` even
   // when their preceding assistant was already ingested previously.
+  // Per-file relationship evidence (#112). Seeded from the prescan when
+  // resuming so cross-file reconciliation sees a consistent view regardless
+  // of whether the call started at offset 0 or partway through.
+  const fileSessionId = deriveFileSessionId(options);
+  const evidence = newEvidence(fileSessionId);
   let prescanLastAssistantMid: string | undefined;
   if (startOffset > 0) {
-    const prescan = await prescanNodes(filePath, startOffset, nodesByUuid);
+    const prescan = await prescanNodes(filePath, startOffset, nodesByUuid, evidence);
     prescanLastAssistantMid = prescan.lastAssistantMessageId;
   }
   const messageIdFirstOffset = new Map<string, number>();
@@ -1255,6 +1626,12 @@ export async function parseClaudeSessionIncremental(
   // the content/event handling.
   const pendingUserTurns: Array<{ offset: number; record: UserTurnRecord }> = [];
   let pendingUserTurnInc: UserTurnRecord | undefined;
+  // Offset of the line that first set `evidence.hasResumeMarker` in this pass.
+  // -1 means "set by the prescan" (i.e. before startOffset, definitely emit).
+  // A non-negative value lets us defer the local continuation row when the
+  // resume marker fell past `endOffset` (resumed pass would re-read the line
+  // and re-emit otherwise).
+  let resumeMarkerOffset = evidence.hasResumeMarker ? -1 : Number.POSITIVE_INFINITY;
 
   let p = 0;
   let cursorOffset = startOffset; // position just past the last complete \n
@@ -1300,8 +1677,10 @@ export async function parseClaudeSessionIncremental(
           line.sessionId,
           line.timestamp,
           lineStartOffset,
+          fileSessionId,
         );
       }
+      recordEvidenceFromLine(evidence, line);
       ingestAssistant(line, working, order, nodesByUuid);
     } else if (rec.type === 'user') {
       const ul = rec as unknown as UserLine;
@@ -1316,7 +1695,14 @@ export async function parseClaudeSessionIncremental(
           ul.sessionId,
           ul.timestamp,
           lineStartOffset,
+          fileSessionId,
         );
+      }
+      recordEvidenceFromLine(evidence, ul);
+      const hadResumeBefore = evidence.hasResumeMarker;
+      recordResumeMarker(evidence, ul);
+      if (!hadResumeBefore && evidence.hasResumeMarker) {
+        resumeMarkerOffset = lineStartOffset;
       }
       const harvested: ToolResultEventRecord[] = [];
       nextEventIndex = collectToolResultEvents(
@@ -1452,6 +1838,17 @@ export async function parseClaudeSessionIncremental(
   // they share an offset boundary with their parent assistant line, so the
   // turn-level endOffset filter already handled it.
   collectSubagentRelationships(turns, emittedRelationships);
+  // Local /resume continuation (#112). Only emit when the marker line was
+  // before endOffset so a resumed pass can't double-emit. The dedup index
+  // would catch the duplicate at write time, but suppressing here keeps the
+  // contract symmetric with how content / event rows are handled.
+  if (resumeMarkerOffset < endOffset) {
+    emitLocalContinuationFromResume(emittedRelationships, evidence);
+  }
+  // Provenance stamp goes last so every relationship row this pass emits
+  // (root, subagent, continuation) gets `sourceSessionId` / `sourceVersion`
+  // populated when the evidence carries them.
+  annotateRelationshipsWithEvidence(emittedRelationships, evidence);
   const emittedToolResultEvents: ToolResultEventRecord[] = [];
   for (const ev of pendingToolResultEvents) {
     if (ev.offset < endOffset) emittedToolResultEvents.push(ev.record);
@@ -1475,6 +1872,7 @@ export async function parseClaudeSessionIncremental(
     endOffset,
     lastUserText: currentUserText,
     userTurns: emittedUserTurns,
+    evidence,
   };
 }
 
@@ -1484,13 +1882,15 @@ function recordRootIncremental(
   sessionId: string,
   ts: string | undefined,
   offset: number,
+  fileSessionId: string | undefined,
 ): void {
-  if (seen.has(sessionId)) return;
-  seen.add(sessionId);
+  const canonical = fileSessionId ?? sessionId;
+  if (seen.has(canonical)) return;
+  seen.add(canonical);
   const row: SessionRelationshipRecord = {
     v: 1,
     source: 'claude-code',
-    sessionId,
+    sessionId: canonical,
     relationshipType: 'root',
   };
   if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
