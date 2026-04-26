@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { open, readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -671,9 +671,19 @@ export async function deriveCodexSessionId(file: string): Promise<string | null>
 }
 
 async function readCodexSessionMetaId(file: string): Promise<string | null> {
+  // session_meta is always the first JSONL line, so an 8 KB prefix is more
+  // than enough — avoids loading multi-MB rollouts during rebuild --content
+  // (#125 review).
   let raw: string;
   try {
-    raw = await readFile(file, 'utf8');
+    const handle = await open(file, 'r');
+    try {
+      const buf = Buffer.alloc(8192);
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+      raw = buf.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await handle.close();
+    }
   } catch {
     return null;
   }

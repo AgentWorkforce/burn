@@ -35,7 +35,18 @@ export async function runCodexWrapper(args: ParsedArgs): Promise<number> {
   });
   process.stderr.write(`[burn] codex spawn: pending stamp ${path.basename(pending.file)}\n`);
 
-  const watcher = startWatchLoop({ immediate: false });
+  // The watch loop drains turns silently while the child runs; accumulate its
+  // ticks so the final ingest report reflects everything appended during the
+  // session, not just the leftovers the post-exit pass picks up (#125 review).
+  let totalIngestedSessions = 0;
+  let totalAppendedTurns = 0;
+  const watcher = startWatchLoop({
+    immediate: false,
+    onReport(report) {
+      totalIngestedSessions += report.ingestedSessions;
+      totalAppendedTurns += report.appendedTurns;
+    },
+  });
 
   const child = spawn('codex', args.passthrough, {
     stdio: 'inherit',
@@ -51,11 +62,13 @@ export async function runCodexWrapper(args: ParsedArgs): Promise<number> {
   });
 
   await watcher.stop();
-  const report = await ingestCodexSessions();
+  const finalReport = await ingestCodexSessions();
+  totalIngestedSessions += finalReport.ingestedSessions;
+  totalAppendedTurns += finalReport.appendedTurns;
   process.stderr.write(
-    `[burn] codex ingest: ${report.ingestedSessions} session` +
-      `${report.ingestedSessions === 1 ? '' : 's'} ` +
-      `(+${report.appendedTurns} turn${report.appendedTurns === 1 ? '' : 's'})\n`,
+    `[burn] codex ingest: ${totalIngestedSessions} session` +
+      `${totalIngestedSessions === 1 ? '' : 's'} ` +
+      `(+${totalAppendedTurns} turn${totalAppendedTurns === 1 ? '' : 's'})\n`,
   );
 
   return code;
