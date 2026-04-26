@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-04-26
+
 ### Added
 
 - **`CodexCursor` carries execution-graph commit state** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). Three optional fields — `rootSessionEmitted`, `nextEventIndex`, `toolResultCounters` — let `burn ingest` resume Codex sessions without re-emitting the root `SessionRelationshipRecord` or restarting `ToolResultEventRecord.eventIndex` at zero across `burn` invocations. Older cursor files are backward-compatible: missing fields default to "fresh" (root not emitted, indices start at zero), and the next ingest pass pre-loads them onto the writer's dedup index.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-04-26
+
 ### Added
 
 - **Execution-graph passthrough for Codex ingest** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `burn ingest` (and `burn codex`) now persist Codex `SessionRelationshipRecord`s and `ToolResultEventRecord`s the reader emits, alongside the existing turns / content lines, mirroring the Claude path landed in the previous release. The Codex cursor (`~/.relayburn/cursors.json`) gains `rootSessionEmitted`, `nextEventIndex`, and `toolResultCounters` so dedup of execution-graph rows survives across `burn` invocations even when the writer-side index isn't warm.
