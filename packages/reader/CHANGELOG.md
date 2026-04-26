@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode parser populates `TurnRecord.fidelity`** ([#89](https://github.com/AgentWorkforce/burn/issues/89), follow-up to [#41](https://github.com/AgentWorkforce/burn/issues/41) / [#76](https://github.com/AgentWorkforce/burn/issues/76)). `parseOpencodeSession` and `parseOpencodeSessionIncremental` now stamp `fidelity` on every emitted turn at `granularity: 'per-turn'`. Usage coverage flags (`hasInputTokens`, `hasOutputTokens`, `hasReasoningTokens`, `hasCacheReadTokens`, `hasCacheCreateTokens`) reflect *presence* on the upstream `tokens` block — folded across both the assistant message and any `step-finish` parts that carry tokens — so a turn that never received cache fields reports `hasCacheReadTokens: false` instead of silently rendering `cacheRead === 0`. Capability flags (`hasToolCalls`, `hasToolResultEvents`, `hasSessionRelationships`, `hasRawContent`) are always true. Closes the "0 vs unknown" ambiguity for OpenCode in `summarizeFidelity` and `hasMinimumFidelity`.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added
