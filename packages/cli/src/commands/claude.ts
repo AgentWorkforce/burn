@@ -8,6 +8,7 @@ import {
   appendRelationships,
   appendToolResultEvents,
   appendTurns,
+  appendUserTurns,
   loadConfig,
   loadCursors,
   saveCursors,
@@ -74,7 +75,7 @@ export async function ingestSession(cwd: string, sessionId: string): Promise<voi
     return;
   }
   const cfg = await loadConfig();
-  const { turns, content, events, relationships, toolResultEvents } =
+  const { turns, content, events, relationships, toolResultEvents, userTurns } =
     await parseClaudeSession(file, {
       sessionPath: file,
       contentMode: cfg.content.store,
@@ -85,6 +86,7 @@ export async function ingestSession(cwd: string, sessionId: string): Promise<voi
   if (events.length > 0) await appendCompactions(events);
   if (relationships.length > 0) await appendRelationships(relationships);
   if (toolResultEvents.length > 0) await appendToolResultEvents(toolResultEvents);
+  if (userTurns.length > 0) await appendUserTurns(userTurns);
 
   // Persist a cursor so a later `burn summary` (which calls ingestAll) skips
   // this file instead of re-parsing and re-appending its content. Turns are

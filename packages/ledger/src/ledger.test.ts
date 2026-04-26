@@ -8,15 +8,22 @@ import type {
   SessionRelationshipRecord,
   ToolResultEventRecord,
   TurnRecord,
+  UserTurnRecord,
 } from '@relayburn/reader';
 
 import {
   appendRelationships,
   appendToolResultEvents,
   appendTurns,
+  appendUserTurns,
   stamp,
 } from './writer.js';
-import { queryAll, queryRelationships, queryToolResultEvents } from './reader.js';
+import {
+  queryAll,
+  queryRelationships,
+  queryToolResultEvents,
+  queryUserTurns,
+} from './reader.js';
 import { ledgerContentIndexPath, ledgerIndexPath, ledgerPath } from './paths.js';
 import { __resetIndexCacheForTesting, rebuildIndex } from './index-sidecar.js';
 
@@ -349,6 +356,119 @@ describe('ledger', () => {
     // Verify index files are populated
     const idsContent = await readFile(ledgerIndexPath(), 'utf8');
     assert.equal(idsContent.trim().split('\n').length, 2);
+  });
+
+  it('round-trips UserTurnRecord through append + query and dedupes by (source, sessionId, userUuid)', async () => {
+    const u1: UserTurnRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-ut',
+      userUuid: 'u-1',
+      ts: '2026-04-20T00:00:00.000Z',
+      followingMessageId: 'msg-1',
+      blocks: [
+        { kind: 'text', byteLen: 12, approxTokens: 3 },
+      ],
+    };
+    const u2: UserTurnRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-ut',
+      userUuid: 'u-2',
+      ts: '2026-04-20T00:00:01.000Z',
+      precedingMessageId: 'msg-1',
+      followingMessageId: 'msg-2',
+      blocks: [
+        { kind: 'tool_result', toolUseId: 'tu_a', byteLen: 40, approxTokens: 10 },
+        { kind: 'tool_result', toolUseId: 'tu_b', byteLen: 80, approxTokens: 20, isError: true },
+      ],
+    };
+    await appendUserTurns([u1, u2]);
+    await appendUserTurns([u1]); // dup: same userUuid
+    const got = await queryUserTurns();
+    assert.equal(got.length, 2, 'second append must not produce a duplicate');
+    const second = got.find((r) => r.userUuid === 'u-2')!;
+    assert.equal(second.blocks.length, 2);
+    assert.equal(second.blocks[1]!.isError, true);
+  });
+
+  it('queryUserTurns filters by sessionId, source, and time range', async () => {
+    const a: UserTurnRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-A',
+      userUuid: 'u-A1',
+      ts: '2026-04-19T00:00:00.000Z',
+      blocks: [{ kind: 'text', byteLen: 4, approxTokens: 1 }],
+    };
+    const b: UserTurnRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-B',
+      userUuid: 'u-B1',
+      ts: '2026-04-21T00:00:00.000Z',
+      blocks: [{ kind: 'text', byteLen: 4, approxTokens: 1 }],
+    };
+    const c: UserTurnRecord = {
+      v: 1,
+      source: 'codex',
+      sessionId: 's-C',
+      userUuid: 'u-C1',
+      ts: '2026-04-21T00:00:00.000Z',
+      blocks: [{ kind: 'text', byteLen: 4, approxTokens: 1 }],
+    };
+    await appendUserTurns([a, b, c]);
+    assert.equal((await queryUserTurns({ sessionId: 's-A' })).length, 1);
+    assert.equal((await queryUserTurns({ source: 'codex' })).length, 1);
+    const sinceFiltered = await queryUserTurns({ since: '2026-04-20T00:00:00.000Z' });
+    assert.equal(sinceFiltered.length, 2);
+  });
+
+  it('user-turn append + later turn append do not collide on the ledger lock or id index', async () => {
+    // Sanity: a user-turn line and a turn line written for overlapping
+    // sessionIds share the same ledger but live in distinct id slots.
+    await appendUserTurns([
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-mix',
+        userUuid: 'u-mix-1',
+        ts: '2026-04-20T00:00:00.000Z',
+        blocks: [{ kind: 'text', byteLen: 8, approxTokens: 2 }],
+      },
+    ]);
+    await appendTurns([fakeTurn({ sessionId: 's-mix', messageId: 'msg-mix-1' })]);
+    const turns = await queryAll({ sessionId: 's-mix' });
+    const userTurns = await queryUserTurns({ sessionId: 's-mix' });
+    assert.equal(turns.length, 1);
+    assert.equal(userTurns.length, 1);
+  });
+
+  it('rebuildIndex re-indexes user_turn lines', async () => {
+    const turn = fakeTurn({ messageId: 'rebuild-ut-1' });
+    const u: UserTurnRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-rebuild-ut',
+      userUuid: 'u-rebuild-1',
+      ts: '2026-04-20T00:00:00.000Z',
+      blocks: [{ kind: 'text', byteLen: 16, approxTokens: 4 }],
+    };
+    await appendTurns([turn]);
+    await appendUserTurns([u]);
+
+    await unlink(ledgerIndexPath());
+    await unlink(ledgerContentIndexPath());
+    __resetIndexCacheForTesting();
+
+    const { ids } = await rebuildIndex();
+    // 1 turn + 1 user_turn = 2 ids.
+    assert.equal(ids, 2);
+
+    // After rebuild, re-appending the same user turn must not duplicate.
+    const sizeBefore = (await stat(ledgerPath())).size;
+    await appendUserTurns([u]);
+    assert.equal((await stat(ledgerPath())).size, sizeBefore);
   });
 
   it('rebuildIndex re-indexes relationship and tool_result_event lines', async () => {
