@@ -166,6 +166,67 @@ describe('burn archive CLI', () => {
     assert.match(human.stdout, /tool_result_events:\s+1/);
   });
 
+  it('archive status --json surfaces a fidelity histogram on turns (#110)', async () => {
+    // Use distinctive ts/usage so the writer's content-fingerprint dedup
+    // doesn't collide with prior CLI tests in the same module (the in-memory
+    // index cache is module-scoped — see #110 / writer.ts).
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-fid',
+        messageId: 'fid-1',
+        ts: '2026-04-22T00:00:00.000Z',
+        usage: {
+          input: 111,
+          output: 51,
+          reasoning: 0,
+          cacheRead: 1001,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+        fidelity: {
+          granularity: 'per-turn',
+          coverage: {
+            hasInputTokens: true,
+            hasOutputTokens: true,
+            hasReasoningTokens: false,
+            hasCacheReadTokens: true,
+            hasCacheCreateTokens: true,
+            hasToolCalls: true,
+            hasToolResultEvents: true,
+            hasSessionRelationships: true,
+            hasRawContent: true,
+          },
+          class: 'full',
+        },
+      }),
+      // Older line — no fidelity at all.
+      fakeTurn({
+        sessionId: 's-fid',
+        messageId: 'fid-2',
+        turnIndex: 1,
+        ts: '2026-04-22T00:01:00.000Z',
+        usage: {
+          input: 112,
+          output: 52,
+          reasoning: 0,
+          cacheRead: 1002,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+      }),
+    ]);
+    await captureRun({}, ['build']);
+    const statusOut = await captureRun({ json: true }, ['status']);
+    assert.equal(statusOut.code, 0);
+    const parsed = JSON.parse(statusOut.stdout) as {
+      fidelityHistogram: Record<string, number>;
+      rowCounts: { turns: number };
+    };
+    assert.equal(parsed.rowCounts.turns, 2);
+    assert.equal(parsed.fidelityHistogram['full'], 1);
+    assert.equal(parsed.fidelityHistogram['unknown'], 1);
+  });
+
   it('archive with no subcommand prints help and exits 0', async () => {
     const out = await captureRun({}, []);
     assert.equal(out.code, 0);

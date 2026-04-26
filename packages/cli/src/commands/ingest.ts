@@ -7,6 +7,7 @@ import {
   appendRelationships,
   appendToolResultEvents,
   appendTurns,
+  appendUserTurns,
   loadConfig,
   loadCursors,
   saveCursors,
@@ -133,6 +134,7 @@ async function ingestClaudeTranscript(
     events,
     relationships,
     toolResultEvents,
+    userTurns,
     endOffset,
     lastUserText,
   } = await parseClaudeSessionIncremental(file, parseOpts);
@@ -142,6 +144,7 @@ async function ingestClaudeTranscript(
   if (events.length > 0) await appendCompactions(events);
   if (relationships.length > 0) await appendRelationships(relationships);
   if (toolResultEvents.length > 0) await appendToolResultEvents(toolResultEvents);
+  if (userTurns.length > 0) await appendUserTurns(userTurns);
 
   const next: ClaudeCursor = {
     kind: 'claude',
