@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode passive reader populates the execution graph** ([#93](https://github.com/AgentWorkforce/burn/issues/93)). `parseOpencodeSession` / `parseOpencodeSessionIncremental` now return `relationships: SessionRelationshipRecord[]` and `toolResultEvents: ToolResultEventRecord[]` alongside the existing `turns` / `content` / `userTurns` arrays. One `root` row is emitted per session; a `subagent` row is added when the session payload carries `parentID`, with `relatedSessionId` pointing at the parent session. Each tool part with a resolved `state.output` produces a terminal-status `ToolResultEventRecord` whose `status` follows the same failure rules as the existing `erroredCallIds` set (`state.status === 'error'` or `metadata.exit !== 0` for bash-family tools), with `contentLength` / `contentHash` computed from the stringified output (metadata only — no raw bytes stored). Per-`toolUseId` `callIndex` and per-pass monotonic `eventIndex` mirror the Claude convention. `Subagent.isSidechain` continues to populate from `parentID` unchanged. Resumed incremental passes don't re-emit events for already-seen assistant messages; relationship rows re-emit on every pass and the writer dedups them by hash.
+
 ## [0.22.0] - 2026-04-26
 
 ### Added
