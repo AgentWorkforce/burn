@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-04-26
+
 ### Added
 
 - **Fidelity / coverage columns on the analytics archive** (#110, follow-up to #40 / #41 / #78). `turns` carries `attribution_fidelity` (the `FidelityClass` string from `TurnRecord.fidelity.class` — `full`, `usage-only`, `partial`, `aggregate-only`, `cost-only`), `tokens_present` (1 if the source surfaced any per-turn input/output/reasoning count), and `cost_present` (1 iff cost-only). `sessions` carries `min_fidelity` (the worst class observed across the session's known-fidelity turns) and `has_full_attribution` (1 iff every fidelity-tagged turn is `full`). Older lines that pre-date the upstream parser fidelity work (Codex/OpenCode pre-#84/#89) persist `NULL` rather than guessing — downstream queries should read `NULL` as "unknown". Migration is additive: `openArchive()` runs idempotent `ALTER TABLE … ADD COLUMN` guarded by `PRAGMA table_info`, so existing archives forward-migrate without a rebuild and `ARCHIVE_VERSION` stays at 1. `getArchiveStatus()` now returns a `fidelityHistogram` (counts per `attribution_fidelity` value, with `NULL` bucketed as `unknown`).

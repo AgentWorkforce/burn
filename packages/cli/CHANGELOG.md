@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-04-26
+
 ### Added
 
 - **`burn archive status --json` surfaces a fidelity histogram on `turns`** (#110). The JSON payload gains a `fidelityHistogram` field — counts per `attribution_fidelity` value across all materialized turns (`full`, `usage-only`, `partial`, `aggregate-only`, `cost-only`, plus `unknown` for rows with no fidelity metadata yet). Lets ops scripts spot upstream parser gaps without opening the SQLite directly. Text-mode output is unchanged for now.
