@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`compareFromArchive(query, opts)`** ([#88](https://github.com/AgentWorkforce/burn/issues/88)). New helper that builds a `CompareTable` directly from `archive.sqlite` via a single grouped `SELECT … GROUP BY model, activity, source` plus a tiny per-(model, activity) follow-up for median retries, instead of streaming every `EnrichedTurn` through `buildCompareTable` in memory. Returns `{ table, analyzedTurns }` so the caller can populate the same "turns analyzed" header the legacy path uses. Output is byte-identical to `buildCompareTable(await queryAll(q), opts)` for the parity fixture; per-source reasoning-mode handling (Codex's `included_in_output`) is preserved by grouping on `source` alongside `(model, activity)`. Powers the migration of `burn compare` to the archive read model.
+
 ## [0.22.0] - 2026-04-26
 
 ### Changed
