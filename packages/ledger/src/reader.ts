@@ -8,6 +8,7 @@ import type {
   SourceKind,
   ToolResultEventRecord,
   TurnRecord,
+  UserTurnRecord,
 } from '@relayburn/reader';
 
 import { ledgerPath } from './paths.js';
@@ -17,6 +18,7 @@ import {
   isStampLine,
   isToolResultEventLine,
   isTurnLine,
+  isUserTurnLine,
   stampMatches,
   type Enrichment,
   type StampLine,
@@ -180,6 +182,29 @@ export async function queryToolResultEvents(
   for await (const parsed of streamLines(filePath)) {
     if (!isToolResultEventLine(parsed)) continue;
     if (!toolResultEventPasses(parsed.record, q)) continue;
+    out.push(parsed.record);
+  }
+  return out;
+}
+
+function userTurnPasses(r: UserTurnRecord, q: Query): boolean {
+  if (q.since && r.ts < q.since) return false;
+  if (q.until && r.ts > q.until) return false;
+  if (q.sessionId && r.sessionId !== q.sessionId) return false;
+  if (q.source && r.source !== q.source) return false;
+  // project and enrichment don't filter user turns (they live at the session
+  // level; callers that need project-scoping should pre-filter by sessionId
+  // from a turn query).
+  return true;
+}
+
+export async function queryUserTurns(q: Query = {}): Promise<UserTurnRecord[]> {
+  const filePath = ledgerPath();
+  if (!(await fileExists(filePath))) return [];
+  const out: UserTurnRecord[] = [];
+  for await (const parsed of streamLines(filePath)) {
+    if (!isUserTurnLine(parsed)) continue;
+    if (!userTurnPasses(parsed.record, q)) continue;
     out.push(parsed.record);
   }
   return out;

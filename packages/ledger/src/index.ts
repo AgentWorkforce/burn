@@ -3,6 +3,7 @@ export {
   appendRelationships,
   appendToolResultEvents,
   appendTurns,
+  appendUserTurns,
   stamp,
 } from './writer.js';
 export {
@@ -11,6 +12,7 @@ export {
   queryCompactions,
   queryRelationships,
   queryToolResultEvents,
+  queryUserTurns,
 } from './reader.js';
 export type { Query, EnrichedTurn } from './reader.js';
 export {
@@ -56,6 +58,7 @@ export type {
   StampSelector,
   ToolResultEventLine,
   TurnLine,
+  UserTurnLine,
 } from './schema.js';
 export {
   isCompactionLine,
@@ -63,6 +66,7 @@ export {
   isStampLine,
   isToolResultEventLine,
   isTurnLine,
+  isUserTurnLine,
   stampMatches,
 } from './schema.js';
 export { loadHwm, saveHwm } from './hwm.js';
@@ -76,6 +80,7 @@ export {
   toolResultEventIdHash,
   turnIdHash,
   turnContentFingerprint,
+  userTurnIdHash,
 } from './index-sidecar.js';
 export { reclassifyLedger } from './reclassify.js';
 export type { ReclassifyOptions, ReclassifyReport } from './reclassify.js';

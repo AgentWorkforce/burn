@@ -3,6 +3,7 @@ import type {
   SessionRelationshipRecord,
   ToolResultEventRecord,
   TurnRecord,
+  UserTurnRecord,
 } from '@relayburn/reader';
 
 export type Enrichment = Record<string, string>;
@@ -57,12 +58,26 @@ export interface ToolResultEventLine {
   record: ToolResultEventRecord;
 }
 
+// Per-user-turn block info (#2 / #94). One line per user line in a session,
+// carrying the byte/approx-token size of each tool_result and free-text block
+// the user supplied. Append-only and dedup'd through the same ledger-id index
+// as turns/compactions via `userTurnIdHash` keyed on (source, sessionId,
+// userUuid). Old readers that don't recognize `kind: 'user_turn'` simply skip
+// the line — the existing `isTurnLine` / `isStampLine` / etc. guards already
+// filter to known kinds.
+export interface UserTurnLine {
+  v: 1;
+  kind: 'user_turn';
+  record: UserTurnRecord;
+}
+
 export type LedgerLine =
   | TurnLine
   | StampLine
   | CompactionLine
   | SessionRelationshipLine
-  | ToolResultEventLine;
+  | ToolResultEventLine
+  | UserTurnLine;
 
 export function isTurnLine(line: unknown): line is TurnLine {
   return (
@@ -109,6 +124,15 @@ export function isToolResultEventLine(
     !!line &&
     typeof line === 'object' &&
     (line as { kind?: string }).kind === 'tool_result_event' &&
+    (line as { v?: number }).v === 1
+  );
+}
+
+export function isUserTurnLine(line: unknown): line is UserTurnLine {
+  return (
+    !!line &&
+    typeof line === 'object' &&
+    (line as { kind?: string }).kind === 'user_turn' &&
     (line as { v?: number }).v === 1
   );
 }

@@ -9,6 +9,7 @@ import type {
   SessionRelationshipRecord,
   ToolResultEventRecord,
   TurnRecord,
+  UserTurnRecord,
 } from '@relayburn/reader';
 
 import { withLock } from './lock.js';
@@ -22,6 +23,7 @@ import {
   isSessionRelationshipLine,
   isToolResultEventLine,
   isTurnLine,
+  isUserTurnLine,
 } from './schema.js';
 
 export const CONTENT_WINDOW = 10_000;
@@ -68,6 +70,19 @@ export function relationshipIdHash(r: SessionRelationshipRecord): string {
 export function toolResultEventIdHash(r: ToolResultEventRecord): string {
   const key = [r.source, r.sessionId, r.toolUseId, r.eventIndex].join('|');
   return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+// Stable id for a UserTurnRecord. (source, sessionId, userUuid) uniquely
+// identifies a user line within the source — the parser preserves the source
+// log's per-line uuid so two ingest passes re-reading the same bytes produce
+// the same id. Shares the ledger-id namespace with turns / compactions /
+// relationships / tool-result events; the hash inputs differ enough that
+// collisions are not a practical concern.
+export function userTurnIdHash(r: UserTurnRecord): string {
+  return createHash('sha256')
+    .update(`${r.source}|${r.sessionId}|${r.userUuid}`)
+    .digest('hex')
+    .slice(0, 16);
 }
 
 export function turnContentFingerprint(t: TurnRecord): string {
@@ -182,6 +197,8 @@ export async function rebuildIndex(): Promise<{ ids: number; content: number }> 
           ids.add(relationshipIdHash(parsed.record));
         } else if (isToolResultEventLine(parsed)) {
           ids.add(toolResultEventIdHash(parsed.record));
+        } else if (isUserTurnLine(parsed)) {
+          ids.add(userTurnIdHash(parsed.record));
         }
       }
     } finally {
