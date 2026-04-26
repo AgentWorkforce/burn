@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-04-26
+
 ### Fixed
 
 - **Reasoning-token pricing semantics** (#32). User-visible cost numbers will change downward for any session with non-zero reasoning tokens — most notably Codex sessions, where reasoning was being billed twice (once inside `output_tokens` and again on top via `usage.reasoning`). On the documented 10-turn Codex sample the reported cost drops from $4.282607 to $3.846557 (~11.3%). Models with a distinct reasoning tariff in `models.dev` (e.g. Alibaba Qwen reasoning models) are now priced correctly instead of falling through at the output rate. The reader-level `usage.reasoning` field is unchanged — the bug was in pricing, not data capture. See `packages/analyze/CHANGELOG.md` for the full breakdown.

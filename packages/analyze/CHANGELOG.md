@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-04-26
+
 ### Fixed
 
 - **Reasoning-token pricing semantics** (#32). Two correctness bugs that distorted reported spend whenever reasoning tokens were involved:
