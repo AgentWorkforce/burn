@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Codex parser populates `TurnRecord.fidelity`** ([#84](https://github.com/AgentWorkforce/burn/issues/84)). `parseCodexSession` and `parseCodexSessionIncremental` now stamp `fidelity` on every emitted turn at `granularity: 'per-turn'`, mirroring the Claude parser. Coverage flags follow the rollout source: `hasInputTokens` / `hasOutputTokens` / `hasReasoningTokens` / `hasCacheReadTokens` flip to `true` only when a `token_count` event with `total_token_usage` arrived between `task_started` and `task_complete`; turns whose source omitted token counts now report `class: 'partial'` (the numeric `usage` fields still default to 0, but the coverage flag is the honest signal). `hasToolCalls` / `hasToolResultEvents` / `hasRawContent` are capability flags — true even on tool-less turns. `hasCacheCreateTokens` and `hasSessionRelationships` stay `false` (Codex rollouts have no cache-create or parent-tracking concept yet — the latter waits on #42 / #63). Closes the `unknown === 0` requirement from #41 for Codex sessions.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added
