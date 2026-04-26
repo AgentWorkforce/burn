@@ -27,6 +27,9 @@ export interface CodexCursor {
   sessionCwd?: string;
   turnContexts: Record<string, { turn_id?: string; cwd?: string; model?: string }>;
   userTurnSlot?: PersistedUserTurnSlot;
+  rootSessionEmitted?: boolean;
+  nextEventIndex?: number;
+  toolResultCounters?: Record<string, number>;
 }
 
 export interface OpencodeCursor {

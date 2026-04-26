@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Waste attribution uses persisted user-turn block sizes before even-split** (#2). `attributeWaste()` accepts `userTurnsBySession` and fills missing per-`toolUseId` sizes from `UserTurnRecord.blocks` when content sidecars are unavailable, while keeping full sidecar content primary when present. Sessions that use this path report `attributionMethod: "user-turn"` instead of degrading to even-split.
 
+## [0.22.0] - 2026-04-26
+
+### Changed
+
+- Populate TurnRecord.fidelity from OpenCode parser (#89)
+
 ## [0.18.0] - 2026-04-26
 
 ### Fixed

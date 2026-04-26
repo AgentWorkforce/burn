@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
@@ -244,6 +244,84 @@ describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
   });
 });
 
+describe('ingestCodexSessions execution graph passthrough (#87)', () => {
+  let tmpHome: string;
+  let tmpRelay: string;
+  const originalHome = process.env['HOME'];
+  const originalRelay = process.env['RELAYBURN_HOME'];
+  const originalStore = process.env['RELAYBURN_CONTENT_STORE'];
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-eg-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-eg-relay-'));
+    process.env['HOME'] = tmpHome;
+    process.env['RELAYBURN_HOME'] = tmpRelay;
+    delete process.env['RELAYBURN_CONTENT_STORE'];
+    resetIngestGapWarnings();
+  });
+
+  after(async () => {
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
+    else delete process.env['RELAYBURN_HOME'];
+    if (originalStore !== undefined) process.env['RELAYBURN_CONTENT_STORE'] = originalStore;
+    else delete process.env['RELAYBURN_CONTENT_STORE'];
+    resetIngestGapWarnings();
+    await rm(tmpHome, { recursive: true, force: true });
+    await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  it('persists root + subagent relationships and tool_result events, no duplicates on re-ingest', async () => {
+    await writeCodexSession(tmpHome, 'rollout-eg-1', codexSpawnAgentSession());
+    await ingestCodexSessions();
+    // Second pass: cursor sits at EOF so the parser is a no-op; the
+    // committed-end-offset deferral and cursor advancement together
+    // guarantee no duplicate appends regardless of writer-side dedup.
+    await ingestCodexSessions();
+
+    const ledger = await readFile(path.join(tmpRelay, 'ledger.jsonl'), 'utf8');
+    const lines = ledger
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { kind: string; record: { source?: string } });
+
+    const codexLines = lines.filter((l) => l.record.source === 'codex');
+    const relationships = codexLines
+      .filter((l) => l.kind === 'relationship')
+      .map((l) => l.record as Record<string, unknown>);
+    const toolResultEvents = codexLines
+      .filter((l) => l.kind === 'tool_result_event')
+      .map((l) => l.record as Record<string, unknown>);
+
+    const roots = relationships.filter((r) => r['relationshipType'] === 'root');
+    assert.equal(roots.length, 1, 'exactly one root row appended');
+    assert.equal(roots[0]!['sessionId'], 'sess_eg_1');
+
+    const subagents = relationships.filter((r) => r['relationshipType'] === 'subagent');
+    assert.equal(subagents.length, 1, 'one subagent row appended');
+    assert.equal(subagents[0]!['parentToolUseId'], 'call_spawn_eg');
+    assert.equal(subagents[0]!['agentId'], 'agent_eg_xyz');
+
+    assert.ok(toolResultEvents.length >= 1, 'at least one tool_result_event line appended');
+    const fcOutput = toolResultEvents.find(
+      (e) => e['eventSource'] === 'function_call_output' && e['toolUseId'] === 'call_spawn_eg',
+    );
+    assert.ok(fcOutput, 'function_call_output row present');
+    assert.equal(fcOutput!['agentId'], 'agent_eg_xyz');
+
+    // No (sessionId, toolUseId, eventIndex) tuple should appear twice in the
+    // ledger after the second pass — that's the writer-level dedup contract.
+    const seen = new Set<string>();
+    for (const r of toolResultEvents) {
+      const key = `${r['sessionId']}|${r['toolUseId']}|${r['eventIndex']}`;
+      assert.ok(!seen.has(key), `tool_result_event duplicated: ${key}`);
+      seen.add(key);
+    }
+  });
+});
+
 // ---------- helpers ----------
 
 async function writeClaudeSession(home: string, sessionId: string, body: string): Promise<void> {
@@ -422,6 +500,70 @@ function codexSessionWithToolCallNoOutput(): string {
       timestamp: '2026-04-20T01:00:04.100Z',
       type: 'event_msg',
       payload: { type: 'task_complete', turn_id: 'turn_gap_1' },
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+// A codex session that spawns one subagent (call_spawn_eg → agent_eg_xyz),
+// receives the spawn function_call_output, and commits the turn — exercising
+// the execution-graph passthrough path in `ingestCodexInto`.
+function codexSpawnAgentSession(): string {
+  const lines = [
+    {
+      timestamp: '2026-04-23T01:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: 'sess_eg_1', cwd: '/tmp/project', timestamp: '2026-04-23T01:00:00.000Z' },
+    },
+    {
+      timestamp: '2026-04-23T01:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_eg_1', cwd: '/tmp/project', model: 'gpt-5.4' },
+    },
+    {
+      timestamp: '2026-04-23T01:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_eg_1' },
+    },
+    {
+      timestamp: '2026-04-23T01:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'spawn_agent',
+        arguments: '{"subagent_type":"investigator","description":"trace failure"}',
+        call_id: 'call_spawn_eg',
+      },
+    },
+    {
+      timestamp: '2026-04-23T01:00:02.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_spawn_eg',
+        output: '{"agent_id":"agent_eg_xyz","status":"started"}',
+      },
+    },
+    {
+      timestamp: '2026-04-23T01:00:03.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 500,
+            cached_input_tokens: 0,
+            output_tokens: 50,
+            reasoning_output_tokens: 0,
+            total_tokens: 550,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-23T01:00:03.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_eg_1' },
     },
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
