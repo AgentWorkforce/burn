@@ -5,10 +5,15 @@ import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { after, before, beforeEach, describe, it } from 'node:test';
 
-import type { TurnRecord } from '@relayburn/reader';
+import type { ToolResultEventRecord, TurnRecord } from '@relayburn/reader';
 
 import { __resetIndexCacheForTesting } from './index-sidecar.js';
-import { appendCompactions, appendTurns, stamp } from './writer.js';
+import {
+  appendCompactions,
+  appendToolResultEvents,
+  appendTurns,
+  stamp,
+} from './writer.js';
 import { archivePath, ledgerPath } from './paths.js';
 import {
   ARCHIVE_VERSION,
@@ -267,6 +272,269 @@ describe('archive', () => {
     } finally {
       db.close();
     }
+  });
+
+  it('round-trips tool_result_event lines from ledger to archive', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-tre', messageId: 'mtre-1' })]);
+    const events: ToolResultEventRecord[] = [
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-tre',
+        messageId: 'mtre-1',
+        toolUseId: 'tu-A',
+        callIndex: 0,
+        eventIndex: 0,
+        ts: '2026-04-20T00:00:01.000Z',
+        status: 'completed',
+        eventSource: 'tool_result',
+        contentLength: 1234,
+        contentHash: 'abc123',
+        agentId: 'agent-X',
+      },
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-tre',
+        messageId: 'mtre-1',
+        toolUseId: 'tu-B',
+        callIndex: 1,
+        eventIndex: 1,
+        ts: '2026-04-20T00:00:02.000Z',
+        status: 'errored',
+        eventSource: 'tool_result',
+        contentLength: 0,
+        contentHash: 'def456',
+        isError: true,
+      },
+    ];
+    await appendToolResultEvents(events);
+    const result = await buildArchive();
+    assert.equal(result.toolResultEventsApplied, 2);
+
+    const status = await getArchiveStatus();
+    assert.equal(status.rowCounts.toolResultEvents, 2);
+
+    const db = await openArchive();
+    try {
+      const rows = db
+        .prepare(
+          `SELECT source, session_id, message_id, tool_use_id, call_index,
+                  event_index, status, content_length, content_hash, is_error,
+                  agent_id, event_source, ts
+             FROM tool_result_events ORDER BY event_index`,
+        )
+        .all() as Array<{
+        source: string;
+        session_id: string;
+        message_id: string;
+        tool_use_id: string;
+        call_index: number | bigint;
+        event_index: number | bigint;
+        status: string;
+        content_length: number | bigint | null;
+        content_hash: string | null;
+        is_error: number | bigint | null;
+        agent_id: string | null;
+        event_source: string;
+        ts: string | null;
+      }>;
+      assert.equal(rows.length, 2);
+      const r0 = rows[0]!;
+      assert.equal(r0.source, 'claude-code');
+      assert.equal(r0.session_id, 's-tre');
+      assert.equal(r0.message_id, 'mtre-1');
+      assert.equal(r0.tool_use_id, 'tu-A');
+      assert.equal(Number(r0.call_index), 0);
+      assert.equal(Number(r0.event_index), 0);
+      assert.equal(r0.status, 'completed');
+      assert.equal(Number(r0.content_length), 1234);
+      assert.equal(r0.content_hash, 'abc123');
+      assert.equal(r0.agent_id, 'agent-X');
+      assert.equal(r0.event_source, 'tool_result');
+      assert.equal(r0.ts, '2026-04-20T00:00:01.000Z');
+      assert.equal(r0.is_error, null);
+      const r1 = rows[1]!;
+      assert.equal(r1.tool_use_id, 'tu-B');
+      assert.equal(r1.status, 'errored');
+      assert.equal(Number(r1.call_index), 1);
+      assert.equal(Number(r1.is_error), 1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rebuilds tool_result_events from zero deterministically (idempotent)', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-rb-tre', messageId: 'mrb-tre-1' })]);
+    const events: ToolResultEventRecord[] = Array.from({ length: 5 }, (_, i) => ({
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-rb-tre',
+      messageId: 'mrb-tre-1',
+      toolUseId: `tu-${i}`,
+      callIndex: i,
+      eventIndex: i,
+      ts: `2026-04-20T00:00:0${i}.000Z`,
+      status: 'completed',
+      eventSource: 'tool_result',
+      contentLength: 100 * i,
+      contentHash: `h${i}`,
+    }));
+    await appendToolResultEvents(events);
+    await buildArchive();
+    const before = await getArchiveStatus();
+    assert.equal(before.rowCounts.toolResultEvents, 5);
+
+    // Rebuild from zero replays the same lines and yields the same row count.
+    const rb = await rebuildArchive();
+    assert.equal(rb.rebuiltFromZero, true);
+    assert.equal(rb.toolResultEventsApplied, 5);
+    const after = await getArchiveStatus();
+    assert.equal(after.rowCounts.toolResultEvents, 5);
+
+    // A second build with no new ledger writes is a clean no-op.
+    const noop = await buildArchive();
+    assert.equal(noop.toolResultEventsApplied, 0);
+    const noopStatus = await getArchiveStatus();
+    assert.equal(noopStatus.rowCounts.toolResultEvents, 5);
+  });
+
+  it('materializes mixed-source tool_result events (claude-code, codex, opencode)', async () => {
+    // Synthesize events from each supported source so the archive table
+    // doesn't accidentally lock to a single source's column shape.
+    const events: ToolResultEventRecord[] = [
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-cc',
+        messageId: 'mcc-1',
+        toolUseId: 'tu-cc',
+        callIndex: 0,
+        eventIndex: 0,
+        ts: '2026-04-20T00:00:00.000Z',
+        status: 'completed',
+        eventSource: 'tool_result',
+        contentLength: 10,
+        contentHash: 'cc',
+      },
+      {
+        v: 1,
+        source: 'codex',
+        sessionId: 's-cx',
+        messageId: 'mcx-1',
+        toolUseId: 'call-cx',
+        callIndex: 0,
+        eventIndex: 0,
+        ts: '2026-04-20T00:00:01.000Z',
+        status: 'completed',
+        eventSource: 'function_call_output',
+        contentLength: 20,
+        contentHash: 'cx',
+      },
+      {
+        v: 1,
+        source: 'opencode',
+        sessionId: 's-oc',
+        messageId: 'moc-1',
+        toolUseId: 'callid-oc',
+        callIndex: 0,
+        eventIndex: 0,
+        ts: '2026-04-20T00:00:02.000Z',
+        status: 'completed',
+        eventSource: 'tool_result',
+        contentLength: 30,
+        contentHash: 'oc',
+      },
+    ];
+    await appendToolResultEvents(events);
+    await buildArchive();
+    const db = await openArchive();
+    try {
+      const rows = db
+        .prepare(
+          'SELECT DISTINCT source FROM tool_result_events ORDER BY source',
+        )
+        .all() as Array<{ source: string }>;
+      assert.deepEqual(
+        rows.map((r) => r.source),
+        ['claude-code', 'codex', 'opencode'],
+      );
+      const total = (db
+        .prepare('SELECT COUNT(*) AS n FROM tool_result_events')
+        .get() as { n: number | bigint }).n;
+      assert.equal(Number(total), 3);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('tool_result_events: incremental tail picks up newly-appended events', async () => {
+    await appendToolResultEvents([
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-tail-tre',
+        messageId: 'mtt-1',
+        toolUseId: 'tu-1',
+        callIndex: 0,
+        eventIndex: 0,
+        ts: '2026-04-20T00:00:00.000Z',
+        status: 'completed',
+        eventSource: 'tool_result',
+        contentLength: 1,
+        contentHash: 'h1',
+      },
+    ]);
+    await buildArchive();
+    const status1 = await getArchiveStatus();
+    assert.equal(status1.rowCounts.toolResultEvents, 1);
+
+    await appendToolResultEvents([
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-tail-tre',
+        messageId: 'mtt-1',
+        toolUseId: 'tu-2',
+        callIndex: 1,
+        eventIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+        status: 'completed',
+        eventSource: 'tool_result',
+        contentLength: 2,
+        contentHash: 'h2',
+      },
+    ]);
+    const tail = await buildArchive();
+    assert.equal(tail.toolResultEventsApplied, 1);
+    const status2 = await getArchiveStatus();
+    assert.equal(status2.rowCounts.toolResultEvents, 2);
+    assert.equal(status2.upToDate, true);
+  });
+
+  it('tool_result_events: PK is dedup-safe — replaying the same event is a no-op upsert', async () => {
+    const ev: ToolResultEventRecord = {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-dup',
+      messageId: 'mdup-1',
+      toolUseId: 'tu-dup',
+      callIndex: 0,
+      eventIndex: 0,
+      ts: '2026-04-20T00:00:00.000Z',
+      status: 'completed',
+      eventSource: 'tool_result',
+      contentLength: 99,
+      contentHash: 'h-dup',
+    };
+    await appendToolResultEvents([ev]);
+    await buildArchive();
+
+    // rebuildArchive replays the entire ledger — including the same tool
+    // result event line — and must land exactly one row.
+    await rebuildArchive();
+    const status = await getArchiveStatus();
+    assert.equal(status.rowCounts.toolResultEvents, 1);
   });
 
   it('archive lives at RELAYBURN_HOME/archive.sqlite', async () => {
