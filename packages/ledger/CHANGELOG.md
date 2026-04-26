@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-04-26
+
 ### Added
 
 - **`tool_result_events` archive table is now populated** (#101). `buildArchive()` materializes `ToolResultEventLine` ledger lines into the previously-empty `tool_result_events` table during incremental builds, keyed on (`source`, `session_id`, `message_id`, `tool_use_id`, `event_index`). Columns mirror the canonical `ToolResultEventRecord`: `status`, `content_length`, `content_hash`, `subagent_session_id`, `agent_id`, `event_source`, `ts`, `call_index`. Cursor uses the same `archive_state.ledger_offset_bytes` as turns / stamps / compactions, so no parallel cursor and no extra disk read. `rebuildArchive()` replays tool-result events alongside the other line kinds and yields the same row count deterministically. New `idx_tool_result_events_use_id` / `_session` / `_subagent` indexes for the obvious join paths. `BuildResult.toolResultEventsApplied` and `ArchiveStatus.rowCounts.toolResultEvents` expose the new counts. Closes #101, refs #40, #42, #77.
