@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-04-26
+
 ### Added
 
 - **User-turn ledger line: `UserTurnLine`** (#94, follows #74). New `LedgerLine` kind (`user_turn`) with matching `appendUserTurns` writer, `queryUserTurns` reader, and `isUserTurnLine` guard. Append-only and dedup'd through the same `~/.relayburn/ledger-index` namespace as turns / compactions / relationships / tool-result events via `userTurnIdHash` keyed on `(source, sessionId, userUuid)`. `rebuildIndex` re-indexes the new kind. Old readers that don't recognize `kind: 'user_turn'` simply skip the line — the existing per-kind guards already filter to known kinds. Persists the per-user-turn block sizes the reader started emitting in #74 so consumers can read them back without re-parsing source session files; backfilling user turns into existing ledgers is not done automatically — see follow-up.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-04-26
+
 ### Added
 
 - **User-turn passthrough in ingest** (#94). `burn ingest`, `burn ingest --runtime claude` (hook path), and `burn claude` (subcommand wrapper) now persist `UserTurnRecord`s the Claude / Codex / OpenCode parsers produce, alongside the existing turns / content / compaction / relationship / tool-result-event lines. No new flags or output yet — this lays the substrate so per-tool-call cost attribution (#2) can read user-turn block sizes back out of the ledger instead of re-parsing source session files at query time.
