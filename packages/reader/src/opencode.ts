@@ -3,12 +3,14 @@ import * as path from 'node:path';
 
 import { classifyActivity } from './classifier.js';
 import { resolveProject } from './git.js';
-import { argsHash } from './hash.js';
+import { argsHash, contentHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
+  SessionRelationshipRecord,
   Subagent,
   ToolCall,
+  ToolResultEventRecord,
   TurnRecord,
   Usage,
   UserTurnBlock,
@@ -93,17 +95,24 @@ export interface ParseOpencodeResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  // Execution-graph substrate (#42 / #93). One `root` row per session, plus a
+  // `subagent` row when the session payload carries a `parentID`. Always
+  // present (possibly empty) so callers can pass directly to `appendRelationships`.
+  relationships: SessionRelationshipRecord[];
+  // Terminal-status tool-result events, one per tool part with a resolved
+  // `state.output`. Status is derived from `state.status === 'error'` and
+  // `metadata.exit !== 0`. Metadata-only — `contentLength` / `contentHash`
+  // are computed from the stringified output; raw bytes are never stored.
+  toolResultEvents: ToolResultEventRecord[];
 }
 
 export async function parseOpencodeSession(
   sessionFilePath: string,
   options: ParseOpencodeOptions = {},
 ): Promise<ParseOpencodeResult> {
-  const { turns, content, userTurns } = await parseOpencodeSessionIncremental(
-    sessionFilePath,
-    options,
-  );
-  return { turns, content, userTurns };
+  const { turns, content, userTurns, relationships, toolResultEvents } =
+    await parseOpencodeSessionIncremental(sessionFilePath, options);
+  return { turns, content, userTurns, relationships, toolResultEvents };
 }
 
 export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
@@ -114,6 +123,8 @@ export interface ParseOpencodeIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
   seenMessageIds: Set<string>;
 }
 
@@ -127,6 +138,8 @@ export async function parseOpencodeSessionIncremental(
       turns: [],
       content: [],
       userTurns: [],
+      relationships: [],
+      toolResultEvents: [],
       seenMessageIds: new Set(options.seenMessageIds ?? []),
     };
   }
@@ -144,6 +157,12 @@ export async function parseOpencodeSessionIncremental(
   const turns: TurnRecord[] = [];
   const content: ContentRecord[] = [];
   const userTurns: UserTurnRecord[] = [];
+  const toolResultEvents: ToolResultEventRecord[] = [];
+  // Per-toolUseId callIndex counter — 0 for the first event for that id, 1
+  // for the next, etc. Local to this parse pass; on resumed ingest the
+  // writer's hash-based dedup is the source of truth.
+  const callIndexCounters = new Map<string, number>();
+  let nextEventIndex = 0;
 
   for (let i = 0; i < assistants.length; i++) {
     const m = assistants[i]!;
@@ -220,6 +239,20 @@ export async function parseOpencodeSessionIncremental(
     turns.push(record);
     seen.add(m.id);
 
+    // Execution graph (#42 / #93). One ToolResultEventRecord per tool part
+    // with a resolved output, in part-id order. Status follows the same
+    // failure rules as the existing erroredCallIds set: state.status='error'
+    // OR a non-zero `metadata.exit` (bash-family tools).
+    nextEventIndex = collectOpencodeToolResultEvents(
+      parts,
+      m.sessionID,
+      m.id,
+      new Date(m.time.created).toISOString(),
+      toolResultEvents,
+      callIndexCounters,
+      nextEventIndex,
+    );
+
     if (captureContent) {
       const assistantTs = new Date(m.time.created).toISOString();
       if (userMessage) {
@@ -243,7 +276,104 @@ export async function parseOpencodeSessionIncremental(
     }
   }
 
-  return { turns, content, userTurns, seenMessageIds: seen };
+  // Relationship rows are session-level state and always reflect the current
+  // session payload (root for every session, plus a `subagent` row when
+  // `parentID` is set). Emitted on every pass; the writer dedups by hash so
+  // resumed ingest doesn't double-write. OpenCode session payloads don't
+  // expose a stable spawning `callID` / subagent_type / description on the
+  // child session itself today, so the subagent row carries `relatedSessionId`
+  // (the parent session id) and nothing more — matches the Claude shape's
+  // mandatory fields without inventing fields the source doesn't surface.
+  const relationships = buildOpencodeRelationships(session, assistants);
+
+  return { turns, content, userTurns, relationships, toolResultEvents, seenMessageIds: seen };
+}
+
+function collectOpencodeToolResultEvents(
+  parts: Part[],
+  sessionId: string,
+  messageId: string,
+  ts: string,
+  out: ToolResultEventRecord[],
+  callIndexCounters: Map<string, number>,
+  startEventIndex: number,
+): number {
+  let nextIndex = startEventIndex;
+  for (const p of parts) {
+    if (p.type !== 'tool') continue;
+    const tp = p as ToolPart;
+    if (typeof tp.callID !== 'string' || tp.callID.length === 0) continue;
+    const state = tp.state;
+    if (!state || !Object.prototype.hasOwnProperty.call(state, 'output')) continue;
+    const isError = isFailedTool(tp);
+    const callIndex = callIndexCounters.get(tp.callID) ?? 0;
+    callIndexCounters.set(tp.callID, callIndex + 1);
+    const record: ToolResultEventRecord = {
+      v: 1,
+      source: 'opencode',
+      sessionId,
+      messageId,
+      toolUseId: tp.callID,
+      callIndex,
+      eventIndex: nextIndex++,
+      ts,
+      status: isError ? 'errored' : 'completed',
+      eventSource: 'tool_result',
+    };
+    if (isError) record.isError = true;
+    const measured = measureOpencodeToolOutput(state.output);
+    if (measured.length !== undefined) record.contentLength = measured.length;
+    if (measured.hash !== undefined) record.contentHash = measured.hash;
+    out.push(record);
+  }
+  return nextIndex;
+}
+
+function measureOpencodeToolOutput(output: unknown): { length?: number; hash?: string } {
+  if (typeof output === 'string') {
+    return { length: output.length, hash: contentHash(output) };
+  }
+  if (output === undefined || output === null) {
+    return {};
+  }
+  try {
+    const serialized = JSON.stringify(output);
+    if (typeof serialized !== 'string') return {};
+    return { length: serialized.length, hash: contentHash(serialized) };
+  } catch {
+    return {};
+  }
+}
+
+function buildOpencodeRelationships(
+  session: SessionInfo,
+  assistants: AssistantMessage[],
+): SessionRelationshipRecord[] {
+  const out: SessionRelationshipRecord[] = [];
+  // Earliest assistant ts is a reasonable witness for "when this session
+  // first did anything"; absent assistants we leave ts unset.
+  const firstTs =
+    assistants.length > 0 ? new Date(assistants[0]!.time.created).toISOString() : undefined;
+  const root: SessionRelationshipRecord = {
+    v: 1,
+    source: 'opencode',
+    sessionId: session.id,
+    relationshipType: 'root',
+  };
+  if (firstTs !== undefined) root.ts = firstTs;
+  out.push(root);
+  if (typeof session.parentID === 'string' && session.parentID.length > 0) {
+    const sub: SessionRelationshipRecord = {
+      v: 1,
+      source: 'opencode',
+      sessionId: session.id,
+      relatedSessionId: session.parentID,
+      relationshipType: 'subagent',
+    };
+    if (firstTs !== undefined) sub.ts = firstTs;
+    out.push(sub);
+  }
+  return out;
 }
 
 // Build a UserTurnRecord for the gap between two consecutive assistant

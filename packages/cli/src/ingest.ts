@@ -386,12 +386,17 @@ async function ingestOpencodeInto(
         continue;
       }
 
-      const { turns, content, seenMessageIds: nextSeen } =
-        await parseOpencodeSessionIncremental(file, {
-          sessionPath: file,
-          seenMessageIds,
-          contentMode,
-        });
+      const {
+        turns,
+        content,
+        relationships,
+        toolResultEvents,
+        seenMessageIds: nextSeen,
+      } = await parseOpencodeSessionIncremental(file, {
+        sessionPath: file,
+        seenMessageIds,
+        contentMode,
+      });
       if (turns.length > 0) {
         await appendTurns(turns);
         report.appendedTurns += turns.length;
@@ -406,6 +411,12 @@ async function ingestOpencodeInto(
       }
       if (content.length > 0) {
         await appendContent(content);
+      }
+      if (relationships.length > 0) {
+        await appendRelationships(relationships);
+      }
+      if (toolResultEvents.length > 0) {
+        await appendToolResultEvents(toolResultEvents);
       }
       const next: OpencodeCursor = {
         kind: 'opencode',

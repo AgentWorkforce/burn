@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Execution-graph passthrough for OpenCode ingest** ([#93](https://github.com/AgentWorkforce/burn/issues/93)). `burn ingest` (OpenCode path) now persists the `SessionRelationshipRecord`s and `ToolResultEventRecord`s the OpenCode reader produces — root / subagent edges from `session.parentID`, plus terminal-status tool-result events with `contentLength` / `contentHash` — via the existing `appendRelationships` / `appendToolResultEvents` writers. No new flags or output; closes the OpenCode arm of the gap that #77 closed for Claude.
+
 ## [0.20.0] - 2026-04-26
 
 ### Added
