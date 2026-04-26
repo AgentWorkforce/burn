@@ -320,8 +320,8 @@ describe('archive', () => {
       const rows = db
         .prepare(
           `SELECT source, session_id, message_id, tool_use_id, call_index,
-                  event_index, status, content_length, content_hash, agent_id,
-                  event_source, ts
+                  event_index, status, content_length, content_hash, is_error,
+                  agent_id, event_source, ts
              FROM tool_result_events ORDER BY event_index`,
         )
         .all() as Array<{
@@ -334,6 +334,7 @@ describe('archive', () => {
         status: string;
         content_length: number | bigint | null;
         content_hash: string | null;
+        is_error: number | bigint | null;
         agent_id: string | null;
         event_source: string;
         ts: string | null;
@@ -352,10 +353,12 @@ describe('archive', () => {
       assert.equal(r0.agent_id, 'agent-X');
       assert.equal(r0.event_source, 'tool_result');
       assert.equal(r0.ts, '2026-04-20T00:00:01.000Z');
+      assert.equal(r0.is_error, null);
       const r1 = rows[1]!;
       assert.equal(r1.tool_use_id, 'tu-B');
       assert.equal(r1.status, 'errored');
       assert.equal(Number(r1.call_index), 1);
+      assert.equal(Number(r1.is_error), 1);
     } finally {
       db.close();
     }

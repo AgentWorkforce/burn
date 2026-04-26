@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS tool_result_events (
   status              TEXT,
   content_length      INTEGER,
   content_hash        TEXT,
+  is_error            INTEGER,
   subagent_session_id TEXT,
   agent_id            TEXT,
   event_source        TEXT,
@@ -668,9 +669,9 @@ async function applyLedgerRange(
       const insertToolResultEvent = db.prepare(`
         INSERT OR REPLACE INTO tool_result_events (
           source, session_id, message_id, tool_use_id, call_index,
-          event_index, status, content_length, content_hash,
+          event_index, status, content_length, content_hash, is_error,
           subagent_session_id, agent_id, event_source, ts
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const tre of toolResultEventLines) {
         const r = tre.record;
@@ -689,6 +690,7 @@ async function applyLedgerRange(
           r.status,
           r.contentLength ?? null,
           r.contentHash ?? null,
+          r.isError === undefined ? null : r.isError ? 1 : 0,
           r.subagentSessionId ?? null,
           r.agentId ?? null,
           r.eventSource,
