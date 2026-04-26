@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`burn summary` now reads from `archive.sqlite` instead of streaming `ledger.jsonl`** ([#82](https://github.com/AgentWorkforce/burn/issues/82)). The default hot path calls `buildArchive()` (cheap incremental tail scan after the per-invocation `ingestAll`) and issues SQL with filters lowered to indexed `WHERE` clauses against `turns`, replacing the per-invocation full ledger walk + stamp fold. Subagent-tree (`--subagent-tree`) and `--by-subagent-type` modes consume the same archive-derived turn slice. Output (text + `--json`) is parity-preserved against the legacy reader for the `byModel`, `totalCost`, and `fidelity` blocks. Two escape hatches preserve the old behavior: a new `--no-archive` flag and the `RELAYBURN_ARCHIVE=0` env var both revert to `queryAll`. If the archive path throws (corrupt sqlite, schema mismatch we couldn't recover from cleanly), the command transparently falls back to the streaming reader and surfaces the reason on stderr — the archive can never wedge `burn summary`.
+
 ### Added
 
 - **Execution-graph passthrough for Codex ingest** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `burn ingest` (and `burn codex`) now persist Codex `SessionRelationshipRecord`s and `ToolResultEventRecord`s the reader emits, alongside the existing turns / content lines, mirroring the Claude path landed in the previous release. The Codex cursor (`~/.relayburn/cursors.json`) gains `rootSessionEmitted`, `nextEventIndex`, and `toolResultCounters` so dedup of execution-graph rows survives across `burn` invocations even when the writer-side index isn't warm.
