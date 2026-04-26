@@ -21,10 +21,10 @@ import { runWaste } from './commands/waste.js';
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
-  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--quality]
-                     [--subagent-tree <session-id>] [--by-subagent-type]
-  burn by-tool       [--since 7d] [--project <path>] [--session <id>]
-  burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--all] [--json]
+  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--quality]
+                     [--by-provider] [--subagent-tree <session-id>] [--by-subagent-type]
+  burn by-tool       [--since 7d] [--project <path>] [--session <id>] [--provider <p>]
+  burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]]
   burn diagnose      <session-id> [--json]
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
@@ -43,6 +43,7 @@ Usage:
 
 Examples:
   burn summary --since 24h
+  burn summary --by-provider --provider synthetic
   burn summary --subagent-tree <session-id>
   burn summary --by-subagent-type --since 7d
   burn by-tool --since 7d
@@ -67,6 +68,10 @@ Examples:
   burn archive build
   burn archive rebuild
   burn rebuild --reclassify
+
+Provider filters are query-time only. Synthetic-routed models are recognized
+from hf:*, accounts/fireworks/models/*, and synthetic/* model IDs and are
+reported as provider "synthetic" without rewriting ledger rows.
 `;
 
 async function main(): Promise<number> {
