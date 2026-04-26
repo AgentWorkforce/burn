@@ -1,5 +1,17 @@
-export { appendCompactions, appendTurns, stamp } from './writer.js';
-export { query, queryAll, queryCompactions } from './reader.js';
+export {
+  appendCompactions,
+  appendRelationships,
+  appendToolResultEvents,
+  appendTurns,
+  stamp,
+} from './writer.js';
+export {
+  query,
+  queryAll,
+  queryCompactions,
+  queryRelationships,
+  queryToolResultEvents,
+} from './reader.js';
 export type { Query, EnrichedTurn } from './reader.js';
 export {
   ledgerHome,
@@ -39,11 +51,20 @@ export type {
   Enrichment,
   LedgerLine,
   MessageIdRange,
+  SessionRelationshipLine,
   StampLine,
   StampSelector,
+  ToolResultEventLine,
   TurnLine,
 } from './schema.js';
-export { isCompactionLine, isStampLine, isTurnLine, stampMatches } from './schema.js';
+export {
+  isCompactionLine,
+  isSessionRelationshipLine,
+  isStampLine,
+  isToolResultEventLine,
+  isTurnLine,
+  stampMatches,
+} from './schema.js';
 export { loadHwm, saveHwm } from './hwm.js';
 export type { HwmEntry, HwmMap } from './hwm.js';
 export { loadCursors, saveCursors } from './cursors.js';
@@ -51,6 +72,8 @@ export type { FileCursor, ClaudeCursor, CodexCursor, OpencodeCursor } from './cu
 export { withLock } from './lock.js';
 export {
   rebuildIndex,
+  relationshipIdHash,
+  toolResultEventIdHash,
   turnIdHash,
   turnContentFingerprint,
 } from './index-sidecar.js';

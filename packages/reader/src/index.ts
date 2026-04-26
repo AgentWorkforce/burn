@@ -12,7 +12,19 @@ export type {
   ContentToolUse,
   ContentToolResult,
   ContentStoreMode,
+  RelationshipType,
+  SessionRelationshipRecord,
+  ToolResultStatus,
+  ToolResultEventSource,
+  ToolResultEventRecord,
+  UserTurnBlock,
+  UserTurnRecord,
+  Coverage,
+  Fidelity,
+  FidelityClass,
+  UsageGranularity,
 } from './types.js';
+export { classifyFidelity, makeFidelity, EMPTY_COVERAGE } from './fidelity.js';
 export { classifyActivity, countRetries, normalizeToolName } from './classifier.js';
 export type { ClassificationInput, ClassificationResult } from './classifier.js';
 export { parseClaudeSession, parseClaudeSessionIncremental } from './claude.js';
@@ -29,6 +41,7 @@ export type {
   ParseCodexIncrementalOptions,
   ParseCodexIncrementalResult,
   CodexResumeState,
+  PersistedUserTurnSlot,
 } from './codex.js';
 export { parseOpencodeSession, parseOpencodeSessionIncremental } from './opencode.js';
 export type {

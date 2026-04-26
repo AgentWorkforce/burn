@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-04-26
+
+### Added
+
+- **Execution-graph substrate** (#42, first PR). Two new normalized append-only record types — `SessionRelationshipRecord` (`root` / `continuation` / `fork` / `subagent` edges) and `ToolResultEventRecord` (per-`toolUseId` chronology with `status` + `eventSource` discriminator) — that sit beside `TurnRecord` and preserve passive-reader metadata that's currently flattened or lost. Both ride at `v: 1`. Foundation for #8 (subagent tree consumers) and #11 (waste / retry / terminal-outcome analysis); no new flags or output yet.
+  - `@relayburn/reader` — Claude passive parser populates `relationships` and `toolResultEvents` alongside the existing `turns` / `content` / `events` arrays. One root row per session id; one subagent row per discovered invocation (joining to `Subagent.agentId`); one `ToolResultEventRecord` per `tool_result` block with monotonic `eventIndex` + per-`toolUseId` `callIndex`. Spawn events post-annotated with the spawned subagent's `agentId` so consumers can join the two record types. Codex / OpenCode population deferred to follow-up PRs.
+  - `@relayburn/ledger` — two new line kinds (`relationship` / `tool_result_event`) with matching `appendRelationships` / `appendToolResultEvents` writers and `queryRelationships` / `queryToolResultEvents` readers. Both dedup through the existing `ledger-index` namespace; `rebuildIndex` re-indexes both. Old readers skip unknown kinds.
+  - `@relayburn/cli` — `burn ingest` (runtime + hook paths) and `burn claude` persist the new records when the Claude reader emits them, so the substrate lands automatically alongside turns.
+
+## [0.18.0] - 2026-04-26
+
+### Fixed
+
+- **Reasoning-token pricing semantics** (#32). User-visible cost numbers will change downward for any session with non-zero reasoning tokens — most notably Codex sessions, where reasoning was being billed twice (once inside `output_tokens` and again on top via `usage.reasoning`). On the documented 10-turn Codex sample the reported cost drops from $4.282607 to $3.846557 (~11.3%). Models with a distinct reasoning tariff in `models.dev` (e.g. Alibaba Qwen reasoning models) are now priced correctly instead of falling through at the output rate. The reader-level `usage.reasoning` field is unchanged — the bug was in pricing, not data capture. See `packages/analyze/CHANGELOG.md` for the full breakdown.
+
+## [0.13.1] - 2026-04-25
+
 ### Added
 
 - **Derived analytics archive (foundation)** (#40). New `~/.relayburn/archive.sqlite` materialized read model alongside the canonical `ledger.jsonl` — the architectural gap between burn as an event collector and burn as a usable local analytics system. The archive is disposable: `rm archive.sqlite && burn archive rebuild` always reproduces the same state from the ledger. This PR lands the schema (`sessions`, `turns`, `tool_calls`, `compactions`, plus a reserved `tool_result_events` table for the future content-sidecar bridge), incremental build keyed off ledger byte offset, and the `burn archive build | rebuild | status` command group. Rewiring `burn summary` / `compare` / `plans` / `@relayburn/mcp` onto SQL queries lands in follow-up PRs. Backed by `node:sqlite` so no native build step.

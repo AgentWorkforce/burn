@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-04-26
+
+### Added
+
+- **Execution graph foundation: `SessionRelationshipRecord` and `ToolResultEventRecord`** (#42, first PR). Two new normalized record shapes that sit beside `TurnRecord` and preserve cross-source metadata that's currently flattened or lost: how sessions relate (`root` / `continuation` / `fork` / `subagent`) and chronological tool-result events keyed by `toolUseId`. Both carry `v: 1`, `source`, and a `sessionId`; relationship rows include `parentToolUseId` / `agentId` / `subagentType` / `description` for subagent edges; tool-result events carry `status` (`running` / `completed` / `errored` / `cancelled` / `unknown`), an `eventSource` discriminator (`tool_result` / `subagent_notification` / `queue_event` / `progress_event` / `function_call_output`), `contentLength` + `contentHash` (metadata only — no raw content), and `agentId` for spawn events.
+- **Claude passive reader populates the execution graph.** `parseClaudeSession` and `parseClaudeSessionIncremental` now return `relationships` and `toolResultEvents` alongside the existing `turns` / `content` / `events` arrays. Roots are emitted once per session id; one `subagent` row is emitted per distinct invocation discovered (joining to `Subagent.agentId`); each `tool_result` block in a user line becomes a `ToolResultEventRecord` with monotonic `eventIndex` and per-`toolUseId` `callIndex`. Spawn events (Agent/Task tool_results that map to a sidechain) are post-annotated with the resolved subagent's `agentId` so consumers can join the two record types. Incremental parser respects the same `endOffset` deferral the existing content/event paths use, so resumed ingest doesn't double-emit. Codex / OpenCode population deferred to follow-up PRs.
+
+## [0.16.0] - 2026-04-25
+
+### Added
+
+- **Per-user-turn block-size capture for Claude sessions** ([#2](https://github.com/AgentWorkforce/burn/issues/2)). `parseClaudeSession` / `parseClaudeSessionIncremental` now return a `userTurns: UserTurnRecord[]` alongside `turns`, recording each user-turn's content blocks (`tool_result` and free-text) with `byteLen`, `approxTokens` (bytes/4 heuristic), `toolUseId`, and `isError`. Each `UserTurnRecord` carries `precedingMessageId` / `followingMessageId` so consumers can place the user turn between two assistant turns without re-walking `parentUuid` chains. This is the prerequisite for per-tool-call cost attribution (`burn waste`): combined with the existing per-turn `usage`, callers can recover the input-side delta caused by individual tool calls (Anthropic only reports usage at message granularity). Additive — no on-disk schema change, existing `TurnRecord` consumers are unaffected. Codex and OpenCode parsers are scoped for follow-up.
+
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **Coverage and fidelity metadata on `TurnRecord`** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). New optional `TurnRecord.fidelity` field with three pieces: `granularity` (`per-turn` | `per-message` | `per-session-aggregate` | `cost-only`), per-field `coverage` flags (`hasInputTokens`, `hasOutputTokens`, `hasReasoningTokens`, `hasCacheReadTokens`, `hasCacheCreateTokens`, `hasToolCalls`, `hasToolResultEvents`, `hasSessionRelationships`, `hasRawContent`), and a derived `class` (`full` | `usage-only` | `aggregate-only` | `cost-only` | `partial`). Coverage is strictly about *availability*: `hasOutputTokens: false` means "we don't know," not "0 output tokens." New `EMPTY_COVERAGE`, `classifyFidelity`, and `makeFidelity` helpers exported alongside the types. The Claude parser populates fidelity on every turn; usage-coverage flags reflect which fields the upstream `usage` block actually carried (so a turn with no `cache_creation` reports `hasCacheCreateTokens: false`). Codex/OpenCode parsers do not yet populate fidelity — deferred to a follow-up. Older ledger writers leave `fidelity` undefined; downstream code treats absence as best-effort full fidelity for backward compat.
+
+## [0.13.1] - 2026-04-25
+
+### Changed
+
+- Bump packages to v0.13.0
+
 ## [0.9.0] - 2026-04-24
 
 ### Added

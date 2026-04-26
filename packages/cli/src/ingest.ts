@@ -7,10 +7,17 @@ import {
   parseCodexSessionIncremental,
   parseOpencodeSessionIncremental,
 } from '@relayburn/reader';
-import type { CodexResumeState, ContentStoreMode } from '@relayburn/reader';
+import type {
+  CodexResumeState,
+  ContentRecord,
+  ContentStoreMode,
+  TurnRecord,
+} from '@relayburn/reader';
 import {
   appendCompactions,
   appendContent,
+  appendRelationships,
+  appendToolResultEvents,
   appendTurns,
   listContentSessionIds,
   loadConfig,
@@ -24,11 +31,22 @@ import {
 
 import { walkJsonl, walkOpencodeSessions } from './walk.js';
 
-const CLAUDE_PROJECTS = path.join(homedir(), '.claude', 'projects');
-const CODEX_SESSIONS = path.join(homedir(), '.codex', 'sessions');
-const OPENCODE_STORAGE = path.join(homedir(), '.local', 'share', 'opencode', 'storage');
-const OPENCODE_SESSION_ROOT = path.join(OPENCODE_STORAGE, 'session');
-const OPENCODE_MESSAGE_ROOT = path.join(OPENCODE_STORAGE, 'message');
+// Resolved per-call so tests can swap HOME between runs. Cheap (string join).
+function claudeProjectsDir(): string {
+  return path.join(homedir(), '.claude', 'projects');
+}
+function codexSessionsDir(): string {
+  return path.join(homedir(), '.codex', 'sessions');
+}
+function opencodeStorageDir(): string {
+  return path.join(homedir(), '.local', 'share', 'opencode', 'storage');
+}
+function opencodeSessionRoot(): string {
+  return path.join(opencodeStorageDir(), 'session');
+}
+function opencodeMessageRoot(): string {
+  return path.join(opencodeStorageDir(), 'message');
+}
 
 export interface IngestReport {
   scannedSessions: number;
@@ -36,11 +54,61 @@ export interface IngestReport {
   appendedTurns: number;
 }
 
+// Per-adapter content-capture gap aggregator. A "gap" is a session that the
+// parser emitted in `contentMode === 'full'` mode with at least one tool call
+// in a committed turn but zero `tool_result` ContentRecords — the load-bearing
+// kind for `burn waste`'s tool-call attribution. See #59 / #33.
+//
+// We accumulate per adapter across the ingest loop and emit a single warning
+// at the end. Suppression is per-process: once an adapter has warned, later
+// `ingestAll()` calls in the same `burn` invocation stay silent unless the
+// adapter accumulates fresh affected sessions (which we re-check by
+// comparing against the prior emit's session count).
+interface GapStats {
+  affectedSessions: number;
+  orphanToolCalls: number;
+}
+
+interface GapTrackerState {
+  // Adapters that have already emitted a warning at least once in this
+  // process. Used to keep a flooding `--watch` loop quiet after the first
+  // notice — if a second pass turns up *additional* affected sessions we
+  // still warn, but a steady state stays silent.
+  warnedAffectedSessions: Map<AdapterName, number>;
+  // Override the writer used for warnings. Tests inject a buffer-backed sink
+  // so they can assert on the formatted message without scribbling on
+  // stderr.
+  write: (msg: string) => void;
+}
+
+type AdapterName = 'claude' | 'codex' | 'opencode';
+
+const moduleGapState: GapTrackerState = {
+  warnedAffectedSessions: new Map(),
+  write: (msg) => process.stderr.write(msg),
+};
+
+// Test-only: clear per-process suppression state. Safe to call from prod
+// code too (it's a no-op when nothing has been warned yet).
+export function resetIngestGapWarnings(): void {
+  moduleGapState.warnedAffectedSessions.clear();
+}
+
+// Test-only: replace the warning sink. Returns the previous sink so callers
+// can restore it.
+export function setIngestGapWriter(write: (msg: string) => void): (msg: string) => void {
+  const prev = moduleGapState.write;
+  moduleGapState.write = write;
+  return prev;
+}
+
 export async function ingestClaudeProjects(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
-  await ingestClaudeInto(cursors, report, contentMode);
+  const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  await ingestClaudeInto(cursors, report, contentMode, gap);
+  emitGapWarning('claude', contentMode, gap, moduleGapState);
   await saveCursors(cursors);
   return report;
 }
@@ -49,7 +117,9 @@ export async function ingestCodexSessions(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
-  await ingestCodexInto(cursors, report, contentMode);
+  const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  await ingestCodexInto(cursors, report, contentMode, gap);
+  emitGapWarning('codex', contentMode, gap, moduleGapState);
   await saveCursors(cursors);
   return report;
 }
@@ -58,7 +128,9 @@ export async function ingestOpencodeSessions(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
-  await ingestOpencodeInto(cursors, report, contentMode);
+  const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  await ingestOpencodeInto(cursors, report, contentMode, gap);
+  emitGapWarning('opencode', contentMode, gap, moduleGapState);
   await saveCursors(cursors);
   return report;
 }
@@ -67,11 +139,61 @@ export async function ingestAll(): Promise<IngestReport> {
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
-  await ingestClaudeInto(cursors, report, contentMode);
-  await ingestCodexInto(cursors, report, contentMode);
-  await ingestOpencodeInto(cursors, report, contentMode);
+  const claudeGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  const codexGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  const opencodeGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  await ingestClaudeInto(cursors, report, contentMode, claudeGap);
+  await ingestCodexInto(cursors, report, contentMode, codexGap);
+  await ingestOpencodeInto(cursors, report, contentMode, opencodeGap);
+  emitGapWarning('claude', contentMode, claudeGap, moduleGapState);
+  emitGapWarning('codex', contentMode, codexGap, moduleGapState);
+  emitGapWarning('opencode', contentMode, opencodeGap, moduleGapState);
   await saveCursors(cursors);
   return report;
+}
+
+// Count tool calls in committed turns that lack a corresponding tool_result
+// ContentRecord. Returns { sessionAffected, orphanCount } — a session is
+// "affected" iff (a) it produced ≥1 turn with ≥1 tool call and (b) no
+// tool_result records were captured for it. Per the issue, we ignore the
+// `text`/`thinking`/`tool_use` content kinds because their absence is not
+// load-bearing for `burn waste` attribution.
+export function countToolCallGaps(
+  turns: readonly TurnRecord[],
+  content: readonly ContentRecord[],
+): { sessionAffected: boolean; orphanToolCalls: number } {
+  let toolCallsObserved = 0;
+  for (const t of turns) {
+    toolCallsObserved += t.toolCalls.length;
+  }
+  if (toolCallsObserved === 0) return { sessionAffected: false, orphanToolCalls: 0 };
+  let toolResults = 0;
+  for (const c of content) {
+    if (c.kind === 'tool_result') toolResults++;
+  }
+  if (toolResults > 0) return { sessionAffected: false, orphanToolCalls: 0 };
+  return { sessionAffected: true, orphanToolCalls: toolCallsObserved };
+}
+
+function emitGapWarning(
+  adapter: AdapterName,
+  contentMode: ContentStoreMode,
+  stats: GapStats,
+  state: GapTrackerState,
+): void {
+  if (contentMode !== 'full') return;
+  if (stats.affectedSessions === 0) return;
+  // Suppress if we've already warned for this adapter and no *additional*
+  // affected sessions showed up since then. Without this, a `--watch` loop
+  // would re-print the warning on every poll.
+  const priorEmitted = state.warnedAffectedSessions.get(adapter);
+  if (priorEmitted !== undefined && stats.affectedSessions <= priorEmitted) return;
+  state.warnedAffectedSessions.set(adapter, stats.affectedSessions);
+  state.write(
+    `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
+      `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
+      `adapter, so burn waste will fall back to even-split attribution. See #33.\n`,
+  );
 }
 
 async function resolveContentMode(): Promise<ContentStoreMode> {
@@ -83,8 +205,9 @@ async function ingestClaudeInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
   contentMode: ContentStoreMode,
+  gap: GapStats,
 ): Promise<void> {
-  const projects = await listDirs(CLAUDE_PROJECTS);
+  const projects = await listDirs(claudeProjectsDir());
   for (const projectDir of projects) {
     const files = await listJsonlFiles(projectDir);
     for (const file of files) {
@@ -113,18 +236,38 @@ async function ingestClaudeInto(
         };
         const priorUserText = rotated ? undefined : priorClaude?.lastUserText;
         if (priorUserText) parseOpts.lastUserText = priorUserText;
-        const { turns, content, events, endOffset, lastUserText } =
-          await parseClaudeSessionIncremental(file, parseOpts);
+        const {
+          turns,
+          content,
+          events,
+          relationships,
+          toolResultEvents,
+          endOffset,
+          lastUserText,
+        } = await parseClaudeSessionIncremental(file, parseOpts);
         if (turns.length > 0) {
           await appendTurns(turns);
           report.appendedTurns += turns.length;
           report.ingestedSessions++;
+          if (contentMode === 'full') {
+            const { sessionAffected, orphanToolCalls } = countToolCallGaps(turns, content);
+            if (sessionAffected) {
+              gap.affectedSessions++;
+              gap.orphanToolCalls += orphanToolCalls;
+            }
+          }
         }
         if (content.length > 0) {
           await appendContent(content);
         }
         if (events.length > 0) {
           await appendCompactions(events);
+        }
+        if (relationships.length > 0) {
+          await appendRelationships(relationships);
+        }
+        if (toolResultEvents.length > 0) {
+          await appendToolResultEvents(toolResultEvents);
         }
         const next: ClaudeCursor = {
           kind: 'claude',
@@ -146,8 +289,9 @@ async function ingestCodexInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
   contentMode: ContentStoreMode,
+  gap: GapStats,
 ): Promise<void> {
-  for (const file of await walkJsonl(CODEX_SESSIONS)) {
+  for (const file of await walkJsonl(codexSessionsDir())) {
     report.scannedSessions++;
     try {
       const st = await stat(file);
@@ -185,6 +329,13 @@ async function ingestCodexInto(
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
+        if (contentMode === 'full') {
+          const { sessionAffected, orphanToolCalls } = countToolCallGaps(turns, content);
+          if (sessionAffected) {
+            gap.affectedSessions++;
+            gap.orphanToolCalls += orphanToolCalls;
+          }
+        }
       }
       if (content.length > 0) {
         await appendContent(content);
@@ -211,12 +362,13 @@ async function ingestOpencodeInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
   contentMode: ContentStoreMode,
+  gap: GapStats,
 ): Promise<void> {
-  for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
+  for (const file of await walkOpencodeSessions(opencodeSessionRoot())) {
     report.scannedSessions++;
     try {
       const sessionId = path.basename(file, '.json');
-      const messageDir = path.join(OPENCODE_MESSAGE_ROOT, sessionId);
+      const messageDir = path.join(opencodeMessageRoot(), sessionId);
       const messageMtime = await getDirMtime(messageDir);
       if (messageMtime === null) continue;
 
@@ -244,6 +396,13 @@ async function ingestOpencodeInto(
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
+        if (contentMode === 'full') {
+          const { sessionAffected, orphanToolCalls } = countToolCallGaps(turns, content);
+          if (sessionAffected) {
+            gap.affectedSessions++;
+            gap.orphanToolCalls += orphanToolCalls;
+          }
+        }
       }
       if (content.length > 0) {
         await appendContent(content);
@@ -298,7 +457,7 @@ async function reingestClaudeContent(
   existing: Set<string>,
   report: ReingestContentReport,
 ): Promise<void> {
-  const projects = await listDirs(CLAUDE_PROJECTS);
+  const projects = await listDirs(claudeProjectsDir());
   for (const projectDir of projects) {
     const files = await listJsonlFiles(projectDir);
     for (const file of files) {
@@ -334,7 +493,7 @@ async function reingestCodexContent(
   existing: Set<string>,
   report: ReingestContentReport,
 ): Promise<void> {
-  for (const file of await walkJsonl(CODEX_SESSIONS)) {
+  for (const file of await walkJsonl(codexSessionsDir())) {
     report.scannedFiles++;
     const derived = deriveCodexSessionId(file);
     if (derived && existing.has(derived)) {
@@ -366,7 +525,7 @@ async function reingestOpencodeContent(
   existing: Set<string>,
   report: ReingestContentReport,
 ): Promise<void> {
-  for (const file of await walkOpencodeSessions(OPENCODE_SESSION_ROOT)) {
+  for (const file of await walkOpencodeSessions(opencodeSessionRoot())) {
     report.scannedFiles++;
     const sessionId = path.basename(file, '.json');
     if (existing.has(sessionId)) {

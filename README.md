@@ -80,6 +80,37 @@ The wrapper pre-assigns a session ID, passes `--session-id` to Claude, applies a
 burn claude --tag workflow=refactor --tag persona=senior-eng -- --resume abc
 ```
 
+The same wrapper pattern applies to Codex and OpenCode:
+
+```
+burn codex     [--tag k=v ...] [-- <codex args>]
+burn opencode  [--tag k=v ...] [-- <opencode args>]
+```
+
+### Spawner env-var contract (workflow / agent attribution)
+
+For orchestrators that spawn many agent sessions, threading `--tag` through every wrapper invocation is awkward. All three wrappers also read a fixed set of `RELAYBURN_*` env vars and fold them into the stamp bag:
+
+| Env var                       | Stamp key       |
+|-------------------------------|-----------------|
+| `RELAYBURN_WORKFLOW_ID`       | `workflowId`    |
+| `RELAYBURN_STEP_ID`           | `stepId`        |
+| `RELAYBURN_AGENT_ID`          | `agentId`       |
+| `RELAYBURN_PARENT_AGENT_ID`   | `parentAgentId` |
+| `RELAYBURN_PERSONA`           | `persona`       |
+| `RELAYBURN_TIER`              | `tier`          |
+
+`--tag k=v` flags win on key collision (explicit beats implicit). The merged values are re-exported on the child harness's environment under their canonical names, so a transitive `burn …` invocation inside the child session inherits the same context without the orchestrator having to re-thread it. This gives Codex and OpenCode the same orchestrator-level attribution that Claude already had via stamps, independent of whether the harness reports `isSidechain` / `parentID` natively.
+
+```bash
+export RELAYBURN_WORKFLOW_ID=wf-refactor-auth
+export RELAYBURN_AGENT_ID=ag-42
+burn codex   # workflowId=wf-refactor-auth, agentId=ag-42 stamped
+burn opencode --tag agentId=ag-43   # --tag wins → agentId=ag-43, workflowId still inherited
+```
+
+Other `RELAYBURN_*` variables (`RELAYBURN_HOME`, `RELAYBURN_SESSION_ID`, `RELAYBURN_CONTENT_STORE`, `RELAYBURN_CONTENT_TTL_DAYS`) are burn internals and are **not** treated as stamp tags.
+
 ### Hook-based ingest for orchestrators
 
 If your code already controls the Claude Code spawn, you can install burn's hooks per-invocation via Claude's `--settings` flag — no global `~/.claude/settings.json` mutation needed. Hook payloads land on stdin and get forwarded to `burn ingest`, which incrementally parses the transcript with the same cursor+dedup machinery as `burn claude`.
@@ -150,7 +181,7 @@ A **content sidecar** (enabled by default) stores the full conversation separate
 
 Content is stored because it meaningfully strengthens several attribution and diagnostic paths — tool-call sizing becomes exact (no delta estimation), outcome inference gets a real signal, CLAUDE.md adherence checking becomes possible, and waste patterns can surface the specific error text that caused a retry loop rather than just a count.
 
-Retention defaults to 90 days for the sidecar, forever for the main ledger. Configure via `RELAYBURN_CONTENT_TTL_DAYS`.
+Retention defaults to 90 days for the sidecar, forever for the main ledger. Configure via `RELAYBURN_CONTENT_TTL_DAYS`. Prune is **source-aware**: a sidecar whose upstream session file (`~/.claude/projects/…`, `~/.codex/sessions/…`, `~/.local/share/opencode/storage/…`) still exists is left in place, because `burn rebuild --content` can rederive it. Run `burn content prune --force` (or set `RELAYBURN_PRUNE_FORCE=1`) to delete recoverable sidecars anyway.
 
 Three content modes:
 
@@ -210,6 +241,16 @@ Together these make `oneShotRate = oneShotTurns / editTurns` computable directly
 | `@relayburn/cli` | `burn` binary: spawn wrapper + read/report commands. |
 
 Override ledger location with `RELAYBURN_HOME=/path/to/dir`.
+
+### Reasoning-token pricing semantics
+
+`usage.reasoning` on a `TurnRecord` is always preserved for observability, but how it's billed depends on the source and model:
+
+- **Codex (`source: 'codex'`)** — `output_tokens` already includes reasoning. `burn` does **not** double-bill reasoning on top of output. `usage.reasoning` is informational only. (Matches `ccusage`'s Codex semantics.)
+- **Models with a distinct `cost.reasoning` tariff in `models.dev`** — billed at that tariff (e.g. Alibaba Qwen reasoning models). The flattened `ModelCost` carries `reasoning` and `reasoningMode: 'separate'`.
+- **Everything else (Anthropic Claude, default)** — billed at the model's `output` rate. `reasoningMode: 'same_as_output'`.
+
+You can override per-call via `costForUsage(usage, model, pricing, { reasoningMode })`.
 
 ## CLI
 

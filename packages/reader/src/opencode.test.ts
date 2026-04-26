@@ -383,3 +383,113 @@ describe('parseOpencodeSession content capture', () => {
     });
   });
 });
+
+describe('parseOpencodeSession user-turn block sizes (issue #86)', () => {
+  it('emits one UserTurnRecord per gap between assistant turns', async () => {
+    const file = sessionFile('user-turn-blocks', 'ses_utb');
+    const { turns, userTurns } = await parseOpencodeSession(file);
+    assert.equal(turns.length, 2);
+    // Two gaps with content: pre-a1 (user text) and a1→a2 (tool outputs + user text).
+    assert.equal(userTurns.length, 2);
+
+    for (const u of userTurns) {
+      assert.equal(u.v, 1);
+      assert.equal(u.source, 'opencode');
+      assert.equal(u.sessionId, 'ses_utb');
+      assert.equal(typeof u.userUuid, 'string');
+      assert.ok(u.userUuid.length > 0);
+      assert.ok(u.ts.length > 0);
+      assert.ok(u.blocks.length >= 1);
+    }
+
+    const [pre, between] = userTurns;
+    // Pre-a1 user turn: free-text only, no preceding assistant.
+    assert.equal(pre!.precedingMessageId, undefined);
+    assert.equal(pre!.followingMessageId, 'msg_utb_a1');
+    assert.equal(pre!.userUuid, 'msg_utb_u1', 'user message id is the natural userUuid');
+    assert.equal(pre!.blocks.length, 1);
+    assert.equal(pre!.blocks[0]!.kind, 'text');
+    assert.equal(pre!.blocks[0]!.byteLen, Buffer.byteLength('fix the build', 'utf8'));
+    assert.equal(pre!.blocks[0]!.approxTokens, Math.ceil(13 / 4));
+
+    // a1 → a2 gap: tool outputs from a1's parts + user text from u2.
+    assert.equal(between!.precedingMessageId, 'msg_utb_a1');
+    assert.equal(between!.followingMessageId, 'msg_utb_a2');
+    assert.equal(between!.userUuid, 'msg_utb_u2');
+    assert.equal(between!.blocks.length, 3);
+
+    const okBlock = between!.blocks.find((b) => b.toolUseId === 'call_b1');
+    assert.ok(okBlock);
+    assert.equal(okBlock!.kind, 'tool_result');
+    assert.equal(okBlock!.byteLen, Buffer.byteLength('ok\n', 'utf8'));
+    assert.equal(okBlock!.approxTokens, Math.ceil(3 / 4));
+    assert.equal(okBlock!.isError, undefined);
+
+    const failBlock = between!.blocks.find((b) => b.toolUseId === 'call_fail');
+    assert.ok(failBlock);
+    assert.equal(failBlock!.kind, 'tool_result');
+    assert.equal(failBlock!.byteLen, Buffer.byteLength('ERROR: tests failed', 'utf8'));
+    assert.equal(failBlock!.approxTokens, Math.ceil(19 / 4));
+    assert.equal(failBlock!.isError, true, 'exit!=0 surfaces isError on the block');
+
+    const txtBlock = between!.blocks.find((b) => b.kind === 'text');
+    assert.ok(txtBlock);
+    assert.equal(txtBlock!.byteLen, Buffer.byteLength('now run tests', 'utf8'));
+  });
+
+  it('reconciles input + cacheWrite delta against user-turn block tokens', async () => {
+    // Per issue #86: `(input + cacheWrite) - output(prev)` on consecutive
+    // assistant messages should be positive and the same order of magnitude
+    // as the sum of approxTokens in the user turn between them. OpenCode
+    // reports per-message tokens (not cumulative), so the math is direct.
+    const file = sessionFile('user-turn-blocks', 'ses_utb');
+    const { turns, userTurns } = await parseOpencodeSession(file);
+    assert.equal(turns.length, 2);
+    const between = userTurns.find((u) => u.followingMessageId === 'msg_utb_a2');
+    assert.ok(between);
+    const userTurnTokens = between!.blocks.reduce((s, b) => s + b.approxTokens, 0);
+    const prev = turns[0]!;
+    const cur = turns[1]!;
+    // OpenCode usage maps cache.write → cacheCreate5m.
+    const lhs = cur.usage.input + cur.usage.cacheCreate5m - prev.usage.output;
+    assert.ok(lhs > 0, '(input + cacheWrite)(N+1) - output(N) should be positive');
+    assert.equal(lhs, userTurnTokens, 'fixture is engineered for an exact reconciliation match');
+  });
+
+  it('emits empty userTurns for a session with no measurable user-side blocks', async () => {
+    // The bundled multi-turn fixture has user messages with no part files
+    // (no user text on disk), a1 has only step-finish (no tool parts), and
+    // a2's tool outputs would attribute to a (non-existent) a3 gap. So no
+    // gap on this session has any block to emit.
+    const file = sessionFile('multi-turn', 'ses_multi');
+    const { userTurns } = await parseOpencodeSession(file);
+    assert.deepEqual(userTurns, []);
+  });
+
+  it('does not double-emit user turns across resumed incremental passes', async () => {
+    // Pass 1 sees only a1 (pre-a1 user turn). Pass 2 sees a2 (a1→a2 user turn).
+    // The seenMessageIds dedup prevents re-processing a1; the user turn between
+    // a1 and a2 is built fresh on pass 2 by re-reading a1's tool parts.
+    const file = sessionFile('user-turn-blocks', 'ses_utb');
+    const first = await parseOpencodeSessionIncremental(file, {
+      seenMessageIds: new Set(),
+    });
+    // Without filtering, both user turns are emitted in one pass.
+    assert.equal(first.userTurns.length, 2);
+
+    // Simulate a resumed pass: pass 1 processed a1, pass 2 picks up a2.
+    const seenAfterPass1 = new Set(['msg_utb_a1']);
+    const resumed = await parseOpencodeSessionIncremental(file, {
+      seenMessageIds: seenAfterPass1,
+    });
+    assert.equal(resumed.turns.length, 1, 'only the new assistant is processed');
+    assert.equal(resumed.turns[0]!.messageId, 'msg_utb_a2');
+    // The resumed pass emits the a1→a2 user turn (built from a1's parts on
+    // disk + u2's text), with no double-emit of pre-a1.
+    assert.equal(resumed.userTurns.length, 1);
+    const u = resumed.userTurns[0]!;
+    assert.equal(u.precedingMessageId, 'msg_utb_a1');
+    assert.equal(u.followingMessageId, 'msg_utb_a2');
+    assert.equal(u.blocks.length, 3, 'tool outputs + inter-turn text are all present');
+  });
+});

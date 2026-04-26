@@ -1,4 +1,9 @@
-import type { CompactionEvent, TurnRecord } from '@relayburn/reader';
+import type {
+  CompactionEvent,
+  SessionRelationshipRecord,
+  ToolResultEventRecord,
+  TurnRecord,
+} from '@relayburn/reader';
 
 export type Enrichment = Record<string, string>;
 
@@ -35,7 +40,29 @@ export interface CompactionLine {
   record: CompactionEvent;
 }
 
-export type LedgerLine = TurnLine | StampLine | CompactionLine;
+// Execution graph (#42). Two new ledger line kinds, both append-only and
+// keyed by (source, sessionId, …) the same way TurnLine is. Old readers
+// that don't know about these kinds simply skip them — the existing
+// `isTurnLine` / `isStampLine` / `isCompactionLine` guards already filter
+// to only the kinds they understand.
+export interface SessionRelationshipLine {
+  v: 1;
+  kind: 'relationship';
+  record: SessionRelationshipRecord;
+}
+
+export interface ToolResultEventLine {
+  v: 1;
+  kind: 'tool_result_event';
+  record: ToolResultEventRecord;
+}
+
+export type LedgerLine =
+  | TurnLine
+  | StampLine
+  | CompactionLine
+  | SessionRelationshipLine
+  | ToolResultEventLine;
 
 export function isTurnLine(line: unknown): line is TurnLine {
   return (
@@ -60,6 +87,28 @@ export function isCompactionLine(line: unknown): line is CompactionLine {
     !!line &&
     typeof line === 'object' &&
     (line as { kind?: string }).kind === 'compaction' &&
+    (line as { v?: number }).v === 1
+  );
+}
+
+export function isSessionRelationshipLine(
+  line: unknown,
+): line is SessionRelationshipLine {
+  return (
+    !!line &&
+    typeof line === 'object' &&
+    (line as { kind?: string }).kind === 'relationship' &&
+    (line as { v?: number }).v === 1
+  );
+}
+
+export function isToolResultEventLine(
+  line: unknown,
+): line is ToolResultEventLine {
+  return (
+    !!line &&
+    typeof line === 'object' &&
+    (line as { kind?: string }).kind === 'tool_result_event' &&
     (line as { v?: number }).v === 1
   );
 }

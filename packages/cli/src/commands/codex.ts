@@ -7,12 +7,18 @@ import { appendContent, appendTurns, loadConfig, stamp } from '@relayburn/ledger
 import type { Enrichment } from '@relayburn/ledger';
 
 import type { ParsedArgs } from '../args.js';
+import {
+  mergeSpawnTags,
+  readSpawnEnvTags,
+  spawnTagEnvOverrides,
+} from '../spawn-tags.js';
 import { walkJsonl } from '../walk.js';
 
 const CODEX_SESSIONS = path.join(homedir(), '.codex', 'sessions');
 
 export async function runCodexWrapper(args: ParsedArgs): Promise<number> {
-  const tags: Enrichment = { ...args.tags };
+  const envTags = readSpawnEnvTags();
+  const tags: Enrichment = mergeSpawnTags(envTags, args.tags);
   tags['harness'] = 'codex';
   tags['burnSpawn'] = '1';
   const spawnStartTs = Date.now();
@@ -21,7 +27,10 @@ export async function runCodexWrapper(args: ParsedArgs): Promise<number> {
   const preSnapshot = await snapshotSessions();
   process.stderr.write(`[burn] codex spawn: tracking ${preSnapshot.size} existing sessions\n`);
 
-  const child = spawn('codex', args.passthrough, { stdio: 'inherit', env: process.env });
+  const child = spawn('codex', args.passthrough, {
+    stdio: 'inherit',
+    env: { ...process.env, ...spawnTagEnvOverrides(tags) },
+  });
   const code: number = await new Promise((resolve) => {
     child.on('exit', (c) => resolve(c ?? 0));
     child.on('error', (err) => {

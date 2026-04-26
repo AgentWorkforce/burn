@@ -2,12 +2,20 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
-import type { CompactionEvent, SourceKind, TurnRecord } from '@relayburn/reader';
+import type {
+  CompactionEvent,
+  SessionRelationshipRecord,
+  SourceKind,
+  ToolResultEventRecord,
+  TurnRecord,
+} from '@relayburn/reader';
 
 import { ledgerPath } from './paths.js';
 import {
   isCompactionLine,
+  isSessionRelationshipLine,
   isStampLine,
+  isToolResultEventLine,
   isTurnLine,
   stampMatches,
   type Enrichment,
@@ -127,6 +135,51 @@ export async function queryCompactions(q: Query = {}): Promise<CompactionEvent[]
   for await (const parsed of streamLines(filePath)) {
     if (!isCompactionLine(parsed)) continue;
     if (!compactionPasses(parsed.record, q)) continue;
+    out.push(parsed.record);
+  }
+  return out;
+}
+
+function relationshipPasses(r: SessionRelationshipRecord, q: Query): boolean {
+  if (q.since && r.ts && r.ts < q.since) return false;
+  if (q.until && r.ts && r.ts > q.until) return false;
+  if (q.sessionId && r.sessionId !== q.sessionId && r.relatedSessionId !== q.sessionId)
+    return false;
+  if (q.source && r.source !== q.source) return false;
+  return true;
+}
+
+function toolResultEventPasses(r: ToolResultEventRecord, q: Query): boolean {
+  if (q.since && r.ts && r.ts < q.since) return false;
+  if (q.until && r.ts && r.ts > q.until) return false;
+  if (q.sessionId && r.sessionId !== q.sessionId) return false;
+  if (q.source && r.source !== q.source) return false;
+  return true;
+}
+
+export async function queryRelationships(
+  q: Query = {},
+): Promise<SessionRelationshipRecord[]> {
+  const filePath = ledgerPath();
+  if (!(await fileExists(filePath))) return [];
+  const out: SessionRelationshipRecord[] = [];
+  for await (const parsed of streamLines(filePath)) {
+    if (!isSessionRelationshipLine(parsed)) continue;
+    if (!relationshipPasses(parsed.record, q)) continue;
+    out.push(parsed.record);
+  }
+  return out;
+}
+
+export async function queryToolResultEvents(
+  q: Query = {},
+): Promise<ToolResultEventRecord[]> {
+  const filePath = ledgerPath();
+  if (!(await fileExists(filePath))) return [];
+  const out: ToolResultEventRecord[] = [];
+  for await (const parsed of streamLines(filePath)) {
+    if (!isToolResultEventLine(parsed)) continue;
+    if (!toolResultEventPasses(parsed.record, q)) continue;
     out.push(parsed.record);
   }
   return out;
