@@ -344,6 +344,13 @@ async function ingestCodexInto(
             sessionId: priorCodex.sessionId,
             turnContexts: { ...priorCodex.turnContexts },
             ...(priorCodex.sessionCwd !== undefined ? { sessionCwd: priorCodex.sessionCwd } : {}),
+            // Execution-graph (#42 / #87) committed counters. Carried across
+            // `burn` invocations so dedup at the writer is the only line of
+            // defense — without these the second pass would emit an
+            // already-committed root row and reset eventIndex to 0.
+            rootSessionEmitted: priorCodex.rootSessionEmitted === true,
+            nextEventIndex: priorCodex.nextEventIndex ?? 0,
+            toolResultCounters: { ...(priorCodex.toolResultCounters ?? {}) },
           };
 
       if (!rotated && startOffset >= st.size) {
@@ -357,8 +364,15 @@ async function ingestCodexInto(
         contentMode,
       };
       if (resume !== undefined) opts.resume = resume;
-      const { turns, content, userTurns, endOffset, resume: nextResume } =
-        await parseCodexSessionIncremental(file, opts);
+      const {
+        turns,
+        content,
+        userTurns,
+        relationships,
+        toolResultEvents,
+        endOffset,
+        resume: nextResume,
+      } = await parseCodexSessionIncremental(file, opts);
       if (turns.length > 0) {
         await appendTurns(turns);
         report.appendedTurns += turns.length;
@@ -374,6 +388,12 @@ async function ingestCodexInto(
       if (content.length > 0) {
         await appendContent(content);
       }
+      if (relationships.length > 0) {
+        await appendRelationships(relationships);
+      }
+      if (toolResultEvents.length > 0) {
+        await appendToolResultEvents(toolResultEvents);
+      }
       if (userTurns.length > 0) {
         await appendUserTurns(userTurns);
       }
@@ -387,6 +407,11 @@ async function ingestCodexInto(
         turnContexts: nextResume.turnContexts,
       };
       if (nextResume.sessionCwd !== undefined) next.sessionCwd = nextResume.sessionCwd;
+      if (nextResume.rootSessionEmitted === true) next.rootSessionEmitted = true;
+      if (nextResume.nextEventIndex !== undefined) next.nextEventIndex = nextResume.nextEventIndex;
+      if (nextResume.toolResultCounters && Object.keys(nextResume.toolResultCounters).length > 0) {
+        next.toolResultCounters = nextResume.toolResultCounters;
+      }
       cursors[file] = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

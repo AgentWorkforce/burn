@@ -3,13 +3,16 @@ import { open } from 'node:fs/promises';
 import { classifyActivity } from './classifier.js';
 import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
-import { argsHash } from './hash.js';
+import { argsHash, contentHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
   Coverage,
   Fidelity,
+  SessionRelationshipRecord,
   ToolCall,
+  ToolResultEventRecord,
+  ToolResultStatus,
   TurnRecord,
   Usage,
   UserTurnBlock,
@@ -38,6 +41,18 @@ export interface CodexResumeState {
   // committed turn live here until the next task_started stamps `following`
   // and the subsequent task_complete commits the record. Issue #81.
   userTurnSlot?: PersistedUserTurnSlot;
+  // Execution-graph counters (#42 / #87). All committed-state — only advanced
+  // at task_complete boundaries. These survive across resumes so the next
+  // pass produces session-monotonic `eventIndex` values without duplicating
+  // any already-emitted (sessionId, toolUseId, eventIndex) tuple, and so the
+  // root relationship row is emitted exactly once per session id.
+  rootSessionEmitted?: boolean;
+  nextEventIndex?: number;
+  // Per-tool-call event counter — eventually filled with the `callIndex`
+  // for the next event seen for this call_id. Codex tool calls almost
+  // always have exactly one output, but spawn_agent / wait fanouts can
+  // produce multiple events for the same call_id.
+  toolResultCounters?: Record<string, number>;
 }
 
 export interface PersistedUserTurnSlot {
@@ -50,6 +65,16 @@ export interface ParseCodexIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  // Execution graph (#42 / #87). `relationships` carries one `root` row per
+  // newly-seen session id and one `subagent` row per `spawn_agent` call.
+  // `toolResultEvents` carries one row per `function_call_output` /
+  // `custom_tool_call_output` (with status patched from
+  // `exec_command_end.exit_code` / `patch_apply_end.success` when seen) plus
+  // one row per `subagent_message_complete` notification. Both arrays
+  // respect the same committed-end-offset deferral the rest of the
+  // incremental result uses, so resumed ingest doesn't double-emit.
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
   endOffset: number;
   resume: CodexResumeState;
 }
@@ -145,6 +170,23 @@ interface CustomToolCallOutputPayload {
   output?: unknown;
 }
 
+// `event_msg` payload that confirms a spawned subagent has reached a
+// terminal state. Codex doesn't have a single canonical name for this —
+// implementations vary across rollout versions. We accept any event_msg
+// type beginning with `subagent_` and ending with `_complete` / `_done` /
+// `_finished` (e.g. `subagent_message_complete`, `subagent_done`,
+// `subagent_finished`) so long as it carries a `call_id` joining it back
+// to the spawning function call.
+interface SubagentNotificationPayload {
+  type: string;
+  call_id?: string;
+  agent_id?: string;
+  subagent_id?: string;
+  session_id?: string;
+  success?: boolean;
+  status?: string;
+}
+
 interface CumulativeUsage {
   input: number;
   output: number;
@@ -167,11 +209,35 @@ interface OpenTurn {
   // Captured only when contentMode === 'full'. Emitted alongside the turn
   // once task_complete commits it; dropped if the turn never commits.
   content: ContentRecord[];
+  // Per-turn buffer of pending execution-graph rows. They're committed (folded
+  // into the parser-level `pendingToolResultEvents` / `pendingRelationships`
+  // arrays) when the enclosing turn's task_complete fires, and dropped if
+  // the turn never commits. status on tool-result events is patched at
+  // commit time using `erroredCallIds`, since `exec_command_end` /
+  // `patch_apply_end` ordering relative to the output payload isn't
+  // guaranteed.
+  pendingToolResultEvents: ToolResultEventRecord[];
+  pendingRelationships: SessionRelationshipRecord[];
+  // Per-call_id metadata for `spawn_agent` calls seen in this turn — used to
+  // build the `subagent` SessionRelationshipRecord once the spawning call's
+  // output (or terminal notification) resolves the spawned agent's id.
+  spawnCalls: Map<string, SpawnCallInfo>;
   // Set true once a `token_count` event with `total_token_usage` is observed
   // while this turn is open. Drives the per-turn usage `Coverage` flags so a
   // turn whose source omitted `total_token_usage` lands in `class: 'partial'`
   // rather than silently reporting zeros as full-fidelity (#84).
   usageObserved: boolean;
+}
+
+interface SpawnCallInfo {
+  callId: string;
+  ts: string;
+  subagentType?: string;
+  description?: string;
+  // Resolved from the function_call_output / notification when seen.
+  spawnedAgentId?: string;
+  // Whether we've already emitted a SessionRelationshipRecord for this spawn.
+  emitted: boolean;
 }
 
 interface FinalizedTurn
@@ -181,6 +247,9 @@ interface FinalizedTurn
     | 'seenCallIds'
     | 'filesTouched'
     | 'erroredCallIds'
+    | 'pendingToolResultEvents'
+    | 'pendingRelationships'
+    | 'spawnCalls'
     | 'usageObserved'
   > {
   usage: Usage;
@@ -199,17 +268,22 @@ export interface ParseCodexResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  // Execution graph (#42 / #87). See `ParseCodexIncrementalResult` for the
+  // shape; full parses always reflect the committed state at end-of-file.
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
 }
 
 export async function parseCodexSession(
   filePath: string,
   options: ParseCodexOptions = {},
 ): Promise<ParseCodexResult> {
-  const { turns, content, userTurns } = await parseCodexSessionIncremental(filePath, {
-    ...options,
-    startOffset: 0,
-  });
-  return { turns, content, userTurns };
+  const { turns, content, userTurns, relationships, toolResultEvents } =
+    await parseCodexSessionIncremental(filePath, {
+      ...options,
+      startOffset: 0,
+    });
+  return { turns, content, userTurns, relationships, toolResultEvents };
 }
 
 export async function parseCodexSessionIncremental(
@@ -228,6 +302,8 @@ export async function parseCodexSessionIncremental(
         turns: [],
         content: [],
         userTurns: [],
+        relationships: [],
+        toolResultEvents: [],
         endOffset: startOffset,
         resume: cloneResume(options.resume),
       };
@@ -273,6 +349,33 @@ export async function parseCodexSessionIncremental(
     : { blocks: [], ts: '' };
   const userTurns: UserTurnRecord[] = [];
 
+  // Execution-graph (#42 / #87) state. All four are committed-state — they
+  // only count toward the final result once the enclosing turn's
+  // task_complete fires. The counters and seen-set are seeded from the
+  // resume blob so `eventIndex` stays session-monotonic across re-ingest
+  // cycles and the root row is emitted exactly once per session id.
+  let rootSessionEmitted = options.resume?.rootSessionEmitted === true;
+  let nextEventIndex = options.resume?.nextEventIndex ?? 0;
+  const toolResultCounters = new Map<string, number>();
+  if (options.resume?.toolResultCounters) {
+    for (const [k, v] of Object.entries(options.resume.toolResultCounters)) {
+      toolResultCounters.set(k, v);
+    }
+  }
+  // Pending records, tagged with the byte offset of their source line so
+  // we can drop anything past `committedEndOffset` at output time. Loose
+  // tool-result events (those whose function_call_output arrived without
+  // an open turn) live here too; they're committed when the next
+  // task_complete advances `committedEndOffset` past their offset.
+  const pendingToolResultEvents: Array<{
+    offset: number;
+    record: ToolResultEventRecord;
+  }> = [];
+  const pendingRelationships: Array<{
+    offset: number;
+    record: SessionRelationshipRecord;
+  }> = [];
+
   // Commit snapshot — only advanced at task_complete boundaries.
   let committedEndOffset = startOffset;
   let committedCumulative: CumulativeUsage = { ...cumulative };
@@ -282,6 +385,9 @@ export async function parseCodexSessionIncremental(
   let committedFinalizedCount = 0;
   let committedUserTurnsCount = 0;
   let committedUserTurnSlot: UserTurnSlot = cloneSlot(userTurnSlot);
+  let committedRootSessionEmitted = rootSessionEmitted;
+  let committedNextEventIndex = nextEventIndex;
+  let committedToolResultCounters = new Map(toolResultCounters);
 
   let p = 0;
   while (p < buf.length) {
@@ -312,6 +418,20 @@ export async function parseCodexSessionIncremental(
       if (typeof sp.cwd === 'string') {
         sessionCwd = sp.cwd;
         if (openTurn && openTurn.project === undefined) openTurn.project = sp.cwd;
+      }
+      // Emit the root SessionRelationshipRecord exactly once per session id.
+      // Codex always carries the session id on session_meta; the row is
+      // pending until the next task_complete commits it (mirrors the
+      // committed-end-offset deferral the rest of the parser uses), so a
+      // session_meta without any subsequent task_complete won't surface a
+      // root row in the result.
+      if (typeof sessionId === 'string' && sessionId.length > 0 && !rootSessionEmitted) {
+        rootSessionEmitted = true;
+        const ts = typeof sp.timestamp === 'string' ? sp.timestamp : rec.timestamp;
+        pendingRelationships.push({
+          offset: lineEndOffset,
+          record: buildRootRelationship(sessionId, ts),
+        });
       }
       continue;
     }
@@ -381,6 +501,9 @@ export async function parseCodexSessionIncremental(
           assistantText: '',
           erroredCallIds: new Set(),
           content: [],
+          pendingToolResultEvents: [],
+          pendingRelationships: [],
+          spawnCalls: new Map(),
           usageObserved: false,
         };
         pendingUserText = '';
@@ -412,6 +535,22 @@ export async function parseCodexSessionIncremental(
               b.isError = true;
             }
           }
+          // Patch status / isError on pending tool_result events whose
+          // call_id ended up in `erroredCallIds`. Then drain the turn's
+          // pending execution-graph rows into the parser-level pending
+          // arrays so they're committed for emission below.
+          for (const ev of openTurn.pendingToolResultEvents) {
+            if (openTurn.erroredCallIds.has(ev.toolUseId)) {
+              ev.status = 'errored';
+              ev.isError = true;
+            } else if (ev.status === 'unknown') {
+              ev.status = 'completed';
+            }
+            pendingToolResultEvents.push({ offset: lineEndOffset, record: ev });
+          }
+          for (const r of openTurn.pendingRelationships) {
+            pendingRelationships.push({ offset: lineEndOffset, record: r });
+          }
           // Stamp preceding so the next task_started knows this turn closed
           // off the slot and the record can be linked.
           userTurnSlot.precedingMessageId = openTurn.turnId;
@@ -425,6 +564,9 @@ export async function parseCodexSessionIncremental(
           committedFinalizedCount = finalized.length;
           committedUserTurnsCount = userTurns.length;
           committedUserTurnSlot = cloneSlot(userTurnSlot);
+          committedRootSessionEmitted = rootSessionEmitted;
+          committedNextEventIndex = nextEventIndex;
+          committedToolResultCounters = new Map(toolResultCounters);
         }
         continue;
       }
@@ -448,6 +590,56 @@ export async function parseCodexSessionIncremental(
         if (!openTurn || ev.turn_id !== openTurn.turnId) continue;
         if (typeof ev.exit_code === 'number' && ev.exit_code !== 0 && typeof ev.call_id === 'string') {
           openTurn.erroredCallIds.add(ev.call_id);
+        }
+        continue;
+      }
+
+      // Terminal subagent notification — joined back to the spawning call by
+      // call_id. Codex emits these as `event_msg` payloads with
+      // implementation-specific names; we accept any type starting with
+      // `subagent_` and ending in a terminal-status suffix so the parser
+      // doesn't have to track every rollout-version naming scheme.
+      if (typeof pl.type === 'string' && isSubagentTerminalNotification(pl.type)) {
+        const note = payload as SubagentNotificationPayload;
+        if (typeof note.call_id !== 'string' || note.call_id.length === 0) continue;
+        const callIndex = toolResultCounters.get(note.call_id) ?? 0;
+        toolResultCounters.set(note.call_id, callIndex + 1);
+        const status = subagentNotificationStatus(note);
+        const evRec: ToolResultEventRecord = {
+          v: 1,
+          source: 'codex',
+          sessionId,
+          toolUseId: note.call_id,
+          callIndex,
+          eventIndex: nextEventIndex++,
+          status,
+          eventSource: 'subagent_notification',
+        };
+        if (openTurn) evRec.messageId = openTurn.turnId;
+        if (rec.timestamp) evRec.ts = rec.timestamp;
+        if (status === 'errored') evRec.isError = true;
+        const spawnedId =
+          (typeof note.agent_id === 'string' && note.agent_id) ||
+          (typeof note.subagent_id === 'string' && note.subagent_id) ||
+          (typeof note.session_id === 'string' && note.session_id) ||
+          undefined;
+        if (spawnedId) {
+          evRec.agentId = spawnedId;
+          evRec.subagentSessionId = spawnedId;
+          // Backfill the spawn relationship if the spawning function_call
+          // didn't carry the id and the function_call_output never did either.
+          if (openTurn) {
+            const spawn = openTurn.spawnCalls.get(note.call_id);
+            if (spawn && !spawn.spawnedAgentId) {
+              spawn.spawnedAgentId = spawnedId;
+              maybeEmitSpawnRelationship(openTurn, sessionId, spawn, rec.timestamp ?? '');
+            }
+          }
+        }
+        if (openTurn) {
+          openTurn.pendingToolResultEvents.push(evRec);
+        } else {
+          pendingToolResultEvents.push({ offset: lineEndOffset, record: evRec });
         }
         continue;
       }
@@ -530,6 +722,53 @@ export async function parseCodexSessionIncremental(
         // payload isn't guaranteed.
         userTurnSlot.blocks.push(makeToolResultBlock(out.call_id, out.output));
         if (!userTurnSlot.ts && itemTs) userTurnSlot.ts = itemTs;
+        // Build the ToolResultEventRecord (#42 / #87). Status is derived from
+        // `erroredCallIds` if exec_command_end / patch_apply_end already fired
+        // for this call_id; otherwise we fall back to `unknown` and patch at
+        // task_complete (status arrival is not ordered relative to output).
+        const callIndex = toolResultCounters.get(out.call_id) ?? 0;
+        toolResultCounters.set(out.call_id, callIndex + 1);
+        const initialStatus: ToolResultStatus = openTurn?.erroredCallIds.has(out.call_id)
+          ? 'errored'
+          : 'unknown';
+        const evRec: ToolResultEventRecord = {
+          v: 1,
+          source: 'codex',
+          sessionId,
+          toolUseId: out.call_id,
+          callIndex,
+          eventIndex: nextEventIndex++,
+          status: initialStatus,
+          eventSource: 'function_call_output',
+        };
+        if (openTurn) evRec.messageId = openTurn.turnId;
+        if (itemTs) evRec.ts = itemTs;
+        if (initialStatus === 'errored') evRec.isError = true;
+        const measured = measureToolOutput(out.output);
+        if (measured.length !== undefined) evRec.contentLength = measured.length;
+        if (measured.hash !== undefined) evRec.contentHash = measured.hash;
+        // If the call was a `spawn_agent`, resolve the spawned agent's id from
+        // the output payload and record it both on the event and the pending
+        // SessionRelationshipRecord built when the function_call was seen.
+        if (openTurn) {
+          const spawn = openTurn.spawnCalls.get(out.call_id);
+          if (spawn) {
+            const spawnedId = extractSpawnedAgentId(out.output);
+            if (spawnedId) {
+              spawn.spawnedAgentId = spawnedId;
+              evRec.agentId = spawnedId;
+              evRec.subagentSessionId = spawnedId;
+            }
+            maybeEmitSpawnRelationship(openTurn, sessionId, spawn, itemTs);
+          }
+          openTurn.pendingToolResultEvents.push(evRec);
+        } else {
+          // Output landed outside any open turn (e.g. trailing after the
+          // last task_complete). Commit it immediately as 'unknown' — we
+          // can't retroactively patch status without an open-turn context,
+          // and the next task_complete (if any) will simply pass it through.
+          pendingToolResultEvents.push({ offset: lineEndOffset, record: evRec });
+        }
         if (!captureContent) continue;
         pushContent(openTurn, pendingContent, {
           v: 1,
@@ -558,6 +797,28 @@ export async function parseCodexSessionIncremental(
         const target = pickFunctionCallTarget(fc.name, parsedArgs);
         if (target !== undefined) call.target = target;
         openTurn.toolCalls.push(call);
+        // Capture spawn_agent metadata so the eventual function_call_output /
+        // subagent notification can complete a SessionRelationshipRecord.
+        // The relationship row is emitted as soon as we know the spawned
+        // agent's id (or, failing that, never — without an id the row would
+        // carry no useful join key).
+        if (fc.name === 'spawn_agent') {
+          const info: SpawnCallInfo = {
+            callId: fc.call_id,
+            ts: itemTs,
+            emitted: false,
+          };
+          if (parsedArgs) {
+            const t = pickStringField(parsedArgs, ['subagent_type', 'agent_type', 'type']);
+            const d = pickStringField(parsedArgs, ['description', 'task', 'prompt']);
+            if (t !== undefined) info.subagentType = t;
+            if (d !== undefined) info.description = d;
+            const id = pickStringField(parsedArgs, ['agent_id', 'subagent_id', 'session_id']);
+            if (id !== undefined) info.spawnedAgentId = id;
+          }
+          openTurn.spawnCalls.set(fc.call_id, info);
+          maybeEmitSpawnRelationship(openTurn, sessionId, info, itemTs);
+        }
         if (captureContent) {
           openTurn.content.push({
             v: 1,
@@ -645,15 +906,32 @@ export async function parseCodexSessionIncremental(
     sessionId: committedSessionId,
     turnContexts: Object.fromEntries(committedTurnContexts),
     userTurnSlot: cloneSlot(committedUserTurnSlot),
+    rootSessionEmitted: committedRootSessionEmitted,
+    nextEventIndex: committedNextEventIndex,
+    toolResultCounters: Object.fromEntries(committedToolResultCounters),
   };
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
 
   const emittedUserTurns = userTurns.slice(0, committedUserTurnsCount);
 
+  // Execution graph (#42 / #87). Emit only records whose source line ended
+  // at-or-before the committed end offset — anything past it belongs to an
+  // open / partial turn and will be re-emitted by the next incremental pass.
+  const emittedRelationships: SessionRelationshipRecord[] = [];
+  for (const r of pendingRelationships) {
+    if (r.offset <= committedEndOffset) emittedRelationships.push(r.record);
+  }
+  const emittedToolResultEvents: ToolResultEventRecord[] = [];
+  for (const ev of pendingToolResultEvents) {
+    if (ev.offset <= committedEndOffset) emittedToolResultEvents.push(ev.record);
+  }
+
   return {
     turns,
     content,
     userTurns: emittedUserTurns,
+    relationships: emittedRelationships,
+    toolResultEvents: emittedToolResultEvents,
     endOffset: committedEndOffset,
     resume,
   };
@@ -690,12 +968,18 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
       sessionId: '',
       turnContexts: {},
       userTurnSlot: { blocks: [], ts: '' },
+      rootSessionEmitted: false,
+      nextEventIndex: 0,
+      toolResultCounters: {},
     };
   }
   const out: CodexResumeState = {
     cumulative: { ...r.cumulative },
     sessionId: r.sessionId,
     turnContexts: { ...r.turnContexts },
+    rootSessionEmitted: r.rootSessionEmitted === true,
+    nextEventIndex: r.nextEventIndex ?? 0,
+    toolResultCounters: { ...(r.toolResultCounters ?? {}) },
   };
   if (r.sessionCwd !== undefined) out.sessionCwd = r.sessionCwd;
   if (r.userTurnSlot) out.userTurnSlot = cloneSlot(r.userTurnSlot);
@@ -783,8 +1067,9 @@ function buildCodexFidelity(usageObserved: boolean): Fidelity {
   // cache-create concept (the `FULL_REQUIRED` matrix in fidelity.ts excludes
   // this field, so absence does not demote a turn from `full`).
   //
-  // `hasSessionRelationships` is `false` until the spawn-tagging substrate
-  // lands (#42, #63) — Codex rollouts have no parent-tracking path today.
+  // `hasSessionRelationships` is `true` now that the Codex parser emits
+  // `root` / `subagent` SessionRelationshipRecords (#87) — capability, not
+  // presence, so tool-less turns still report `true`.
   const coverage: Coverage = {
     ...EMPTY_COVERAGE,
     hasInputTokens: usageObserved,
@@ -794,7 +1079,7 @@ function buildCodexFidelity(usageObserved: boolean): Fidelity {
     hasCacheCreateTokens: false,
     hasToolCalls: true,
     hasToolResultEvents: true,
-    hasSessionRelationships: false,
+    hasSessionRelationships: true,
     hasRawContent: true,
   };
   return makeFidelity('per-turn', coverage);
@@ -874,4 +1159,131 @@ function pickCustomToolTarget(name: string, input: string): string | undefined {
     if (m) return m[1];
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Execution graph helpers (#42 / #87).
+// ---------------------------------------------------------------------------
+
+function buildRootRelationship(
+  sessionId: string,
+  ts?: string,
+): SessionRelationshipRecord {
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'codex',
+    sessionId,
+    relationshipType: 'root',
+  };
+  if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+  return row;
+}
+
+// Build / refresh the SessionRelationshipRecord for a `spawn_agent` call once
+// we know enough to make it useful. The row only carries weight when the
+// spawned agent's id is known (so consumers can join child→parent), so we
+// deliberately don't emit a placeholder when the id is still missing.
+// Idempotent: `info.emitted` flips on the first commit so the second
+// resolution path (output then notification, or vice versa) doesn't add a
+// duplicate row.
+function maybeEmitSpawnRelationship(
+  openTurn: OpenTurn,
+  sessionId: string,
+  info: SpawnCallInfo,
+  ts: string,
+): void {
+  if (info.emitted) return;
+  if (!info.spawnedAgentId) return;
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'codex',
+    sessionId: info.spawnedAgentId,
+    relationshipType: 'subagent',
+    relatedSessionId: sessionId,
+    parentToolUseId: info.callId,
+    agentId: info.spawnedAgentId,
+  };
+  if (info.subagentType !== undefined) row.subagentType = info.subagentType;
+  if (info.description !== undefined) row.description = info.description;
+  const stamp = ts || info.ts;
+  if (stamp) row.ts = stamp;
+  openTurn.pendingRelationships.push(row);
+  info.emitted = true;
+}
+
+function pickStringField(
+  obj: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  return undefined;
+}
+
+// Best-effort extraction of a spawned agent / session id from a
+// `function_call_output.output`. Codex output payloads vary by tool
+// implementation — we look for common id-bearing fields whether the output
+// is a JSON object, a JSON string, or a plain string we can parse.
+function extractSpawnedAgentId(output: unknown): string | undefined {
+  if (!output) return undefined;
+  let obj: Record<string, unknown> | undefined;
+  if (typeof output === 'object' && !Array.isArray(output)) {
+    obj = output as Record<string, unknown>;
+  } else if (typeof output === 'string') {
+    try {
+      const parsed = JSON.parse(output);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        obj = parsed as Record<string, unknown>;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  if (!obj) return undefined;
+  return pickStringField(obj, ['agent_id', 'subagent_id', 'session_id']);
+}
+
+function measureToolOutput(output: unknown): { length?: number; hash?: string } {
+  if (output === undefined || output === null) return {};
+  if (typeof output === 'string') {
+    return { length: output.length, hash: contentHash(output) };
+  }
+  try {
+    const serialized = JSON.stringify(output);
+    if (typeof serialized !== 'string') return {};
+    return { length: serialized.length, hash: contentHash(serialized) };
+  } catch {
+    return {};
+  }
+}
+
+// Codex `event_msg` notifications confirming a subagent has reached a
+// terminal state. Names vary by rollout version (e.g. `subagent_message_complete`,
+// `subagent_done`, `subagent_finished`); we accept any `subagent_*` event_msg
+// type ending in `_complete` / `_done` / `_finished` / `_terminated` so the
+// parser stays forward-compatible.
+function isSubagentTerminalNotification(type: string): boolean {
+  if (!type.startsWith('subagent_')) return false;
+  return (
+    type.endsWith('_complete') ||
+    type.endsWith('_done') ||
+    type.endsWith('_finished') ||
+    type.endsWith('_terminated')
+  );
+}
+
+function subagentNotificationStatus(note: SubagentNotificationPayload): ToolResultStatus {
+  if (note.success === false) return 'errored';
+  if (note.success === true) return 'completed';
+  if (typeof note.status === 'string') {
+    const s = note.status.toLowerCase();
+    if (s === 'errored' || s === 'failed' || s === 'error') return 'errored';
+    if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+    if (s === 'completed' || s === 'success' || s === 'succeeded') return 'completed';
+  }
+  // Notification fired but no explicit status field — treat as completed
+  // since the notification kind itself implies a terminal transition.
+  return 'completed';
 }

@@ -3,7 +3,15 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 
 import { parseCodexSession } from '@relayburn/reader';
-import { appendContent, appendTurns, loadConfig, stamp } from '@relayburn/ledger';
+import {
+  appendContent,
+  appendRelationships,
+  appendToolResultEvents,
+  appendTurns,
+  appendUserTurns,
+  loadConfig,
+  stamp,
+} from '@relayburn/ledger';
 import type { Enrichment } from '@relayburn/ledger';
 
 import type { ParsedArgs } from '../args.js';
@@ -47,13 +55,19 @@ export async function runCodexWrapper(args: ParsedArgs): Promise<number> {
 
   const cfg = await loadConfig();
   for (const file of newFiles) {
-    const { turns, content } = await parseCodexSession(file, {
-      sessionPath: file,
-      contentMode: cfg.content.store,
-    });
+    const { turns, content, relationships, toolResultEvents, userTurns } = await parseCodexSession(
+      file,
+      {
+        sessionPath: file,
+        contentMode: cfg.content.store,
+      },
+    );
     if (turns.length === 0) continue;
     await appendTurns(turns);
     if (content.length > 0) await appendContent(content);
+    if (relationships.length > 0) await appendRelationships(relationships);
+    if (toolResultEvents.length > 0) await appendToolResultEvents(toolResultEvents);
+    if (userTurns.length > 0) await appendUserTurns(userTurns);
     const sessionId = turns[0]!.sessionId;
     if (sessionId) await stamp({ sessionId }, tags);
     process.stderr.write(`[burn] ingested ${turns.length} turns from ${file}\n`);
