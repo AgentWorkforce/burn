@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
-import { appendTurns, stamp } from '@relayburn/ledger';
-import type { TurnRecord } from '@relayburn/reader';
+import { appendToolResultEvents, appendTurns, stamp } from '@relayburn/ledger';
+import type { ToolResultEventRecord, TurnRecord } from '@relayburn/reader';
 
 import { runArchive } from './archive.js';
 
@@ -132,6 +132,38 @@ describe('burn archive CLI', () => {
       rowCounts: { turns: number };
     };
     assert.equal(afterStatus.rowCounts.turns, beforeStatus.rowCounts.turns);
+  });
+
+  it('archive status --json surfaces tool_result_events row count', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-tre-cli', messageId: 'tre-cli-1' })]);
+    const events: ToolResultEventRecord[] = [
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-tre-cli',
+        messageId: 'tre-cli-1',
+        toolUseId: 'tu-cli-1',
+        callIndex: 0,
+        eventIndex: 0,
+        ts: '2026-04-20T00:00:01.000Z',
+        status: 'completed',
+        eventSource: 'tool_result',
+        contentLength: 7,
+        contentHash: 'cli-h1',
+      },
+    ];
+    await appendToolResultEvents(events);
+    await captureRun({}, ['build']);
+
+    const statusOut = await captureRun({ json: true }, ['status']);
+    assert.equal(statusOut.code, 0);
+    const parsed = JSON.parse(statusOut.stdout) as {
+      rowCounts: { toolResultEvents: number };
+    };
+    assert.equal(parsed.rowCounts.toolResultEvents, 1);
+
+    const human = await captureRun({}, ['status']);
+    assert.match(human.stdout, /tool_result_events:\s+1/);
   });
 
   it('archive with no subcommand prints help and exits 0', async () => {

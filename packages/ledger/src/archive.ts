@@ -43,11 +43,13 @@ import { archivePath, ledgerPath } from './paths.js';
 import {
   isCompactionLine,
   isStampLine,
+  isToolResultEventLine,
   isTurnLine,
   stampMatches,
   type CompactionLine,
   type Enrichment,
   type StampLine,
+  type ToolResultEventLine,
   type TurnLine,
 } from './schema.js';
 
@@ -56,7 +58,7 @@ import {
  * statement below changes shape; the next `buildArchive()` call will detect
  * the mismatch in `archive_state.archive_version` and rebuild from scratch.
  */
-export const ARCHIVE_VERSION = 1;
+export const ARCHIVE_VERSION = 2;
 
 /**
  * SQL statements that materialize the read model. These are intentionally
@@ -67,7 +69,11 @@ export const ARCHIVE_VERSION = 1;
  *  - sessions: one row per (source, sessionId)
  *  - turns: one row per ingested TurnRecord, with stamps folded in
  *  - tool_calls: one row per ToolCall attached to a turn
- *  - tool_result_events: reserved for future content-sidecar bridging (#33)
+ *  - tool_result_events: chronological tool-output / terminal-status events
+ *    materialized from `ToolResultEventLine` ledger lines (#101 / #42 / #77).
+ *    `content_length` / `content_hash` come straight from the canonical
+ *    record; the content sidecar (#33) carries the raw bytes when callers
+ *    need them.
  *  - archive_state: incremental build cursor + schema version
  */
 const SCHEMA_SQL = `
@@ -146,8 +152,12 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_use_id ON tool_calls(tool_use_id);
 
--- Reserved for the content-sidecar bridge (#33) and the execution-graph work.
--- Created now so consumers can stably reference the table, populated later.
+-- Materialized from ToolResultEventLine (execution-graph #42 / #77) -- one
+-- row per chronological tool_result / terminal-status / progress event keyed
+-- on (source, session_id, message_id, tool_use_id, event_index). The content
+-- sidecar (#33) holds the raw bytes; this table carries metadata only
+-- (content_length, content_hash) so analyses can group / dedupe without
+-- loading sidecar JSONL.
 CREATE TABLE IF NOT EXISTS tool_result_events (
   source              TEXT NOT NULL,
   session_id          TEXT NOT NULL,
@@ -164,6 +174,10 @@ CREATE TABLE IF NOT EXISTS tool_result_events (
   ts                  TEXT,
   PRIMARY KEY (source, session_id, message_id, tool_use_id, event_index)
 );
+
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_use_id ON tool_result_events(tool_use_id);
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_session ON tool_result_events(source, session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_subagent ON tool_result_events(subagent_session_id);
 
 CREATE TABLE IF NOT EXISTS compactions (
   source                TEXT NOT NULL,
@@ -199,6 +213,7 @@ export interface ArchiveStatus {
     sessions: number;
     turns: number;
     toolCalls: number;
+    toolResultEvents: number;
     compactions: number;
   };
 }
@@ -215,6 +230,8 @@ export interface BuildResult {
   stampsApplied: number;
   /** Compaction events ingested. */
   compactionsApplied: number;
+  /** Tool-result-event lines materialized into `tool_result_events`. */
+  toolResultEventsApplied: number;
   /** True iff the archive was rebuilt from zero before this build. */
   rebuiltFromZero: boolean;
 }
@@ -338,6 +355,7 @@ async function buildArchiveLocked(opts: { isRebuild?: boolean } = {}): Promise<B
         sessionsTouched: 0,
         stampsApplied: 0,
         compactionsApplied: 0,
+        toolResultEventsApplied: 0,
         rebuiltFromZero: false,
       };
     }
@@ -386,6 +404,7 @@ async function buildArchiveLocked(opts: { isRebuild?: boolean } = {}): Promise<B
       sessionsTouched: result.sessionsTouched,
       stampsApplied: result.stampsApplied,
       compactionsApplied: result.compactionsApplied,
+      toolResultEventsApplied: result.toolResultEventsApplied,
       rebuiltFromZero: false,
     };
   } finally {
@@ -399,6 +418,7 @@ interface ApplyResult {
   sessionsTouched: number;
   stampsApplied: number;
   compactionsApplied: number;
+  toolResultEventsApplied: number;
   /**
    * Byte offset of the parser's last newline boundary inside the ledger.
    * Equals `startOffset` when nothing was scanned. The caller stamps this
@@ -435,6 +455,7 @@ async function applyLedgerRange(
   const newStamps: StampLine[] = [];
   const turnLines: TurnLine[] = [];
   const compactionLines: CompactionLine[] = [];
+  const toolResultEventLines: ToolResultEventLine[] = [];
 
   let bytesScanned = 0;
   let safeOffset = startOffset;
@@ -448,16 +469,24 @@ async function applyLedgerRange(
       newStamps.push(parsed);
     } else if (isCompactionLine(parsed)) {
       compactionLines.push(parsed);
+    } else if (isToolResultEventLine(parsed)) {
+      toolResultEventLines.push(parsed);
     }
   }
 
-  if (turnLines.length === 0 && newStamps.length === 0 && compactionLines.length === 0) {
+  if (
+    turnLines.length === 0 &&
+    newStamps.length === 0 &&
+    compactionLines.length === 0 &&
+    toolResultEventLines.length === 0
+  ) {
     return {
       scannedBytes: bytesScanned,
       turnsApplied: 0,
       sessionsTouched: 0,
       stampsApplied: 0,
       compactionsApplied: 0,
+      toolResultEventsApplied: 0,
       safeOffset,
     };
   }
@@ -630,6 +659,44 @@ async function applyLedgerRange(
       }
     }
 
+    if (toolResultEventLines.length > 0) {
+      // INSERT OR REPLACE keyed on the table's PK (source, session_id,
+      // message_id, tool_use_id, event_index). The execution-graph record
+      // already carries `contentLength` and `contentHash`; if a future
+      // record lacks them we still write null and a follow-up can enrich
+      // from the content sidecar (#33). The table allows NULL for both.
+      const insertToolResultEvent = db.prepare(`
+        INSERT OR REPLACE INTO tool_result_events (
+          source, session_id, message_id, tool_use_id, call_index,
+          event_index, status, content_length, content_hash,
+          subagent_session_id, agent_id, event_source, ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const tre of toolResultEventLines) {
+        const r = tre.record;
+        insertToolResultEvent.run(
+          r.source,
+          r.sessionId,
+          // PK requires NOT NULL message_id; some event sources (queue events,
+          // subagent notifications) don't carry one. Substitute the empty
+          // string so the row still lands and so two NULL-message_id events
+          // for the same (source, sessionId, toolUseId, eventIndex) collide
+          // on the PK (which is the desired idempotent behavior).
+          r.messageId ?? '',
+          r.toolUseId,
+          r.callIndex ?? 0,
+          r.eventIndex,
+          r.status,
+          r.contentLength ?? null,
+          r.contentHash ?? null,
+          r.subagentSessionId ?? null,
+          r.agentId ?? null,
+          r.eventSource,
+          r.ts ?? null,
+        );
+      }
+    }
+
     rebuildSessions(db, sessionsTouched);
 
     // NOTE: the ledger cursor is intentionally NOT written here. The caller
@@ -657,6 +724,7 @@ async function applyLedgerRange(
     sessionsTouched: distinctSessionIds.size,
     stampsApplied: newStamps.length,
     compactionsApplied: compactionLines.length,
+    toolResultEventsApplied: toolResultEventLines.length,
     safeOffset,
   };
 }
@@ -879,7 +947,13 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
       upToDate: false,
       lastBuiltAt: null,
       lastRebuildAt: null,
-      rowCounts: { sessions: 0, turns: 0, toolCalls: 0, compactions: 0 },
+      rowCounts: {
+        sessions: 0,
+        turns: 0,
+        toolCalls: 0,
+        toolResultEvents: 0,
+        compactions: 0,
+      },
     };
   }
 
@@ -908,6 +982,9 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
     const toolCalls = db.prepare('SELECT COUNT(*) AS n FROM tool_calls').get() as {
       n: number | bigint;
     };
+    const toolResultEvents = db
+      .prepare('SELECT COUNT(*) AS n FROM tool_result_events')
+      .get() as { n: number | bigint };
     const compactions = db.prepare('SELECT COUNT(*) AS n FROM compactions').get() as {
       n: number | bigint;
     };
@@ -927,6 +1004,7 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
         sessions: Number(sessions.n),
         turns: Number(turns.n),
         toolCalls: Number(toolCalls.n),
+        toolResultEvents: Number(toolResultEvents.n),
         compactions: Number(compactions.n),
       },
     };

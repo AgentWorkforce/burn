@@ -76,7 +76,8 @@ function printBuildResult(
     `  ${formatInt(result.turnsApplied)} turn${result.turnsApplied === 1 ? '' : 's'} applied,` +
       ` ${formatInt(result.sessionsTouched)} session${result.sessionsTouched === 1 ? '' : 's'} touched,` +
       ` ${formatInt(result.stampsApplied)} stamp${result.stampsApplied === 1 ? '' : 's'},` +
-      ` ${formatInt(result.compactionsApplied)} compaction${result.compactionsApplied === 1 ? '' : 's'}`,
+      ` ${formatInt(result.compactionsApplied)} compaction${result.compactionsApplied === 1 ? '' : 's'},` +
+      ` ${formatInt(result.toolResultEventsApplied)} tool-result event${result.toolResultEventsApplied === 1 ? '' : 's'}`,
   );
   lines.push(`  ${formatInt(result.scannedBytes)} bytes scanned from ledger tail`);
   process.stdout.write(lines.join('\n') + '\n');
@@ -104,10 +105,11 @@ async function runStatus(args: ParsedArgs): Promise<number> {
   if (status.lastBuiltAt) lines.push(`  last build: ${status.lastBuiltAt}`);
   if (status.lastRebuildAt) lines.push(`  last rebuild: ${status.lastRebuildAt}`);
   lines.push('  rows:');
-  lines.push(`    sessions:     ${formatInt(status.rowCounts.sessions)}`);
-  lines.push(`    turns:        ${formatInt(status.rowCounts.turns)}`);
-  lines.push(`    tool_calls:   ${formatInt(status.rowCounts.toolCalls)}`);
-  lines.push(`    compactions:  ${formatInt(status.rowCounts.compactions)}`);
+  lines.push(`    sessions:           ${formatInt(status.rowCounts.sessions)}`);
+  lines.push(`    turns:              ${formatInt(status.rowCounts.turns)}`);
+  lines.push(`    tool_calls:         ${formatInt(status.rowCounts.toolCalls)}`);
+  lines.push(`    tool_result_events: ${formatInt(status.rowCounts.toolResultEvents)}`);
+  lines.push(`    compactions:        ${formatInt(status.rowCounts.compactions)}`);
   process.stdout.write(lines.join('\n') + '\n');
   return 0;
 }
