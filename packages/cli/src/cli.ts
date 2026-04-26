@@ -17,6 +17,7 @@ import { runRebuild } from './commands/rebuild.js';
 import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
 import { runWaste } from './commands/waste.js';
+import { runWatch } from './commands/watch.js';
 
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
@@ -34,6 +35,7 @@ Usage:
   burn claude        [--tag k=v ...] [-- <claude args>]
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]
+  burn watch         [--interval <ms>] [--once]
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
   burn content prune [--days <n>] [--force]
@@ -62,6 +64,7 @@ Examples:
   burn claude   --tag workflow=refactor -- --resume
   burn codex    --tag workflow=refactor
   burn opencode --tag workflow=refactor
+  burn watch
   burn content prune --days 30
   burn archive status
   burn archive build
@@ -104,6 +107,8 @@ async function main(): Promise<number> {
       return runCodexWrapper(args);
     case 'opencode':
       return runOpencodeWrapper(args);
+    case 'watch':
+      return runWatch(args);
     case 'ingest':
       return runIngest(args);
     case 'mcp-server':

@@ -1,4 +1,4 @@
-import { readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -31,6 +31,10 @@ import {
 } from '@relayburn/ledger';
 
 import { walkJsonl, walkOpencodeSessions } from './walk.js';
+import {
+  cleanupStalePendingStamps,
+  resolvePendingStampsForSession,
+} from './pending-stamps.js';
 
 // Resolved per-call so tests can swap HOME between runs. Cheap (string join).
 function claudeProjectsDir(): string {
@@ -104,6 +108,7 @@ export function setIngestGapWriter(write: (msg: string) => void): (msg: string) 
 }
 
 export async function ingestClaudeProjects(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -115,6 +120,7 @@ export async function ingestClaudeProjects(): Promise<IngestReport> {
 }
 
 export async function ingestCodexSessions(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -126,6 +132,7 @@ export async function ingestCodexSessions(): Promise<IngestReport> {
 }
 
 export async function ingestOpencodeSessions(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -137,6 +144,7 @@ export async function ingestOpencodeSessions(): Promise<IngestReport> {
 }
 
 export async function ingestAll(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -331,6 +339,18 @@ async function ingestCodexInto(
       const { turns, content, userTurns, endOffset, resume: nextResume } =
         await parseCodexSessionIncremental(file, opts);
       if (turns.length > 0) {
+        const sessionId = nextResume.sessionId || turns[0]!.sessionId || (await deriveCodexSessionId(file));
+        if (sessionId) {
+          const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
+            harness: 'codex',
+            sessionId,
+            sessionPath: file,
+            sessionMtimeMs: st.mtimeMs,
+          };
+          const cwd = nextResume.sessionCwd ?? turns[0]!.project;
+          if (cwd !== undefined) candidate.cwd = cwd;
+          await resolvePendingStampsForSession(candidate);
+        }
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
@@ -401,6 +421,14 @@ async function ingestOpencodeInto(
           contentMode,
         });
       if (turns.length > 0) {
+        const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
+          harness: 'opencode',
+          sessionId,
+          sessionPath: file,
+          sessionMtimeMs: Math.max(st.mtimeMs, messageMtime),
+        };
+        if (turns[0]!.project !== undefined) candidate.cwd = turns[0]!.project;
+        await resolvePendingStampsForSession(candidate);
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
@@ -506,7 +534,7 @@ async function reingestCodexContent(
 ): Promise<void> {
   for (const file of await walkJsonl(codexSessionsDir())) {
     report.scannedFiles++;
-    const derived = deriveCodexSessionId(file);
+    const derived = await deriveCodexSessionId(file);
     if (derived && existing.has(derived)) {
       report.skippedExisting++;
       continue;
@@ -567,12 +595,38 @@ async function reingestOpencodeContent(
 // Codex filenames are `rollout-<timestamp>-<uuid>.jsonl` where the UUID is the
 // session id. Extract it for a cheap skip check before parsing. If the pattern
 // doesn't match, return null and fall back to post-filtering.
-function deriveCodexSessionId(file: string): string | null {
+export async function deriveCodexSessionId(file: string): Promise<string | null> {
   const base = path.basename(file, '.jsonl');
   const m = base.match(
     /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/,
   );
-  return m ? m[1]! : null;
+  if (m) return m[1]!;
+  return readCodexSessionMetaId(file);
+}
+
+async function readCodexSessionMetaId(file: string): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await readFile(file, 'utf8');
+  } catch {
+    return null;
+  }
+  for (const line of raw.split(/\r?\n/, 20)) {
+    const text = line.trim();
+    if (!text) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const rec = parsed as { type?: unknown; payload?: unknown };
+    if (rec.type !== 'session_meta' || !rec.payload || typeof rec.payload !== 'object') continue;
+    const id = (rec.payload as { id?: unknown }).id;
+    return typeof id === 'string' && id.length > 0 ? id : null;
+  }
+  return null;
 }
 
 async function listDirs(parent: string): Promise<string[]> {
