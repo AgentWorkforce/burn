@@ -879,8 +879,9 @@ describe('parseCodexSession fidelity (issue #84)', () => {
     assert.ok(f, 'fidelity is populated');
     assert.equal(f!.granularity, 'per-turn');
     // Full requires input + output + cacheRead + tool calls + tool results +
-    // session relationships. Codex has no parent-tracking signal yet (#63),
-    // so the strongest a Codex turn can claim today is `usage-only`.
+    // session relationships. With #87 the Codex parser now emits root /
+    // subagent relationship rows, so a token-complete Codex turn satisfies
+    // the FULL_REQUIRED matrix.
     assert.equal(f!.coverage.hasInputTokens, true);
     assert.equal(f!.coverage.hasOutputTokens, true);
     assert.equal(f!.coverage.hasReasoningTokens, true);
@@ -888,9 +889,9 @@ describe('parseCodexSession fidelity (issue #84)', () => {
     assert.equal(f!.coverage.hasCacheCreateTokens, false);
     assert.equal(f!.coverage.hasToolCalls, true);
     assert.equal(f!.coverage.hasToolResultEvents, true);
-    assert.equal(f!.coverage.hasSessionRelationships, false);
+    assert.equal(f!.coverage.hasSessionRelationships, true);
     assert.equal(f!.coverage.hasRawContent, true);
-    assert.equal(f!.class, 'usage-only');
+    assert.equal(f!.class, 'full');
   });
 
   it('reports class=partial when token_count is absent for a turn', async () => {
@@ -1030,7 +1031,7 @@ describe('parseCodexSession fidelity (issue #84)', () => {
       // Sanity: token_count was present, so usage flags are on.
       assert.equal(f!.coverage.hasInputTokens, true);
       assert.equal(f!.coverage.hasReasoningTokens, true);
-      assert.equal(f!.class, 'usage-only');
+      assert.equal(f!.class, 'full');
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

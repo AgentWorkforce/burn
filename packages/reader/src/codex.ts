@@ -1067,8 +1067,9 @@ function buildCodexFidelity(usageObserved: boolean): Fidelity {
   // cache-create concept (the `FULL_REQUIRED` matrix in fidelity.ts excludes
   // this field, so absence does not demote a turn from `full`).
   //
-  // `hasSessionRelationships` is `false` until the spawn-tagging substrate
-  // lands (#42, #63) — Codex rollouts have no parent-tracking path today.
+  // `hasSessionRelationships` is `true` now that the Codex parser emits
+  // `root` / `subagent` SessionRelationshipRecords (#87) — capability, not
+  // presence, so tool-less turns still report `true`.
   const coverage: Coverage = {
     ...EMPTY_COVERAGE,
     hasInputTokens: usageObserved,
@@ -1078,7 +1079,7 @@ function buildCodexFidelity(usageObserved: boolean): Fidelity {
     hasCacheCreateTokens: false,
     hasToolCalls: true,
     hasToolResultEvents: true,
-    hasSessionRelationships: false,
+    hasSessionRelationships: true,
     hasRawContent: true,
   };
   return makeFidelity('per-turn', coverage);
