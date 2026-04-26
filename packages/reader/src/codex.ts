@@ -1,11 +1,14 @@
 import { open } from 'node:fs/promises';
 
 import { classifyActivity } from './classifier.js';
+import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
+  Coverage,
+  Fidelity,
   ToolCall,
   TurnRecord,
   Usage,
@@ -164,16 +167,26 @@ interface OpenTurn {
   // Captured only when contentMode === 'full'. Emitted alongside the turn
   // once task_complete commits it; dropped if the turn never commits.
   content: ContentRecord[];
+  // Set true once a `token_count` event with `total_token_usage` is observed
+  // while this turn is open. Drives the per-turn usage `Coverage` flags so a
+  // turn whose source omitted `total_token_usage` lands in `class: 'partial'`
+  // rather than silently reporting zeros as full-fidelity (#84).
+  usageObserved: boolean;
 }
 
 interface FinalizedTurn
   extends Omit<
     OpenTurn,
-    'startCumulative' | 'seenCallIds' | 'filesTouched' | 'erroredCallIds'
+    | 'startCumulative'
+    | 'seenCallIds'
+    | 'filesTouched'
+    | 'erroredCallIds'
+    | 'usageObserved'
   > {
   usage: Usage;
   filesTouched: string[];
   erroredCallIds: Set<string>;
+  fidelity: Fidelity;
 }
 
 interface UserTurnSlot {
@@ -328,6 +341,11 @@ export async function parseCodexSessionIncremental(
           cumulative.cacheRead = cached;
           cumulative.output = total.output_tokens ?? 0;
           cumulative.reasoning = total.reasoning_output_tokens ?? 0;
+          // Mark coverage on the open turn — usage flags are honest only when
+          // a `total_token_usage` actually arrived between task_started and
+          // task_complete. Without this, finalize would emit zero-deltas as
+          // `full` fidelity (#84).
+          if (openTurn) openTurn.usageObserved = true;
         }
         continue;
       }
@@ -363,6 +381,7 @@ export async function parseCodexSessionIncremental(
           assistantText: '',
           erroredCallIds: new Set(),
           content: [],
+          usageObserved: false,
         };
         pendingUserText = '';
         if (captureContent && pendingContent.length > 0) {
@@ -597,6 +616,7 @@ export async function parseCodexSessionIncremental(
       model: f.model,
       usage: f.usage,
       toolCalls: f.toolCalls,
+      fidelity: f.fidelity,
     };
     if (options.sessionPath !== undefined) record.sessionPath = options.sessionPath;
     if (f.project !== undefined) {
@@ -741,9 +761,43 @@ function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTur
     assistantText: open.assistantText,
     erroredCallIds: open.erroredCallIds,
     content: open.content,
+    fidelity: buildCodexFidelity(open.usageObserved),
   };
   if (open.project !== undefined) out.project = open.project;
   return out;
+}
+
+function buildCodexFidelity(usageObserved: boolean): Fidelity {
+  // Mirror Claude's pattern (`buildClaudeFidelity`): coverage is *capability*,
+  // not *presence* — `hasToolCalls` / `hasToolResultEvents` / `hasRawContent`
+  // are flipped on for every Codex turn because the source can surface them,
+  // not because this particular turn happened to carry one.
+  //
+  // Per-turn token coverage hinges on whether a `token_count` event with
+  // `total_token_usage` arrived between `task_started` and `task_complete`.
+  // When it didn't, the cumulative-delta arithmetic in `finalizeTurn` returns
+  // 0 for each field — set the matching coverage flags to `false` so the
+  // resulting `class` is `partial` rather than a silent zero (#84).
+  //
+  // `hasCacheCreateTokens` is `false`: Codex rollouts have no ephemeral
+  // cache-create concept (the `FULL_REQUIRED` matrix in fidelity.ts excludes
+  // this field, so absence does not demote a turn from `full`).
+  //
+  // `hasSessionRelationships` is `false` until the spawn-tagging substrate
+  // lands (#42, #63) — Codex rollouts have no parent-tracking path today.
+  const coverage: Coverage = {
+    ...EMPTY_COVERAGE,
+    hasInputTokens: usageObserved,
+    hasOutputTokens: usageObserved,
+    hasReasoningTokens: usageObserved,
+    hasCacheReadTokens: usageObserved,
+    hasCacheCreateTokens: false,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: false,
+    hasRawContent: true,
+  };
+  return makeFidelity('per-turn', coverage);
 }
 
 // Codex user messages mix real prompts with harness boilerplate

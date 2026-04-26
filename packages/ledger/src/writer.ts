@@ -6,6 +6,7 @@ import type {
   SessionRelationshipRecord,
   ToolResultEventRecord,
   TurnRecord,
+  UserTurnRecord,
 } from '@relayburn/reader';
 
 import {
@@ -16,6 +17,7 @@ import {
   toolResultEventIdHash,
   turnContentFingerprint,
   turnIdHash,
+  userTurnIdHash,
 } from './index-sidecar.js';
 import { withLock } from './lock.js';
 import { ledgerPath } from './paths.js';
@@ -28,6 +30,7 @@ import type {
   StampSelector,
   ToolResultEventLine,
   TurnLine,
+  UserTurnLine,
 } from './schema.js';
 
 async function ensureDir(filePath: string): Promise<void> {
@@ -120,6 +123,32 @@ export async function appendRelationships(
   const lines: SessionRelationshipLine[] = fresh.map((record) => ({
     v: 1,
     kind: 'relationship',
+    record,
+  }));
+  await appendLines(lines);
+  await appendHashes(newIds, []);
+}
+
+export async function appendUserTurns(records: UserTurnRecord[]): Promise<void> {
+  if (records.length === 0) return;
+  // Dedup piggybacks on the ledger-id index. User-turn ids share the same
+  // namespace as turn / compaction / relationship / tool-result-event ids —
+  // they hash different inputs (source|sessionId|userUuid) so collisions are
+  // not a practical concern, and we get crash-safe persistence for free.
+  const idx = await loadIndex();
+  const fresh: UserTurnRecord[] = [];
+  const newIds: string[] = [];
+  for (const r of records) {
+    const id = userTurnIdHash(r);
+    if (idx.ids.has(id)) continue;
+    fresh.push(r);
+    newIds.push(id);
+    idx.ids.add(id);
+  }
+  if (fresh.length === 0) return;
+  const lines: UserTurnLine[] = fresh.map((record) => ({
+    v: 1,
+    kind: 'user_turn',
     record,
   }));
   await appendLines(lines);
