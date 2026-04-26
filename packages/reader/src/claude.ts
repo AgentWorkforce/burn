@@ -1080,13 +1080,12 @@ function recordEvidenceFromLine(
   // line carries it. Assistant `parentUuid` always points inside the same
   // file (the prior user line), so it would never resolve cross-file.
   // Subsequent user lines in the same session also point inside the file.
-  if (line.type === 'user' && !evidenceUserSeen.has(ev)) {
+  // Sidechain user lines must not arm the gate, otherwise a leading
+  // sidechain prompt would block the first main-thread user line from
+  // setting `firstParentUuid` and we'd lose cross-file continuation.
+  if (line.type === 'user' && line.isSidechain !== true && !evidenceUserSeen.has(ev)) {
     evidenceUserSeen.add(ev);
-    if (
-      line.isSidechain !== true &&
-      typeof line.parentUuid === 'string' &&
-      line.parentUuid.length > 0
-    ) {
+    if (typeof line.parentUuid === 'string' && line.parentUuid.length > 0) {
       ev.firstParentUuid = line.parentUuid;
     }
   }

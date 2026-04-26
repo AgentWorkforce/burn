@@ -861,6 +861,12 @@ describe('parseClaudeSession fork / continuation relationships (#112)', () => {
     assert.equal(root!.sourceVersion, '2.1.97');
   });
 
+  it('captures firstParentUuid from the first non-sidechain user line even when a sidechain user line precedes it', async () => {
+    const file = path.join(FIXTURES, 'sidechain-leading-then-main.jsonl');
+    const { evidence } = await parseClaudeSession(file, { sessionPath: file });
+    assert.equal(evidence.firstParentUuid, 'u-original-asst');
+  });
+
   it('exposes per-file evidence so a cross-file pass can resolve fork / continuation', async () => {
     const file = path.join(FIXTURES, 'resume-marker.jsonl');
     const { evidence } = await parseClaudeSession(file, { sessionPath: file });
