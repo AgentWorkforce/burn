@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn limits` honors fidelity on its 5-hour forecast** ([#105](https://github.com/AgentWorkforce/burn/issues/105)). The forecast still consumes every windowed turn — partial / aggregate-only / cost-only data still contributes to the running token total — but `burn limits` now classifies the contributing slice via `summarizeFidelity` and surfaces a binary `high` / `low` confidence flag. Text mode appends a `forecast: low-confidence (N of M contributing turns lack per-turn token data)` notice when at least one contributing turn is missing per-turn token coverage; full-fidelity windows print no notice. `--json` output gains a `forecast.fidelity` block carrying the `confidence` flag and the underlying `FidelitySummary`. `--watch` re-evaluates confidence on each tick so the flag flips as fresher full-fidelity turns land.
+
 ### Changed
 
 - **Persist user-turn block-size records during ingest** (#2). `burn ingest`, passive ingest, and the Claude/Codex/OpenCode wrappers now append parser-emitted `UserTurnRecord`s for all three harnesses. Codex passive cursors also carry the in-flight user-turn slot so resumed ingest can complete a bridge record across file-growth boundaries. `burn waste` and `burn diagnose` load these records and use them as the sized fallback when content sidecars are missing.
