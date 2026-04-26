@@ -1,6 +1,7 @@
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
 
-import type { ModelCost, PricingTable } from './pricing.js';
+import { costForTurn, lookupModelRate } from './cost.js';
+import type { PricingTable } from './pricing.js';
 
 const PER_MILLION = 1_000_000;
 const CHARS_PER_TOKEN = 4;
@@ -90,8 +91,12 @@ export function attributeWaste(
 
     let sessionGrand = 0;
     for (const t of sessionTurns) {
-      const cost = costForTurnLocal(t, pricing);
-      if (cost !== null) sessionGrand += cost;
+      // Use the canonical `costForTurn` so waste-attribution totals stay
+      // consistent with `cost.ts` for sessions involving reasoning tokens
+      // (Codex `included_in_output`, models with a separate reasoning tariff,
+      // etc.). Returns null for unknown models — skip those, same as before.
+      const breakdown = costForTurn(t, pricing);
+      if (breakdown !== null) sessionGrand += breakdown.total;
     }
 
     let sessionAttributed = 0;
@@ -157,7 +162,7 @@ function attributeSession(
   const ridingActive: ToolAttribution[] = [];
 
   for (const turn of turns) {
-    const turnRate = lookupRate(turn.model, pricing);
+    const turnRate = lookupModelRate(turn.model, pricing);
 
     // 1) Initial cost: this turn pays for tool_results emitted on the previous
     //    turn (they enter context now as fresh `input` and/or `cacheCreate`).
@@ -337,29 +342,6 @@ function estimateTokens(text: string): number {
   return Math.max(0, Math.ceil(text.length / CHARS_PER_TOKEN));
 }
 
-function lookupRate(model: string, pricing: PricingTable): ModelCost | undefined {
-  const direct = pricing[model];
-  if (direct) return direct;
-  const i = model.indexOf('/');
-  if (i >= 0) {
-    const stripped = pricing[model.slice(i + 1)];
-    if (stripped) return stripped;
-  }
-  return undefined;
-}
-
-function costForTurnLocal(turn: TurnRecord, pricing: PricingTable): number | null {
-  const rate = lookupRate(turn.model, pricing);
-  if (!rate) return null;
-  const u = turn.usage;
-  return (
-    (u.input / PER_MILLION) * rate.input +
-    (u.output / PER_MILLION) * rate.output +
-    (u.reasoning / PER_MILLION) * rate.output +
-    (u.cacheRead / PER_MILLION) * rate.cacheRead +
-    ((u.cacheCreate5m + u.cacheCreate1h) / PER_MILLION) * rate.cacheWrite
-  );
-}
 
 export interface FileAggregation {
   path: string;

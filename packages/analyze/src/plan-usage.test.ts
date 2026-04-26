@@ -13,6 +13,7 @@ const PRICING: PricingTable = {
     output: 15,
     cacheRead: 0.3,
     cacheWrite: 3.75,
+    reasoningMode: 'same_as_output',
   },
 };
 

@@ -35,7 +35,7 @@ Usage:
   burn opencode      [--tag k=v ...] [-- <opencode args>]
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
-  burn content prune [--days <n>]
+  burn content prune [--days <n>] [--force]
   burn rebuild         --index | --reclassify [--force]
   burn rebuild-index   (alias for 'burn rebuild --index')
 

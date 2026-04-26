@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-04-26
+
+### Fixed
+
+- **Reasoning-token pricing semantics** (#32). Two correctness bugs that distorted reported spend whenever reasoning tokens were involved:
+  - Codex `usage.reasoning` was double-billed at the output rate even though Codex's `output_tokens` already includes reasoning. `burn` now treats Codex turns as `included_in_output` and bills `output` only. On a 10-turn Codex sample (660k input / 53k output / 29k reasoning / 5.6M cacheRead), this drops the reported cost from $4.282607 to $3.846557 — about 11% off the Codex slice.
+  - `cost.reasoning` from the `models.dev` snapshot was discarded during `flatten()`, so any model with a distinct reasoning tariff (e.g. Alibaba Qwen reasoning models) couldn't be priced correctly. The flattener now preserves `reasoning` and tags the entry `reasoningMode: 'separate'`; `costForUsage` honors the distinct tariff.
+- **Waste-attribution session totals now honor the same reasoning-mode semantics** as `costForTurn`. `attributeWaste` previously had a private `costForTurnLocal` that unconditionally billed reasoning at the output rate, which double-billed Codex turns and ignored separate reasoning tariffs in `sessionGrand` / `grandCost` / `unattributedCost`. It now delegates to `costForTurn`, so waste totals match `cost.ts` for any session involving reasoning tokens (Devin review on #73).
+
+### Added
+
+- `ModelCost.reasoningMode: 'included_in_output' | 'separate' | 'same_as_output'` and optional `reasoning` per-million tariff. `ReasoningMode` and `CostForUsageOptions` are exported.
+- `costForUsage(usage, model, pricing, { reasoningMode })` accepts an explicit override. `costForTurn` infers `included_in_output` for `source: 'codex'` automatically.
+- `flatten` is now exported so callers can build `PricingTable`s from in-memory `models.dev` payloads.
+
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **`summarizeFidelity(turns)` and `hasMinimumFidelity(fidelity, minimum)`** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). `summarizeFidelity` walks a slice of turns and returns a `FidelitySummary` with totals broken down by `class`, by `granularity`, and per-field `missingCoverage` counts plus an `unknown` bucket for records emitted before `TurnRecord.fidelity` existed. `hasMinimumFidelity` is the predicate behind a future "default exclude aggregate-only / cost-only" filter for `burn compare` and friends; treats `undefined` fidelity as passing for backward compat. Pure functions — no I/O, safe to call repeatedly.
+
+## [0.13.1] - 2026-04-25
+
+### Added
+
+- **Synthetic provider reattribution layer (#31).** `resolveProvider(model, rules?)` returns a `{ provider, normalizedModel, matchedRule }` for Synthetic-routed model IDs — the cross-collector reattribution pattern used when a Claude Code or OpenCode session uses a model dispatched through Synthetic.new. First pass covers three prefix shapes (`hf:*`, `accounts/fireworks/models/*`, `synthetic/*`) and exposes `DEFAULT_RULES` plus a `ProviderRule` type so future aggregators (OpenRouter, etc.) plug in via the same scaffolding. Pricing lookup in `costForTurn`, `attributeWaste`, and `attributeClaudeMd`/`attributeContext` all consult the reattribution layer before falling back to the existing `provider/model` strip, so a turn logged with `hf:deepseek-ai/deepseek-r1` resolves to the `deepseek-r1` rate instead of returning `null` across summary, waste, and context views. Reattribution stays query-time only — raw model strings are never mutated in the ledger. Octofriend SQLite fallback and other aggregator prefixes are deferred to follow-up issues.
+
 ## [0.11.0] - 2026-04-25
 
 ### Added

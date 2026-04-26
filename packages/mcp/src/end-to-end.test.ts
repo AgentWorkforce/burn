@@ -16,7 +16,13 @@ interface JsonRpcResponse {
 }
 
 const PRICING: PricingTable = {
-  'claude-sonnet-4-5': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  'claude-sonnet-4-5': {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 3.75,
+    reasoningMode: 'same_as_output',
+  },
 };
 
 function turn(): EnrichedTurn {

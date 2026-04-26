@@ -1,7 +1,7 @@
-export { loadBuiltinPricing, loadPricing } from './pricing.js';
-export type { ModelCost, PricingTable } from './pricing.js';
+export { flatten, loadBuiltinPricing, loadPricing } from './pricing.js';
+export type { ModelCost, PricingTable, ReasoningMode } from './pricing.js';
 export { costForTurn, costForUsage, sumCosts } from './cost.js';
-export type { CostBreakdown } from './cost.js';
+export type { CostBreakdown, CostForUsageOptions } from './cost.js';
 export { buildCompareTable, DEFAULT_MIN_SAMPLE } from './compare.js';
 export type { CompareCategory, CompareCell, CompareOptions, CompareTable } from './compare.js';
 export {
@@ -72,6 +72,14 @@ export {
 } from './context-md.js';
 export { computePlanUsage, cycleBounds } from './plan-usage.js';
 export type { ComputePlanUsageOptions, PlanUsage } from './plan-usage.js';
+export {
+  emptyFidelitySummary,
+  hasMinimumFidelity,
+  summarizeFidelity,
+} from './fidelity.js';
+export type { FidelitySummary } from './fidelity.js';
+export { DEFAULT_RULES, resolveProvider } from './provider-reattribution.js';
+export type { ProviderResolution, ProviderRule } from './provider-reattribution.js';
 export type {
   AttributeContextInput,
   ContextAttributionResult,

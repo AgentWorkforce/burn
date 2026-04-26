@@ -11,7 +11,10 @@ import type {
   ToolCall,
   TurnRecord,
   Usage,
+  UserTurnBlock,
+  UserTurnRecord,
 } from './types.js';
+import { makeTextBlock, makeToolResultBlock } from './userTurn.js';
 
 export interface ParseOpencodeOptions {
   sessionPath?: string;
@@ -89,14 +92,18 @@ interface UserMessage {
 export interface ParseOpencodeResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  userTurns: UserTurnRecord[];
 }
 
 export async function parseOpencodeSession(
   sessionFilePath: string,
   options: ParseOpencodeOptions = {},
 ): Promise<ParseOpencodeResult> {
-  const { turns, content } = await parseOpencodeSessionIncremental(sessionFilePath, options);
-  return { turns, content };
+  const { turns, content, userTurns } = await parseOpencodeSessionIncremental(
+    sessionFilePath,
+    options,
+  );
+  return { turns, content, userTurns };
 }
 
 export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
@@ -106,6 +113,7 @@ export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
 export interface ParseOpencodeIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  userTurns: UserTurnRecord[];
   seenMessageIds: Set<string>;
 }
 
@@ -115,7 +123,12 @@ export async function parseOpencodeSessionIncremental(
 ): Promise<ParseOpencodeIncrementalResult> {
   const session = await readSession(sessionFilePath);
   if (!session) {
-    return { turns: [], content: [], seenMessageIds: new Set(options.seenMessageIds ?? []) };
+    return {
+      turns: [],
+      content: [],
+      userTurns: [],
+      seenMessageIds: new Set(options.seenMessageIds ?? []),
+    };
   }
 
   const storageRoot = path.resolve(sessionFilePath, '..', '..', '..');
@@ -130,10 +143,33 @@ export async function parseOpencodeSessionIncremental(
   const seen = new Set<string>(options.seenMessageIds ?? []);
   const turns: TurnRecord[] = [];
   const content: ContentRecord[] = [];
+  const userTurns: UserTurnRecord[] = [];
 
   for (let i = 0; i < assistants.length; i++) {
     const m = assistants[i]!;
     if (seen.has(m.id)) continue;
+    // Build the user turn that bridges the previous assistant message and
+    // this one — tool outputs from the predecessor's parts plus any user
+    // text from the user message that precedes `m`. Issue #86.
+    // Emitted once per gap, on the pass when `m` is first processed; the
+    // previous assistant may have been seen on an earlier pass, but its
+    // parts are still on disk for re-reading.
+    const prev = i > 0 ? assistants[i - 1]! : undefined;
+    const userMsg = findPrecedingUser(users, m.time.created);
+    // Don't re-attribute the same user message to two assistants — for
+    // gaps after the first, only count the user message if its timestamp
+    // is *after* the previous assistant's.
+    const userMsgForGap =
+      userMsg && (!prev || userMsg.time.created > prev.time.created) ? userMsg : undefined;
+    const userTurn = await buildOpencodeUserTurnRecord(
+      storageRoot,
+      session.id,
+      prev,
+      m,
+      userMsgForGap,
+    );
+    if (userTurn) userTurns.push(userTurn);
+
     const parts = await readParts(storageRoot, m.id);
     const { toolCalls, filesTouched, erroredCallIds } = extractToolsAndFiles(parts);
     const stopReason = lastStepFinishReason(parts);
@@ -207,7 +243,75 @@ export async function parseOpencodeSessionIncremental(
     }
   }
 
-  return { turns, content, seenMessageIds: seen };
+  return { turns, content, userTurns, seenMessageIds: seen };
+}
+
+// Build a UserTurnRecord for the gap between two consecutive assistant
+// messages. Tool outputs come from the predecessor's parts (the harness's
+// response to the previous assistant's tool calls); free-text comes from the
+// user message preceding the following assistant. preceding is undef on the
+// first assistant of the session. Returns undefined if the gap has no
+// measurable blocks. Issue #86.
+async function buildOpencodeUserTurnRecord(
+  storageRoot: string,
+  sessionId: string,
+  prev: AssistantMessage | undefined,
+  next: AssistantMessage,
+  userMsg: UserMessage | undefined,
+): Promise<UserTurnRecord | undefined> {
+  const blocks: UserTurnBlock[] = [];
+
+  // Prior assistant's tool outputs feed back into `next`'s input — the
+  // harness wrote them between the two assistant turns.
+  if (prev) {
+    const prevParts = await readParts(storageRoot, prev.id);
+    for (const p of prevParts) {
+      if (p.type !== 'tool') continue;
+      const tp = p as ToolPart;
+      if (typeof tp.callID !== 'string') continue;
+      const state = tp.state;
+      if (!state || !Object.prototype.hasOwnProperty.call(state, 'output')) continue;
+      const isError = isFailedTool(tp);
+      blocks.push(makeToolResultBlock(tp.callID, state.output ?? '', isError));
+    }
+  }
+
+  // User-typed text from the user message preceding `next`. Synthetic parts
+  // are harness-injected (env context, agent-mode nudges) — they still flow
+  // into the model's input, so they count toward attribution byte length
+  // even though the activity classifier filters them out.
+  let ts = userMsg ? new Date(userMsg.time.created).toISOString() : '';
+  if (userMsg) {
+    const userParts = await readParts(storageRoot, userMsg.id);
+    for (const p of userParts) {
+      if (p.type !== 'text') continue;
+      const tp = p as TextPart;
+      if (typeof tp.text === 'string' && tp.text.length > 0) blocks.push(makeTextBlock(tp.text));
+    }
+  }
+
+  if (blocks.length === 0) return undefined;
+
+  if (!ts) ts = new Date(next.time.created).toISOString();
+
+  // userUuid: prefer the user message id when present (stable, OpenCode-native);
+  // fall back to a synthesized id from the surrounding assistants when the gap
+  // contains only tool outputs.
+  const userUuid = userMsg
+    ? userMsg.id
+    : `${sessionId}:${prev?.id ?? 'start'}->${next.id}`;
+
+  const record: UserTurnRecord = {
+    v: 1,
+    source: 'opencode',
+    sessionId,
+    userUuid,
+    ts,
+    blocks,
+    followingMessageId: next.id,
+  };
+  if (prev) record.precedingMessageId = prev.id;
+  return record;
 }
 
 function extractAssistantContent(

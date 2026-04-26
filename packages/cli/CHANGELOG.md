@@ -9,8 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
 - **Execution-graph passthrough in ingest** (#42, first PR). `burn ingest` and `burn claude` (subcommand wrapper) now persist `SessionRelationshipRecord`s and `ToolResultEventRecord`s the Claude reader produces, alongside the existing turns / content / compaction lines. No new flags or output yet — this PR just lays the substrate so #8 (subagent tree), #11 (waste patterns), and future archive work can consume the graph instead of reconstructing it from `isSidechain` / `parentUuid`.
+
+## [0.17.0] - 2026-04-25
+
+### Changed
+
+- Surface silent parser content-capture gaps at ingest time (#59)
+
+## [0.15.1] - 2026-04-25
+
+### Added
+
+- **Wire spawner-owned RELAYBURN_* env-var contract into burn claude/codex/opencode** (#63)
+
+## [0.15.0] - 2026-04-25
+
+### Changed
+
+- Protect recoverable sidecars from retention prune (#61)
+
+## [0.14.2] - 2026-04-25
+
+### Changed
+
+- Promote even-split note to a banner when it dominates (#60)
+
+## [0.14.0] - 2026-04-25
+
+### Added
+
+- **Add coverage and fidelity metadata to TurnRecord** (#41)
+
+## [0.13.1] - 2026-04-25
+
+### Added
+
+- **`burn mcp-server`** — stdio MCP (Model Context Protocol) server that lets a running agent self-query its own cost and quota state mid-session. Registers `burn__sessionCost` and `burn__currentBlock`. Read-only. Pair with `buildMcpConfig({sessionId})` from `@relayburn/mcp` to inject the server into a spawned `claude --mcp-config <…>` session. (#26)
 
 ## [0.11.0] - 2026-04-25
 
