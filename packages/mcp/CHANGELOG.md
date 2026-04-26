@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`burn__sessionCost` and `burn__currentBlock` query the analytics archive on the hot path** ([#97](https://github.com/AgentWorkforce/burn/issues/97)). Both tool handlers now default to `queryTurnsFromArchive` (a single SQL query against `archive.sqlite`) instead of folding the entire JSONL ledger on every MCP call. Tool responses are equivalent to the pre-migration implementation within float-rounding tolerance for cost. The CLI's `burn mcp-server` invokes an incremental `buildArchive()` once at startup so the first tool call hits SQL, not a ledger walk. If the archive cannot be opened or the query throws, both handlers transparently fall back to `queryAll` and emit a one-line note via the new `onLog` dependency hook (the CLI server wires this to stderr) so persistent breakage is visible without ever refusing to serve.
+
 ## [0.18.0] - 2026-04-26
 
 ### Fixed

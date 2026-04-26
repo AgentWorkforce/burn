@@ -1,6 +1,6 @@
 import { costForTurn, loadPricing, sumCosts } from '@relayburn/analyze';
 import type { PricingTable } from '@relayburn/analyze';
-import { queryAll } from '@relayburn/ledger';
+import { queryAll, queryTurnsFromArchive } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 
 import type { ToolDefinition } from '../types.js';
@@ -22,10 +22,28 @@ export interface SessionCostDeps {
   defaultSessionId: string | undefined;
   queryTurns?: (sessionId: string) => Promise<EnrichedTurn[]>;
   loadPricing?: () => Promise<PricingTable>;
+  /**
+   * Called when the default archive-backed `queryTurns` falls through to the
+   * ledger-walking `queryAll` because the archive open / query threw. Defaults
+   * to no-op so the MCP server stays quiet on the happy path; the CLI server
+   * wires this to stderr so failures are visible in the MCP host's log.
+   */
+  onLog?: (msg: string) => void;
 }
 
 export function createSessionCostTool(deps: SessionCostDeps): ToolDefinition {
-  const queryTurns = deps.queryTurns ?? ((id) => queryAll({ sessionId: id }));
+  const log = deps.onLog ?? (() => {});
+  const queryTurns =
+    deps.queryTurns ??
+    (async (id: string) => {
+      try {
+        return await queryTurnsFromArchive({ sessionId: id });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`sessionCost: archive query failed, falling back to ledger walk: ${msg}`);
+        return queryAll({ sessionId: id });
+      }
+    });
   const pricingLoader = deps.loadPricing ?? loadPricing;
 
   return {

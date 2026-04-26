@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
-import { queryAll } from '@relayburn/ledger';
+import { queryAll, queryTurnsFromArchive } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 
 import type { ToolDefinition } from '../types.js';
@@ -37,14 +37,30 @@ export interface CurrentBlockDeps {
   fetchUsage?: (token: string) => Promise<UsageResponse>;
   queryTurns?: (windowStartMs: number) => Promise<EnrichedTurn[]>;
   now?: () => Date;
+  /**
+   * Called when the default archive-backed `queryTurns` falls through to the
+   * ledger-walking `queryAll` because the archive open / query threw. Defaults
+   * to no-op; the CLI server wires this to stderr so failures are visible.
+   */
+  onLog?: (msg: string) => void;
 }
 
 export function createCurrentBlockTool(deps: CurrentBlockDeps = {}): ToolDefinition {
   const loadToken = deps.loadOauthToken ?? loadOauthToken;
   const fetchUsage = deps.fetchUsage ?? fetchUsageFromApi;
+  const log = deps.onLog ?? (() => {});
   const queryTurns =
     deps.queryTurns ??
-    (async (start: number) => queryAll({ since: new Date(start).toISOString(), source: 'claude-code' }));
+    (async (start: number) => {
+      const since = new Date(start).toISOString();
+      try {
+        return await queryTurnsFromArchive({ since, source: 'claude-code' });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`currentBlock: archive query failed, falling back to ledger walk: ${msg}`);
+        return queryAll({ since, source: 'claude-code' });
+      }
+    });
   const now = deps.now ?? (() => new Date());
 
   return {
