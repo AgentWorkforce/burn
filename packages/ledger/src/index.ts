@@ -24,10 +24,19 @@ export {
   pricingOverridePath,
   configPath,
   plansPath,
+  archivePath,
   contentDir,
   contentFilePath,
   isValidSessionId,
 } from './paths.js';
+export {
+  ARCHIVE_VERSION,
+  buildArchive,
+  getArchiveStatus,
+  openArchive,
+  rebuildArchive,
+} from './archive.js';
+export type { ArchiveStatus, BuildResult } from './archive.js';
 export {
   appendContent,
   listContentSessionIds,

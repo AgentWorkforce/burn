@@ -43,6 +43,10 @@ export function plansPath(): string {
   return path.join(ledgerHome(), 'plans.json');
 }
 
+export function archivePath(): string {
+  return path.join(ledgerHome(), 'archive.sqlite');
+}
+
 export function contentDir(): string {
   return path.join(ledgerHome(), 'content');
 }
