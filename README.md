@@ -257,7 +257,7 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
 burn by-tool [--since 7d] [--project <path>] [--session <id>]
-burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
 burn claude  [--tag k=v ...] [-- <claude args>]
 ```
 
@@ -282,7 +282,9 @@ This is observed data, not counterfactual: it tells you what happened when you a
 
 Standard filters apply: `--session <id>` limits to a single session, `--agent <id>` limits to a stamped agent ID, `--workflow <id>` to a stamped workflow ID, `--project <path>` to a project path or git-canonical projectKey.
 
-Output formats: TTY table (default), `--json` for scripts, `--csv` for spreadsheets. `--json` and `--csv` are mutually exclusive.
+By default, `burn compare` only aggregates turns with `usage-only` fidelity or better — `aggregate-only`, `cost-only`, and `partial` turns are excluded so a session with mixed fidelity can't silently bias the cost/turn or one-shot rate of full-fidelity peers from the same model. When the gate dropped anything, the table prints an `excluded N turns below <class> fidelity (… aggregate-only, … cost-only, … partial)` coverage note. Override the floor with `--fidelity full | usage-only | aggregate-only | cost-only | partial`; `--include-partial` is shorthand for `--fidelity partial` and includes every turn. Records emitted before `TurnRecord.fidelity` existed always pass for backward compatibility.
+
+Output formats: TTY table (default), `--json` for scripts, `--csv` for spreadsheets. `--json` and `--csv` are mutually exclusive. The `--json` payload includes a `fidelity` block (`{ minimum, excluded, summary }`) computed against the unfiltered slice so consumers can render their own coverage UI.
 
 ### `burn rebuild --reclassify` — backfill activity labels on old turns
 

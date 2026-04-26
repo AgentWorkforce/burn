@@ -1,11 +1,15 @@
 import {
   buildCompareTable,
   DEFAULT_MIN_SAMPLE,
+  hasMinimumFidelity,
   loadPricing,
+  summarizeFidelity,
   type CompareCell,
   type CompareTable,
+  type FidelitySummary,
 } from '@relayburn/analyze';
-import { queryAll, type Query } from '@relayburn/ledger';
+import { queryAll, type EnrichedTurn, type Query } from '@relayburn/ledger';
+import type { FidelityClass } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
@@ -15,7 +19,8 @@ const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
 
 Usage:
   burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>]
-               [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+               [--workflow <id>] [--agent <id>] [--min-sample <n>]
+               [--fidelity <class>] [--include-partial] [--json|--csv]
 
 Flags:
   --models      comma-separated list of model names to include (default: all)
@@ -26,8 +31,16 @@ Flags:
   --agent       filter by stamped agentId
   --min-sample  insufficient-sample threshold; cells below this get flagged
                 in the coverage-notes block (default: 5)
+  --fidelity    minimum fidelity class to include in the aggregate
+                (full | usage-only | aggregate-only | cost-only | partial).
+                Default: usage-only — drops aggregate-only / cost-only / partial
+                turns so a session with mixed fidelity isn't silently averaged
+                with full-fidelity turns from the same model. Records emitted
+                before TurnRecord.fidelity existed always pass.
+  --include-partial
+                shorthand for --fidelity partial; includes every turn.
   --json        emit a stable JSON object (analyzedTurns, models, categories,
-                totals, cells[])
+                totals, cells[], fidelity{ minimum, excluded, summary })
   --csv         emit a CSV with one row per (model, category) pair
   --help, -h    show this message
 
@@ -43,9 +56,28 @@ Examples:
   burn compare --since 30d
   burn compare --models claude-sonnet-4-6,claude-haiku-4-5 --since 7d
   burn compare --workflow wf-refactor --json
+  burn compare --fidelity full        # strict: drop anything below full
+  burn compare --include-partial      # include every turn, even cost-only
 `;
 
-export async function runCompare(args: ParsedArgs): Promise<number> {
+const FIDELITY_CHOICES: ReadonlyArray<FidelityClass> = [
+  'full',
+  'usage-only',
+  'aggregate-only',
+  'cost-only',
+  'partial',
+];
+
+export interface CompareDeps {
+  ingestAll?: () => Promise<unknown>;
+  queryAll?: (q: Query) => Promise<EnrichedTurn[]>;
+  loadPricing?: typeof loadPricing;
+}
+
+export async function runCompare(
+  args: ParsedArgs,
+  deps: CompareDeps = {},
+): Promise<number> {
   const first = args.positional[0];
   if (
     args.flags['help'] === true ||
@@ -73,6 +105,31 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
     return 2;
   }
 
+  // Resolve --fidelity / --include-partial. --include-partial is just sugar
+  // for --fidelity partial; passing both is fine as long as they agree, and
+  // we error otherwise so the user doesn't get a surprising effective level.
+  const includePartial = args.flags['include-partial'] === true;
+  const fidelityFlag = args.flags['fidelity'];
+  let minFidelity: FidelityClass = 'usage-only';
+  if (typeof fidelityFlag === 'string') {
+    if (!isFidelityClass(fidelityFlag)) {
+      process.stderr.write(
+        `burn: invalid --fidelity: ${fidelityFlag} (expected one of ${FIDELITY_CHOICES.join(', ')})\n`,
+      );
+      return 2;
+    }
+    minFidelity = fidelityFlag;
+  }
+  if (includePartial) {
+    if (typeof fidelityFlag === 'string' && fidelityFlag !== 'partial') {
+      process.stderr.write(
+        `burn: --include-partial conflicts with --fidelity ${fidelityFlag}\n`,
+      );
+      return 2;
+    }
+    minFidelity = 'partial';
+  }
+
   const wantJson = args.flags['json'] === true;
   const wantCsv = args.flags['csv'] === true;
   if (wantJson && wantCsv) {
@@ -82,16 +139,45 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
     return 2;
   }
 
-  await ingestAll();
-  const pricing = await loadPricing();
-  const turns = await queryAll(q);
+  const ingest = deps.ingestAll ?? ingestAll;
+  const query = deps.queryAll ?? queryAll;
+  const loadPricingFn = deps.loadPricing ?? loadPricing;
+
+  await ingest();
+  const pricing = await loadPricingFn();
+  const turns = await query(q);
+
+  // Summarize fidelity over the *unfiltered* slice so coverage notes and the
+  // JSON `summary` reflect the input the user actually queried, not what
+  // survived the gate. The summary is what tells them why N turns were
+  // dropped.
+  const summary = summarizeFidelity(turns);
+  // `--fidelity partial` (and its `--include-partial` shorthand) is the "let
+  // everything through" escape hatch per #41. The FidelityClass ordering used
+  // by `hasMinimumFidelity` puts `partial` strictly above `aggregate-only` /
+  // `cost-only`, so the predicate would otherwise still drop those two
+  // buckets. Bypass the gate entirely in that mode.
+  const filteredTurns = minFidelity === 'partial'
+    ? turns
+    : turns.filter((t) => hasMinimumFidelity(t.fidelity, minFidelity));
+  const excluded = computeExcluded(summary, minFidelity);
 
   const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample };
   if (models) opts.models = models;
-  const table = buildCompareTable(turns, opts);
+  const table = buildCompareTable(filteredTurns, opts);
 
   if (wantJson) {
-    process.stdout.write(JSON.stringify(toJson(table, turns.length), null, 2) + '\n');
+    process.stdout.write(
+      JSON.stringify(
+        toJson(table, filteredTurns.length, {
+          minimum: minFidelity,
+          excluded,
+          summary,
+        }),
+        null,
+        2,
+      ) + '\n',
+    );
     return 0;
   }
   if (wantCsv) {
@@ -99,11 +185,75 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(renderTty(table, turns.length));
+  process.stdout.write(
+    renderTty(table, filteredTurns.length, { minimum: minFidelity, excluded }),
+  );
   return 0;
 }
 
-function toJson(t: CompareTable, analyzedTurns: number): object {
+function isFidelityClass(s: string): s is FidelityClass {
+  return (FIDELITY_CHOICES as ReadonlyArray<string>).includes(s);
+}
+
+interface ExcludedBreakdown {
+  total: number;
+  aggregateOnly: number;
+  costOnly: number;
+  partial: number;
+  usageOnly: number;
+}
+
+// Sum the byClass buckets that fall below the minimum fidelity. We never
+// exclude `unknown` (records without a fidelity field — `hasMinimumFidelity`
+// passes them for backward compat), so they don't get counted here.
+//
+// `--fidelity partial` is the "include everything" escape hatch (matched by
+// the runtime), so it always reports zero excluded — even though the
+// FidelityClass ordering puts `partial` above `aggregate-only` / `cost-only`.
+function computeExcluded(
+  summary: FidelitySummary,
+  minimum: FidelityClass,
+): ExcludedBreakdown {
+  const out: ExcludedBreakdown = {
+    total: 0,
+    aggregateOnly: 0,
+    costOnly: 0,
+    partial: 0,
+    usageOnly: 0,
+  };
+  if (minimum === 'partial') return out;
+  const order: ReadonlyArray<FidelityClass> = [
+    'cost-only',
+    'aggregate-only',
+    'partial',
+    'usage-only',
+    'full',
+  ];
+  const need = order.indexOf(minimum);
+  for (const cls of order) {
+    if (order.indexOf(cls) >= need) continue;
+    const n = summary.byClass[cls];
+    if (n === 0) continue;
+    out.total += n;
+    if (cls === 'aggregate-only') out.aggregateOnly += n;
+    else if (cls === 'cost-only') out.costOnly += n;
+    else if (cls === 'partial') out.partial += n;
+    else if (cls === 'usage-only') out.usageOnly += n;
+  }
+  return out;
+}
+
+interface FidelityJsonBlock {
+  minimum: FidelityClass;
+  excluded: ExcludedBreakdown;
+  summary: FidelitySummary;
+}
+
+function toJson(
+  t: CompareTable,
+  analyzedTurns: number,
+  fidelity: FidelityJsonBlock,
+): object {
   const cells: Array<Record<string, unknown>> = [];
   for (const m of t.models) {
     for (const cat of t.categories) {
@@ -132,6 +282,7 @@ function toJson(t: CompareTable, analyzedTurns: number): object {
     categories: t.categories,
     totals: t.totals,
     cells,
+    fidelity,
   };
 }
 
@@ -211,10 +362,22 @@ function cellFields(c: CompareCell): [string, string, string] {
   return [turns, cost, oneShot];
 }
 
-function renderTty(t: CompareTable, analyzedTurns: number): string {
+interface FidelityRenderInput {
+  minimum: FidelityClass;
+  excluded: ExcludedBreakdown;
+}
+
+function renderTty(
+  t: CompareTable,
+  analyzedTurns: number,
+  fidelity: FidelityRenderInput,
+): string {
   const lines: string[] = [];
   lines.push('');
   lines.push(`turns analyzed: ${formatInt(analyzedTurns)}`);
+  if (fidelity.excluded.total > 0) {
+    lines.push(formatExcludedNote(fidelity));
+  }
   lines.push('');
 
   if (t.models.length === 0 || t.categories.length === 0) {
@@ -294,14 +457,32 @@ function renderTty(t: CompareTable, analyzedTurns: number): string {
     }
   }
 
-  // Per-model totals
+  // Per-model totals. A model that survived the filter with zero turns (e.g.
+  // every turn was excluded by --fidelity, or --models pre-seeded a model the
+  // user asked about that has no data in the slice) renders the cost as the
+  // dash sentinel — not "$0.00", which would falsely claim the model ran for
+  // free.
   lines.push('');
   for (const m of t.models) {
     const tot = t.totals[m] ?? { turns: 0, totalCost: 0 };
-    lines.push(`${displayModelName(m)}: ${formatInt(tot.turns)} turns, ${formatUsd(tot.totalCost)} total`);
+    const totalCost = tot.turns > 0 ? formatUsd(tot.totalCost) : DASH;
+    lines.push(`${displayModelName(m)}: ${formatInt(tot.turns)} turns, ${totalCost} total`);
   }
   lines.push('');
   return lines.join('\n');
+}
+
+// "excluded 12 turns below usage-only fidelity (8 aggregate-only, 3 cost-only, 1 partial)"
+// — only mention non-zero buckets so the parenthetical stays terse.
+function formatExcludedNote(f: FidelityRenderInput): string {
+  const parts: string[] = [];
+  if (f.excluded.aggregateOnly > 0) parts.push(`${f.excluded.aggregateOnly} aggregate-only`);
+  if (f.excluded.costOnly > 0) parts.push(`${f.excluded.costOnly} cost-only`);
+  if (f.excluded.partial > 0) parts.push(`${f.excluded.partial} partial`);
+  if (f.excluded.usageOnly > 0) parts.push(`${f.excluded.usageOnly} usage-only`);
+  const breakdown = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+  const noun = f.excluded.total === 1 ? 'turn' : 'turns';
+  return `excluded ${formatInt(f.excluded.total)} ${noun} below ${f.minimum} fidelity${breakdown}`;
 }
 
 function renderRow(row: string[], widths: number[], sep: string): string {

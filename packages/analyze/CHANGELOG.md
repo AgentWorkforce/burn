@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`hasMinimumFidelity` and `summarizeFidelity` are now wired into `burn compare`** ([#95](https://github.com/AgentWorkforce/burn/issues/95)). No API change in `@relayburn/analyze` itself — this entry just records the consumer-side adoption of the helpers shipped in 0.14.0 ([#41](https://github.com/AgentWorkforce/burn/issues/41)). See `@relayburn/cli` for the CLI surface (`--fidelity`, `--include-partial`, the new JSON `fidelity` block, and the "excluded N turns" coverage note).
 - **Waste attribution uses persisted user-turn block sizes before even-split** (#2). `attributeWaste()` accepts `userTurnsBySession` and fills missing per-`toolUseId` sizes from `UserTurnRecord.blocks` when content sidecars are unavailable, while keeping full sidecar content primary when present. Sessions that use this path report `attributionMethod: "user-turn"` instead of degrading to even-split.
 
 ## [0.22.0] - 2026-04-26
