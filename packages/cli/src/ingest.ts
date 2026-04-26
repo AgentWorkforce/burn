@@ -19,6 +19,7 @@ import {
   appendRelationships,
   appendToolResultEvents,
   appendTurns,
+  appendUserTurns,
   listContentSessionIds,
   loadConfig,
   loadCursors,
@@ -242,6 +243,7 @@ async function ingestClaudeInto(
           events,
           relationships,
           toolResultEvents,
+          userTurns,
           endOffset,
           lastUserText,
         } = await parseClaudeSessionIncremental(file, parseOpts);
@@ -268,6 +270,9 @@ async function ingestClaudeInto(
         }
         if (toolResultEvents.length > 0) {
           await appendToolResultEvents(toolResultEvents);
+        }
+        if (userTurns.length > 0) {
+          await appendUserTurns(userTurns);
         }
         const next: ClaudeCursor = {
           kind: 'claude',
@@ -323,7 +328,7 @@ async function ingestCodexInto(
         contentMode,
       };
       if (resume !== undefined) opts.resume = resume;
-      const { turns, content, endOffset, resume: nextResume } =
+      const { turns, content, userTurns, endOffset, resume: nextResume } =
         await parseCodexSessionIncremental(file, opts);
       if (turns.length > 0) {
         await appendTurns(turns);
@@ -339,6 +344,9 @@ async function ingestCodexInto(
       }
       if (content.length > 0) {
         await appendContent(content);
+      }
+      if (userTurns.length > 0) {
+        await appendUserTurns(userTurns);
       }
       const next: CodexCursor = {
         kind: 'codex',
@@ -386,7 +394,7 @@ async function ingestOpencodeInto(
         continue;
       }
 
-      const { turns, content, seenMessageIds: nextSeen } =
+      const { turns, content, userTurns, seenMessageIds: nextSeen } =
         await parseOpencodeSessionIncremental(file, {
           sessionPath: file,
           seenMessageIds,
@@ -406,6 +414,9 @@ async function ingestOpencodeInto(
       }
       if (content.length > 0) {
         await appendContent(content);
+      }
+      if (userTurns.length > 0) {
+        await appendUserTurns(userTurns);
       }
       const next: OpencodeCursor = {
         kind: 'opencode',
