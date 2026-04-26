@@ -5,13 +5,18 @@ import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
-import { queryUserTurns } from '@relayburn/ledger';
-import { ledgerPath } from '@relayburn/ledger';
+import {
+  ledgerPath,
+  queryRelationships,
+  queryToolResultEvents,
+  queryUserTurns,
+} from '@relayburn/ledger';
 
 import {
   countToolCallGaps,
   ingestClaudeProjects,
   ingestCodexSessions,
+  ingestOpencodeSessions,
   resetIngestGapWarnings,
   setIngestGapWriter,
 } from './ingest.js';
@@ -164,6 +169,39 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
       setIngestGapWriter(restore);
     }
     assert.equal(captured.length, 1, 'second/third ingest stays silent');
+  });
+
+  it('persists Codex graph records emitted by passive ingest', async () => {
+    await writeCodexSession(tmpHome, 'rollout-graph', codexSessionWithToolOutput());
+    await ingestCodexSessions();
+
+    const relationships = await queryRelationships({ source: 'codex' });
+    assert.equal(relationships.length, 1);
+    assert.equal(relationships[0]!.relationshipType, 'root');
+    assert.equal(relationships[0]!.sessionId, 'sess_graph_1');
+
+    const events = await queryToolResultEvents({ source: 'codex' });
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.toolUseId, 'call_graph_1');
+    assert.equal(events[0]!.status, 'completed');
+    assert.equal(typeof events[0]!.contentHash, 'string');
+  });
+
+  it('persists OpenCode graph records emitted by passive ingest', async () => {
+    await writeOpencodeSession(tmpHome);
+    await ingestOpencodeSessions();
+
+    const relationships = await queryRelationships({ source: 'opencode' });
+    assert.equal(relationships.length, 1);
+    assert.equal(relationships[0]!.relationshipType, 'root');
+    assert.equal(relationships[0]!.sessionId, 'ses_oc_graph');
+
+    const events = await queryToolResultEvents({ source: 'opencode' });
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.toolUseId, 'call_oc_graph');
+    assert.equal(events[0]!.status, 'errored');
+    assert.equal(events[0]!.isError, true);
+    assert.equal(typeof events[0]!.contentHash, 'string');
   });
 });
 
@@ -450,4 +488,114 @@ function codexChatOnlySession(): string {
     },
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+function codexSessionWithToolOutput(): string {
+  const lines = [
+    {
+      timestamp: '2026-04-20T01:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: 'sess_graph_1', cwd: '/tmp/project', timestamp: '2026-04-20T01:00:00.000Z' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_graph_1', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_graph_1' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: '{"cmd":"git status"}',
+        call_id: 'call_graph_1',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.100Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_graph_1',
+        output: 'clean',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.200Z',
+      type: 'event_msg',
+      payload: { type: 'exec_command_end', call_id: 'call_graph_1', turn_id: 'turn_graph_1', exit_code: 0 },
+    },
+    {
+      timestamp: '2026-04-20T01:00:02.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10 } },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:02.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_graph_1' },
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+async function writeOpencodeSession(home: string): Promise<void> {
+  const storage = path.join(home, '.local', 'share', 'opencode', 'storage');
+  const sessionDir = path.join(storage, 'session', 'global');
+  const messageDir = path.join(storage, 'message', 'ses_oc_graph');
+  const partDir = path.join(storage, 'part', 'msg_oc_graph_asst');
+  await mkdir(sessionDir, { recursive: true });
+  await mkdir(messageDir, { recursive: true });
+  await mkdir(partDir, { recursive: true });
+  await writeFile(
+    path.join(sessionDir, 'ses_oc_graph.json'),
+    JSON.stringify({
+      id: 'ses_oc_graph',
+      version: '1.0.0',
+      directory: '/tmp/project',
+      time: { created: 1_776_988_000_000, updated: 1_776_988_001_000 },
+    }),
+    'utf8',
+  );
+  await writeFile(
+    path.join(messageDir, 'msg_oc_graph_asst.json'),
+    JSON.stringify({
+      id: 'msg_oc_graph_asst',
+      sessionID: 'ses_oc_graph',
+      role: 'assistant',
+      providerID: 'anthropic',
+      modelID: 'claude-sonnet-4-5',
+      time: { created: 1_776_988_001_000 },
+      path: { cwd: '/tmp/project' },
+      tokens: { input: 10, output: 5, cache: { read: 0, write: 0 } },
+    }),
+    'utf8',
+  );
+  await writeFile(
+    path.join(partDir, 'prt_oc_graph_tool.json'),
+    JSON.stringify({
+      id: 'prt_oc_graph_tool',
+      sessionID: 'ses_oc_graph',
+      messageID: 'msg_oc_graph_asst',
+      type: 'tool',
+      callID: 'call_oc_graph',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: { command: 'npm test' },
+        output: 'failed',
+        metadata: { exit: 1 },
+      },
+    }),
+    'utf8',
+  );
 }

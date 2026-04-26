@@ -121,6 +121,116 @@ describe('parseCodexSession', () => {
     assert.equal(typeof t.retries, 'number');
   });
 
+  it('emits root relationships with source version metadata', async () => {
+    const { relationships } = await parseCodexSession(path.join(FIXTURES, 'simple-turn.jsonl'));
+    assert.equal(relationships.length, 1);
+    const root = relationships[0]!;
+    assert.equal(root.source, 'codex');
+    assert.equal(root.relationshipType, 'root');
+    assert.equal(root.sessionId, 'sess_simple_1');
+    assert.equal(root.sourceVersion, '0.121.0');
+    assert.equal(root.ts, '2026-04-20T00:00:00.000Z');
+  });
+
+  it('emits metadata-only ToolResultEventRecords for function_call_output blocks', async () => {
+    const { toolResultEvents } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    assert.equal(toolResultEvents.length, 4);
+    assert.deepEqual(
+      toolResultEvents.map((e) => e.toolUseId),
+      ['call_b1', 'call_b2', 'call_p1', 'call_b3'],
+    );
+    for (let i = 0; i < toolResultEvents.length; i++) {
+      const ev = toolResultEvents[i]!;
+      assert.equal(ev.source, 'codex');
+      assert.equal(ev.eventSource, 'function_call_output');
+      assert.equal(ev.callIndex, 0);
+      assert.equal(ev.eventIndex, i);
+      assert.equal(typeof ev.contentLength, 'number');
+      assert.equal(typeof ev.contentHash, 'string');
+      assert.equal(Object.prototype.hasOwnProperty.call(ev, 'output'), false);
+    }
+    const failed = toolResultEvents.find((e) => e.toolUseId === 'call_b2')!;
+    assert.equal(failed.status, 'errored');
+    assert.equal(failed.isError, true);
+    assert.equal(failed.contentLength, 'FAIL: 1 test broke'.length);
+    assert.equal(toolResultEvents.find((e) => e.toolUseId === 'call_p1')!.status, 'completed');
+  });
+
+  it('links spawn_agent outputs to subagent relationships when Codex exposes child ids', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-spawn-'));
+    try {
+      const file = path.join(tmp, 'spawn.jsonl');
+      const lines = [
+        {
+          timestamp: '2026-04-22T00:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'sess_parent', cwd: '/tmp/proj', timestamp: '2026-04-22T00:00:00.000Z' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.100Z',
+          type: 'turn_context',
+          payload: { turn_id: 'turn_spawn_1', cwd: '/tmp/proj', model: 'gpt-5.4' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.200Z',
+          type: 'event_msg',
+          payload: { type: 'task_started', turn_id: 'turn_spawn_1' },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.300Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'spawn_agent',
+            call_id: 'spawn_1',
+            arguments: '{"subagent_type":"review","description":"Review patch"}',
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.400Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call_output',
+            call_id: 'spawn_1',
+            output: { session_id: 'sess_child', agent_id: 'agent_child', status: 'completed' },
+          },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.500Z',
+          type: 'event_msg',
+          payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 } } },
+        },
+        {
+          timestamp: '2026-04-22T00:00:00.600Z',
+          type: 'event_msg',
+          payload: { type: 'task_complete', turn_id: 'turn_spawn_1' },
+        },
+      ];
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { relationships, toolResultEvents } = await parseCodexSession(file);
+      const sub = relationships.find((r) => r.relationshipType === 'subagent')!;
+      assert.ok(sub);
+      assert.equal(sub.sessionId, 'sess_child');
+      assert.equal(sub.relatedSessionId, 'sess_parent');
+      assert.equal(sub.parentToolUseId, 'spawn_1');
+      assert.equal(sub.agentId, 'agent_child');
+      assert.equal(sub.subagentType, 'review');
+      assert.equal(sub.description, 'Review patch');
+
+      const ev = toolResultEvents.find((e) => e.toolUseId === 'spawn_1')!;
+      assert.equal(ev.status, 'completed');
+      assert.equal(ev.subagentSessionId, 'sess_child');
+      assert.equal(ev.agentId, 'agent_child');
+      assert.equal(typeof ev.contentHash, 'string');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('marks exec_command_end with non-zero exit as a failed tool → debugging', async () => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
@@ -667,6 +777,10 @@ describe('parseCodexSessionIncremental user-turn dedup (issue #81)', () => {
       // Pass 1 should have emitted: pre-turn-1 text user turn + between 1-2 user turn.
       const firstIds = partial.userTurns.map((u) => u.userUuid).sort();
       assert.equal(partial.userTurns.length, 2);
+      assert.deepEqual(
+        partial.toolResultEvents.map((e) => e.toolUseId),
+        ['call_b1', 'call_b2', 'call_p1'],
+      );
       assert.equal(partial.endOffset, cutoff);
 
       const fullPath = path.join(tmp, 'full.jsonl');
@@ -679,6 +793,13 @@ describe('parseCodexSessionIncremental user-turn dedup (issue #81)', () => {
 
       // Pass 2 should have emitted exactly the between-2-3 user turn.
       assert.equal(resumed.userTurns.length, 1);
+      assert.equal(resumed.toolResultEvents.length, 1);
+      assert.equal(resumed.toolResultEvents[0]!.toolUseId, 'call_b3');
+      assert.equal(
+        resumed.toolResultEvents[0]!.eventIndex,
+        3,
+        'eventIndex resumes after graph events emitted in pass 1',
+      );
       const between23 = resumed.userTurns[0]!;
       assert.equal(between23.precedingMessageId, 'turn_utb_2');
       assert.equal(between23.followingMessageId, 'turn_utb_3');

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Codex cursor resume metadata now includes execution-graph state** (#42), allowing CLI ingest to preserve Codex tool-result event indexes and pending user-turn slots across incremental runs. Ledger query tests now cover source-neutral retry/failure and subagent-outcome consumers over `SessionRelationshipRecord` and `ToolResultEventRecord`.
+
 ## [0.21.0] - 2026-04-26
 
 ### Added

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Execution-graph passive reader coverage completed** (#42). Codex and OpenCode now populate the normalized relationship / tool-result-event substrate alongside Claude: Codex captures function/custom tool outputs, exposed spawn-agent child ids, statuses, event indexes, and output hashes; OpenCode captures root/parentID subagent relationships plus tool-part statuses and hashes. Passive ingest persists these graph rows for all three adapters, and ledger-level consumers can derive retry/failure and subagent outcome analyses from the cross-source record shapes.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added

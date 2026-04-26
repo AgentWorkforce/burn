@@ -2,11 +2,15 @@ import { open } from 'node:fs/promises';
 
 import { classifyActivity } from './classifier.js';
 import { resolveProject } from './git.js';
-import { argsHash } from './hash.js';
+import { argsHash, contentHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
+  SessionRelationshipRecord,
   ToolCall,
+  ToolResultEventSource,
+  ToolResultEventRecord,
+  ToolResultStatus,
   TurnRecord,
   Usage,
   UserTurnBlock,
@@ -35,6 +39,7 @@ export interface CodexResumeState {
   // committed turn live here until the next task_started stamps `following`
   // and the subsequent task_complete commits the record. Issue #81.
   userTurnSlot?: PersistedUserTurnSlot;
+  graph?: PersistedCodexGraphState;
 }
 
 export interface PersistedUserTurnSlot {
@@ -43,10 +48,27 @@ export interface PersistedUserTurnSlot {
   ts: string;
 }
 
+export interface PersistedCodexSpawnCall {
+  parentToolUseId: string;
+  agentId?: string;
+  subagentSessionId?: string;
+  subagentType?: string;
+  description?: string;
+}
+
+export interface PersistedCodexGraphState {
+  nextEventIndex: number;
+  toolResultCounters: Record<string, number>;
+  seenRootSessionIds: string[];
+  spawnCalls?: Record<string, PersistedCodexSpawnCall>;
+}
+
 export interface ParseCodexIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
   endOffset: number;
   resume: CodexResumeState;
 }
@@ -55,6 +77,18 @@ interface SessionMetaPayload {
   id?: string;
   cwd?: string;
   timestamp?: string;
+  cli_version?: string;
+  version?: string;
+  sourceSessionId?: string;
+  source_session_id?: string;
+  sourceSession?: string;
+  source_session?: string;
+  forkSessionId?: string;
+  fork_session_id?: string;
+  forkedFromSessionId?: string;
+  forked_from_session_id?: string;
+  continuedFromSessionId?: string;
+  continued_from_session_id?: string;
 }
 
 interface TurnContextPayload {
@@ -186,17 +220,20 @@ export interface ParseCodexResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
 }
 
 export async function parseCodexSession(
   filePath: string,
   options: ParseCodexOptions = {},
 ): Promise<ParseCodexResult> {
-  const { turns, content, userTurns } = await parseCodexSessionIncremental(filePath, {
-    ...options,
-    startOffset: 0,
-  });
-  return { turns, content, userTurns };
+  const { turns, content, userTurns, relationships, toolResultEvents } =
+    await parseCodexSessionIncremental(filePath, {
+      ...options,
+      startOffset: 0,
+    });
+  return { turns, content, userTurns, relationships, toolResultEvents };
 }
 
 export async function parseCodexSessionIncremental(
@@ -215,6 +252,8 @@ export async function parseCodexSessionIncremental(
         turns: [],
         content: [],
         userTurns: [],
+        relationships: [],
+        toolResultEvents: [],
         endOffset: startOffset,
         resume: cloneResume(options.resume),
       };
@@ -260,6 +299,22 @@ export async function parseCodexSessionIncremental(
     : { blocks: [], ts: '' };
   const userTurns: UserTurnRecord[] = [];
 
+  const graphState = cloneGraphState(options.resume?.graph);
+  let nextEventIndex = graphState.nextEventIndex;
+  const toolResultCounters = new Map<string, number>();
+  for (const [k, v] of Object.entries(graphState.toolResultCounters)) {
+    if (Number.isFinite(v)) toolResultCounters.set(k, v);
+  }
+  const seenRootSessionIds = new Set(graphState.seenRootSessionIds);
+  const spawnCalls = new Map<string, PersistedCodexSpawnCall>();
+  if (graphState.spawnCalls) {
+    for (const [k, v] of Object.entries(graphState.spawnCalls)) spawnCalls.set(k, { ...v });
+  }
+  const relationships: Array<{ offset: number; record: SessionRelationshipRecord }> = [];
+  const seenRelationshipIds = new Set<string>();
+  const toolResultEvents: Array<{ offset: number; record: ToolResultEventRecord }> = [];
+  const eventsByCallId = new Map<string, ToolResultEventRecord[]>();
+
   // Commit snapshot — only advanced at task_complete boundaries.
   let committedEndOffset = startOffset;
   let committedCumulative: CumulativeUsage = { ...cumulative };
@@ -269,6 +324,12 @@ export async function parseCodexSessionIncremental(
   let committedFinalizedCount = 0;
   let committedUserTurnsCount = 0;
   let committedUserTurnSlot: UserTurnSlot = cloneSlot(userTurnSlot);
+  let committedGraphState: PersistedCodexGraphState = snapshotGraphState(
+    nextEventIndex,
+    toolResultCounters,
+    seenRootSessionIds,
+    spawnCalls,
+  );
 
   let p = 0;
   while (p < buf.length) {
@@ -295,7 +356,17 @@ export async function parseCodexSessionIncremental(
 
     if (rec.type === 'session_meta') {
       const sp = payload as SessionMetaPayload;
-      if (typeof sp.id === 'string') sessionId = sp.id;
+      if (typeof sp.id === 'string') {
+        sessionId = sp.id;
+        collectSessionRelationships(
+          sp,
+          rec.timestamp,
+          lineEndOffset,
+          relationships,
+          seenRelationshipIds,
+          seenRootSessionIds,
+        );
+      }
       if (typeof sp.cwd === 'string') {
         sessionCwd = sp.cwd;
         if (openTurn && openTurn.project === undefined) openTurn.project = sp.cwd;
@@ -393,6 +464,9 @@ export async function parseCodexSessionIncremental(
               b.isError = true;
             }
           }
+          for (const callId of openTurn.erroredCallIds) {
+            markCodexToolResultStatus(eventsByCallId, callId, 'errored');
+          }
           // Stamp preceding so the next task_started knows this turn closed
           // off the slot and the record can be linked.
           userTurnSlot.precedingMessageId = openTurn.turnId;
@@ -406,6 +480,12 @@ export async function parseCodexSessionIncremental(
           committedFinalizedCount = finalized.length;
           committedUserTurnsCount = userTurns.length;
           committedUserTurnSlot = cloneSlot(userTurnSlot);
+          committedGraphState = snapshotGraphState(
+            nextEventIndex,
+            toolResultCounters,
+            seenRootSessionIds,
+            spawnCalls,
+          );
         }
         continue;
       }
@@ -414,8 +494,14 @@ export async function parseCodexSessionIncremental(
         const ev = payload as PatchApplyEndPayload;
         if (!openTurn || ev.turn_id !== openTurn.turnId) continue;
         if (ev.success === false) {
-          if (typeof ev.call_id === 'string') openTurn.erroredCallIds.add(ev.call_id);
+          if (typeof ev.call_id === 'string') {
+            openTurn.erroredCallIds.add(ev.call_id);
+            markCodexToolResultStatus(eventsByCallId, ev.call_id, 'errored');
+          }
           continue;
+        }
+        if (typeof ev.call_id === 'string') {
+          markCodexToolResultStatus(eventsByCallId, ev.call_id, 'completed');
         }
         const changes = ev.changes;
         if (changes && typeof changes === 'object') {
@@ -427,10 +513,28 @@ export async function parseCodexSessionIncremental(
       if (pl.type === 'exec_command_end') {
         const ev = payload as ExecCommandEndPayload;
         if (!openTurn || ev.turn_id !== openTurn.turnId) continue;
-        if (typeof ev.exit_code === 'number' && ev.exit_code !== 0 && typeof ev.call_id === 'string') {
-          openTurn.erroredCallIds.add(ev.call_id);
+        if (typeof ev.call_id === 'string') {
+          if (typeof ev.exit_code === 'number' && ev.exit_code !== 0) {
+            openTurn.erroredCallIds.add(ev.call_id);
+            markCodexToolResultStatus(eventsByCallId, ev.call_id, 'errored');
+          } else if (typeof ev.exit_code === 'number') {
+            markCodexToolResultStatus(eventsByCallId, ev.call_id, 'completed');
+          }
         }
         continue;
+      }
+
+      const notification = collectCodexNotificationEvent(
+        payload as Record<string, unknown>,
+        sessionId,
+        rec.timestamp,
+        toolResultCounters,
+        nextEventIndex,
+      );
+      if (notification) {
+        nextEventIndex++;
+        toolResultEvents.push({ offset: lineEndOffset, record: notification });
+        rememberEvent(eventsByCallId, notification);
       }
       continue;
     }
@@ -503,6 +607,35 @@ export async function parseCodexSessionIncremental(
         // have one, or buffer as pre-turn content otherwise.
         const out = payload as FunctionCallOutputPayload | CustomToolCallOutputPayload;
         if (typeof out.call_id !== 'string') continue;
+        const callIndex = toolResultCounters.get(out.call_id) ?? 0;
+        toolResultCounters.set(out.call_id, callIndex + 1);
+        const eventInput: Parameters<typeof buildCodexToolResultEvent>[0] = {
+          sessionId,
+          toolUseId: out.call_id,
+          callIndex,
+          eventIndex: nextEventIndex++,
+          ts: itemTs,
+          output: out.output,
+          status: 'completed',
+        };
+        if (openTurn?.turnId !== undefined) eventInput.messageId = openTurn.turnId;
+        const event = buildCodexToolResultEvent(eventInput);
+        const outcome = extractCodexSubagentOutcome(out.output);
+        const spawn = spawnCalls.get(out.call_id);
+        annotateCodexSubagentEvent(event, outcome, spawn);
+        if (event.status === 'errored' && openTurn) openTurn.erroredCallIds.add(out.call_id);
+        toolResultEvents.push({ offset: lineEndOffset, record: event });
+        rememberEvent(eventsByCallId, event);
+        collectCodexSubagentRelationship(
+          relationships,
+          seenRelationshipIds,
+          sessionId,
+          out.call_id,
+          itemTs,
+          lineEndOffset,
+          outcome,
+          spawn,
+        );
         // Always capture the output as a UserTurnBlock for the slot bridging
         // the open turn (or its predecessor) and the next assistant turn —
         // attribution doesn't require contentMode and shouldn't pay its cost.
@@ -539,6 +672,20 @@ export async function parseCodexSessionIncremental(
         const target = pickFunctionCallTarget(fc.name, parsedArgs);
         if (target !== undefined) call.target = target;
         openTurn.toolCalls.push(call);
+        const spawn = extractCodexSpawnCall(fc.name, fc.call_id, parsedArgs);
+        if (spawn) {
+          spawnCalls.set(fc.call_id, spawn);
+          collectCodexSubagentRelationship(
+            relationships,
+            seenRelationshipIds,
+            sessionId,
+            fc.call_id,
+            itemTs,
+            lineEndOffset,
+            spawn,
+            spawn,
+          );
+        }
         if (captureContent) {
           openTurn.content.push({
             v: 1,
@@ -565,6 +712,21 @@ export async function parseCodexSessionIncremental(
         const target = pickCustomToolTarget(ct.name, input);
         if (target !== undefined) call.target = target;
         openTurn.toolCalls.push(call);
+        const parsedInput = safeParseJson(input);
+        const spawn = extractCodexSpawnCall(ct.name, ct.call_id, parsedInput ?? { input });
+        if (spawn) {
+          spawnCalls.set(ct.call_id, spawn);
+          collectCodexSubagentRelationship(
+            relationships,
+            seenRelationshipIds,
+            sessionId,
+            ct.call_id,
+            itemTs,
+            lineEndOffset,
+            spawn,
+            spawn,
+          );
+        }
         if (captureContent) {
           openTurn.content.push({
             v: 1,
@@ -625,18 +787,506 @@ export async function parseCodexSessionIncremental(
     sessionId: committedSessionId,
     turnContexts: Object.fromEntries(committedTurnContexts),
     userTurnSlot: cloneSlot(committedUserTurnSlot),
+    graph: cloneGraphState(committedGraphState),
   };
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
 
   const emittedUserTurns = userTurns.slice(0, committedUserTurnsCount);
+  const emittedRelationships = relationships
+    .filter((r) => r.offset < committedEndOffset)
+    .map((r) => r.record);
+  const emittedToolResultEvents = toolResultEvents
+    .filter((e) => e.offset < committedEndOffset)
+    .map((e) => e.record);
 
   return {
     turns,
     content,
     userTurns: emittedUserTurns,
+    relationships: emittedRelationships,
+    toolResultEvents: emittedToolResultEvents,
     endOffset: committedEndOffset,
     resume,
   };
+}
+
+function cloneGraphState(g: PersistedCodexGraphState | undefined): PersistedCodexGraphState {
+  if (!g) {
+    return {
+      nextEventIndex: 0,
+      toolResultCounters: {},
+      seenRootSessionIds: [],
+      spawnCalls: {},
+    };
+  }
+  const out: PersistedCodexGraphState = {
+    nextEventIndex: Number.isFinite(g.nextEventIndex) ? g.nextEventIndex : 0,
+    toolResultCounters: { ...g.toolResultCounters },
+    seenRootSessionIds: [...g.seenRootSessionIds],
+    spawnCalls: {},
+  };
+  if (g.spawnCalls) {
+    out.spawnCalls = Object.fromEntries(
+      Object.entries(g.spawnCalls).map(([k, v]) => [k, { ...v }]),
+    );
+  }
+  return out;
+}
+
+function snapshotGraphState(
+  nextEventIndex: number,
+  counters: Map<string, number>,
+  seenRootSessionIds: Set<string>,
+  spawnCalls: Map<string, PersistedCodexSpawnCall>,
+): PersistedCodexGraphState {
+  return {
+    nextEventIndex,
+    toolResultCounters: Object.fromEntries(counters),
+    seenRootSessionIds: [...seenRootSessionIds],
+    spawnCalls: Object.fromEntries(
+      [...spawnCalls].map(([k, v]) => [k, { ...v }]),
+    ),
+  };
+}
+
+function collectSessionRelationships(
+  meta: SessionMetaPayload,
+  fallbackTs: string | undefined,
+  offset: number,
+  out: Array<{ offset: number; record: SessionRelationshipRecord }>,
+  seenRelationships: Set<string>,
+  seenRootSessionIds: Set<string>,
+): void {
+  if (typeof meta.id !== 'string' || meta.id.length === 0) return;
+  const ts = nonEmpty(meta.timestamp) ?? nonEmpty(fallbackTs);
+  const sourceVersion = nonEmpty(meta.cli_version) ?? nonEmpty(meta.version);
+  if (!seenRootSessionIds.has(meta.id)) {
+    seenRootSessionIds.add(meta.id);
+    const root: SessionRelationshipRecord = {
+      v: 1,
+      source: 'codex',
+      sessionId: meta.id,
+      relationshipType: 'root',
+    };
+    if (ts !== undefined) root.ts = ts;
+    if (sourceVersion !== undefined) root.sourceVersion = sourceVersion;
+    pushCodexRelationship(out, seenRelationships, root, offset);
+  }
+
+  const forkSource =
+    nonEmpty(meta.forkSessionId) ??
+    nonEmpty(meta.fork_session_id) ??
+    nonEmpty(meta.forkedFromSessionId) ??
+    nonEmpty(meta.forked_from_session_id);
+  const continuationSource =
+    nonEmpty(meta.continuedFromSessionId) ??
+    nonEmpty(meta.continued_from_session_id) ??
+    nonEmpty(meta.sourceSessionId) ??
+    nonEmpty(meta.source_session_id) ??
+    nonEmpty(meta.sourceSession) ??
+    nonEmpty(meta.source_session);
+  const relatedSessionId = forkSource ?? continuationSource;
+  if (relatedSessionId === undefined || relatedSessionId === meta.id) return;
+  const rel: SessionRelationshipRecord = {
+    v: 1,
+    source: 'codex',
+    sessionId: meta.id,
+    relatedSessionId,
+    relationshipType: forkSource !== undefined ? 'fork' : 'continuation',
+    sourceSessionId: relatedSessionId,
+  };
+  if (ts !== undefined) rel.ts = ts;
+  if (sourceVersion !== undefined) rel.sourceVersion = sourceVersion;
+  pushCodexRelationship(out, seenRelationships, rel, offset);
+}
+
+function pushCodexRelationship(
+  out: Array<{ offset: number; record: SessionRelationshipRecord }>,
+  seen: Set<string>,
+  record: SessionRelationshipRecord,
+  offset: number,
+): void {
+  const key = [
+    record.source,
+    record.sessionId,
+    record.relationshipType,
+    record.relatedSessionId ?? '',
+    record.agentId ?? '',
+    record.parentToolUseId ?? '',
+  ].join('|');
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({ offset, record });
+}
+
+function buildCodexToolResultEvent(input: {
+  sessionId: string;
+  messageId?: string;
+  toolUseId: string;
+  callIndex: number;
+  eventIndex: number;
+  ts: string;
+  output: unknown;
+  status: ToolResultStatus;
+}): ToolResultEventRecord {
+  const record: ToolResultEventRecord = {
+    v: 1,
+    source: 'codex',
+    sessionId: input.sessionId,
+    toolUseId: input.toolUseId,
+    callIndex: input.callIndex,
+    eventIndex: input.eventIndex,
+    status: input.status,
+    eventSource: 'function_call_output',
+  };
+  if (input.messageId !== undefined) record.messageId = input.messageId;
+  if (input.ts) record.ts = input.ts;
+  const measured = measureGraphContent(input.output);
+  if (measured.length !== undefined) record.contentLength = measured.length;
+  if (measured.hash !== undefined) record.contentHash = measured.hash;
+  return record;
+}
+
+function rememberEvent(
+  byCallId: Map<string, ToolResultEventRecord[]>,
+  event: ToolResultEventRecord,
+): void {
+  const existing = byCallId.get(event.toolUseId);
+  if (existing) existing.push(event);
+  else byCallId.set(event.toolUseId, [event]);
+}
+
+function markCodexToolResultStatus(
+  byCallId: Map<string, ToolResultEventRecord[]>,
+  callId: string,
+  status: ToolResultStatus,
+): void {
+  const events = byCallId.get(callId);
+  if (!events) return;
+  for (const ev of events) {
+    if (ev.status === 'errored' && status !== 'errored') continue;
+    ev.status = status;
+    if (status === 'errored') ev.isError = true;
+  }
+}
+
+interface CodexSubagentEvidence {
+  parentToolUseId?: string;
+  agentId?: string;
+  subagentSessionId?: string;
+  subagentType?: string;
+  description?: string;
+  status?: ToolResultStatus;
+}
+
+function extractCodexSpawnCall(
+  toolName: string,
+  callId: string,
+  args: Record<string, unknown> | undefined,
+): PersistedCodexSpawnCall | undefined {
+  if (!isCodexSpawnTool(toolName)) return undefined;
+  const input = args ?? {};
+  const out: PersistedCodexSpawnCall = { parentToolUseId: callId };
+  const agentId = pickDeepString(input, [
+    'agentId',
+    'agent_id',
+    'subagentId',
+    'subagent_id',
+    'taskId',
+    'task_id',
+  ]);
+  const sessionId = pickDeepString(input, [
+    'sessionId',
+    'session_id',
+    'subagentSessionId',
+    'subagent_session_id',
+    'childSessionId',
+    'child_session_id',
+  ]);
+  const subagentType = pickDeepString(input, ['subagent_type', 'subagentType', 'agentType']);
+  const description = pickDeepString(input, ['description', 'title', 'name']);
+  if (agentId !== undefined) out.agentId = agentId;
+  if (sessionId !== undefined) out.subagentSessionId = sessionId;
+  if (subagentType !== undefined) out.subagentType = subagentType;
+  if (description !== undefined) out.description = description;
+  return out;
+}
+
+function isCodexSpawnTool(name: string): boolean {
+  const normalized = name.toLowerCase().replace(/[-\s]/g, '_');
+  return (
+    normalized === 'spawn_agent' ||
+    normalized === 'spawn_subagent' ||
+    normalized === 'subagent' ||
+    normalized === 'agent' ||
+    normalized === 'task'
+  );
+}
+
+function extractCodexSubagentOutcome(output: unknown): CodexSubagentEvidence {
+  const obj = objectFromUnknown(output);
+  if (!obj) {
+    const status = statusFromUnknown(output);
+    return status ? { status } : {};
+  }
+  const parentToolUseId = pickDeepString(obj, [
+    'parentToolUseID',
+    'parentToolUseId',
+    'parent_tool_use_id',
+    'toolUseId',
+    'tool_use_id',
+    'spawnCallId',
+    'spawn_call_id',
+  ]);
+  const agentId = pickDeepString(obj, [
+    'agentId',
+    'agent_id',
+    'subagentId',
+    'subagent_id',
+    'taskId',
+    'task_id',
+  ]);
+  const subagentSessionId = pickDeepString(obj, [
+    'sessionId',
+    'session_id',
+    'subagentSessionId',
+    'subagent_session_id',
+    'childSessionId',
+    'child_session_id',
+  ]);
+  const subagentType = pickDeepString(obj, ['subagent_type', 'subagentType', 'agentType']);
+  const description = pickDeepString(obj, ['description', 'title', 'name']);
+  const status = statusFromUnknown(obj);
+  const out: CodexSubagentEvidence = {};
+  if (parentToolUseId !== undefined) out.parentToolUseId = parentToolUseId;
+  if (agentId !== undefined) out.agentId = agentId;
+  if (subagentSessionId !== undefined) out.subagentSessionId = subagentSessionId;
+  if (subagentType !== undefined) out.subagentType = subagentType;
+  if (description !== undefined) out.description = description;
+  if (status !== undefined) out.status = status;
+  return out;
+}
+
+function annotateCodexSubagentEvent(
+  event: ToolResultEventRecord,
+  outcome: CodexSubagentEvidence,
+  spawn: PersistedCodexSpawnCall | undefined,
+): void {
+  const status = outcome.status;
+  if (status !== undefined) {
+    event.status = status;
+    if (status === 'errored') event.isError = true;
+  }
+  const subagentSessionId = outcome.subagentSessionId ?? spawn?.subagentSessionId;
+  const agentId = outcome.agentId ?? spawn?.agentId ?? subagentSessionId;
+  if (subagentSessionId !== undefined) event.subagentSessionId = subagentSessionId;
+  if (agentId !== undefined) event.agentId = agentId;
+}
+
+function collectCodexSubagentRelationship(
+  out: Array<{ offset: number; record: SessionRelationshipRecord }>,
+  seen: Set<string>,
+  parentSessionId: string,
+  callId: string,
+  ts: string,
+  offset: number,
+  outcome: CodexSubagentEvidence,
+  spawn: PersistedCodexSpawnCall | undefined,
+): void {
+  if (!parentSessionId) return;
+  const childSessionId =
+    outcome.subagentSessionId ?? spawn?.subagentSessionId ?? outcome.agentId ?? spawn?.agentId;
+  if (childSessionId === undefined || childSessionId.length === 0) return;
+  const agentId = outcome.agentId ?? spawn?.agentId ?? childSessionId;
+  const parentToolUseId = outcome.parentToolUseId ?? spawn?.parentToolUseId ?? callId;
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'codex',
+    sessionId: childSessionId,
+    relatedSessionId: parentSessionId,
+    relationshipType: 'subagent',
+    parentToolUseId,
+    agentId,
+  };
+  if (ts) row.ts = ts;
+  const subagentType = outcome.subagentType ?? spawn?.subagentType;
+  const description = outcome.description ?? spawn?.description;
+  if (subagentType !== undefined) row.subagentType = subagentType;
+  if (description !== undefined) row.description = description;
+  pushCodexRelationship(out, seen, row, offset);
+}
+
+function collectCodexNotificationEvent(
+  payload: Record<string, unknown>,
+  sessionId: string,
+  ts: string | undefined,
+  counters: Map<string, number>,
+  eventIndex: number,
+): ToolResultEventRecord | undefined {
+  if (!sessionId) return undefined;
+  const type = typeof payload['type'] === 'string' ? payload['type'] : '';
+  const eventSource = classifyCodexNotificationSource(type);
+  if (eventSource === undefined) return undefined;
+  const toolUseId = pickDeepString(payload, [
+    'toolUseId',
+    'tool_use_id',
+    'call_id',
+    'callId',
+    'parentToolUseID',
+    'parentToolUseId',
+    'parent_tool_use_id',
+  ]);
+  if (toolUseId === undefined) return undefined;
+  const callIndex = counters.get(toolUseId) ?? 0;
+  counters.set(toolUseId, callIndex + 1);
+  const record: ToolResultEventRecord = {
+    v: 1,
+    source: 'codex',
+    sessionId,
+    toolUseId,
+    callIndex,
+    eventIndex,
+    status: statusFromUnknown(payload) ?? 'unknown',
+    eventSource,
+  };
+  if (ts !== undefined) record.ts = ts;
+  const agentId = pickDeepString(payload, ['agentId', 'agent_id', 'taskId', 'task_id']);
+  const subagentSessionId = pickDeepString(payload, [
+    'sessionId',
+    'session_id',
+    'subagentSessionId',
+    'subagent_session_id',
+    'childSessionId',
+    'child_session_id',
+  ]);
+  if (agentId !== undefined) record.agentId = agentId;
+  if (subagentSessionId !== undefined && subagentSessionId !== sessionId) {
+    record.subagentSessionId = subagentSessionId;
+  }
+  if (record.status === 'errored') record.isError = true;
+  const content = pickNotificationContent(payload);
+  const measured = measureGraphContent(content);
+  if (measured.length !== undefined) record.contentLength = measured.length;
+  if (measured.hash !== undefined) record.contentHash = measured.hash;
+  return record;
+}
+
+function classifyCodexNotificationSource(type: string): ToolResultEventSource | undefined {
+  const normalized = type.toLowerCase();
+  if (normalized.includes('queue') || normalized.includes('enqueue')) return 'queue_event';
+  if (normalized.includes('progress')) return 'progress_event';
+  if (normalized.includes('subagent') || normalized.includes('agent')) {
+    return 'subagent_notification';
+  }
+  return undefined;
+}
+
+function pickNotificationContent(payload: Record<string, unknown>): unknown {
+  for (const key of ['content', 'message', 'output', 'result']) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) return payload[key];
+  }
+  return undefined;
+}
+
+function objectFromUnknown(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function pickDeepString(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const direct = obj[key];
+    if (typeof direct === 'string' && direct.length > 0) return direct;
+  }
+  for (const value of Object.values(obj)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const nested = pickDeepString(value as Record<string, unknown>, keys);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+function statusFromUnknown(value: unknown): ToolResultStatus | undefined {
+  if (typeof value === 'string') return normalizeToolResultStatus(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const obj = value as Record<string, unknown>;
+  for (const key of ['status', 'state', 'result', 'terminalStatus', 'terminal_status']) {
+    const status = normalizeToolResultStatus(obj[key]);
+    if (status !== undefined) return status;
+  }
+  for (const nested of Object.values(obj)) {
+    const status = statusFromUnknown(nested);
+    if (status !== undefined) return status;
+  }
+  return undefined;
+}
+
+function normalizeToolResultStatus(value: unknown): ToolResultStatus | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.toLowerCase().replace(/[-\s]/g, '_');
+  if (
+    normalized === 'completed' ||
+    normalized === 'complete' ||
+    normalized === 'success' ||
+    normalized === 'succeeded' ||
+    normalized === 'done'
+  ) {
+    return 'completed';
+  }
+  if (
+    normalized === 'error' ||
+    normalized === 'errored' ||
+    normalized === 'failed' ||
+    normalized === 'failure'
+  ) {
+    return 'errored';
+  }
+  if (
+    normalized === 'running' ||
+    normalized === 'in_progress' ||
+    normalized === 'queued' ||
+    normalized === 'pending' ||
+    normalized === 'started'
+  ) {
+    return 'running';
+  }
+  if (
+    normalized === 'cancelled' ||
+    normalized === 'canceled' ||
+    normalized === 'aborted'
+  ) {
+    return 'cancelled';
+  }
+  return undefined;
+}
+
+function measureGraphContent(content: unknown): { length?: number; hash?: string } {
+  if (typeof content === 'string') {
+    return { length: content.length, hash: contentHash(content) };
+  }
+  if (content === undefined || content === null) return {};
+  try {
+    const serialized = JSON.stringify(content);
+    if (typeof serialized !== 'string') return {};
+    return { length: serialized.length, hash: contentHash(serialized) };
+  } catch {
+    return {};
+  }
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function pushContent(
@@ -670,6 +1320,7 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
       sessionId: '',
       turnContexts: {},
       userTurnSlot: { blocks: [], ts: '' },
+      graph: cloneGraphState(undefined),
     };
   }
   const out: CodexResumeState = {
@@ -680,6 +1331,7 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
   if (r.sessionCwd !== undefined) out.sessionCwd = r.sessionCwd;
   if (r.userTurnSlot) out.userTurnSlot = cloneSlot(r.userTurnSlot);
   else out.userTurnSlot = { blocks: [], ts: '' };
+  out.graph = cloneGraphState(r.graph);
   return out;
 }
 

@@ -3,12 +3,15 @@ import * as path from 'node:path';
 
 import { classifyActivity } from './classifier.js';
 import { resolveProject } from './git.js';
-import { argsHash } from './hash.js';
+import { argsHash, contentHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
+  SessionRelationshipRecord,
   Subagent,
   ToolCall,
+  ToolResultEventRecord,
+  ToolResultStatus,
   TurnRecord,
   Usage,
   UserTurnBlock,
@@ -25,6 +28,12 @@ interface SessionInfo {
   id: string;
   parentID?: string;
   directory?: string;
+  version?: string;
+  title?: string;
+  time?: {
+    created?: number;
+    updated?: number;
+  };
 }
 
 interface MessageTokens {
@@ -93,17 +102,20 @@ export interface ParseOpencodeResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
 }
 
 export async function parseOpencodeSession(
   sessionFilePath: string,
   options: ParseOpencodeOptions = {},
 ): Promise<ParseOpencodeResult> {
-  const { turns, content, userTurns } = await parseOpencodeSessionIncremental(
-    sessionFilePath,
-    options,
-  );
-  return { turns, content, userTurns };
+  const { turns, content, userTurns, relationships, toolResultEvents } =
+    await parseOpencodeSessionIncremental(
+      sessionFilePath,
+      options,
+    );
+  return { turns, content, userTurns, relationships, toolResultEvents };
 }
 
 export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
@@ -114,6 +126,8 @@ export interface ParseOpencodeIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   userTurns: UserTurnRecord[];
+  relationships: SessionRelationshipRecord[];
+  toolResultEvents: ToolResultEventRecord[];
   seenMessageIds: Set<string>;
 }
 
@@ -127,6 +141,8 @@ export async function parseOpencodeSessionIncremental(
       turns: [],
       content: [],
       userTurns: [],
+      relationships: [],
+      toolResultEvents: [],
       seenMessageIds: new Set(options.seenMessageIds ?? []),
     };
   }
@@ -144,10 +160,23 @@ export async function parseOpencodeSessionIncremental(
   const turns: TurnRecord[] = [];
   const content: ContentRecord[] = [];
   const userTurns: UserTurnRecord[] = [];
+  const relationships = buildOpencodeRelationships(session);
+  const toolResultEvents: ToolResultEventRecord[] = [];
+  const toolResultCounters = new Map<string, number>();
+  let nextEventIndex = 0;
 
   for (let i = 0; i < assistants.length; i++) {
     const m = assistants[i]!;
+    const parts = await readParts(storageRoot, m.id);
+    const harvested = collectOpencodeToolResultEvents(
+      parts,
+      m,
+      toolResultCounters,
+      nextEventIndex,
+    );
+    nextEventIndex += harvested.length;
     if (seen.has(m.id)) continue;
+    toolResultEvents.push(...harvested);
     // Build the user turn that bridges the previous assistant message and
     // this one — tool outputs from the predecessor's parts plus any user
     // text from the user message that precedes `m`. Issue #86.
@@ -170,7 +199,6 @@ export async function parseOpencodeSessionIncremental(
     );
     if (userTurn) userTurns.push(userTurn);
 
-    const parts = await readParts(storageRoot, m.id);
     const { toolCalls, filesTouched, erroredCallIds } = extractToolsAndFiles(parts);
     const stopReason = lastStepFinishReason(parts);
 
@@ -197,7 +225,8 @@ export async function parseOpencodeSessionIncremental(
     }
     if (filesTouched.length > 0) record.filesTouched = filesTouched;
     if (isSidechain) {
-      const sub: Subagent = { isSidechain: true };
+      const sub: Subagent = { isSidechain: true, agentId: session.id };
+      if (session.parentID !== undefined) sub.parentAgentId = session.parentID;
       record.subagent = sub;
     }
     if (stopReason !== undefined) record.stopReason = stopReason;
@@ -243,7 +272,7 @@ export async function parseOpencodeSessionIncremental(
     }
   }
 
-  return { turns, content, userTurns, seenMessageIds: seen };
+  return { turns, content, userTurns, relationships, toolResultEvents, seenMessageIds: seen };
 }
 
 // Build a UserTurnRecord for the gap between two consecutive assistant
@@ -377,6 +406,128 @@ function extractAssistantContent(
   return out;
 }
 
+function buildOpencodeRelationships(session: SessionInfo): SessionRelationshipRecord[] {
+  const ts =
+    typeof session.time?.created === 'number'
+      ? new Date(session.time.created).toISOString()
+      : undefined;
+  if (session.parentID && session.parentID.length > 0) {
+    const row: SessionRelationshipRecord = {
+      v: 1,
+      source: 'opencode',
+      sessionId: session.id,
+      relatedSessionId: session.parentID,
+      relationshipType: 'subagent',
+      agentId: session.id,
+    };
+    if (ts !== undefined) row.ts = ts;
+    if (session.version !== undefined) row.sourceVersion = session.version;
+    return [row];
+  }
+  const root: SessionRelationshipRecord = {
+    v: 1,
+    source: 'opencode',
+    sessionId: session.id,
+    relationshipType: 'root',
+  };
+  if (ts !== undefined) root.ts = ts;
+  if (session.version !== undefined) root.sourceVersion = session.version;
+  return [root];
+}
+
+function collectOpencodeToolResultEvents(
+  parts: Part[],
+  message: AssistantMessage,
+  counters: Map<string, number>,
+  startEventIndex: number,
+): ToolResultEventRecord[] {
+  const out: ToolResultEventRecord[] = [];
+  let eventIndex = startEventIndex;
+  const ts = new Date(message.time.created).toISOString();
+  for (const p of parts) {
+    if (p.type !== 'tool') continue;
+    const tp = p as ToolPart;
+    if (typeof tp.callID !== 'string') continue;
+    const callIndex = counters.get(tp.callID) ?? 0;
+    counters.set(tp.callID, callIndex + 1);
+    const status = opencodeToolStatus(tp);
+    const record: ToolResultEventRecord = {
+      v: 1,
+      source: 'opencode',
+      sessionId: message.sessionID,
+      messageId: message.id,
+      toolUseId: tp.callID,
+      callIndex,
+      eventIndex: eventIndex++,
+      ts,
+      status,
+      eventSource: 'tool_result',
+    };
+    if (status === 'errored') record.isError = true;
+    if (tp.state && Object.prototype.hasOwnProperty.call(tp.state, 'output')) {
+      const measured = measureGraphContent(tp.state.output);
+      if (measured.length !== undefined) record.contentLength = measured.length;
+      if (measured.hash !== undefined) record.contentHash = measured.hash;
+    }
+    out.push(record);
+  }
+  return out;
+}
+
+function opencodeToolStatus(tp: ToolPart): ToolResultStatus {
+  if (isFailedTool(tp)) return 'errored';
+  const raw = tp.state?.status;
+  if (typeof raw !== 'string') return 'unknown';
+  const normalized = raw.toLowerCase().replace(/[-\s]/g, '_');
+  if (
+    normalized === 'completed' ||
+    normalized === 'complete' ||
+    normalized === 'success' ||
+    normalized === 'succeeded'
+  ) {
+    return 'completed';
+  }
+  if (
+    normalized === 'error' ||
+    normalized === 'errored' ||
+    normalized === 'failed' ||
+    normalized === 'failure'
+  ) {
+    return 'errored';
+  }
+  if (
+    normalized === 'running' ||
+    normalized === 'pending' ||
+    normalized === 'queued' ||
+    normalized === 'in_progress' ||
+    normalized === 'started'
+  ) {
+    return 'running';
+  }
+  if (
+    normalized === 'cancelled' ||
+    normalized === 'canceled' ||
+    normalized === 'aborted'
+  ) {
+    return 'cancelled';
+  }
+  return 'unknown';
+}
+
+function measureGraphContent(content: unknown): { length?: number; hash?: string } {
+  if (typeof content === 'string') {
+    return { length: content.length, hash: contentHash(content) };
+  }
+  if (content === undefined || content === null) return {};
+  try {
+    const serialized = JSON.stringify(content);
+    if (typeof serialized !== 'string') return {};
+    return { length: serialized.length, hash: contentHash(serialized) };
+  } catch {
+    return {};
+  }
+}
+
 async function readUserTextParts(storageRoot: string, userMessageId: string): Promise<string[]> {
   const parts = await readParts(storageRoot, userMessageId);
   const out: string[] = [];
@@ -397,6 +548,15 @@ async function readSession(sessionFilePath: string): Promise<SessionInfo | null>
     const out: SessionInfo = { id: parsed.id };
     if (typeof parsed.parentID === 'string') out.parentID = parsed.parentID;
     if (typeof parsed.directory === 'string') out.directory = parsed.directory;
+    if (typeof parsed.version === 'string') out.version = parsed.version;
+    if (typeof parsed.title === 'string') out.title = parsed.title;
+    if (parsed.time && typeof parsed.time === 'object') {
+      const t = parsed.time as Record<string, unknown>;
+      const time: NonNullable<SessionInfo['time']> = {};
+      if (typeof t['created'] === 'number') time.created = t['created'];
+      if (typeof t['updated'] === 'number') time.updated = t['updated'];
+      out.time = time;
+    }
     return out;
   } catch {
     return null;

@@ -199,6 +199,94 @@ describe('parseClaudeSession', () => {
     assert.equal(innerSpawn!.agentId, 'u-sub2-user');
   });
 
+  it('does not invent fork/continuation rows when Claude logs only expose parentUuid chains', async () => {
+    const { relationships } = await parseClaudeSession(
+      path.join(FIXTURES, 'nested-subagent.jsonl'),
+    );
+    assert.equal(
+      relationships.some(
+        (r) => r.relationshipType === 'fork' || r.relationshipType === 'continuation',
+      ),
+      false,
+    );
+  });
+
+  it('preserves explicit source-session continuation metadata when Claude logs expose it', async () => {
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-claude-source-'));
+    try {
+      const file = path.join(tmp, 'continued.jsonl');
+      const lines = [
+        {
+          type: 'user',
+          sessionId: 'sess_new',
+          sourceSessionId: 'sess_old',
+          claudeCodeVersion: '1.2.3',
+          timestamp: '2026-04-23T00:00:00.000Z',
+          uuid: 'u-source',
+          parentUuid: null,
+          message: { role: 'user', content: 'continue' },
+        },
+        {
+          type: 'assistant',
+          sessionId: 'sess_new',
+          sourceSessionId: 'sess_old',
+          claudeCodeVersion: '1.2.3',
+          timestamp: '2026-04-23T00:00:01.000Z',
+          uuid: 'a-source',
+          parentUuid: 'u-source',
+          message: {
+            id: 'msg_source',
+            model: 'claude-sonnet-4-6',
+            content: [{ type: 'text', text: 'ok' }],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        },
+      ];
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { relationships } = await parseClaudeSession(file);
+      const continuation = relationships.find((r) => r.relationshipType === 'continuation')!;
+      assert.ok(continuation);
+      assert.equal(continuation.sessionId, 'sess_new');
+      assert.equal(continuation.relatedSessionId, 'sess_old');
+      assert.equal(continuation.sourceSessionId, 'sess_old');
+      assert.equal(continuation.sourceVersion, '1.2.3');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves Claude progress evidence as graph events when logs expose parentToolUseID', async () => {
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-claude-progress-'));
+    try {
+      const file = path.join(tmp, 'progress.jsonl');
+      const lines = [
+        {
+          type: 'system',
+          subtype: 'agent_progress',
+          sessionId: 'sess_progress',
+          parentToolUseID: 'toolu_spawn',
+          agentId: 'agent-progress-1',
+          status: 'running',
+          message: 'queued',
+          timestamp: '2026-04-23T00:00:00.000Z',
+        },
+      ];
+      await writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const { toolResultEvents } = await parseClaudeSession(file);
+      assert.equal(toolResultEvents.length, 1);
+      const ev = toolResultEvents[0]!;
+      assert.equal(ev.eventSource, 'progress_event');
+      assert.equal(ev.toolUseId, 'toolu_spawn');
+      assert.equal(ev.agentId, 'agent-progress-1');
+      assert.equal(ev.status, 'running');
+      assert.equal(typeof ev.contentHash, 'string');
+      assert.equal(Object.prototype.hasOwnProperty.call(ev, 'message'), false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('attaches per-turn fidelity metadata with full coverage on a normal turn', async () => {
     const { turns } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
     const t = turns[0]!;

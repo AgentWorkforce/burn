@@ -298,6 +298,83 @@ describe('ledger', () => {
     assert.equal(errored.eventIndex, 1);
   });
 
+  it('lets consumers derive retry failures and subagent outcomes from normalized graph records', async () => {
+    const rel: SessionRelationshipRecord = {
+      v: 1,
+      source: 'codex',
+      sessionId: 's-child',
+      relatedSessionId: 's-parent',
+      relationshipType: 'subagent',
+      parentToolUseId: 'spawn-agent',
+      agentId: 'agent-child',
+    };
+    await appendRelationships([rel]);
+    await appendToolResultEvents([
+      {
+        v: 1,
+        source: 'codex',
+        sessionId: 's-parent',
+        toolUseId: 'retry-tool',
+        callIndex: 0,
+        eventIndex: 0,
+        status: 'errored',
+        eventSource: 'function_call_output',
+        isError: true,
+      },
+      {
+        v: 1,
+        source: 'codex',
+        sessionId: 's-parent',
+        toolUseId: 'retry-tool',
+        callIndex: 1,
+        eventIndex: 1,
+        status: 'errored',
+        eventSource: 'function_call_output',
+        isError: true,
+      },
+      {
+        v: 1,
+        source: 'codex',
+        sessionId: 's-parent',
+        toolUseId: 'retry-tool',
+        callIndex: 2,
+        eventIndex: 2,
+        status: 'completed',
+        eventSource: 'function_call_output',
+      },
+      {
+        v: 1,
+        source: 'opencode',
+        sessionId: 's-parent',
+        toolUseId: 'spawn-agent',
+        eventIndex: 3,
+        status: 'errored',
+        eventSource: 'tool_result',
+        isError: true,
+        subagentSessionId: 's-child',
+        agentId: 'agent-child',
+      },
+    ]);
+
+    const events = await queryToolResultEvents({ sessionId: 's-parent' });
+    const retryEvents = events
+      .filter((e) => e.toolUseId === 'retry-tool')
+      .sort((a, b) => a.eventIndex - b.eventIndex);
+    assert.deepEqual(
+      retryEvents.map((e) => e.status),
+      ['errored', 'errored', 'completed'],
+      'retry/failure sequence is source-neutral',
+    );
+    assert.equal(retryEvents.filter((e) => e.isError).length, 2);
+
+    const spawnOutcome = events.find((e) => e.subagentSessionId === 's-child')!;
+    assert.ok(spawnOutcome.subagentSessionId);
+    const [relationship] = await queryRelationships({ sessionId: spawnOutcome.subagentSessionId });
+    assert.equal(relationship!.relationshipType, 'subagent');
+    assert.equal(relationship!.parentToolUseId, spawnOutcome.toolUseId);
+    assert.equal(spawnOutcome.status, 'errored');
+  });
+
   it('queryRelationships filters by source and sessionId (matching child or parent)', async () => {
     await appendRelationships([
       {

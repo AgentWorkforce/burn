@@ -315,6 +315,10 @@ async function ingestCodexInto(
             sessionId: priorCodex.sessionId,
             turnContexts: { ...priorCodex.turnContexts },
             ...(priorCodex.sessionCwd !== undefined ? { sessionCwd: priorCodex.sessionCwd } : {}),
+            ...(priorCodex.userTurnSlot !== undefined
+              ? { userTurnSlot: priorCodex.userTurnSlot }
+              : {}),
+            ...(priorCodex.graph !== undefined ? { graph: priorCodex.graph } : {}),
           };
 
       if (!rotated && startOffset >= st.size) {
@@ -328,7 +332,15 @@ async function ingestCodexInto(
         contentMode,
       };
       if (resume !== undefined) opts.resume = resume;
-      const { turns, content, userTurns, endOffset, resume: nextResume } =
+      const {
+        turns,
+        content,
+        userTurns,
+        relationships,
+        toolResultEvents,
+        endOffset,
+        resume: nextResume,
+      } =
         await parseCodexSessionIncremental(file, opts);
       if (turns.length > 0) {
         await appendTurns(turns);
@@ -348,6 +360,12 @@ async function ingestCodexInto(
       if (userTurns.length > 0) {
         await appendUserTurns(userTurns);
       }
+      if (relationships.length > 0) {
+        await appendRelationships(relationships);
+      }
+      if (toolResultEvents.length > 0) {
+        await appendToolResultEvents(toolResultEvents);
+      }
       const next: CodexCursor = {
         kind: 'codex',
         inode: st.ino,
@@ -358,6 +376,8 @@ async function ingestCodexInto(
         turnContexts: nextResume.turnContexts,
       };
       if (nextResume.sessionCwd !== undefined) next.sessionCwd = nextResume.sessionCwd;
+      if (nextResume.userTurnSlot !== undefined) next.userTurnSlot = nextResume.userTurnSlot;
+      if (nextResume.graph !== undefined) next.graph = nextResume.graph;
       cursors[file] = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -394,7 +414,14 @@ async function ingestOpencodeInto(
         continue;
       }
 
-      const { turns, content, userTurns, seenMessageIds: nextSeen } =
+      const {
+        turns,
+        content,
+        userTurns,
+        relationships,
+        toolResultEvents,
+        seenMessageIds: nextSeen,
+      } =
         await parseOpencodeSessionIncremental(file, {
           sessionPath: file,
           seenMessageIds,
@@ -417,6 +444,12 @@ async function ingestOpencodeInto(
       }
       if (userTurns.length > 0) {
         await appendUserTurns(userTurns);
+      }
+      if (relationships.length > 0) {
+        await appendRelationships(relationships);
+      }
+      if (toolResultEvents.length > 0) {
+        await appendToolResultEvents(toolResultEvents);
       }
       const next: OpencodeCursor = {
         kind: 'opencode',

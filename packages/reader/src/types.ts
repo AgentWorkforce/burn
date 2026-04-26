@@ -206,10 +206,8 @@ export interface UserTurnRecord {
 //     we never store the raw bytes here.
 //
 // These are additive — existing TurnRecord consumers continue to work — and
-// the contract is intentionally cross-source so Codex / OpenCode / hook-path
-// ingest all populate the same shape over time. This file ships the shapes
-// + the Claude passive reader's first population pass; Codex / OpenCode
-// follow in a subsequent PR.
+// the contract is intentionally cross-source so Claude / Codex / OpenCode /
+// hook-path ingest all populate the same shape where their logs expose it.
 // ---------------------------------------------------------------------------
 
 export type RelationshipType = 'root' | 'continuation' | 'fork' | 'subagent';

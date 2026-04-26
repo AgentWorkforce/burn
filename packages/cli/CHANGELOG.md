@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Persist Codex and OpenCode execution-graph records during passive ingest** (#42). `burn codex` / `burn opencode` background ingest now appends the `SessionRelationshipRecord`s and `ToolResultEventRecord`s emitted by their readers, matching the Claude ingest path. Codex cursor state also carries the parser's graph/user-turn resume metadata so incremental ingest preserves event chronology across runs.
+
 ## [0.21.0] - 2026-04-26
 
 ### Added

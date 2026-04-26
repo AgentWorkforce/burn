@@ -94,7 +94,47 @@ describe('parseOpencodeSession', () => {
     const t = turns[0]!;
     assert.ok(t.subagent);
     assert.equal(t.subagent!.isSidechain, true);
+    assert.equal(t.subagent!.agentId, 'ses_child');
+    assert.equal(t.subagent!.parentAgentId, 'ses_multi');
     assert.equal(t.model, 'anthropic/claude-haiku-4-5');
+  });
+
+  it('emits root and parentID-backed subagent relationships', async () => {
+    const parent = await parseOpencodeSession(sessionFile('multi-turn', 'ses_multi'));
+    assert.equal(parent.relationships.length, 1);
+    assert.equal(parent.relationships[0]!.relationshipType, 'root');
+    assert.equal(parent.relationships[0]!.sessionId, 'ses_multi');
+    assert.equal(parent.relationships[0]!.sourceVersion, '1.0.0');
+
+    const child = await parseOpencodeSession(sessionFile('multi-turn', 'ses_child'));
+    assert.equal(child.relationships.length, 1);
+    const rel = child.relationships[0]!;
+    assert.equal(rel.relationshipType, 'subagent');
+    assert.equal(rel.sessionId, 'ses_child');
+    assert.equal(rel.relatedSessionId, 'ses_multi');
+    assert.equal(rel.agentId, 'ses_child');
+    assert.equal(rel.sourceVersion, '1.0.0');
+  });
+
+  it('emits metadata-only tool result events from tool parts', async () => {
+    const { toolResultEvents } = await parseOpencodeSession(sessionFile('with-tool', 'ses_tool'));
+    assert.equal(toolResultEvents.length, 3);
+    assert.deepEqual(
+      toolResultEvents.map((e) => e.toolUseId),
+      ['toolu_read_1', 'toolu_edit_1', 'toolu_bash_1'],
+    );
+    for (let i = 0; i < toolResultEvents.length; i++) {
+      const ev = toolResultEvents[i]!;
+      assert.equal(ev.source, 'opencode');
+      assert.equal(ev.eventSource, 'tool_result');
+      assert.equal(ev.status, 'completed');
+      assert.equal(ev.eventIndex, i);
+      assert.equal(ev.callIndex, 0);
+      assert.equal(ev.messageId, 'msg_tool_asst');
+      assert.equal(typeof ev.contentLength, 'number');
+      assert.equal(typeof ev.contentHash, 'string');
+      assert.equal(Object.prototype.hasOwnProperty.call(ev, 'output'), false);
+    }
   });
 
   it('produces stable argsHash for identical tool inputs', async () => {
@@ -186,11 +226,16 @@ describe('parseOpencodeSession', () => {
         }),
       );
       const file = path.join(sessionDir, 'ses_fail.json');
-      const { turns } = await parseOpencodeSession(file);
+      const { turns, toolResultEvents } = await parseOpencodeSession(file);
       assert.equal(turns.length, 1);
       // Non-zero exit on a bash call flags hasFailedTool → debugging wins.
       assert.equal(turns[0]!.activity, 'debugging');
       assert.equal(turns[0]!.hasEdits, false);
+      assert.equal(toolResultEvents.length, 1);
+      assert.equal(toolResultEvents[0]!.toolUseId, 'call_fail_bash');
+      assert.equal(toolResultEvents[0]!.status, 'errored');
+      assert.equal(toolResultEvents[0]!.isError, true);
+      assert.equal(toolResultEvents[0]!.contentLength, 'command not found: foo'.length);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

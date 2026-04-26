@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Complete passive execution-graph population for Codex and OpenCode** (#42). Codex now emits root / explicit fork-or-continuation / exposed subagent relationship rows plus metadata-only `ToolResultEventRecord`s for `function_call_output` and `custom_tool_call_output`, including status, `callIndex`, `eventIndex`, `contentLength`, and `contentHash`; `spawn_agent`-style outputs are annotated with child session / agent ids when the log exposes them. OpenCode now emits root and `parentID` subagent relationships, marks sidechain turns with stable agent / parent ids, and converts tool parts into metadata-only tool-result events with status and output size/hash. Claude graph extraction also preserves explicit source-session fork/continuation metadata and system-level queue/progress/subagent notifications when present, while continuing not to invent fork/continuation rows from `parentUuid` alone.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added

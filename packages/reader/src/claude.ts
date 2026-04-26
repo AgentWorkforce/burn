@@ -16,7 +16,9 @@ import type {
   SessionRelationshipRecord,
   Subagent,
   ToolCall,
+  ToolResultEventSource,
   ToolResultEventRecord,
+  ToolResultStatus,
   TurnRecord,
   Usage,
   UserTurnBlock,
@@ -142,9 +144,10 @@ export interface ParseResult {
   content: ContentRecord[];
   events: CompactionEvent[];
   // Normalized execution-graph metadata (#42). `relationships` describes how
-  // sessions relate (root + one row per discovered subagent invocation in
-  // this PR; fork/continuation arrive in follow-up work). `toolResultEvents`
-  // is the chronological tool_result stream keyed by `toolUseId`.
+  // sessions relate (root + discovered subagent invocations, and explicit
+  // fork/continuation source-session metadata when logs expose it).
+  // `toolResultEvents` is the chronological tool_result / notification stream
+  // keyed by `toolUseId`.
   relationships: SessionRelationshipRecord[];
   toolResultEvents: ToolResultEventRecord[];
   // Per-user-turn block info between assistant turns (issue #2). Ordered by
@@ -196,6 +199,7 @@ export async function parseClaudeSession(
   // sessionId; subagent rows are derived after working records are resolved.
   const relationships: SessionRelationshipRecord[] = [];
   const seenRootSessionIds = new Set<string>();
+  const seenExplicitRelationshipIds = new Set<string>();
 
   const rl = createInterface({
     input: createReadStream(filePath, { encoding: 'utf8' }),
@@ -235,6 +239,13 @@ export async function parseClaudeSession(
         if (typeof mid === 'string') lastAssistantMessageId = mid;
         if (typeof al.sessionId === 'string' && al.sessionId.length > 0) {
           recordRoot(relationships, seenRootSessionIds, al.sessionId, al.timestamp);
+          collectClaudeExplicitSessionRelationship(
+            rec,
+            relationships,
+            seenExplicitRelationshipIds,
+            al.sessionId,
+            al.timestamp,
+          );
         }
         ingestAssistant(al, working, order, nodesByUuid);
       } else if (rec.type === 'user') {
@@ -245,6 +256,13 @@ export async function parseClaudeSession(
         collectErroredToolUseIds(ul, erroredToolUseIds);
         if (typeof ul.sessionId === 'string' && ul.sessionId.length > 0) {
           recordRoot(relationships, seenRootSessionIds, ul.sessionId, ul.timestamp);
+          collectClaudeExplicitSessionRelationship(
+            rec,
+            relationships,
+            seenExplicitRelationshipIds,
+            ul.sessionId,
+            ul.timestamp,
+          );
         }
         nextEventIndex = collectToolResultEvents(
           ul,
@@ -273,6 +291,12 @@ export async function parseClaudeSession(
           };
           if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
           events.push(ev);
+        }
+      } else if (rec.type === 'system') {
+        const graphEvent = collectClaudeSystemGraphEvent(rec, nextEventIndex);
+        if (graphEvent) {
+          toolResultEvents.push(graphEvent);
+          nextEventIndex++;
         }
       }
       seq++;
@@ -810,6 +834,212 @@ function recordRoot(
   out.push(row);
 }
 
+function collectClaudeExplicitSessionRelationship(
+  line: Record<string, unknown>,
+  out: SessionRelationshipRecord[],
+  seen: Set<string>,
+  sessionId: string,
+  fallbackTs: string | undefined,
+): void {
+  const row = buildClaudeExplicitSessionRelationship(line, sessionId, fallbackTs);
+  if (!row) return;
+  const key = claudeRelationshipKey(row);
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push(row);
+}
+
+function collectClaudeExplicitSessionRelationshipIncremental(
+  line: Record<string, unknown>,
+  out: Array<{ offset: number; record: SessionRelationshipRecord }>,
+  seen: Set<string>,
+  sessionId: string,
+  fallbackTs: string | undefined,
+  offset: number,
+): void {
+  const row = buildClaudeExplicitSessionRelationship(line, sessionId, fallbackTs);
+  if (!row) return;
+  const key = claudeRelationshipKey(row);
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({ offset, record: row });
+}
+
+function buildClaudeExplicitSessionRelationship(
+  line: Record<string, unknown>,
+  sessionId: string,
+  fallbackTs: string | undefined,
+): SessionRelationshipRecord | undefined {
+  const forkSource = pickDeepString(line, [
+    'forkSessionId',
+    'fork_session_id',
+    'forkedFromSessionId',
+    'forked_from_session_id',
+  ]);
+  const continuationSource = pickDeepString(line, [
+    'continuedFromSessionId',
+    'continued_from_session_id',
+    'sourceSessionId',
+    'source_session_id',
+    'sourceSession',
+    'source_session',
+  ]);
+  const relatedSessionId = forkSource ?? continuationSource;
+  if (relatedSessionId === undefined || relatedSessionId === sessionId) return undefined;
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    relatedSessionId,
+    relationshipType: forkSource !== undefined ? 'fork' : 'continuation',
+    sourceSessionId: relatedSessionId,
+  };
+  const ts = pickDeepString(line, ['timestamp', 'ts']) ?? fallbackTs;
+  const sourceVersion = pickDeepString(line, [
+    'version',
+    'sourceVersion',
+    'source_version',
+    'claudeCodeVersion',
+    'claude_code_version',
+  ]);
+  if (ts !== undefined) row.ts = ts;
+  if (sourceVersion !== undefined) row.sourceVersion = sourceVersion;
+  return row;
+}
+
+function claudeRelationshipKey(row: SessionRelationshipRecord): string {
+  return [
+    row.source,
+    row.sessionId,
+    row.relationshipType,
+    row.relatedSessionId ?? '',
+    row.agentId ?? '',
+    row.parentToolUseId ?? '',
+  ].join('|');
+}
+
+function collectClaudeSystemGraphEvent(
+  line: Record<string, unknown>,
+  eventIndex: number,
+): ToolResultEventRecord | undefined {
+  const eventSource = classifyClaudeSystemEventSource(line);
+  if (eventSource === undefined) return undefined;
+  const sessionId = pickDeepString(line, ['sessionId', 'session_id']);
+  const toolUseId = pickDeepString(line, [
+    'toolUseId',
+    'tool_use_id',
+    'parentToolUseID',
+    'parentToolUseId',
+    'parent_tool_use_id',
+  ]);
+  if (sessionId === undefined || toolUseId === undefined) return undefined;
+  const record: ToolResultEventRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    toolUseId,
+    eventIndex,
+    status: statusFromClaudeSystemEvent(line),
+    eventSource,
+  };
+  const ts = pickDeepString(line, ['timestamp', 'ts']);
+  const agentId = pickDeepString(line, ['agentId', 'agent_id', 'taskId', 'task_id']);
+  const subagentSessionId = pickDeepString(line, [
+    'subagentSessionId',
+    'subagent_session_id',
+    'childSessionId',
+    'child_session_id',
+  ]);
+  if (ts !== undefined) record.ts = ts;
+  if (agentId !== undefined) record.agentId = agentId;
+  if (subagentSessionId !== undefined) record.subagentSessionId = subagentSessionId;
+  if (record.status === 'errored') record.isError = true;
+  const content = pickGraphContent(line);
+  const measured = measureToolResult(content);
+  if (measured.length !== undefined) record.contentLength = measured.length;
+  if (measured.hash !== undefined) record.contentHash = measured.hash;
+  return record;
+}
+
+function classifyClaudeSystemEventSource(
+  line: Record<string, unknown>,
+): ToolResultEventSource | undefined {
+  const subtype = typeof line['subtype'] === 'string' ? line['subtype'].toLowerCase() : '';
+  const eventName =
+    typeof line['event'] === 'string' ? line['event'].toLowerCase() : '';
+  const type = `${subtype} ${eventName}`;
+  if (type.includes('queue') || type.includes('enqueue')) return 'queue_event';
+  if (type.includes('progress')) return 'progress_event';
+  if (type.includes('agent') || type.includes('subagent')) return 'subagent_notification';
+  return undefined;
+}
+
+function statusFromClaudeSystemEvent(line: Record<string, unknown>): ToolResultStatus {
+  const status = pickDeepString(line, [
+    'status',
+    'state',
+    'terminalStatus',
+    'terminal_status',
+    'result',
+  ]);
+  if (status === undefined) return 'unknown';
+  const normalized = status.toLowerCase().replace(/[-\s]/g, '_');
+  if (
+    normalized === 'completed' ||
+    normalized === 'complete' ||
+    normalized === 'success' ||
+    normalized === 'succeeded' ||
+    normalized === 'done'
+  ) {
+    return 'completed';
+  }
+  if (
+    normalized === 'error' ||
+    normalized === 'errored' ||
+    normalized === 'failed' ||
+    normalized === 'failure'
+  ) {
+    return 'errored';
+  }
+  if (
+    normalized === 'running' ||
+    normalized === 'in_progress' ||
+    normalized === 'queued' ||
+    normalized === 'pending' ||
+    normalized === 'started'
+  ) {
+    return 'running';
+  }
+  if (
+    normalized === 'cancelled' ||
+    normalized === 'canceled' ||
+    normalized === 'aborted'
+  ) {
+    return 'cancelled';
+  }
+  return 'unknown';
+}
+
+function pickGraphContent(line: Record<string, unknown>): unknown {
+  for (const key of ['content', 'message', 'output', 'result']) {
+    if (Object.prototype.hasOwnProperty.call(line, key)) return line[key];
+  }
+  return undefined;
+}
+
+function pickDeepString(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  for (const value of Object.values(obj)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const nested = pickDeepString(value as Record<string, unknown>, keys);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
 // Walk a user line's tool_result blocks and emit one ToolResultEventRecord
 // per block. Status follows from is_error: errored vs completed; `running` /
 // `cancelled` are reserved for future progress / queue events that Claude
@@ -1250,6 +1480,7 @@ export async function parseClaudeSessionIncremental(
     record: SessionRelationshipRecord;
   }> = [];
   const seenRootSessionIds = new Set<string>();
+  const seenExplicitRelationshipIds = new Set<string>();
   // Per-user-turn records tagged with their line offset so we can drop any
   // that fall past endOffset (avoiding double-emission on resume), mirroring
   // the content/event handling.
@@ -1301,6 +1532,14 @@ export async function parseClaudeSessionIncremental(
           line.timestamp,
           lineStartOffset,
         );
+        collectClaudeExplicitSessionRelationshipIncremental(
+          rec,
+          pendingRelationships,
+          seenExplicitRelationshipIds,
+          line.sessionId,
+          line.timestamp,
+          lineStartOffset,
+        );
       }
       ingestAssistant(line, working, order, nodesByUuid);
     } else if (rec.type === 'user') {
@@ -1313,6 +1552,14 @@ export async function parseClaudeSessionIncremental(
         recordRootIncremental(
           pendingRelationships,
           seenRootSessionIds,
+          ul.sessionId,
+          ul.timestamp,
+          lineStartOffset,
+        );
+        collectClaudeExplicitSessionRelationshipIncremental(
+          rec,
+          pendingRelationships,
+          seenExplicitRelationshipIds,
           ul.sessionId,
           ul.timestamp,
           lineStartOffset,
@@ -1351,6 +1598,12 @@ export async function parseClaudeSessionIncremental(
         };
         if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
         events.push({ offset: lineStartOffset, event: ev });
+      }
+    } else if (rec.type === 'system') {
+      const graphEvent = collectClaudeSystemGraphEvent(rec, nextEventIndex);
+      if (graphEvent) {
+        pendingToolResultEvents.push({ offset: lineStartOffset, record: graphEvent });
+        nextEventIndex++;
       }
     }
   }
