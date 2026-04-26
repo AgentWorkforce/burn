@@ -971,13 +971,31 @@ describe('parseClaudeSession fork / continuation relationships (#112)', () => {
     // relationship rows. The on-disk dedup is keyed by `relationshipIdHash`
     // (source + sessionId + relationshipType + relatedSessionId + agentId +
     // parentToolUseId), so the parser must produce equivalent rows on both
-    // passes for the writer's existing dedup to fold them.
-    const { relationshipIdHash } = await import('@relayburn/ledger');
+    // passes for the writer's existing dedup to fold them. Reproduce the same
+    // canonical key here rather than importing from `@relayburn/ledger`, which
+    // already depends on `@relayburn/reader` (importing it back would create a
+    // cycle that breaks `tsc --build`).
+    const keyOf = (r: {
+      source: string;
+      sessionId: string;
+      relationshipType: string;
+      relatedSessionId?: string | undefined;
+      agentId?: string | undefined;
+      parentToolUseId?: string | undefined;
+    }) =>
+      [
+        r.source,
+        r.sessionId,
+        r.relationshipType,
+        r.relatedSessionId ?? '',
+        r.agentId ?? '',
+        r.parentToolUseId ?? '',
+      ].join('|');
     const file = path.join(FIXTURES, 'resume-marker.jsonl');
     const a = await parseClaudeSession(file, { sessionPath: file });
     const b = await parseClaudeSession(file, { sessionPath: file });
-    const idsA = new Set(a.relationships.map(relationshipIdHash));
-    const idsB = new Set(b.relationships.map(relationshipIdHash));
+    const idsA = new Set(a.relationships.map(keyOf));
+    const idsB = new Set(b.relationships.map(keyOf));
     assert.equal(idsA.size, a.relationships.length);
     assert.deepEqual([...idsA].sort(), [...idsB].sort());
   });
