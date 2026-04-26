@@ -3,10 +3,37 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 
 import type { Plan } from '@relayburn/ledger';
-import type { SourceKind, TurnRecord } from '@relayburn/reader';
+import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
+import type { Fidelity, SourceKind, TurnRecord } from '@relayburn/reader';
 
 import { computePlanUsage, cycleBounds, planUsageFromArchive } from './plan-usage.js';
 import type { PricingTable } from './pricing.js';
+
+const FULL_FIDELITY: Fidelity = makeFidelity('per-turn', {
+  ...EMPTY_COVERAGE,
+  hasInputTokens: true,
+  hasOutputTokens: true,
+  hasCacheReadTokens: true,
+  hasToolCalls: true,
+  hasToolResultEvents: true,
+  hasSessionRelationships: true,
+});
+
+const USAGE_ONLY_FIDELITY: Fidelity = makeFidelity('per-turn', {
+  ...EMPTY_COVERAGE,
+  hasInputTokens: true,
+  hasOutputTokens: true,
+});
+
+const PARTIAL_FIDELITY: Fidelity = makeFidelity('per-turn', {
+  ...EMPTY_COVERAGE,
+  hasInputTokens: true,
+  // missing output → "partial"
+});
+
+const COST_ONLY_FIDELITY: Fidelity = makeFidelity('cost-only', {
+  ...EMPTY_COVERAGE,
+});
 
 const PRICING: PricingTable = {
   'claude-sonnet-4-6': {
@@ -25,8 +52,11 @@ function turn(opts: {
   outputTokens?: number;
   model?: string;
   sessionId?: string;
+  fidelity?: Fidelity;
 }): TurnRecord {
-  return {
+  // exactOptionalPropertyTypes refuses an explicit `undefined` for the
+  // optional `fidelity` field — only attach when present.
+  const base: TurnRecord = {
     v: 1,
     source: opts.source ?? 'claude-code',
     sessionId: opts.sessionId ?? 's1',
@@ -44,6 +74,7 @@ function turn(opts: {
     },
     toolCalls: [],
   };
+  return opts.fidelity ? { ...base, fidelity: opts.fidelity } : base;
 }
 
 const plan: Plan = {
@@ -204,6 +235,131 @@ describe('computePlanUsage', () => {
     ];
     const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
     assert.equal(u.spentUsd, 3);
+  });
+
+  // Issue #108: fidelity-aware totals. The plan view continues to count every
+  // turn that lands in the cycle (no fidelity-based filter — `plans`, like
+  // `limits`, is permissive), but annotates the cycle as low-confidence when
+  // any contributing turn lacks per-turn input/output token coverage.
+  it('reports high-confidence fidelity when every cycle turn is full', () => {
+    const turns: TurnRecord[] = [
+      turn({
+        ts: '2026-04-05T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        fidelity: FULL_FIDELITY,
+      }),
+      turn({
+        ts: '2026-04-10T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        fidelity: FULL_FIDELITY,
+      }),
+    ];
+    const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
+    assert.equal(u.spentUsd, 6);
+    assert.equal(u.fidelity.confidence, 'high');
+    assert.equal(u.fidelity.summary.total, 2);
+    assert.equal(u.fidelity.summary.byClass.full, 2);
+  });
+
+  it('treats usage-only (per-turn input + output) cycles as high-confidence', () => {
+    const turns: TurnRecord[] = [
+      turn({
+        ts: '2026-04-05T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        fidelity: USAGE_ONLY_FIDELITY,
+      }),
+    ];
+    const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
+    assert.equal(u.fidelity.confidence, 'high');
+  });
+
+  it('treats turns without fidelity (older ledger writers) as high-confidence', () => {
+    // Backward-compat: pre-#41 records have no fidelity field at all and are
+    // best-effort full per the codebase convention. Don't demote a cycle to
+    // low-confidence purely because the writer was old.
+    const turns: TurnRecord[] = [
+      turn({ ts: '2026-04-05T00:00:00.000Z', inputTokens: 1_000_000 }),
+    ];
+    const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
+    assert.equal(u.fidelity.confidence, 'high');
+  });
+
+  it('marks low-confidence when a cycle has any partial-fidelity turn', () => {
+    const turns: TurnRecord[] = [
+      turn({
+        ts: '2026-04-05T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        fidelity: FULL_FIDELITY,
+      }),
+      // Partial: input known, output missing — its priced contribution is a
+      // lower bound. Cycle total still includes it.
+      turn({
+        ts: '2026-04-10T00:00:00.000Z',
+        inputTokens: 500_000,
+        fidelity: PARTIAL_FIDELITY,
+      }),
+    ];
+    const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
+    // Spend still counts both turns: 1M input + 1M output ($3 + $15) + 500k input ($1.5)
+    assert.equal(u.spentUsd, 19.5);
+    assert.equal(u.fidelity.confidence, 'low');
+    assert.equal(u.fidelity.summary.total, 2);
+    assert.equal(u.fidelity.summary.byClass.full, 1);
+    assert.equal(u.fidelity.summary.byClass.partial, 1);
+    assert.equal(u.fidelity.summary.missingCoverage.hasOutputTokens, 1);
+  });
+
+  it('counts cost-only contributions toward spend and marks the cycle low-confidence', () => {
+    // A `cost-only` source provides a price (here: via priced tokens on the
+    // turn) but no per-turn token coverage. Spend totals include it; the
+    // cycle is flagged low-confidence on the token-coverage axis.
+    const turns: TurnRecord[] = [
+      turn({
+        ts: '2026-04-05T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        fidelity: FULL_FIDELITY,
+      }),
+      turn({
+        ts: '2026-04-10T00:00:00.000Z',
+        inputTokens: 1_000_000, // priced contribution, but fidelity says "cost-only"
+        fidelity: COST_ONLY_FIDELITY,
+      }),
+    ];
+    const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
+    // 1M input + 1M output = $3 + $15 = $18; then cost-only 1M input = $3 → $21
+    assert.equal(u.spentUsd, 21);
+    assert.equal(u.fidelity.confidence, 'low');
+    assert.equal(u.fidelity.summary.byClass['cost-only'], 1);
+  });
+
+  it('reports an empty cycle as high-confidence (nothing to be uncertain about)', () => {
+    const u = computePlanUsage(plan, [], { pricing: PRICING, now });
+    assert.equal(u.fidelity.confidence, 'high');
+    assert.equal(u.fidelity.summary.total, 0);
+  });
+
+  it('ignores fidelity of turns outside the cycle when deciding confidence', () => {
+    const turns: TurnRecord[] = [
+      // In-cycle, full fidelity:
+      turn({
+        ts: '2026-04-05T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        fidelity: FULL_FIDELITY,
+      }),
+      // Out-of-cycle (previous month), partial: must NOT drag the cycle down.
+      turn({
+        ts: '2026-03-20T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        fidelity: PARTIAL_FIDELITY,
+      }),
+    ];
+    const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
+    assert.equal(u.fidelity.confidence, 'high');
+    assert.equal(u.fidelity.summary.total, 1);
   });
 });
 

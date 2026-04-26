@@ -67,7 +67,21 @@ async function runList(args: ParsedArgs): Promise<number> {
   const statuses = await statusForPlans(plans, { useArchive: shouldUseArchive(args) });
 
   if (json) {
-    process.stdout.write(JSON.stringify({ plans: statuses }, null, 2) + '\n');
+    // Hand-shape the per-plan payload so the `fidelity` block is emitted next
+    // to the rest of the cycle stats. Mirrors the shape `burn limits --json`
+    // would build if it grew the same field — keep the two surfaces parallel.
+    const payload = {
+      plans: statuses.map((s) => ({
+        usage: {
+          ...s.usage,
+          fidelity: {
+            confidence: s.usage.fidelity.confidence,
+            summary: s.usage.fidelity.summary,
+          },
+        },
+      })),
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return 0;
   }
 
@@ -78,22 +92,69 @@ async function runList(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  const rows: string[][] = [['id', 'name', 'spent', 'projected', 'budget', 'reset']];
+  const anyLowConfidence = statuses.some((s) => s.usage.fidelity.confidence === 'low');
+  const headers = ['id', 'name', 'spent', 'projected', 'budget', 'reset'];
+  if (anyLowConfidence) headers.push('confidence');
+  const rows: string[][] = [headers];
   for (const s of statuses) {
     const u = s.usage;
     const projected = formatUsd(u.projectedEndOfCycleUsd);
     const projectedCell = u.limitedData ? `${projected} (limited data)` : projected;
-    rows.push([
+    const row = [
       u.plan.id,
       u.plan.name,
       formatUsd(u.spentUsd),
       projectedCell,
       formatUsd(u.plan.budgetUsd),
       `${u.daysElapsed}/${u.daysInCycle} days`,
-    ]);
+    ];
+    if (anyLowConfidence) {
+      row.push(u.fidelity.confidence === 'low' ? 'low (partial token data)' : 'high');
+    }
+    rows.push(row);
   }
-  process.stdout.write(table(rows) + '\n');
+  let output = table(rows) + '\n';
+  // When any cycle has at least one turn missing per-turn token coverage,
+  // append a footer line that names the worst affected plan so users can
+  // tell at a glance whether the totals are a lower bound. Suppressed when
+  // every cycle is full-fidelity.
+  for (const s of statuses) {
+    const u = s.usage;
+    if (u.fidelity.confidence !== 'low') continue;
+    const total = u.fidelity.summary.total;
+    if (total === 0) continue;
+    const lacking = countTurnsLackingTokens(u.fidelity.summary);
+    if (lacking === 0) continue;
+    output +=
+      `note: ${u.plan.id}: ${lacking} of ${total} turns this cycle ` +
+      `lack per-turn token data — totals are a lower bound.\n`;
+  }
+  process.stdout.write(output);
   return 0;
+}
+
+// Count turns whose per-turn input or output token coverage is missing.
+// Mirrors the `confidence === 'low'` rule in `computePlanUsage` so the
+// rendered count agrees with the per-plan flag. We approximate using the
+// summary's `missingCoverage` counts: any turn missing input *or* output
+// counts; we take the max of the two as a safe upper bound (a turn missing
+// both still counts once, which is what the user wants to read).
+function countTurnsLackingTokens(summary: {
+  missingCoverage: { hasInputTokens: number; hasOutputTokens: number };
+  byClass: { partial: number; 'aggregate-only': number; 'cost-only': number };
+}): number {
+  const fromCoverage = Math.max(
+    summary.missingCoverage.hasInputTokens,
+    summary.missingCoverage.hasOutputTokens,
+  );
+  // Fallback for records whose granularity already classes them as
+  // aggregate-only / cost-only / partial — those are by definition missing
+  // per-turn token coverage even if the coverage flags happen to be on.
+  const fromClass =
+    summary.byClass.partial +
+    summary.byClass['aggregate-only'] +
+    summary.byClass['cost-only'];
+  return Math.max(fromCoverage, fromClass);
 }
 
 async function runAdd(args: ParsedArgs): Promise<number> {

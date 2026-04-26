@@ -78,6 +78,7 @@ export type {
   ComputePlanUsageFromArchiveOptions,
   ComputePlanUsageOptions,
   PlanUsage,
+  PlanUsageFidelity,
 } from './plan-usage.js';
 export {
   emptyFidelitySummary,

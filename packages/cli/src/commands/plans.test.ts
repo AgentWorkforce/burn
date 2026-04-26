@@ -6,7 +6,8 @@ import { after, beforeEach, describe, it } from 'node:test';
 
 import { appendTurns, loadPlans, savePlans } from '@relayburn/ledger';
 import type { Plan } from '@relayburn/ledger';
-import type { TurnRecord } from '@relayburn/reader';
+import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
+import type { Fidelity, TurnRecord } from '@relayburn/reader';
 
 import type { ParsedArgs } from '../args.js';
 import { runPlans, statusForPlans } from './plans.js';
@@ -363,5 +364,191 @@ describe('burn plans CLI', () => {
     assert.equal(archiveStatus[0]!.usage.daysElapsed, fallbackStatus[0]!.usage.daysElapsed);
     assert.equal(archiveStatus[0]!.usage.daysInCycle, fallbackStatus[0]!.usage.daysInCycle);
     assert.equal(archiveStatus[0]!.usage.limitedData, fallbackStatus[0]!.usage.limitedData);
+  });
+
+  // Issue #108: list view honors per-cycle fidelity. The plan still renders
+  // when partial / aggregate-only / cost-only turns land in the cycle, and
+  // surfaces a low-confidence note + JSON block so callers can tell the total
+  // is a lower bound.
+  describe('fidelity (#108)', () => {
+    const FULL_FIDELITY: Fidelity = makeFidelity('per-turn', {
+      ...EMPTY_COVERAGE,
+      hasInputTokens: true,
+      hasOutputTokens: true,
+      hasCacheReadTokens: true,
+      hasToolCalls: true,
+      hasToolResultEvents: true,
+      hasSessionRelationships: true,
+    });
+
+    const PARTIAL_FIDELITY: Fidelity = makeFidelity('per-turn', {
+      ...EMPTY_COVERAGE,
+      hasInputTokens: true,
+      // missing output → "partial"
+    });
+
+    // Per-test counter so each turn's messageId/sessionId AND content
+    // fingerprint is unique. The `appendTurns` index cache is process-wide,
+    // so without distinct session ids + token totals, a turn from the
+    // previous test would dedup the new test's matching turn. We mix the
+    // counter into the token totals (a few extra bytes per turn) to push the
+    // content fingerprint apart.
+    let testCounter = 0;
+    function fakeTurn(opts: {
+      ts: string;
+      inputTokens: number;
+      outputTokens?: number;
+      fidelity?: Fidelity;
+      label?: string;
+    }): TurnRecord {
+      testCounter++;
+      const tag = `${Date.now()}-${process.pid}-${testCounter}`;
+      const base: TurnRecord = {
+        v: 1,
+        source: 'claude-code',
+        sessionId: `s-fid-${tag}`,
+        messageId: `m-${opts.label ?? 'turn'}-${tag}`,
+        turnIndex: 0,
+        ts: opts.ts,
+        model: 'claude-sonnet-4-6',
+        usage: {
+          // Bias by the counter so each turn lands on a distinct content
+          // fingerprint even when ts + model + raw token totals would
+          // otherwise collide with a turn from a previous test.
+          input: opts.inputTokens + testCounter,
+          output: opts.outputTokens ?? 0,
+          reasoning: 0,
+          cacheRead: 0,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+        toolCalls: [],
+      };
+      return opts.fidelity ? { ...base, fidelity: opts.fidelity } : base;
+    }
+
+    // Pin a recent timestamp inside whatever calendar month the test runs in
+    // so the turn always lands within a reset-day=1 plan's current cycle.
+    function tsInsideCycleNow(): string {
+      const now = new Date();
+      // Anchor 30 minutes into "today" (UTC) — well after the cycle start.
+      const anchor = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 30),
+      );
+      return anchor.toISOString();
+    }
+
+    it('renders the table without a confidence column when every cycle is full-fidelity', async () => {
+      await savePlans([
+        {
+          id: 'claude-pro',
+          provider: 'claude',
+          name: 'Claude Pro',
+          budgetUsd: 20,
+          resetDay: 1,
+        },
+      ]);
+      await appendTurns([
+        fakeTurn({
+          ts: tsInsideCycleNow(),
+          inputTokens: 100_000,
+          outputTokens: 50_000,
+          fidelity: FULL_FIDELITY,
+        }),
+      ]);
+      const { result, stdout } = await captureStdio(() => runPlans(args()));
+      assert.equal(result, 0);
+      assert.match(stdout, /claude-pro/);
+      assert.doesNotMatch(stdout, /confidence/);
+      assert.doesNotMatch(stdout, /lower bound/);
+    });
+
+    it('appends a low-confidence note when any cycle turn lacks per-turn token data', async () => {
+      await savePlans([
+        {
+          id: 'claude-pro',
+          provider: 'claude',
+          name: 'Claude Pro',
+          budgetUsd: 20,
+          resetDay: 1,
+        },
+      ]);
+      await appendTurns([
+        fakeTurn({
+          ts: tsInsideCycleNow(),
+          inputTokens: 100_000,
+          outputTokens: 50_000,
+          label: 'full',
+          fidelity: FULL_FIDELITY,
+        }),
+        fakeTurn({
+          ts: tsInsideCycleNow(),
+          inputTokens: 100_000,
+          label: 'partial',
+          fidelity: PARTIAL_FIDELITY,
+        }),
+      ]);
+      const { result, stdout } = await captureStdio(() => runPlans(args()));
+      assert.equal(result, 0);
+      // Header shows the new column when at least one plan is low-confidence.
+      assert.match(stdout, /confidence/);
+      assert.match(stdout, /low \(partial token data\)/);
+      // Footer note names the affected plan + the lower-bound caveat.
+      assert.match(
+        stdout,
+        /note: claude-pro: 1 of 2 turns this cycle lack per-turn token data — totals are a lower bound\./,
+      );
+    });
+
+    it('emits a per-plan fidelity block in --json output', async () => {
+      await savePlans([
+        {
+          id: 'claude-pro',
+          provider: 'claude',
+          name: 'Claude Pro',
+          budgetUsd: 20,
+          resetDay: 1,
+        },
+      ]);
+      await appendTurns([
+        fakeTurn({
+          ts: tsInsideCycleNow(),
+          inputTokens: 100_000,
+          outputTokens: 50_000,
+          label: 'full-json',
+          fidelity: FULL_FIDELITY,
+        }),
+        fakeTurn({
+          ts: tsInsideCycleNow(),
+          inputTokens: 100_000,
+          label: 'partial-json',
+          fidelity: PARTIAL_FIDELITY,
+        }),
+      ]);
+      const { result, stdout } = await captureStdio(() => runPlans(args([], { json: true })));
+      assert.equal(result, 0);
+      const parsed = JSON.parse(stdout) as {
+        plans: Array<{
+          usage: {
+            plan: { id: string };
+            fidelity: {
+              confidence: 'high' | 'low';
+              summary: {
+                total: number;
+                byClass: Record<string, number>;
+                missingCoverage: Record<string, number>;
+              };
+            };
+          };
+        }>;
+      };
+      assert.equal(parsed.plans.length, 1);
+      const fid = parsed.plans[0]!.usage.fidelity;
+      assert.equal(fid.confidence, 'low');
+      assert.equal(fid.summary.total, 2);
+      assert.equal(fid.summary.byClass['full'], 1);
+      assert.equal(fid.summary.byClass['partial'], 1);
+      assert.equal(fid.summary.missingCoverage['hasOutputTokens'], 1);
+    });
   });
 });
