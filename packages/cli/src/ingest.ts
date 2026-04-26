@@ -193,7 +193,7 @@ function emitGapWarning(
   state.write(
     `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
       `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
-      `adapter, so burn waste will fall back to even-split attribution. See #33.\n`,
+      `adapter, so burn waste will use user-turn block sizes when available, then fall back to even-split attribution. See #33.\n`,
   );
 }
 
@@ -315,6 +315,9 @@ async function ingestCodexInto(
             sessionId: priorCodex.sessionId,
             turnContexts: { ...priorCodex.turnContexts },
             ...(priorCodex.sessionCwd !== undefined ? { sessionCwd: priorCodex.sessionCwd } : {}),
+            ...(priorCodex.userTurnSlot !== undefined
+              ? { userTurnSlot: priorCodex.userTurnSlot }
+              : {}),
           };
 
       if (!rotated && startOffset >= st.size) {
@@ -358,6 +361,7 @@ async function ingestCodexInto(
         turnContexts: nextResume.turnContexts,
       };
       if (nextResume.sessionCwd !== undefined) next.sessionCwd = nextResume.sessionCwd;
+      if (nextResume.userTurnSlot !== undefined) next.userTurnSlot = nextResume.userTurnSlot;
       cursors[file] = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -1,7 +1,12 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import type { ContentRecord, ToolCall, TurnRecord } from '@relayburn/reader';
+import type {
+  ContentRecord,
+  ToolCall,
+  TurnRecord,
+  UserTurnRecord,
+} from '@relayburn/reader';
 
 import { loadBuiltinPricing } from './pricing.js';
 import {
@@ -42,6 +47,23 @@ function toolResultContent(sessionId: string, toolUseId: string, text: string, t
     role: 'tool_result',
     kind: 'tool_result',
     toolResult: { toolUseId, content: text },
+  };
+}
+
+function userTurn(
+  sessionId: string,
+  userUuid: string,
+  blocks: UserTurnRecord['blocks'],
+): UserTurnRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    userUuid,
+    ts: '2026-04-20T00:00:00.500Z',
+    precedingMessageId: 'msg-0',
+    followingMessageId: 'msg-1',
+    blocks,
   };
 }
 
@@ -251,6 +273,84 @@ describe('attributeWaste', () => {
       assert.equal(a.persistenceCost, 0);
     }
     assert.equal(result.sessionTotals[0]!.attributionMethod, 'even-split');
+  });
+
+  it('uses user-turn tool_result block sizes when content sidecar is unavailable', async () => {
+    const pricing = await loadBuiltinPricing();
+    const sessionId = 's-user-turn-fallback';
+    const turns: TurnRecord[] = [
+      turn({
+        sessionId,
+        messageId: 'msg-0',
+        turnIndex: 0,
+        toolCalls: [tc('tu_big', 'Read', '/big.ts'), tc('tu_small', 'Read', '/small.ts')],
+      }),
+      turn({
+        sessionId,
+        messageId: 'msg-1',
+        turnIndex: 1,
+        usage: { input: 4000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+      turn({
+        sessionId,
+        messageId: 'msg-2',
+        turnIndex: 2,
+        usage: { input: 100, output: 5, reasoning: 0, cacheRead: 4500, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ];
+    const userTurnsBySession = new Map<string, UserTurnRecord[]>();
+    userTurnsBySession.set(sessionId, [
+      userTurn(sessionId, 'u-1', [
+        { kind: 'tool_result', toolUseId: 'tu_big', byteLen: 12_000, approxTokens: 3000 },
+        { kind: 'tool_result', toolUseId: 'tu_small', byteLen: 4000, approxTokens: 1000 },
+      ]),
+    ]);
+
+    const result = attributeWaste(turns, { pricing, userTurnsBySession });
+    const byId = new Map(result.attributions.map((a) => [a.toolUseId, a]));
+    assert.equal(result.sessionTotals[0]!.attributionMethod, 'user-turn');
+    assert.equal(byId.get('tu_big')!.initialTokens, 3000);
+    assert.equal(byId.get('tu_small')!.initialTokens, 1000);
+    assert.equal(byId.get('tu_big')!.persistenceTokens, 3000);
+    assert.equal(byId.get('tu_small')!.persistenceTokens, 1000);
+    assert.ok(byId.get('tu_big')!.totalCost > byId.get('tu_small')!.totalCost);
+  });
+
+  it('keeps content sidecar sizes primary over user-turn fallback sizes', async () => {
+    const pricing = await loadBuiltinPricing();
+    const sessionId = 's-sidecar-primary';
+    const turns: TurnRecord[] = [
+      turn({
+        sessionId,
+        messageId: 'msg-0',
+        turnIndex: 0,
+        toolCalls: [tc('tu_read', 'Read', '/file.ts')],
+      }),
+      turn({
+        sessionId,
+        messageId: 'msg-1',
+        turnIndex: 1,
+        usage: { input: 5000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set(sessionId, [
+      toolResultContent(sessionId, 'tu_read', 'x'.repeat(1000 * 4), '2026-04-20T00:00:00.100Z'),
+    ]);
+    const userTurnsBySession = new Map<string, UserTurnRecord[]>();
+    userTurnsBySession.set(sessionId, [
+      userTurn(sessionId, 'u-1', [
+        { kind: 'tool_result', toolUseId: 'tu_read', byteLen: 36_000, approxTokens: 9000 },
+      ]),
+    ]);
+
+    const result = attributeWaste(turns, {
+      pricing,
+      contentBySession,
+      userTurnsBySession,
+    });
+    assert.equal(result.sessionTotals[0]!.attributionMethod, 'sized');
+    assert.equal(result.attributions[0]!.initialTokens, 1000);
   });
 
   it('caps sibling initial cost at the next turn\'s actual newContent', async () => {
