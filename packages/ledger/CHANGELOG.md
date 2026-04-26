@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **User-turn ledger lines** (#2). New append-only `user_turn` ledger records persist parser-emitted `UserTurnRecord`s alongside raw turns without rewriting or mutating them. The ledger now exposes `appendUserTurns()` / `queryUserTurns()`, `UserTurnLine` / `isUserTurnLine()`, and `userTurnIdHash()` keyed by `(source, sessionId, userUuid)` through the existing dedup index; `rebuildIndex()` rehydrates those ids after index loss.
+
 ## [0.26.0] - 2026-04-26
 
 ### Added

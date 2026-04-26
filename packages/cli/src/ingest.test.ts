@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
@@ -164,6 +164,39 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
       setIngestGapWriter(restore);
     }
     assert.equal(captured.length, 1, 'second/third ingest stays silent');
+  });
+
+  it('persists Codex parser user-turn records during passive ingest', async () => {
+    await writeCodexSession(tmpHome, 'rollout-user-turn', codexSessionWithUserTurnBridge());
+
+    await ingestCodexSessions();
+
+    const userTurns = await queryUserTurns({ sessionId: 'sess_user_turn_1' });
+    assert.equal(userTurns.length, 1);
+    assert.equal(userTurns[0]!.precedingMessageId, 'turn_user_1');
+    assert.equal(userTurns[0]!.followingMessageId, 'turn_user_2');
+    assert.equal(userTurns[0]!.blocks.length, 1);
+    assert.equal(userTurns[0]!.blocks[0]!.kind, 'tool_result');
+    assert.equal(userTurns[0]!.blocks[0]!.toolUseId, 'call_read_1');
+  });
+
+  it('carries a Codex user-turn slot across passive ingest resume boundaries', async () => {
+    const [firstChunk, secondChunk] = codexSessionWithUserTurnBridgeChunks(
+      'sess_user_turn_resume',
+    );
+    const file = await writeCodexSession(tmpHome, 'rollout-user-turn-resume', firstChunk);
+
+    await ingestCodexSessions();
+    assert.equal((await queryUserTurns({ sessionId: 'sess_user_turn_resume' })).length, 0);
+
+    await appendFile(file, secondChunk, 'utf8');
+    await ingestCodexSessions();
+
+    const userTurns = await queryUserTurns({ sessionId: 'sess_user_turn_resume' });
+    assert.equal(userTurns.length, 1);
+    assert.equal(userTurns[0]!.precedingMessageId, 'turn_user_1');
+    assert.equal(userTurns[0]!.followingMessageId, 'turn_user_2');
+    assert.equal(userTurns[0]!.blocks[0]!.toolUseId, 'call_read_1');
   });
 });
 
@@ -395,12 +428,14 @@ function makeContent(opts: {
   };
 }
 
-async function writeCodexSession(home: string, name: string, body: string): Promise<void> {
+async function writeCodexSession(home: string, name: string, body: string): Promise<string> {
   // Real codex layout is ~/.codex/sessions/YYYY/MM/DD/<rollout>.jsonl. The
   // walker is recursive, so we can use any nested layout under sessions/.
   const dir = path.join(home, '.codex', 'sessions', '2026', '04', '24');
   await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, `${name}.jsonl`), body, 'utf8');
+  const file = path.join(dir, `${name}.jsonl`);
+  await writeFile(file, body, 'utf8');
+  return file;
 }
 
 // A codex session with a committed turn (task_started → task_complete) that
@@ -592,4 +627,112 @@ function codexChatOnlySession(): string {
     },
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+function codexSessionWithUserTurnBridge(): string {
+  return codexSessionWithUserTurnBridgeChunks('sess_user_turn_1').join('');
+}
+
+function codexSessionWithUserTurnBridgeChunks(sessionId: string): [string, string] {
+  const lines = [
+    {
+      timestamp: '2026-04-20T01:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: sessionId,
+        cwd: '/tmp/project',
+        timestamp: '2026-04-20T01:00:00.000Z',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_user_1', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_user_1' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: '{"cmd":"cat a.txt"}',
+        call_id: 'call_read_1',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.500Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_read_1',
+        output: 'file contents that feed the next turn',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:02.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 500,
+            cached_input_tokens: 0,
+            output_tokens: 50,
+            reasoning_output_tokens: 0,
+            total_tokens: 550,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:02.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_user_1' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:03.000Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_user_2', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:03.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_user_2' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:04.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 1500,
+            cached_input_tokens: 0,
+            output_tokens: 60,
+            reasoning_output_tokens: 0,
+            total_tokens: 1560,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:04.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_user_2' },
+    },
+  ];
+  const firstChunk = lines
+    .slice(0, 7)
+    .map((l) => JSON.stringify(l))
+    .join('\n') + '\n';
+  const secondChunk = lines
+    .slice(7)
+    .map((l) => JSON.stringify(l))
+    .join('\n') + '\n';
+  return [firstChunk, secondChunk];
 }

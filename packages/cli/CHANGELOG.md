@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Persist user-turn block-size records during ingest** (#2). `burn ingest`, passive ingest, and the Claude/Codex/OpenCode wrappers now append parser-emitted `UserTurnRecord`s for all three harnesses. Codex passive cursors also carry the in-flight user-turn slot so resumed ingest can complete a bridge record across file-growth boundaries. `burn waste` and `burn diagnose` load these records and use them as the sized fallback when content sidecars are missing.
+
 ## [0.26.0] - 2026-04-26
 
 ### Added

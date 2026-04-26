@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
+import type { PersistedUserTurnSlot } from '@relayburn/reader';
+
 import { withLock } from './lock.js';
 import { cursorsPath } from './paths.js';
 
@@ -24,10 +26,7 @@ export interface CodexCursor {
   sessionId: string;
   sessionCwd?: string;
   turnContexts: Record<string, { turn_id?: string; cwd?: string; model?: string }>;
-  // Execution-graph (#42 / #87) committed state. Persisted across `burn`
-  // invocations so `eventIndex` stays session-monotonic and the root
-  // SessionRelationshipRecord is emitted exactly once per session id, even
-  // when ingest resumes from a fresh process.
+  userTurnSlot?: PersistedUserTurnSlot;
   rootSessionEmitted?: boolean;
   nextEventIndex?: number;
   toolResultCounters?: Record<string, number>;

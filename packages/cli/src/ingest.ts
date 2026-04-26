@@ -195,7 +195,7 @@ function emitGapWarning(
   state.write(
     `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
       `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
-      `adapter, so burn waste will fall back to even-split attribution. See #33.\n`,
+      `adapter, so burn waste will use user-turn block sizes when available, then fall back to even-split attribution. See #33.\n`,
   );
 }
 
@@ -344,10 +344,9 @@ async function ingestCodexInto(
             sessionId: priorCodex.sessionId,
             turnContexts: { ...priorCodex.turnContexts },
             ...(priorCodex.sessionCwd !== undefined ? { sessionCwd: priorCodex.sessionCwd } : {}),
-            // Execution-graph (#42 / #87) committed counters. Carried across
-            // `burn` invocations so dedup at the writer is the only line of
-            // defense — without these the second pass would emit an
-            // already-committed root row and reset eventIndex to 0.
+            ...(priorCodex.userTurnSlot !== undefined
+              ? { userTurnSlot: priorCodex.userTurnSlot }
+              : {}),
             rootSessionEmitted: priorCodex.rootSessionEmitted === true,
             nextEventIndex: priorCodex.nextEventIndex ?? 0,
             toolResultCounters: { ...(priorCodex.toolResultCounters ?? {}) },
@@ -407,6 +406,7 @@ async function ingestCodexInto(
         turnContexts: nextResume.turnContexts,
       };
       if (nextResume.sessionCwd !== undefined) next.sessionCwd = nextResume.sessionCwd;
+      if (nextResume.userTurnSlot !== undefined) next.userTurnSlot = nextResume.userTurnSlot;
       if (nextResume.rootSessionEmitted === true) next.rootSessionEmitted = true;
       if (nextResume.nextEventIndex !== undefined) next.nextEventIndex = nextResume.nextEventIndex;
       if (nextResume.toolResultCounters && Object.keys(nextResume.toolResultCounters).length > 0) {
