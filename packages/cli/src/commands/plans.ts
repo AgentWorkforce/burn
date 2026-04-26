@@ -76,7 +76,10 @@ async function runList(args: ParsedArgs): Promise<number> {
   for (const s of statuses) {
     const u = s.usage;
     const projected = formatUsd(u.projectedEndOfCycleUsd);
-    const projectedCell = u.limitedData ? `${projected} (limited data)` : projected;
+    const notes = [];
+    if (u.limitedData) notes.push('limited data');
+    if (u.partialData) notes.push('partial fidelity');
+    const projectedCell = notes.length > 0 ? `${projected} (${notes.join(', ')})` : projected;
     rows.push([
       u.plan.id,
       u.plan.name,

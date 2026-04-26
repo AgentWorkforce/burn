@@ -15,7 +15,7 @@ import type {
 } from '@relayburn/analyze';
 import { queryAll, readContent, type Query } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
-import type { ContentRecord } from '@relayburn/reader';
+import type { ContentRecord, Coverage } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -58,11 +58,14 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
         appendedTurns: ingestReport.appendedTurns,
       },
       turns: turns.length,
+      pricedTurns: rowsByModel.reduce((sum, r) => sum + r.pricedTurns, 0),
       totalCost,
       byModel: rowsByModel.map((r) => ({
         model: r.model,
         turns: r.turns,
         usage: r.usage,
+        usageCoverage: r.usageCoverage,
+        pricedTurns: r.pricedTurns,
         cost: r.cost,
       })),
       fidelity,
@@ -92,20 +95,27 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     dataRows.push([
       r.model,
       formatInt(r.turns),
-      formatInt(r.usage.input),
-      formatInt(r.usage.output),
-      formatInt(r.usage.reasoning),
-      formatInt(r.usage.cacheRead),
-      formatInt(r.usage.cacheCreate5m + r.usage.cacheCreate1h),
-      formatUsd(r.cost.total),
+      formatUsageCell(r, 'input'),
+      formatUsageCell(r, 'output'),
+      formatUsageCell(r, 'reasoning'),
+      formatUsageCell(r, 'cacheRead'),
+      formatUsageCell(r, 'cacheCreate'),
+      formatCostCell(r),
     ]);
   }
   lines.push(table(dataRows));
   lines.push('');
-  lines.push(`total cost: ${formatUsd(totalCost.total)}`);
-  lines.push(
-    `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / reasoning ${formatUsd(totalCost.reasoning)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
-  );
+  const costPartial = rowsByModel.some((r) => r.pricedTurns < r.turns);
+  const pricedTurns = rowsByModel.reduce((sum, r) => sum + r.pricedTurns, 0);
+  if (pricedTurns === 0) {
+    lines.push('total cost: —');
+    lines.push('  cost breakdown unavailable');
+  } else {
+    lines.push(`total cost: ${formatUsd(totalCost.total)}${costPartial ? '*' : ''}`);
+    lines.push(
+      `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / reasoning ${formatUsd(totalCost.reasoning)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
+    );
+  }
   lines.push('');
 
   // Only print a fidelity line when *something* is below full — the common
@@ -114,6 +124,12 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   const fidelityNotice = renderFidelityNotice(fidelity);
   if (fidelityNotice) {
     lines.push(fidelityNotice);
+    lines.push('');
+  }
+  if (rowsByModel.some(hasPartialDisplayCoverage)) {
+    lines.push(
+      '* partial coverage: some numeric fields or prices are unknown for at least one row (use --json for counts).',
+    );
     lines.push('');
   }
 
@@ -192,7 +208,17 @@ interface ModelRow {
   model: string;
   turns: number;
   usage: EnrichedTurn['usage'];
+  usageCoverage: Record<UsageField, FieldCoverage>;
+  pricedTurns: number;
   cost: CostBreakdown;
+}
+
+type UsageField = 'input' | 'output' | 'reasoning' | 'cacheRead' | 'cacheCreate';
+
+interface FieldCoverage {
+  knownTurns: number;
+  missingTurns: number;
+  unknownTurns: number;
 }
 
 function renderSubagentTreeMode(
@@ -333,6 +359,8 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
         model: key,
         turns: 0,
         usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        usageCoverage: emptyUsageCoverage(),
+        pricedTurns: 0,
         cost: { model: key, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate: 0 },
       };
       byModel.set(key, row);
@@ -344,8 +372,10 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
     row.usage.cacheRead += t.usage.cacheRead;
     row.usage.cacheCreate5m += t.usage.cacheCreate5m;
     row.usage.cacheCreate1h += t.usage.cacheCreate1h;
-    const c = costForTurn(t, pricing);
+    updateUsageCoverage(row, t);
+    const c = hasCostCoverage(t) ? costForTurn(t, pricing) : null;
     if (c) {
+      row.pricedTurns++;
       row.cost.total += c.total;
       row.cost.input += c.input;
       row.cost.output += c.output;
@@ -355,4 +385,81 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
     }
   }
   return [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total);
+}
+
+function emptyUsageCoverage(): Record<UsageField, FieldCoverage> {
+  return {
+    input: emptyFieldCoverage(),
+    output: emptyFieldCoverage(),
+    reasoning: emptyFieldCoverage(),
+    cacheRead: emptyFieldCoverage(),
+    cacheCreate: emptyFieldCoverage(),
+  };
+}
+
+function emptyFieldCoverage(): FieldCoverage {
+  return { knownTurns: 0, missingTurns: 0, unknownTurns: 0 };
+}
+
+function updateUsageCoverage(row: ModelRow, turn: EnrichedTurn): void {
+  updateField(row.usageCoverage.input, turn, 'hasInputTokens');
+  updateField(row.usageCoverage.output, turn, 'hasOutputTokens');
+  updateField(row.usageCoverage.reasoning, turn, 'hasReasoningTokens');
+  updateField(row.usageCoverage.cacheRead, turn, 'hasCacheReadTokens');
+  updateField(row.usageCoverage.cacheCreate, turn, 'hasCacheCreateTokens');
+}
+
+function updateField(
+  field: FieldCoverage,
+  turn: EnrichedTurn,
+  coverageKey: keyof Coverage,
+): void {
+  if (!turn.fidelity) {
+    field.unknownTurns++;
+    return;
+  }
+  if (turn.fidelity.coverage[coverageKey]) field.knownTurns++;
+  else field.missingTurns++;
+}
+
+function formatUsageCell(row: ModelRow, field: UsageField): string {
+  const c = row.usageCoverage[field];
+  const value = usageValue(row, field);
+  if (c.knownTurns === 0 && c.unknownTurns === 0 && c.missingTurns > 0) return '—';
+  const suffix = c.knownTurns === row.turns && c.unknownTurns === 0 ? '' : '*';
+  return `${formatInt(value)}${suffix}`;
+}
+
+function usageValue(row: ModelRow, field: UsageField): number {
+  switch (field) {
+    case 'input':
+      return row.usage.input;
+    case 'output':
+      return row.usage.output;
+    case 'reasoning':
+      return row.usage.reasoning;
+    case 'cacheRead':
+      return row.usage.cacheRead;
+    case 'cacheCreate':
+      return row.usage.cacheCreate5m + row.usage.cacheCreate1h;
+  }
+}
+
+function formatCostCell(row: ModelRow): string {
+  if (row.pricedTurns === 0) return '—';
+  const suffix = row.pricedTurns === row.turns ? '' : '*';
+  return `${formatUsd(row.cost.total)}${suffix}`;
+}
+
+function hasPartialDisplayCoverage(row: ModelRow): boolean {
+  if (row.pricedTurns < row.turns) return true;
+  return Object.values(row.usageCoverage).some(
+    (c) => c.missingTurns > 0 || c.unknownTurns > 0,
+  );
+}
+
+function hasCostCoverage(turn: EnrichedTurn): boolean {
+  const c = turn.fidelity?.coverage;
+  if (!c) return true;
+  return c.hasInputTokens && c.hasOutputTokens;
 }

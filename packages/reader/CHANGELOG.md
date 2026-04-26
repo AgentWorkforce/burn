@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Codex and OpenCode fidelity population** (#41). Both readers now attach `TurnRecord.fidelity` to emitted turns, preserving the difference between reported zero token fields and omitted fields. Codex reports per-turn delta coverage from cumulative token snapshots; OpenCode reports per-message coverage from its `tokens` object. Both mark tool-call / tool-result / raw-content capabilities and leave unsupported cache/session fields explicit instead of implied by numeric zero.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added

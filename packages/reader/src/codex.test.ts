@@ -32,6 +32,18 @@ describe('parseCodexSession', () => {
     });
     assert.equal(t.toolCalls.length, 0);
     assert.equal(t.filesTouched, undefined);
+    assert.ok(t.fidelity);
+    assert.equal(t.fidelity!.granularity, 'per-turn');
+    assert.equal(t.fidelity!.coverage.hasInputTokens, true);
+    assert.equal(t.fidelity!.coverage.hasOutputTokens, true);
+    assert.equal(t.fidelity!.coverage.hasReasoningTokens, true);
+    assert.equal(t.fidelity!.coverage.hasCacheReadTokens, true);
+    assert.equal(t.fidelity!.coverage.hasCacheCreateTokens, false);
+    assert.equal(t.fidelity!.coverage.hasToolCalls, true);
+    assert.equal(t.fidelity!.coverage.hasToolResultEvents, true);
+    assert.equal(t.fidelity!.coverage.hasSessionRelationships, false);
+    assert.equal(t.fidelity!.coverage.hasRawContent, true);
+    assert.equal(t.fidelity!.class, 'usage-only');
   });
 
   it('extracts function and custom tool calls and maps filesTouched from patch_apply_end', async () => {
@@ -264,6 +276,57 @@ describe('parseCodexSession', () => {
       assert.equal(turns.length, 1);
       assert.equal(turns[0]!.activity, 'refactoring');
       assert.equal(turns[0]!.hasEdits, true);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('marks omitted token fields as unknown rather than zero in fidelity coverage', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-fidelity-'));
+    try {
+      const jsonl =
+        [
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.000Z',
+            type: 'session_meta',
+            payload: { id: 'sess_fidelity', cwd: '/tmp/proj' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.100Z',
+            type: 'turn_context',
+            payload: { turn_id: 'turn_fidelity_1', cwd: '/tmp/proj', model: 'gpt-5.4' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.200Z',
+            type: 'event_msg',
+            payload: { type: 'task_started', turn_id: 'turn_fidelity_1' },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.300Z',
+            type: 'event_msg',
+            payload: {
+              type: 'token_count',
+              info: { total_token_usage: { input_tokens: 10, output_tokens: 0 } },
+            },
+          }),
+          JSON.stringify({
+            timestamp: '2026-04-22T00:00:00.400Z',
+            type: 'event_msg',
+            payload: { type: 'task_complete', turn_id: 'turn_fidelity_1' },
+          }),
+          '',
+        ].join('\n');
+      const file = path.join(tmp, 'fidelity.jsonl');
+      await writeFile(file, jsonl, 'utf8');
+      const { turns } = await parseCodexSession(file);
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity!;
+      assert.equal(turns[0]!.usage.output, 0, 'reported zero output remains numeric zero');
+      assert.equal(f.coverage.hasOutputTokens, true, 'output_tokens: 0 is known zero');
+      assert.equal(f.coverage.hasCacheReadTokens, false, 'missing cached_input_tokens is unknown');
+      assert.equal(f.coverage.hasReasoningTokens, false, 'missing reasoning_output_tokens is unknown');
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

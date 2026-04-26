@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fidelity-aware compare and plan calculations** (#41). `buildCompareTable` now defaults to `full` + `usage-only` turns, tracks included/excluded sample counts by fidelity class, skips cost/cache metrics when required coverage is missing, and exposes priced-turn totals so unknown cost is not rendered as free. `computePlanUsage` now reports costed/skipped/partial/unknown fidelity counts and marks projections `partialData` when spend relies on incomplete coverage.
+
 ## [0.18.0] - 2026-04-26
 
 ### Fixed

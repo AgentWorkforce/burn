@@ -257,7 +257,7 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
 burn by-tool [--since 7d] [--project <path>] [--session <id>]
-burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--include-partial] [--fidelity full,usage-only] [--json|--csv]
 burn claude  [--tag k=v ...] [-- <claude args>]
 ```
 
@@ -278,7 +278,7 @@ exploration     118    $0.013     —         52   $0.003     —
 
 One-shot rate = `turns with edits and zero intra-turn retries / edit turns`. It's `—` for categories that don't produce edits (`exploration`, `brainstorming`, etc.). Missing-data cells render as `—`, never `$0.00` or `0%`.
 
-This is observed data, not counterfactual: it tells you what happened when you actually used both models, not what *would have* happened if you'd picked differently. Cells with `turns < --min-sample` (default 5) are flagged as indicative; categories where only one model has data surface a coverage note beneath the table. The JSON cell shape exposes both `noData` (we never saw this combination) and `insufficientSample` (we have data but not much) so consumers can tell them apart cleanly.
+This is observed data, not counterfactual: it tells you what happened when you actually used both models, not what *would have* happened if you'd picked differently. By default `burn compare` includes `full` and `usage-only` fidelity turns and excludes `partial`, `aggregate-only`, and `cost-only` turns; use `--include-partial` or `--fidelity <classes>` to opt in. Cells with `turns < --min-sample` (default 5) are flagged as indicative; categories where only one model has data surface a coverage note beneath the table. The JSON cell shape exposes both `noData` (we never saw this combination) and `insufficientSample` (we have data but not much) so consumers can tell them apart cleanly.
 
 Standard filters apply: `--session <id>` limits to a single session, `--agent <id>` limits to a stamped agent ID, `--workflow <id>` to a stamped workflow ID, `--project <path>` to a project path or git-canonical projectKey.
 

@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import type { Plan } from '@relayburn/ledger';
+import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
 import type { TurnRecord } from '@relayburn/reader';
 
 import { computePlanUsage, cycleBounds } from './plan-usage.js';
@@ -203,5 +204,29 @@ describe('computePlanUsage', () => {
     ];
     const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
     assert.equal(u.spentUsd, 3);
+  });
+
+  it('marks projections as partial when fidelity is incomplete', () => {
+    const turns: TurnRecord[] = [
+      turn({
+        ts: '2026-04-05T00:00:00.000Z',
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+      }),
+      {
+        ...turn({ ts: '2026-04-06T00:00:00.000Z', inputTokens: 1_000_000 }),
+        fidelity: makeFidelity('per-turn', {
+          ...EMPTY_COVERAGE,
+          hasInputTokens: true,
+        }),
+      },
+    ];
+    const u = computePlanUsage(plan, turns, { pricing: PRICING, now });
+    assert.equal(u.partialData, true);
+    assert.equal(u.fidelity.matchedTurns, 2);
+    assert.equal(u.fidelity.costedTurns, 1);
+    assert.equal(u.fidelity.skippedTurns, 1);
+    assert.equal(u.fidelity.partialTurns, 1);
+    assert.equal(u.fidelity.unknownTurns, 1);
   });
 });

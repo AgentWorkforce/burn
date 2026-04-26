@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Changed
+
+- **Coverage/fidelity command contract completed** (#41). Codex and OpenCode turns now carry normalized fidelity metadata, and downstream commands consume it: `burn compare` defaults to full/usage-only samples and reports fidelity exclusions, `burn summary` marks partial usage/cost fields instead of rendering unknowns as zero, `burn waste` refuses unsupported attribution with missing prerequisites, and plan/limit projections flag partial-fidelity confidence.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added

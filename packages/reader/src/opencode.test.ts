@@ -37,6 +37,18 @@ describe('parseOpencodeSession', () => {
     assert.equal(t.toolCalls.length, 0);
     assert.equal(t.filesTouched, undefined);
     assert.equal(t.subagent, undefined);
+    assert.ok(t.fidelity);
+    assert.equal(t.fidelity!.granularity, 'per-message');
+    assert.equal(t.fidelity!.coverage.hasInputTokens, true);
+    assert.equal(t.fidelity!.coverage.hasOutputTokens, true);
+    assert.equal(t.fidelity!.coverage.hasReasoningTokens, true);
+    assert.equal(t.fidelity!.coverage.hasCacheReadTokens, true);
+    assert.equal(t.fidelity!.coverage.hasCacheCreateTokens, true);
+    assert.equal(t.fidelity!.coverage.hasToolCalls, true);
+    assert.equal(t.fidelity!.coverage.hasToolResultEvents, true);
+    assert.equal(t.fidelity!.coverage.hasSessionRelationships, false);
+    assert.equal(t.fidelity!.coverage.hasRawContent, true);
+    assert.equal(t.fidelity!.class, 'usage-only');
   });
 
   it('extracts tool calls and filesTouched only for file tools', async () => {
@@ -191,6 +203,48 @@ describe('parseOpencodeSession', () => {
       // Non-zero exit on a bash call flags hasFailedTool → debugging wins.
       assert.equal(turns[0]!.activity, 'debugging');
       assert.equal(turns[0]!.hasEdits, false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('distinguishes missing token fields from reported zero token fields', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-oc-fidelity-'));
+    try {
+      const storage = path.join(tmp, 'storage');
+      const sessionDir = path.join(storage, 'session', 'global');
+      const msgDir = path.join(storage, 'message', 'ses_fidelity');
+      await mkdir(sessionDir, { recursive: true });
+      await mkdir(msgDir, { recursive: true });
+      await writeFile(
+        path.join(sessionDir, 'ses_fidelity.json'),
+        JSON.stringify({ id: 'ses_fidelity', directory: '/tmp/proj' }),
+      );
+      await writeFile(
+        path.join(msgDir, 'msg_fidelity_asst.json'),
+        JSON.stringify({
+          id: 'msg_fidelity_asst',
+          sessionID: 'ses_fidelity',
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: 'claude-haiku-4-5',
+          time: { created: 1_776_988_001_000 },
+          path: { cwd: '/tmp/proj' },
+          tokens: { input: 0, output: 0, cache: { read: 0 } },
+        }),
+      );
+      const { turns } = await parseOpencodeSession(path.join(sessionDir, 'ses_fidelity.json'));
+      assert.equal(turns.length, 1);
+      const f = turns[0]!.fidelity!;
+      assert.equal(turns[0]!.usage.input, 0);
+      assert.equal(turns[0]!.usage.output, 0);
+      assert.equal(f.coverage.hasInputTokens, true, 'input: 0 is known zero');
+      assert.equal(f.coverage.hasOutputTokens, true, 'output: 0 is known zero');
+      assert.equal(f.coverage.hasCacheReadTokens, true, 'cache.read: 0 is known zero');
+      assert.equal(f.coverage.hasReasoningTokens, false, 'missing reasoning is unknown');
+      assert.equal(f.coverage.hasCacheCreateTokens, false, 'missing cache.write is unknown');
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

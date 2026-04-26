@@ -2,7 +2,8 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import type { EnrichedTurn } from '@relayburn/ledger';
-import type { ActivityCategory } from '@relayburn/reader';
+import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
+import type { ActivityCategory, Fidelity } from '@relayburn/reader';
 
 import { buildCompareTable } from './compare.js';
 import { loadBuiltinPricing } from './pricing.js';
@@ -34,6 +35,34 @@ function turn(
     ...partial,
   };
 }
+
+const FULL_FIDELITY: Fidelity = makeFidelity('per-turn', {
+  ...EMPTY_COVERAGE,
+  hasInputTokens: true,
+  hasOutputTokens: true,
+  hasCacheReadTokens: true,
+  hasCacheCreateTokens: true,
+  hasToolCalls: true,
+  hasToolResultEvents: true,
+  hasSessionRelationships: true,
+});
+
+const USAGE_ONLY_FIDELITY: Fidelity = makeFidelity('per-turn', {
+  ...EMPTY_COVERAGE,
+  hasInputTokens: true,
+  hasOutputTokens: true,
+});
+
+const PARTIAL_FIDELITY: Fidelity = makeFidelity('per-turn', {
+  ...EMPTY_COVERAGE,
+  hasInputTokens: true,
+});
+
+const AGGREGATE_FIDELITY: Fidelity = makeFidelity('per-session-aggregate', {
+  ...EMPTY_COVERAGE,
+  hasInputTokens: true,
+  hasOutputTokens: true,
+});
 
 describe('buildCompareTable', () => {
   it('buckets turns by (model, activity) and reports per-cell metrics', async () => {
@@ -250,5 +279,84 @@ describe('buildCompareTable', () => {
     const cell = t.cells['claude-sonnet-4-6']!['coding']!;
     assert.ok(cell.cacheHitRate !== null);
     assert.ok(Math.abs(cell.cacheHitRate! - 3000 / 4000) < 1e-9);
+  });
+
+  it('excludes partial and aggregate fidelity by default and reports the sample loss', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', {
+        fidelity: FULL_FIDELITY,
+        hasEdits: true,
+        retries: 0,
+      }),
+      turn('claude-sonnet-4-6', 'coding', {
+        fidelity: USAGE_ONLY_FIDELITY,
+        hasEdits: true,
+        retries: 0,
+      }),
+      turn('claude-sonnet-4-6', 'coding', {
+        fidelity: PARTIAL_FIDELITY,
+        hasEdits: true,
+        retries: 0,
+      }),
+      turn('claude-sonnet-4-6', 'coding', {
+        fidelity: AGGREGATE_FIDELITY,
+        hasEdits: true,
+        retries: 0,
+      }),
+    ];
+    const t = buildCompareTable(turns, { pricing, minSample: 1 });
+    assert.equal(t.sample.totalTurns, 4);
+    assert.equal(t.sample.includedTurns, 2);
+    assert.equal(t.sample.excludedTurns, 2);
+    assert.equal(t.sample.excludedByClass.partial, 1);
+    assert.equal(t.sample.excludedByClass['aggregate-only'], 1);
+    assert.equal(t.cells['claude-sonnet-4-6']!['coding']!.turns, 2);
+  });
+
+  it('includes partial turns when requested but keeps missing-cost fields null', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', {
+        fidelity: PARTIAL_FIDELITY,
+        hasEdits: true,
+        retries: 0,
+        usage: {
+          input: 1000,
+          output: 0,
+          reasoning: 0,
+          cacheRead: 0,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+      }),
+    ];
+    const t = buildCompareTable(turns, {
+      pricing,
+      includePartial: true,
+      minSample: 1,
+    });
+    const cell = t.cells['claude-sonnet-4-6']!['coding']!;
+    assert.equal(t.sample.includedTurns, 1);
+    assert.equal(cell.turns, 1);
+    assert.equal(cell.pricedTurns, 0, 'missing output coverage prevents fake $0 cost');
+    assert.equal(cell.costPerTurn, null);
+  });
+
+  it('honors an explicit fidelity allow-list', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', { fidelity: FULL_FIDELITY }),
+      turn('claude-sonnet-4-6', 'coding', { fidelity: USAGE_ONLY_FIDELITY }),
+    ];
+    const t = buildCompareTable(turns, {
+      pricing,
+      fidelity: ['full'],
+      minSample: 1,
+    });
+    assert.deepEqual(t.sample.allowedFidelity, ['full']);
+    assert.equal(t.sample.includedTurns, 1);
+    assert.equal(t.sample.excludedByClass['usage-only'], 1);
+    assert.equal(t.cells['claude-sonnet-4-6']!['coding']!.turns, 1);
   });
 });

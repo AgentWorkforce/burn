@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fidelity-aware command output** (#41). `burn compare` adds `--include-partial` / `--fidelity`, reports included vs excluded sample size, and avoids `$0` for unpriced or missing-coverage costs. `burn summary` adds per-model usage coverage and priced-turn counts to JSON and marks partial TTY fields. `burn waste` now refuses source-level unsupported attribution with explicit missing prerequisites. `burn plans` / `burn limits` mark plan projections as partial-fidelity when underlying spend coverage is incomplete.
+
 ## [0.21.0] - 2026-04-26
 
 ### Added

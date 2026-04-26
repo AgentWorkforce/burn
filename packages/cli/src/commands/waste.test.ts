@@ -9,7 +9,9 @@ import type {
   WasteResult,
 } from '@relayburn/analyze';
 
-import { formatWasteReport, isAttributionDegraded } from './waste.js';
+import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
+
+import { checkWasteFidelity, formatWasteReport, isAttributionDegraded } from './waste.js';
 
 function session(
   id: string,
@@ -192,5 +194,49 @@ describe('formatWasteReport', () => {
       out,
       /⚠ attribution is degraded: 39,486 of 39,587 sessions \(99\.7%\)/,
     );
+  });
+});
+
+describe('checkWasteFidelity', () => {
+  it('rejects aggregate-only turns with explicit missing prerequisites', () => {
+    const support = checkWasteFidelity([
+      {
+        fidelity: makeFidelity('per-session-aggregate', {
+          ...EMPTY_COVERAGE,
+          hasInputTokens: true,
+          hasOutputTokens: true,
+        }),
+        toolCalls: [{ name: 'Bash' }],
+      },
+    ]);
+    assert.equal(support.supported, false);
+    assert.equal(support.unsupportedTurns, 1);
+    assert.deepEqual(support.missingPrerequisites, [
+      'content lengths',
+      'per-turn usage',
+      'tool calls',
+      'tool result events',
+    ]);
+    assert.equal(support.unsupportedByClass['aggregate-only'], 1);
+  });
+
+  it('requires session relationships only when subagent calls are present', () => {
+    const base = makeFidelity('per-turn', {
+      ...EMPTY_COVERAGE,
+      hasInputTokens: true,
+      hasOutputTokens: true,
+      hasToolCalls: true,
+      hasToolResultEvents: true,
+      hasRawContent: true,
+    });
+    assert.equal(
+      checkWasteFidelity([{ fidelity: base, toolCalls: [{ name: 'Bash' }] }]).supported,
+      true,
+    );
+    const withSubagent = checkWasteFidelity([
+      { fidelity: base, toolCalls: [{ name: 'Agent' }] },
+    ]);
+    assert.equal(withSubagent.supported, false);
+    assert.deepEqual(withSubagent.missingPrerequisites, ['session relationships']);
   });
 });

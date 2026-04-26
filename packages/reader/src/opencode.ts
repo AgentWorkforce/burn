@@ -2,11 +2,13 @@ import { readFile, readdir } from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { classifyActivity } from './classifier.js';
+import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
+  Coverage,
   Subagent,
   ToolCall,
   TurnRecord,
@@ -35,6 +37,20 @@ interface MessageTokens {
     read?: number;
     write?: number;
   };
+}
+
+type UsageCoverage = Pick<
+  Coverage,
+  | 'hasInputTokens'
+  | 'hasOutputTokens'
+  | 'hasReasoningTokens'
+  | 'hasCacheReadTokens'
+  | 'hasCacheCreateTokens'
+>;
+
+interface UsageWithCoverage {
+  usage: Usage;
+  coverage: UsageCoverage;
 }
 
 interface AssistantMessage {
@@ -176,7 +192,8 @@ export async function parseOpencodeSessionIncremental(
 
     const model = buildModel(m.providerID, m.modelID);
     const project = m.path?.cwd ?? session.directory;
-    const usage = toUsage(m.tokens);
+    const usageInfo = toUsage(m.tokens);
+    const usage = usageInfo.usage;
 
     const record: TurnRecord = {
       v: 1,
@@ -189,6 +206,7 @@ export async function parseOpencodeSessionIncremental(
       usage,
       toolCalls,
     };
+    record.fidelity = buildOpencodeFidelity(usageInfo.coverage);
     if (options.sessionPath !== undefined) record.sessionPath = options.sessionPath;
     if (project !== undefined) {
       const resolved = resolveProject(project);
@@ -582,20 +600,41 @@ function lastStepFinishReason(parts: Part[]): string | undefined {
   return undefined;
 }
 
-function toUsage(t: MessageTokens | undefined): Usage {
+function toUsage(t: MessageTokens | undefined): UsageWithCoverage {
   const input = t?.input ?? 0;
   const output = t?.output ?? 0;
   const reasoning = t?.reasoning ?? 0;
   const cacheRead = t?.cache?.read ?? 0;
   const cacheWrite = t?.cache?.write ?? 0;
   return {
-    input,
-    output,
-    reasoning,
-    cacheRead,
-    cacheCreate5m: cacheWrite,
-    cacheCreate1h: 0,
+    usage: {
+      input,
+      output,
+      reasoning,
+      cacheRead,
+      cacheCreate5m: cacheWrite,
+      cacheCreate1h: 0,
+    },
+    coverage: {
+      hasInputTokens: t?.input !== undefined,
+      hasOutputTokens: t?.output !== undefined,
+      hasReasoningTokens: t?.reasoning !== undefined,
+      hasCacheReadTokens: t?.cache?.read !== undefined,
+      hasCacheCreateTokens: t?.cache?.write !== undefined,
+    },
   };
+}
+
+function buildOpencodeFidelity(usageCoverage: UsageCoverage) {
+  const coverage: Coverage = {
+    ...EMPTY_COVERAGE,
+    ...usageCoverage,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: false,
+    hasRawContent: true,
+  };
+  return makeFidelity('per-message', coverage);
 }
 
 function buildModel(providerID: string | undefined, modelID: string | undefined): string {

@@ -27,6 +27,17 @@ export interface PlanUsage {
   // Renderers should mark these projections as "limited data" per #39's
   // acceptance criteria.
   limitedData: boolean;
+  // True when spend/projection used turns whose fidelity is not fully known
+  // or skipped turns whose usage/pricing was insufficient. Renderers should
+  // mark projections as lower confidence instead of presenting them as exact.
+  partialData: boolean;
+  fidelity: {
+    matchedTurns: number;
+    costedTurns: number;
+    skippedTurns: number;
+    partialTurns: number;
+    unknownTurns: number;
+  };
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -49,13 +60,26 @@ export function computePlanUsage(
   const nowMs = now.getTime();
 
   let spent = 0;
+  let matchedTurns = 0;
+  let costedTurns = 0;
+  let skippedTurns = 0;
+  let partialTurns = 0;
+  let unknownTurns = 0;
   for (const t of turns) {
     if (!matchesProvider(plan.provider, t)) continue;
     const ts = Date.parse(t.ts);
     if (!Number.isFinite(ts)) continue;
     if (ts < cycleStartMs || ts >= cycleEndMs) continue;
-    const cost = costForTurn(t, opts.pricing);
-    if (cost) spent += cost.total;
+    matchedTurns++;
+    if (!t.fidelity) unknownTurns++;
+    else if (t.fidelity.class !== 'full') partialTurns++;
+    const cost = hasCostCoverage(t) ? costForTurn(t, opts.pricing) : null;
+    if (cost) {
+      spent += cost.total;
+      costedTurns++;
+    } else {
+      skippedTurns++;
+    }
   }
 
   const elapsedMs = Math.max(0, nowMs - cycleStartMs);
@@ -92,6 +116,14 @@ export function computePlanUsage(
     runwayDays,
     resetAt: cycleEnd.toISOString(),
     limitedData: daysElapsed < LIMITED_DATA_DAYS,
+    partialData: partialTurns > 0 || unknownTurns > 0 || skippedTurns > 0,
+    fidelity: {
+      matchedTurns,
+      costedTurns,
+      skippedTurns,
+      partialTurns,
+      unknownTurns,
+    },
   };
 }
 
@@ -125,6 +157,12 @@ export function cycleBounds(resetDay: number, now: Date): { cycleStart: Date; cy
     return { cycleStart, cycleEnd: new Date(cycleStart.getTime() + 28 * MS_PER_DAY) };
   }
   return { cycleStart, cycleEnd };
+}
+
+function hasCostCoverage(turn: TurnRecord): boolean {
+  const c = turn.fidelity?.coverage;
+  if (!c) return true;
+  return c.hasInputTokens && c.hasOutputTokens;
 }
 
 function makeCycleAnchor(year: number, month: number, day: number): Date {

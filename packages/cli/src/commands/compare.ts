@@ -1,11 +1,13 @@
 import {
   buildCompareTable,
+  DEFAULT_COMPARE_FIDELITY,
   DEFAULT_MIN_SAMPLE,
   loadPricing,
   type CompareCell,
   type CompareTable,
 } from '@relayburn/analyze';
 import { queryAll, type Query } from '@relayburn/ledger';
+import type { FidelityClass } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
@@ -15,7 +17,8 @@ const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
 
 Usage:
   burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>]
-               [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+               [--workflow <id>] [--agent <id>] [--min-sample <n>]
+               [--include-partial] [--fidelity full,usage-only] [--json|--csv]
 
 Flags:
   --models      comma-separated list of model names to include (default: all)
@@ -26,6 +29,11 @@ Flags:
   --agent       filter by stamped agentId
   --min-sample  insufficient-sample threshold; cells below this get flagged
                 in the coverage-notes block (default: 5)
+  --include-partial
+                include partial-fidelity turns in addition to the default
+                full,usage-only sample
+  --fidelity    comma-separated fidelity classes to include. Valid:
+                full, usage-only, partial, aggregate-only, cost-only
   --json        emit a stable JSON object (analyzedTurns, models, categories,
                 totals, cells[])
   --csv         emit a CSV with one row per (model, category) pair
@@ -72,6 +80,11 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
     process.stderr.write(`burn: invalid --min-sample: ${args.flags['min-sample']}\n`);
     return 2;
   }
+  const fidelity = parseFidelityFlag(args.flags['fidelity']);
+  if (fidelity instanceof Error) {
+    process.stderr.write(`burn: ${fidelity.message}\n`);
+    return 2;
+  }
 
   const wantJson = args.flags['json'] === true;
   const wantCsv = args.flags['csv'] === true;
@@ -88,10 +101,12 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
 
   const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample };
   if (models) opts.models = models;
+  if (fidelity) opts.fidelity = fidelity;
+  if (args.flags['include-partial'] === true) opts.includePartial = true;
   const table = buildCompareTable(turns, opts);
 
   if (wantJson) {
-    process.stdout.write(JSON.stringify(toJson(table, turns.length), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(toJson(table), null, 2) + '\n');
     return 0;
   }
   if (wantCsv) {
@@ -99,11 +114,11 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(renderTty(table, turns.length));
+  process.stdout.write(renderTty(table));
   return 0;
 }
 
-function toJson(t: CompareTable, analyzedTurns: number): object {
+function toJson(t: CompareTable): object {
   const cells: Array<Record<string, unknown>> = [];
   for (const m of t.models) {
     for (const cat of t.categories) {
@@ -126,7 +141,10 @@ function toJson(t: CompareTable, analyzedTurns: number): object {
     }
   }
   return {
-    analyzedTurns,
+    analyzedTurns: t.sample.includedTurns,
+    matchedTurns: t.sample.totalTurns,
+    excludedTurns: t.sample.excludedTurns,
+    sample: t.sample,
     minSample: t.minSample,
     models: t.models,
     categories: t.categories,
@@ -193,6 +211,31 @@ function round(n: number, digits: number): number {
 }
 
 const DASH = '—';
+const FIDELITY_CLASSES: ReadonlySet<string> = new Set([
+  'full',
+  'usage-only',
+  'partial',
+  'aggregate-only',
+  'cost-only',
+]);
+
+function parseFidelityFlag(flag: string | true | undefined): FidelityClass[] | undefined | Error {
+  if (flag === undefined) return undefined;
+  if (flag === true) {
+    return new Error('--fidelity requires a comma-separated list (for example: full,usage-only)');
+  }
+  const out: FidelityClass[] = [];
+  for (const raw of flag.split(',').map((s) => s.trim()).filter(Boolean)) {
+    if (!FIDELITY_CLASSES.has(raw)) {
+      return new Error(
+        `invalid --fidelity value "${raw}" (valid: ${[...FIDELITY_CLASSES].join(', ')})`,
+      );
+    }
+    out.push(raw as FidelityClass);
+  }
+  if (out.length === 0) return [...DEFAULT_COMPARE_FIDELITY];
+  return out;
+}
 
 function formatPct(p: number): string {
   return `${Math.round(p * 100)}%`;
@@ -211,10 +254,18 @@ function cellFields(c: CompareCell): [string, string, string] {
   return [turns, cost, oneShot];
 }
 
-function renderTty(t: CompareTable, analyzedTurns: number): string {
+function renderTty(t: CompareTable): string {
   const lines: string[] = [];
   lines.push('');
-  lines.push(`turns analyzed: ${formatInt(analyzedTurns)}`);
+  if (t.sample.excludedTurns > 0) {
+    lines.push(
+      `turns analyzed: ${formatInt(t.sample.includedTurns)} of ${formatInt(
+        t.sample.totalTurns,
+      )} (${formatInt(t.sample.excludedTurns)} excluded by fidelity)`,
+    );
+  } else {
+    lines.push(`turns analyzed: ${formatInt(t.sample.includedTurns)}`);
+  }
   lines.push('');
 
   if (t.models.length === 0 || t.categories.length === 0) {
@@ -293,15 +344,43 @@ function renderTty(t: CompareTable, analyzedTurns: number): string {
       lines.push(`  … and ${notes.length - NOTE_LIMIT} more coverage gaps.`);
     }
   }
+  const fidelityNotes = renderFidelityExclusionNotes(t);
+  if (fidelityNotes.length > 0) {
+    lines.push('');
+    for (const n of fidelityNotes) lines.push(`  ${n}`);
+  }
 
   // Per-model totals
   lines.push('');
   for (const m of t.models) {
-    const tot = t.totals[m] ?? { turns: 0, totalCost: 0 };
-    lines.push(`${displayModelName(m)}: ${formatInt(tot.turns)} turns, ${formatUsd(tot.totalCost)} total`);
+    const tot = t.totals[m] ?? { turns: 0, pricedTurns: 0, totalCost: 0 };
+    const cost = tot.pricedTurns > 0 ? formatUsd(tot.totalCost) : DASH;
+    const suffix =
+      tot.turns > 0 && tot.pricedTurns < tot.turns
+        ? ` (${formatInt(tot.pricedTurns)}/${formatInt(tot.turns)} priced)`
+        : '';
+    lines.push(`${displayModelName(m)}: ${formatInt(tot.turns)} turns, ${cost} total${suffix}`);
   }
   lines.push('');
   return lines.join('\n');
+}
+
+function renderFidelityExclusionNotes(t: CompareTable): string[] {
+  const notes: string[] = [];
+  const excluded = Object.entries(t.sample.excludedByClass)
+    .filter(([, count]) => count > 0)
+    .map(([cls, count]) => `${formatInt(count)} ${cls}`);
+  if (excluded.length > 0) {
+    notes.push(
+      `excluded by fidelity: ${excluded.join(', ')}. Use --include-partial or --fidelity to opt in.`,
+    );
+  }
+  if (t.sample.unknownFidelityTurns > 0) {
+    notes.push(
+      `${formatInt(t.sample.unknownFidelityTurns)} older turns had unknown fidelity and were included for compatibility.`,
+    );
+  }
+  return notes;
 }
 
 function renderRow(row: string[], widths: number[], sep: string): string {

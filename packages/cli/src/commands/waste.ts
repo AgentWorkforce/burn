@@ -5,6 +5,7 @@ import {
   attributeWaste,
   detectPatterns,
   loadPricing,
+  summarizeFidelity,
   type BashAggregation,
   type FileAggregation,
   type PatternsResult,
@@ -12,7 +13,7 @@ import {
   type WasteResult,
 } from '@relayburn/analyze';
 import { queryAll, queryCompactions, readContent, type Query } from '@relayburn/ledger';
-import type { ContentRecord } from '@relayburn/reader';
+import type { ContentRecord, Fidelity, FidelityClass } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -49,6 +50,15 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll(q);
+  const fidelitySupport = checkWasteFidelity(turns);
+  if (!fidelitySupport.supported) {
+    if (args.flags['json'] === true) {
+      process.stdout.write(JSON.stringify(fidelitySupport, null, 2) + '\n');
+    } else {
+      process.stderr.write(renderWasteFidelityError(fidelitySupport));
+    }
+    return 2;
+  }
 
   const patternsFlag = args.flags['patterns'];
   if (patternsFlag !== undefined) {
@@ -109,6 +119,94 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
     }),
   );
   return 0;
+}
+
+export interface WasteFidelitySupport {
+  supported: boolean;
+  turnsAnalyzed: number;
+  unsupportedTurns: number;
+  missingPrerequisites: string[];
+  unsupportedByClass: Record<FidelityClass, number>;
+  fidelity: ReturnType<typeof summarizeFidelity>;
+}
+
+const WASTE_PREREQ_LABELS = {
+  toolCalls: 'tool calls',
+  toolResultEvents: 'tool result events',
+  contentLengths: 'content lengths',
+  sessionRelationships: 'session relationships',
+  perTurnUsage: 'per-turn usage',
+} as const;
+
+export function checkWasteFidelity(
+  turns: readonly { fidelity?: Fidelity; toolCalls: { name: string }[] }[],
+): WasteFidelitySupport {
+  const missing = new Set<string>();
+  const unsupportedByClass: Record<FidelityClass, number> = {
+    full: 0,
+    'usage-only': 0,
+    'aggregate-only': 0,
+    'cost-only': 0,
+    partial: 0,
+  };
+  let unsupportedTurns = 0;
+  const hasSubagentCalls = turns.some((t) =>
+    t.toolCalls.some((tc) => tc.name === 'Agent' || tc.name === 'Task'),
+  );
+
+  for (const t of turns) {
+    const f = t.fidelity;
+    if (!f) continue;
+    let turnUnsupported = false;
+    if (f.granularity !== 'per-turn' && f.granularity !== 'per-message') {
+      missing.add(WASTE_PREREQ_LABELS.perTurnUsage);
+      turnUnsupported = true;
+    }
+    if (!f.coverage.hasToolCalls) {
+      missing.add(WASTE_PREREQ_LABELS.toolCalls);
+      turnUnsupported = true;
+    }
+    if (!f.coverage.hasToolResultEvents) {
+      missing.add(WASTE_PREREQ_LABELS.toolResultEvents);
+      turnUnsupported = true;
+    }
+    if (!f.coverage.hasRawContent) {
+      missing.add(WASTE_PREREQ_LABELS.contentLengths);
+      turnUnsupported = true;
+    }
+    if (hasSubagentCalls && !f.coverage.hasSessionRelationships) {
+      missing.add(WASTE_PREREQ_LABELS.sessionRelationships);
+      turnUnsupported = true;
+    }
+    if (turnUnsupported) {
+      unsupportedTurns++;
+      unsupportedByClass[f.class]++;
+    }
+  }
+
+  return {
+    supported: missing.size === 0,
+    turnsAnalyzed: turns.length,
+    unsupportedTurns,
+    missingPrerequisites: [...missing].sort(),
+    unsupportedByClass,
+    fidelity: summarizeFidelity(turns),
+  };
+}
+
+function renderWasteFidelityError(support: WasteFidelitySupport): string {
+  const byClass = Object.entries(support.unsupportedByClass)
+    .filter(([, n]) => n > 0)
+    .map(([cls, n]) => `${n} ${cls}`)
+    .join(', ');
+  const detail = byClass.length > 0 ? ` (${byClass})` : '';
+  return [
+    'burn waste: selected turns do not preserve enough fidelity for attribution.',
+    `missing prerequisites: ${support.missingPrerequisites.join(', ')}`,
+    `unsupported turns: ${support.unsupportedTurns}/${support.turnsAnalyzed}${detail}`,
+    'No attribution was computed; re-ingest with a reader that preserves tool results and content lengths.',
+    '',
+  ].join('\n');
 }
 
 interface FormatWasteReportInput {

@@ -144,6 +144,8 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
               runwayDays: s.usage.runwayDays,
               resetAt: s.usage.resetAt,
               limitedData: s.usage.limitedData,
+              partialData: s.usage.partialData,
+              fidelity: s.usage.fidelity,
             })),
           },
           null,
@@ -250,8 +252,11 @@ function renderTty(opts: {
     const overOrUnder = u.overBudget
       ? `${formatUsd(u.projectedEndOfCycleUsd - u.plan.budgetUsd)} over`
       : `${(((u.plan.budgetUsd - u.projectedEndOfCycleUsd) / u.plan.budgetUsd) * 100).toFixed(0)}% under`;
-    const limited = u.limitedData ? '  (limited data)' : '';
-    lines.push(`  Projected: ${projected} end-of-cycle (${overOrUnder})${limited}`);
+    const notes = [];
+    if (u.limitedData) notes.push('limited data');
+    if (u.partialData) notes.push('partial fidelity');
+    const note = notes.length > 0 ? `  (${notes.join(', ')})` : '';
+    lines.push(`  Projected: ${projected} end-of-cycle (${overOrUnder})${note}`);
     if (u.runwayDays !== null) {
       lines.push(`  Runway:    ${u.runwayDays} more day${u.runwayDays === 1 ? '' : 's'} at current rate`);
     }

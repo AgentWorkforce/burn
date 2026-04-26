@@ -1,5 +1,5 @@
 import type { EnrichedTurn } from '@relayburn/ledger';
-import type { ActivityCategory } from '@relayburn/reader';
+import type { ActivityCategory, Coverage, FidelityClass } from '@relayburn/reader';
 
 import { costForTurn } from './cost.js';
 import type { PricingTable } from './pricing.js';
@@ -36,17 +36,34 @@ export interface CompareTable {
   models: string[];
   categories: string[];
   cells: Record<string, Record<string, CompareCell>>;
-  totals: Record<string, { turns: number; totalCost: number }>;
+  totals: Record<string, { turns: number; pricedTurns: number; totalCost: number }>;
   minSample: number;
+  sample: CompareSample;
+}
+
+export interface CompareSample {
+  totalTurns: number;
+  includedTurns: number;
+  excludedTurns: number;
+  allowedFidelity: FidelityClass[];
+  includeUnknownFidelity: boolean;
+  unknownFidelityTurns: number;
+  excludedByClass: Record<FidelityClass, number>;
 }
 
 export interface CompareOptions {
   pricing: PricingTable;
   models?: string[];
   minSample?: number;
+  fidelity?: FidelityClass[];
+  includePartial?: boolean;
 }
 
 export const DEFAULT_MIN_SAMPLE = 5;
+export const DEFAULT_COMPARE_FIDELITY: ReadonlyArray<FidelityClass> = [
+  'full',
+  'usage-only',
+];
 
 interface Accum {
   turns: number;
@@ -62,9 +79,12 @@ interface Accum {
 export function buildCompareTable(turns: EnrichedTurn[], opts: CompareOptions): CompareTable {
   const minSample = opts.minSample ?? DEFAULT_MIN_SAMPLE;
   const modelFilter = opts.models && opts.models.length > 0 ? new Set(opts.models) : null;
+  const allowedFidelity = normalizeAllowedFidelity(opts);
+  const allowedSet = new Set<FidelityClass>(allowedFidelity);
+  const sample = emptySample(allowedFidelity);
 
   const byModelCategory = new Map<string, Map<string, Accum>>();
-  const modelTotals = new Map<string, { turns: number; totalCost: number }>();
+  const modelTotals = new Map<string, { turns: number; pricedTurns: number; totalCost: number }>();
   const modelSet = new Set<string>();
   const categorySet = new Set<string>();
 
@@ -75,13 +95,16 @@ export function buildCompareTable(turns: EnrichedTurn[], opts: CompareOptions): 
   if (modelFilter) {
     for (const m of modelFilter) {
       modelSet.add(m);
-      modelTotals.set(m, { turns: 0, totalCost: 0 });
+      modelTotals.set(m, { turns: 0, pricedTurns: 0, totalCost: 0 });
     }
   }
 
   for (const t of turns) {
     const model = t.model || 'unknown';
     if (modelFilter && !modelFilter.has(model)) continue;
+    sample.totalTurns++;
+    if (!isTurnIncludedByFidelity(t, allowedSet, sample)) continue;
+    sample.includedTurns++;
     const cat = (t.activity as string | undefined) ?? 'unclassified';
     modelSet.add(model);
     categorySet.add(cat);
@@ -97,12 +120,13 @@ export function buildCompareTable(turns: EnrichedTurn[], opts: CompareOptions): 
       byCat.set(cat, acc);
     }
     acc.turns++;
-    const mt = modelTotals.get(model) ?? { turns: 0, totalCost: 0 };
+    const mt = modelTotals.get(model) ?? { turns: 0, pricedTurns: 0, totalCost: 0 };
     mt.turns++;
-    const c = costForTurn(t, opts.pricing);
+    const c = hasCostCoverage(t) ? costForTurn(t, opts.pricing) : null;
     if (c) {
       acc.pricedTurns++;
       acc.totalCost += c.total;
+      mt.pricedTurns++;
       mt.totalCost += c.total;
     }
     modelTotals.set(model, mt);
@@ -112,10 +136,13 @@ export function buildCompareTable(turns: EnrichedTurn[], opts: CompareOptions): 
       acc.retriesSamples.push(r);
       if (r === 0) acc.oneShotTurns++;
     }
-    acc.cacheRead += t.usage.cacheRead;
-    acc.tokenDenominator +=
-      t.usage.input + t.usage.cacheRead + t.usage.cacheCreate5m + t.usage.cacheCreate1h;
+    if (hasCacheHitCoverage(t)) {
+      acc.cacheRead += t.usage.cacheRead;
+      acc.tokenDenominator +=
+        t.usage.input + t.usage.cacheRead + t.usage.cacheCreate5m + t.usage.cacheCreate1h;
+    }
   }
+  sample.excludedTurns = sample.totalTurns - sample.includedTurns;
 
   const models = [...modelSet].sort((a, b) => {
     const ca = modelTotals.get(a)?.totalCost ?? 0;
@@ -145,7 +172,69 @@ export function buildCompareTable(turns: EnrichedTurn[], opts: CompareOptions): 
   const totals: CompareTable['totals'] = {};
   for (const [m, v] of modelTotals) totals[m] = v;
 
-  return { models, categories, cells, totals, minSample };
+  return { models, categories, cells, totals, minSample, sample };
+}
+
+function normalizeAllowedFidelity(opts: CompareOptions): FidelityClass[] {
+  const seen = new Set<FidelityClass>();
+  const out: FidelityClass[] = [];
+  const requested =
+    opts.fidelity && opts.fidelity.length > 0
+      ? opts.fidelity
+      : DEFAULT_COMPARE_FIDELITY;
+  for (const cls of requested) {
+    if (!seen.has(cls)) {
+      seen.add(cls);
+      out.push(cls);
+    }
+  }
+  if (opts.includePartial && !seen.has('partial')) out.push('partial');
+  return out;
+}
+
+function emptySample(allowedFidelity: FidelityClass[]): CompareSample {
+  return {
+    totalTurns: 0,
+    includedTurns: 0,
+    excludedTurns: 0,
+    allowedFidelity,
+    includeUnknownFidelity: true,
+    unknownFidelityTurns: 0,
+    excludedByClass: {
+      full: 0,
+      'usage-only': 0,
+      'aggregate-only': 0,
+      'cost-only': 0,
+      partial: 0,
+    },
+  };
+}
+
+function isTurnIncludedByFidelity(
+  turn: EnrichedTurn,
+  allowed: ReadonlySet<FidelityClass>,
+  sample: CompareSample,
+): boolean {
+  const fidelity = turn.fidelity;
+  if (!fidelity) {
+    sample.unknownFidelityTurns++;
+    return true;
+  }
+  if (allowed.has(fidelity.class)) return true;
+  sample.excludedByClass[fidelity.class]++;
+  return false;
+}
+
+function hasCostCoverage(turn: EnrichedTurn): boolean {
+  const c = turn.fidelity?.coverage;
+  if (!c) return true;
+  return c.hasInputTokens && c.hasOutputTokens;
+}
+
+function hasCacheHitCoverage(turn: EnrichedTurn): boolean {
+  const c = turn.fidelity?.coverage;
+  if (!c) return true;
+  return c.hasInputTokens && c.hasCacheReadTokens && c.hasCacheCreateTokens;
 }
 
 function toCell(acc: Accum | undefined, minSample: number): CompareCell {

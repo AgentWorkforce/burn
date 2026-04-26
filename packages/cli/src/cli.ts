@@ -30,7 +30,7 @@ Usage:
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
   burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
-  burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+  burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--include-partial] [--fidelity full,usage-only] [--json|--csv]
   burn claude        [--tag k=v ...] [-- <claude args>]
   burn codex         [--tag k=v ...] [-- <codex args>]
   burn opencode      [--tag k=v ...] [-- <opencode args>]

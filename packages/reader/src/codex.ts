@@ -1,11 +1,13 @@
 import { open } from 'node:fs/promises';
 
 import { classifyActivity } from './classifier.js';
+import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash } from './hash.js';
 import type {
   ContentRecord,
   ContentStoreMode,
+  Coverage,
   ToolCall,
   TurnRecord,
   Usage,
@@ -26,6 +28,7 @@ export interface ParseCodexIncrementalOptions extends ParseCodexOptions {
 
 export interface CodexResumeState {
   cumulative: { input: number; output: number; cacheRead: number; reasoning: number };
+  cumulativeCoverage?: UsageCoverage;
   sessionId: string;
   sessionCwd?: string;
   turnContexts: Record<string, { turn_id?: string; cwd?: string; model?: string }>;
@@ -149,12 +152,21 @@ interface CumulativeUsage {
   reasoning: number;
 }
 
+type UsageCoverage = Pick<
+  Coverage,
+  | 'hasInputTokens'
+  | 'hasOutputTokens'
+  | 'hasReasoningTokens'
+  | 'hasCacheReadTokens'
+>;
+
 interface OpenTurn {
   turnId: string;
   ts: string;
   model: string;
   project?: string;
   startCumulative: CumulativeUsage;
+  startCumulativeCoverage: UsageCoverage;
   toolCalls: ToolCall[];
   seenCallIds: Set<string>;
   filesTouched: Set<string>;
@@ -169,9 +181,14 @@ interface OpenTurn {
 interface FinalizedTurn
   extends Omit<
     OpenTurn,
-    'startCumulative' | 'seenCallIds' | 'filesTouched' | 'erroredCallIds'
+    | 'startCumulative'
+    | 'startCumulativeCoverage'
+    | 'seenCallIds'
+    | 'filesTouched'
+    | 'erroredCallIds'
   > {
   usage: Usage;
+  usageCoverage: UsageCoverage;
   filesTouched: string[];
   erroredCallIds: Set<string>;
 }
@@ -240,6 +257,15 @@ export async function parseCodexSessionIncremental(
     cacheRead: options.resume?.cumulative.cacheRead ?? 0,
     reasoning: options.resume?.cumulative.reasoning ?? 0,
   };
+  let cumulativeCoverage: UsageCoverage = options.resume?.cumulativeCoverage
+    ? { ...options.resume.cumulativeCoverage }
+    : {
+        hasInputTokens: false,
+        hasOutputTokens: false,
+        hasReasoningTokens: false,
+        hasCacheReadTokens: false,
+      };
+  let seenUsageSnapshot = options.resume?.cumulativeCoverage !== undefined;
   let openTurn: OpenTurn | null = null;
   let pendingUserText = '';
   // User content (and any stray records) that arrive before the next
@@ -263,6 +289,8 @@ export async function parseCodexSessionIncremental(
   // Commit snapshot — only advanced at task_complete boundaries.
   let committedEndOffset = startOffset;
   let committedCumulative: CumulativeUsage = { ...cumulative };
+  let committedCumulativeCoverage: UsageCoverage = { ...cumulativeCoverage };
+  let committedSeenUsageSnapshot = seenUsageSnapshot;
   let committedSessionId = sessionId;
   let committedSessionCwd = sessionCwd;
   let committedTurnContexts = new Map(turnContexts);
@@ -328,6 +356,8 @@ export async function parseCodexSessionIncremental(
           cumulative.cacheRead = cached;
           cumulative.output = total.output_tokens ?? 0;
           cumulative.reasoning = total.reasoning_output_tokens ?? 0;
+          cumulativeCoverage = usageCoverageFromTokenUsage(total);
+          seenUsageSnapshot = true;
         }
         continue;
       }
@@ -338,7 +368,7 @@ export async function parseCodexSessionIncremental(
         const turnId = ev.turn_id;
         if (typeof turnId !== 'string') continue;
         if (openTurn) {
-          finalized.push(finalizeTurn(openTurn, cumulative));
+          finalized.push(finalizeTurn(openTurn, cumulative, cumulativeCoverage));
         }
         // Close the user-turn slot that bridges the previous assistant turn
         // and this one. `precedingMessageId` was stamped at the previous
@@ -356,6 +386,7 @@ export async function parseCodexSessionIncremental(
           ts,
           model: ctx?.model ?? '',
           startCumulative: { ...cumulative },
+          startCumulativeCoverage: baselineCoverage(cumulativeCoverage, seenUsageSnapshot),
           toolCalls: [],
           seenCallIds: new Set(),
           filesTouched: new Set(),
@@ -396,10 +427,12 @@ export async function parseCodexSessionIncremental(
           // Stamp preceding so the next task_started knows this turn closed
           // off the slot and the record can be linked.
           userTurnSlot.precedingMessageId = openTurn.turnId;
-          finalized.push(finalizeTurn(openTurn, cumulative));
+          finalized.push(finalizeTurn(openTurn, cumulative, cumulativeCoverage));
           openTurn = null;
           committedEndOffset = lineEndOffset;
           committedCumulative = { ...cumulative };
+          committedCumulativeCoverage = { ...cumulativeCoverage };
+          committedSeenUsageSnapshot = seenUsageSnapshot;
           committedSessionId = sessionId;
           committedSessionCwd = sessionCwd;
           committedTurnContexts = new Map(turnContexts);
@@ -616,6 +649,7 @@ export async function parseCodexSessionIncremental(
     record.activity = classified.activity;
     record.retries = classified.retries;
     record.hasEdits = classified.hasEdits;
+    record.fidelity = buildCodexFidelity(f.usageCoverage);
     turns.push(record);
     if (captureContent) content.push(...f.content);
   }
@@ -626,6 +660,13 @@ export async function parseCodexSessionIncremental(
     turnContexts: Object.fromEntries(committedTurnContexts),
     userTurnSlot: cloneSlot(committedUserTurnSlot),
   };
+  if (
+    committedSeenUsageSnapshot ||
+    committedFinalizedCount > 0 ||
+    options.resume?.cumulativeCoverage !== undefined
+  ) {
+    resume.cumulativeCoverage = { ...committedCumulativeCoverage };
+  }
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
 
   const emittedUserTurns = userTurns.slice(0, committedUserTurnsCount);
@@ -677,6 +718,9 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
     sessionId: r.sessionId,
     turnContexts: { ...r.turnContexts },
   };
+  if (r.cumulativeCoverage !== undefined) {
+    out.cumulativeCoverage = { ...r.cumulativeCoverage };
+  }
   if (r.sessionCwd !== undefined) out.sessionCwd = r.sessionCwd;
   if (r.userTurnSlot) out.userTurnSlot = cloneSlot(r.userTurnSlot);
   else out.userTurnSlot = { blocks: [], ts: '' };
@@ -721,7 +765,11 @@ function buildCodexUserTurnRecord(
   return record;
 }
 
-function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTurn {
+function finalizeTurn(
+  open: OpenTurn,
+  cumulative: CumulativeUsage,
+  cumulativeCoverage: UsageCoverage,
+): FinalizedTurn {
   const usage: Usage = {
     input: Math.max(0, cumulative.input - open.startCumulative.input),
     output: Math.max(0, cumulative.output - open.startCumulative.output),
@@ -730,12 +778,14 @@ function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTur
     cacheCreate5m: 0,
     cacheCreate1h: 0,
   };
+  const usageCoverage = deltaCoverage(open.startCumulativeCoverage, cumulativeCoverage);
   const out: FinalizedTurn = {
     turnId: open.turnId,
     ts: open.ts,
     model: open.model,
     toolCalls: open.toolCalls,
     usage,
+    usageCoverage,
     filesTouched: [...open.filesTouched],
     userText: open.userText,
     assistantText: open.assistantText,
@@ -744,6 +794,47 @@ function finalizeTurn(open: OpenTurn, cumulative: CumulativeUsage): FinalizedTur
   };
   if (open.project !== undefined) out.project = open.project;
   return out;
+}
+
+function baselineCoverage(current: UsageCoverage, seenSnapshot: boolean): UsageCoverage {
+  if (seenSnapshot) return { ...current };
+  return {
+    hasInputTokens: true,
+    hasOutputTokens: true,
+    hasReasoningTokens: true,
+    hasCacheReadTokens: true,
+  };
+}
+
+function usageCoverageFromTokenUsage(total: TokenUsage): UsageCoverage {
+  return {
+    hasInputTokens: total.input_tokens !== undefined,
+    hasOutputTokens: total.output_tokens !== undefined,
+    hasReasoningTokens: total.reasoning_output_tokens !== undefined,
+    hasCacheReadTokens: total.cached_input_tokens !== undefined,
+  };
+}
+
+function deltaCoverage(start: UsageCoverage, end: UsageCoverage): UsageCoverage {
+  return {
+    hasInputTokens: start.hasInputTokens && end.hasInputTokens,
+    hasOutputTokens: start.hasOutputTokens && end.hasOutputTokens,
+    hasReasoningTokens: start.hasReasoningTokens && end.hasReasoningTokens,
+    hasCacheReadTokens: start.hasCacheReadTokens && end.hasCacheReadTokens,
+  };
+}
+
+function buildCodexFidelity(usageCoverage: UsageCoverage) {
+  const coverage: Coverage = {
+    ...EMPTY_COVERAGE,
+    ...usageCoverage,
+    hasCacheCreateTokens: false,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: false,
+    hasRawContent: true,
+  };
+  return makeFidelity('per-turn', coverage);
 }
 
 // Codex user messages mix real prompts with harness boilerplate
