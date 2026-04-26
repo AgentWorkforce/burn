@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-04-26
+
 ### Added
 
 - **Execution-graph ledger lines: `SessionRelationshipLine` and `ToolResultEventLine`** (#42, first PR). Two new `LedgerLine` kinds (`relationship`, `tool_result_event`) with matching `appendRelationships` / `appendToolResultEvents` writers, `queryRelationships` / `queryToolResultEvents` readers, and `isSessionRelationshipLine` / `isToolResultEventLine` guards. Both append-only; both dedup through the same `~/.relayburn/ledger-index` namespace as turns and compactions via `relationshipIdHash` (keyed on type + agentId + parentToolUseId) and `toolResultEventIdHash` (keyed on sessionId + toolUseId + eventIndex). `rebuildIndex` re-indexes both kinds. Old readers that don't recognize the new kinds simply skip them — the existing `isTurnLine` / `isStampLine` / `isCompactionLine` guards already filter to known kinds.

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-04-26
+
 ### Added
 
 - **Execution-graph substrate** (#42, first PR). Two new normalized append-only record types — `SessionRelationshipRecord` (`root` / `continuation` / `fork` / `subagent` edges) and `ToolResultEventRecord` (per-`toolUseId` chronology with `status` + `eventSource` discriminator) — that sit beside `TurnRecord` and preserve passive-reader metadata that's currently flattened or lost. Both ride at `v: 1`. Foundation for #8 (subagent tree consumers) and #11 (waste / retry / terminal-outcome analysis); no new flags or output yet.
