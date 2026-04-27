@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`queryAllFromArchive(query)` + `archiveAvailable()`** ([#82](https://github.com/AgentWorkforce/burn/issues/82)). New read-side entry point in `@relayburn/ledger` that issues SQL against `archive.sqlite` and returns the same `EnrichedTurn[]` shape as `queryAll`, so consumers (starting with `burn summary`) can swap implementations without touching their aggregation code. Filters land as `WHERE` clauses against indexed columns (`ts`, `model`, `project_key`, `session_id`, `source`, materialized enrichment columns); arbitrary stamp keys not promoted to columns fall back to a `json_extract` over `enrichment_json` to match `queryAll` semantics. Tool calls are bulk-hydrated keyed on `(source, session_id, message_id)` so callers that read `turn.toolCalls` keep working without an extra round-trip. Fidelity is reconstructed from the persisted `attribution_fidelity` / `tokens_present` / `cost_present` columns plus class-implied coverage defaults — class equality (the load-bearing parity contract for `summarizeFidelity`) is preserved; the synthesized coverage shape may differ from the on-ledger blob for classes that don't pin every flag.
+
 ## [0.30.0] - 2026-04-27
 
 ### Changed
@@ -17,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`queryAllFromArchive(query)` + `archiveAvailable()`** ([#82](https://github.com/AgentWorkforce/burn/issues/82)). New read-side entry point in `@relayburn/ledger` that issues SQL against `archive.sqlite` and returns the same `EnrichedTurn[]` shape as `queryAll`, so consumers (starting with `burn summary`) can swap implementations without touching their aggregation code. Filters land as `WHERE` clauses against indexed columns (`ts`, `model`, `project_key`, `session_id`, `source`, materialized enrichment columns); arbitrary stamp keys not promoted to columns fall back to a `json_extract` over `enrichment_json` to match `queryAll` semantics. Tool calls are bulk-hydrated keyed on `(source, session_id, message_id)` so callers that read `turn.toolCalls` keep working without an extra round-trip. Fidelity is reconstructed from the persisted `attribution_fidelity` / `tokens_present` / `cost_present` columns plus class-implied coverage defaults — class equality (the load-bearing parity contract for `summarizeFidelity`) is preserved; the synthesized coverage shape may differ from the on-ledger blob for classes that don't pin every flag.
 - **User-turn ledger lines** (#2). New append-only `user_turn` ledger records persist parser-emitted `UserTurnRecord`s alongside raw turns without rewriting or mutating them. The ledger now exposes `appendUserTurns()` / `queryUserTurns()`, `UserTurnLine` / `isUserTurnLine()`, and `userTurnIdHash()` keyed by `(source, sessionId, userUuid)` through the existing dedup index; `rebuildIndex()` rehydrates those ids after index loss.
 
 ## [0.26.0] - 2026-04-26
