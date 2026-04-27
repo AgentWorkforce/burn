@@ -680,10 +680,11 @@ export async function runPatternsMode(
   );
 
   // For the "turns analyzed" headline we report the union of analyzed slices —
-  // a turn that survived any detector counts.
+  // a turn that survived any detector counts. Compaction has no fidelity
+  // prereq and runs on the full slice, so every turn is "analyzed" by it
+  // whenever it's selected.
   const analyzedUnion = new Set<string>();
   for (const d of perDetectorCoverage) {
-    if (d.kind === 'compaction') continue;
     const slice = perDetector.get(d.kind)!;
     for (const t of slice) analyzedUnion.add(`${t.sessionId}|${t.messageId}`);
   }

@@ -786,4 +786,94 @@ describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
     assert.equal(stderr, '');
     assert.doesNotMatch(stdout, /no selected detectors can run/);
   });
+
+  it('compaction-only counts every turn as analyzed (top-level + JSON fidelity)', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Regression for the case where --patterns compaction reported
+    // turnsAnalyzed: 0 / fidelity.excluded: total because the analyzed-union
+    // skipped the compaction slice. Compaction has no fidelity prereq, so
+    // every turn is "analyzed" by it.
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
+        }),
+      );
+    }
+    const selected = new Set(['compaction'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.turnsAnalyzed, 3);
+    assert.equal(payload.fidelity.analyzed, 3);
+    assert.equal(payload.fidelity.excluded, 0);
+    assert.equal(payload.fidelity.refused, false);
+    const compaction = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'compaction',
+    );
+    assert.ok(compaction);
+    assert.equal(compaction.analyzed, 3);
+    assert.equal(compaction.excluded, 0);
+  });
+
+  it('mixed compaction + retries union credits compaction-only turns', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Two full-fidelity turns (analyzable by retries) + three aggregate-only
+    // turns (only compaction can analyze). The union should be all 5 turns;
+    // fidelity.excluded must be 0 because every turn was analyzed by at
+    // least one detector.
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 2; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 'good',
+          messageId: `g${i}`,
+          turnIndex: i,
+          source: 'claude-code',
+          fidelity: fidelityWith('full', 'per-turn'),
+        }),
+      );
+    }
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 'bad',
+          messageId: `b${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
+        }),
+      );
+    }
+    const selected = new Set(['retries', 'compaction'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.turnsAnalyzed, 5);
+    assert.equal(payload.fidelity.analyzed, 5);
+    assert.equal(payload.fidelity.excluded, 0);
+    const retries = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'retries',
+    );
+    assert.equal(retries.analyzed, 2);
+    assert.equal(retries.excluded, 3);
+    const compaction = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'compaction',
+    );
+    assert.equal(compaction.analyzed, 5);
+    assert.equal(compaction.excluded, 0);
+  });
 });
