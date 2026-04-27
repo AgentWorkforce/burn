@@ -1,0 +1,32 @@
+{
+  "name": "relayburn",
+  "version": "0.33.0",
+  "description": "Token usage & cost attribution for agent CLIs (installs the `burn` command)",
+  "type": "module",
+  "bin": {
+    "burn": "./bin/burn.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "chmod +x bin/burn.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@relayburn/cli": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/relayburn"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

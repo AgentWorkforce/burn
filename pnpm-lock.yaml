@@ -59,6 +59,12 @@ importers:
 
   packages/reader: {}
 
+  packages/relayburn:
+    dependencies:
+      '@relayburn/cli':
+        specifier: workspace:*
+        version: link:../cli
+
 packages:
 
   '@types/node@22.19.17':
