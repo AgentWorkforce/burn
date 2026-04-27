@@ -4,6 +4,8 @@ export { costForTurn, costForUsage, sumCosts } from './cost.js';
 export type { CostBreakdown, CostForUsageOptions } from './cost.js';
 export { buildCompareTable, DEFAULT_MIN_SAMPLE } from './compare.js';
 export type { CompareCategory, CompareCell, CompareOptions, CompareTable } from './compare.js';
+export { compareFromArchive } from './compare-archive.js';
+export type { CompareFromArchiveResult } from './compare-archive.js';
 export {
   attributeWaste,
   aggregateByFile,
@@ -71,8 +73,13 @@ export {
   findContextFiles,
   loadContextFile,
 } from './context-md.js';
-export { computePlanUsage, cycleBounds } from './plan-usage.js';
-export type { ComputePlanUsageOptions, PlanUsage } from './plan-usage.js';
+export { computePlanUsage, cycleBounds, planUsageFromArchive } from './plan-usage.js';
+export type {
+  ComputePlanUsageFromArchiveOptions,
+  ComputePlanUsageOptions,
+  PlanUsage,
+  PlanUsageFidelity,
+} from './plan-usage.js';
 export {
   emptyFidelitySummary,
   hasMinimumFidelity,

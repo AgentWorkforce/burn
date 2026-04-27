@@ -13,13 +13,24 @@ import type {
   QualityResult,
   SubagentTreeNode,
 } from '@relayburn/analyze';
-import { queryAll, readContent, type Query } from '@relayburn/ledger';
+import {
+  buildArchive,
+  queryAll,
+  queryAllFromArchive,
+  readContent,
+  type Query,
+} from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 import type { ContentRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import {
+  filterTurnsByProvider,
+  parseProviderFilter,
+  resolveTurnProvider,
+} from '../provider.js';
 
 export async function runSummary(args: ParsedArgs): Promise<number> {
   const q: Query = {};
@@ -28,13 +39,19 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
   if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
+  const providerFilter = parseProviderFilter(args.flags['provider']);
+  if (providerFilter instanceof Error) {
+    process.stderr.write(providerFilter.message);
+    return 2;
+  }
 
   const subagentTreeFlag = args.flags['subagent-tree'];
   const subagentTypeFlag = args.flags['by-subagent-type'] === true;
+  const byProvider = args.flags['by-provider'] === true;
 
   const ingestReport = await ingestAll();
   const pricing = await loadPricing();
-  const turns = await queryAll(q);
+  const turns = filterTurnsByProvider(await loadTurns(q, args), providerFilter);
 
   if (subagentTreeFlag !== undefined) {
     return renderSubagentTreeMode(args, turns, pricing, subagentTreeFlag, q);
@@ -43,8 +60,10 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return renderSubagentTypeMode(args, turns, pricing);
   }
 
-  const rowsByModel = aggregateByModel(turns, pricing);
-  const totalCost = sumCosts(rowsByModel.map((r) => r.cost));
+  const rows = byProvider
+    ? aggregateByProvider(turns, pricing)
+    : aggregateByModel(turns, pricing);
+  const totalCost = sumCosts(rows.map((r) => r.cost));
   const fidelity = summarizeFidelity(turns);
 
   if (args.flags['json'] === true) {
@@ -59,12 +78,23 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
       },
       turns: turns.length,
       totalCost,
-      byModel: rowsByModel.map((r) => ({
-        model: r.model,
-        turns: r.turns,
-        usage: r.usage,
-        cost: r.cost,
-      })),
+      ...(byProvider
+        ? {
+            byProvider: rows.map((r) => ({
+              provider: r.label,
+              turns: r.turns,
+              usage: r.usage,
+              cost: r.cost,
+            })),
+          }
+        : {
+            byModel: rows.map((r) => ({
+              model: r.label,
+              turns: r.turns,
+              usage: r.usage,
+              cost: r.cost,
+            })),
+          }),
       fidelity,
     };
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
@@ -86,11 +116,11 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  const header = ['model', 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
+  const header = [byProvider ? 'provider' : 'model', 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
   const dataRows: string[][] = [header];
-  for (const r of rowsByModel) {
+  for (const r of rows) {
     dataRows.push([
-      r.model,
+      r.label,
       formatInt(r.turns),
       formatInt(r.usage.input),
       formatInt(r.usage.output),
@@ -189,7 +219,7 @@ function weightedOneShotRate(q: QualityResult): number | undefined {
 }
 
 interface ModelRow {
-  model: string;
+  label: string;
   turns: number;
   usage: EnrichedTurn['usage'];
   cost: CostBreakdown;
@@ -323,18 +353,62 @@ function renderFidelityNotice(f: FidelitySummary): string | undefined {
   return `fidelity: ${parts.join(' / ')} (use --json for per-field coverage)`;
 }
 
+/**
+ * Load the turns slice that drives every summary mode.
+ *
+ * Default path: bring `archive.sqlite` current via `buildArchive()` (cheap
+ * incremental tail scan after `ingestAll`'s appends), then issue SQL with
+ * filters lowered as `WHERE` clauses against indexed columns. Replaces the
+ * full ledger walk (`queryAll`) on the hot path.
+ *
+ * Fallback path: `--no-archive` flag or `RELAYBURN_ARCHIVE=0` env reverts
+ * to the legacy `queryAll` ledger stream — kept as an escape hatch for
+ * parity validation and for environments where the archive is missing /
+ * corrupt. If a build/query against the archive throws, we transparently
+ * fall back to the same legacy path so a wedged archive can never break
+ * the command.
+ */
+async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
+  const noArchiveFlag = args.flags['no-archive'] === true;
+  const envDisabled = process.env['RELAYBURN_ARCHIVE'] === '0';
+  if (noArchiveFlag || envDisabled) {
+    return queryAll(q);
+  }
+  try {
+    await buildArchive();
+    return await queryAllFromArchive(q);
+  } catch (err) {
+    // Don't let an archive-side failure (corrupt sqlite, schema mismatch we
+    // didn't recover from cleanly, etc.) take down `burn summary`. Surface
+    // the reason on stderr and fall back to the streaming reader.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`burn: archive read failed (${msg}); falling back to ledger walk\n`);
+    return queryAll(q);
+  }
+}
+
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {
+  return aggregateTurns(turns, pricing, (t) => t.model || 'unknown');
+}
+
+function aggregateByProvider(
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+): ModelRow[] {
+  return aggregateTurns(turns, pricing, (t) => resolveTurnProvider(t).provider);
+}
+
+function aggregateTurns(
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+  keyForTurn: (turn: EnrichedTurn) => string,
+): ModelRow[] {
   const byModel = new Map<string, ModelRow>();
   for (const t of turns) {
-    const key = t.model || 'unknown';
+    const key = keyForTurn(t) || 'unknown';
     let row = byModel.get(key);
     if (!row) {
-      row = {
-        model: key,
-        turns: 0,
-        usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
-        cost: { model: key, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate: 0 },
-      };
+      row = emptyRow(key);
       byModel.set(key, row);
     }
     row.turns++;
@@ -355,4 +429,13 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
     }
   }
   return [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total);
+}
+
+function emptyRow(label: string): ModelRow {
+  return {
+    label,
+    turns: 0,
+    usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+    cost: { model: label, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate: 0 },
+  };
 }

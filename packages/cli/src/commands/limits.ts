@@ -53,8 +53,9 @@ export type ForecastConfidence = 'high' | 'low';
 export interface ForecastFidelity {
   confidence: ForecastConfidence;
   // Count of turns whose per-turn token data is unreliable for forecasting.
-  // Equivalent to `total - (full + qualified usage-only) - (any unknowns)`;
-  // surfaced separately so the rendered notice can read "N of M".
+  // Equivalent to `total - (full + qualified usage-only)` — unknowns (records
+  // with no `fidelity` field) are counted here too, not excluded.
+  // Surfaced separately so the rendered notice can read "N of M".
   lowConfidenceTurns: number;
   summary: FidelitySummary;
 }

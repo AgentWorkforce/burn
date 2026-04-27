@@ -1,3 +1,4 @@
+import { buildArchive } from '@relayburn/ledger';
 import {
   createCurrentBlockTool,
   createSessionCostTool,
@@ -42,16 +43,34 @@ export async function runMcpServer(args: ParsedArgs): Promise<number> {
     process.stderr.write(`[burn mcp-server] initial ingest failed: ${msg}\n`);
   }
 
+  // Apply any ledger tail not yet materialized into the archive so the first
+  // tool call hits SQL on the hot path instead of re-walking the ledger.
+  // Idempotent and incremental — a no-op when nothing has changed since the
+  // last build (issue #97).
+  try {
+    await buildArchive();
+  } catch (err) {
+    // Tools fall back to `queryAll` if the archive is unavailable; log the
+    // build failure so an operator can spot a persistent breakage but don't
+    // refuse to serve.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[burn mcp-server] initial archive build failed: ${msg}\n`);
+  }
+
+  const log = (msg: string): void => {
+    process.stderr.write(`[burn mcp-server] ${msg}\n`);
+  };
+
   const tools = [
-    createSessionCostTool({ defaultSessionId }),
-    createCurrentBlockTool(),
+    createSessionCostTool({ defaultSessionId, onLog: log }),
+    createCurrentBlockTool({ onLog: log }),
   ];
 
   const server = startStdioServer({
     name: '@relayburn/mcp',
     version: getServerVersion(),
     tools,
-    onLog: (msg) => process.stderr.write(`[burn mcp-server] ${msg}\n`),
+    onLog: log,
   });
 
   await server.done;

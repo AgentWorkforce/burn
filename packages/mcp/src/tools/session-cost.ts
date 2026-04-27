@@ -1,6 +1,6 @@
 import { costForTurn, loadPricing, sumCosts } from '@relayburn/analyze';
 import type { PricingTable } from '@relayburn/analyze';
-import { queryAll } from '@relayburn/ledger';
+import { buildArchive, queryAll, queryTurnsFromArchive } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 
 import type { ToolDefinition } from '../types.js';
@@ -22,10 +22,35 @@ export interface SessionCostDeps {
   defaultSessionId: string | undefined;
   queryTurns?: (sessionId: string) => Promise<EnrichedTurn[]>;
   loadPricing?: () => Promise<PricingTable>;
+  /**
+   * Called when the default archive-backed `queryTurns` falls through to the
+   * ledger-walking `queryAll` because the archive open / query threw. Defaults
+   * to no-op so the MCP server stays quiet on the happy path; the CLI server
+   * wires this to stderr so failures are visible in the MCP host's log.
+   */
+  onLog?: (msg: string) => void;
 }
 
 export function createSessionCostTool(deps: SessionCostDeps): ToolDefinition {
-  const queryTurns = deps.queryTurns ?? ((id) => queryAll({ sessionId: id }));
+  const log = deps.onLog ?? (() => {});
+  const queryTurns =
+    deps.queryTurns ??
+    (async (id: string) => {
+      // Hooks append new turns to the JSONL ledger throughout the session,
+      // but the archive is only materialized when something explicitly calls
+      // `buildArchive`. Run an incremental build before each query so the
+      // tool reflects fresh data (Devin review on #97). The build is
+      // idempotent + cursor-driven, so it's a no-op when nothing has changed
+      // since the last call.
+      try {
+        await buildArchive();
+        return await queryTurnsFromArchive({ sessionId: id });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`sessionCost: archive query failed, falling back to ledger walk: ${msg}`);
+        return queryAll({ sessionId: id });
+      }
+    });
   const pricingLoader = deps.loadPricing ?? loadPricing;
 
   return {

@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import type { Fidelity } from '@relayburn/reader';
+import { emptyFidelitySummary } from '@relayburn/analyze';
 
 import {
   deriveForecastFidelity,
@@ -268,6 +269,7 @@ describe('burn limits', () => {
             runwayDays: 29,
             resetAt: '2026-05-01T00:00:00.000Z',
             limitedData: false,
+            fidelity: { confidence: 'high', summary: emptyFidelitySummary() },
           },
         },
       ],
@@ -307,6 +309,7 @@ describe('burn limits', () => {
             runwayDays: null,
             resetAt: '2026-05-22T00:00:00.000Z',
             limitedData: true,
+            fidelity: { confidence: 'high', summary: emptyFidelitySummary() },
           },
         },
       ],
@@ -365,6 +368,7 @@ describe('burn limits', () => {
             runwayDays: null,
             resetAt: '2026-05-01T00:00:00.000Z',
             limitedData: false,
+            fidelity: { confidence: 'high', summary: emptyFidelitySummary() },
           },
         },
       ],
