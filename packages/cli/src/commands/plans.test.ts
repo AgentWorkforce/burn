@@ -456,7 +456,11 @@ describe('burn plans CLI', () => {
           fidelity: FULL_FIDELITY,
         }),
       ]);
-      const { result, stdout } = await captureStdio(() => runPlans(args()));
+      // Force the in-memory path — the archive's single `tokens_present` bit
+      // cannot distinguish per-axis coverage, so `missingCoverage` assertions
+      // only hold on the exact-fidelity in-memory path. Archive fidelity is
+      // tested at the analyze layer (plan-usage.test.ts).
+      const { result, stdout } = await captureStdio(() => runPlans(args([], { 'no-archive': true })));
       assert.equal(result, 0);
       assert.match(stdout, /claude-pro/);
       assert.doesNotMatch(stdout, /confidence/);
@@ -488,7 +492,7 @@ describe('burn plans CLI', () => {
           fidelity: PARTIAL_FIDELITY,
         }),
       ]);
-      const { result, stdout } = await captureStdio(() => runPlans(args()));
+      const { result, stdout } = await captureStdio(() => runPlans(args([], { 'no-archive': true })));
       assert.equal(result, 0);
       // Header shows the new column when at least one plan is low-confidence.
       assert.match(stdout, /confidence/);
@@ -525,7 +529,7 @@ describe('burn plans CLI', () => {
           fidelity: PARTIAL_FIDELITY,
         }),
       ]);
-      const { result, stdout } = await captureStdio(() => runPlans(args([], { json: true })));
+      const { result, stdout } = await captureStdio(() => runPlans(args([], { json: true, 'no-archive': true })));
       assert.equal(result, 0);
       const parsed = JSON.parse(stdout) as {
         plans: Array<{
