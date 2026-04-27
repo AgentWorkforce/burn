@@ -592,15 +592,16 @@ export async function runPatternsMode(
     perDetectorCoverage.push(coverage);
   }
 
-  // Refusal: every selected detector that has a coverage prereq refused. If
-  // the only thing the user asked for was compaction (always allowed), we
-  // never refuse. Mixed sets where at least one detector can run continue
-  // with partial output and per-detector notices.
+  // Refusal: every selected detector refused. Compaction has no fidelity
+  // prereq and is recorded with refused:false unconditionally, so its
+  // presence in `selected` short-circuits this — we only refuse when the
+  // entire selection is fidelity-gated and every detector lost its slice.
   const refusableSelected = perDetectorCoverage.filter(
     (d) => d.kind !== 'compaction',
   );
   const allRefused =
-    refusableSelected.length > 0 && refusableSelected.every((d) => d.refused);
+    perDetectorCoverage.length > 0 &&
+    perDetectorCoverage.every((d) => d.refused);
 
   if (allRefused) {
     const lines: string[] = [];

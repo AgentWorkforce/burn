@@ -876,4 +876,45 @@ describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
     assert.equal(compaction.analyzed, 5);
     assert.equal(compaction.excluded, 0);
   });
+
+  it('mixed retries+compaction does NOT refuse when only retries lacks coverage', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Every turn is aggregate-only — retries must refuse, but compaction
+    // has no fidelity prereq and should still run. Refusing the whole
+    // command in this case would silently drop the compaction signal.
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
+        }),
+      );
+    }
+    const selected = new Set(['retries', 'compaction'] as const);
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    assert.equal(result, 0, 'must not refuse — compaction can still run');
+    assert.equal(stderr, '');
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.fidelity.refused, false);
+    assert.equal(payload.turnsAnalyzed, 3);
+    const retries = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'retries',
+    );
+    assert.equal(retries.refused, true);
+    assert.equal(retries.analyzed, 0);
+    const compaction = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'compaction',
+    );
+    assert.equal(compaction.refused, false);
+    assert.equal(compaction.analyzed, 3);
+  });
 });
