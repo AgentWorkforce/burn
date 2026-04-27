@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-04-27
+
+### Changed
+
+- **`hasMinimumFidelity` and `summarizeFidelity` are now wired into `burn compare`** ([#95](https://github.com/AgentWorkforce/burn/issues/95)). No API change in `@relayburn/analyze` itself — this entry just records the consumer-side adoption of the helpers shipped in 0.14.0 ([#41](https://github.com/AgentWorkforce/burn/issues/41)). See `@relayburn/cli` for the CLI surface (`--fidelity`, `--include-partial`, the new JSON `fidelity` block, and the "excluded N turns" coverage note).
+
+## [0.33.0] - 2026-04-27
+
 ### Added
 
 - `planUsageFromArchive(plan, { pricing, db, now })` ([#91](https://github.com/AgentWorkforce/burn/issues/91)) — computes `PlanUsage` for a plan via one `SUM(...) GROUP BY (source, model)` query against the archive's `turns` table instead of a full ledger scan. Returns the same shape as `computePlanUsage` so callers can swap paths cleanly. Reuses `costForTurn`'s source-aware reasoning override, so Codex `output_tokens` is not double-billed against `usage.reasoning`.

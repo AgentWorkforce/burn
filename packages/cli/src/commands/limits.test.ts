@@ -1,12 +1,15 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
+import type { Fidelity } from '@relayburn/reader';
 import { emptyFidelitySummary } from '@relayburn/analyze';
 
 import {
+  deriveForecastFidelity,
   makeCachingFetcher,
   runLimits,
   type ForecastInput,
+  type ForecastResult,
   type LimitsDeps,
   type UsageResponse,
 } from './limits.js';
@@ -46,6 +49,49 @@ function fakeNow(): Date {
   return new Date(FIXED_NOW);
 }
 
+const FULL_FIDELITY: Fidelity = {
+  granularity: 'per-turn',
+  class: 'full',
+  coverage: {
+    hasInputTokens: true,
+    hasOutputTokens: true,
+    hasReasoningTokens: true,
+    hasCacheReadTokens: true,
+    hasCacheCreateTokens: true,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: true,
+    hasRawContent: true,
+  },
+};
+
+const PARTIAL_FIDELITY: Fidelity = {
+  granularity: 'per-turn',
+  class: 'partial',
+  coverage: {
+    hasInputTokens: false,
+    hasOutputTokens: false,
+    hasReasoningTokens: false,
+    hasCacheReadTokens: false,
+    hasCacheCreateTokens: false,
+    hasToolCalls: true,
+    hasToolResultEvents: false,
+    hasSessionRelationships: false,
+    hasRawContent: false,
+  },
+};
+
+// Wrap a `ForecastInput` in a high-confidence `ForecastResult` so existing
+// tests (which only care about the numeric forecast) get a benign fidelity
+// block by default. Tests that exercise low-confidence behavior pass an
+// explicit `ForecastResult` instead.
+function highConfidence(input: ForecastInput): ForecastResult {
+  return {
+    input,
+    fidelity: deriveForecastFidelity([{ fidelity: FULL_FIDELITY }]),
+  };
+}
+
 function noTokenDeps(): LimitsDeps {
   return {
     loadToken: async () => null,
@@ -61,7 +107,7 @@ function tokenDeps(usage: UsageResponse, forecast: ForecastInput | null = null):
     loadToken: async () => 'fake-token',
     fetchUsage: async () => usage,
     now: fakeNow,
-    loadForecast: async () => forecast,
+    loadForecast: async () => (forecast ? highConfidence(forecast) : null),
     loadPlanStatuses: async () => [],
   };
 }
@@ -152,7 +198,7 @@ describe('burn limits', () => {
         throw new Error('should not be called when --no-api');
       },
       now: fakeNow,
-      loadForecast: async () => forecast,
+      loadForecast: async () => highConfidence(forecast),
     };
     const { result, stdout } = await captureStdout(() =>
       runLimits(args({ 'no-api': true }), deps),
@@ -333,6 +379,161 @@ describe('burn limits', () => {
     assert.equal(parsed.plans[0].id, 'claude-pro');
     assert.equal(parsed.plans[0].budgetUsd, 20);
     assert.equal(parsed.plans[0].limitedData, false);
+  });
+
+  it('high-confidence forecast (all full) renders no fidelity notice', async () => {
+    // Acceptance criteria #105: full-fidelity windows show no notice.
+    const usage: UsageResponse = {
+      five_hour: { percent_used: 40, reset_at: '2026-04-24T14:00:00.000Z' },
+    };
+    const forecast: ForecastInput = {
+      tokensSoFar: 600_000,
+      elapsedMs: 2 * 60 * 60 * 1000,
+      remainingMs: 2 * 60 * 60 * 1000,
+    };
+    const result: ForecastResult = {
+      input: forecast,
+      fidelity: deriveForecastFidelity([
+        { fidelity: FULL_FIDELITY },
+        { fidelity: FULL_FIDELITY },
+        { fidelity: FULL_FIDELITY },
+      ]),
+    };
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => usage,
+      now: fakeNow,
+      loadForecast: async () => result,
+      loadPlanStatuses: async () => [],
+    };
+    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    assert.match(stdout, /burn rate/);
+    assert.doesNotMatch(stdout, /low-confidence/);
+  });
+
+  it('low-confidence forecast (one partial turn) appends a notice without refusing the projection', async () => {
+    // Acceptance criteria #105: rendered output shows a low-confidence notice
+    // when any contributing turn lacks per-turn token coverage; the forecast
+    // number itself is unchanged (still rendered).
+    const usage: UsageResponse = {
+      five_hour: { percent_used: 40, reset_at: '2026-04-24T14:00:00.000Z' },
+    };
+    const forecast: ForecastInput = {
+      tokensSoFar: 600_000,
+      elapsedMs: 2 * 60 * 60 * 1000,
+      remainingMs: 2 * 60 * 60 * 1000,
+    };
+    const result: ForecastResult = {
+      input: forecast,
+      fidelity: deriveForecastFidelity([
+        { fidelity: FULL_FIDELITY },
+        { fidelity: FULL_FIDELITY },
+        { fidelity: PARTIAL_FIDELITY },
+      ]),
+    };
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => usage,
+      now: fakeNow,
+      loadForecast: async () => result,
+      loadPlanStatuses: async () => [],
+    };
+    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    // Forecast is still rendered with both burn rate and projection.
+    assert.match(stdout, /burn rate 5\.0k tok\/min/);
+    assert.match(stdout, /projected 80% at reset/);
+    // And a low-confidence notice is appended naming the count.
+    assert.match(
+      stdout,
+      /forecast: low-confidence \(1 of 3 contributing turns lack per-turn token data\)/,
+    );
+  });
+
+  it('--json forecast block carries a fidelity sub-object with confidence + summary', async () => {
+    // Acceptance criteria #105: --json emits a fidelity block with confidence
+    // and the underlying FidelitySummary.
+    const usage: UsageResponse = {
+      five_hour: { percent_used: 40, reset_at: '2026-04-24T14:00:00.000Z' },
+    };
+    const forecast: ForecastInput = {
+      tokensSoFar: 600_000,
+      elapsedMs: 2 * 60 * 60 * 1000,
+      remainingMs: 2 * 60 * 60 * 1000,
+    };
+    const result: ForecastResult = {
+      input: forecast,
+      fidelity: deriveForecastFidelity([
+        { fidelity: FULL_FIDELITY },
+        { fidelity: PARTIAL_FIDELITY },
+      ]),
+    };
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => usage,
+      now: fakeNow,
+      loadForecast: async () => result,
+      loadPlanStatuses: async () => [],
+    };
+    const { stdout } = await captureStdout(() => runLimits(args({ json: true }), deps));
+    const parsed = JSON.parse(stdout);
+    assert.ok(parsed.forecast.fidelity, 'forecast.fidelity present');
+    assert.equal(parsed.forecast.fidelity.confidence, 'low');
+    assert.equal(parsed.forecast.fidelity.summary.total, 2);
+    assert.equal(parsed.forecast.fidelity.summary.byClass.full, 1);
+    assert.equal(parsed.forecast.fidelity.summary.byClass.partial, 1);
+    assert.equal(parsed.forecast.fidelity.summary.unknown, 0);
+  });
+
+  it('--json forecast fidelity reports high confidence when every turn is full', async () => {
+    const usage: UsageResponse = {
+      five_hour: { percent_used: 40, reset_at: '2026-04-24T14:00:00.000Z' },
+    };
+    const forecast: ForecastInput = {
+      tokensSoFar: 600_000,
+      elapsedMs: 2 * 60 * 60 * 1000,
+      remainingMs: 2 * 60 * 60 * 1000,
+    };
+    const { stdout } = await captureStdout(() =>
+      runLimits(args({ json: true }), tokenDeps(usage, forecast)),
+    );
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.forecast.fidelity.confidence, 'high');
+    assert.equal(parsed.forecast.fidelity.summary.total, 1);
+    assert.equal(parsed.forecast.fidelity.summary.byClass.full, 1);
+  });
+
+  it('--watch re-evaluates confidence each tick (low → high as full turns arrive)', async () => {
+    // Acceptance criteria #105: --watch re-evaluates confidence on each tick.
+    // We exercise renderOnce indirectly by toggling the loadForecast result
+    // between calls and checking that runLimits picks up the change. (We
+    // don't actually run the watch loop here — the loop just calls
+    // renderOnce repeatedly, which is what we test below.)
+    const usage: UsageResponse = {
+      five_hour: { percent_used: 40, reset_at: '2026-04-24T14:00:00.000Z' },
+    };
+    const forecastInput: ForecastInput = {
+      tokensSoFar: 600_000,
+      elapsedMs: 2 * 60 * 60 * 1000,
+      remainingMs: 2 * 60 * 60 * 1000,
+    };
+    let tick = 0;
+    const deps: LimitsDeps = {
+      loadToken: async () => 'tok',
+      fetchUsage: async () => usage,
+      now: fakeNow,
+      loadForecast: async () => {
+        const turns =
+          tick++ === 0
+            ? [{ fidelity: FULL_FIDELITY }, { fidelity: PARTIAL_FIDELITY }]
+            : [{ fidelity: FULL_FIDELITY }, { fidelity: FULL_FIDELITY }];
+        return { input: forecastInput, fidelity: deriveForecastFidelity(turns) };
+      },
+      loadPlanStatuses: async () => [],
+    };
+    const { stdout: first } = await captureStdout(() => runLimits(args(), deps));
+    assert.match(first, /low-confidence/);
+    const { stdout: second } = await captureStdout(() => runLimits(args(), deps));
+    assert.doesNotMatch(second, /low-confidence/);
   });
 
   it('renders very-low projected % without double-normalizing back to 0..1', async () => {
