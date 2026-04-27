@@ -1,13 +1,19 @@
 import {
   BUILTIN_PRESETS,
+  buildArchive,
   findPreset,
   loadPlans,
+  openArchive,
   plansPath,
   queryAll,
   savePlans,
 } from '@relayburn/ledger';
 import type { Plan, PlanProvider } from '@relayburn/ledger';
-import { computePlanUsage, loadPricing } from '@relayburn/analyze';
+import {
+  computePlanUsage,
+  loadPricing,
+  planUsageFromArchive,
+} from '@relayburn/analyze';
 import type { PlanUsage } from '@relayburn/analyze';
 
 import type { ParsedArgs } from '../args.js';
@@ -58,7 +64,7 @@ export async function runPlans(args: ParsedArgs): Promise<number> {
 async function runList(args: ParsedArgs): Promise<number> {
   const json = args.flags['json'] === true;
   const plans = await loadPlans();
-  const statuses = await statusForPlans(plans);
+  const statuses = await statusForPlans(plans, { useArchive: shouldUseArchive(args) });
 
   if (json) {
     process.stdout.write(JSON.stringify({ plans: statuses }, null, 2) + '\n');
@@ -236,14 +242,48 @@ export interface PlanStatus {
   usage: PlanUsage;
 }
 
+export interface StatusForPlansOptions {
+  /**
+   * When true, aggregate spend with one SQL query per plan against the
+   * archive (`archive.sqlite`). When false (default), use the legacy
+   * `queryAll()` + in-memory reduce path. Defaults to `false` so callers
+   * have to opt in explicitly: `burn plans` wires this to `shouldUseArchive`
+   * (the `--no-archive` flag + `RELAYBURN_ARCHIVE` env var); `burn limits`
+   * stays on the legacy path until it's migrated separately. See #91.
+   */
+  useArchive?: boolean;
+}
+
 // Shared by `burn plans` (list view) and `burn limits` (composite view) so
 // both surfaces show identical numbers.
-export async function statusForPlans(plans: Plan[]): Promise<PlanStatus[]> {
+export async function statusForPlans(
+  plans: Plan[],
+  opts: StatusForPlansOptions = {},
+): Promise<PlanStatus[]> {
   if (plans.length === 0) return [];
   await ingestAll();
   const pricing = await loadPricing();
-  // Pull the widest cycle window across plans so we only walk the ledger
-  // once. Cheaper than per-plan queryAll for users with several plans.
+  const useArchive = opts.useArchive ?? false;
+
+  if (useArchive) {
+    // Materialize the ledger tail into the archive once before any plan
+    // queries so `SELECT SUM(...) FROM turns` sees every turn the legacy
+    // `queryAll()` path would have. Cheap when up to date (idempotent).
+    await buildArchive();
+    const db = await openArchive();
+    try {
+      const now = new Date();
+      return plans.map((plan) => ({
+        usage: planUsageFromArchive(plan, { pricing, db, now }),
+      }));
+    } finally {
+      db.close();
+    }
+  }
+
+  // Fallback: in-memory reduce. Walk the ledger once across the widest cycle
+  // window so we still beat per-plan re-scanning when several plans share a
+  // common cycle.
   const oldestStart = plans
     .map((p) => {
       const usageStub = computePlanUsage(p, [], { pricing, now: new Date() });
@@ -253,6 +293,18 @@ export async function statusForPlans(plans: Plan[]): Promise<PlanStatus[]> {
   const since = new Date(oldestStart).toISOString();
   const turns = await queryAll({ since });
   return plans.map((plan) => ({ usage: computePlanUsage(plan, turns, { pricing }) }));
+}
+
+/**
+ * `--no-archive` flag (or `RELAYBURN_ARCHIVE=0`) opts back into the legacy
+ * `queryAll()` reduce path. Kept while we shake out the archive migration —
+ * see issue #91 / #78.
+ */
+function shouldUseArchive(args: ParsedArgs): boolean {
+  if (args.flags['no-archive'] === true) return false;
+  const env = process.env['RELAYBURN_ARCHIVE'];
+  if (env === '0' || env === 'false') return false;
+  return true;
 }
 
 function isProvider(s: string): s is PlanProvider {

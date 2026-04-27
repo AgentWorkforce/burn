@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`burn plans` (list view) reads spend from the archive** ([#91](https://github.com/AgentWorkforce/burn/issues/91)). The list path now issues one `SUM(...) GROUP BY (source, model)` aggregate per plan against `archive.sqlite` instead of walking the full ledger once per plan. Output is byte-identical to the legacy `queryAll()` reduce path on the parity fixture (text and `--json`); `limitedData` flagging, reset-day boundaries, multi-plan ordering, and built-in presets all carry over. Pass `--no-archive` (or set `RELAYBURN_ARCHIVE=0`) to opt back into the in-memory reduce while the migration shakes out.
+
 ## [0.31.0] - 2026-04-27
 
 ### Changed

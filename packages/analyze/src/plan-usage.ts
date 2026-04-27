@@ -1,5 +1,7 @@
-import type { Plan } from '@relayburn/ledger';
-import type { TurnRecord } from '@relayburn/reader';
+import type { DatabaseSync } from 'node:sqlite';
+
+import type { Plan, PlanProvider } from '@relayburn/ledger';
+import type { SourceKind, TurnRecord } from '@relayburn/reader';
 
 import { costForTurn } from './cost.js';
 import type { PricingTable } from './pricing.js';
@@ -156,4 +158,172 @@ function matchesProvider(provider: Plan['provider'], turn: TurnRecord): boolean 
       // labelling their plan as `custom`.
       return true;
   }
+}
+
+export interface ComputePlanUsageFromArchiveOptions {
+  pricing: PricingTable;
+  /** Open archive handle. Caller owns the lifecycle. */
+  db: DatabaseSync;
+  now?: Date;
+}
+
+interface BucketRow {
+  source: string;
+  model: string;
+  input: number | bigint;
+  output: number | bigint;
+  reasoning: number | bigint;
+  cache_read: number | bigint;
+  cache_5m: number | bigint;
+  cache_1h: number | bigint;
+}
+
+/**
+ * Compute `PlanUsage` for `plan` against the archive's `turns` table — one SQL
+ * aggregate per call instead of a full ledger scan. Returns the same shape as
+ * `computePlanUsage` so callers can treat the two interchangeably.
+ *
+ * The SQL groups by `(source, model)` because cost derivation needs both: the
+ * per-source `reasoningModeForSource` override (Codex bills reasoning inside
+ * `output_tokens`) and the per-model pricing rate live at different join
+ * points and we want them composed exactly the way `costForTurn` would have.
+ *
+ * `cycleStart` / `cycleEnd` come from the same `cycleBounds` helper as the
+ * in-memory path, so reset-day boundaries match byte-for-byte.
+ */
+export function planUsageFromArchive(
+  plan: Plan,
+  opts: ComputePlanUsageFromArchiveOptions,
+): PlanUsage {
+  const now = opts.now ?? new Date();
+  const { cycleStart, cycleEnd } = cycleBounds(plan.resetDay, now);
+  const cycleStartIso = cycleStart.toISOString();
+  const cycleEndIso = cycleEnd.toISOString();
+  const nowMs = now.getTime();
+  const cycleStartMs = cycleStart.getTime();
+  const cycleEndMs = cycleEnd.getTime();
+
+  const sources = providerSources(plan.provider);
+  // Matches `matchesProvider`'s "no rows" outcome: a provider whose source
+  // list is empty (e.g. `cursor`, where the synthetic source is not in
+  // `SourceKind`) should produce $0 spend without issuing a query whose
+  // `IN ()` would be a SQL syntax error in some dialects.
+  const rows: BucketRow[] = sources === null
+    ? runQuery(opts.db, cycleStartIso, cycleEndIso, undefined)
+    : sources.length === 0
+      ? []
+      : runQuery(opts.db, cycleStartIso, cycleEndIso, sources);
+
+  let spent = 0;
+  for (const row of rows) {
+    // Reuse `costForTurn`'s source-aware reasoning override by going through
+    // `costForUsage` with an explicit override. Keeps Codex `output_tokens`
+    // from being double-billed against `usage.reasoning`.
+    const synthetic: TurnRecord = {
+      v: 1,
+      source: row.source as SourceKind,
+      sessionId: '',
+      messageId: '',
+      turnIndex: 0,
+      ts: cycleStartIso,
+      model: row.model,
+      usage: {
+        input: Number(row.input),
+        output: Number(row.output),
+        reasoning: Number(row.reasoning),
+        cacheRead: Number(row.cache_read),
+        cacheCreate5m: Number(row.cache_5m),
+        cacheCreate1h: Number(row.cache_1h),
+      },
+      toolCalls: [],
+    };
+    const cost = costForTurn(synthetic, opts.pricing);
+    if (cost) spent += cost.total;
+  }
+
+  const elapsedMs = Math.max(0, nowMs - cycleStartMs);
+  const cycleMs = Math.max(1, cycleEndMs - cycleStartMs);
+  const daysElapsed = Math.floor(elapsedMs / MS_PER_DAY);
+  const daysInCycle = Math.max(1, Math.round(cycleMs / MS_PER_DAY));
+
+  const fractionElapsed = elapsedMs / cycleMs;
+  const projected = fractionElapsed > 0 ? spent / fractionElapsed : spent;
+
+  const overBudget = projected > plan.budgetUsd;
+
+  let runwayDays: number | null = null;
+  if (overBudget && elapsedMs > 0) {
+    const dailyRate = spent / (elapsedMs / MS_PER_DAY);
+    if (dailyRate > 0) {
+      const remaining = Math.max(0, plan.budgetUsd - spent);
+      runwayDays = Math.floor(remaining / dailyRate);
+    }
+  }
+
+  return {
+    plan,
+    cycleStart,
+    cycleEnd,
+    spentUsd: spent,
+    daysElapsed,
+    daysInCycle,
+    projectedEndOfCycleUsd: projected,
+    overBudget,
+    runwayDays,
+    resetAt: cycleEnd.toISOString(),
+    limitedData: daysElapsed < LIMITED_DATA_DAYS,
+  };
+}
+
+/**
+ * Translate a plan's provider into the `turns.source` values the SQL query
+ * should match. `null` means "every source" (custom plans). An empty array
+ * means "no source the ledger can produce" (cursor — see `matchesProvider`).
+ */
+function providerSources(provider: PlanProvider): SourceKind[] | null {
+  switch (provider) {
+    case 'claude':
+      return ['claude-code', 'anthropic-api'];
+    case 'cursor':
+      // Same rationale as `matchesProvider`: no `SourceKind` value matches
+      // 'cursor' so we never emit a query at all.
+      return [];
+    case 'custom':
+      return null;
+  }
+}
+
+function runQuery(
+  db: DatabaseSync,
+  cycleStartIso: string,
+  cycleEndIso: string,
+  sources: readonly SourceKind[] | undefined,
+): BucketRow[] {
+  // Use a half-open window `[start, end)` to match the in-memory path's
+  // `ts < cycleEndMs` boundary, so a turn timestamped exactly at the next
+  // cycle's start lands in the next cycle (not this one).
+  const baseSql = `
+    SELECT
+      source,
+      model,
+      COALESCE(SUM(input_tokens), 0)             AS input,
+      COALESCE(SUM(output_tokens), 0)            AS output,
+      COALESCE(SUM(reasoning_tokens), 0)         AS reasoning,
+      COALESCE(SUM(cache_read_tokens), 0)        AS cache_read,
+      COALESCE(SUM(cache_create_5m_tokens), 0)   AS cache_5m,
+      COALESCE(SUM(cache_create_1h_tokens), 0)   AS cache_1h
+    FROM turns
+    WHERE ts >= ? AND ts < ?`;
+  if (sources === undefined) {
+    const stmt = db.prepare(`${baseSql} GROUP BY source, model`);
+    return stmt.all(cycleStartIso, cycleEndIso) as unknown as BucketRow[];
+  }
+  // node:sqlite parameter binding doesn't expand arrays, so build the
+  // placeholders inline. `sources` is a closed enum (`SourceKind`) so this
+  // is not a SQL-injection vector.
+  const placeholders = sources.map(() => '?').join(', ');
+  const stmt = db.prepare(
+    `${baseSql} AND source IN (${placeholders}) GROUP BY source, model`,
+  );
+  return stmt.all(cycleStartIso, cycleEndIso, ...sources) as unknown as BucketRow[];
 }
