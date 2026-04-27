@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Execution-graph passthrough for Codex ingest** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `burn ingest` (and `burn codex`) now persist Codex `SessionRelationshipRecord`s and `ToolResultEventRecord`s the reader emits, alongside the existing turns / content lines, mirroring the Claude path landed in the previous release. The Codex cursor (`~/.relayburn/cursors.json`) gains `rootSessionEmitted`, `nextEventIndex`, and `toolResultCounters` so dedup of execution-graph rows survives across `burn` invocations even when the writer-side index isn't warm.
 
+### Changed
+
+- **`burn compare` now reads from the SQLite archive by default** ([#88](https://github.com/AgentWorkforce/burn/issues/88)). The compare table is built from a single grouped `SELECT … GROUP BY model, activity, source` over `archive.sqlite` plus a tiny per-cell median-retries follow-up, instead of streaming every turn through `queryAll()` + an in-memory reduce. Output (text, CSV, `--json`) is byte-identical to the legacy path for the parity fixture; all existing flags (`--models`, `--since`, `--project`, `--session`, `--workflow`, `--agent`, `--min-sample`) work through the SQL path. New `--no-archive` flag (also honored via `RELAYBURN_ARCHIVE=0`) preserves the in-memory path as a parity-validation / safety-net fallback.
+
 ## [0.25.0] - 2026-04-26
 
 ### Added

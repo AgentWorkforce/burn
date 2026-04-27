@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS turns (
   parent_tool_use_id    TEXT,
   subagent_type         TEXT,
   -- Free-form subagent description (Claude reader populates this from the
-  -- spawn payload). Persisted so `burn summary --subagent-tree --json`
+  -- spawn payload). Persisted so 'burn summary --subagent-tree --json'
   -- preserves SubagentTreeNode.description on archive-backed reads.
   subagent_description  TEXT,
   input_tokens          INTEGER NOT NULL DEFAULT 0,

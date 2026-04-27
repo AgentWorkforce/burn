@@ -4,6 +4,8 @@ export { costForTurn, costForUsage, sumCosts } from './cost.js';
 export type { CostBreakdown, CostForUsageOptions } from './cost.js';
 export { buildCompareTable, DEFAULT_MIN_SAMPLE } from './compare.js';
 export type { CompareCategory, CompareCell, CompareOptions, CompareTable } from './compare.js';
+export { compareFromArchive } from './compare-archive.js';
+export type { CompareFromArchiveResult } from './compare-archive.js';
 export {
   attributeWaste,
   aggregateByFile,
