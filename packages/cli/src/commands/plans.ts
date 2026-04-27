@@ -244,12 +244,12 @@ export interface PlanStatus {
 
 export interface StatusForPlansOptions {
   /**
-   * When true (default), aggregate spend with one SQL query per plan against
-   * the archive (`archive.sqlite`). When false, fall back to the legacy
-   * `queryAll()` + in-memory reduce path. The fallback is kept so users can
-   * compare numbers if the archive is suspected of staleness, and so the
-   * `RELAYBURN_ARCHIVE=0` env knob (or `--no-archive` flag) cleanly toggles
-   * the path. See issue #91.
+   * When true, aggregate spend with one SQL query per plan against the
+   * archive (`archive.sqlite`). When false (default), use the legacy
+   * `queryAll()` + in-memory reduce path. Defaults to `false` so callers
+   * have to opt in explicitly: `burn plans` wires this to `shouldUseArchive`
+   * (the `--no-archive` flag + `RELAYBURN_ARCHIVE` env var); `burn limits`
+   * stays on the legacy path until it's migrated separately. See #91.
    */
   useArchive?: boolean;
 }
@@ -263,7 +263,7 @@ export async function statusForPlans(
   if (plans.length === 0) return [];
   await ingestAll();
   const pricing = await loadPricing();
-  const useArchive = opts.useArchive ?? true;
+  const useArchive = opts.useArchive ?? false;
 
   if (useArchive) {
     // Materialize the ledger tail into the archive once before any plan
