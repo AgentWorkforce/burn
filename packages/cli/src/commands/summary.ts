@@ -21,7 +21,7 @@ import {
   type Query,
 } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
-import type { ContentRecord } from '@relayburn/reader';
+import type { ContentRecord, Coverage } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -69,8 +69,11 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (args.flags['json'] === true) {
     // JSON contract: numeric usage fields are always numbers, but the
     // companion `fidelity` block is the only honest answer to "are these
-    // zeros real?". Programmatic consumers should consult `missingCoverage`
-    // before trusting any aggregate.
+    // zeros real?". Programmatic consumers should consult `summary` (the
+    // slice-wide rollup, same shape compare/waste/limits/plans emit) and
+    // `perCell` (per-(model|provider) per-field known/missing counts) before
+    // trusting any aggregate.
+    const perCell = buildPerCellFidelity(rows, byProvider ? 'provider' : 'model');
     const payload = {
       ingest: {
         ingestedSessions: ingestReport.ingestedSessions,
@@ -95,7 +98,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
               cost: r.cost,
             })),
           }),
-      fidelity,
+      fidelity: { summary: fidelity, perCell },
     };
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return 0;
@@ -118,15 +121,26 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
 
   const header = [byProvider ? 'provider' : 'model', 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
   const dataRows: string[][] = [header];
+  let anyPartialCell = false;
   for (const r of rows) {
+    const cacheCreateCov = mergeCoverage(r.coverage.cacheCreate);
+    if (
+      cellIsPartial(r.coverage.input) ||
+      cellIsPartial(r.coverage.output) ||
+      cellIsPartial(r.coverage.reasoning) ||
+      cellIsPartial(r.coverage.cacheRead) ||
+      cellIsPartial(cacheCreateCov)
+    ) {
+      anyPartialCell = true;
+    }
     dataRows.push([
       r.label,
       formatInt(r.turns),
-      formatInt(r.usage.input),
-      formatInt(r.usage.output),
-      formatInt(r.usage.reasoning),
-      formatInt(r.usage.cacheRead),
-      formatInt(r.usage.cacheCreate5m + r.usage.cacheCreate1h),
+      coverageCell(r.usage.input, r.coverage.input),
+      coverageCell(r.usage.output, r.coverage.output),
+      coverageCell(r.usage.reasoning, r.coverage.reasoning),
+      coverageCell(r.usage.cacheRead, r.coverage.cacheRead),
+      coverageCell(r.usage.cacheCreate5m + r.usage.cacheCreate1h, cacheCreateCov),
       formatUsd(r.cost.total),
     ]);
   }
@@ -137,6 +151,14 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / reasoning ${formatUsd(totalCost.reasoning)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
   );
   lines.push('');
+
+  // Footer marker explainer: only print when at least one cell carries `*`
+  // — the all-full case is the common one and we don't want to train people
+  // to ignore the marker.
+  if (anyPartialCell) {
+    lines.push(formatPartialFooter(rows));
+    lines.push('');
+  }
 
   // Only print a fidelity line when *something* is below full — the common
   // all-Claude case is full fidelity for every turn, and noise there would
@@ -218,11 +240,48 @@ function weightedOneShotRate(q: QualityResult): number | undefined {
   return edit > 0 ? oneShot / edit : undefined;
 }
 
+// Per-token-field coverage counters maintained alongside each aggregate row.
+// `known` is the number of contributing turns whose source actually reported
+// the field; `missing` counts turns whose source omitted it (the matching
+// `Coverage` flag was false). Records emitted before #41 (no `fidelity` at
+// all) are treated as best-effort full and counted as `known` — the same
+// backward-compat stance taken by `summarizeFidelity` / `hasMinimumFidelity`.
+interface FieldCoverage {
+  known: number;
+  missing: number;
+}
+
+type CoverageField =
+  | 'input'
+  | 'output'
+  | 'reasoning'
+  | 'cacheRead'
+  | 'cacheCreate';
+
+type RowCoverage = Record<CoverageField, FieldCoverage>;
+
+const COVERAGE_FIELDS: ReadonlyArray<CoverageField> = [
+  'input',
+  'output',
+  'reasoning',
+  'cacheRead',
+  'cacheCreate',
+];
+
+const COVERAGE_FLAG: Record<CoverageField, keyof Coverage> = {
+  input: 'hasInputTokens',
+  output: 'hasOutputTokens',
+  reasoning: 'hasReasoningTokens',
+  cacheRead: 'hasCacheReadTokens',
+  cacheCreate: 'hasCacheCreateTokens',
+};
+
 interface ModelRow {
   label: string;
   turns: number;
   usage: EnrichedTurn['usage'];
   cost: CostBreakdown;
+  coverage: RowCoverage;
 }
 
 function renderSubagentTreeMode(
@@ -331,6 +390,94 @@ function renderNodeLine(node: SubagentTreeNode, indent: string): string {
   return `${indent}${label}${model}  ${cost}  ${turns}`;
 }
 
+// Render one token-field cell. Three cases:
+//   - every contributing turn reported the field → numeric value, no marker
+//   - some turns reported, some didn't           → numeric value + `*`
+//   - no turn reported                           → `—` (never `0`, which
+//     would falsely claim a real zero from the source)
+// `cacheCreate` callers pre-merge the 5m/1h split via `mergeCoverage`; they
+// share a single coverage flag (`hasCacheCreateTokens`).
+function coverageCell(value: number, c: FieldCoverage): string {
+  if (c.known === 0 && c.missing > 0) return DASH;
+  if (c.known > 0 && c.missing > 0) return `${formatInt(value)}${PARTIAL_MARK}`;
+  return formatInt(value);
+}
+
+function cellIsPartial(c: FieldCoverage): boolean {
+  return c.known > 0 && c.missing > 0;
+}
+
+// `cacheCreate5m` and `cacheCreate1h` collapse into one ledger column and one
+// `Coverage` flag (`hasCacheCreateTokens`), so the per-cell counter is shared
+// between them. This helper just returns that single counter — the second
+// argument is intentional dead-code symmetry to make the call sites obvious.
+function mergeCoverage(cacheCreate: FieldCoverage): FieldCoverage {
+  return cacheCreate;
+}
+
+// Footer note explaining the `*` marker. Sums `known` / `missing` across every
+// row's input field as a proxy for "of M turns". Input is the canonical token
+// field — if a record has any per-turn coverage at all, it has input — so
+// treating its counters as the denominator gives an honest "N of M" for the
+// partial-coverage case without having to pick an arbitrary field.
+function formatPartialFooter(rows: ReadonlyArray<ModelRow>): string {
+  let total = 0;
+  let missing = 0;
+  for (const r of rows) {
+    total += r.coverage.input.known + r.coverage.input.missing;
+    missing += r.coverage.input.missing;
+  }
+  // Sum across every coverage field — input alone may not capture the
+  // "missing" turns when the gap is actually elsewhere (e.g. reasoning-only
+  // collectors that report input but not output). Take the largest missing
+  // count across fields so the footer reflects the worst-covered axis.
+  for (const r of rows) {
+    for (const f of COVERAGE_FIELDS) {
+      if (r.coverage[f].missing > missing) missing = r.coverage[f].missing;
+    }
+  }
+  return `${PARTIAL_MARK} partial coverage: ${formatInt(missing)} of ${formatInt(total)} turns omitted per-turn token data`;
+}
+
+interface PerCellFidelityEntry {
+  label: string;
+  partial: boolean;
+  fields: Record<CoverageField, FieldCoverage>;
+}
+
+interface PerCellFidelityBlock {
+  groupBy: 'model' | 'provider';
+  cells: PerCellFidelityEntry[];
+}
+
+// Per-(model|provider) per-field coverage block for `--json`. Shape mirrors
+// the pattern compare/waste use: a `summary` (slice-wide rollup) plus an
+// optional `perCell` payload programmatic callers can render without
+// re-walking the ledger. Empty `cells` array (no rows in scope) is a valid
+// payload — callers should treat it the same as "every cell is full".
+function buildPerCellFidelity(
+  rows: ReadonlyArray<ModelRow>,
+  groupBy: 'model' | 'provider',
+): PerCellFidelityBlock {
+  const cells: PerCellFidelityEntry[] = rows.map((r) => {
+    const cacheCreate = mergeCoverage(r.coverage.cacheCreate);
+    const fields: Record<CoverageField, FieldCoverage> = {
+      input: r.coverage.input,
+      output: r.coverage.output,
+      reasoning: r.coverage.reasoning,
+      cacheRead: r.coverage.cacheRead,
+      cacheCreate,
+    };
+    const partial = COVERAGE_FIELDS.some((f) => cellIsPartial(fields[f])) ||
+      COVERAGE_FIELDS.some((f) => fields[f].known === 0 && fields[f].missing > 0);
+    return { label: r.label, partial, fields };
+  });
+  return { groupBy, cells };
+}
+
+const PARTIAL_MARK = '*';
+const DASH = '—';
+
 function renderFidelityNotice(f: FidelitySummary): string | undefined {
   // Returns undefined when every classified turn is full fidelity *and* no
   // unknown turns exist — i.e. every number above is trustworthy. Otherwise
@@ -418,6 +565,7 @@ function aggregateTurns(
     row.usage.cacheRead += t.usage.cacheRead;
     row.usage.cacheCreate5m += t.usage.cacheCreate5m;
     row.usage.cacheCreate1h += t.usage.cacheCreate1h;
+    accumulateCoverage(row.coverage, t.fidelity?.coverage);
     const c = costForTurn(t, pricing);
     if (c) {
       row.cost.total += c.total;
@@ -431,11 +579,30 @@ function aggregateTurns(
   return [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total);
 }
 
+// A turn whose record predates #41 has no `coverage` map; the long-standing
+// stance is to treat that as best-effort full fidelity. So if `coverage` is
+// undefined every field counts as `known`. When it is present, a field is
+// `missing` exactly when its flag is false — same predicate `summarizeFidelity`
+// uses against `missingCoverage`.
+function accumulateCoverage(target: RowCoverage, coverage: Coverage | undefined): void {
+  for (const f of COVERAGE_FIELDS) {
+    if (!coverage || coverage[COVERAGE_FLAG[f]]) target[f].known++;
+    else target[f].missing++;
+  }
+}
+
 function emptyRow(label: string): ModelRow {
   return {
     label,
     turns: 0,
     usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
     cost: { model: label, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate: 0 },
+    coverage: {
+      input: { known: 0, missing: 0 },
+      output: { known: 0, missing: 0 },
+      reasoning: { known: 0, missing: 0 },
+      cacheRead: { known: 0, missing: 0 },
+      cacheCreate: { known: 0, missing: 0 },
+    },
   };
 }
