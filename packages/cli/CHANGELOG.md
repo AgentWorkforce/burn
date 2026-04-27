@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`burn mcp-server` runs an incremental `buildArchive()` at startup** ([#97](https://github.com/AgentWorkforce/burn/issues/97)) so the first `burn__sessionCost` / `burn__currentBlock` tool call hits the SQL archive instead of re-walking the JSONL ledger. The build is idempotent — a no-op when nothing has changed since the last build — and a build failure logs to stderr but never refuses to serve. Tool fallbacks to `queryAll` are wired through the new `onLog` hook so any persistent archive breakage is visible in the MCP host's stderr stream.
 
+## [0.29.0] - 2026-04-26
+
+### Added
+
+- **Complete Codex/OpenCode parity for spawn attribution and live ingest** (#63). `burn codex` and `burn opencode` now write v1 pending-stamp manifests under `$RELAYBURN_HOME/pending-stamps/` before spawning, resolve them before the first matching turn is appended, and run a foreground watch loop for the child lifetime so sessions ingest incrementally while live. Adds `burn watch [--interval <ms>] [--once]` for passive foreground ingest of Claude, Codex, and OpenCode stores; `--daemon` is explicitly unsupported for now.
+
+### Changed
+
+- Codex session-id discovery falls back to the first JSONL `session_meta.payload.id` when the rollout filename does not end in a UUID.
+
+## [0.28.0] - 2026-04-26
+
+### Added
+
+- **Synthetic provider filters and grouping** (#31). `burn summary`, `burn by-tool`, and `burn waste` accept `--provider <name>`; `burn summary --by-provider` groups query-time reattributed turns under provider labels such as `synthetic` without rewriting raw ledger model strings. Synthetic routing recognizes `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
+
+## [0.27.0] - 2026-04-26
+
+### Changed
+
+- **Persist user-turn block-size records during ingest** (#2). `burn ingest`, passive ingest, and the Claude/Codex/OpenCode wrappers now append parser-emitted `UserTurnRecord`s for all three harnesses. Codex passive cursors also carry the in-flight user-turn slot so resumed ingest can complete a bridge record across file-growth boundaries. `burn waste` and `burn diagnose` load these records and use them as the sized fallback when content sidecars are missing.
+
+## [0.26.0] - 2026-04-26
+
 ### Added
 
 - **Execution-graph passthrough for Codex ingest** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `burn ingest` (and `burn codex`) now persist Codex `SessionRelationshipRecord`s and `ToolResultEventRecord`s the reader emits, alongside the existing turns / content lines, mirroring the Claude path landed in the previous release. The Codex cursor (`~/.relayburn/cursors.json`) gains `rootSessionEmitted`, `nextEventIndex`, and `toolResultCounters` so dedup of execution-graph rows survives across `burn` invocations even when the writer-side index isn't warm.

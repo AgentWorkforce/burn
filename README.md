@@ -87,6 +87,16 @@ burn codex     [--tag k=v ...] [-- <codex args>]
 burn opencode  [--tag k=v ...] [-- <opencode args>]
 ```
 
+Codex and OpenCode do not expose Claude-style hooks or a pre-spawn session ID. Their wrappers write a v1 pending-stamp manifest under `$RELAYBURN_HOME/pending-stamps/` before spawning, then resolve it against the first matching session file before the first turn is appended. The wrappers also run burn's foreground watch loop for the child process lifetime, so long sessions become visible incrementally instead of only after exit. Abandoned pending manifests are cleaned up after 24 hours.
+
+For passive ingest without a wrapper, run:
+
+```
+burn watch [--interval <ms>]
+```
+
+`burn watch` scans Claude, Codex, and OpenCode stores in the foreground and uses the same cursor + dedup path as the reporting commands. `burn watch --daemon` is reserved but not implemented yet.
+
 ### Spawner env-var contract (workflow / agent attribution)
 
 For orchestrators that spawn many agent sessions, threading `--tag` through every wrapper invocation is awkward. All three wrappers also read a fixed set of `RELAYBURN_*` env vars and fold them into the stamp bag:
@@ -255,11 +265,17 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 ## CLI
 
 ```
-burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>]
-burn by-tool [--since 7d] [--project <path>] [--session <id>]
+burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--by-provider]
+burn by-tool [--since 7d] [--project <path>] [--session <id>] [--provider <p>]
+burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>]
 burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
 burn claude  [--tag k=v ...] [-- <claude args>]
+burn codex   [--tag k=v ...] [-- <codex args>]
+burn opencode [--tag k=v ...] [-- <opencode args>]
+burn watch   [--interval <ms>] [--once]
 ```
+
+Provider filters are applied at query time; raw ledger model strings are not rewritten. `burn summary --by-provider --provider synthetic` groups Synthetic-routed turns under provider `synthetic` while pricing against the normalized model id. Recognized Synthetic model patterns are `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
 
 ### `burn compare` — model comparison by observed activity
 

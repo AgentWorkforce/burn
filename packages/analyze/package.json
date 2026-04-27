@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/analyze",
-  "version": "0.25.0",
+  "version": "0.29.0",
   "description": "Cost and usage derivations for relayburn TurnRecords",
   "type": "module",
   "main": "./dist/index.js",

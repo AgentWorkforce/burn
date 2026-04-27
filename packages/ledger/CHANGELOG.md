@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-04-26
+
+### Added
+
+- **User-turn ledger lines** (#2). New append-only `user_turn` ledger records persist parser-emitted `UserTurnRecord`s alongside raw turns without rewriting or mutating them. The ledger now exposes `appendUserTurns()` / `queryUserTurns()`, `UserTurnLine` / `isUserTurnLine()`, and `userTurnIdHash()` keyed by `(source, sessionId, userUuid)` through the existing dedup index; `rebuildIndex()` rehydrates those ids after index loss.
+
+## [0.26.0] - 2026-04-26
+
 ### Added
 
 - **`queryTurnsFromArchive(query)`** ([#97](https://github.com/AgentWorkforce/burn/issues/97)). Reads `EnrichedTurn[]` directly from the materialized `archive.sqlite` instead of folding stamps over the JSONL ledger. Caller contract matches `queryAll(query)` — same `Query` filters (`since`, `until`, `sessionId`, `source`, `project`, `enrichment`), same `EnrichedTurn` shape — minus the per-turn fields the archive doesn't materialize today (`filesTouched`, `sessionPath`, `subagent.description`, `editPreHash` / `editPostHash`). Throws on archive open / query failure so callers (the MCP tool handlers in #97) can route to `queryAll` for a transparent fallback. Caller is responsible for cadence: the helper does not trigger an incremental `buildArchive()` itself.
