@@ -379,6 +379,9 @@ const ARCHIVE_TURNS_DDL = `
     cache_read_tokens       INTEGER NOT NULL DEFAULT 0,
     cache_create_5m_tokens  INTEGER NOT NULL DEFAULT 0,
     cache_create_1h_tokens  INTEGER NOT NULL DEFAULT 0,
+    attribution_fidelity    TEXT,
+    tokens_present          INTEGER,
+    cost_present            INTEGER,
     PRIMARY KEY (source, session_id, message_id)
   );
   CREATE INDEX idx_turns_ts ON turns(ts);

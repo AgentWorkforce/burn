@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 import type { Plan, PlanProvider } from '@relayburn/ledger';
-import type { SourceKind, TurnRecord } from '@relayburn/reader';
+import type { Coverage, Fidelity, FidelityClass, SourceKind, TurnRecord, UsageGranularity } from '@relayburn/reader';
+import { EMPTY_COVERAGE } from '@relayburn/reader';
 
 import { costForTurn } from './cost.js';
 import { emptyFidelitySummary, summarizeFidelity } from './fidelity.js';
@@ -320,6 +321,15 @@ export function planUsageFromArchive(
     }
   }
 
+  // Query per-turn fidelity data from the archive so `deriveFidelity` can
+  // annotate the cycle with the same confidence flag the in-memory path uses.
+  const fidelityRows = queryFidelityRows(opts.db, cycleStartIso, cycleEndIso, sources ?? undefined);
+  const contributing: Array<Pick<TurnRecord, 'fidelity'>> = fidelityRows.map((r) => {
+    const fidelity = synthesizeArchiveFidelity(r);
+    return fidelity ? { fidelity } : {};
+  });
+  const fidelity = deriveFidelity(contributing);
+
   return {
     plan,
     cycleStart,
@@ -332,6 +342,7 @@ export function planUsageFromArchive(
     runwayDays,
     resetAt: cycleEnd.toISOString(),
     limitedData: daysElapsed < LIMITED_DATA_DAYS,
+    fidelity,
   };
 }
 
@@ -386,4 +397,81 @@ function runQuery(
     `${baseSql} AND source IN (${placeholders}) GROUP BY source, model`,
   );
   return stmt.all(cycleStartIso, cycleEndIso, ...sources) as unknown as BucketRow[];
+}
+
+// ---------------------------------------------------------------------------
+// Archive fidelity helpers — mirrors the ledger's `synthesizeFidelity` logic
+// so the archive-backed `planUsageFromArchive` can feed `deriveFidelity` the
+// same per-turn fidelity shape the in-memory `computePlanUsage` produces.
+// ---------------------------------------------------------------------------
+
+interface FidelityRow {
+  attribution_fidelity: string | null;
+  tokens_present: number | bigint | null;
+  cost_present: number | bigint | null;
+}
+
+function queryFidelityRows(
+  db: DatabaseSync,
+  cycleStartIso: string,
+  cycleEndIso: string,
+  sources: readonly SourceKind[] | undefined,
+): FidelityRow[] {
+  const baseSql = `
+    SELECT attribution_fidelity, tokens_present, cost_present
+    FROM turns
+    WHERE ts >= ? AND ts < ?`;
+  if (sources === undefined) {
+    const stmt = db.prepare(baseSql);
+    return stmt.all(cycleStartIso, cycleEndIso) as unknown as FidelityRow[];
+  }
+  const placeholders = sources.map(() => '?').join(', ');
+  const stmt = db.prepare(`${baseSql} AND source IN (${placeholders})`);
+  return stmt.all(cycleStartIso, cycleEndIso, ...sources) as unknown as FidelityRow[];
+}
+
+function synthesizeArchiveFidelity(r: FidelityRow): Fidelity | undefined {
+  if (r.attribution_fidelity === null) return undefined;
+  const cls = r.attribution_fidelity as FidelityClass;
+  const tokensPresent = r.tokens_present !== null && Number(r.tokens_present) === 1;
+  const costPresent = r.cost_present !== null && Number(r.cost_present) === 1;
+  const granularity: UsageGranularity = costPresent ? 'cost-only' : 'per-turn';
+  const coverage = coverageForClass(cls, tokensPresent);
+  return { class: cls, granularity, coverage };
+}
+
+function coverageForClass(cls: FidelityClass, tokensPresent: boolean): Coverage {
+  switch (cls) {
+    case 'full':
+      return {
+        ...EMPTY_COVERAGE,
+        hasInputTokens: true,
+        hasOutputTokens: true,
+        hasReasoningTokens: true,
+        hasCacheReadTokens: true,
+        hasCacheCreateTokens: true,
+        hasToolCalls: true,
+        hasToolResultEvents: true,
+        hasSessionRelationships: true,
+        hasRawContent: true,
+      };
+    case 'usage-only':
+      return {
+        ...EMPTY_COVERAGE,
+        hasInputTokens: tokensPresent,
+        hasOutputTokens: tokensPresent,
+        hasCacheReadTokens: tokensPresent,
+        hasCacheCreateTokens: tokensPresent,
+      };
+    case 'partial':
+      return {
+        ...EMPTY_COVERAGE,
+        hasInputTokens: tokensPresent,
+        hasOutputTokens: tokensPresent,
+      };
+    case 'aggregate-only':
+    case 'cost-only':
+    default:
+      return { ...EMPTY_COVERAGE };
+  }
 }
