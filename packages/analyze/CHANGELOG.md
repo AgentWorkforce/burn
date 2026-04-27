@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `planUsageFromArchive(plan, { pricing, db, now })` ([#91](https://github.com/AgentWorkforce/burn/issues/91)) — computes `PlanUsage` for a plan via one `SUM(...) GROUP BY (source, model)` query against the archive's `turns` table instead of a full ledger scan. Returns the same shape as `computePlanUsage` so callers can swap paths cleanly. Reuses `costForTurn`'s source-aware reasoning override, so Codex `output_tokens` is not double-billed against `usage.reasoning`.
+- **`PlanUsage.fidelity` annotates per-cycle token-coverage confidence** ([#108](https://github.com/AgentWorkforce/burn/issues/108)). `computePlanUsage` now walks every contributing turn through `summarizeFidelity` and emits a `{ confidence: 'high' | 'low', summary }` block alongside the existing spend/projection fields. `confidence === 'high'` only when every turn in the cycle is `full` or `usage-only` with both per-turn input and output token coverage; otherwise `low`. Records with no `fidelity` field at all (older ledger writers) are treated as best-effort high, matching the codebase's existing backward-compat policy. Spend totals continue to include `partial` / `aggregate-only` / `cost-only` contributions — under-counting is worse than annotating low-confidence — so the cycle's `spentUsd` is the lower bound the consumer renders against the new flag. The `PlanUsageFidelity` type is exported for downstream consumers.
 
 ## [0.31.0] - 2026-04-27
 

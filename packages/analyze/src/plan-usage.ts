@@ -1,10 +1,26 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 import type { Plan, PlanProvider } from '@relayburn/ledger';
-import type { SourceKind, TurnRecord } from '@relayburn/reader';
+import type { Coverage, Fidelity, FidelityClass, SourceKind, TurnRecord, UsageGranularity } from '@relayburn/reader';
+import { EMPTY_COVERAGE } from '@relayburn/reader';
 
 import { costForTurn } from './cost.js';
+import { emptyFidelitySummary, summarizeFidelity } from './fidelity.js';
+import type { FidelitySummary } from './fidelity.js';
 import type { PricingTable } from './pricing.js';
+
+// Per-cycle confidence on the spent/projected totals. `high` when every
+// contributing turn supplies per-turn input + output token coverage (i.e.
+// `full` or `usage-only` with both axes present). Otherwise `low` — the cycle
+// includes at least one `partial` / `aggregate-only` / `cost-only` turn, so
+// the totals are a lower bound on actual spend. The accompanying `summary`
+// is the same `FidelitySummary` shape `summarizeFidelity` emits for any
+// other slice — kept here so JSON consumers can render exact counts without
+// re-walking turns.
+export interface PlanUsageFidelity {
+  confidence: 'high' | 'low';
+  summary: FidelitySummary;
+}
 
 export interface PlanUsage {
   plan: Plan;
@@ -29,6 +45,12 @@ export interface PlanUsage {
   // Renderers should mark these projections as "limited data" per #39's
   // acceptance criteria.
   limitedData: boolean;
+  // Token-coverage confidence over the contributing turns this cycle. See
+  // `PlanUsageFidelity`. When `confidence === 'low'`, `spentUsd` is a lower
+  // bound — at least one turn lacked per-turn input/output token data, so
+  // its priced contribution is missing or estimated. Renderers should
+  // surface this so a "looks under budget" plan isn't read as authoritative.
+  fidelity: PlanUsageFidelity;
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -51,11 +73,20 @@ export function computePlanUsage(
   const nowMs = now.getTime();
 
   let spent = 0;
+  // Like `burn limits`, `plans` is allowed to count partial / aggregate-only /
+  // cost-only contributions toward the cycle total — under-counting silently is
+  // worse than annotating low-confidence. We collect the contributing turns'
+  // fidelity blocks here so we can mark the whole cycle low-confidence below
+  // when any of them lacks per-turn input/output coverage.
+  const contributing: Array<Pick<TurnRecord, 'fidelity'>> = [];
   for (const t of turns) {
     if (!matchesProvider(plan.provider, t)) continue;
     const ts = Date.parse(t.ts);
     if (!Number.isFinite(ts)) continue;
     if (ts < cycleStartMs || ts >= cycleEndMs) continue;
+    // exactOptionalPropertyTypes refuses an explicit `undefined` for the
+    // optional `fidelity` field — only attach the property when present.
+    contributing.push(t.fidelity ? { fidelity: t.fidelity } : {});
     const cost = costForTurn(t, opts.pricing);
     if (cost) spent += cost.total;
   }
@@ -94,7 +125,37 @@ export function computePlanUsage(
     runwayDays,
     resetAt: cycleEnd.toISOString(),
     limitedData: daysElapsed < LIMITED_DATA_DAYS,
+    fidelity: deriveFidelity(contributing),
   };
+}
+
+// `confidence === 'high'` when every contributing turn carries per-turn
+// input + output token coverage — that is, `full` or `usage-only` with both
+// axes present. A turn with no `fidelity` field at all (older ledger writers,
+// pre-#41) is also treated as high; we have no signal to claim otherwise and
+// elsewhere the codebase treats unknown as best-effort full. Empty cycles
+// (no contributing turns) report high — there's nothing to be uncertain about.
+function deriveFidelity(
+  contributing: ReadonlyArray<Pick<TurnRecord, 'fidelity'>>,
+): PlanUsageFidelity {
+  if (contributing.length === 0) {
+    return { confidence: 'high', summary: emptyFidelitySummary() };
+  }
+  const summary = summarizeFidelity(contributing);
+  let confidence: 'high' | 'low' = 'high';
+  for (const t of contributing) {
+    const f = t.fidelity;
+    if (!f) continue; // unknown → treat as high, matches summarizeFidelity policy
+    if (f.class !== 'full' && f.class !== 'usage-only') {
+      confidence = 'low';
+      break;
+    }
+    if (!f.coverage.hasInputTokens || !f.coverage.hasOutputTokens) {
+      confidence = 'low';
+      break;
+    }
+  }
+  return { confidence, summary };
 }
 
 // Returns the [start, end) window for the cycle containing `now`. The
@@ -260,6 +321,17 @@ export function planUsageFromArchive(
     }
   }
 
+  // Query per-turn fidelity data from the archive so `deriveFidelity` can
+  // annotate the cycle with the same confidence flag the in-memory path uses.
+  const fidelityRows = sources !== null && sources.length === 0
+    ? []
+    : queryFidelityRows(opts.db, cycleStartIso, cycleEndIso, sources ?? undefined);
+  const contributing: Array<Pick<TurnRecord, 'fidelity'>> = fidelityRows.map((r) => {
+    const fidelity = synthesizeArchiveFidelity(r);
+    return fidelity ? { fidelity } : {};
+  });
+  const fidelity = deriveFidelity(contributing);
+
   return {
     plan,
     cycleStart,
@@ -272,6 +344,7 @@ export function planUsageFromArchive(
     runwayDays,
     resetAt: cycleEnd.toISOString(),
     limitedData: daysElapsed < LIMITED_DATA_DAYS,
+    fidelity,
   };
 }
 
@@ -326,4 +399,81 @@ function runQuery(
     `${baseSql} AND source IN (${placeholders}) GROUP BY source, model`,
   );
   return stmt.all(cycleStartIso, cycleEndIso, ...sources) as unknown as BucketRow[];
+}
+
+// ---------------------------------------------------------------------------
+// Archive fidelity helpers — mirrors the ledger's `synthesizeFidelity` logic
+// so the archive-backed `planUsageFromArchive` can feed `deriveFidelity` the
+// same per-turn fidelity shape the in-memory `computePlanUsage` produces.
+// ---------------------------------------------------------------------------
+
+interface FidelityRow {
+  attribution_fidelity: string | null;
+  tokens_present: number | bigint | null;
+  cost_present: number | bigint | null;
+}
+
+function queryFidelityRows(
+  db: DatabaseSync,
+  cycleStartIso: string,
+  cycleEndIso: string,
+  sources: readonly SourceKind[] | undefined,
+): FidelityRow[] {
+  const baseSql = `
+    SELECT attribution_fidelity, tokens_present, cost_present
+    FROM turns
+    WHERE ts >= ? AND ts < ?`;
+  if (sources === undefined) {
+    const stmt = db.prepare(baseSql);
+    return stmt.all(cycleStartIso, cycleEndIso) as unknown as FidelityRow[];
+  }
+  const placeholders = sources.map(() => '?').join(', ');
+  const stmt = db.prepare(`${baseSql} AND source IN (${placeholders})`);
+  return stmt.all(cycleStartIso, cycleEndIso, ...sources) as unknown as FidelityRow[];
+}
+
+function synthesizeArchiveFidelity(r: FidelityRow): Fidelity | undefined {
+  if (r.attribution_fidelity === null) return undefined;
+  const cls = r.attribution_fidelity as FidelityClass;
+  const tokensPresent = r.tokens_present !== null && Number(r.tokens_present) === 1;
+  const costPresent = r.cost_present !== null && Number(r.cost_present) === 1;
+  const granularity: UsageGranularity = costPresent ? 'cost-only' : 'per-turn';
+  const coverage = coverageForClass(cls, tokensPresent);
+  return { class: cls, granularity, coverage };
+}
+
+function coverageForClass(cls: FidelityClass, tokensPresent: boolean): Coverage {
+  switch (cls) {
+    case 'full':
+      return {
+        ...EMPTY_COVERAGE,
+        hasInputTokens: true,
+        hasOutputTokens: true,
+        hasReasoningTokens: true,
+        hasCacheReadTokens: true,
+        hasCacheCreateTokens: true,
+        hasToolCalls: true,
+        hasToolResultEvents: true,
+        hasSessionRelationships: true,
+        hasRawContent: true,
+      };
+    case 'usage-only':
+      return {
+        ...EMPTY_COVERAGE,
+        hasInputTokens: tokensPresent,
+        hasOutputTokens: tokensPresent,
+        hasCacheReadTokens: tokensPresent,
+        hasCacheCreateTokens: tokensPresent,
+      };
+    case 'partial':
+      return {
+        ...EMPTY_COVERAGE,
+        hasInputTokens: tokensPresent,
+        hasOutputTokens: tokensPresent,
+      };
+    case 'aggregate-only':
+    case 'cost-only':
+    default:
+      return { ...EMPTY_COVERAGE };
+  }
 }
