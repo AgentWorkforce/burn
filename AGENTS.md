@@ -5,7 +5,7 @@ Pairs with [`README.md`](./README.md) — README is what burn does, this file is
 
 ## Layout
 
-pnpm workspace, five published packages in dependency order:
+pnpm workspace, six published packages in dependency order:
 
 ```
 @relayburn/reader   — pure parsers (Claude Code / Codex / OpenCode session logs → TurnRecord)
@@ -13,9 +13,10 @@ pnpm workspace, five published packages in dependency order:
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
 @relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
 @relayburn/cli      — `burn` binary (summary, by-tool, compare, claude/codex/opencode wrappers, mcp-server, …)
+relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
 ```
 
-`reader → ledger → analyze → mcp → cli`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
+`reader → ledger → analyze → mcp → cli → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
 
 ## Common commands
 
@@ -58,7 +59,7 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 
 ```bash
 # from GitHub Actions: workflow_dispatch → "Publish Package"
-#   package: all | reader | ledger | analyze | mcp | cli
+#   package: all | reader | ledger | analyze | mcp | cli | relayburn
 #   version: patch | minor | major | prepatch | … | none (re-publish current)
 #   custom_version: 0.3.1 (overrides version type)
 #   tag: latest | next | beta | alpha
@@ -67,7 +68,7 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 
 The workflow:
 1. Builds + tests the whole workspace.
-2. Bumps `package.json` versions in dep order (reader → ledger → analyze → mcp → cli).
+2. Bumps `package.json` versions in dep order (reader → ledger → analyze → mcp → cli → relayburn).
 3. Generates changelog entries from `git log <pkg>-v<last>..HEAD -- packages/<pkg>`.
 4. Publishes via `pnpm pack` + `npm publish` using OIDC trusted-publisher auth (no `NPM_TOKEN`).
 5. Tags `<pkg>-v<version>` and creates a GitHub Release with the changelog body.
