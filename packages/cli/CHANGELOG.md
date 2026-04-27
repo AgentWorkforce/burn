@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn plans` honors per-cycle fidelity** ([#108](https://github.com/AgentWorkforce/burn/issues/108)). The list view continues to render every plan even when the cycle slice contains `partial` / `aggregate-only` / `cost-only` turns (no fidelity-based filter — `plans`, like `limits`, is permissive), but now flags low-confidence cycles so a "looks under budget" plan isn't read as authoritative. The text table grows a `confidence` column when at least one plan has any contributing turn missing per-turn input/output token data, marked `low (partial token data)`, and a footer note names the affected plan + lower-bound caveat (e.g. `note: claude-pro: 3 of 412 turns this cycle lack per-turn token data — totals are a lower bound.`). Full-fidelity cycles render exactly as before — no extra column, no footer. `--json` gains a per-plan `usage.fidelity: { confidence, summary }` block carrying the same `FidelitySummary` shape the analyze package emits elsewhere, so machine consumers can render exact counts without re-walking the ledger. `cost-only` source contributions count toward `spentUsd` and mark the cycle low-confidence on the token-coverage axis.
+
+### Changed
+
+- **`burn plans` (list view) reads spend from the archive** ([#91](https://github.com/AgentWorkforce/burn/issues/91)). The list path now issues one `SUM(...) GROUP BY (source, model)` aggregate per plan against `archive.sqlite` instead of walking the full ledger once per plan. Output is byte-identical to the legacy `queryAll()` reduce path on the parity fixture (text and `--json`); `limitedData` flagging, reset-day boundaries, multi-plan ordering, and built-in presets all carry over. Pass `--no-archive` (or set `RELAYBURN_ARCHIVE=0`) to opt back into the in-memory reduce while the migration shakes out.
+
+## [0.31.0] - 2026-04-27
+
+### Changed
+
+- **`burn summary` now reads from `archive.sqlite` instead of streaming `ledger.jsonl`** ([#82](https://github.com/AgentWorkforce/burn/issues/82)). The default hot path calls `buildArchive()` (cheap incremental tail scan after the per-invocation `ingestAll`) and issues SQL with filters lowered to indexed `WHERE` clauses against `turns`, replacing the per-invocation full ledger walk + stamp fold. Subagent-tree (`--subagent-tree`) and `--by-subagent-type` modes consume the same archive-derived turn slice. Output (text + `--json`) is parity-preserved against the legacy reader for the `byModel`, `totalCost`, and `fidelity` blocks. Two escape hatches preserve the old behavior: a new `--no-archive` flag and the `RELAYBURN_ARCHIVE=0` env var both revert to `queryAll`. If the archive path throws (corrupt sqlite, schema mismatch we couldn't recover from cleanly), the command transparently falls back to the streaming reader and surfaces the reason on stderr — the archive can never wedge `burn summary`.
+
+## [0.30.0] - 2026-04-27
+
+### Changed
+
+- **`burn mcp-server` runs an incremental `buildArchive()` at startup** ([#97](https://github.com/AgentWorkforce/burn/issues/97)) so the first `burn__sessionCost` / `burn__currentBlock` tool call hits the SQL archive instead of re-walking the JSONL ledger. The MCP tool handlers themselves run another incremental build before each query so turns appended by hooks mid-session also show up in tool responses. The build is idempotent — a no-op when nothing has changed since the last build — and a build failure logs to stderr but never refuses to serve. Tool fallbacks to `queryAll` are wired through the new `onLog` hook so any persistent archive breakage is visible in the MCP host's stderr stream.
+
+## [0.29.0] - 2026-04-26
+
+### Added
+
+- **Complete Codex/OpenCode parity for spawn attribution and live ingest** (#63). `burn codex` and `burn opencode` now write v1 pending-stamp manifests under `$RELAYBURN_HOME/pending-stamps/` before spawning, resolve them before the first matching turn is appended, and run a foreground watch loop for the child lifetime so sessions ingest incrementally while live. Adds `burn watch [--interval <ms>] [--once]` for passive foreground ingest of Claude, Codex, and OpenCode stores; `--daemon` is explicitly unsupported for now.
+
+### Changed
+
+- Codex session-id discovery falls back to the first JSONL `session_meta.payload.id` when the rollout filename does not end in a UUID.
+
+## [0.28.0] - 2026-04-26
+
+### Added
+
+- **Synthetic provider filters and grouping** (#31). `burn summary`, `burn by-tool`, and `burn waste` accept `--provider <name>`; `burn summary --by-provider` groups query-time reattributed turns under provider labels such as `synthetic` without rewriting raw ledger model strings. Synthetic routing recognizes `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
+
+## [0.27.0] - 2026-04-26
+
 ### Changed
 
 - **Persist user-turn block-size records during ingest** (#2). `burn ingest`, passive ingest, and the Claude/Codex/OpenCode wrappers now append parser-emitted `UserTurnRecord`s for all three harnesses. Codex passive cursors also carry the in-flight user-turn slot so resumed ingest can complete a bridge record across file-growth boundaries. `burn waste` and `burn diagnose` load these records and use them as the sized fallback when content sidecars are missing.
@@ -17,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Execution-graph passthrough for Codex ingest** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `burn ingest` (and `burn codex`) now persist Codex `SessionRelationshipRecord`s and `ToolResultEventRecord`s the reader emits, alongside the existing turns / content lines, mirroring the Claude path landed in the previous release. The Codex cursor (`~/.relayburn/cursors.json`) gains `rootSessionEmitted`, `nextEventIndex`, and `toolResultCounters` so dedup of execution-graph rows survives across `burn` invocations even when the writer-side index isn't warm.
+
+### Changed
+
+- **`burn compare` now reads from the SQLite archive by default** ([#88](https://github.com/AgentWorkforce/burn/issues/88)). The compare table is built from a single grouped `SELECT … GROUP BY model, activity, source` over `archive.sqlite` plus a tiny per-cell median-retries follow-up, instead of streaming every turn through `queryAll()` + an in-memory reduce. Output (text, CSV, `--json`) is byte-identical to the legacy path for the parity fixture; all existing flags (`--models`, `--since`, `--project`, `--session`, `--workflow`, `--agent`, `--min-sample`) work through the SQL path. New `--no-archive` flag (also honored via `RELAYBURN_ARCHIVE=0`) preserves the in-memory path as a parity-validation / safety-net fallback.
 
 ## [0.25.0] - 2026-04-26
 
