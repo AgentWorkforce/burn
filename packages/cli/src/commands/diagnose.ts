@@ -7,8 +7,13 @@ import {
   loadPricing,
   type PatternsResult,
 } from '@relayburn/analyze';
-import { queryAll, queryCompactions, readContent } from '@relayburn/ledger';
-import type { ContentRecord } from '@relayburn/reader';
+import {
+  queryAll,
+  queryCompactions,
+  queryUserTurns,
+  readContent,
+} from '@relayburn/ledger';
+import type { ContentRecord, UserTurnRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, table } from '../format.js';
@@ -33,8 +38,15 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   const contentRecords: ContentRecord[] = await readContent({ sessionId });
   const contentBySession = new Map<string, ContentRecord[]>();
   if (contentRecords.length > 0) contentBySession.set(sessionId, contentRecords);
+  const userTurns: UserTurnRecord[] = await queryUserTurns({ sessionId });
+  const userTurnsBySession = new Map<string, UserTurnRecord[]>();
+  if (userTurns.length > 0) userTurnsBySession.set(sessionId, userTurns);
 
-  const attribution = attributeWaste(turns, { pricing, contentBySession });
+  const attribution = attributeWaste(turns, {
+    pricing,
+    contentBySession,
+    userTurnsBySession,
+  });
   const patterns = detectPatterns(turns, { pricing, compactions });
   const files = aggregateByFile(attribution.attributions).slice(0, 5);
   const bashes = aggregateByBash(attribution.attributions).slice(0, 5);

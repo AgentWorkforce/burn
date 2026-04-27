@@ -6,6 +6,7 @@ export { runClaudeWrapper } from './commands/claude.js';
 export { runIngest } from './commands/ingest.js';
 export { runLimits } from './commands/limits.js';
 export { runPlans } from './commands/plans.js';
+export { runWatch, runWatchTick, startWatchLoop } from './commands/watch.js';
 export { parseArgs } from './args.js';
-export { ingestClaudeProjects, ingestOpencodeSessions, ingestAll } from './ingest.js';
+export { ingestClaudeProjects, ingestCodexSessions, ingestOpencodeSessions, ingestAll } from './ingest.js';
 export { runOpencodeWrapper } from './commands/opencode.js';
