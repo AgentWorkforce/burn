@@ -68,6 +68,33 @@ export async function queryAllFromArchive(q: Query = {}): Promise<EnrichedTurn[]
   }
 }
 
+/**
+ * Slimmer counterpart to `queryAllFromArchive`. Reads `EnrichedTurn[]`
+ * directly from the materialized archive but skips the per-turn `fidelity`
+ * synthesis — the only consumer (the MCP tool handlers in #97) doesn't read
+ * fidelity, so we save the bookkeeping. Callers that need fidelity should
+ * use `queryAllFromArchive`. The archive must already be built — see
+ * `buildArchive()` — and any open / query failure throws so callers can
+ * route to `queryAll` for a transparent fallback.
+ */
+export async function queryTurnsFromArchive(q: Query = {}): Promise<EnrichedTurn[]> {
+  const db = await openArchive();
+  try {
+    const { sql, params } = buildSelect(q);
+    const rows = db.prepare(sql).all(...params) as unknown as ArchiveTurnRow[];
+    if (rows.length === 0) return [];
+
+    const toolCallsByKey = await loadToolCallsForKeys(
+      db,
+      rows.map((r) => ({ source: r.source, sessionId: r.session_id, messageId: r.message_id })),
+    );
+
+    return rows.map((r) => rowToEnrichedTurn(r, toolCallsByKey, { withFidelity: false }));
+  } finally {
+    db.close();
+  }
+}
+
 export async function archiveAvailable(): Promise<boolean> {
   try {
     const s = await stat(archivePath());
@@ -95,6 +122,7 @@ interface ArchiveTurnRow {
   parent_subagent_id: string | null;
   parent_tool_use_id: string | null;
   subagent_type: string | null;
+  subagent_description: string | null;
   input_tokens: number | bigint;
   output_tokens: number | bigint;
   reasoning_tokens: number | bigint;
@@ -249,6 +277,7 @@ async function loadToolCallsForKeys(
 function rowToEnrichedTurn(
   r: ArchiveTurnRow,
   toolCallsByKey: Map<string, ToolCall[]>,
+  opts: { withFidelity?: boolean } = { withFidelity: true },
 ): EnrichedTurn {
   const enrichment = parseEnrichment(r.enrichment_json);
   const toolCalls = toolCallsByKey.get(`${r.source}|${r.session_id}|${r.message_id}`) ?? [];
@@ -284,7 +313,8 @@ function rowToEnrichedTurn(
     r.subagent_id !== null ||
     r.parent_subagent_id !== null ||
     r.parent_tool_use_id !== null ||
-    r.subagent_type !== null
+    r.subagent_type !== null ||
+    r.subagent_description !== null
   ) {
     const subagent: NonNullable<TurnRecord['subagent']> = {
       isSidechain: Number(r.is_sidechain ?? 0) === 1,
@@ -293,17 +323,20 @@ function rowToEnrichedTurn(
     if (r.parent_subagent_id !== null) subagent.parentAgentId = r.parent_subagent_id;
     if (r.parent_tool_use_id !== null) subagent.parentToolUseId = r.parent_tool_use_id;
     if (r.subagent_type !== null) subagent.subagentType = r.subagent_type;
+    if (r.subagent_description !== null) subagent.description = r.subagent_description;
     turn.subagent = subagent;
   }
-  const fidelity = synthesizeFidelity(r);
-  if (fidelity) turn.fidelity = fidelity;
+  if (opts.withFidelity !== false) {
+    const fidelity = synthesizeFidelity(r);
+    if (fidelity) turn.fidelity = fidelity;
+  }
   return { ...turn, enrichment };
 }
 
 function parseEnrichment(json: string | null): Enrichment {
   if (!json) return {};
   try {
-    const parsed = JSON.parse(json);
+    const parsed = JSON.parse(json) as unknown;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const out: Enrichment = {};
       for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {

@@ -26,6 +26,11 @@ import type { ContentRecord } from '@relayburn/reader';
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import {
+  filterTurnsByProvider,
+  parseProviderFilter,
+  resolveTurnProvider,
+} from '../provider.js';
 
 export async function runSummary(args: ParsedArgs): Promise<number> {
   const q: Query = {};
@@ -34,13 +39,19 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
   if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
+  const providerFilter = parseProviderFilter(args.flags['provider']);
+  if (providerFilter instanceof Error) {
+    process.stderr.write(providerFilter.message);
+    return 2;
+  }
 
   const subagentTreeFlag = args.flags['subagent-tree'];
   const subagentTypeFlag = args.flags['by-subagent-type'] === true;
+  const byProvider = args.flags['by-provider'] === true;
 
   const ingestReport = await ingestAll();
   const pricing = await loadPricing();
-  const turns = await loadTurns(q, args);
+  const turns = filterTurnsByProvider(await loadTurns(q, args), providerFilter);
 
   if (subagentTreeFlag !== undefined) {
     return renderSubagentTreeMode(args, turns, pricing, subagentTreeFlag, q);
@@ -49,8 +60,10 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return renderSubagentTypeMode(args, turns, pricing);
   }
 
-  const rowsByModel = aggregateByModel(turns, pricing);
-  const totalCost = sumCosts(rowsByModel.map((r) => r.cost));
+  const rows = byProvider
+    ? aggregateByProvider(turns, pricing)
+    : aggregateByModel(turns, pricing);
+  const totalCost = sumCosts(rows.map((r) => r.cost));
   const fidelity = summarizeFidelity(turns);
 
   if (args.flags['json'] === true) {
@@ -65,12 +78,23 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
       },
       turns: turns.length,
       totalCost,
-      byModel: rowsByModel.map((r) => ({
-        model: r.model,
-        turns: r.turns,
-        usage: r.usage,
-        cost: r.cost,
-      })),
+      ...(byProvider
+        ? {
+            byProvider: rows.map((r) => ({
+              provider: r.label,
+              turns: r.turns,
+              usage: r.usage,
+              cost: r.cost,
+            })),
+          }
+        : {
+            byModel: rows.map((r) => ({
+              model: r.label,
+              turns: r.turns,
+              usage: r.usage,
+              cost: r.cost,
+            })),
+          }),
       fidelity,
     };
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
@@ -92,11 +116,11 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  const header = ['model', 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
+  const header = [byProvider ? 'provider' : 'model', 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
   const dataRows: string[][] = [header];
-  for (const r of rowsByModel) {
+  for (const r of rows) {
     dataRows.push([
-      r.model,
+      r.label,
       formatInt(r.turns),
       formatInt(r.usage.input),
       formatInt(r.usage.output),
@@ -195,7 +219,7 @@ function weightedOneShotRate(q: QualityResult): number | undefined {
 }
 
 interface ModelRow {
-  model: string;
+  label: string;
   turns: number;
   usage: EnrichedTurn['usage'];
   cost: CostBreakdown;
@@ -364,17 +388,27 @@ async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
 }
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {
+  return aggregateTurns(turns, pricing, (t) => t.model || 'unknown');
+}
+
+function aggregateByProvider(
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+): ModelRow[] {
+  return aggregateTurns(turns, pricing, (t) => resolveTurnProvider(t).provider);
+}
+
+function aggregateTurns(
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+  keyForTurn: (turn: EnrichedTurn) => string,
+): ModelRow[] {
   const byModel = new Map<string, ModelRow>();
   for (const t of turns) {
-    const key = t.model || 'unknown';
+    const key = keyForTurn(t) || 'unknown';
     let row = byModel.get(key);
     if (!row) {
-      row = {
-        model: key,
-        turns: 0,
-        usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
-        cost: { model: key, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate: 0 },
-      };
+      row = emptyRow(key);
       byModel.set(key, row);
     }
     row.turns++;
@@ -395,4 +429,13 @@ function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof cost
     }
   }
   return [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total);
+}
+
+function emptyRow(label: string): ModelRow {
+  return {
+    label,
+    turns: 0,
+    usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+    cost: { model: label, total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreate: 0 },
+  };
 }
