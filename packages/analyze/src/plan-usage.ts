@@ -323,7 +323,9 @@ export function planUsageFromArchive(
 
   // Query per-turn fidelity data from the archive so `deriveFidelity` can
   // annotate the cycle with the same confidence flag the in-memory path uses.
-  const fidelityRows = queryFidelityRows(opts.db, cycleStartIso, cycleEndIso, sources ?? undefined);
+  const fidelityRows = sources !== null && sources.length === 0
+    ? []
+    : queryFidelityRows(opts.db, cycleStartIso, cycleEndIso, sources ?? undefined);
   const contributing: Array<Pick<TurnRecord, 'fidelity'>> = fidelityRows.map((r) => {
     const fidelity = synthesizeArchiveFidelity(r);
     return fidelity ? { fidelity } : {};
