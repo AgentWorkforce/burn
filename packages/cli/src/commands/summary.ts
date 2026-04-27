@@ -13,7 +13,13 @@ import type {
   QualityResult,
   SubagentTreeNode,
 } from '@relayburn/analyze';
-import { queryAll, readContent, type Query } from '@relayburn/ledger';
+import {
+  buildArchive,
+  queryAll,
+  queryAllFromArchive,
+  readContent,
+  type Query,
+} from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
 import type { ContentRecord } from '@relayburn/reader';
 
@@ -45,7 +51,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
 
   const ingestReport = await ingestAll();
   const pricing = await loadPricing();
-  const turns = filterTurnsByProvider(await queryAll(q), providerFilter);
+  const turns = filterTurnsByProvider(await loadTurns(q, args), providerFilter);
 
   if (subagentTreeFlag !== undefined) {
     return renderSubagentTreeMode(args, turns, pricing, subagentTreeFlag, q);
@@ -345,6 +351,40 @@ function renderFidelityNotice(f: FidelitySummary): string | undefined {
   if (f.byClass.partial > 0) parts.push(`${f.byClass.partial} partial`);
   if (f.unknown > 0) parts.push(`${f.unknown} unknown`);
   return `fidelity: ${parts.join(' / ')} (use --json for per-field coverage)`;
+}
+
+/**
+ * Load the turns slice that drives every summary mode.
+ *
+ * Default path: bring `archive.sqlite` current via `buildArchive()` (cheap
+ * incremental tail scan after `ingestAll`'s appends), then issue SQL with
+ * filters lowered as `WHERE` clauses against indexed columns. Replaces the
+ * full ledger walk (`queryAll`) on the hot path.
+ *
+ * Fallback path: `--no-archive` flag or `RELAYBURN_ARCHIVE=0` env reverts
+ * to the legacy `queryAll` ledger stream — kept as an escape hatch for
+ * parity validation and for environments where the archive is missing /
+ * corrupt. If a build/query against the archive throws, we transparently
+ * fall back to the same legacy path so a wedged archive can never break
+ * the command.
+ */
+async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
+  const noArchiveFlag = args.flags['no-archive'] === true;
+  const envDisabled = process.env['RELAYBURN_ARCHIVE'] === '0';
+  if (noArchiveFlag || envDisabled) {
+    return queryAll(q);
+  }
+  try {
+    await buildArchive();
+    return await queryAllFromArchive(q);
+  } catch (err) {
+    // Don't let an archive-side failure (corrupt sqlite, schema mismatch we
+    // didn't recover from cleanly, etc.) take down `burn summary`. Surface
+    // the reason on stderr and fall back to the streaming reader.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`burn: archive read failed (${msg}); falling back to ledger walk\n`);
+    return queryAll(q);
+  }
 }
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {

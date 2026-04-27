@@ -23,7 +23,7 @@ const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--quality]
-                     [--by-provider] [--subagent-tree <session-id>] [--by-subagent-type]
+                     [--by-provider] [--subagent-tree <session-id>] [--by-subagent-type] [--no-archive]
   burn by-tool       [--since 7d] [--project <path>] [--session <id>] [--provider <p>]
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]]

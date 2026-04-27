@@ -39,7 +39,11 @@ export {
   rebuildArchive,
 } from './archive.js';
 export type { ArchiveStatus, BuildResult } from './archive.js';
-export { queryTurnsFromArchive } from './archive-query.js';
+export {
+  archiveAvailable,
+  queryAllFromArchive,
+  queryTurnsFromArchive,
+} from './archive-query.js';
 export {
   appendContent,
   listContentSessionIds,
