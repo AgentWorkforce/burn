@@ -15,6 +15,7 @@ on:
           - analyze
           - mcp
           - cli
+          - relayburn
       version:
         description: 'Version bump type (ignored if custom_version is set)'
         required: true
@@ -100,10 +101,12 @@ jobs:
         run: |
           case "${{ github.event.inputs.package }}" in
             all)
-              # Must be in dependency order: reader → ledger → analyze → mcp → cli.
-              echo "packages=reader ledger analyze mcp cli" >> "$GITHUB_OUTPUT"
+              # Dependency order: reader → ledger → analyze → mcp → cli → relayburn.
+              # `relayburn` is a thin wrapper that depends on `@relayburn/cli`,
+              # so cli must publish first.
+              echo "packages=reader ledger analyze mcp cli relayburn" >> "$GITHUB_OUTPUT"
               ;;
-            reader|ledger|analyze|mcp|cli)
+            reader|ledger|analyze|mcp|cli|relayburn)
               echo "packages=${{ github.event.inputs.package }}" >> "$GITHUB_OUTPUT"
               ;;
             *)
@@ -125,7 +128,8 @@ jobs:
           set -euo pipefail
           for pkg in ${{ steps.targets.outputs.packages }}; do
             LOCAL=$(node -p "require('./packages/$pkg/package.json').version")
-            REMOTE=$(npm view "@relayburn/$pkg" versions --json 2>/dev/null \
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            REMOTE=$(npm view "$NPM_NAME" versions --json 2>/dev/null \
               | node -e '
                 const raw = require("fs").readFileSync(0, "utf8").trim() || "[]";
                 const parsed = JSON.parse(raw);
@@ -142,7 +146,7 @@ jobs:
                 process.stdout.write(stable.length ? stable[stable.length - 1] : "");
               ' || echo "")
             if [ -z "$REMOTE" ]; then
-              echo "@relayburn/$pkg: no stable releases on npm yet — OK"
+              echo "$NPM_NAME: no stable releases on npm yet — OK"
               continue
             fi
             CMP=$(node -e '
@@ -157,10 +161,10 @@ jobs:
               console.log(0);
             ' "$LOCAL" "$REMOTE")
             if [ "$CMP" = "-1" ]; then
-              echo "::error title=npm/git version drift::@relayburn/$pkg: package.json is at $LOCAL but npm has $REMOTE published. A previous publish run likely succeeded on npm but failed before tagging. Bump packages/$pkg/package.json to >= $REMOTE on a branch, push, then re-run this workflow. (You may also want to tag the prior release commit as $pkg-v$REMOTE so the changelog generator picks the right baseline.)"
+              echo "::error title=npm/git version drift::$NPM_NAME: package.json is at $LOCAL but npm has $REMOTE published. A previous publish run likely succeeded on npm but failed before tagging. Bump packages/$pkg/package.json to >= $REMOTE on a branch, push, then re-run this workflow. (You may also want to tag the prior release commit as $pkg-v$REMOTE so the changelog generator picks the right baseline.)"
               exit 1
             fi
-            echo "@relayburn/$pkg: local=$LOCAL, npm=$REMOTE — OK"
+            echo "$NPM_NAME: local=$LOCAL, npm=$REMOTE — OK"
           done
 
       - name: Bump versions
@@ -198,12 +202,13 @@ jobs:
           for entry in ${{ steps.bump.outputs.versions }}; do
             pkg="${entry%%:*}"
             ver="${entry##*:}"
-            EXISTS=$(npm view "@relayburn/$pkg@$ver" version 2>/dev/null || true)
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            EXISTS=$(npm view "$NPM_NAME@$ver" version 2>/dev/null || true)
             if [ -n "$EXISTS" ]; then
-              echo "::error title=Version already published::@relayburn/$pkg@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
+              echo "::error title=Version already published::$NPM_NAME@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
               exit 1
             fi
-            echo "@relayburn/$pkg@$ver: unpublished — OK"
+            echo "$NPM_NAME@$ver: unpublished — OK"
           done
 
       # Per-package CHANGELOG.md generation. For each package being published:
@@ -374,7 +379,8 @@ jobs:
 
           // --- Step 3: write the file with Unreleased reset + new block. ---
           if (!existing) {
-            const header = `# Changelog\n\nAll notable changes to \`@relayburn/${pkg}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
+            const npmName = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf-8')).name;
+            const header = `# Changelog\n\nAll notable changes to \`${npmName}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
             writeFileSync(path, header + newEntry + '\n');
           } else if (parts) {
             // Reset Unreleased body to empty (single blank line after header)
@@ -518,7 +524,8 @@ jobs:
             for entry in ${{ steps.bump.outputs.versions }}; do
               pkg="${entry%%:*}"
               version="${entry##*:}"
-              MSG+=" @relayburn/$pkg@$version"
+              NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+              MSG+=" $NPM_NAME@$version"
             done
             git commit -m "$MSG"
           fi
@@ -552,11 +559,17 @@ jobs:
           fi
 
           for pkg in ${{ steps.targets.outputs.packages }}; do
-            echo "==> Packing @relayburn/$pkg"
-            pnpm --filter "@relayburn/$pkg" pack --pack-destination "$PACK_DIR"
-            TARBALL=$(ls -1t "$PACK_DIR"/relayburn-$pkg-*.tgz | head -n1)
-            if [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
-              echo "::error::could not find packed tarball for $pkg in $PACK_DIR" >&2
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            VERSION=$(node -p "require('./packages/$pkg/package.json').version")
+            # `pnpm pack` writes <name-without-@>-<ver>.tgz with `/` → `-`.
+            # @relayburn/cli@0.33.0  → relayburn-cli-0.33.0.tgz
+            # relayburn@0.33.0       → relayburn-0.33.0.tgz
+            TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${VERSION}.tgz"
+            echo "==> Packing $NPM_NAME"
+            pnpm --filter "$NPM_NAME" pack --pack-destination "$PACK_DIR"
+            TARBALL="$PACK_DIR/$TARBALL_BASENAME"
+            if [ ! -f "$TARBALL" ]; then
+              echo "::error::could not find packed tarball $TARBALL_BASENAME in $PACK_DIR" >&2
               ls -la "$PACK_DIR" >&2 || true
               exit 1
             fi
@@ -572,7 +585,8 @@ jobs:
           for entry in ${{ steps.bump.outputs.versions }}; do
             pkg="${entry%%:*}"
             version="${entry##*:}"
-            git tag -a "$pkg-v$version" -m "@relayburn/$pkg@$version"
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            git tag -a "$pkg-v$version" -m "$NPM_NAME@$version"
           done
           git push origin HEAD --follow-tags
 
@@ -584,7 +598,8 @@ jobs:
             for entry in ${{ steps.bump.outputs.versions }}; do
               pkg="${entry%%:*}"
               version="${entry##*:}"
-              echo "- \`@relayburn/$pkg@$version\`"
+              NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+              echo "- \`$NPM_NAME@$version\`"
             done
             echo ""
             echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
@@ -598,7 +613,7 @@ jobs:
   # One GitHub Release per package tag. Runs in parallel across packages;
   # each cell is gated on whether its package was published.
   create-release:
-    name: Release @relayburn/${{ matrix.package }}
+    name: Release ${{ matrix.package }}
     needs: publish
     if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
     runs-on: ubuntu-latest
@@ -607,7 +622,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [reader, ledger, analyze, mcp, cli]
+        package: [reader, ledger, analyze, mcp, cli, relayburn]
     steps:
       - name: Check if this package was published
         id: check
@@ -635,6 +650,13 @@ jobs:
         with:
           # Need the tag that the publish job just pushed.
           ref: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+
+      - name: Resolve npm name
+        if: steps.check.outputs.published == 'true'
+        id: name
+        run: |
+          NPM_NAME=$(node -p "require('./packages/${{ matrix.package }}/package.json').name")
+          echo "npm_name=$NPM_NAME" >> "$GITHUB_OUTPUT"
 
       # Prefer the per-package CHANGELOG section that was generated and
       # committed during publish. Falls back to auto-generated notes for
@@ -666,7 +688,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
-          name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }}"
+          name: "${{ steps.name.outputs.npm_name }}@${{ steps.check.outputs.version }}"
           body_path: /tmp/release-notes.md
 
       - name: Create GitHub Release (stable, auto notes)
@@ -674,7 +696,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
-          name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }}"
+          name: "${{ steps.name.outputs.npm_name }}@${{ steps.check.outputs.version }}"
           generate_release_notes: true
 
       - name: Create GitHub Release (prerelease)
@@ -682,6 +704,6 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
-          name: "@relayburn/${{ matrix.package }}@${{ steps.check.outputs.version }} (prerelease)"
+          name: "${{ steps.name.outputs.npm_name }}@${{ steps.check.outputs.version }} (prerelease)"
           prerelease: true
           generate_release_notes: true

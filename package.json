@@ -1,5 +1,5 @@
 {
-  "name": "relayburn",
+  "name": "relayburn-monorepo",
   "private": true,
   "version": "0.0.1",
   "description": "Token usage & cost attribution for agent CLIs",

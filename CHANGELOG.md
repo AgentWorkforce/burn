@@ -2,7 +2,7 @@
 
 Cross-package narrative for the relayburn monorepo. The per-package CHANGELOGs at `packages/*/CHANGELOG.md` are authoritative for exactly what shipped in each package; this file is the unified view.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Packages are released in lockstep, so each version below applies to all five (`reader`, `ledger`, `analyze`, `mcp`, `cli`).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the workspace adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Packages are released in lockstep, so each version below applies to all six (`reader`, `ledger`, `analyze`, `mcp`, `cli`, `relayburn`).
 
 ## [Unreleased]
 
