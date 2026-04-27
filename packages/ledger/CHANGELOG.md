@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-04-27
+
+### Changed
+
+- Migrate MCP tool handlers to archive queries (#97)
+
 ## [0.27.0] - 2026-04-26
 
 ### Added
