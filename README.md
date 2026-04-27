@@ -68,26 +68,21 @@ This is the composability surface. Burn stays small; the spawner owns the contex
 
 ### Spawner-integrated ingest
 
-For Claude Code specifically, burn generates session UUIDs up-front so metadata can be stamped before the agent starts:
+All three supported harnesses (Claude, Codex, OpenCode) ship under one verb:
 
 ```
-burn claude [--tag k=v ...] [-- <claude args>]
+burn run <claude|codex|opencode> [--tag k=v ...] [-- <harness args>]
 ```
 
-The wrapper pre-assigns a session ID, passes `--session-id` to Claude, applies any `--tag k=v` pairs as stamps, and ingests the session into the ledger when Claude exits. If you are building an orchestrator, the same pattern applies: generate the UUID, stamp first, spawn with the UUID, let burn pick up the session log on ingest.
+For Claude specifically, the adapter generates a session UUID up-front so metadata can be stamped before the agent starts. It passes `--session-id` to Claude, applies any `--tag k=v` pairs as stamps, and ingests the session into the ledger when Claude exits. If you are building an orchestrator, the same pattern applies: generate the UUID, stamp first, spawn with the UUID, let burn pick up the session log on ingest.
 
 ```
-burn claude --tag workflow=refactor --tag persona=senior-eng -- --resume abc
+burn run claude --tag workflow=refactor --tag persona=senior-eng -- --resume abc
 ```
 
-The same wrapper pattern applies to Codex and OpenCode:
+Codex and OpenCode do not expose Claude-style hooks or a pre-spawn session ID. Their adapters write a v1 pending-stamp manifest under `$RELAYBURN_HOME/pending-stamps/` before spawning, then resolve it against the first matching session file before the first turn is appended. They also run burn's foreground watch loop for the child process lifetime, so long sessions become visible incrementally instead of only after exit. Abandoned pending manifests are cleaned up after 24 hours.
 
-```
-burn codex     [--tag k=v ...] [-- <codex args>]
-burn opencode  [--tag k=v ...] [-- <opencode args>]
-```
-
-Codex and OpenCode do not expose Claude-style hooks or a pre-spawn session ID. Their wrappers write a v1 pending-stamp manifest under `$RELAYBURN_HOME/pending-stamps/` before spawning, then resolve it against the first matching session file before the first turn is appended. The wrappers also run burn's foreground watch loop for the child process lifetime, so long sessions become visible incrementally instead of only after exit. Abandoned pending manifests are cleaned up after 24 hours.
+> **Deprecation notice.** The legacy verbs `burn claude`, `burn codex`, and `burn opencode` still work but print a one-line stderr deprecation notice and forward to `burn run <name>`. They will be removed in the next minor release.
 
 For passive ingest without a wrapper, run:
 
@@ -99,7 +94,7 @@ burn watch [--interval <ms>]
 
 ### Spawner env-var contract (workflow / agent attribution)
 
-For orchestrators that spawn many agent sessions, threading `--tag` through every wrapper invocation is awkward. All three wrappers also read a fixed set of `RELAYBURN_*` env vars and fold them into the stamp bag:
+For orchestrators that spawn many agent sessions, threading `--tag` through every wrapper invocation is awkward. All three adapters also read a fixed set of `RELAYBURN_*` env vars and fold them into the stamp bag:
 
 | Env var                       | Stamp key       |
 |-------------------------------|-----------------|
@@ -115,15 +110,15 @@ For orchestrators that spawn many agent sessions, threading `--tag` through ever
 ```bash
 export RELAYBURN_WORKFLOW_ID=wf-refactor-auth
 export RELAYBURN_AGENT_ID=ag-42
-burn codex   # workflowId=wf-refactor-auth, agentId=ag-42 stamped
-burn opencode --tag agentId=ag-43   # --tag wins → agentId=ag-43, workflowId still inherited
+burn run codex   # workflowId=wf-refactor-auth, agentId=ag-42 stamped
+burn run opencode --tag agentId=ag-43   # --tag wins → agentId=ag-43, workflowId still inherited
 ```
 
 Other `RELAYBURN_*` variables (`RELAYBURN_HOME`, `RELAYBURN_SESSION_ID`, `RELAYBURN_CONTENT_STORE`, `RELAYBURN_CONTENT_TTL_DAYS`) are burn internals and are **not** treated as stamp tags.
 
 ### Hook-based ingest for orchestrators
 
-If your code already controls the Claude Code spawn, you can install burn's hooks per-invocation via Claude's `--settings` flag — no global `~/.claude/settings.json` mutation needed. Hook payloads land on stdin and get forwarded to `burn ingest`, which incrementally parses the transcript with the same cursor+dedup machinery as `burn claude`.
+If your code already controls the Claude Code spawn, you can install burn's hooks per-invocation via Claude's `--settings` flag — no global `~/.claude/settings.json` mutation needed. Hook payloads land on stdin and get forwarded to `burn ingest`, which incrementally parses the transcript with the same cursor+dedup machinery as `burn run claude`.
 
 ```ts
 import { buildClaudeHookSettings, stamp } from '@relayburn/ledger';
@@ -269,9 +264,7 @@ burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] 
 burn by-tool [--since 7d] [--project <path>] [--session <id>] [--provider <p>]
 burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>]
 burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
-burn claude  [--tag k=v ...] [-- <claude args>]
-burn codex   [--tag k=v ...] [-- <codex args>]
-burn opencode [--tag k=v ...] [-- <opencode args>]
+burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
 burn watch   [--interval <ms>] [--once]
 ```
 

@@ -1,6 +1,3 @@
-import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-
 import { parseClaudeSession } from '@relayburn/reader';
 import {
   appendCompactions,
@@ -12,67 +9,24 @@ import {
   loadConfig,
   loadCursors,
   saveCursors,
-  stamp,
 } from '@relayburn/ledger';
-import type { ClaudeCursor, Enrichment } from '@relayburn/ledger';
+import type { ClaudeCursor } from '@relayburn/ledger';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { stat } from 'node:fs/promises';
 
-import type { ParsedArgs } from '../args.js';
-import {
-  mergeSpawnTags,
-  readSpawnEnvTags,
-  spawnTagEnvOverrides,
-} from '../spawn-tags.js';
+import type { IngestReport } from '../ingest.js';
 
-export async function runClaudeWrapper(args: ParsedArgs): Promise<number> {
-  const sessionId = randomUUID();
-  const passthrough = args.passthrough;
-  const claudeArgs = ['--session-id', sessionId, ...passthrough];
-
-  const envTags = readSpawnEnvTags();
-  const tags: Enrichment = mergeSpawnTags(envTags, args.tags);
-  tags['harness'] = 'claude';
-  tags['burnSpawn'] = '1';
-  tags['burnSpawnTs'] = new Date().toISOString();
-
-  await stamp({ sessionId }, tags);
-
-  process.stderr.write(`[burn] session-id=${sessionId}\n`);
-
-  const cwd = process.cwd();
-  const child = spawn('claude', claudeArgs, {
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      ...spawnTagEnvOverrides(tags),
-      RELAYBURN_SESSION_ID: sessionId,
-    },
-  });
-
-  const code: number = await new Promise((resolve) => {
-    child.on('exit', (c) => resolve(c ?? 0));
-    child.on('error', (err) => {
-      process.stderr.write(`[burn] failed to spawn claude: ${err.message}\n`);
-      resolve(127);
-    });
-  });
-
-  await ingestSession(cwd, sessionId);
-  return code;
-}
-
-export async function ingestSession(cwd: string, sessionId: string): Promise<void> {
+export async function ingestSession(cwd: string, sessionId: string): Promise<IngestReport> {
   const encoded = cwd.replace(/\//g, '-');
   const file = path.join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
   let st: Awaited<ReturnType<typeof stat>>;
   try {
     st = await stat(file);
-    if (!st.isFile()) return;
+    if (!st.isFile()) return emptyReport();
   } catch {
     process.stderr.write(`[burn] no session file found at ${file}\n`);
-    return;
+    return emptyReport();
   }
   const cfg = await loadConfig();
   const { turns, content, events, relationships, toolResultEvents, userTurns } =
@@ -80,7 +34,7 @@ export async function ingestSession(cwd: string, sessionId: string): Promise<voi
       sessionPath: file,
       contentMode: cfg.content.store,
     });
-  if (turns.length === 0) return;
+  if (turns.length === 0) return { scannedSessions: 1, ingestedSessions: 0, appendedTurns: 0 };
   await appendTurns(turns);
   if (content.length > 0) await appendContent(content);
   if (events.length > 0) await appendCompactions(events);
@@ -102,5 +56,9 @@ export async function ingestSession(cwd: string, sessionId: string): Promise<voi
   cursors[file] = cursor;
   await saveCursors(cursors);
 
-  process.stderr.write(`[burn] ingested ${turns.length} turns from ${file}\n`);
+  return { scannedSessions: 1, ingestedSessions: 1, appendedTurns: turns.length };
+}
+
+function emptyReport(): IngestReport {
+  return { scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 };
 }
