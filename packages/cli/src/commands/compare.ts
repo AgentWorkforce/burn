@@ -158,7 +158,14 @@ export async function runCompare(
   // filtering is in effect (i.e., minFidelity !== 'partial') so #95's
   // gate is correctly applied. `--include-partial` / `--fidelity partial`
   // disables filtering and reuses the archive's grouped SQL.
-  const useArchive = !shouldBypassArchive(args) && minFidelity === 'partial';
+  //
+  // Skip the archive when the caller injected `queryAll` (test mode):
+  // `buildArchive` and `compareFromArchive` are not part of `CompareDeps`
+  // and would hit the real `~/.relayburn/archive.sqlite`, breaking test
+  // isolation. The non-archive branch already handles `--fidelity partial`
+  // correctly (the filter becomes a no-op).
+  const useArchive =
+    !shouldBypassArchive(args) && minFidelity === 'partial' && !deps.queryAll;
   let table: CompareTable;
   let filteredTurns: EnrichedTurn[];
   let summary: FidelitySummary;

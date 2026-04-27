@@ -3,8 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
+import { summarizeFidelity } from '@relayburn/analyze';
+import type { FidelitySummary } from '@relayburn/analyze';
 import { loadPlans, queryAll } from '@relayburn/ledger';
 import type { Plan } from '@relayburn/ledger';
+import type { TurnRecord } from '@relayburn/reader';
 
 import type { ParsedArgs } from '../args.js';
 import { formatUsd } from '../format.js';
@@ -38,11 +41,35 @@ export interface ForecastInput {
   remainingMs: number;
 }
 
+// Binary "is this forecast trustworthy?" flag, derived from the fidelity of
+// the turns that contributed to `tokensSoFar`. `high` means every contributing
+// turn has full per-turn token coverage (`full` or `usage-only` with input +
+// output token counts). `low` means at least one turn is `partial` /
+// `aggregate-only` / `cost-only` / `unknown` — the running token total still
+// represents *something* meaningful (cost totals, summed aggregates), but the
+// per-turn shape is fuzzy enough that the projection should be flagged.
+export type ForecastConfidence = 'high' | 'low';
+
+export interface ForecastFidelity {
+  confidence: ForecastConfidence;
+  // Count of turns whose per-turn token data is unreliable for forecasting.
+  // Equivalent to `total - (full + qualified usage-only)` — unknowns (records
+  // with no `fidelity` field) are counted here too, not excluded.
+  // Surfaced separately so the rendered notice can read "N of M".
+  lowConfidenceTurns: number;
+  summary: FidelitySummary;
+}
+
+export interface ForecastResult {
+  input: ForecastInput;
+  fidelity: ForecastFidelity;
+}
+
 export interface LimitsDeps {
   loadToken?: () => Promise<string | null>;
   fetchUsage?: (token: string) => Promise<UsageResponse>;
   now?: () => Date;
-  loadForecast?: (windowStartMs: number, nowMs: number) => Promise<ForecastInput | null>;
+  loadForecast?: (windowStartMs: number, nowMs: number) => Promise<ForecastResult | null>;
   loadPlanStatuses?: () => Promise<PlanStatus[]>;
 }
 
@@ -87,12 +114,12 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
     }
 
     const nowDate = now();
-    let forecast: { window: ForecastWindow; data: ForecastInput } | null = null;
+    let forecast: { window: ForecastWindow; data: ForecastInput; fidelity: ForecastFidelity } | null = null;
     if (!noForecast) {
       const windowStartMs = forecastWindowStartMs(usage?.five_hour, nowDate);
-      const data = await loadForecast(windowStartMs, nowDate.getTime());
-      if (data) {
-        forecast = { window: { startMs: windowStartMs }, data };
+      const result = await loadForecast(windowStartMs, nowDate.getTime());
+      if (result) {
+        forecast = { window: { startMs: windowStartMs }, data: result.input, fidelity: result.fidelity };
       }
     }
 
@@ -128,6 +155,10 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
                   remainingMs: forecast.data.remainingMs,
                   burnRateTokensPerMinute: burnRatePerMinute(forecast.data),
                   projectedPercentAtReset: projectedPercent,
+                  fidelity: {
+                    confidence: forecast.fidelity.confidence,
+                    summary: forecast.fidelity.summary,
+                  },
                 }
               : null,
             plans: planStatuses.map((s) => ({
@@ -181,7 +212,7 @@ interface ForecastWindow {
 function renderTty(opts: {
   usage: UsageResponse | null;
   usageError: string | null;
-  forecast: { window: ForecastWindow; data: ForecastInput } | null;
+  forecast: { window: ForecastWindow; data: ForecastInput; fidelity: ForecastFidelity } | null;
   projectedPercent: number | null;
   planStatuses: PlanStatus[];
   now: Date;
@@ -234,6 +265,18 @@ function renderTty(opts: {
         parts.push(`projected ${projectedPercent.toFixed(0)}% at reset`);
       }
       lines.push(`  ${parts.join(', ')}`);
+    }
+    // Low-confidence notice (#105): when one or more contributing turns lack
+    // per-turn token coverage the forecast number itself is unchanged — we
+    // still sum what's there — but the user should know the per-turn shape is
+    // fuzzy enough that the rate could be off. Full-fidelity windows print
+    // nothing here so the common case stays quiet.
+    if (forecast.fidelity.confidence === 'low') {
+      const total = forecast.fidelity.summary.total;
+      const lowN = forecast.fidelity.lowConfidenceTurns;
+      lines.push(
+        `  forecast: low-confidence (${lowN} of ${total} contributing turns lack per-turn token data)`,
+      );
     }
   }
 
@@ -487,7 +530,7 @@ async function defaultLoadPlanStatuses(): Promise<PlanStatus[]> {
 async function loadForecastFromLedger(
   windowStartMs: number,
   nowMs: number,
-): Promise<ForecastInput | null> {
+): Promise<ForecastResult | null> {
   // Match the convention used by every other read-only command (summary,
   // by-tool, diagnose, …): sweep new session logs into the ledger before
   // querying, so the forecast reflects what just happened in the active
@@ -496,6 +539,10 @@ async function loadForecastFromLedger(
   // every ~5s stays cheap on a steady-state ledger.
   await ingestAll();
   const since = new Date(windowStartMs).toISOString();
+  // Permissive filter (#105): unlike `burn compare`, `limits` consumes the
+  // entire windowed slice — partial / aggregate-only / cost-only turns still
+  // contribute meaningful spend totals. We surface confidence separately
+  // rather than refusing data.
   const turns = await queryAll({ since, source: 'claude-code' });
   if (turns.length === 0) return null;
   let tokens = 0;
@@ -511,5 +558,39 @@ async function loadForecastFromLedger(
   }
   const elapsedMs = Math.max(0, nowMs - windowStartMs);
   const remainingMs = Math.max(0, windowStartMs + SESSION_DURATION_MS - nowMs);
-  return { tokensSoFar: tokens, elapsedMs, remainingMs };
+  return {
+    input: { tokensSoFar: tokens, elapsedMs, remainingMs },
+    fidelity: deriveForecastFidelity(turns),
+  };
+}
+
+// Walk the windowed slice and decide whether the forecast deserves a "low
+// confidence" flag. A turn is forecast-trustworthy when its fidelity class is
+// `full`, or `usage-only` *and* both input and output token counts are
+// covered. Anything else — `partial`, `aggregate-only`, `cost-only`, or a
+// pre-#41 record with no fidelity at all — gets counted toward
+// `lowConfidenceTurns` and flips the overall flag to `low`.
+export function deriveForecastFidelity(
+  turns: ReadonlyArray<Pick<TurnRecord, 'fidelity'>>,
+): ForecastFidelity {
+  const summary = summarizeFidelity(turns);
+  let lowConfidenceTurns = 0;
+  for (const t of turns) {
+    const f = t.fidelity;
+    if (!f) {
+      lowConfidenceTurns++;
+      continue;
+    }
+    if (f.class === 'full') continue;
+    if (
+      f.class === 'usage-only' &&
+      f.coverage.hasInputTokens &&
+      f.coverage.hasOutputTokens
+    ) {
+      continue;
+    }
+    lowConfidenceTurns++;
+  }
+  const confidence: ForecastConfidence = lowConfidenceTurns === 0 ? 'high' : 'low';
+  return { confidence, lowConfidenceTurns, summary };
 }
