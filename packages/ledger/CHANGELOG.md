@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Codex cursors remember the last committed turn.** `CodexCursor` now carries the reader's last completed Codex turn snapshot so incremental ingest can anchor a later compaction marker to the preceding turn without re-reading the whole session.
+
 ## [0.33.0] - 2026-04-27
 
 ### Dependencies

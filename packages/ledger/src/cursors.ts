@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import type { PersistedUserTurnSlot } from '@relayburn/reader';
+import type { CodexLastCompletedTurn, PersistedUserTurnSlot } from '@relayburn/reader';
 
 import { withLock } from './lock.js';
 import { cursorsPath } from './paths.js';
@@ -30,6 +30,7 @@ export interface CodexCursor {
   rootSessionEmitted?: boolean;
   nextEventIndex?: number;
   toolResultCounters?: Record<string, number>;
+  lastCompletedTurn?: CodexLastCompletedTurn;
 }
 
 export interface OpencodeCursor {

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Codex compaction parity with Claude.** Codex passive ingest now detects `compacted` session-log records, persists them as ledger compaction events, and anchors them to the preceding Codex turn so compaction-loss analysis can cover Codex sessions instead of only Claude Code.
+
 ## [0.34.0] - 2026-04-27
 
 ### Changed

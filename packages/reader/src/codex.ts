@@ -5,6 +5,7 @@ import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash, contentHash } from './hash.js';
 import type {
+  CompactionEvent,
   ContentRecord,
   ContentStoreMode,
   Coverage,
@@ -53,6 +54,9 @@ export interface CodexResumeState {
   // always have exactly one output, but spawn_agent / wait fanouts can
   // produce multiple events for the same call_id.
   toolResultCounters?: Record<string, number>;
+  // Most recent committed assistant turn. Kept in the resume/cursor so a
+  // later Codex compaction marker can be anchored to the turn it compacted.
+  lastCompletedTurn?: CodexLastCompletedTurn;
 }
 
 export interface PersistedUserTurnSlot {
@@ -61,9 +65,15 @@ export interface PersistedUserTurnSlot {
   ts: string;
 }
 
+export interface CodexLastCompletedTurn {
+  messageId: string;
+  cacheRead: number;
+}
+
 export interface ParseCodexIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  events: CompactionEvent[];
   userTurns: UserTurnRecord[];
   // Execution graph (#42 / #87). `relationships` carries one `root` row per
   // newly-seen session id and one `subagent` row per `spawn_agent` call.
@@ -267,6 +277,7 @@ interface UserTurnSlot {
 export interface ParseCodexResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  events: CompactionEvent[];
   userTurns: UserTurnRecord[];
   // Execution graph (#42 / #87). See `ParseCodexIncrementalResult` for the
   // shape; full parses always reflect the committed state at end-of-file.
@@ -278,12 +289,12 @@ export async function parseCodexSession(
   filePath: string,
   options: ParseCodexOptions = {},
 ): Promise<ParseCodexResult> {
-  const { turns, content, userTurns, relationships, toolResultEvents } =
+  const { turns, content, events, userTurns, relationships, toolResultEvents } =
     await parseCodexSessionIncremental(filePath, {
       ...options,
       startOffset: 0,
     });
-  return { turns, content, userTurns, relationships, toolResultEvents };
+  return { turns, content, events, userTurns, relationships, toolResultEvents };
 }
 
 export async function parseCodexSessionIncremental(
@@ -301,6 +312,7 @@ export async function parseCodexSessionIncremental(
       return {
         turns: [],
         content: [],
+        events: [],
         userTurns: [],
         relationships: [],
         toolResultEvents: [],
@@ -375,6 +387,10 @@ export async function parseCodexSessionIncremental(
     offset: number;
     record: SessionRelationshipRecord;
   }> = [];
+  const pendingCompactions: Array<{
+    offset: number;
+    event: CompactionEvent;
+  }> = [];
 
   // Commit snapshot — only advanced at task_complete boundaries.
   let committedEndOffset = startOffset;
@@ -388,6 +404,8 @@ export async function parseCodexSessionIncremental(
   let committedRootSessionEmitted = rootSessionEmitted;
   let committedNextEventIndex = nextEventIndex;
   let committedToolResultCounters = new Map(toolResultCounters);
+  let lastCompletedTurn = cloneLastCompletedTurn(options.resume?.lastCompletedTurn);
+  let committedLastCompletedTurn = cloneLastCompletedTurn(lastCompletedTurn);
 
   let p = 0;
   while (p < buf.length) {
@@ -449,6 +467,16 @@ export async function parseCodexSessionIncremental(
     }
 
     const pl = payload as { type?: string };
+
+    if (rec.type === 'compacted') {
+      if (sessionId) {
+        pendingCompactions.push({
+          offset: lineEndOffset,
+          event: buildCodexCompactionEvent(sessionId, rec.timestamp ?? '', lastCompletedTurn),
+        });
+      }
+      continue;
+    }
 
     if (rec.type === 'event_msg') {
       if (pl.type === 'token_count') {
@@ -554,7 +582,12 @@ export async function parseCodexSessionIncremental(
           // Stamp preceding so the next task_started knows this turn closed
           // off the slot and the record can be linked.
           userTurnSlot.precedingMessageId = openTurn.turnId;
-          finalized.push(finalizeTurn(openTurn, cumulative));
+          const closed = finalizeTurn(openTurn, cumulative);
+          finalized.push(closed);
+          lastCompletedTurn = {
+            messageId: closed.turnId,
+            cacheRead: closed.usage.cacheRead,
+          };
           openTurn = null;
           committedEndOffset = lineEndOffset;
           committedCumulative = { ...cumulative };
@@ -567,6 +600,7 @@ export async function parseCodexSessionIncremental(
           committedRootSessionEmitted = rootSessionEmitted;
           committedNextEventIndex = nextEventIndex;
           committedToolResultCounters = new Map(toolResultCounters);
+          committedLastCompletedTurn = cloneLastCompletedTurn(lastCompletedTurn);
         }
         continue;
       }
@@ -911,8 +945,14 @@ export async function parseCodexSessionIncremental(
     toolResultCounters: Object.fromEntries(committedToolResultCounters),
   };
   if (committedSessionCwd !== undefined) resume.sessionCwd = committedSessionCwd;
+  const lastCompleted = cloneLastCompletedTurn(committedLastCompletedTurn);
+  if (lastCompleted) resume.lastCompletedTurn = lastCompleted;
 
   const emittedUserTurns = userTurns.slice(0, committedUserTurnsCount);
+  const emittedEvents: CompactionEvent[] = [];
+  for (const e of pendingCompactions) {
+    if (e.offset <= committedEndOffset) emittedEvents.push(e.event);
+  }
 
   // Execution graph (#42 / #87). Emit only records whose source line ended
   // at-or-before the committed end offset — anything past it belongs to an
@@ -929,6 +969,7 @@ export async function parseCodexSessionIncremental(
   return {
     turns,
     content,
+    events: emittedEvents,
     userTurns: emittedUserTurns,
     relationships: emittedRelationships,
     toolResultEvents: emittedToolResultEvents,
@@ -961,6 +1002,24 @@ function collectReasoningText(rp: ReasoningPayload): string {
   return parts.join('\n');
 }
 
+function buildCodexCompactionEvent(
+  sessionId: string,
+  ts: string,
+  preceding: CodexLastCompletedTurn | undefined,
+): CompactionEvent {
+  const event: CompactionEvent = {
+    v: 1,
+    source: 'codex',
+    sessionId,
+    ts,
+  };
+  if (preceding) {
+    event.precedingMessageId = preceding.messageId;
+    event.tokensBeforeCompact = preceding.cacheRead;
+  }
+  return event;
+}
+
 function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
   if (!r) {
     return {
@@ -984,7 +1043,16 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
   if (r.sessionCwd !== undefined) out.sessionCwd = r.sessionCwd;
   if (r.userTurnSlot) out.userTurnSlot = cloneSlot(r.userTurnSlot);
   else out.userTurnSlot = { blocks: [], ts: '' };
+  const lastCompleted = cloneLastCompletedTurn(r.lastCompletedTurn);
+  if (lastCompleted) out.lastCompletedTurn = lastCompleted;
   return out;
+}
+
+function cloneLastCompletedTurn(
+  turn: CodexLastCompletedTurn | undefined,
+): CodexLastCompletedTurn | undefined {
+  if (!turn) return undefined;
+  return { ...turn };
 }
 
 function cloneSlot(s: UserTurnSlot | PersistedUserTurnSlot): UserTurnSlot {

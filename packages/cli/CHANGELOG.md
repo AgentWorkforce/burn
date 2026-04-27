@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Codex ingest persists compaction events.** The Codex passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see Codex context compactions with the same event shape Claude uses.
+
 ## [0.34.0] - 2026-04-27
 
 ### Added
