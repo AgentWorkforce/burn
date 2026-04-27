@@ -1,5 +1,6 @@
 import {
   buildCompareTable,
+  compareFromArchive,
   DEFAULT_MIN_SAMPLE,
   hasMinimumFidelity,
   loadPricing,
@@ -8,7 +9,7 @@ import {
   type CompareTable,
   type FidelitySummary,
 } from '@relayburn/analyze';
-import { queryAll, type EnrichedTurn, type Query } from '@relayburn/ledger';
+import { buildArchive, queryAll, type EnrichedTurn, type Query } from '@relayburn/ledger';
 import type { FidelityClass } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
@@ -20,7 +21,7 @@ const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
 Usage:
   burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>]
                [--workflow <id>] [--agent <id>] [--min-sample <n>]
-               [--fidelity <class>] [--include-partial] [--json|--csv]
+               [--fidelity <class>] [--include-partial] [--json|--csv] [--no-archive]
 
 Flags:
   --models      comma-separated list of model names to include (default: all)
@@ -42,6 +43,8 @@ Flags:
   --json        emit a stable JSON object (analyzedTurns, models, categories,
                 totals, cells[], fidelity{ minimum, excluded, summary })
   --csv         emit a CSV with one row per (model, category) pair
+  --no-archive  bypass the SQLite archive and stream the ledger directly
+                (legacy path; honored when env RELAYBURN_ARCHIVE=0)
   --help, -h    show this message
 
 Cell metrics:
@@ -145,26 +148,52 @@ export async function runCompare(
 
   await ingest();
   const pricing = await loadPricingFn();
-  const turns = await query(q);
-
-  // Summarize fidelity over the *unfiltered* slice so coverage notes and the
-  // JSON `summary` reflect the input the user actually queried, not what
-  // survived the gate. The summary is what tells them why N turns were
-  // dropped.
-  const summary = summarizeFidelity(turns);
-  // `--fidelity partial` (and its `--include-partial` shorthand) is the "let
-  // everything through" escape hatch per #41. The FidelityClass ordering used
-  // by `hasMinimumFidelity` puts `partial` strictly above `aggregate-only` /
-  // `cost-only`, so the predicate would otherwise still drop those two
-  // buckets. Bypass the gate entirely in that mode.
-  const filteredTurns = minFidelity === 'partial'
-    ? turns
-    : turns.filter((t) => hasMinimumFidelity(t.fidelity, minFidelity));
-  const excluded = computeExcluded(summary, minFidelity);
 
   const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample };
   if (models) opts.models = models;
-  const table = buildCompareTable(filteredTurns, opts);
+
+  // Archive path is the default (#88), but it does not yet apply
+  // `attribution_fidelity` filtering at the SQL layer. Fall back to the
+  // in-memory `queryAll` + `buildCompareTable` path whenever fidelity
+  // filtering is in effect (i.e., minFidelity !== 'partial') so #95's
+  // gate is correctly applied. `--include-partial` / `--fidelity partial`
+  // disables filtering and reuses the archive's grouped SQL.
+  const useArchive = !shouldBypassArchive(args) && minFidelity === 'partial';
+  let table: CompareTable;
+  let filteredTurns: EnrichedTurn[];
+  let summary: FidelitySummary;
+  if (useArchive) {
+    // Materialize the ledger tail before reading. ingestAll() above only
+    // writes to the JSONL ledger; the archive is a derived read model that
+    // needs an explicit catch-up build to reflect the just-appended turns.
+    await buildArchive();
+    const result = await compareFromArchive(q, opts);
+    table = result.table;
+    // For fidelity-permissive mode the JSON summary reflects everything in
+    // the queried slice; we still emit a zero-excluded breakdown so the
+    // schema is stable.
+    const turnsForSummary = await query(q);
+    summary = summarizeFidelity(turnsForSummary);
+    filteredTurns = turnsForSummary;
+    void result.analyzedTurns;
+  } else {
+    const turns = await query(q);
+    // Summarize fidelity over the *unfiltered* slice so coverage notes and
+    // the JSON `summary` reflect the input the user actually queried, not
+    // what survived the gate. The summary is what tells them why N turns
+    // were dropped.
+    summary = summarizeFidelity(turns);
+    // `--fidelity partial` (and its `--include-partial` shorthand) is the
+    // "let everything through" escape hatch per #41. The FidelityClass
+    // ordering used by `hasMinimumFidelity` puts `partial` strictly above
+    // `aggregate-only` / `cost-only`, so the predicate would otherwise
+    // still drop those two buckets. Bypass the gate entirely in that mode.
+    filteredTurns = minFidelity === 'partial'
+      ? turns
+      : turns.filter((t) => hasMinimumFidelity(t.fidelity, minFidelity));
+    table = buildCompareTable(filteredTurns, opts);
+  }
+  const excluded = computeExcluded(summary, minFidelity);
 
   if (wantJson) {
     process.stdout.write(
@@ -189,6 +218,13 @@ export async function runCompare(
     renderTty(table, filteredTurns.length, { minimum: minFidelity, excluded }),
   );
   return 0;
+}
+
+function shouldBypassArchive(args: ParsedArgs): boolean {
+  if (args.flags['no-archive'] === true) return true;
+  const env = process.env['RELAYBURN_ARCHIVE'];
+  if (env === '0' || env === 'false' || env === 'no') return true;
+  return false;
 }
 
 function isFidelityClass(s: string): s is FidelityClass {

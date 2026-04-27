@@ -1,13 +1,19 @@
 import {
   BUILTIN_PRESETS,
+  buildArchive,
   findPreset,
   loadPlans,
+  openArchive,
   plansPath,
   queryAll,
   savePlans,
 } from '@relayburn/ledger';
 import type { Plan, PlanProvider } from '@relayburn/ledger';
-import { computePlanUsage, loadPricing } from '@relayburn/analyze';
+import {
+  computePlanUsage,
+  loadPricing,
+  planUsageFromArchive,
+} from '@relayburn/analyze';
 import type { PlanUsage } from '@relayburn/analyze';
 
 import type { ParsedArgs } from '../args.js';
@@ -58,10 +64,24 @@ export async function runPlans(args: ParsedArgs): Promise<number> {
 async function runList(args: ParsedArgs): Promise<number> {
   const json = args.flags['json'] === true;
   const plans = await loadPlans();
-  const statuses = await statusForPlans(plans);
+  const statuses = await statusForPlans(plans, { useArchive: shouldUseArchive(args) });
 
   if (json) {
-    process.stdout.write(JSON.stringify({ plans: statuses }, null, 2) + '\n');
+    // Hand-shape the per-plan payload so the `fidelity` block is emitted next
+    // to the rest of the cycle stats. Mirrors the shape `burn limits --json`
+    // would build if it grew the same field — keep the two surfaces parallel.
+    const payload = {
+      plans: statuses.map((s) => ({
+        usage: {
+          ...s.usage,
+          fidelity: {
+            confidence: s.usage.fidelity.confidence,
+            summary: s.usage.fidelity.summary,
+          },
+        },
+      })),
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return 0;
   }
 
@@ -72,22 +92,69 @@ async function runList(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  const rows: string[][] = [['id', 'name', 'spent', 'projected', 'budget', 'reset']];
+  const anyLowConfidence = statuses.some((s) => s.usage.fidelity.confidence === 'low');
+  const headers = ['id', 'name', 'spent', 'projected', 'budget', 'reset'];
+  if (anyLowConfidence) headers.push('confidence');
+  const rows: string[][] = [headers];
   for (const s of statuses) {
     const u = s.usage;
     const projected = formatUsd(u.projectedEndOfCycleUsd);
     const projectedCell = u.limitedData ? `${projected} (limited data)` : projected;
-    rows.push([
+    const row = [
       u.plan.id,
       u.plan.name,
       formatUsd(u.spentUsd),
       projectedCell,
       formatUsd(u.plan.budgetUsd),
       `${u.daysElapsed}/${u.daysInCycle} days`,
-    ]);
+    ];
+    if (anyLowConfidence) {
+      row.push(u.fidelity.confidence === 'low' ? 'low (partial token data)' : 'high');
+    }
+    rows.push(row);
   }
-  process.stdout.write(table(rows) + '\n');
+  let output = table(rows) + '\n';
+  // When any cycle has at least one turn missing per-turn token coverage,
+  // append a footer line that names the worst affected plan so users can
+  // tell at a glance whether the totals are a lower bound. Suppressed when
+  // every cycle is full-fidelity.
+  for (const s of statuses) {
+    const u = s.usage;
+    if (u.fidelity.confidence !== 'low') continue;
+    const total = u.fidelity.summary.total;
+    if (total === 0) continue;
+    const lacking = countTurnsLackingTokens(u.fidelity.summary);
+    if (lacking === 0) continue;
+    output +=
+      `note: ${u.plan.id}: ${lacking} of ${total} turns this cycle ` +
+      `lack per-turn token data — totals are a lower bound.\n`;
+  }
+  process.stdout.write(output);
   return 0;
+}
+
+// Count turns whose per-turn input or output token coverage is missing.
+// Mirrors the `confidence === 'low'` rule in `computePlanUsage` so the
+// rendered count agrees with the per-plan flag. We approximate using the
+// summary's `missingCoverage` counts: any turn missing input *or* output
+// counts; we take the max of the two as a safe upper bound (a turn missing
+// both still counts once, which is what the user wants to read).
+function countTurnsLackingTokens(summary: {
+  missingCoverage: { hasInputTokens: number; hasOutputTokens: number };
+  byClass: { partial: number; 'aggregate-only': number; 'cost-only': number };
+}): number {
+  const fromCoverage = Math.max(
+    summary.missingCoverage.hasInputTokens,
+    summary.missingCoverage.hasOutputTokens,
+  );
+  // Fallback for records whose granularity already classes them as
+  // aggregate-only / cost-only / partial — those are by definition missing
+  // per-turn token coverage even if the coverage flags happen to be on.
+  const fromClass =
+    summary.byClass.partial +
+    summary.byClass['aggregate-only'] +
+    summary.byClass['cost-only'];
+  return Math.max(fromCoverage, fromClass);
 }
 
 async function runAdd(args: ParsedArgs): Promise<number> {
@@ -236,14 +303,48 @@ export interface PlanStatus {
   usage: PlanUsage;
 }
 
+export interface StatusForPlansOptions {
+  /**
+   * When true, aggregate spend with one SQL query per plan against the
+   * archive (`archive.sqlite`). When false (default), use the legacy
+   * `queryAll()` + in-memory reduce path. Defaults to `false` so callers
+   * have to opt in explicitly: `burn plans` wires this to `shouldUseArchive`
+   * (the `--no-archive` flag + `RELAYBURN_ARCHIVE` env var); `burn limits`
+   * stays on the legacy path until it's migrated separately. See #91.
+   */
+  useArchive?: boolean;
+}
+
 // Shared by `burn plans` (list view) and `burn limits` (composite view) so
 // both surfaces show identical numbers.
-export async function statusForPlans(plans: Plan[]): Promise<PlanStatus[]> {
+export async function statusForPlans(
+  plans: Plan[],
+  opts: StatusForPlansOptions = {},
+): Promise<PlanStatus[]> {
   if (plans.length === 0) return [];
   await ingestAll();
   const pricing = await loadPricing();
-  // Pull the widest cycle window across plans so we only walk the ledger
-  // once. Cheaper than per-plan queryAll for users with several plans.
+  const useArchive = opts.useArchive ?? false;
+
+  if (useArchive) {
+    // Materialize the ledger tail into the archive once before any plan
+    // queries so `SELECT SUM(...) FROM turns` sees every turn the legacy
+    // `queryAll()` path would have. Cheap when up to date (idempotent).
+    await buildArchive();
+    const db = await openArchive();
+    try {
+      const now = new Date();
+      return plans.map((plan) => ({
+        usage: planUsageFromArchive(plan, { pricing, db, now }),
+      }));
+    } finally {
+      db.close();
+    }
+  }
+
+  // Fallback: in-memory reduce. Walk the ledger once across the widest cycle
+  // window so we still beat per-plan re-scanning when several plans share a
+  // common cycle.
   const oldestStart = plans
     .map((p) => {
       const usageStub = computePlanUsage(p, [], { pricing, now: new Date() });
@@ -253,6 +354,18 @@ export async function statusForPlans(plans: Plan[]): Promise<PlanStatus[]> {
   const since = new Date(oldestStart).toISOString();
   const turns = await queryAll({ since });
   return plans.map((plan) => ({ usage: computePlanUsage(plan, turns, { pricing }) }));
+}
+
+/**
+ * `--no-archive` flag (or `RELAYBURN_ARCHIVE=0`) opts back into the legacy
+ * `queryAll()` reduce path. Kept while we shake out the archive migration —
+ * see issue #91 / #78.
+ */
+function shouldUseArchive(args: ParsedArgs): boolean {
+  if (args.flags['no-archive'] === true) return false;
+  const env = process.env['RELAYBURN_ARCHIVE'];
+  if (env === '0' || env === 'false') return false;
+  return true;
 }
 
 function isProvider(s: string): s is PlanProvider {

@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
+import { loadBuiltinPricing } from '@relayburn/analyze';
 import type {
   BashAggregation,
   FileAggregation,
@@ -8,8 +9,25 @@ import type {
   SubagentAggregation,
   WasteResult,
 } from '@relayburn/analyze';
+import type { EnrichedTurn } from '@relayburn/ledger';
+import type { Coverage, Fidelity, SourceKind } from '@relayburn/reader';
 
-import { formatWasteReport, isAttributionDegraded } from './waste.js';
+import {
+  ATTRIBUTION_REQUIRED,
+  PATTERN_REQUIRED,
+  describeExcluded,
+  fmtCoverageKey,
+  formatCoverageNotice,
+  formatWasteReport,
+  isAttributionDegraded,
+  renderSourcesClause,
+  resolvePatternSelection,
+  runPatternsMode,
+  runWasteAttribution,
+  turnPassesCoverage,
+  type WasteAttributionDeps,
+} from './waste.js';
+import type { ParsedArgs } from '../args.js';
 
 function session(
   id: string,
@@ -192,5 +210,711 @@ describe('formatWasteReport', () => {
       out,
       /⚠ attribution is degraded: 39,486 of 39,587 sessions \(99\.7%\)/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fidelity-gating helpers (#100)
+
+function fullCoverage(): Coverage {
+  return {
+    hasInputTokens: true,
+    hasOutputTokens: true,
+    hasReasoningTokens: true,
+    hasCacheReadTokens: true,
+    hasCacheCreateTokens: true,
+    hasToolCalls: true,
+    hasToolResultEvents: true,
+    hasSessionRelationships: true,
+    hasRawContent: true,
+  };
+}
+
+function fidelityWith(
+  cls: Fidelity['class'],
+  granularity: Fidelity['granularity'],
+  overrides: Partial<Coverage> = {},
+): Fidelity {
+  return {
+    class: cls,
+    granularity,
+    coverage: { ...fullCoverage(), ...overrides },
+  };
+}
+
+function makeTurn(
+  overrides: Partial<EnrichedTurn> & {
+    sessionId: string;
+    messageId: string;
+    turnIndex: number;
+    source: SourceKind;
+  },
+): EnrichedTurn {
+  return {
+    v: 1,
+    model: 'claude-sonnet-4-6',
+    ts: '2026-04-20T00:00:00.000Z',
+    usage: {
+      input: 100,
+      output: 50,
+      reasoning: 0,
+      cacheRead: 0,
+      cacheCreate5m: 0,
+      cacheCreate1h: 0,
+    },
+    toolCalls: [],
+    enrichment: {},
+    ...overrides,
+  };
+}
+
+function args(flags: Record<string, string | true> = {}): ParsedArgs {
+  return { flags, tags: {}, positional: [], passthrough: [] };
+}
+
+async function captureStdio<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; stdout: string; stderr: string }> {
+  let stdout = '';
+  let stderr = '';
+  const origOut = process.stdout.write.bind(process.stdout);
+  const origErr = process.stderr.write.bind(process.stderr);
+  process.stdout.write = ((c: string | Uint8Array) => {
+    stdout += typeof c === 'string' ? c : Buffer.from(c).toString('utf8');
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((c: string | Uint8Array) => {
+    stderr += typeof c === 'string' ? c : Buffer.from(c).toString('utf8');
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    const result = await fn();
+    return { result, stdout, stderr };
+  } finally {
+    process.stdout.write = origOut;
+    process.stderr.write = origErr;
+  }
+}
+
+const EMPTY_DEPS: WasteAttributionDeps = {
+  loadContentForSession: async () => [],
+  loadUserTurnsForSession: async () => [],
+};
+
+describe('turnPassesCoverage (#100)', () => {
+  it('passes turns with no fidelity field (legacy ledger writers)', () => {
+    const t = makeTurn({ sessionId: 's', messageId: 'm', turnIndex: 0, source: 'claude-code' });
+    assert.equal(turnPassesCoverage(t, ['hasToolCalls', 'hasToolResultEvents']), true);
+  });
+
+  it('fails a turn that is missing any required coverage flag', () => {
+    const t = makeTurn({
+      sessionId: 's',
+      messageId: 'm',
+      turnIndex: 0,
+      source: 'codex',
+      fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+    });
+    assert.equal(turnPassesCoverage(t, ['hasToolCalls', 'hasToolResultEvents']), false);
+  });
+
+  it('passes a turn that has every required coverage flag', () => {
+    const t = makeTurn({
+      sessionId: 's',
+      messageId: 'm',
+      turnIndex: 0,
+      source: 'codex',
+      fidelity: fidelityWith('full', 'per-turn'),
+    });
+    assert.equal(turnPassesCoverage(t, ['hasToolCalls', 'hasToolResultEvents']), true);
+  });
+});
+
+describe('describeExcluded / source clauses (#100)', () => {
+  it('groups excluded turns by source and tracks granularity + missing flags', () => {
+    const excluded = [
+      makeTurn({
+        sessionId: 's1',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+      }),
+      makeTurn({
+        sessionId: 's1',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'codex',
+        fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+      }),
+      makeTurn({
+        sessionId: 's2',
+        messageId: 'm3',
+        turnIndex: 0,
+        source: 'opencode',
+        fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+          hasToolCalls: false,
+          hasToolResultEvents: false,
+        }),
+      }),
+    ];
+    const breakdown = describeExcluded(excluded, ATTRIBUTION_REQUIRED);
+    assert.equal(breakdown.sources.size, 2);
+    const codex = breakdown.sources.get('codex')!;
+    assert.equal(codex.count, 2);
+    assert.deepEqual([...codex.granularities].sort(), ['per-turn']);
+    assert.deepEqual([...codex.missing].sort(), ['hasToolResultEvents']);
+    const opencode = breakdown.sources.get('opencode')!;
+    assert.equal(opencode.count, 1);
+    assert.deepEqual([...opencode.granularities].sort(), ['per-session-aggregate']);
+    assert.deepEqual(
+      [...opencode.missing].sort(),
+      ['hasToolCalls', 'hasToolResultEvents'],
+    );
+
+    const clause = renderSourcesClause(breakdown);
+    assert.match(clause, /codex \(per-turn, missing tool-result events\)/);
+    assert.match(
+      clause,
+      /opencode \(per-session-aggregate, missing tool-call records, tool-result events\)/,
+    );
+  });
+
+  it('formatCoverageNotice renders an "analyzed N of M" line that names the gap and source', () => {
+    const excluded = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+      }),
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'codex',
+        fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+      }),
+    ];
+    const breakdown = describeExcluded(excluded, ATTRIBUTION_REQUIRED);
+    const notice = formatCoverageNotice(8, 10, breakdown);
+    assert.match(notice, /^analyzed 8 of 10 turns; 2 excluded for /);
+    assert.match(notice, /missing tool-result events/);
+    assert.match(notice, /\(codex\)/);
+  });
+
+  it('fmtCoverageKey expands every key without falling through to a raw flag name', () => {
+    const keys: Array<keyof Coverage> = [
+      'hasInputTokens',
+      'hasOutputTokens',
+      'hasReasoningTokens',
+      'hasCacheReadTokens',
+      'hasCacheCreateTokens',
+      'hasToolCalls',
+      'hasToolResultEvents',
+      'hasSessionRelationships',
+      'hasRawContent',
+    ];
+    for (const k of keys) {
+      const text = fmtCoverageKey(k);
+      assert.ok(text && !text.startsWith('has'), `${k} -> ${text}`);
+    }
+  });
+});
+
+describe('PATTERN_REQUIRED prerequisites (#100)', () => {
+  it('matches the spec: retries/failures need tool-result events; reverts needs raw content', () => {
+    assert.deepEqual([...PATTERN_REQUIRED.retries].sort(), [
+      'hasToolCalls',
+      'hasToolResultEvents',
+    ]);
+    assert.deepEqual([...PATTERN_REQUIRED.failures].sort(), [
+      'hasToolCalls',
+      'hasToolResultEvents',
+    ]);
+    assert.deepEqual([...PATTERN_REQUIRED.reverts].sort(), [
+      'hasRawContent',
+      'hasToolCalls',
+    ]);
+  });
+});
+
+describe('resolvePatternSelection', () => {
+  it('parses a comma-separated list of detector names', () => {
+    const set = resolvePatternSelection('retries,failures');
+    assert.equal(set.size, 2);
+    assert.ok(set.has('retries'));
+    assert.ok(set.has('failures'));
+  });
+
+  it('returns all detectors when the flag is bare (true)', () => {
+    const set = resolvePatternSelection(true);
+    assert.equal(set.size, 4);
+  });
+});
+
+describe('runWasteAttribution — fidelity refusal (#100)', () => {
+  it('refuses with exit 2, names the missing prerequisite + source kind, when every turn is aggregate-only', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 142; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
+        }),
+      );
+    }
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runWasteAttribution(args(), turns, pricing, EMPTY_DEPS),
+    );
+    assert.equal(result, 2);
+    assert.equal(stdout, '');
+    assert.match(stderr, /burn waste: 142\/142 turns lack tool-call\/tool-result coverage/);
+    assert.match(stderr, /codex/);
+    assert.match(stderr, /per-session-aggregate/);
+    assert.match(stderr, /missing tool-call records, tool-result events/);
+    assert.match(stderr, /No waste analysis was performed/);
+  });
+
+  it('JSON-mode refusal still writes a fidelity block with refused: true and exits 2', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+          hasToolCalls: false,
+          hasToolResultEvents: false,
+        }),
+      }),
+    ];
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runWasteAttribution(args({ json: true }), turns, pricing, EMPTY_DEPS),
+    );
+    assert.equal(result, 2);
+    assert.match(stderr, /No waste analysis was performed/);
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.fidelity.refused, true);
+    assert.equal(payload.fidelity.analyzed, 0);
+    assert.equal(payload.fidelity.excluded, 1);
+    assert.ok(payload.fidelity.summary, 'summary present');
+    assert.equal(payload.fidelity.summary.total, 1);
+    assert.equal(payload.fidelity.summary.byClass['aggregate-only'], 1);
+    assert.equal(payload.turnsAnalyzed, 0);
+    assert.match(payload.refusalReason, /No waste analysis was performed/);
+  });
+
+  it('does not refuse on a fully empty input (no turns at all)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const { result, stderr } = await captureStdio(() =>
+      runWasteAttribution(args(), [], pricing, EMPTY_DEPS),
+    );
+    assert.equal(result, 0, 'empty slice is not a refusal');
+    assert.equal(stderr, '');
+  });
+});
+
+describe('runWasteAttribution — partial exclusion (#100)', () => {
+  it('analyzes only qualifying turns and prints "analyzed N of M" with the exclusion reason', async () => {
+    const pricing = await loadBuiltinPricing();
+    const goodFidelity = fidelityWith('full', 'per-turn');
+    const badFidelity = fidelityWith('partial', 'per-turn', { hasToolResultEvents: false });
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 'good',
+        messageId: 'g1',
+        turnIndex: 0,
+        source: 'claude-code',
+        fidelity: goodFidelity,
+      }),
+      makeTurn({
+        sessionId: 'good',
+        messageId: 'g2',
+        turnIndex: 1,
+        source: 'claude-code',
+        fidelity: goodFidelity,
+      }),
+      makeTurn({
+        sessionId: 'bad',
+        messageId: 'b1',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: badFidelity,
+      }),
+    ];
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runWasteAttribution(args(), turns, pricing, EMPTY_DEPS),
+    );
+    assert.equal(result, 0);
+    assert.equal(stderr, '');
+    assert.match(stdout, /turns analyzed: 2/);
+    assert.match(stdout, /analyzed 2 of 3 turns; 1 excluded for/);
+    assert.match(stdout, /missing tool-result events/);
+    assert.match(stdout, /\(codex\)/);
+  });
+
+  it('omits the coverage notice when nothing is excluded', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm',
+        turnIndex: 0,
+        source: 'claude-code',
+        fidelity: fidelityWith('full', 'per-turn'),
+      }),
+    ];
+    const { result, stdout } = await captureStdio(() =>
+      runWasteAttribution(args(), turns, pricing, EMPTY_DEPS),
+    );
+    assert.equal(result, 0);
+    assert.doesNotMatch(stdout, /analyzed \d+ of \d+ turns; \d+ excluded/);
+  });
+
+  it('JSON mode includes a fidelity block with analyzed, excluded, summary, refused: false', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 'good',
+        messageId: 'g1',
+        turnIndex: 0,
+        source: 'claude-code',
+        fidelity: fidelityWith('full', 'per-turn'),
+      }),
+      makeTurn({
+        sessionId: 'bad',
+        messageId: 'b1',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+      }),
+    ];
+    const { result, stdout } = await captureStdio(() =>
+      runWasteAttribution(args({ json: true }), turns, pricing, EMPTY_DEPS),
+    );
+    assert.equal(result, 0);
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.fidelity.refused, false);
+    assert.equal(payload.fidelity.analyzed, 1);
+    assert.equal(payload.fidelity.excluded, 1);
+    assert.equal(payload.fidelity.summary.total, 2);
+    assert.equal(payload.fidelity.summary.byClass.full, 1);
+    assert.equal(payload.fidelity.summary.byClass.partial, 1);
+    assert.equal(payload.turnsAnalyzed, 1);
+  });
+});
+
+describe('runPatternsMode — fidelity refusal (#100)', () => {
+  it('refuses with exit 2 when every turn is below every selected detector\'s prereq', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+          hasToolCalls: false,
+          hasToolResultEvents: false,
+          hasRawContent: false,
+        }),
+      }),
+    ];
+    const selected = new Set(['retries', 'failures'] as const);
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runPatternsMode(args(), turns, pricing, [], selected),
+    );
+    assert.equal(result, 2);
+    assert.equal(stdout, '');
+    assert.match(stderr, /burn waste --patterns: no selected detectors can run/);
+    assert.match(stderr, /retries: 1\/1 turns lack tool-call records \+ tool-result events/);
+    assert.match(stderr, /failures: 1\/1 turns lack tool-call records \+ tool-result events/);
+    assert.match(stderr, /codex/);
+  });
+
+  it('JSON-mode refusal includes per-detector required prerequisites and refused=true', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+          hasToolCalls: false,
+          hasToolResultEvents: false,
+        }),
+      }),
+    ];
+    const selected = new Set(['retries'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.fidelity.refused, true);
+    assert.ok(Array.isArray(payload.fidelity.perDetector));
+    const retries = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'retries',
+    );
+    assert.ok(retries, 'retries detector reported');
+    assert.deepEqual(retries.required.sort(), ['hasToolCalls', 'hasToolResultEvents']);
+    assert.equal(retries.refused, true);
+    assert.equal(retries.analyzed, 0);
+    assert.equal(retries.excluded, 1);
+    assert.ok(Array.isArray(retries.excludedBySource));
+    assert.equal(retries.excludedBySource[0].source, 'codex');
+  });
+});
+
+describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
+  it('names the missing coverage flag per detector when a source is excluded', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Three claude turns with full fidelity; two codex turns with partial
+    // fidelity (no tool-result events). Selecting --patterns retries,failures
+    // should analyze only the claude turns and emit a per-detector notice
+    // naming the missing prereq.
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 'good',
+          messageId: `g${i}`,
+          turnIndex: i,
+          source: 'claude-code',
+          fidelity: fidelityWith('full', 'per-turn'),
+        }),
+      );
+    }
+    for (let i = 0; i < 2; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 'bad',
+          messageId: `b${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+        }),
+      );
+    }
+    const selected = new Set(['retries', 'failures'] as const);
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runPatternsMode(args(), turns, pricing, [], selected),
+    );
+    assert.equal(result, 0);
+    assert.equal(stderr, '');
+    // Per-detector lines should mention the missing prereq + source.
+    assert.match(stdout, /retries: analyzed 3 of 5 turns; 2 excluded \(needs tool-call records \+ tool-result events;/);
+    assert.match(stdout, /failures: analyzed 3 of 5 turns; 2 excluded \(needs tool-call records \+ tool-result events;/);
+    assert.match(stdout, /missing tool-result events/);
+    assert.match(stdout, /\(codex\)/);
+  });
+
+  it('JSON mode reports per-detector required + excludedBySource shape', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 'good',
+        messageId: 'g1',
+        turnIndex: 0,
+        source: 'claude-code',
+        fidelity: fidelityWith('full', 'per-turn'),
+      }),
+      makeTurn({
+        sessionId: 'bad',
+        messageId: 'b1',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+      }),
+    ];
+    const selected = new Set(['retries', 'failures', 'reverts'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.fidelity.refused, false);
+    const retries = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'retries',
+    );
+    const reverts = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'reverts',
+    );
+    assert.ok(retries && reverts);
+    assert.deepEqual(retries.required.sort(), ['hasToolCalls', 'hasToolResultEvents']);
+    assert.deepEqual(reverts.required.sort(), ['hasRawContent', 'hasToolCalls']);
+    // The codex turn here passes reverts (it has hasRawContent + hasToolCalls
+    // by default in fullCoverage()) but fails retries.
+    assert.equal(retries.excluded, 1);
+    assert.equal(retries.excludedBySource[0].source, 'codex');
+    assert.deepEqual(
+      retries.excludedBySource[0].missingCoverage.sort(),
+      ['hasToolResultEvents'],
+    );
+  });
+
+  it('compaction detector is independent of fidelity — runs against the full slice', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Even though every turn lacks tool coverage, selecting only `compaction`
+    // must not refuse — the compaction sidecar comes from the ledger directly.
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+          hasToolCalls: false,
+          hasToolResultEvents: false,
+        }),
+      }),
+    ];
+    const selected = new Set(['compaction'] as const);
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runPatternsMode(args(), turns, pricing, [], selected),
+    );
+    assert.equal(result, 0, 'compaction-only must not refuse on aggregate-only input');
+    assert.equal(stderr, '');
+    assert.doesNotMatch(stdout, /no selected detectors can run/);
+  });
+
+  it('compaction-only counts every turn as analyzed (top-level + JSON fidelity)', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Regression for the case where --patterns compaction reported
+    // turnsAnalyzed: 0 / fidelity.excluded: total because the analyzed-union
+    // skipped the compaction slice. Compaction has no fidelity prereq, so
+    // every turn is "analyzed" by it.
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
+        }),
+      );
+    }
+    const selected = new Set(['compaction'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.turnsAnalyzed, 3);
+    assert.equal(payload.fidelity.analyzed, 3);
+    assert.equal(payload.fidelity.excluded, 0);
+    assert.equal(payload.fidelity.refused, false);
+    const compaction = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'compaction',
+    );
+    assert.ok(compaction);
+    assert.equal(compaction.analyzed, 3);
+    assert.equal(compaction.excluded, 0);
+  });
+
+  it('mixed compaction + retries union credits compaction-only turns', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Two full-fidelity turns (analyzable by retries) + three aggregate-only
+    // turns (only compaction can analyze). The union should be all 5 turns;
+    // fidelity.excluded must be 0 because every turn was analyzed by at
+    // least one detector.
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 2; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 'good',
+          messageId: `g${i}`,
+          turnIndex: i,
+          source: 'claude-code',
+          fidelity: fidelityWith('full', 'per-turn'),
+        }),
+      );
+    }
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 'bad',
+          messageId: `b${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
+        }),
+      );
+    }
+    const selected = new Set(['retries', 'compaction'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.turnsAnalyzed, 5);
+    assert.equal(payload.fidelity.analyzed, 5);
+    assert.equal(payload.fidelity.excluded, 0);
+    const retries = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'retries',
+    );
+    assert.equal(retries.analyzed, 2);
+    assert.equal(retries.excluded, 3);
+    const compaction = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'compaction',
+    );
+    assert.equal(compaction.analyzed, 5);
+    assert.equal(compaction.excluded, 0);
+  });
+
+  it('mixed retries+compaction does NOT refuse when only retries lacks coverage', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Every turn is aggregate-only — retries must refuse, but compaction
+    // has no fidelity prereq and should still run. Refusing the whole
+    // command in this case would silently drop the compaction signal.
+    const turns: EnrichedTurn[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        makeTurn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          source: 'codex',
+          fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
+        }),
+      );
+    }
+    const selected = new Set(['retries', 'compaction'] as const);
+    const { result, stdout, stderr } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    assert.equal(result, 0, 'must not refuse — compaction can still run');
+    assert.equal(stderr, '');
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.fidelity.refused, false);
+    assert.equal(payload.turnsAnalyzed, 3);
+    const retries = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'retries',
+    );
+    assert.equal(retries.refused, true);
+    assert.equal(retries.analyzed, 0);
+    const compaction = payload.fidelity.perDetector.find(
+      (d: { kind: string }) => d.kind === 'compaction',
+    );
+    assert.equal(compaction.refused, false);
+    assert.equal(compaction.analyzed, 3);
   });
 });
