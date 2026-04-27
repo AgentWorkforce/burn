@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Codex ingest persists compaction events.** The Codex passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see Codex context compactions with the same event shape Claude uses.
 
+### Removed
+
+- **`burn rebuild-index`** ([#151](https://github.com/AgentWorkforce/burn/issues/151)). The standalone subcommand has been dropped — it was a thin alias for `burn rebuild --index` with identical behavior. Run `burn rebuild --index` instead.
+
 ## [0.34.0] - 2026-04-27
 
 ### Added

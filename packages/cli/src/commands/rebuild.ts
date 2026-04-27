@@ -13,7 +13,7 @@ Usage:
   burn rebuild --index --reclassify [--force]
 
 Flags:
-  --index       rebuild the sidecar index (equivalent to 'burn rebuild-index')
+  --index       rebuild the sidecar index
   --reclassify  re-run the activity classifier on every ledger turn
   --force       with --reclassify, overwrite activity even if already set
   --content     re-parse source session files to populate missing content

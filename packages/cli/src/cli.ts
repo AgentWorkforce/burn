@@ -14,7 +14,6 @@ import { runMcpServer } from './commands/mcp-server.js';
 import { runOpencodeWrapper } from './commands/opencode.js';
 import { runPlans } from './commands/plans.js';
 import { runRebuild } from './commands/rebuild.js';
-import { runRebuildIndex } from './commands/rebuild-index.js';
 import { runSummary } from './commands/summary.js';
 import { runWaste } from './commands/waste.js';
 import { runWatch } from './commands/watch.js';
@@ -41,7 +40,6 @@ Usage:
   burn content prune [--days <n>] [--force]
   burn archive       build | rebuild | status [--json]
   burn rebuild         --index | --reclassify [--force]
-  burn rebuild-index   (alias for 'burn rebuild --index')
 
 Examples:
   burn summary --since 24h
@@ -124,8 +122,6 @@ async function main(): Promise<number> {
       return runArchive(args);
     case 'rebuild':
       return runRebuild(args);
-    case 'rebuild-index':
-      return runRebuildIndex();
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 1;
