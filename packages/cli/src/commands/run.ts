@@ -42,7 +42,7 @@ export async function runWrapper(
   const harnessName = args.positional[0];
   if (!harnessName || harnessName === 'help' || args.flags['help'] === true) {
     process.stdout.write(RUN_HELP);
-    return harnessName ? 0 : 2;
+    return (harnessName || args.flags['help'] === true) ? 0 : 2;
   }
   const adapter = lookupHarness(harnessName);
   if (!adapter) {
