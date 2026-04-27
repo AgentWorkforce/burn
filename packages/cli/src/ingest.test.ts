@@ -434,6 +434,28 @@ describe('ingestCodexSessions execution graph passthrough (#87)', () => {
       seen.add(key);
     }
   });
+
+  it('persists codex compaction events, no duplicates on re-ingest', async () => {
+    await writeCodexSession(tmpHome, 'rollout-compact-1', codexCompactionSession());
+    await ingestCodexSessions();
+    await ingestCodexSessions();
+
+    const ledger = await readFile(path.join(tmpRelay, 'ledger.jsonl'), 'utf8');
+    const lines = ledger
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { kind: string; record: Record<string, unknown> });
+
+    const compactions = lines
+      .filter((l) => l.kind === 'compaction' && l.record['source'] === 'codex')
+      .map((l) => l.record);
+
+    assert.equal(compactions.length, 1, 'exactly one codex compaction row appended');
+    assert.equal(compactions[0]!['sessionId'], 'sess_codex_compact_ingest');
+    assert.equal(compactions[0]!['precedingMessageId'], 'turn_compact_ingest_1');
+    assert.equal(compactions[0]!['tokensBeforeCompact'], 1000);
+  });
 });
 
 // ---------- helpers ----------
@@ -663,6 +685,92 @@ function codexCommittedSession(sessionId: string, turnId: string, cwd: string): 
       timestamp: '2026-04-20T01:00:02.000Z',
       type: 'event_msg',
       payload: { type: 'task_complete', turn_id: turnId },
+    },
+  ];
+  return lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+}
+
+function codexCompactionSession(): string {
+  const lines = [
+    {
+      timestamp: '2026-04-20T03:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: 'sess_codex_compact_ingest',
+        cwd: '/tmp/project',
+        timestamp: '2026-04-20T03:00:00.000Z',
+      },
+    },
+    {
+      timestamp: '2026-04-20T03:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_compact_ingest_1', cwd: '/tmp/project', model: 'gpt-5.4' },
+    },
+    {
+      timestamp: '2026-04-20T03:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_compact_ingest_1' },
+    },
+    {
+      timestamp: '2026-04-20T03:00:01.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 3000,
+            cached_input_tokens: 1000,
+            output_tokens: 200,
+            reasoning_output_tokens: 50,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T03:00:02.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_compact_ingest_1' },
+    },
+    {
+      timestamp: '2026-04-20T03:00:03.000Z',
+      type: 'compacted',
+      payload: {
+        message: '',
+        replacement_history: [
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'start' }] },
+          { type: 'compaction', encrypted_content: 'opaque' },
+        ],
+      },
+    },
+    {
+      timestamp: '2026-04-20T03:00:04.000Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_compact_ingest_2', cwd: '/tmp/project', model: 'gpt-5.4' },
+    },
+    {
+      timestamp: '2026-04-20T03:00:04.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_compact_ingest_2' },
+    },
+    {
+      timestamp: '2026-04-20T03:00:05.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 6500,
+            cached_input_tokens: 1500,
+            output_tokens: 450,
+            reasoning_output_tokens: 90,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T03:00:06.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_compact_ingest_2' },
     },
   ];
   return lines.map((line) => JSON.stringify(line)).join('\n') + '\n';

@@ -358,6 +358,9 @@ async function ingestCodexInto(
             rootSessionEmitted: priorCodex.rootSessionEmitted === true,
             nextEventIndex: priorCodex.nextEventIndex ?? 0,
             toolResultCounters: { ...(priorCodex.toolResultCounters ?? {}) },
+            ...(priorCodex.lastCompletedTurn !== undefined
+              ? { lastCompletedTurn: priorCodex.lastCompletedTurn }
+              : {}),
           };
 
       if (!rotated && startOffset >= st.size) {
@@ -374,6 +377,7 @@ async function ingestCodexInto(
       const {
         turns,
         content,
+        events,
         userTurns,
         relationships,
         toolResultEvents,
@@ -407,6 +411,9 @@ async function ingestCodexInto(
       if (content.length > 0) {
         await appendContent(content);
       }
+      if (events.length > 0) {
+        await appendCompactions(events);
+      }
       if (relationships.length > 0) {
         await appendRelationships(relationships);
       }
@@ -431,6 +438,9 @@ async function ingestCodexInto(
       if (nextResume.nextEventIndex !== undefined) next.nextEventIndex = nextResume.nextEventIndex;
       if (nextResume.toolResultCounters && Object.keys(nextResume.toolResultCounters).length > 0) {
         next.toolResultCounters = nextResume.toolResultCounters;
+      }
+      if (nextResume.lastCompletedTurn !== undefined) {
+        next.lastCompletedTurn = nextResume.lastCompletedTurn;
       }
       cursors[file] = next;
     } catch (err) {

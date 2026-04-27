@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **Codex compaction parity with Claude.** Codex passive ingest now detects `compacted` session-log records, persists them as ledger compaction events, and anchors them to the preceding Codex turn so compaction-loss analysis can cover Codex sessions instead of only Claude Code.
+
 - **`burn plans` honors per-cycle fidelity** ([#108](https://github.com/AgentWorkforce/burn/issues/108)). `computePlanUsage` now annotates each cycle with a `fidelity: { confidence, summary }` block so renderers can flag low-confidence totals. The CLI list view gains a `confidence` column and footer note when any cycle contains turns missing per-turn token data; `--json` emits the same `FidelitySummary` shape. Spend totals continue to include all contributing turns — the annotation marks them as a lower bound rather than silently under-counting.
 
 ## [0.27.0] - 2026-04-26

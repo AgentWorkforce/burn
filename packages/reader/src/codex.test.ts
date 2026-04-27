@@ -98,6 +98,23 @@ describe('parseCodexSession', () => {
     assert.equal(t2!.toolCalls[0]!.target, 'ls');
   });
 
+  it('emits a CompactionEvent anchored to the preceding committed turn', async () => {
+    const { turns, events } = await parseCodexSession(path.join(FIXTURES, 'compaction.jsonl'));
+
+    assert.equal(turns.length, 2);
+    assert.equal(events.length, 1);
+
+    const ev = events[0]!;
+    assert.equal(ev.source, 'codex');
+    assert.equal(ev.sessionId, 'sess_codex_compact');
+    assert.equal(ev.ts, '2026-04-20T03:00:03.000Z');
+    assert.equal(ev.precedingMessageId, 'turn_compact_1');
+
+    const preceding = turns.find((t) => t.messageId === 'turn_compact_1')!;
+    assert.equal(ev.tokensBeforeCompact, preceding.usage.cacheRead);
+    assert.equal(ev.tokensBeforeCompact, 1000);
+  });
+
   it('produces stable argsHash for identical tool inputs', async () => {
     const a = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
     const b = await parseCodexSession(path.join(FIXTURES, 'with-tool-call.jsonl'));
@@ -326,6 +343,44 @@ describe('parseCodexSessionIncremental', () => {
       // The second turn's usage must match the delta computed in the full parse
       const full = await parseCodexSession(fullPath);
       assert.deepEqual(resumed.turns[0]!.usage, full.turns[1]!.usage);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('anchors a resumed compaction event to the previous cursor turn', async () => {
+    const file = path.join(FIXTURES, 'compaction.jsonl');
+    const raw = await readFile(file, 'utf8');
+    const lines = raw.split('\n');
+    // Offset right after the first task_complete line (line index 4, 0-based).
+    const cutoff = Buffer.byteLength(lines.slice(0, 5).join('\n') + '\n', 'utf8');
+
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-compact-inc-'));
+    try {
+      const partialPath = path.join(tmp, 'partial.jsonl');
+      await writeFile(partialPath, raw.slice(0, cutoff), 'utf8');
+      const partial = await parseCodexSessionIncremental(partialPath);
+      assert.equal(partial.turns.length, 1);
+      assert.equal(partial.events.length, 0);
+      assert.deepEqual(partial.resume.lastCompletedTurn, {
+        messageId: 'turn_compact_1',
+        cacheRead: 1000,
+      });
+
+      const fullPath = path.join(tmp, 'full.jsonl');
+      await writeFile(fullPath, raw, 'utf8');
+      const resumed = await parseCodexSessionIncremental(fullPath, {
+        startOffset: partial.endOffset,
+        resume: partial.resume,
+      });
+
+      assert.equal(resumed.turns.length, 1);
+      assert.equal(resumed.turns[0]!.messageId, 'turn_compact_2');
+      assert.equal(resumed.events.length, 1);
+      assert.equal(resumed.events[0]!.precedingMessageId, 'turn_compact_1');
+      assert.equal(resumed.events[0]!.tokensBeforeCompact, 1000);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
