@@ -40,6 +40,11 @@ export {
 } from './archive.js';
 export type { ArchiveStatus, BuildResult } from './archive.js';
 export {
+  archiveAvailable,
+  queryAllFromArchive,
+  queryTurnsFromArchive,
+} from './archive-query.js';
+export {
   appendContent,
   listContentSessionIds,
   pruneContent,
@@ -81,6 +86,10 @@ export {
   turnIdHash,
   turnContentFingerprint,
   userTurnIdHash,
+  // Exposed (underscore-prefixed) so cross-package tests that swap
+  // RELAYBURN_HOME between cases can drop the in-memory dedup cache. Not
+  // part of the supported runtime surface — see `index-sidecar.ts`.
+  __resetIndexCacheForTesting,
 } from './index-sidecar.js';
 export { reclassifyLedger } from './reclassify.js';
 export type { ReclassifyOptions, ReclassifyReport } from './reclassify.js';

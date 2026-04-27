@@ -1,4 +1,4 @@
-import { readdir, stat } from 'node:fs/promises';
+import { open, readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -33,6 +33,10 @@ import {
 } from '@relayburn/ledger';
 
 import { walkJsonl, walkOpencodeSessions } from './walk.js';
+import {
+  cleanupStalePendingStamps,
+  resolvePendingStampsForSession,
+} from './pending-stamps.js';
 
 // Resolved per-call so tests can swap HOME between runs. Cheap (string join).
 function claudeProjectsDir(): string {
@@ -106,6 +110,7 @@ export function setIngestGapWriter(write: (msg: string) => void): (msg: string) 
 }
 
 export async function ingestClaudeProjects(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -117,6 +122,7 @@ export async function ingestClaudeProjects(): Promise<IngestReport> {
 }
 
 export async function ingestCodexSessions(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -128,6 +134,7 @@ export async function ingestCodexSessions(): Promise<IngestReport> {
 }
 
 export async function ingestOpencodeSessions(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -139,6 +146,7 @@ export async function ingestOpencodeSessions(): Promise<IngestReport> {
 }
 
 export async function ingestAll(): Promise<IngestReport> {
+  await cleanupStalePendingStamps();
   const cursors = await loadCursors();
   const report = emptyReport();
   const contentMode = await resolveContentMode();
@@ -195,7 +203,7 @@ function emitGapWarning(
   state.write(
     `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
       `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
-      `adapter, so burn waste will fall back to even-split attribution. See #33.\n`,
+      `adapter, so burn waste will use user-turn block sizes when available, then fall back to even-split attribution. See #33.\n`,
   );
 }
 
@@ -344,10 +352,9 @@ async function ingestCodexInto(
             sessionId: priorCodex.sessionId,
             turnContexts: { ...priorCodex.turnContexts },
             ...(priorCodex.sessionCwd !== undefined ? { sessionCwd: priorCodex.sessionCwd } : {}),
-            // Execution-graph (#42 / #87) committed counters. Carried across
-            // `burn` invocations so dedup at the writer is the only line of
-            // defense — without these the second pass would emit an
-            // already-committed root row and reset eventIndex to 0.
+            ...(priorCodex.userTurnSlot !== undefined
+              ? { userTurnSlot: priorCodex.userTurnSlot }
+              : {}),
             rootSessionEmitted: priorCodex.rootSessionEmitted === true,
             nextEventIndex: priorCodex.nextEventIndex ?? 0,
             toolResultCounters: { ...(priorCodex.toolResultCounters ?? {}) },
@@ -374,6 +381,18 @@ async function ingestCodexInto(
         resume: nextResume,
       } = await parseCodexSessionIncremental(file, opts);
       if (turns.length > 0) {
+        const sessionId = nextResume.sessionId || turns[0]!.sessionId || (await deriveCodexSessionId(file));
+        if (sessionId) {
+          const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
+            harness: 'codex',
+            sessionId,
+            sessionPath: file,
+            sessionMtimeMs: st.mtimeMs,
+          };
+          const cwd = nextResume.sessionCwd ?? turns[0]!.project;
+          if (cwd !== undefined) candidate.cwd = cwd;
+          await resolvePendingStampsForSession(candidate);
+        }
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
@@ -407,6 +426,7 @@ async function ingestCodexInto(
         turnContexts: nextResume.turnContexts,
       };
       if (nextResume.sessionCwd !== undefined) next.sessionCwd = nextResume.sessionCwd;
+      if (nextResume.userTurnSlot !== undefined) next.userTurnSlot = nextResume.userTurnSlot;
       if (nextResume.rootSessionEmitted === true) next.rootSessionEmitted = true;
       if (nextResume.nextEventIndex !== undefined) next.nextEventIndex = nextResume.nextEventIndex;
       if (nextResume.toolResultCounters && Object.keys(nextResume.toolResultCounters).length > 0) {
@@ -461,6 +481,14 @@ async function ingestOpencodeInto(
         contentMode,
       });
       if (turns.length > 0) {
+        const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
+          harness: 'opencode',
+          sessionId,
+          sessionPath: file,
+          sessionMtimeMs: Math.max(st.mtimeMs, messageMtime),
+        };
+        if (turns[0]!.project !== undefined) candidate.cwd = turns[0]!.project;
+        await resolvePendingStampsForSession(candidate);
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
@@ -572,7 +600,7 @@ async function reingestCodexContent(
 ): Promise<void> {
   for (const file of await walkJsonl(codexSessionsDir())) {
     report.scannedFiles++;
-    const derived = deriveCodexSessionId(file);
+    const derived = await deriveCodexSessionId(file);
     if (derived && existing.has(derived)) {
       report.skippedExisting++;
       continue;
@@ -633,12 +661,48 @@ async function reingestOpencodeContent(
 // Codex filenames are `rollout-<timestamp>-<uuid>.jsonl` where the UUID is the
 // session id. Extract it for a cheap skip check before parsing. If the pattern
 // doesn't match, return null and fall back to post-filtering.
-function deriveCodexSessionId(file: string): string | null {
+export async function deriveCodexSessionId(file: string): Promise<string | null> {
   const base = path.basename(file, '.jsonl');
   const m = base.match(
     /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/,
   );
-  return m ? m[1]! : null;
+  if (m) return m[1]!;
+  return readCodexSessionMetaId(file);
+}
+
+async function readCodexSessionMetaId(file: string): Promise<string | null> {
+  // session_meta is always the first JSONL line, so an 8 KB prefix is more
+  // than enough — avoids loading multi-MB rollouts during rebuild --content
+  // (#125 review).
+  let raw: string;
+  try {
+    const handle = await open(file, 'r');
+    try {
+      const buf = Buffer.alloc(8192);
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+      raw = buf.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+  for (const line of raw.split(/\r?\n/, 20)) {
+    const text = line.trim();
+    if (!text) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object') continue;
+    const rec = parsed as { type?: unknown; payload?: unknown };
+    if (rec.type !== 'session_meta' || !rec.payload || typeof rec.payload !== 'object') continue;
+    const id = (rec.payload as { id?: unknown }).id;
+    return typeof id === 'string' && id.length > 0 ? id : null;
+  }
+  return null;
 }
 
 async function listDirs(parent: string): Promise<string[]> {

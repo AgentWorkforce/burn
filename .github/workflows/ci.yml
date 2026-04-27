@@ -1,0 +1,48 @@
+name: CI
+
+# Build + test the full workspace on every PR and on every push to main.
+# Catches the failure mode where a syntactically-broken file lands on main
+# undetected because publish.yml only runs on workflow_dispatch — e.g. the
+# unescaped backticks in archive.ts's SCHEMA_SQL template literal that
+# slipped past review and broke `tsc` for everyone downstream.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+          cache: 'pnpm'
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # `tsc --build` walks every package in the workspace and is the gate
+      # for parse-level failures. Run it as its own step so a syntax error
+      # surfaces clearly in the failure summary instead of being lumped in
+      # with test output.
+      - name: Build workspace
+        run: pnpm -r run build
+
+      - name: Run tests
+        run: pnpm run test

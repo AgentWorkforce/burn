@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `planUsageFromArchive(plan, { pricing, db, now })` ([#91](https://github.com/AgentWorkforce/burn/issues/91)) — computes `PlanUsage` for a plan via one `SUM(...) GROUP BY (source, model)` query against the archive's `turns` table instead of a full ledger scan. Returns the same shape as `computePlanUsage` so callers can swap paths cleanly. Reuses `costForTurn`'s source-aware reasoning override, so Codex `output_tokens` is not double-billed against `usage.reasoning`.
 
+## [0.31.0] - 2026-04-27
+
+### Added
+
+- **`compareFromArchive(query, opts)`** ([#88](https://github.com/AgentWorkforce/burn/issues/88)). New helper that builds a `CompareTable` directly from `archive.sqlite` via a single grouped `SELECT … GROUP BY model, activity, source` plus a tiny per-(model, activity) follow-up for median retries, instead of streaming every `EnrichedTurn` through `buildCompareTable` in memory. Returns `{ table, analyzedTurns }` so the caller can populate the same "turns analyzed" header the legacy path uses. Output is byte-identical to `buildCompareTable(await queryAll(q), opts)` for the parity fixture; per-source reasoning-mode handling (Codex's `included_in_output`) is preserved by grouping on `source` alongside `(model, activity)`. Powers the migration of `burn compare` to the archive read model.
+
+## [0.27.0] - 2026-04-26
+
+### Changed
+
+- **Waste attribution uses persisted user-turn block sizes before even-split** (#2). `attributeWaste()` accepts `userTurnsBySession` and fills missing per-`toolUseId` sizes from `UserTurnRecord.blocks` when content sidecars are unavailable, while keeping full sidecar content primary when present. Sessions that use this path report `attributionMethod: "user-turn"` instead of degrading to even-split.
+
 ## [0.22.0] - 2026-04-26
 
 ### Changed

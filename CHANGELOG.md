@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-04-26
+
+### Added
+
+- **End-to-end user-turn block-size attribution** (#2). Parser-emitted `UserTurnRecord`s are now persisted in the ledger for Claude, Codex, and OpenCode ingest paths, then consumed by waste attribution as the sized fallback between full content sidecars and even-split. Raw `TurnRecord`s remain unchanged; the new path is additive.
+
 ## [0.19.0] - 2026-04-26
 
 ### Added

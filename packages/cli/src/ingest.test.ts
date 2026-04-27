@@ -1,20 +1,32 @@
 import { strict as assert } from 'node:assert';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
-import { queryUserTurns } from '@relayburn/ledger';
-import { ledgerPath } from '@relayburn/ledger';
+import { ledgerPath, queryAll, queryUserTurns } from '@relayburn/ledger';
 
 import {
   countToolCallGaps,
   ingestClaudeProjects,
+  deriveCodexSessionId,
   ingestCodexSessions,
+  ingestOpencodeSessions,
   resetIngestGapWarnings,
   setIngestGapWriter,
 } from './ingest.js';
+import { pendingStampsDir, writePendingStamp } from './pending-stamps.js';
 
 describe('countToolCallGaps', () => {
   it('flags a session with tool calls but zero tool_result records', () => {
@@ -165,6 +177,39 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
     }
     assert.equal(captured.length, 1, 'second/third ingest stays silent');
   });
+
+  it('persists Codex parser user-turn records during passive ingest', async () => {
+    await writeCodexSession(tmpHome, 'rollout-user-turn', codexSessionWithUserTurnBridge());
+
+    await ingestCodexSessions();
+
+    const userTurns = await queryUserTurns({ sessionId: 'sess_user_turn_1' });
+    assert.equal(userTurns.length, 1);
+    assert.equal(userTurns[0]!.precedingMessageId, 'turn_user_1');
+    assert.equal(userTurns[0]!.followingMessageId, 'turn_user_2');
+    assert.equal(userTurns[0]!.blocks.length, 1);
+    assert.equal(userTurns[0]!.blocks[0]!.kind, 'tool_result');
+    assert.equal(userTurns[0]!.blocks[0]!.toolUseId, 'call_read_1');
+  });
+
+  it('carries a Codex user-turn slot across passive ingest resume boundaries', async () => {
+    const [firstChunk, secondChunk] = codexSessionWithUserTurnBridgeChunks(
+      'sess_user_turn_resume',
+    );
+    const file = await writeCodexSession(tmpHome, 'rollout-user-turn-resume', firstChunk);
+
+    await ingestCodexSessions();
+    assert.equal((await queryUserTurns({ sessionId: 'sess_user_turn_resume' })).length, 0);
+
+    await appendFile(file, secondChunk, 'utf8');
+    await ingestCodexSessions();
+
+    const userTurns = await queryUserTurns({ sessionId: 'sess_user_turn_resume' });
+    assert.equal(userTurns.length, 1);
+    assert.equal(userTurns[0]!.precedingMessageId, 'turn_user_1');
+    assert.equal(userTurns[0]!.followingMessageId, 'turn_user_2');
+    assert.equal(userTurns[0]!.blocks[0]!.toolUseId, 'call_read_1');
+  });
 });
 
 describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
@@ -208,6 +253,108 @@ describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
     assert.equal(sizeAfter, sizeBefore, 'ledger must not grow on idempotent re-ingest');
     const second = await queryUserTurns();
     assert.equal(second.length, 1, 'still one user-turn line after re-ingest');
+  });
+});
+
+describe('pending stamp ingest', () => {
+  let tmpHome: string;
+  let tmpRelay: string;
+  const originalHome = process.env['HOME'];
+  const originalRelay = process.env['RELAYBURN_HOME'];
+  const originalStore = process.env['RELAYBURN_CONTENT_STORE'];
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-pending-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-pending-relay-'));
+    process.env['HOME'] = tmpHome;
+    process.env['RELAYBURN_HOME'] = tmpRelay;
+    delete process.env['RELAYBURN_CONTENT_STORE'];
+    resetIngestGapWarnings();
+  });
+
+  after(async () => {
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
+    else delete process.env['RELAYBURN_HOME'];
+    if (originalStore !== undefined) process.env['RELAYBURN_CONTENT_STORE'] = originalStore;
+    else delete process.env['RELAYBURN_CONTENT_STORE'];
+    resetIngestGapWarnings();
+    await rm(tmpHome, { recursive: true, force: true });
+    await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  it('applies a codex pending stamp before the first ingested turn is appended', async () => {
+    const spawnStartTs = new Date();
+    await writePendingStamp({
+      harness: 'codex',
+      cwd: '/tmp/project',
+      enrichment: { workflowId: 'wf-codex', agentId: 'ag-codex', harness: 'codex' },
+      sessionDirHint: path.join(tmpHome, '.codex', 'sessions'),
+      spawnStartTs,
+      spawnerPid: 63,
+    });
+    await writeCodexSession(
+      tmpHome,
+      'renamed-rollout',
+      codexCommittedSession('sess_pending_codex', 'turn_pending_codex', '/tmp/project'),
+    );
+
+    await ingestCodexSessions();
+
+    const lines = (await readFile(ledgerPath(), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { kind: string; selector?: { sessionId?: string } });
+    assert.equal(lines[0]!.kind, 'stamp');
+    assert.equal(lines[0]!.selector?.sessionId, 'sess_pending_codex');
+    assert.equal(lines[1]!.kind, 'turn');
+
+    const turns = await queryAll({ sessionId: 'sess_pending_codex' });
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0]!.enrichment['workflowId'], 'wf-codex');
+    assert.equal(turns[0]!.enrichment['agentId'], 'ag-codex');
+    assert.deepEqual(await listPendingFiles(), []);
+  });
+
+  it('applies an opencode pending stamp before the first ingested turn is appended', async () => {
+    const spawnStartTs = new Date();
+    const storage = path.join(tmpHome, '.local', 'share', 'opencode', 'storage');
+    await writePendingStamp({
+      harness: 'opencode',
+      cwd: '/tmp/project',
+      enrichment: { workflowId: 'wf-opencode', agentId: 'ag-opencode', harness: 'opencode' },
+      sessionDirHint: path.join(storage, 'session'),
+      spawnStartTs,
+      spawnerPid: 63,
+    });
+    await cp(path.resolve('tests/fixtures/opencode/simple/storage'), storage, { recursive: true });
+
+    await ingestOpencodeSessions();
+
+    const lines = (await readFile(ledgerPath(), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { kind: string; selector?: { sessionId?: string } });
+    assert.equal(lines[0]!.kind, 'stamp');
+    assert.equal(lines[0]!.selector?.sessionId, 'ses_simple');
+    assert.equal(lines[1]!.kind, 'turn');
+
+    const turns = await queryAll({ sessionId: 'ses_simple' });
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0]!.enrichment['workflowId'], 'wf-opencode');
+    assert.equal(turns[0]!.enrichment['agentId'], 'ag-opencode');
+    assert.deepEqual(await listPendingFiles(), []);
+  });
+
+  it('derives a codex session id from the first JSONL session_meta line when the filename is opaque', async () => {
+    const file = await writeCodexSession(
+      tmpHome,
+      'opaque-name',
+      codexCommittedSession('sess_from_meta', 'turn_from_meta', '/tmp/project'),
+    );
+
+    assert.equal(await deriveCodexSessionId(file), 'sess_from_meta');
   });
 });
 
@@ -395,12 +542,22 @@ function makeContent(opts: {
   };
 }
 
-async function writeCodexSession(home: string, name: string, body: string): Promise<void> {
+async function writeCodexSession(home: string, name: string, body: string): Promise<string> {
   // Real codex layout is ~/.codex/sessions/YYYY/MM/DD/<rollout>.jsonl. The
   // walker is recursive, so we can use any nested layout under sessions/.
   const dir = path.join(home, '.codex', 'sessions', '2026', '04', '24');
   await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, `${name}.jsonl`), body, 'utf8');
+  const file = path.join(dir, `${name}.jsonl`);
+  await writeFile(file, body, 'utf8');
+  return file;
+}
+
+async function listPendingFiles(): Promise<string[]> {
+  try {
+    return await readdir(pendingStampsDir());
+  } catch {
+    return [];
+  }
 }
 
 // A codex session with a committed turn (task_started → task_complete) that
@@ -468,6 +625,47 @@ function codexSessionWithToolCallNoOutput(): string {
     },
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+function codexCommittedSession(sessionId: string, turnId: string, cwd: string): string {
+  const lines = [
+    {
+      timestamp: '2026-04-20T01:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: sessionId, cwd, timestamp: '2026-04-20T01:00:00.000Z' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: turnId, cwd, model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: turnId },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 12,
+            cached_input_tokens: 2,
+            output_tokens: 4,
+            reasoning_output_tokens: 1,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:02.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: turnId },
+    },
+  ];
+  return lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
 }
 
 // A codex session that spawns one subagent (call_spawn_eg → agent_eg_xyz),
@@ -592,4 +790,112 @@ function codexChatOnlySession(): string {
     },
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+function codexSessionWithUserTurnBridge(): string {
+  return codexSessionWithUserTurnBridgeChunks('sess_user_turn_1').join('');
+}
+
+function codexSessionWithUserTurnBridgeChunks(sessionId: string): [string, string] {
+  const lines = [
+    {
+      timestamp: '2026-04-20T01:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: sessionId,
+        cwd: '/tmp/project',
+        timestamp: '2026-04-20T01:00:00.000Z',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_user_1', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_user_1' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: '{"cmd":"cat a.txt"}',
+        call_id: 'call_read_1',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:01.500Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_read_1',
+        output: 'file contents that feed the next turn',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:02.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 500,
+            cached_input_tokens: 0,
+            output_tokens: 50,
+            reasoning_output_tokens: 0,
+            total_tokens: 550,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:02.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_user_1' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:03.000Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_user_2', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:03.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_user_2' },
+    },
+    {
+      timestamp: '2026-04-20T01:00:04.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 1500,
+            cached_input_tokens: 0,
+            output_tokens: 60,
+            reasoning_output_tokens: 0,
+            total_tokens: 1560,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:00:04.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_user_2' },
+    },
+  ];
+  const firstChunk = lines
+    .slice(0, 7)
+    .map((l) => JSON.stringify(l))
+    .join('\n') + '\n';
+  const secondChunk = lines
+    .slice(7)
+    .map((l) => JSON.stringify(l))
+    .join('\n') + '\n';
+  return [firstChunk, secondChunk];
 }

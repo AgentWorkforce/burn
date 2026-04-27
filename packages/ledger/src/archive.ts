@@ -125,6 +125,10 @@ CREATE TABLE IF NOT EXISTS turns (
   parent_subagent_id    TEXT,
   parent_tool_use_id    TEXT,
   subagent_type         TEXT,
+  -- Free-form subagent description (Claude reader populates this from the
+  -- spawn payload). Persisted so 'burn summary --subagent-tree --json'
+  -- preserves SubagentTreeNode.description on archive-backed reads.
+  subagent_description  TEXT,
   input_tokens          INTEGER NOT NULL DEFAULT 0,
   output_tokens         INTEGER NOT NULL DEFAULT 0,
   reasoning_tokens      INTEGER NOT NULL DEFAULT 0,
@@ -335,6 +339,7 @@ function applyAdditiveMigrations(db: DatabaseSync): void {
   ensureColumn(db, 'turns', 'attribution_fidelity', 'TEXT');
   ensureColumn(db, 'turns', 'tokens_present', 'INTEGER');
   ensureColumn(db, 'turns', 'cost_present', 'INTEGER');
+  ensureColumn(db, 'turns', 'subagent_description', 'TEXT');
   ensureColumn(db, 'sessions', 'min_fidelity', 'TEXT');
   ensureColumn(db, 'sessions', 'has_full_attribution', 'INTEGER');
   // Index on the fidelity column — `CREATE INDEX IF NOT EXISTS` is already
@@ -594,6 +599,7 @@ async function applyLedgerRange(
         source, session_id, message_id, turn_index, ts, model, project, project_key,
         activity, stop_reason, has_edits, retries,
         is_sidechain, subagent_id, parent_subagent_id, parent_tool_use_id, subagent_type,
+        subagent_description,
         input_tokens, output_tokens, reasoning_tokens,
         cache_read_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
         workflow_id, agent_id, persona, tier, enrichment_json,
@@ -602,6 +608,7 @@ async function applyLedgerRange(
         ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
+        ?,
         ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?, ?,
@@ -622,6 +629,7 @@ async function applyLedgerRange(
         parent_subagent_id = excluded.parent_subagent_id,
         parent_tool_use_id = excluded.parent_tool_use_id,
         subagent_type = excluded.subagent_type,
+        subagent_description = excluded.subagent_description,
         input_tokens = excluded.input_tokens,
         output_tokens = excluded.output_tokens,
         reasoning_tokens = excluded.reasoning_tokens,
@@ -947,6 +955,7 @@ function writeTurn(
     t.subagent?.parentAgentId ?? null,
     t.subagent?.parentToolUseId ?? null,
     t.subagent?.subagentType ?? null,
+    t.subagent?.description ?? null,
     t.usage.input,
     t.usage.output,
     t.usage.reasoning,

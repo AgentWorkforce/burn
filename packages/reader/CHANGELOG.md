@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-04-26
+
 ### Added
 
 - **Codex passive reader populates the execution graph** ([#87](https://github.com/AgentWorkforce/burn/issues/87)). `parseCodexSession` and `parseCodexSessionIncremental` now return `relationships` and `toolResultEvents` alongside the existing `turns` / `content` / `userTurns` arrays. Each `function_call_output` / `custom_tool_call_output` becomes a `ToolResultEventRecord` with `eventSource: 'function_call_output'`; `status` is patched to `errored` (and `isError: true`) when a matching `exec_command_end` reports a non-zero exit or `patch_apply_end` reports `success: false`, falling back to `completed` otherwise. `spawn_agent` function calls produce a `subagent` `SessionRelationshipRecord` joining the spawned agent id (resolved from the call's args or its `function_call_output` payload) back to the spawning `call_id` via `parentToolUseId`. Terminal subagent notifications — `event_msg` payloads matching `subagent_*_complete` / `_done` / `_finished` / `_terminated` — surface as `ToolResultEventRecord`s with `eventSource: 'subagent_notification'`. Each session emits exactly one `root` row. `eventIndex`, per-`call_id` `callIndex` counters, and the root-emitted flag are persisted in `CodexResumeState` so resumed parses produce session-monotonic ids without double-emitting any `(sessionId, toolUseId, eventIndex)` tuple.

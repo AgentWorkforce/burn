@@ -1,11 +1,12 @@
 import {
   buildCompareTable,
+  compareFromArchive,
   DEFAULT_MIN_SAMPLE,
   loadPricing,
   type CompareCell,
   type CompareTable,
 } from '@relayburn/analyze';
-import { queryAll, type Query } from '@relayburn/ledger';
+import { buildArchive, queryAll, type Query } from '@relayburn/ledger';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
@@ -15,7 +16,8 @@ const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
 
 Usage:
   burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>]
-               [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+               [--workflow <id>] [--agent <id>] [--min-sample <n>]
+               [--json|--csv] [--no-archive]
 
 Flags:
   --models      comma-separated list of model names to include (default: all)
@@ -29,6 +31,8 @@ Flags:
   --json        emit a stable JSON object (analyzedTurns, models, categories,
                 totals, cells[])
   --csv         emit a CSV with one row per (model, category) pair
+  --no-archive  bypass the SQLite archive and stream the ledger directly
+                (legacy path; honored when env RELAYBURN_ARCHIVE=0)
   --help, -h    show this message
 
 Cell metrics:
@@ -84,14 +88,33 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
 
   await ingestAll();
   const pricing = await loadPricing();
-  const turns = await queryAll(q);
 
   const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample };
   if (models) opts.models = models;
-  const table = buildCompareTable(turns, opts);
+
+  // Archive path is the default (#88). Fallback to the in-memory `queryAll`
+  // + `buildCompareTable` path is preserved behind `--no-archive` and the
+  // env override `RELAYBURN_ARCHIVE=0` for parity validation and as a
+  // safety net when the archive is missing or corrupt.
+  const useArchive = !shouldBypassArchive(args);
+  let table: CompareTable;
+  let analyzedTurns: number;
+  if (useArchive) {
+    // Materialize the ledger tail before reading. ingestAll() above only
+    // writes to the JSONL ledger; the archive is a derived read model that
+    // needs an explicit catch-up build to reflect the just-appended turns.
+    await buildArchive();
+    const result = await compareFromArchive(q, opts);
+    table = result.table;
+    analyzedTurns = result.analyzedTurns;
+  } else {
+    const turns = await queryAll(q);
+    table = buildCompareTable(turns, opts);
+    analyzedTurns = turns.length;
+  }
 
   if (wantJson) {
-    process.stdout.write(JSON.stringify(toJson(table, turns.length), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(toJson(table, analyzedTurns), null, 2) + '\n');
     return 0;
   }
   if (wantCsv) {
@@ -99,8 +122,15 @@ export async function runCompare(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(renderTty(table, turns.length));
+  process.stdout.write(renderTty(table, analyzedTurns));
   return 0;
+}
+
+function shouldBypassArchive(args: ParsedArgs): boolean {
+  if (args.flags['no-archive'] === true) return true;
+  const env = process.env['RELAYBURN_ARCHIVE'];
+  if (env === '0' || env === 'false' || env === 'no') return true;
+  return false;
 }
 
 function toJson(t: CompareTable, analyzedTurns: number): object {

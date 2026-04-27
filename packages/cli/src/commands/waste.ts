@@ -11,12 +11,19 @@ import {
   type SubagentAggregation,
   type WasteResult,
 } from '@relayburn/analyze';
-import { queryAll, queryCompactions, readContent, type Query } from '@relayburn/ledger';
-import type { ContentRecord } from '@relayburn/reader';
+import {
+  queryAll,
+  queryCompactions,
+  queryUserTurns,
+  readContent,
+  type Query,
+} from '@relayburn/ledger';
+import type { ContentRecord, UserTurnRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
 const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts'] as const;
@@ -45,16 +52,22 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
+  const providerFilter = parseProviderFilter(args.flags['provider']);
+  if (providerFilter instanceof Error) {
+    process.stderr.write(providerFilter.message);
+    return 2;
+  }
 
   await ingestAll();
   const pricing = await loadPricing();
-  const turns = await queryAll(q);
+  const turns = filterTurnsByProvider(await queryAll(q), providerFilter);
 
   const patternsFlag = args.flags['patterns'];
   if (patternsFlag !== undefined) {
     const selected = resolvePatternSelection(patternsFlag);
+    const sessionIds = new Set(turns.map((t) => t.sessionId));
     const compactions = selected.has('compaction')
-      ? await queryCompactions(q)
+      ? (await queryCompactions(q)).filter((c) => sessionIds.has(c.sessionId))
       : [];
     const patterns = detectPatterns(turns, { pricing, compactions });
     return renderPatterns(args, patterns, selected, turns.length);
@@ -62,12 +75,19 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
 
   const sessionIds = new Set(turns.map((t) => t.sessionId));
   const contentBySession = new Map<string, ContentRecord[]>();
+  const userTurnsBySession = new Map<string, UserTurnRecord[]>();
   for (const sessionId of sessionIds) {
     const records = await readContent({ sessionId });
     if (records.length > 0) contentBySession.set(sessionId, records);
+    const userTurns = await queryUserTurns({ sessionId });
+    if (userTurns.length > 0) userTurnsBySession.set(sessionId, userTurns);
   }
 
-  const result = attributeWaste(turns, { pricing, contentBySession });
+  const result = attributeWaste(turns, {
+    pricing,
+    contentBySession,
+    userTurnsBySession,
+  });
   const files = aggregateByFile(result.attributions);
   const bashes = aggregateByBash(result.attributions);
   const subagents = aggregateBySubagent(result.attributions);
