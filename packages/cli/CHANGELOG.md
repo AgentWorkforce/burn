@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`burn mcp-server` runs an incremental `buildArchive()` at startup** ([#97](https://github.com/AgentWorkforce/burn/issues/97)) so the first `burn__sessionCost` / `burn__currentBlock` tool call hits the SQL archive instead of re-walking the JSONL ledger. The build is idempotent — a no-op when nothing has changed since the last build — and a build failure logs to stderr but never refuses to serve. Tool fallbacks to `queryAll` are wired through the new `onLog` hook so any persistent archive breakage is visible in the MCP host's stderr stream.
+- **`burn mcp-server` runs an incremental `buildArchive()` at startup** ([#97](https://github.com/AgentWorkforce/burn/issues/97)) so the first `burn__sessionCost` / `burn__currentBlock` tool call hits the SQL archive instead of re-walking the JSONL ledger. The MCP tool handlers themselves run another incremental build before each query so turns appended by hooks mid-session also show up in tool responses. The build is idempotent — a no-op when nothing has changed since the last build — and a build failure logs to stderr but never refuses to serve. Tool fallbacks to `queryAll` are wired through the new `onLog` hook so any persistent archive breakage is visible in the MCP host's stderr stream.
 
 ## [0.29.0] - 2026-04-26
 

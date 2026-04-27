@@ -110,6 +110,43 @@ describe('MCP tool handlers backed by archive (issue #97)', () => {
       assert.deepEqual(result.models, ['claude-sonnet-4-5']);
     });
 
+    it('reflects ledger turns appended after the initial archive build', async () => {
+      // Hooks append to the JSONL ledger throughout a session but the archive
+      // is only built on demand. The default queryTurns lambda runs an
+      // incremental buildArchive before each query so a tool call after a
+      // hook fires reflects the new turns (Devin review on #97).
+      await appendTurns([fakeTurn()]);
+      await buildArchive();
+
+      // Simulate a hook firing mid-session: a new turn is appended after the
+      // initial build but no explicit rebuild has been triggered.
+      await appendTurns([
+        fakeTurn({
+          messageId: 'm-2',
+          turnIndex: 1,
+          ts: '2026-04-24T10:05:00.000Z',
+          usage: {
+            input: 0,
+            output: 1_000_000,
+            reasoning: 0,
+            cacheRead: 0,
+            cacheCreate5m: 0,
+            cacheCreate1h: 0,
+          },
+        }),
+      ]);
+
+      const tool = createSessionCostTool({
+        defaultSessionId: 's-cost',
+        loadPricing: PRICING_LOADER,
+      });
+      const result = (await tool.handler({})) as SessionCostResult;
+      assert.equal(result.turnCount, 2);
+      assert.equal(result.totalTokens, 2_000_000);
+      // 1M input @ $3/M + 1M output @ $15/M = $18.
+      assert.equal(result.totalUSD, 18);
+    });
+
     it('falls back to queryAll and logs when the archive cannot be opened', async () => {
       await appendTurns([fakeTurn()]);
       // Don't build the archive. Then corrupt the archive file so
