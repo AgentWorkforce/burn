@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-04-27
+
 ### Changed
 
 - **`burn compare` honors fidelity** ([#95](https://github.com/AgentWorkforce/burn/issues/95)). The aggregate now defaults to the `usage-only` fidelity floor — turns whose per-turn token coverage is `aggregate-only` / `cost-only` / `partial` are excluded so a session with mixed fidelity can't silently bias the cost/turn or one-shot rate of full-fidelity peers from the same model. New `--fidelity <class>` and `--include-partial` flags override or disable the floor; coverage notes and the `--json` output gain a `fidelity` block (`{ minimum, excluded, summary }`) computed against the unfiltered slice. Records emitted before `TurnRecord.fidelity` existed still pass for backward compatibility.
