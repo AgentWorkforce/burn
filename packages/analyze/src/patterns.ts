@@ -1,5 +1,7 @@
 import type {
   CompactionEvent,
+  ContentRecord,
+  ContentToolResult,
   SourceKind,
   ToolCall,
   TurnRecord,
@@ -27,6 +29,13 @@ export interface RetryLoop {
   // the blast radius of a retry-bearing turn isn't decomposable without
   // content-level attribution.
   cost: number;
+  // First-line error signature shared across the retried tool_results, when
+  // content-sidecar data is available and at least one matching tool_result
+  // was captured. If the signatures across attempts diverge, this is the
+  // first attempt's signature suffixed with " (signatures diverged)". Absent
+  // when no content was supplied or none of the retry tool_uses had a
+  // matching tool_result in the sidecar.
+  errorSignature?: string;
 }
 
 // Consecutive tool failures: ≥ 3 consecutive errored tool results using
@@ -40,6 +49,12 @@ export interface FailureRun {
   endTurnIndex: number;
   toolsInvolved: string[];
   cost: number;
+  // One entry per distinct tool involved in the run, when content-sidecar
+  // data is available. `firstLine` is the first non-empty line of the first
+  // tool_result observed for that tool. Tools whose tool_results aren't in
+  // the sidecar are omitted. Absent when no content was supplied or no
+  // signatures could be extracted.
+  errorSignatures?: Array<{ tool: string; firstLine: string }>;
 }
 
 export interface CompactionLoss {
@@ -51,6 +66,17 @@ export interface CompactionLoss {
   // Priced at the preceding turn's model rate, which is the rate at which the
   // user paid to carry that cache on the last turn before it evaporated.
   cacheLostCost: number;
+  // Aggregated work performed in the compacted window (between the previous
+  // compact_boundary or session start and this one), populated when content
+  // sidecar data is available. `files` lists distinct paths touched by edit
+  // tools across the window; the *Count fields tally normalized tool calls
+  // (`Bash`, `Edit`/`Write`, `Read`). Absent when content was not supplied.
+  lostWork?: {
+    files: string[];
+    bashCount: number;
+    editCount: number;
+    readCount: number;
+  };
 }
 
 export interface EditRevertCycle {
@@ -63,6 +89,15 @@ export interface EditRevertCycle {
   // hashes we can't cleanly separate the revert work from the rest of those
   // turns — reported as a rough upper bound, good enough for ranking.
   cost: number;
+  // Truncated `old_string`/`new_string` strings for the first edit and the
+  // reverting edit, when content-sidecar data is available. Each string is
+  // capped at SAMPLE_PREVIEW_MAX_CHARS (with an ellipsis suffix on overflow)
+  // so reports stay scannable. Absent when content was not supplied or the
+  // matching tool_use entries were not captured.
+  samplePreview?: {
+    firstEdit: { old: string; new: string };
+    revert: { old: string; new: string };
+  };
 }
 
 // OpenCode skill recall non-deduplication: the same skill({name}) is called
@@ -172,10 +207,21 @@ export interface DetectPatternsOptions {
   // sessionId -> UserTurnRecord[] in source order. Used to estimate the
   // first user message size for the system-prompt-tax detector.
   userTurnsBySession?: Map<string, UserTurnRecord[]> | undefined;
+  // sessionId -> ContentRecord[] in source order. When supplied, the four
+  // waste-pattern detectors enrich their output with content-derived fields
+  // (error signatures, compacted-window summaries, edit previews). Detectors
+  // run identically without it — only the enrichment fields are absent.
+  contentBySession?: Map<string, ContentRecord[]> | undefined;
 }
 
 const MIN_RETRY_LEN = 3;
 const MIN_FAILURE_RUN_LEN = 3;
+
+// Edit revert sample previews are truncated to this length per field. Long
+// `old_string`/`new_string` blocks are common (whole functions, JSON blobs);
+// 200 chars is enough to identify what was thrashed without bloating reports
+// or content-sidecar query payloads.
+const SAMPLE_PREVIEW_MAX_CHARS = 200;
 
 // edits / reads above this and editCount ≥ MIN flags the session.
 // Threshold ported from codeburn (Claude-derived). Codex `apply_patch` bundles
@@ -211,11 +257,12 @@ export function detectPatterns(
 
   for (const [sessionId, sessionTurns] of bySession) {
     sessionTurns.sort((a, b) => a.turnIndex - b.turnIndex);
-    retryLoops.push(...detectRetryLoopsForSession(sessionId, sessionTurns, opts.pricing));
+    const contentIndex = buildContentIndex(opts.contentBySession?.get(sessionId));
+    retryLoops.push(...detectRetryLoopsForSession(sessionId, sessionTurns, opts.pricing, contentIndex));
     failureRuns.push(
-      ...detectFailureRunsForSession(sessionId, sessionTurns, opts.pricing),
+      ...detectFailureRunsForSession(sessionId, sessionTurns, opts.pricing, contentIndex),
     );
-    editReverts.push(...detectEditRevertsForSession(sessionId, sessionTurns, opts.pricing));
+    editReverts.push(...detectEditRevertsForSession(sessionId, sessionTurns, opts.pricing, contentIndex));
     skillRecallDups.push(...detectSkillRecallDupsForSession(sessionId, sessionTurns, opts.pricing));
     skillPruningProtection.push(...detectSkillPruningProtectionForSession(sessionId, sessionTurns, opts.pricing));
     systemPromptTaxes.push(...detectSystemPromptTaxForSession(sessionId, sessionTurns, opts.pricing, opts.userTurnsBySession?.get(sessionId)));
@@ -223,7 +270,7 @@ export function detectPatterns(
   }
 
   const compactions = opts.compactions
-    ? detectCompactionLosses(opts.compactions, turns, opts.pricing)
+    ? detectCompactionLosses(opts.compactions, turns, opts.pricing, opts.contentBySession)
     : [];
 
   return {
@@ -274,6 +321,108 @@ function flattenToolCalls(turns: TurnRecord[]): ToolCallRef[] {
   return out;
 }
 
+// Per-session lookup over the content sidecar. `toolResults` is keyed by
+// `toolUseId`, mirroring the join the four enrichments need; `toolUses`
+// gives us the original tool-use input record (used for edit-revert sample
+// previews where we need `old_string`/`new_string`). `null` is returned by
+// `buildContentIndex` when no content was supplied so detectors can skip
+// enrichment work entirely with a single null check.
+interface ContentIndex {
+  toolResults: Map<string, ContentToolResult>;
+  toolUses: Map<string, Record<string, unknown>>;
+}
+
+function buildContentIndex(records: ContentRecord[] | undefined): ContentIndex | null {
+  if (!records || records.length === 0) return null;
+  const toolResults = new Map<string, ContentToolResult>();
+  const toolUses = new Map<string, Record<string, unknown>>();
+  for (const r of records) {
+    if (r.kind === 'tool_result' && r.toolResult) {
+      // Keep the first observation per toolUseId. A retry replays the same
+      // tool_use id only when the harness reissues it; in practice the
+      // detectors care about the result actually returned for the call.
+      if (!toolResults.has(r.toolResult.toolUseId)) {
+        toolResults.set(r.toolResult.toolUseId, r.toolResult);
+      }
+    } else if (r.kind === 'tool_use' && r.toolUse) {
+      if (!toolUses.has(r.toolUse.id)) {
+        toolUses.set(r.toolUse.id, r.toolUse.input);
+      }
+    }
+  }
+  return { toolResults, toolUses };
+}
+
+// Stringify a tool_result content block to plain text for signature
+// extraction. Mirrors `stringifyToolResult` in waste.ts (kept in-module to
+// avoid a public export of an internal helper); structured blocks fall back
+// to JSON so an `is_error` payload still has *something* readable.
+function stringifyToolResultContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (content === null || content === undefined) return '';
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (block && typeof block === 'object') {
+        const b = block as { type?: string; text?: string };
+        if (b.type === 'text' && typeof b.text === 'string') {
+          parts.push(b.text);
+        } else {
+          parts.push(JSON.stringify(block));
+        }
+      } else if (typeof block === 'string') {
+        parts.push(block);
+      }
+    }
+    return parts.join('\n');
+  }
+  return JSON.stringify(content);
+}
+
+// Maximum characters of an error signature we surface. Long stack traces or
+// formatted outputs are common; the user wants the leading line, not the
+// whole dump. Matches the spec ("first error line — or first N chars").
+const ERROR_SIGNATURE_MAX_CHARS = 240;
+
+function extractErrorSignature(toolResult: ContentToolResult | undefined): string | undefined {
+  if (!toolResult) return undefined;
+  const text = stringifyToolResultContent(toolResult.content);
+  if (!text) return undefined;
+  // First non-empty line. Some tool errors prefix with blank lines or shells
+  // emit the prompt before the error.
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.length <= ERROR_SIGNATURE_MAX_CHARS) return line;
+    return line.slice(0, ERROR_SIGNATURE_MAX_CHARS - 1) + '…';
+  }
+  return undefined;
+}
+
+function truncateForPreview(s: string): string {
+  if (s.length <= SAMPLE_PREVIEW_MAX_CHARS) return s;
+  return s.slice(0, SAMPLE_PREVIEW_MAX_CHARS - 1) + '…';
+}
+
+// Pull `old_string`/`new_string` (or `content` for `Write`) out of a captured
+// tool_use input. Returns empty strings for fields the input doesn't carry —
+// a `Write` doesn't have `old_string` and we don't want to fail the whole
+// preview just because one half is absent.
+function extractEditPreview(input: Record<string, unknown> | undefined): { old: string; new: string } | undefined {
+  if (!input) return undefined;
+  const oldRaw = input['old_string'];
+  const newRaw = input['new_string'];
+  const contentRaw = input['content'];
+  const oldStr = typeof oldRaw === 'string' ? oldRaw : '';
+  let newStr = typeof newRaw === 'string' ? newRaw : '';
+  if (!newStr && typeof contentRaw === 'string') newStr = contentRaw;
+  if (!oldStr && !newStr) return undefined;
+  return {
+    old: truncateForPreview(oldStr),
+    new: truncateForPreview(newStr),
+  };
+}
+
 function sumCostForTurns(turns: TurnRecord[], pricing: PricingTable): number {
   let sum = 0;
   for (const t of turns) {
@@ -287,6 +436,7 @@ function detectRetryLoopsForSession(
   sessionId: string,
   turns: TurnRecord[],
   pricing: PricingTable,
+  contentIndex: ContentIndex | null,
 ): RetryLoop[] {
   const flat = flattenToolCalls(turns);
   const loops: RetryLoop[] = [];
@@ -297,7 +447,7 @@ function detectRetryLoopsForSession(
     const first = streak[0]!;
     const last = streak[streak.length - 1]!;
     const contributingTurns = dedupTurns(streak.map((r) => r.turn));
-    loops.push({
+    const loop: RetryLoop = {
       sessionId,
       tool: first.call.name,
       target: first.call.target,
@@ -306,7 +456,10 @@ function detectRetryLoopsForSession(
       startTurnIndex: first.turn.turnIndex,
       endTurnIndex: last.turn.turnIndex,
       cost: sumCostForTurns(contributingTurns, pricing),
-    });
+    };
+    const sig = retryLoopSignature(streak, contentIndex);
+    if (sig !== undefined) loop.errorSignature = sig;
+    loops.push(loop);
   };
 
   for (const ref of flat) {
@@ -332,10 +485,35 @@ function detectRetryLoopsForSession(
   return loops;
 }
 
+function retryLoopSignature(
+  streak: ToolCallRef[],
+  contentIndex: ContentIndex | null,
+): string | undefined {
+  if (!contentIndex) return undefined;
+  let firstSig: string | undefined;
+  let diverged = false;
+  for (const ref of streak) {
+    const result = contentIndex.toolResults.get(ref.call.id);
+    const sig = extractErrorSignature(result);
+    if (!sig) continue;
+    if (firstSig === undefined) {
+      firstSig = sig;
+      continue;
+    }
+    if (sig !== firstSig) {
+      diverged = true;
+      break;
+    }
+  }
+  if (firstSig === undefined) return undefined;
+  return diverged ? `${firstSig} (signatures diverged)` : firstSig;
+}
+
 function detectFailureRunsForSession(
   sessionId: string,
   turns: TurnRecord[],
   pricing: PricingTable,
+  contentIndex: ContentIndex | null,
 ): FailureRun[] {
   const flat = flattenToolCalls(turns);
   const runs: FailureRun[] = [];
@@ -352,14 +530,17 @@ function detectFailureRunsForSession(
     const last = streak[streak.length - 1]!;
     const tools = Array.from(new Set(streak.map((r) => r.call.name)));
     const contributingTurns = dedupTurns(streak.map((r) => r.turn));
-    runs.push({
+    const run: FailureRun = {
       sessionId,
       length: streak.length,
       startTurnIndex: first.turn.turnIndex,
       endTurnIndex: last.turn.turnIndex,
       toolsInvolved: tools,
       cost: sumCostForTurns(contributingTurns, pricing),
-    });
+    };
+    const sigs = failureRunSignatures(streak, contentIndex);
+    if (sigs.length > 0) run.errorSignatures = sigs;
+    runs.push(run);
   };
 
   for (const ref of flat) {
@@ -374,10 +555,34 @@ function detectFailureRunsForSession(
   return runs;
 }
 
+function failureRunSignatures(
+  streak: ToolCallRef[],
+  contentIndex: ContentIndex | null,
+): Array<{ tool: string; firstLine: string }> {
+  if (!contentIndex) return [];
+  // One entry per *distinct* tool, in first-seen order. We use the first
+  // tool_result we observe for each tool — that's the "what blew up first"
+  // signature the user wants to read in a report. Subsequent failures for
+  // the same tool may have different signatures; if the user wants those
+  // they can `burn diagnose <session>`.
+  const out: Array<{ tool: string; firstLine: string }> = [];
+  const seen = new Set<string>();
+  for (const ref of streak) {
+    if (seen.has(ref.call.name)) continue;
+    const result = contentIndex.toolResults.get(ref.call.id);
+    const sig = extractErrorSignature(result);
+    if (!sig) continue;
+    out.push({ tool: ref.call.name, firstLine: sig });
+    seen.add(ref.call.name);
+  }
+  return out;
+}
+
 function detectEditRevertsForSession(
   sessionId: string,
   turns: TurnRecord[],
   pricing: PricingTable,
+  contentIndex: ContentIndex | null,
 ): EditRevertCycle[] {
   // For each file, scan in turn order. Every edit contributes a (preHash?,
   // postHash?) and is added to that file's history. We detect a revert when
@@ -389,6 +594,7 @@ function detectEditRevertsForSession(
     preHash: string | undefined;
     postHash: string | undefined;
     turn: TurnRecord;
+    toolUseId: string;
   }
   const byFile = new Map<string, EditSlot[]>();
   const cycles: EditRevertCycle[] = [];
@@ -405,20 +611,29 @@ function detectEditRevertsForSession(
       preHash: call.editPreHash,
       postHash: call.editPostHash,
       turn: ref.turn,
+      toolUseId: call.id,
     };
     const history = byFile.get(call.target) ?? [];
     if (slot.postHash !== undefined) {
       const matchIdx = history.findIndex((prior) => prior.preHash === slot.postHash);
       if (matchIdx >= 0) {
         const first = history[matchIdx]!;
-        cycles.push({
+        const cycle: EditRevertCycle = {
           sessionId,
           filePath: call.target,
           firstEditTurnIndex: first.turn.turnIndex,
           revertTurnIndex: ref.turn.turnIndex,
           spanTurns: ref.turn.turnIndex - first.turn.turnIndex,
           cost: sumCostForTurns(dedupTurns([first.turn, ref.turn]), pricing),
-        });
+        };
+        if (contentIndex) {
+          const firstEdit = extractEditPreview(contentIndex.toolUses.get(first.toolUseId));
+          const revert = extractEditPreview(contentIndex.toolUses.get(slot.toolUseId));
+          if (firstEdit && revert) {
+            cycle.samplePreview = { firstEdit, revert };
+          }
+        }
+        cycles.push(cycle);
         // Reset: the cycle is closed; any subsequent work on this file is a
         // fresh sequence, not part of the just-reported cycle.
         byFile.set(call.target, []);
@@ -435,41 +650,123 @@ function detectCompactionLosses(
   events: CompactionEvent[],
   turns: TurnRecord[],
   pricing: PricingTable,
+  contentBySession: Map<string, ContentRecord[]> | undefined,
 ): CompactionLoss[] {
   const turnByMessageId = new Map<string, TurnRecord>();
   for (const t of turns) turnByMessageId.set(t.messageId, t);
 
-  const out: CompactionLoss[] = [];
+  // Group events by session in arrival order so we can bound each event's
+  // "compacted window" by its previous boundary. Events in `events` are not
+  // guaranteed to be sorted, so we sort by ts (falling back to source order)
+  // before walking. Turns within a session are pre-sorted by `turnIndex`,
+  // which mirrors source order.
+  const eventsBySession = new Map<string, CompactionEvent[]>();
   for (const e of events) {
-    const tokens = e.tokensBeforeCompact ?? 0;
-    let cacheLostCost = 0;
-    if (tokens > 0 && e.precedingMessageId) {
-      const preceding = turnByMessageId.get(e.precedingMessageId);
-      if (preceding) {
-        const priced = costForUsage(
-          {
-            input: 0,
-            output: 0,
-            reasoning: 0,
-            cacheRead: tokens,
-            cacheCreate5m: 0,
-            cacheCreate1h: 0,
-          },
-          preceding.model,
-          pricing,
-        );
-        if (priced) cacheLostCost = priced.total;
+    const list = eventsBySession.get(e.sessionId) ?? [];
+    list.push(e);
+    eventsBySession.set(e.sessionId, list);
+  }
+  for (const list of eventsBySession.values()) {
+    list.sort((a, b) => a.ts.localeCompare(b.ts));
+  }
+
+  // Sort turns by session, then turnIndex, so we can bisect by ts.
+  const turnsBySession = new Map<string, TurnRecord[]>();
+  for (const t of turns) {
+    const list = turnsBySession.get(t.sessionId) ?? [];
+    list.push(t);
+    turnsBySession.set(t.sessionId, list);
+  }
+  for (const list of turnsBySession.values()) {
+    list.sort((a, b) => a.turnIndex - b.turnIndex);
+  }
+
+  // Track the previous boundary ts per session for `lostWork` window math.
+  const prevBoundaryTs = new Map<string, string>();
+
+  const out: CompactionLoss[] = [];
+  for (const sessionEvents of eventsBySession.values()) {
+    for (const e of sessionEvents) {
+      const tokens = e.tokensBeforeCompact ?? 0;
+      let cacheLostCost = 0;
+      if (tokens > 0 && e.precedingMessageId) {
+        const preceding = turnByMessageId.get(e.precedingMessageId);
+        if (preceding) {
+          const priced = costForUsage(
+            {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cacheRead: tokens,
+              cacheCreate5m: 0,
+              cacheCreate1h: 0,
+            },
+            preceding.model,
+            pricing,
+          );
+          if (priced) cacheLostCost = priced.total;
+        }
       }
+      const loss: CompactionLoss = {
+        sessionId: e.sessionId,
+        ts: e.ts,
+        precedingMessageId: e.precedingMessageId,
+        tokensBeforeCompact: tokens,
+        cacheLostCost,
+      };
+      // Gate on content-sidecar presence — `lostWork` is the "with content"
+      // enrichment, even though the aggregate uses `TurnRecord.toolCalls`
+      // (which carries the same shape as the sidecar's tool_use records and
+      // is the more reliable join key for windowing). Without content
+      // capture, we honor the spec's graceful-degradation contract.
+      if (contentBySession?.get(e.sessionId)) {
+        const sessionTurns = turnsBySession.get(e.sessionId) ?? [];
+        const windowStart = prevBoundaryTs.get(e.sessionId);
+        loss.lostWork = summarizeCompactedWindow(
+          sessionTurns,
+          windowStart,
+          e.ts,
+        );
+      }
+      out.push(loss);
+      prevBoundaryTs.set(e.sessionId, e.ts);
     }
-    out.push({
-      sessionId: e.sessionId,
-      ts: e.ts,
-      precedingMessageId: e.precedingMessageId,
-      tokensBeforeCompact: tokens,
-      cacheLostCost,
-    });
   }
   return out;
+}
+
+// Aggregate the work performed in the compacted window: distinct files
+// touched (from edit/write tool calls) and counts per normalized tool
+// category. The window is `(windowStart, boundaryTs]` — exclusive on the
+// previous boundary, inclusive on the current one — so a turn that produced
+// the boundary itself counts as work that lost its cache.
+function summarizeCompactedWindow(
+  sessionTurns: TurnRecord[],
+  windowStart: string | undefined,
+  boundaryTs: string,
+): { files: string[]; bashCount: number; editCount: number; readCount: number } {
+  let bashCount = 0;
+  let editCount = 0;
+  let readCount = 0;
+  const files = new Set<string>();
+  for (const t of sessionTurns) {
+    if (windowStart !== undefined && t.ts <= windowStart) continue;
+    if (t.ts > boundaryTs) continue;
+    for (const call of t.toolCalls) {
+      const name = normalizeToolName(call.name);
+      if (name === 'Bash') bashCount++;
+      else if (EDIT_TOOLS.has(name)) {
+        editCount++;
+        if (call.target) files.add(call.target);
+      } else if (READ_TOOLS.has(name)) readCount++;
+    }
+  }
+  return {
+    files: Array.from(files).sort(),
+    bashCount,
+    editCount,
+    readCount,
+  };
 }
 
 function detectSkillRecallDupsForSession(
