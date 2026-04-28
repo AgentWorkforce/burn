@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`burn compare` takes models as a required positional, not a flag** ([#159](https://github.com/AgentWorkforce/burn/issues/159)). The verb "compare" implies selection — without an explicit list the old `burn compare` produced a wide N×M survey of every model in the ledger, which is what `burn summary` (with `--by-provider` / `--by-tool`) already covers. The new shape is `burn compare <model_a,model_b[,...]> [flags]` with a minimum of 2 models. Trim/dedupe rules match the old `--models` flag. The `--models` flag is removed; passing it now exits 2 with a pointer to the positional form. Missing or single-model positional likewise exits 2 with `burn compare: needs at least 2 models. Run \`burn summary --by-provider\` (or \`burn summary --by-tool\`) to see which models have data.` Help block, top-level help, and every example in this repo flip to the positional form. No behavioral change to filters, the cell schema, the JSON contract, or aggregation logic.
 
+## [0.38.0] - 2026-04-28
+
+### Changed
+
+- **`burn by-tool` folded into `burn summary --by-tool`** ([#156](https://github.com/AgentWorkforce/burn/issues/156)). The standalone `burn by-tool` verb has been removed in favor of a `summary` mode flag that sits next to `--by-provider`, `--by-subagent-type`, and `--subagent-tree`. Output columns (`tool | calls | attributedCost`) and the attribution-method footer are unchanged. Folding into `summary` closes the previous filter-parity gap — `--by-tool` now inherits `--workflow`/`--agent` from `summary`'s filter list. JSON shape is `{ ingest, turns, byTool: [{ tool, calls, attributedCost }], unattributed, fidelity }`. Mode flags are mutually exclusive: combining `--by-tool` with `--by-provider`/`--by-subagent-type`/`--subagent-tree` exits non-zero with a clear error. No deprecation alias — callers must migrate to `burn summary --by-tool`.
+
 ## [0.37.0] - 2026-04-28
 
 ### Added

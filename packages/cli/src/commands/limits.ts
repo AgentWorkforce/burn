@@ -532,7 +532,7 @@ async function loadForecastFromLedger(
   nowMs: number,
 ): Promise<ForecastResult | null> {
   // Match the convention used by every other read-only command (summary,
-  // by-tool, diagnose, …): sweep new session logs into the ledger before
+  // diagnose, …): sweep new session logs into the ledger before
   // querying, so the forecast reflects what just happened in the active
   // claude session rather than whatever the last burn invocation captured.
   // ingestAll is incremental via cursors, so the watch loop calling this

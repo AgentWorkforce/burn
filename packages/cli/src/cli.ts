@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from './args.js';
 import { runArchive } from './commands/archive.js';
-import { runByTool } from './commands/by-tool.js';
 import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
 import { runContext } from './commands/context.js';
@@ -23,8 +22,8 @@ const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--quality]
-                     [--by-provider] [--subagent-tree <session-id>] [--by-subagent-type] [--no-archive]
-  burn by-tool       [--since 7d] [--project <path>] [--session <id>] [--provider <p>]
+                     [--by-provider | --by-tool | --by-subagent-type | --subagent-tree <session-id>] [--no-archive]
+                     (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]]
   burn diagnose      <session-id> [--json]
@@ -45,7 +44,7 @@ Examples:
   burn summary --by-provider --provider synthetic
   burn summary --subagent-tree <session-id>
   burn summary --by-subagent-type --since 7d
-  burn by-tool --since 7d
+  burn summary --by-tool --since 7d
   burn waste --since 7d
   burn waste --patterns --since 7d
   burn diagnose <session-id>
@@ -89,8 +88,6 @@ async function main(): Promise<number> {
   switch (cmd) {
     case 'summary':
       return runSummary(args);
-    case 'by-tool':
-      return runByTool(args);
     case 'waste':
       return runWaste(args);
     case 'diagnose':
