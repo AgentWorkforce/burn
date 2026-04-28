@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn waste --patterns tool-output-bloat`** ([#168](https://github.com/AgentWorkforce/burn/issues/168)). New cross-harness detector that flags oversized `tool_result` content riding in cache. Two signals fold into one table: Signal A reads `~/.claude/settings.json` and the project `.claude/settings.json` and flags any `env.BASH_MAX_OUTPUT_LENGTH > 15000` (project overrides user, last-wins); Signal B walks the ledger's `tool_result_events` stream (#42 substrate) for any session in scope and reports per-`(source, toolName)` buckets above the threshold (default `max(15000 tokens, p95)` with a sample-size guard), pricing the next-turn carry cost at the source turn's model input rate. Findings render in the unified `--findings` table next to retry-loops, failure-runs, etc.; `--json` carries `toolOutputBloats` alongside the other detector arrays. Suggested fix surfaces as a `WasteAction.paste` — the corrected env line for Signal A, a `head` / `tail` / `grep` reminder for Signal B's CLAUDE.md / AGENTS.md.
+
 ## [0.41.0] - 2026-04-28
 
 ### Fixed

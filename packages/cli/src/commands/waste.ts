@@ -5,27 +5,35 @@ import {
   attributeWaste,
   compactionLossToFinding,
   detectPatterns,
+  detectToolOutputBloat,
   editHeavyToFinding,
   editRevertToFinding,
   failureRunToFinding,
+  loadClaudeSettings,
   loadPricing,
+  projectClaudeSettingsPath,
   retryLoopToFinding,
   skillPruningProtectionToFinding,
   skillRecallDupToFinding,
   sortFindings,
   summarizeFidelity,
   systemPromptTaxToFinding,
+  toolOutputBloatToFinding,
+  userClaudeSettingsPath,
   type BashAggregation,
   type FidelitySummary,
   type FileAggregation,
+  type LoadedClaudeSettings,
   type PatternsResult,
   type SubagentAggregation,
+  type ToolOutputBloat,
   type WasteFinding,
   type WasteResult,
 } from '@relayburn/analyze';
 import {
   queryAll,
   queryCompactions,
+  queryToolResultEvents,
   queryUserTurns,
   readContent,
   type EnrichedTurn,
@@ -35,6 +43,7 @@ import type {
   ContentRecord,
   Coverage,
   SourceKind,
+  ToolResultEventRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
 
@@ -44,7 +53,7 @@ import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'tool-output-bloat'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -538,12 +547,15 @@ export function resolvePatternSelection(flag: string | true): Set<PatternKind> {
 // Per-detector coverage prerequisites. `compaction` is intentionally absent —
 // the compaction sidecar is loaded directly from the ledger via
 // `queryCompactions` and is independent of `TurnRecord.fidelity`.
+// `tool-output-bloat` is also absent — it reads the tool-result-event ledger
+// stream directly (issue #168, #42 substrate) and merges Claude settings.json
+// without consulting TurnRecord coverage flags.
 //
 // The revert detector needs editPreHash / editPostHash, which require
 // hasRawContent upstream (the parser computes the hashes from the raw
 // strings). hasToolCalls is the obvious prereq.
 export const PATTERN_REQUIRED: Record<
-  Exclude<PatternKind, 'compaction'>,
+  Exclude<PatternKind, 'compaction' | 'tool-output-bloat'>,
   ReadonlyArray<keyof Coverage>
 > = {
   retries: ['hasToolCalls', 'hasToolResultEvents'],
@@ -583,7 +595,9 @@ export async function runPatternsMode(
   const perDetectorCoverage: PatternDetectorCoverage[] = [];
 
   for (const kind of selected) {
-    if (kind === 'compaction') {
+    if (kind === 'compaction' || kind === 'tool-output-bloat') {
+      // Both detectors read non-TurnRecord ledger streams (compactions /
+      // tool_result_events) and are independent of TurnRecord.fidelity.
       perDetector.set(kind, turns);
       perDetectorCoverage.push({
         kind,
@@ -613,12 +627,13 @@ export async function runPatternsMode(
     perDetectorCoverage.push(coverage);
   }
 
-  // Refusal: every selected detector refused. Compaction has no fidelity
-  // prereq and is recorded with refused:false unconditionally, so its
-  // presence in `selected` short-circuits this — we only refuse when the
-  // entire selection is fidelity-gated and every detector lost its slice.
+  // Refusal: every selected detector refused. `compaction` and
+  // `tool-output-bloat` have no fidelity prereq and are recorded with
+  // refused:false unconditionally, so their presence in `selected`
+  // short-circuits this — we only refuse when the entire selection is
+  // fidelity-gated and every detector lost its slice.
   const refusableSelected = perDetectorCoverage.filter(
-    (d) => d.kind !== 'compaction',
+    (d) => d.kind !== 'compaction' && d.kind !== 'tool-output-bloat',
   );
   const allRefused =
     perDetectorCoverage.length > 0 &&
@@ -627,7 +642,7 @@ export async function runPatternsMode(
   if (allRefused) {
     const lines: string[] = [];
     for (const d of refusableSelected) {
-      const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction'>];
+      const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'tool-output-bloat'>];
       const sourcesClause = d.breakdown ? renderSourcesClause(d.breakdown) : '(unknown sources)';
       lines.push(
         `  ${d.kind}: ${total}/${total} turns lack ${required.map(fmtCoverageKey).join(' + ')} (sources: ${sourcesClause})`,
@@ -651,6 +666,7 @@ export async function runPatternsMode(
             skillRecallDups: [],
             skillPruningProtection: [],
             systemPromptTaxes: [],
+            toolOutputBloats: [],
             sessionSummaries: [],
             findings: [],
             fidelity: {
@@ -680,6 +696,7 @@ export async function runPatternsMode(
   let skillPruningProtection: PatternsResult['skillPruningProtection'] = [];
   let systemPromptTaxes: PatternsResult['systemPromptTaxes'] = [];
   let editHeavySessions: PatternsResult['editHeavySessions'] = [];
+  let toolOutputBloats: ToolOutputBloat[] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
   // Load user turns if the system-prompt detector is selected (needs first
@@ -732,6 +749,29 @@ export async function runPatternsMode(
     const r = detectPatterns(perDetector.get('opencode-system-prompt')!, { pricing, userTurnsBySession });
     systemPromptTaxes = r.systemPromptTaxes;
   }
+  if (selected.has('tool-output-bloat')) {
+    // Signal A inputs: read both ~/.claude/settings.json and the project's
+    // .claude/settings.json. Project comes last so it overrides the user
+    // file in `detectStaticConfigBloat`'s last-wins merge. Missing or
+    // malformed files yield `undefined` from the loader and are dropped from
+    // the input list — see `loadClaudeSettings`.
+    const settings: LoadedClaudeSettings[] = [];
+    const userLoaded = await loadClaudeSettings(userClaudeSettingsPath());
+    if (userLoaded) settings.push(userLoaded);
+    const projectLoaded = await loadClaudeSettings(projectClaudeSettingsPath());
+    if (projectLoaded) settings.push(projectLoaded);
+
+    // Signal B inputs: stream `tool_result_events` from the ledger. We pass
+    // the full TurnRecord set so the detector can join tool_use_ids back to
+    // tool names + price the carry cost at the correct model rate.
+    const toolResultEvents = await loadToolResultEventsForTurns(turns);
+    toolOutputBloats = detectToolOutputBloat({
+      settings,
+      toolResultEvents,
+      turns,
+      pricing,
+    });
+  }
 
   // Build session summaries on the union — anything attributed by *any*
   // detector counts. Re-running detectPatterns on a single union slice
@@ -768,6 +808,7 @@ export async function runPatternsMode(
     ...skillRecallDups.map(skillRecallDupToFinding),
     ...skillPruningProtection.map(skillPruningProtectionToFinding),
     ...systemPromptTaxes.map(systemPromptTaxToFinding),
+    ...toolOutputBloats.map(toolOutputBloatToFinding),
   ]);
 
   if (args.flags['json'] === true) {
@@ -783,6 +824,7 @@ export async function runPatternsMode(
           skillPruningProtection,
           systemPromptTaxes,
           editHeavySessions,
+          toolOutputBloats,
           sessionSummaries,
           findings,
           fidelity: {
@@ -862,6 +904,11 @@ export async function runPatternsMode(
     out.push(renderSystemPromptTable(systemPromptTaxes, limit));
     out.push('');
   }
+  if (selected.has('tool-output-bloat')) {
+    out.push('Oversized tool output bloat (BASH_MAX_OUTPUT_LENGTH config + cross-harness >15k tok tool_results)');
+    out.push(renderToolOutputBloatTable(toolOutputBloats, limit));
+    out.push('');
+  }
 
   process.stdout.write(out.join('\n'));
   return 0;
@@ -881,7 +928,9 @@ function toJsonDetector(d: PatternDetectorCoverage): {
   }>;
 } {
   const required: ReadonlyArray<keyof Coverage> =
-    d.kind === 'compaction' ? [] : PATTERN_REQUIRED[d.kind];
+    d.kind === 'compaction' || d.kind === 'tool-output-bloat'
+      ? []
+      : PATTERN_REQUIRED[d.kind];
   const out: ReturnType<typeof toJsonDetector> = {
     kind: d.kind,
     analyzed: d.analyzed,
@@ -905,8 +954,8 @@ function formatPerDetectorNotice(
   total: number,
 ): string | undefined {
   if (d.excluded === 0) return undefined;
-  if (d.kind === 'compaction') return undefined;
-  const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction'>];
+  if (d.kind === 'compaction' || d.kind === 'tool-output-bloat') return undefined;
+  const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'tool-output-bloat'>];
   const sourceClauses = d.breakdown ? renderInlineSourceClauses(d.breakdown) : [];
   const requirements = required.map(fmtCoverageKey).join(' + ');
   return `${d.kind}: analyzed ${formatInt(d.analyzed)} of ${formatInt(total)} turns; ${formatInt(d.excluded)} excluded (needs ${requirements}; ${sourceClauses.join(' and ') || 'no source breakdown'})`;
@@ -1229,4 +1278,38 @@ async function loadContentBySession(
     if (records.length > 0) out.set(sessionId, records);
   }
   return out;
+}
+
+// Pull every `ToolResultEventRecord` whose session appears in `turns`. Used
+// only by `tool-output-bloat`; we filter post-query rather than issuing one
+// per session so we avoid N round-trips on large slices. The ledger reader
+// streams a single pass over the JSONL file regardless.
+async function loadToolResultEventsForTurns(
+  turns: EnrichedTurn[],
+): Promise<ToolResultEventRecord[]> {
+  if (turns.length === 0) return [];
+  const sessionIds = new Set<string>();
+  for (const t of turns) sessionIds.add(t.sessionId);
+  const events = await queryToolResultEvents({});
+  return events.filter((e) => sessionIds.has(e.sessionId));
+}
+
+function renderToolOutputBloatTable(bloats: ToolOutputBloat[], limit: number): string {
+  if (bloats.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['source', 'tool', 'kind', 'count', 'max(tok)', 'p95(tok)', 'cost'],
+  ];
+  const slice = [...bloats].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const b of slice) {
+    rows.push([
+      b.source,
+      b.toolName,
+      b.kind,
+      String(b.occurrenceCount),
+      formatInt(b.evidencedMaxOutput),
+      b.evidencedP95Output !== undefined ? formatInt(b.evidencedP95Output) : '—',
+      formatUsd(b.cost),
+    ]);
+  }
+  return table(rows);
 }

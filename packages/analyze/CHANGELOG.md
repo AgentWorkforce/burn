@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Oversized tool output bloat detector** ([#168](https://github.com/AgentWorkforce/burn/issues/168)). New `detectToolOutputBloat` that unifies two signal sources under one `ToolOutputBloat` shape (`{ source, kind, toolName, configuredLimit?, evidencedMaxOutput, evidencedP95Output?, occurrenceCount, cost, evidence }`). Signal A (Claude-only static config) reads `~/.claude/settings.json` and the project's `.claude/settings.json` and flags any merged `env.BASH_MAX_OUTPUT_LENGTH > 15000` — project settings override user, last-wins. Signal B (cross-harness session-data evidence) consumes `ToolResultEventRecord.contentLength` from the #42 substrate, maps bytes → tokens via the `bytes/4` heuristic (precision deferred to #57), bucketizes by `(source, toolName)` post-`normalizeToolName` so Claude `Bash`, OpenCode `bash`, and Codex `shell` aggregate under canonical `Bash`, and prices the carry cost at the source turn's model input rate. Threshold defaults to `max(15000 tokens, p95 across the slice)` with a sample-size guard so single-event slices don't self-exclude. New exports: `detectToolOutputBloat`, `detectStaticConfigBloat`, `detectObservedBloat`, `loadClaudeSettings`, `userClaudeSettingsPath`, `projectClaudeSettingsPath`, `toolOutputBloatToFinding`, `BASH_MAX_OUTPUT_ENV_KEY`, `DEFAULT_BLOAT_TOKEN_THRESHOLD`. Findings are emitted as `WasteFinding`s with `kind: 'tool-output-bloat'` — Signal A pastes the corrected env line into `settings.json`; Signal B pastes a `head` / `tail` / `grep` filtering reminder for the user's CLAUDE.md / AGENTS.md.
+
 ## [0.41.0] - 2026-04-28
 
 ### Added
