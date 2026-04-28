@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-04-28
+
 ### Added
 
 - **Ghost-surface detector now consumes user-turn text from the content sidecar to recognise slash-command invocations** ([#172](https://github.com/AgentWorkforce/burn/issues/172)). `burn waste --patterns ghost-surface` now populates `GhostSurfaceInputs.userTurnTextBySession` from `readContent({ sessionId })` for Claude / Codex sessions before running the detector. As a result, a Claude command invoked via `<command-name>/foo</command-name>` and a Codex prompt invoked via `/openspec-apply` no longer surface as ghosts even though they never appear as tool calls. The map is keyed by `SourceKind` first so a Claude `<command-name>` marker can't de-ghost an identically-named Codex prompt and vice versa. Sessions whose content sidecar is empty (`content.store=off`, pruned, or never captured) silently fall back to v1 (tool-call only) behaviour, matching the existing graceful-degradation contract elsewhere in `burn waste`. The CLI only loads sidecars for sources that have a slash-command notion (Claude / Codex), so OpenCode sessions pay no extra I/O cost.

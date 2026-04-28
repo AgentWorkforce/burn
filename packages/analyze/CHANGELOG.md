@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-04-28
+
 ### Added
 
 - **Slash-command-style invocations no longer false-flag as ghosts** ([#172](https://github.com/AgentWorkforce/burn/issues/172)). The `GhostSurfaceAdapter` contract gains an optional `observedNames(inputs, candidates)` hook; the orchestrator unions whatever names that returns into the per-source observed set before deciding which candidates are ghosts. `claudeGhostAdapter` mines `userTurnTextBySession` for `<command-name>...</command-name>` markers (both `<command-name>/foo</command-name>` and the bare `<command-name>foo</command-name>` shape are recognised). `codexGhostAdapter` does a literal `/<basename>` match, anchored on word boundaries on both sides so `https://example.com/foo`, `/foo-bar`, and similar non-invocations don't false-positive. Matching is case-insensitive. Behaviour is opt-in / gated on content-sidecar availability — when `userTurnTextBySession` is undefined or empty (sidecar pruned, `content.store=off`), the hook is a no-op and the detector falls back to v1 (tool-call only) behaviour. The inline doc notes on `claudeGhostAdapter` and `codexGhostAdapter` document the remaining false-negative for Codex (a prompt invoked entirely without typing `/<basename>`). New helpers `mineClaudeCommandNames` and `mineCodexSlashInvocations` are exported alongside. **`userTurnTextBySession` is now keyed by `SourceKind` first** (`Map<SourceKind, Map<string, string[]>>`) so the orchestrator passes only the matching source's session texts to each adapter's `observedNames` hook — preventing Claude `<command-name>/foo</command-name>` markers from de-ghosting an identically-named Codex prompt and vice versa.
