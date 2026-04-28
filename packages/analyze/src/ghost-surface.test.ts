@@ -78,13 +78,76 @@ describe('claudeGhostAdapter', () => {
     const ghosts = await detectGhostSurface(inputs);
     const claudeGhosts = ghosts.filter((g) => g.source === 'claude-code');
     const ghostBasenames = claudeGhosts.map((g) => path.basename(g.path)).sort();
-    // code-reviewer + git-commit are observed; forgotten-helper + openspec-archive are ghosts.
-    assert.deepEqual(ghostBasenames, ['forgotten-helper.md', 'openspec-archive.md']);
+    // code-reviewer + git-commit are observed; forgotten-helper + openspec-apply + openspec-archive are ghosts.
+    assert.deepEqual(ghostBasenames, ['forgotten-helper.md', 'openspec-apply.md', 'openspec-archive.md']);
     const helper = claudeGhosts.find((g) => g.path.endsWith('forgotten-helper.md'))!;
     assert.equal(helper.kind, 'ghost-agent');
     assert.equal(helper.sessionCount, 10);
     assert.ok(helper.cost > 0, 'cost is sizeTokens × 10 × rate');
     assert.ok(helper.sizeTokens > 0, 'size is non-zero');
+  });
+
+  // #172: a Claude command invoked via `<command-name>/foo</command-name>`
+  // de-ghosts the basename even though it never surfaces as a tool call.
+  it('de-ghosts a Claude command when its slash form appears in user-turn text', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer', 'git-commit'])],
+      ]),
+      sessionCountBySource: new Map([['claude-code', 10]]),
+      userTurnTextBySession: new Map([
+        [
+          'claude-code',
+          new Map([
+            ['session-1', ['<command-name>/openspec-apply</command-name>\nApply the latest proposal.']],
+          ]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const claudeGhosts = ghosts.filter((g) => g.source === 'claude-code');
+    const ghostBasenames = claudeGhosts.map((g) => path.basename(g.path)).sort();
+    // openspec-apply is observed via slash; openspec-archive remains a ghost.
+    assert.deepEqual(ghostBasenames, ['forgotten-helper.md', 'openspec-archive.md']);
+  });
+
+  // #172: bare `<command-name>foo</command-name>` (no leading slash) is also
+  // recognised — Claude has shipped both shapes.
+  it('recognises the bare <command-name>foo</command-name> shape (no leading slash)', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer', 'git-commit'])],
+      ]),
+      sessionCountBySource: new Map([['claude-code', 1]]),
+      userTurnTextBySession: new Map([
+        [
+          'claude-code',
+          new Map([['session-1', ['<command-name>openspec-apply</command-name>\nbody']]]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const apply = ghosts.find(
+      (g) => g.source === 'claude-code' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.equal(apply, undefined, 'claude openspec-apply is de-ghosted');
+  });
+
+  // #172: when `userTurnTextBySession` is undefined or empty, slash-command
+  // invocations are NOT mined and the detector falls back to v1 behaviour.
+  it('falls back to v1 behaviour when userTurnTextBySession is empty', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer', 'git-commit'])],
+      ]),
+      sessionCountBySource: new Map([['claude-code', 10]]),
+      userTurnTextBySession: new Map(),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const claudeGhosts = ghosts.filter((g) => g.source === 'claude-code');
+    const ghostBasenames = claudeGhosts.map((g) => path.basename(g.path)).sort();
+    // Slash-command mining doesn't run; openspec-apply remains a ghost.
+    assert.deepEqual(ghostBasenames, ['forgotten-helper.md', 'openspec-apply.md', 'openspec-archive.md']);
   });
 });
 
@@ -97,7 +160,10 @@ describe('codexGhostAdapter', () => {
       list.push(c.basename);
       byKind.set(c.kind, list);
     }
-    assert.deepEqual([...(byKind.get('ghost-prompt') ?? [])].sort(), ['openspec-archive.md', 'refactor.md']);
+    assert.deepEqual(
+      [...(byKind.get('ghost-prompt') ?? [])].sort(),
+      ['openspec-apply.md', 'openspec-archive.md', 'refactor.md'],
+    );
     assert.deepEqual(byKind.get('ghost-skill'), ['code-search.md']);
     assert.deepEqual(byKind.get('ghost-rule'), ['no-print.md']);
     assert.deepEqual(byKind.get('ghost-memory'), ['preferences.md']);
@@ -120,6 +186,199 @@ describe('codexGhostAdapter', () => {
     const kinds = new Set(codexGhosts.map((g) => g.kind));
     assert.ok(kinds.has('ghost-rule'), 'codex rules surface as ghosts');
     assert.ok(kinds.has('ghost-memory'), 'codex memories surface as ghosts');
+  });
+
+  // #172: a Codex prompt invoked via `/<basename>` in a user message
+  // de-ghosts the basename even though it never surfaces as a tool call.
+  // Canonical issue example: `~/.codex/prompts/openspec-apply.md` typed as
+  // `/openspec-apply` in a single session.
+  it('de-ghosts a Codex prompt when /<basename> appears in user-turn text', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([['codex', new Set(['refactor', 'code-search'])]]),
+      sessionCountBySource: new Map([['codex', 5]]),
+      userTurnTextBySession: new Map([
+        [
+          'codex',
+          new Map([['session-1', ['/openspec-apply\nApply the latest proposal please.']]]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const codexGhosts = ghosts.filter((g) => g.source === 'codex');
+    const apply = codexGhosts.find((g) => g.path.endsWith('openspec-apply.md'));
+    assert.equal(apply, undefined, 'codex openspec-apply is de-ghosted via slash mining');
+    // openspec-archive (no slash invocation) remains a ghost.
+    const archive = codexGhosts.find((g) => g.path.endsWith('openspec-archive.md'));
+    assert.ok(archive, 'codex openspec-archive remains a ghost');
+  });
+
+  // #172: a slash form not at the start of the message is still recognised
+  // (the issue body explicitly calls this out). Codex prepends the prompt
+  // body verbatim, but quoted/embedded `/<basename>` references should also
+  // count.
+  it('recognises a slash invocation that is not at the start of the message', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([['codex', new Set()]]),
+      sessionCountBySource: new Map([['codex', 1]]),
+      userTurnTextBySession: new Map([
+        [
+          'codex',
+          new Map([['session-1', ['Please run the /openspec-apply prompt now.']]]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const apply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.equal(apply, undefined, 'mid-line /openspec-apply still de-ghosts the codex prompt');
+  });
+
+  // #172: a hyphenated basename must match the full hyphenated stem; a
+  // longer slash command that happens to share a prefix should NOT match.
+  // E.g. when only `openspec-apply.md` is installed, `/openspec-apply-foo`
+  // should not de-ghost it.
+  it('does not match a slash command whose name extends past the stem', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([['codex', new Set()]]),
+      sessionCountBySource: new Map([['codex', 1]]),
+      userTurnTextBySession: new Map([
+        ['codex', new Map([['session-1', ['/openspec-apply-foo bar']]])],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const apply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.ok(apply, 'a longer slash command does not de-ghost the shorter stem');
+  });
+
+  // #172: slash matches must respect a word boundary on the left, so a path
+  // like `https://example.com/openspec-apply` does not de-ghost.
+  it('ignores slash forms preceded by a word character (paths/URLs)', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([['codex', new Set()]]),
+      sessionCountBySource: new Map([['codex', 1]]),
+      userTurnTextBySession: new Map([
+        [
+          'codex',
+          new Map([['session-1', ['See https://example.com/openspec-apply for docs.']]]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const apply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.ok(apply, 'URL-style /openspec-apply does not de-ghost the codex prompt');
+  });
+
+  // #172: matches are case-insensitive — Codex prompt stems are typically
+  // lower-case but the user's typed input may shift case.
+  it('matches Codex slash invocations case-insensitively', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([['codex', new Set()]]),
+      sessionCountBySource: new Map([['codex', 1]]),
+      userTurnTextBySession: new Map([
+        ['codex', new Map([['session-1', ['/OPENSPEC-Apply now']]])],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const apply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.equal(apply, undefined, 'mixed-case /OPENSPEC-Apply de-ghosts the codex prompt');
+  });
+
+  // Regression for Devin's cross-source contamination finding on #172. The
+  // Codex slash miner does a literal `/<stem>` search with word-boundary
+  // anchors. Claude's `<command-name>` XML wrapper has angle brackets on
+  // both sides — neither `<` nor `>` is a word character, so without
+  // per-source scoping a Claude `<command-name>/openspec-apply</command-name>`
+  // marker would falsely de-ghost an identically-named Codex prompt
+  // (`~/.codex/prompts/openspec-apply.md`) that was never invoked under
+  // Codex. Only the matching adapter's source should be passed to its
+  // `observedNames` hook.
+  it('does not de-ghost a Codex prompt from Claude <command-name> markers', async () => {
+    const inputs = makeInputs({
+      // No Codex tool-call observations, no Codex slash invocations either.
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer'])],
+        ['codex', new Set(['refactor'])],
+      ]),
+      sessionCountBySource: new Map([
+        ['claude-code', 1],
+        ['codex', 1],
+      ]),
+      // Claude session has the `<command-name>/openspec-apply</command-name>`
+      // marker; Codex sessions are silent. With the contamination bug this
+      // marker would leak into the Codex miner and de-ghost the Codex
+      // prompt of the same name.
+      userTurnTextBySession: new Map([
+        [
+          'claude-code',
+          new Map([
+            ['claude-session-1', ['<command-name>/openspec-apply</command-name>\nbody']],
+          ]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const codexApply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.ok(
+      codexApply,
+      'Codex openspec-apply.md must remain a ghost — Claude <command-name> markers must not leak across sources',
+    );
+    // Sanity: the Claude side is correctly de-ghosted by its own observation.
+    const claudeApply = ghosts.find(
+      (g) => g.source === 'claude-code' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.equal(
+      claudeApply,
+      undefined,
+      'Claude openspec-apply.md is de-ghosted by its own user-turn marker',
+    );
+  });
+
+  // The mirror case: a Codex `/openspec-apply` invocation must not
+  // de-ghost a Claude command of the same name.
+  it('does not de-ghost a Claude command from Codex /<stem> matches', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer'])],
+        ['codex', new Set(['refactor'])],
+      ]),
+      sessionCountBySource: new Map([
+        ['claude-code', 1],
+        ['codex', 1],
+      ]),
+      userTurnTextBySession: new Map([
+        [
+          'codex',
+          new Map([
+            ['codex-session-1', ['/openspec-apply\nApply the latest proposal.']],
+          ]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const claudeApply = ghosts.find(
+      (g) => g.source === 'claude-code' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.ok(
+      claudeApply,
+      'Claude openspec-apply.md must remain a ghost — Codex slash matches must not leak across sources',
+    );
+    const codexApply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.equal(
+      codexApply,
+      undefined,
+      'Codex openspec-apply.md is de-ghosted by its own slash invocation',
+    );
   });
 });
 
@@ -190,7 +449,7 @@ describe('detectGhostSurface — orchestrator', () => {
   it('treats observed names case-insensitively', async () => {
     const inputs = makeInputs({
       observedNamesBySource: new Map([
-        ['claude-code', new Set(['Code-Reviewer', 'GIT-COMMIT', 'forgotten-HELPER', 'openspec-archive'])],
+        ['claude-code', new Set(['Code-Reviewer', 'GIT-COMMIT', 'forgotten-HELPER', 'openspec-archive', 'openspec-apply'])],
       ]),
       sessionCountBySource: new Map([['claude-code', 1]]),
     });

@@ -797,7 +797,7 @@ export async function runPatternsMode(
   let ghostFindings: GhostSurfaceFinding[] = [];
   if (selected.has('ghost-surface')) {
     const allTurns = perDetector.get('ghost-surface') ?? turns;
-    const ghostInputs = buildGhostSurfaceInputs(allTurns, pricing);
+    const ghostInputs = await buildGhostSurfaceInputs(allTurns, pricing);
     ghostFindings = await detectGhostSurface(ghostInputs);
   }
 
@@ -1428,15 +1428,66 @@ export function pickRepresentativeCacheReadRate(
   return rate.cacheRead / 1_000_000;
 }
 
-function buildGhostSurfaceInputs(
+// #172: build a per-source, per-session map of user-turn text strings for
+// the slash-command observation pass. We only load content for sessions
+// whose source has a slash-command notion (Claude commands, Codex prompts)
+// — the OpenCode adapter doesn't consume `userTurnTextBySession` so the I/O
+// would be wasted. The outer source key keeps each adapter's miner scoped
+// to its own harness's text — without it, a Codex `/<stem>` literal match
+// would fire against a Claude `<command-name>/<stem></command-name>` marker
+// (and vice versa), falsely de-ghosting an identically-named surface in
+// the other harness. Sessions whose sidecar is empty (`content.store=off`,
+// pruned, or never captured) are silently absent from the inner map; the
+// detector's `observedNames` hooks treat that as v1 fallback.
+async function loadUserTurnTextBySession(
+  turns: ReadonlyArray<EnrichedTurn>,
+): Promise<Map<SourceKind, Map<string, string[]>>> {
+  const out = new Map<SourceKind, Map<string, string[]>>();
+  // Dedupe by (source, sessionId); only Claude / Codex sessions need mining.
+  const sessionsBySource = new Map<SourceKind, Set<string>>();
+  for (const t of turns) {
+    if (t.source !== 'claude-code' && t.source !== 'codex') continue;
+    let set = sessionsBySource.get(t.source);
+    if (!set) {
+      set = new Set<string>();
+      sessionsBySource.set(t.source, set);
+    }
+    set.add(t.sessionId);
+  }
+  for (const [source, sessionIds] of sessionsBySource) {
+    const inner = new Map<string, string[]>();
+    for (const sessionId of sessionIds) {
+      const records = await readContent({ sessionId });
+      if (records.length === 0) continue;
+      const texts: string[] = [];
+      for (const rec of records) {
+        if (rec.role !== 'user' || rec.kind !== 'text') continue;
+        if (typeof rec.text !== 'string' || rec.text.length === 0) continue;
+        texts.push(rec.text);
+      }
+      if (texts.length > 0) inner.set(sessionId, texts);
+    }
+    if (inner.size > 0) out.set(source, inner);
+  }
+  return out;
+}
+
+async function buildGhostSurfaceInputs(
   turns: ReadonlyArray<EnrichedTurn>,
   pricing: Awaited<ReturnType<typeof loadPricing>>,
-): GhostSurfaceInputs {
-  return {
+): Promise<GhostSurfaceInputs> {
+  const userTurnTextBySession = await loadUserTurnTextBySession(turns);
+  const inputs: GhostSurfaceInputs = {
     observedNamesBySource: buildObservedNamesBySource(turns),
     sessionCountBySource: buildSessionCountBySource(turns),
     dollarPerToken: pickRepresentativeCacheReadRate(turns, pricing),
   };
+  // Only attach when non-empty — keeps the v1 fallback path clean for
+  // sessions where the sidecar was unavailable.
+  if (userTurnTextBySession.size > 0) {
+    inputs.userTurnTextBySession = userTurnTextBySession;
+  }
+  return inputs;
 }
 
 function renderGhostSurfaceTable(ghosts: GhostSurfaceFinding[], limit: number): string {
