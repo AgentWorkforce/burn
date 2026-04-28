@@ -6,6 +6,7 @@ import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash, contentHash } from './hash.js';
 import type {
+  CompactionEvent,
   ContentRecord,
   ContentStoreMode,
   Coverage,
@@ -97,6 +98,10 @@ interface UserMessage {
 export interface ParseOpencodeResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  // Compaction events (#148). One per user message that carries a
+  // `type: "compaction"` part, anchored to the assistant turn that finalized
+  // chronologically just before that user message.
+  events: CompactionEvent[];
   userTurns: UserTurnRecord[];
   // Execution-graph substrate (#42 / #93). One `root` row per session, plus a
   // `subagent` row when the session payload carries a `parentID`. Always
@@ -113,9 +118,9 @@ export async function parseOpencodeSession(
   sessionFilePath: string,
   options: ParseOpencodeOptions = {},
 ): Promise<ParseOpencodeResult> {
-  const { turns, content, userTurns, relationships, toolResultEvents } =
+  const { turns, content, events, userTurns, relationships, toolResultEvents } =
     await parseOpencodeSessionIncremental(sessionFilePath, options);
-  return { turns, content, userTurns, relationships, toolResultEvents };
+  return { turns, content, events, userTurns, relationships, toolResultEvents };
 }
 
 export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
@@ -125,6 +130,7 @@ export interface ParseOpencodeIncrementalOptions extends ParseOpencodeOptions {
 export interface ParseOpencodeIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
+  events: CompactionEvent[];
   userTurns: UserTurnRecord[];
   relationships: SessionRelationshipRecord[];
   toolResultEvents: ToolResultEventRecord[];
@@ -140,6 +146,7 @@ export async function parseOpencodeSessionIncremental(
     return {
       turns: [],
       content: [],
+      events: [],
       userTurns: [],
       relationships: [],
       toolResultEvents: [],
@@ -159,6 +166,7 @@ export async function parseOpencodeSessionIncremental(
   const seen = new Set<string>(options.seenMessageIds ?? []);
   const turns: TurnRecord[] = [];
   const content: ContentRecord[] = [];
+  const events: CompactionEvent[] = [];
   const userTurns: UserTurnRecord[] = [];
   const toolResultEvents: ToolResultEventRecord[] = [];
   // Per-toolUseId callIndex counter — 0 for the first event for that id, 1
@@ -289,6 +297,33 @@ export async function parseOpencodeSessionIncremental(
     }
   }
 
+  // Compaction events (#148). OpenCode stores a `type: "compaction"` part on
+  // a synthetic *user* message inserted just before the summary turn. We scan
+  // user messages in chronological order and anchor each event to the
+  // assistant turn whose `time.created` falls just before the compaction
+  // user message — that turn's `cache.read` is what was lost when the
+  // compaction wiped the cache. Dedup uses `seen` so a resumed pass that
+  // already emitted this event will skip it; the user message id namespace
+  // is disjoint from assistant ids in OpenCode storage.
+  for (const u of users) {
+    if (seen.has(u.id)) continue;
+    const userParts = await readParts(storageRoot, u.id);
+    if (!userParts.some((p) => p.type === 'compaction')) continue;
+    const preceding = findPrecedingAssistantByTime(assistants, u.time.created);
+    const ev: CompactionEvent = {
+      v: 1,
+      source: 'opencode',
+      sessionId: session.id,
+      ts: new Date(u.time.created).toISOString(),
+    };
+    if (preceding) {
+      ev.precedingMessageId = preceding.id;
+      ev.tokensBeforeCompact = toUsage(preceding.tokens).cacheRead;
+    }
+    events.push(ev);
+    seen.add(u.id);
+  }
+
   // Relationship rows are session-level state and always reflect the current
   // session payload (root for every session, plus a `subagent` row when
   // `parentID` is set). Emitted on every pass; the writer dedups by hash so
@@ -299,7 +334,30 @@ export async function parseOpencodeSessionIncremental(
   // mandatory fields without inventing fields the source doesn't surface.
   const relationships = buildOpencodeRelationships(session, assistants);
 
-  return { turns, content, userTurns, relationships, toolResultEvents, seenMessageIds: seen };
+  return {
+    turns,
+    content,
+    events,
+    userTurns,
+    relationships,
+    toolResultEvents,
+    seenMessageIds: seen,
+  };
+}
+
+function findPrecedingAssistantByTime(
+  assistants: AssistantMessage[],
+  ts: number,
+): AssistantMessage | undefined {
+  // assistants are sorted ascending by time.created at the top of the parse,
+  // so a forward scan is enough — we stop at the first message whose time
+  // is at or after the compaction user message's time.
+  let best: AssistantMessage | undefined;
+  for (const a of assistants) {
+    if (a.time.created < ts) best = a;
+    else break;
+  }
+  return best;
 }
 
 function collectOpencodeToolResultEvents(

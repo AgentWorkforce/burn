@@ -456,6 +456,32 @@ describe('ingestCodexSessions execution graph passthrough (#87)', () => {
     assert.equal(compactions[0]!['precedingMessageId'], 'turn_compact_ingest_1');
     assert.equal(compactions[0]!['tokensBeforeCompact'], 1000);
   });
+
+  it('persists opencode compaction events, no duplicates on re-ingest', async () => {
+    const storage = path.join(tmpHome, '.local', 'share', 'opencode', 'storage');
+    await cp(path.resolve('tests/fixtures/opencode/with-compaction/storage'), storage, {
+      recursive: true,
+    });
+
+    await ingestOpencodeSessions();
+    await ingestOpencodeSessions();
+
+    const ledger = await readFile(path.join(tmpRelay, 'ledger.jsonl'), 'utf8');
+    const lines = ledger
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as { kind: string; record: Record<string, unknown> });
+
+    const compactions = lines
+      .filter((l) => l.kind === 'compaction' && l.record['source'] === 'opencode')
+      .map((l) => l.record);
+
+    assert.equal(compactions.length, 1, 'exactly one opencode compaction row appended');
+    assert.equal(compactions[0]!['sessionId'], 'ses_compact');
+    assert.equal(compactions[0]!['precedingMessageId'], 'msg_compact_a1');
+    assert.equal(compactions[0]!['tokensBeforeCompact'], 12000);
+  });
 });
 
 // ---------- helpers ----------
