@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cross-harness ghost user-installed surface detector** ([#166](https://github.com/AgentWorkforce/burn/issues/166)). New `detectGhostSurface` orchestrator + per-harness `GhostSurfaceAdapter`s (`claudeGhostAdapter`, `codexGhostAdapter`, `opencodeGhostAdapter`) flag user-installed surface files (agents/skills/commands/prompts/rules/memories) that ride in every session's system prompt but were never invoked across the observed window. Claude scans `~/.claude/{agents,skills,commands}/`, Codex scans `~/.codex/{prompts,skills,rules,memories}/`, and OpenCode walks each project's `opencode.json` declared skills + custom commands and the project skills folder. Output is a sorted `GhostSurfaceFinding[]` (`source`, `kind`, `path`, `sizeTokens`, `cost`, `sessionCount`, `countedByCatalogBloat?`) with cost = `sizeTokens × sessionCount × dollarPerToken`. Adapters are declarative — adding a new harness is one entry in `DEFAULT_GHOST_ADAPTERS`. The `GhostSurfaceInputs` contract reserves a `userTurnTextBySession` field for the [#172](https://github.com/AgentWorkforce/burn/issues/172) follow-up so slash-command invocation mining can land without a breaking change. OpenCode results dedupe against [#54](https://github.com/AgentWorkforce/burn/issues/54)'s `SystemPromptTax` (catalog-bloat) detector by emitting declared catalog skills with `cost: 0` and `countedByCatalogBloat: true` — the entry is still surfaced so the user knows what to remove from `opencode.json`, but the dollars aren't double-counted. New finding adapter `ghostSurfaceToFinding(...)` produces a `WasteFinding` with a `mv <path> <archive-dir>/` `command`-style `WasteAction` per the [#56](https://github.com/AgentWorkforce/burn/issues/56) envelope.
+
 ## [0.41.0] - 2026-04-28
 
 ### Added

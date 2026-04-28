@@ -1,0 +1,20 @@
+{
+  "skills": {
+    "code-search": {
+      "description": "Search the codebase for symbols."
+    },
+    "abandoned-helper": {
+      "description": "A skill in the catalog that nobody calls. Counted by #54 catalog tax, so reported with cost: 0."
+    }
+  },
+  "commands": {
+    "deploy": {
+      "description": "Deploy the staging environment.",
+      "prompt": "Run the deploy.sh script and report status."
+    },
+    "ghost-command": {
+      "description": "A custom command that nobody uses.",
+      "prompt": "This rides in the system prompt for every OpenCode session, contributing N tokens of dead weight."
+    }
+  }
+}

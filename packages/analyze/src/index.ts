@@ -118,3 +118,21 @@ export type {
   ContextFileKind,
   ParsedContextFile,
 } from './context-md.js';
+export {
+  claudeGhostAdapter,
+  codexGhostAdapter,
+  DEFAULT_GHOST_ADAPTERS,
+  detectGhostSurface,
+  ghostFindingsToWasteFindings,
+  ghostSurfaceToFinding,
+  opencodeGhostAdapter,
+} from './ghost-surface.js';
+export type {
+  DetectGhostSurfaceOptions,
+  GhostCandidate,
+  GhostFindingKind,
+  GhostSurfaceAdapter,
+  GhostSurfaceFinding,
+  GhostSurfaceFindingOptions,
+  GhostSurfaceInputs,
+} from './ghost-surface.js';
