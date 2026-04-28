@@ -1,4 +1,5 @@
 import {
+  aggregateByProvider,
   aggregateSubagentTypeStats,
   buildSubagentTree,
   computeQuality,
@@ -7,11 +8,14 @@ import {
 } from '@relayburn/analyze';
 import { costForTurn, sumCosts } from '@relayburn/analyze';
 import type {
-  CostBreakdown,
+  CoverageField,
+  FieldCoverage,
   FidelitySummary,
   OutcomeLabel,
   QualityResult,
+  RowCoverage,
   SubagentTreeNode,
+  UsageCostAggregateRow,
 } from '@relayburn/analyze';
 import {
   buildArchive,
@@ -29,7 +33,6 @@ import type { ParsedArgs } from '../args.js';
 import {
   filterTurnsByProvider,
   parseProviderFilter,
-  resolveTurnProvider,
 } from '../provider.js';
 
 export async function runSummary(args: ParsedArgs): Promise<number> {
@@ -60,6 +63,12 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     );
     return 2;
   }
+  if (byProvider && (subagentTypeFlag || subagentTreeFlag !== undefined)) {
+    process.stderr.write(
+      'burn: --by-provider cannot be combined with --by-subagent-type/--subagent-tree\n',
+    );
+    return 2;
+  }
 
   const ingestReport = await ingestAll();
   const pricing = await loadPricing();
@@ -76,7 +85,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   }
 
   const rows = byProvider
-    ? aggregateByProvider(turns, pricing)
+    ? aggregateByProvider(turns, { pricing })
     : aggregateByModel(turns, pricing);
   const totalCost = sumCosts(rows.map((r) => r.cost));
   const fidelity = summarizeFidelity(turns);
@@ -261,20 +270,6 @@ function weightedOneShotRate(q: QualityResult): number | undefined {
 // `Coverage` flag was false). Records emitted before #41 (no `fidelity` at
 // all) are treated as best-effort full and counted as `known` — the same
 // backward-compat stance taken by `summarizeFidelity` / `hasMinimumFidelity`.
-interface FieldCoverage {
-  known: number;
-  missing: number;
-}
-
-type CoverageField =
-  | 'input'
-  | 'output'
-  | 'reasoning'
-  | 'cacheRead'
-  | 'cacheCreate';
-
-type RowCoverage = Record<CoverageField, FieldCoverage>;
-
 const COVERAGE_FIELDS: ReadonlyArray<CoverageField> = [
   'input',
   'output',
@@ -291,13 +286,7 @@ const COVERAGE_FLAG: Record<CoverageField, keyof Coverage> = {
   cacheCreate: 'hasCacheCreateTokens',
 };
 
-interface ModelRow {
-  label: string;
-  turns: number;
-  usage: EnrichedTurn['usage'];
-  cost: CostBreakdown;
-  coverage: RowCoverage;
-}
+type ModelRow = UsageCostAggregateRow;
 
 function renderSubagentTreeMode(
   args: ParsedArgs,
@@ -668,13 +657,6 @@ async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {
   return aggregateTurns(turns, pricing, (t) => t.model || 'unknown');
-}
-
-function aggregateByProvider(
-  turns: EnrichedTurn[],
-  pricing: Parameters<typeof costForTurn>[1],
-): ModelRow[] {
-  return aggregateTurns(turns, pricing, (t) => resolveTurnProvider(t).provider);
 }
 
 function aggregateTurns(
