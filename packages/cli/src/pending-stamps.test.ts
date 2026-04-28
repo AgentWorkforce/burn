@@ -101,6 +101,59 @@ describe('pending stamp manifest', () => {
     assert.equal(line.enrichment['workflowId'], 'wf-once');
   });
 
+  it('does not cross-contaminate two same-cwd same-harness runs', async () => {
+    const now = Date.now();
+    const spawnStartA = new Date(now);
+    const spawnStartB = new Date(now + 1000);
+    await writePendingStamp({
+      harness: 'codex',
+      cwd: '/tmp/project',
+      enrichment: { tag: 'A' },
+      sessionDirHint: '/tmp/codex/sessions',
+      spawnStartTs: spawnStartA,
+      spawnerPid: 100,
+    });
+    await writePendingStamp({
+      harness: 'codex',
+      cwd: '/tmp/project',
+      enrichment: { tag: 'B' },
+      sessionDirHint: '/tmp/codex/sessions',
+      spawnStartTs: spawnStartB,
+      spawnerPid: 101,
+    });
+
+    const first = await resolvePendingStampsForSession({
+      harness: 'codex',
+      sessionId: 'sess_first',
+      sessionPath: '/tmp/codex/sessions/2026/04/24/first.jsonl',
+      sessionMtimeMs: spawnStartB.getTime() + 50,
+      cwd: '/tmp/project',
+    });
+    const second = await resolvePendingStampsForSession({
+      harness: 'codex',
+      sessionId: 'sess_second',
+      sessionPath: '/tmp/codex/sessions/2026/04/24/second.jsonl',
+      sessionMtimeMs: spawnStartB.getTime() + 60,
+      cwd: '/tmp/project',
+    });
+
+    assert.equal(first.applied, 1);
+    assert.equal(second.applied, 1);
+    // Oldest stamp (A) goes to whichever session ingests first.
+    assert.equal(first.enrichment['tag'], 'A');
+    assert.equal(second.enrichment['tag'], 'B');
+    assert.deepEqual(await listPendingFiles(), []);
+
+    const stampLines = (await readFile(ledgerPath(), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { selector: { sessionId?: string }; enrichment: Record<string, string> });
+    assert.equal(stampLines.length, 2);
+    const bySession = new Map(stampLines.map((l) => [l.selector.sessionId, l.enrichment['tag']]));
+    assert.equal(bySession.get('sess_first'), 'A');
+    assert.equal(bySession.get('sess_second'), 'B');
+  });
+
   it('uses mtime causality as a fallback when session cwd is unavailable', async () => {
     const spawnStart = new Date();
     await writePendingStamp({
