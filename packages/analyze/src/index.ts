@@ -63,6 +63,25 @@ export type {
   WasteFinding,
   WasteSeverity,
 } from './findings.js';
+export {
+  BASH_MAX_OUTPUT_ENV_KEY,
+  DEFAULT_BLOAT_TOKEN_THRESHOLD,
+  detectObservedBloat,
+  detectStaticConfigBloat,
+  detectToolOutputBloat,
+  loadClaudeSettings,
+  projectClaudeSettingsPath,
+  toolOutputBloatToFinding,
+  userClaudeSettingsPath,
+} from './tool-output-bloat.js';
+export type {
+  ClaudeSettings,
+  DetectObservedBloatOptions,
+  DetectStaticConfigBloatOptions,
+  DetectToolOutputBloatOptions,
+  LoadedClaudeSettings,
+  ToolOutputBloat,
+} from './tool-output-bloat.js';
 export { computeQuality, computeOneShotRate, inferOutcome } from './quality.js';
 export type {
   ComputeQualityOptions,
