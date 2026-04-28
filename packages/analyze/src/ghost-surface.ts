@@ -57,10 +57,17 @@ export interface GhostSurfaceFinding {
   // Approximate token cost of the file, computed as Math.ceil(byteLen / 4).
   // Mirrors the cheap heuristic used in `UserTurnBlock.approxTokens`.
   sizeTokens: number;
-  // sizeTokens × sessionCountInWindow × dollar-per-token rate. Zero when
-  // the entry was already counted by the OpenCode catalog-bloat detector
+  // Cumulative cost across the window: sizeTokens × sessionCountInWindow ×
+  // dollar-per-token rate. Drives the CLI's ghost-surface table column. Zero
+  // when the entry was already counted by the OpenCode catalog-bloat detector
   // (#54) — see `countedByCatalogBloat`.
   cost: number;
+  // Per-session cost: sizeTokens × dollar-per-token rate. This is what feeds
+  // severity classification and `estimatedSavings.usdPerSession` in the
+  // unified `WasteFinding` envelope, so a low-traffic ghost isn't ranked as
+  // `high` purely because it rode in many sessions. Zero when
+  // `countedByCatalogBloat` is true.
+  costPerSession: number;
   // Number of sessions observed in the lookback window for this source.
   // Reported alongside cost so the user can sanity-check the multiplier.
   sessionCount: number;
@@ -465,15 +472,19 @@ export async function detectGhostSurface(
       const lookups = namesForLookup(cand.basename);
       const isInvoked = lookups.some((n) => observedLower.has(n.toLowerCase()));
       if (isInvoked) continue;
+      const costPerSession = cand.countedByCatalogBloat
+        ? 0
+        : cand.sizeTokens * inputs.dollarPerToken;
       const cost = cand.countedByCatalogBloat
         ? 0
-        : cand.sizeTokens * sessionCount * inputs.dollarPerToken;
+        : costPerSession * sessionCount;
       const finding: GhostSurfaceFinding = {
         source: cand.source,
         kind: cand.kind,
         path: cand.path,
         sizeTokens: cand.sizeTokens,
         cost,
+        costPerSession,
         sessionCount,
       };
       if (cand.countedByCatalogBloat !== undefined) {
@@ -520,18 +531,41 @@ export interface GhostSurfaceFindingOptions {
   archiveDir?: string;
 }
 
+// POSIX shell single-quote escape: wrap the string in single quotes and
+// replace each embedded `'` with `'\''`. Safe for paths with spaces, `$`,
+// backticks, or other shell metacharacters.
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+// Synthetic OpenCode paths look like `<configPath>#/skills/<name>` or
+// `<configPath>#/commands/<name>` — they aren't real filesystem paths so a
+// `mv` would fail. Detect them and emit a `paste`-style instruction instead.
+function splitSyntheticPath(p: string): { file: string; pointer: string } | null {
+  const hash = p.indexOf('#');
+  if (hash < 0) return null;
+  return { file: p.slice(0, hash), pointer: p.slice(hash + 1) };
+}
+
 export function ghostSurfaceToFinding(
   ghost: GhostSurfaceFinding,
   options: GhostSurfaceFindingOptions = {},
 ): WasteFinding {
   const archiveDir = options.archiveDir ?? defaultArchiveDir();
-  const action: WasteAction = {
-    type: 'command',
-    label: `Archive ghost ${ghost.kind}`,
-    text: `mkdir -p ${archiveDir} && mv ${ghost.path} ${archiveDir}/`,
-  };
-  const usd = ghost.cost;
-  const severity = severityFromUsd(usd);
+  const synthetic = splitSyntheticPath(ghost.path);
+  const action: WasteAction = synthetic
+    ? {
+        type: 'paste',
+        label: `Remove ghost ${ghost.kind} from ${path.basename(synthetic.file)}`,
+        text: `Edit ${synthetic.file} and remove the entry at ${synthetic.pointer}.`,
+      }
+    : {
+        type: 'command',
+        label: `Archive ghost ${ghost.kind}`,
+        text: `mkdir -p ${shellQuote(archiveDir)} && mv ${shellQuote(ghost.path)} ${shellQuote(archiveDir + '/')}`,
+      };
+  const perSessionUsd = ghost.costPerSession;
+  const severity = severityFromUsd(perSessionUsd);
   // Ghost findings have no per-session id. Use the path as a stable key so
   // the unified finding renderer (which keys by sessionId) doesn't collide
   // multiple ghost findings; severity ranking still works because we ranked
@@ -553,10 +587,10 @@ export function ghostSurfaceToFinding(
       `${ghost.path} is part of the user-installed ${ghost.source} surface ` +
       `(~${ghost.sizeTokens.toLocaleString()} tokens) but its basename was never invoked ` +
       `as a tool / agent / command / prompt in the observed window.${sessionsClause} ` +
-      `Cumulative cost ${fmtUsd(usd)}.${dedupNote}`,
+      `Per-session cost ${fmtUsd(perSessionUsd)}; cumulative ${fmtUsd(ghost.cost)}.${dedupNote}`,
     estimatedSavings: {
       tokensPerSession: ghost.sizeTokens,
-      usdPerSession: usd,
+      usdPerSession: perSessionUsd,
     },
     actions: [action],
   };

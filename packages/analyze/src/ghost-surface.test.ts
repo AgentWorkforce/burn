@@ -247,4 +247,59 @@ describe('ghostSurfaceToFinding', () => {
     assert.equal(finding.estimatedSavings.usdPerSession, 0);
     assert.ok(finding.detail.includes('catalog-bloat'));
   });
+
+  it('uses per-session cost for severity and usdPerSession, not cumulative', async () => {
+    // High session count × small per-session cost — cumulative would cross
+    // the `high` severity threshold, but the per-session impact is `info`.
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer'])],
+      ]),
+      sessionCountBySource: new Map([['claude-code', 100_000]]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const helper = ghosts.find((g) => g.path.endsWith('forgotten-helper.md'))!;
+    // Sanity check: cumulative cost is well above the `high` threshold ($0.50).
+    assert.ok(helper.cost > 1, `expected cumulative cost > $1, got ${helper.cost}`);
+    // Per-session cost is sizeTokens × rate (≈ small number × 1e-6 ≈ <$0.05).
+    assert.ok(
+      helper.costPerSession < 0.05,
+      `per-session cost should be below warn threshold, got ${helper.costPerSession}`,
+    );
+    const finding = ghostSurfaceToFinding(helper, { archiveDir: '/tmp/ghost-archive' });
+    assert.equal(finding.estimatedSavings.usdPerSession, helper.costPerSession);
+    assert.equal(finding.severity, 'info');
+  });
+
+  it('shell-quotes paths with spaces in the mv command', async () => {
+    const ghost = {
+      source: 'claude-code' as const,
+      kind: 'ghost-agent' as const,
+      path: '/Users/me/.claude/agents/my helper.md',
+      sizeTokens: 100,
+      cost: 0.001,
+      costPerSession: 0.0001,
+      sessionCount: 10,
+    };
+    const finding = ghostSurfaceToFinding(ghost, { archiveDir: '/tmp/ghost archive' });
+    const action = finding.actions[0]!;
+    assert.equal(action.type, 'command');
+    assert.ok(action.text.includes(`'/Users/me/.claude/agents/my helper.md'`));
+    assert.ok(action.text.includes(`'/tmp/ghost archive'`));
+  });
+
+  it('emits a paste action (not mv) for synthetic OpenCode JSON-pointer paths', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([['opencode', new Set(['deploy'])]]),
+      sessionCountBySource: new Map([['opencode', 5]]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const synthetic = ghosts.find((g) => g.path.includes('#/commands/ghost-command'))!;
+    const finding = ghostSurfaceToFinding(synthetic);
+    const action = finding.actions[0]!;
+    assert.equal(action.type, 'paste');
+    assert.ok(!action.text.includes('mv '), 'paste action should not invoke mv');
+    assert.ok(action.text.includes('opencode.json'));
+    assert.ok(action.text.includes('/commands/ghost-command'));
+  });
 });
