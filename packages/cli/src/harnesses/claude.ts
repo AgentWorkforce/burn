@@ -4,7 +4,7 @@ import * as path from 'node:path';
 
 import { stamp } from '@relayburn/ledger';
 
-import { ingestSession } from '../commands/claude.js';
+import { ingestClaudeSession } from '../ingest.js';
 import type { IngestReport } from '../ingest.js';
 
 import type { HarnessAdapter, HarnessRunContext, HarnessSpawnPlan } from './types.js';
@@ -35,6 +35,6 @@ export const claudeAdapter: HarnessAdapter = {
 
   async afterExit(ctx: HarnessRunContext, plan: HarnessSpawnPlan): Promise<IngestReport> {
     if (!plan.sessionId) throw new Error('claude adapter: plan must include sessionId');
-    return ingestSession(ctx.cwd, plan.sessionId);
+    return ingestClaudeSession(ctx.cwd, plan.sessionId);
   },
 };

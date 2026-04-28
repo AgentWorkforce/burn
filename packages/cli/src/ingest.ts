@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 
 import {
+  parseClaudeSession,
   parseClaudeSessionIncremental,
   parseCodexSessionIncremental,
   parseOpencodeSessionIncremental,
@@ -143,6 +144,49 @@ export async function ingestOpencodeSessions(): Promise<IngestReport> {
   emitGapWarning('opencode', contentMode, gap, moduleGapState);
   await saveCursors(cursors);
   return report;
+}
+
+// Per-session fast-path used by the claude harness adapter after a `burn run`
+// exits. Unlike the directory-scanning ingest functions above, the caller
+// already knows the sessionId from the spawn plan, so we go straight to that
+// one JSONL and persist a cursor at EOF — a later `ingestAll` sweep then
+// skips it instead of re-parsing and duplicating its content sidecar.
+export async function ingestClaudeSession(cwd: string, sessionId: string): Promise<IngestReport> {
+  const encoded = cwd.replace(/\//g, '-');
+  const file = path.join(claudeProjectsDir(), encoded, `${sessionId}.jsonl`);
+  let st: Awaited<ReturnType<typeof stat>>;
+  try {
+    st = await stat(file);
+    if (!st.isFile()) return emptyReport();
+  } catch {
+    process.stderr.write(`[burn] no session file found at ${file}\n`);
+    return emptyReport();
+  }
+  const contentMode = await resolveContentMode();
+  const { turns, content, events, relationships, toolResultEvents, userTurns } =
+    await parseClaudeSession(file, {
+      sessionPath: file,
+      contentMode,
+    });
+  if (turns.length === 0) return { scannedSessions: 1, ingestedSessions: 0, appendedTurns: 0 };
+  await appendTurns(turns);
+  if (content.length > 0) await appendContent(content);
+  if (events.length > 0) await appendCompactions(events);
+  if (relationships.length > 0) await appendRelationships(relationships);
+  if (toolResultEvents.length > 0) await appendToolResultEvents(toolResultEvents);
+  if (userTurns.length > 0) await appendUserTurns(userTurns);
+
+  const cursors = await loadCursors();
+  const cursor: ClaudeCursor = {
+    kind: 'claude',
+    inode: st.ino,
+    offsetBytes: st.size,
+    mtimeMs: st.mtimeMs,
+  };
+  cursors[file] = cursor;
+  await saveCursors(cursors);
+
+  return { scannedSessions: 1, ingestedSessions: 1, appendedTurns: turns.length };
 }
 
 export async function ingestAll(): Promise<IngestReport> {
