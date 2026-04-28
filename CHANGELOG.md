@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **Structured `WasteFinding` envelope for waste detectors** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). `@relayburn/analyze` now exposes a common `{ kind, severity, sessionId, title, detail, estimatedSavings, actions }` shape that wraps every existing detector result. `burn waste --patterns --findings` renders all detector kinds through one severity-ranked table (high → warn → info, then by `usdPerSession`); `burn waste --patterns --json` gains a `findings` array alongside the existing per-detector arrays. The narrow per-detector types remain exported. `WasteAction` is a closed union (`paste` / `command` / `file-content`) so a future `burn waste --apply` can drive a confirmation-gated pipeline against typed actions.
 
+## [0.39.0] - 2026-04-28
+
+### Changed
+
+- **`burn compare` takes models as a required positional** ([#159](https://github.com/AgentWorkforce/burn/issues/159)). Models move from the optional `--models a,b` flag to a required comma-separated positional argument with a minimum of 2 entries. The previous default ("all models in the ledger") was a survey, not a comparison; `burn summary --by-provider` / `--by-tool` already covers that surface. The `--models` flag is removed entirely; the missing/short-positional and legacy-flag paths each exit 2 with a clear error pointing at the positional form. No behavioral change to filters, cell schema, JSON contract, or aggregation.
+
 ## [0.37.0] - 2026-04-28
 
 ### Added

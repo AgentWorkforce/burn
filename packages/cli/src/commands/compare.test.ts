@@ -45,8 +45,15 @@ async function captureStdout<T>(
   }
 }
 
-function args(flags: Record<string, string | true> = {}): ParsedArgs {
-  return { flags, tags: {}, positional: [], passthrough: [] };
+// Default positional that satisfies the >=2 model requirement (#159). Tests
+// that exercise the new validation override `positional` directly.
+const DEFAULT_MODELS_POSITIONAL = ['claude-sonnet-4-6,claude-haiku-4-5'];
+
+function args(
+  flags: Record<string, string | true> = {},
+  positional: string[] = DEFAULT_MODELS_POSITIONAL,
+): ParsedArgs {
+  return { flags, tags: {}, positional, passthrough: [] };
 }
 
 const FULL_FIDELITY: Fidelity = makeFidelity('per-turn', {
@@ -311,7 +318,10 @@ describe('burn compare — fidelity gating', () => {
       turn('claude-haiku-4-5', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
     ];
     const { stdout: jsonOut } = await captureStdout(() =>
-      runCompare(args({ json: true, models: 'claude-sonnet-4-6,claude-haiku-4-5' }), makeDeps(turns)),
+      runCompare(
+        args({ json: true }, ['claude-sonnet-4-6,claude-haiku-4-5']),
+        makeDeps(turns),
+      ),
     );
     const parsed = JSON.parse(jsonOut);
     const sonnetCell = parsed.cells.find(
@@ -325,7 +335,10 @@ describe('burn compare — fidelity gating', () => {
     assert.equal(sonnetCell.oneShotRate, null);
 
     const { stdout: ttyOut } = await captureStdout(() =>
-      runCompare(args({ models: 'claude-sonnet-4-6,claude-haiku-4-5' }), makeDeps(turns)),
+      runCompare(
+        args({}, ['claude-sonnet-4-6,claude-haiku-4-5']),
+        makeDeps(turns),
+      ),
     );
     // Find the data row for `coding` — the Sonnet half (3 sub-columns) must
     // be three em-dashes, never $0.00 / 0%. Tightening the regex so we don't
@@ -351,8 +364,11 @@ describe('burn compare — fidelity gating', () => {
 
 describe('burn compare — --provider filter', () => {
   it('filters the compare table to only synthetic-routed turns', async () => {
-    // Pricing classifier maps `hf:deepseek-ai/...` to provider=synthetic.
-    // Anthropic turns fall through to source=claude-code → provider=anthropic.
+    // Pricing classifier maps `hf:deepseek-ai/...` and `synthetic/...` to
+    // provider=synthetic. Anthropic turns fall through to source=claude-code →
+    // provider=anthropic. The positional list (#159) names two synthetic
+    // models so the comparison can render after the provider filter drops the
+    // Anthropic turn.
     const turns: EnrichedTurn[] = [
       turn('hf:deepseek-ai/deepseek-r1', 'coding', FULL_FIDELITY, {
         hasEdits: true,
@@ -362,18 +378,31 @@ describe('burn compare — --provider filter', () => {
         hasEdits: true,
         retries: 0,
       }),
+      turn('synthetic/qwen-3', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+      }),
       turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, {
         hasEdits: true,
         retries: 0,
       }),
     ];
     const { result, stdout } = await captureStdout(() =>
-      runCompare(args({ json: true, provider: 'synthetic' }), makeDeps(turns)),
+      runCompare(
+        args(
+          { json: true, provider: 'synthetic' },
+          ['hf:deepseek-ai/deepseek-r1,synthetic/qwen-3'],
+        ),
+        makeDeps(turns),
+      ),
     );
     assert.equal(result, 0);
     const parsed = JSON.parse(stdout);
-    assert.equal(parsed.analyzedTurns, 2);
-    assert.deepEqual(parsed.models, ['hf:deepseek-ai/deepseek-r1']);
+    assert.equal(parsed.analyzedTurns, 3);
+    assert.deepEqual(
+      [...parsed.models].sort(),
+      ['hf:deepseek-ai/deepseek-r1', 'synthetic/qwen-3'].sort(),
+    );
   });
 
   it('accepts a comma-separated list (matches summary parser)', async () => {
@@ -395,7 +424,10 @@ describe('burn compare — --provider filter', () => {
     ];
     const { result, stdout } = await captureStdout(() =>
       runCompare(
-        args({ json: true, provider: 'anthropic,synthetic' }),
+        args(
+          { json: true, provider: 'anthropic,synthetic' },
+          ['claude-sonnet-4-6,hf:deepseek-ai/deepseek-r1'],
+        ),
         makeDeps(turns),
       ),
     );
@@ -428,5 +460,115 @@ describe('burn compare — --provider filter', () => {
     );
     assert.equal(result, 2);
     assert.match(stderr, /--provider requires a value/);
+  });
+});
+
+describe('burn compare — required positional models (#159)', () => {
+  it('exits 2 with the discovery message when no positional is given', async () => {
+    const { result, stderr } = await captureStdout(() =>
+      runCompare(args({}, []), makeDeps([])),
+    );
+    assert.equal(result, 2);
+    assert.match(stderr, /needs at least 2 models/);
+    assert.match(stderr, /burn summary --by-provider/);
+  });
+
+  it('exits 2 when the positional names only one model', async () => {
+    const { result, stderr } = await captureStdout(() =>
+      runCompare(args({}, ['claude-sonnet-4-6']), makeDeps([])),
+    );
+    assert.equal(result, 2);
+    assert.match(stderr, /needs at least 2 models/);
+  });
+
+  it('exits 2 when the positional has trailing commas / empties resolving to <2', async () => {
+    // " claude-sonnet-4-6 ,, " → trim/dedupe/drop-empty → 1 model.
+    const { result, stderr } = await captureStdout(() =>
+      runCompare(args({}, [' claude-sonnet-4-6 ,, ']), makeDeps([])),
+    );
+    assert.equal(result, 2);
+    assert.match(stderr, /needs at least 2 models/);
+  });
+
+  it('runs and renders a table for a valid 2+ model positional', async () => {
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+      turn('claude-haiku-4-5', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+    ];
+    const { result, stdout } = await captureStdout(() =>
+      runCompare(
+        args({}, ['claude-sonnet-4-6,claude-haiku-4-5']),
+        makeDeps(turns),
+      ),
+    );
+    assert.equal(result, 0);
+    // Both models surface in the per-model totals footer.
+    assert.match(stdout, /claude-sonnet-4-6:/);
+    assert.match(stdout, /claude-haiku-4-5:/);
+  });
+
+  it('JSON output works with the positional form', async () => {
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+      turn('claude-haiku-4-5', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+    ];
+    const { result, stdout } = await captureStdout(() =>
+      runCompare(
+        args({ json: true }, ['claude-sonnet-4-6,claude-haiku-4-5']),
+        makeDeps(turns),
+      ),
+    );
+    assert.equal(result, 0);
+    const parsed = JSON.parse(stdout);
+    assert.deepEqual(
+      [...parsed.models].sort(),
+      ['claude-haiku-4-5', 'claude-sonnet-4-6'],
+    );
+  });
+
+  it('CSV output works with the positional form', async () => {
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+      turn('claude-haiku-4-5', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+    ];
+    const { result, stdout } = await captureStdout(() =>
+      runCompare(
+        args({ csv: true }, ['claude-sonnet-4-6,claude-haiku-4-5']),
+        makeDeps(turns),
+      ),
+    );
+    assert.equal(result, 0);
+    // Header + one row per (model, category) pair.
+    assert.match(stdout, /^model,category,/);
+    assert.match(stdout, /claude-sonnet-4-6,coding,/);
+    assert.match(stdout, /claude-haiku-4-5,coding,/);
+  });
+
+  it('rejects the legacy --models flag with a pointer to the positional form', async () => {
+    const { result, stderr } = await captureStdout(() =>
+      runCompare(
+        args({ models: 'claude-sonnet-4-6,claude-haiku-4-5' }, []),
+        makeDeps([]),
+      ),
+    );
+    assert.equal(result, 2);
+    assert.match(stderr, /--models was removed/);
+    assert.match(stderr, /positional argument/);
+  });
+
+  it('dedupes and trims model names in the positional', async () => {
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+      turn('claude-haiku-4-5', 'coding', FULL_FIDELITY, { hasEdits: true, retries: 0 }),
+    ];
+    const { result, stdout } = await captureStdout(() =>
+      runCompare(
+        args({ json: true }, [' claude-sonnet-4-6 , claude-haiku-4-5 , claude-sonnet-4-6 ']),
+        makeDeps(turns),
+      ),
+    );
+    assert.equal(result, 0);
+    const parsed = JSON.parse(stdout);
+    assert.deepEqual(parsed.models, ['claude-sonnet-4-6', 'claude-haiku-4-5']);
   });
 });
