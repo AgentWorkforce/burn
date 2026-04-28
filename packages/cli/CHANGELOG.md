@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn watch --opencode-stream` can subscribe to OpenCode's local SSE endpoint and wake ingest immediately on session/message events while polling remains the fallback.
+
 ## [0.42.0] - 2026-04-28
 
 ### Added

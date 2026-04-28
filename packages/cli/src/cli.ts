@@ -32,7 +32,7 @@ Usage:
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
-  burn watch         [--interval <ms>] [--once]
+  burn watch         [--interval <ms>] [--once] [--opencode-stream] [--opencode-url <url>]
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
   burn content prune [--days <n>] [--force]
@@ -63,6 +63,7 @@ Examples:
   burn run codex    --tag workflow=refactor
   burn run opencode --tag workflow=refactor
   burn watch
+  burn watch --opencode-stream
   burn content prune --days 30
   burn archive status
   burn archive build
