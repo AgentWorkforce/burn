@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseClaudeSession } from '@relayburn/reader';
-import type { CompactionEvent, ToolCall, TurnRecord } from '@relayburn/reader';
+import type { CompactionEvent, ToolCall, TurnRecord, UserTurnRecord } from '@relayburn/reader';
 
 import { detectPatterns } from './patterns.js';
 import { loadBuiltinPricing } from './pricing.js';
@@ -495,5 +495,126 @@ describe('detectPatterns — session summary includes skill detectors', () => {
     assert.equal(summary!.skillRecallDupCount, 1);
     // Both skill calls have a subsequent cacheRead turn, so each gets a pruning entry.
     assert.equal(summary!.skillPruningProtectionCount, 2);
+  });
+});
+
+describe('detectPatterns — OpenCode system prompt tax', () => {
+  function userTurn(overrides: { sessionId: string; userUuid: string; blocks: Array<{ kind: 'tool_result' | 'text'; toolUseId?: string; byteLen: number; approxTokens: number; isError?: boolean }>; precedingMessageId?: string; followingMessageId?: string }): UserTurnRecord {
+    const record: UserTurnRecord = {
+      v: 1,
+      source: 'opencode',
+      sessionId: overrides.sessionId,
+      userUuid: overrides.userUuid,
+      ts: '2026-04-20T00:00:00.000Z',
+      blocks: overrides.blocks,
+    };
+    if (overrides.precedingMessageId !== undefined) record.precedingMessageId = overrides.precedingMessageId;
+    if (overrides.followingMessageId !== undefined) record.followingMessageId = overrides.followingMessageId;
+    return record;
+  }
+
+  it('estimates system prompt size from first cacheCreate minus first user message', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        usage: { input: 5000, output: 200, reasoning: 0, cacheRead: 0, cacheCreate5m: 5200, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'opencode' as const,
+        usage: { input: 100, output: 50, reasoning: 0, cacheRead: 5200, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const userTurnsBySession = new Map<string, UserTurnRecord[]>();
+    userTurnsBySession.set('s', [
+      userTurn({
+        sessionId: 's',
+        userUuid: 'u1',
+        blocks: [{ kind: 'text' as const, byteLen: 800, approxTokens: 200 }],
+        followingMessageId: 'm1',
+      }),
+    ]);
+
+    const result = detectPatterns(turns, { pricing, userTurnsBySession });
+    assert.equal(result.systemPromptTaxes.length, 1);
+    const tax = result.systemPromptTaxes[0]!;
+    assert.equal(tax.firstTurnCacheCreate, 5200);
+    assert.equal(tax.firstUserMessageTokens, 200);
+    assert.equal(tax.estimatedSystemPromptTokens, 5000);
+    assert.equal(tax.ridingTurns, 1);
+  });
+
+  it('does not emit when user-turn data is unavailable', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        usage: { input: 5000, output: 200, reasoning: 0, cacheRead: 0, cacheCreate5m: 5200, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.systemPromptTaxes.length, 0);
+  });
+
+  it('does not trigger for non-OpenCode sessions', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'claude-code' as const,
+        usage: { input: 5000, output: 200, reasoning: 0, cacheRead: 0, cacheCreate5m: 5200, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const userTurnsBySession = new Map<string, UserTurnRecord[]>();
+    userTurnsBySession.set('s', [
+      userTurn({
+        sessionId: 's',
+        userUuid: 'u1',
+        blocks: [{ kind: 'text' as const, byteLen: 800, approxTokens: 200 }],
+        followingMessageId: 'm1',
+      }),
+    ]);
+    const result = detectPatterns(turns, { pricing, userTurnsBySession });
+    assert.equal(result.systemPromptTaxes.length, 0);
+  });
+
+  it('does not emit when first cacheCreate is zero', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        usage: { input: 200, output: 100, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const userTurnsBySession = new Map<string, UserTurnRecord[]>();
+    userTurnsBySession.set('s', [
+      userTurn({
+        sessionId: 's',
+        userUuid: 'u1',
+        blocks: [{ kind: 'text' as const, byteLen: 800, approxTokens: 200 }],
+        followingMessageId: 'm1',
+      }),
+    ]);
+    const result = detectPatterns(turns, { pricing, userTurnsBySession });
+    assert.equal(result.systemPromptTaxes.length, 0);
   });
 });

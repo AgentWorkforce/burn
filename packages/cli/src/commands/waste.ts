@@ -34,7 +34,7 @@ import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'opencode-skill-recall', 'opencode-skill-pruning'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -536,6 +536,7 @@ export const PATTERN_REQUIRED: Record<
   reverts: ['hasToolCalls', 'hasRawContent'],
   'opencode-skill-recall': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-skill-pruning': ['hasToolCalls', 'hasToolResultEvents'],
+  'opencode-system-prompt': ['hasToolCalls', 'hasToolResultEvents'],
 };
 
 interface PatternDetectorCoverage {
@@ -630,6 +631,7 @@ export async function runPatternsMode(
             editReverts: [],
             skillRecallDups: [],
             skillPruningProtection: [],
+            systemPromptTaxes: [],
             sessionSummaries: [],
             fidelity: {
               analyzed: 0,
@@ -656,31 +658,43 @@ export async function runPatternsMode(
   let editReverts: PatternsResult['editReverts'] = [];
   let skillRecallDups: PatternsResult['skillRecallDups'] = [];
   let skillPruningProtection: PatternsResult['skillPruningProtection'] = [];
+  let systemPromptTaxes: PatternsResult['systemPromptTaxes'] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
+  // Load user turns if the system-prompt detector is selected (needs first
+  // user message size to estimate the system prompt / skill catalog tax).
+  const needUserTurns = selected.has('opencode-system-prompt');
+  const userTurnsBySession = needUserTurns
+    ? await loadUserTurnsBySession(perDetector)
+    : undefined;
+
   if (selected.has('retries')) {
-    const r = detectPatterns(perDetector.get('retries')!, { pricing });
+    const r = detectPatterns(perDetector.get('retries')!, { pricing, userTurnsBySession });
     retryLoops = r.retryLoops;
   }
   if (selected.has('failures')) {
-    const r = detectPatterns(perDetector.get('failures')!, { pricing });
+    const r = detectPatterns(perDetector.get('failures')!, { pricing, userTurnsBySession });
     failureRuns = r.failureRuns;
   }
   if (selected.has('compaction')) {
-    const r = detectPatterns(perDetector.get('compaction')!, { pricing, compactions });
+    const r = detectPatterns(perDetector.get('compaction')!, { pricing, compactions, userTurnsBySession });
     compactionLosses = r.compactions;
   }
   if (selected.has('reverts')) {
-    const r = detectPatterns(perDetector.get('reverts')!, { pricing });
+    const r = detectPatterns(perDetector.get('reverts')!, { pricing, userTurnsBySession });
     editReverts = r.editReverts;
   }
   if (selected.has('opencode-skill-recall')) {
-    const r = detectPatterns(perDetector.get('opencode-skill-recall')!, { pricing, compactions });
+    const r = detectPatterns(perDetector.get('opencode-skill-recall')!, { pricing, compactions, userTurnsBySession });
     skillRecallDups = r.skillRecallDups;
   }
   if (selected.has('opencode-skill-pruning')) {
-    const r = detectPatterns(perDetector.get('opencode-skill-pruning')!, { pricing, compactions });
+    const r = detectPatterns(perDetector.get('opencode-skill-pruning')!, { pricing, compactions, userTurnsBySession });
     skillPruningProtection = r.skillPruningProtection;
+  }
+  if (selected.has('opencode-system-prompt')) {
+    const r = detectPatterns(perDetector.get('opencode-system-prompt')!, { pricing, userTurnsBySession });
+    systemPromptTaxes = r.systemPromptTaxes;
   }
 
   // Build session summaries on the union — anything attributed by *any*
@@ -694,6 +708,7 @@ export async function runPatternsMode(
     editReverts,
     skillRecallDups,
     skillPruningProtection,
+    systemPromptTaxes,
   );
 
   // For the "turns analyzed" headline we report the union of analyzed slices —
@@ -718,6 +733,7 @@ export async function runPatternsMode(
           editReverts,
           skillRecallDups,
           skillPruningProtection,
+          systemPromptTaxes,
           sessionSummaries,
           fidelity: {
             analyzed: analyzedCount,
@@ -781,6 +797,11 @@ export async function runPatternsMode(
     out.push(renderSkillPruningTable(skillPruningProtection, limit));
     out.push('');
   }
+  if (selected.has('opencode-system-prompt')) {
+    out.push('OpenCode system prompt / skill catalog tax (fixed prefix riding in cache on every turn)');
+    out.push(renderSystemPromptTable(systemPromptTaxes, limit));
+    out.push('');
+  }
 
   process.stdout.write(out.join('\n'));
   return 0;
@@ -838,6 +859,7 @@ function buildSessionSummaries(
   editReverts: PatternsResult['editReverts'],
   skillRecallDups: PatternsResult['skillRecallDups'],
   skillPruningProtection: PatternsResult['skillPruningProtection'],
+  systemPromptTaxes: PatternsResult['systemPromptTaxes'],
 ): PatternsResult['sessionSummaries'] {
   const by = new Map<string, PatternsResult['sessionSummaries'][number]>();
   const get = (sessionId: string): PatternsResult['sessionSummaries'][number] => {
@@ -852,6 +874,7 @@ function buildSessionSummaries(
         editRevertCount: 0,
         skillRecallDupCount: 0,
         skillPruningProtectionCount: 0,
+        systemPromptTaxCount: 0,
         totalRetries: 0,
         totalPatternCost: 0,
       };
@@ -890,6 +913,11 @@ function buildSessionSummaries(
     const row = get(s.sessionId);
     row.skillPruningProtectionCount++;
     row.totalPatternCost += s.cost;
+  }
+  for (const s of systemPromptTaxes) {
+    const row = get(s.sessionId);
+    row.systemPromptTaxCount++;
+    row.totalPatternCost += s.totalCost;
   }
   return [...by.values()].sort((a, b) => b.totalPatternCost - a.totalPatternCost);
 }
@@ -1016,4 +1044,41 @@ function renderSkillPruningTable(
     ]);
   }
   return table(rows);
+}
+
+function renderSystemPromptTable(
+  taxes: PatternsResult['systemPromptTaxes'],
+  limit: number,
+): string {
+  if (taxes.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'prefix(tok)', 'userMsg(tok)', 'systemPrompt(tok)', 'ridingTurns', 'cost'],
+  ];
+  const slice = [...taxes].sort((a, b) => b.totalCost - a.totalCost).slice(0, limit);
+  for (const t of slice) {
+    rows.push([
+      t.sessionId.slice(0, 8),
+      formatInt(t.firstTurnCacheCreate),
+      formatInt(t.firstUserMessageTokens),
+      formatInt(t.estimatedSystemPromptTokens),
+      formatInt(t.ridingTurns),
+      formatUsd(t.totalCost),
+    ]);
+  }
+  return table(rows);
+}
+
+async function loadUserTurnsBySession(
+  perDetector: Map<PatternKind, EnrichedTurn[]>,
+): Promise<Map<string, UserTurnRecord[]>> {
+  const sessionIds = new Set<string>();
+  for (const turns of perDetector.values()) {
+    for (const t of turns) sessionIds.add(t.sessionId);
+  }
+  const out = new Map<string, UserTurnRecord[]>();
+  for (const sessionId of sessionIds) {
+    const userTurns = await queryUserTurns({ sessionId });
+    if (userTurns.length > 0) out.set(sessionId, userTurns);
+  }
+  return out;
 }

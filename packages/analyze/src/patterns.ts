@@ -1,4 +1,4 @@
-import type { CompactionEvent, ToolCall, TurnRecord } from '@relayburn/reader';
+import type { CompactionEvent, ToolCall, TurnRecord, UserTurnRecord } from '@relayburn/reader';
 
 import { costForTurn, costForUsage } from './cost.js';
 import type { PricingTable } from './pricing.js';
@@ -88,6 +88,22 @@ export interface SkillPruningProtection {
   cost: number;
 }
 
+// OpenCode system prompt / skill catalog bloat: the first turn's
+// cacheCreate5m carries the entire cached prefix (system prompt + skill
+// catalog + first user message). By subtracting the first user message size
+// (from content sidecar / user-turn blocks), we get the fixed prefix tax
+// that rides in cache on every turn. Only emitted for source === 'opencode'.
+export interface SystemPromptTax {
+  sessionId: string;
+  firstTurnCacheCreate: number;
+  firstUserMessageTokens: number;
+  estimatedSystemPromptTokens: number;
+  // How many turns in the session carried cacheRead (the prefix was still cached).
+  ridingTurns: number;
+  // Total cost of carrying the prefix across all riding turns.
+  totalCost: number;
+}
+
 // Per-session rollup mentioned in the issue discussion. Downstream commands
 // (`burn compare --worst`, health grading, etc.) can read this shape without
 // re-running the full detector suite.
@@ -100,6 +116,7 @@ export interface SessionPatternSummary {
   editRevertCount: number;
   skillRecallDupCount: number;
   skillPruningProtectionCount: number;
+  systemPromptTaxCount: number;
   totalRetries: number;
   totalPatternCost: number;
 }
@@ -111,12 +128,16 @@ export interface PatternsResult {
   editReverts: EditRevertCycle[];
   skillRecallDups: SkillRecallDup[];
   skillPruningProtection: SkillPruningProtection[];
+  systemPromptTaxes: SystemPromptTax[];
   sessionSummaries: SessionPatternSummary[];
 }
 
 export interface DetectPatternsOptions {
   pricing: PricingTable;
   compactions?: CompactionEvent[];
+  // sessionId -> UserTurnRecord[] in source order. Used to estimate the
+  // first user message size for the system-prompt-tax detector.
+  userTurnsBySession?: Map<string, UserTurnRecord[]> | undefined;
 }
 
 const MIN_RETRY_LEN = 3;
@@ -133,6 +154,7 @@ export function detectPatterns(
   const editReverts: EditRevertCycle[] = [];
   const skillRecallDups: SkillRecallDup[] = [];
   const skillPruningProtection: SkillPruningProtection[] = [];
+  const systemPromptTaxes: SystemPromptTax[] = [];
 
   for (const [sessionId, sessionTurns] of bySession) {
     sessionTurns.sort((a, b) => a.turnIndex - b.turnIndex);
@@ -143,6 +165,7 @@ export function detectPatterns(
     editReverts.push(...detectEditRevertsForSession(sessionId, sessionTurns, opts.pricing));
     skillRecallDups.push(...detectSkillRecallDupsForSession(sessionId, sessionTurns, opts.pricing));
     skillPruningProtection.push(...detectSkillPruningProtectionForSession(sessionId, sessionTurns, opts.pricing, opts.compactions));
+    systemPromptTaxes.push(...detectSystemPromptTaxForSession(sessionId, sessionTurns, opts.pricing, opts.userTurnsBySession?.get(sessionId)));
   }
 
   const compactions = opts.compactions
@@ -156,7 +179,8 @@ export function detectPatterns(
     editReverts,
     skillRecallDups,
     skillPruningProtection,
-    sessionSummaries: buildSummaries(retryLoops, failureRuns, compactions, editReverts, skillRecallDups, skillPruningProtection),
+    systemPromptTaxes,
+    sessionSummaries: buildSummaries(retryLoops, failureRuns, compactions, editReverts, skillRecallDups, skillPruningProtection, systemPromptTaxes),
   };
 }
 
@@ -483,6 +507,63 @@ function detectSkillPruningProtectionForSession(
   return out;
 }
 
+function detectSystemPromptTaxForSession(
+  sessionId: string,
+  turns: TurnRecord[],
+  pricing: PricingTable,
+  userTurns: UserTurnRecord[] | undefined,
+): SystemPromptTax[] {
+  // Only relevant for OpenCode sessions.
+  if (turns.length === 0 || turns[0]!.source !== 'opencode') return [];
+
+  const firstTurn = turns[0]!;
+  const firstCacheCreate = firstTurn.usage.cacheCreate5m + firstTurn.usage.cacheCreate1h;
+  if (firstCacheCreate === 0) return [];
+
+  // Estimate first user message tokens from user-turn blocks.
+  // The first user turn (before the first assistant message) carries the
+  // user's initial prompt. Its approxTokens is what we subtract.
+  let firstUserTokens = 0;
+  if (userTurns && userTurns.length > 0) {
+    // The first user turn is the one with no precedingMessageId (or the
+    // earliest one). Sum all blocks from the first user turn.
+    const firstUserTurn = userTurns[0]!;
+    for (const block of firstUserTurn.blocks) {
+      firstUserTokens += block.approxTokens;
+    }
+  }
+
+  // If we couldn't get user-turn data, fall back to using the first turn's
+  // input tokens as a rough upper bound (includes system prompt + user msg).
+  // We can't separate them, so skip the estimate rather than guess.
+  if (firstUserTokens === 0) return [];
+
+  const systemPromptTokens = Math.max(0, firstCacheCreate - firstUserTokens);
+  if (systemPromptTokens === 0) return [];
+
+  // Count how many subsequent turns carried cacheRead (the prefix was cached).
+  let ridingTurns = 0;
+  let totalCost = 0;
+  for (const t of turns) {
+    if (t.usage.cacheRead > 0) {
+      ridingTurns++;
+      const c = costForTurn(t, pricing);
+      if (c) totalCost += c.total;
+    }
+  }
+
+  if (ridingTurns === 0) return [];
+
+  return [{
+    sessionId,
+    firstTurnCacheCreate: firstCacheCreate,
+    firstUserMessageTokens: firstUserTokens,
+    estimatedSystemPromptTokens: systemPromptTokens,
+    ridingTurns,
+    totalCost,
+  }];
+}
+
 function dedupTurns(turns: TurnRecord[]): TurnRecord[] {
   const seen = new Set<string>();
   const out: TurnRecord[] = [];
@@ -502,6 +583,7 @@ function buildSummaries(
   editReverts: EditRevertCycle[],
   skillRecallDups: SkillRecallDup[],
   skillPruningProtection: SkillPruningProtection[],
+  systemPromptTaxes: SystemPromptTax[],
 ): SessionPatternSummary[] {
   const by = new Map<string, SessionPatternSummary>();
   const get = (sessionId: string): SessionPatternSummary => {
@@ -516,6 +598,7 @@ function buildSummaries(
         editRevertCount: 0,
         skillRecallDupCount: 0,
         skillPruningProtectionCount: 0,
+        systemPromptTaxCount: 0,
         totalRetries: 0,
         totalPatternCost: 0,
       };
@@ -554,6 +637,11 @@ function buildSummaries(
     const row = get(s.sessionId);
     row.skillPruningProtectionCount++;
     row.totalPatternCost += s.cost;
+  }
+  for (const s of systemPromptTaxes) {
+    const row = get(s.sessionId);
+    row.systemPromptTaxCount++;
+    row.totalPatternCost += s.totalCost;
   }
   return [...by.values()].sort((a, b) => b.totalPatternCost - a.totalPatternCost);
 }

@@ -84,7 +84,7 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   }
   if (summary) {
     out.push(
-      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts, ${summary.skillRecallDupCount} skill-recall-dups, ${summary.skillPruningProtectionCount} skill-pruning`,
+      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts, ${summary.skillRecallDupCount} skill-recall-dups, ${summary.skillPruningProtectionCount} skill-pruning, ${summary.systemPromptTaxCount} system-prompt-tax`,
     );
     out.push(`pattern cost: ${formatUsd(summary.totalPatternCost)}`);
   } else {
@@ -111,6 +111,9 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   out.push('');
   out.push('OpenCode skill pruning protection');
   out.push(renderSkillPruning(scoped.skillPruningProtection));
+  out.push('');
+  out.push('OpenCode system prompt / skill catalog tax');
+  out.push(renderSystemPrompt(scoped.systemPromptTaxes));
   out.push('');
 
   out.push('Top files by cost');
@@ -165,6 +168,7 @@ function filterPatterns(patterns: PatternsResult, sessionId: string): PatternsRe
     editReverts: patterns.editReverts.filter((r) => r.sessionId === sessionId),
     skillRecallDups: patterns.skillRecallDups.filter((r) => r.sessionId === sessionId),
     skillPruningProtection: patterns.skillPruningProtection.filter((r) => r.sessionId === sessionId),
+    systemPromptTaxes: patterns.systemPromptTaxes.filter((r) => r.sessionId === sessionId),
     sessionSummaries: patterns.sessionSummaries.filter((r) => r.sessionId === sessionId),
   };
 }
@@ -245,6 +249,20 @@ function renderSkillPruning(events: PatternsResult['skillPruningProtection']): s
       String(e.ridingTurns),
       String(e.lastCachedTurnIndex),
       formatUsd(e.cost),
+    ]),
+  ]);
+}
+
+function renderSystemPrompt(taxes: PatternsResult['systemPromptTaxes']): string {
+  if (taxes.length === 0) return '  (none)';
+  return table([
+    ['prefix(tok)', 'userMsg(tok)', 'systemPrompt(tok)', 'ridingTurns', 'cost'],
+    ...taxes.map((t) => [
+      formatInt(t.firstTurnCacheCreate),
+      formatInt(t.firstUserMessageTokens),
+      formatInt(t.estimatedSystemPromptTokens),
+      formatInt(t.ridingTurns),
+      formatUsd(t.totalCost),
     ]),
   ]);
 }
