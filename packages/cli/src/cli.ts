@@ -26,7 +26,7 @@ Usage:
                      (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]]
-  burn diagnose      <session-id> [--json]
+  burn diagnose      [<session-id>] [--json]
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
   burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
@@ -48,6 +48,7 @@ Examples:
   burn waste --since 7d
   burn waste --patterns --since 7d
   burn diagnose <session-id>
+  burn diagnose                       # per-adapter content-capture gap report
   burn limits
   burn limits --watch
   burn limits --no-api

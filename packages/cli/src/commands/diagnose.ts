@@ -8,22 +8,27 @@ import {
   type PatternsResult,
 } from '@relayburn/analyze';
 import {
+  loadConfig,
   queryAll,
   queryCompactions,
   queryUserTurns,
   readContent,
 } from '@relayburn/ledger';
-import type { ContentRecord, UserTurnRecord } from '@relayburn/reader';
+import type {
+  ContentRecord,
+  SourceKind,
+  TurnRecord,
+  UserTurnRecord,
+} from '@relayburn/reader';
 
-import { ingestAll } from '../ingest.js';
+import { countToolCallGaps, ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
 export async function runDiagnose(args: ParsedArgs): Promise<number> {
   const sessionId = args.positional[0];
   if (!sessionId) {
-    process.stderr.write('burn diagnose: missing session id\n');
-    return 2;
+    return runDiagnoseAggregate(args);
   }
 
   await ingestAll();
@@ -289,4 +294,161 @@ function renderSystemPrompt(taxes: PatternsResult['systemPromptTaxes']): string 
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + '…';
+}
+
+// Aggregate per-adapter content-capture gap report (#79). Walks the ledger and
+// tells the user how many sessions per adapter have ≥1 tool call but zero
+// `tool_result` ContentRecords — the symptom that motivated #58 / #59. Unlike
+// the per-invocation ingest warning (which fires once per `burn` run for a
+// fresh affected session), this is a permanent, queryable surface.
+type Adapter = 'claude' | 'codex' | 'opencode';
+const ADAPTER_ORDER: Adapter[] = ['claude', 'codex', 'opencode'];
+
+interface AdapterRow {
+  adapter: Adapter;
+  sessions: number;
+  sessionsWithToolCalls: number;
+  // null when contentMode is hash-only / off — we can't tell gap from
+  // "store disabled", so we omit the signal rather than mislead.
+  gappedSessions: number | null;
+  orphanToolCalls: number | null;
+  degradedPct: number | null;
+}
+
+async function runDiagnoseAggregate(args: ParsedArgs): Promise<number> {
+  await ingestAll();
+  const config = await loadConfig();
+  const contentMode = config.content.store;
+  const turns = await queryAll();
+
+  const sessionsByAdapter = new Map<Adapter, Map<string, TurnRecord[]>>();
+  for (const t of turns) {
+    const adapter = sourceToAdapter(t.source);
+    if (!adapter) continue;
+    let bySession = sessionsByAdapter.get(adapter);
+    if (!bySession) {
+      bySession = new Map();
+      sessionsByAdapter.set(adapter, bySession);
+    }
+    let bucket = bySession.get(t.sessionId);
+    if (!bucket) {
+      bucket = [];
+      bySession.set(t.sessionId, bucket);
+    }
+    bucket.push(t);
+  }
+
+  const rows: AdapterRow[] = [];
+  for (const adapter of ADAPTER_ORDER) {
+    const bySession = sessionsByAdapter.get(adapter);
+    if (!bySession || bySession.size === 0) continue;
+    let gapped = 0;
+    let orphans = 0;
+    let withToolCalls = 0;
+    for (const [sid, sessionTurns] of bySession) {
+      const hasToolCalls = sessionTurns.some((t) => t.toolCalls.length > 0);
+      if (!hasToolCalls) continue;
+      withToolCalls++;
+      if (contentMode !== 'full') continue;
+      const content = await readContent({ sessionId: sid });
+      const { sessionAffected, orphanToolCalls } = countToolCallGaps(
+        sessionTurns,
+        content,
+      );
+      if (sessionAffected) {
+        gapped++;
+        orphans += orphanToolCalls;
+      }
+    }
+    const row: AdapterRow = {
+      adapter,
+      sessions: bySession.size,
+      sessionsWithToolCalls: withToolCalls,
+      gappedSessions: contentMode === 'full' ? gapped : null,
+      orphanToolCalls: contentMode === 'full' ? orphans : null,
+      degradedPct:
+        contentMode === 'full'
+          ? withToolCalls > 0
+            ? (gapped / withToolCalls) * 100
+            : 0
+          : null,
+    };
+    rows.push(row);
+  }
+
+  if (args.flags['json'] === true) {
+    process.stdout.write(
+      JSON.stringify({ adapters: rows, contentMode }, null, 2) + '\n',
+    );
+    return 0;
+  }
+
+  const out: string[] = [];
+  out.push('');
+  out.push('Content-capture gaps by adapter');
+  if (rows.length === 0) {
+    out.push('  (no sessions in ledger)');
+    out.push('');
+    process.stdout.write(out.join('\n'));
+    return 0;
+  }
+  if (contentMode !== 'full') {
+    out.push(
+      `  content store is ${contentMode}; gap signal unavailable. Set RELAYBURN_CONTENT_STORE=full to enable.`,
+    );
+    out.push(
+      table([
+        ['adapter', 'sessions', 'withToolCalls'],
+        ...rows.map((r) => [
+          r.adapter,
+          formatInt(r.sessions),
+          formatInt(r.sessionsWithToolCalls),
+        ]),
+      ]),
+    );
+  } else {
+    out.push(
+      table([
+        [
+          'adapter',
+          'sessions',
+          'withToolCalls',
+          'gapped',
+          'orphanToolCalls',
+          'degraded%',
+        ],
+        ...rows.map((r) => [
+          r.adapter,
+          formatInt(r.sessions),
+          formatInt(r.sessionsWithToolCalls),
+          formatInt(r.gappedSessions ?? 0),
+          formatInt(r.orphanToolCalls ?? 0),
+          formatPct(r.degradedPct ?? 0),
+        ]),
+      ]),
+    );
+  }
+  out.push('');
+  process.stdout.write(out.join('\n'));
+  return 0;
+}
+
+function sourceToAdapter(source: SourceKind): Adapter | null {
+  switch (source) {
+    case 'claude-code':
+      return 'claude';
+    case 'codex':
+      return 'codex';
+    case 'opencode':
+      return 'opencode';
+    default:
+      // API-direct sources don't correspond to a parser/harness adapter.
+      return null;
+  }
+}
+
+function formatPct(n: number): string {
+  // Match the precision that motivated this report (#58: a 99.7% reading was
+  // the original symptom). One decimal place keeps small differences visible.
+  return `${n.toFixed(1)}%`;
 }
