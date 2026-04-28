@@ -12,7 +12,7 @@ pnpm workspace, six published packages in dependency order:
 @relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
 @relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
-@relayburn/cli      — `burn` binary (summary, by-tool, compare, claude/codex/opencode wrappers, mcp-server, …)
+@relayburn/cli      — `burn` binary (summary, by-tool, compare, `burn run <harness>` wrapper, mcp-server, …)
 relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
 ```
 
@@ -74,6 +74,46 @@ The workflow:
 5. Tags `<pkg>-v<version>` and creates a GitHub Release with the changelog body.
 
 A separate `Verify Publish` workflow smoke-tests installs from npm afterward.
+
+## Adding a harness
+
+`burn run <harness>` dispatches through a `HarnessAdapter` registered in `packages/cli/src/harnesses/registry.ts`. Adding a new harness is a one-file addition + one-line registration:
+
+```ts
+// packages/cli/src/harnesses/cursor.ts
+import type { HarnessAdapter } from './types.js';
+
+export const cursorAdapter: HarnessAdapter = {
+  name: 'cursor',
+  sessionRoot: () => '/path/to/cursor/sessions',
+
+  // Compute the spawn plan. Inject session ids or transport-level args here;
+  // populate `sessionId` on the returned plan so beforeSpawn / afterExit can
+  // see it (claude path).
+  async plan(ctx) {
+    return { binary: 'cursor', args: [...ctx.passthrough] };
+  },
+
+  // Pre-spawn side effects. Stamp now if the session id is known up front;
+  // otherwise drop a pending-stamp manifest the post-spawn ingest can resolve.
+  async beforeSpawn(ctx, plan) {},
+
+  // Optional. Return a controller from `startWatchLoop` to drain a session
+  // store while the child runs; omit for adapters that ingest a single
+  // pre-known file at exit.
+  startWatcher(ctx, onReport) { return null; },
+
+  // Final ingest pass after child exits. Return an IngestReport so the driver
+  // can fold it into the unified `[burn] <name> ingest: ...` line.
+  async afterExit(ctx, plan) {
+    return { scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 };
+  },
+};
+```
+
+Then add it to the registry array in `harnesses/registry.ts`. The CLI help block reads `listHarnessNames()` so it updates automatically.
+
+The codex / opencode adapters share the pending-stamp + watch-loop shape; both are constructed via `createPendingStampAdapter` in `harnesses/pending-stamp.ts`. New harnesses with the same shape can reuse it.
 
 ## When in doubt
 

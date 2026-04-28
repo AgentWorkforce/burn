@@ -10,8 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **Codex compaction parity with Claude.** Codex passive ingest now detects `compacted` session-log records, persists them as ledger compaction events, and anchors them to the preceding Codex turn so compaction-loss analysis can cover Codex sessions instead of only Claude Code.
 
+### Changed
+
+- **`burn run <harness>` consolidates the spawn wrappers** ([#154](https://github.com/AgentWorkforce/burn/issues/154)). `burn claude`, `burn codex`, and `burn opencode` are folded into a single `burn run <claude|codex|opencode>` subcommand backed by a `HarnessAdapter` registry. Adding a new harness becomes a one-file addition + one-line registration; the unified driver also emits a uniform `[burn] <name> ingest: ...` report line. **Breaking change** — the legacy `burn claude` / `burn codex` / `burn opencode` verbs are removed; callers must migrate to `burn run <name>`.
+
 ### Removed
 
+- **Legacy `burn claude` / `burn codex` / `burn opencode` verbs** ([#154](https://github.com/AgentWorkforce/burn/issues/154)). Replaced by `burn run <name>`.
 - **`burn rebuild-index`** ([#151](https://github.com/AgentWorkforce/burn/issues/151)). The standalone subcommand has been dropped — it was a thin alias for `burn rebuild --index` with identical behavior. Run `burn rebuild --index` instead.
 
 ## [0.34.0] - 2026-04-27

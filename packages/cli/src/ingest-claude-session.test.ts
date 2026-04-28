@@ -6,9 +6,9 @@ import { after, beforeEach, describe, it } from 'node:test';
 
 import { loadCursors, readContent } from '@relayburn/ledger';
 
-import { ingestSession } from './claude.js';
+import { ingestClaudeSession } from './ingest.js';
 
-describe('burn claude wrapper ingestSession', () => {
+describe('ingestClaudeSession', () => {
   let tmpHome: string;
   let tmpRelay: string;
   const originalHome = process.env['HOME'];
@@ -81,17 +81,17 @@ describe('burn claude wrapper ingestSession', () => {
     ].join('\n');
     await writeFile(file, jsonl, 'utf8');
 
-    await ingestSession(cwd, sessionId);
+    await ingestClaudeSession(cwd, sessionId);
 
     const cursors = await loadCursors();
     const c = cursors[file];
-    assert.ok(c, 'cursor must be saved after ingestSession');
+    assert.ok(c, 'cursor must be saved after ingestClaudeSession');
     assert.equal(c!.kind, 'claude');
     // File size matches what was written, cursor points at EOF.
     assert.equal(c!.kind === 'claude' ? c!.offsetBytes : -1, Buffer.byteLength(jsonl, 'utf8'));
   });
 
-  it('does not duplicate content when ingestSession is called twice in a row', async () => {
+  it('does not duplicate content when ingestClaudeSession is called twice in a row', async () => {
     const cwd = '/tmp/myproject2';
     const sessionId = 'fedcba98-7654-3210-fedc-ba9876543210';
     const encoded = cwd.replace(/\//g, '-');
@@ -138,13 +138,13 @@ describe('burn claude wrapper ingestSession', () => {
     await writeFile(file, jsonl, 'utf8');
 
     // First call writes content; content.store defaults to 'full'.
-    await ingestSession(cwd, sessionId);
+    await ingestClaudeSession(cwd, sessionId);
     const firstPass = await readContent({ sessionId });
     assert.ok(firstPass.length > 0, 'content should have been written on first pass');
 
     // Second call simulates a separate invocation (user runs burn claude a
     // second time, or ingestAll sweeps the file). With the cursor fix in
-    // claude.ts, appendContent still runs here since ingestSession re-parses
+    // ingest.ts, appendContent still runs here since ingestClaudeSession re-parses
     // unconditionally — but ingestAll would see the cursor and skip. The key
     // invariant: ingestAll re-run path cannot dupe. Approximate by calling
     // parse again and asserting the content sidecar matches after a cursor

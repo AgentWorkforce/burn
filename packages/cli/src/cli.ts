@@ -2,8 +2,6 @@
 import { parseArgs } from './args.js';
 import { runArchive } from './commands/archive.js';
 import { runByTool } from './commands/by-tool.js';
-import { runClaudeWrapper } from './commands/claude.js';
-import { runCodexWrapper } from './commands/codex.js';
 import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
 import { runContext } from './commands/context.js';
@@ -11,12 +9,15 @@ import { runDiagnose } from './commands/diagnose.js';
 import { runIngest } from './commands/ingest.js';
 import { runLimits } from './commands/limits.js';
 import { runMcpServer } from './commands/mcp-server.js';
-import { runOpencodeWrapper } from './commands/opencode.js';
 import { runPlans } from './commands/plans.js';
 import { runRebuild } from './commands/rebuild.js';
+import { runWrapper } from './commands/run.js';
 import { runSummary } from './commands/summary.js';
 import { runWaste } from './commands/waste.js';
 import { runWatch } from './commands/watch.js';
+import { listHarnessNames } from './harnesses/registry.js';
+
+const HARNESS_LIST = listHarnessNames().join('|');
 
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
@@ -31,9 +32,7 @@ Usage:
   burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
-  burn claude        [--tag k=v ...] [-- <claude args>]
-  burn codex         [--tag k=v ...] [-- <codex args>]
-  burn opencode      [--tag k=v ...] [-- <opencode args>]
+  burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
   burn watch         [--interval <ms>] [--once]
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
@@ -60,9 +59,9 @@ Examples:
   burn context --kind claude-md
   burn context advise --top 3
   burn compare --since 30d --models claude-sonnet-4-6,claude-haiku-4-5
-  burn claude   --tag workflow=refactor -- --resume
-  burn codex    --tag workflow=refactor
-  burn opencode --tag workflow=refactor
+  burn run claude   --tag workflow=refactor -- --resume
+  burn run codex    --tag workflow=refactor
+  burn run opencode --tag workflow=refactor
   burn watch
   burn content prune --days 30
   burn archive status
@@ -104,12 +103,8 @@ async function main(): Promise<number> {
       return runContext(args);
     case 'compare':
       return runCompare(args);
-    case 'claude':
-      return runClaudeWrapper(args);
-    case 'codex':
-      return runCodexWrapper(args);
-    case 'opencode':
-      return runOpencodeWrapper(args);
+    case 'run':
+      return runWrapper(args);
     case 'watch':
       return runWatch(args);
     case 'ingest':

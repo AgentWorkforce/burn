@@ -12,8 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`burn summary` surfaces per-cell fidelity** ([#136](https://github.com/AgentWorkforce/burn/issues/136)). The (model | provider) table now distinguishes a literal `0` from "no source data" inside individual cells: a token-field cell whose every contributing turn omitted the field renders as `—`, and a cell whose contributing turns are mixed (some reported, some omitted) renders the value with a trailing `*` plus a single footer note (`* partial coverage: N of M turns omitted per-turn token data`). Full-fidelity slices print no marker and no footer, so the common all-Claude case looks identical to before. Records emitted before `TurnRecord.fidelity` existed (pre-#41 ledgers) are treated as best-effort full and never trigger the marker. `--json` output replaces the bare `fidelity: FidelitySummary` block with `fidelity: { summary, perCell }`, where `perCell.cells[]` carries per-(model|provider) per-field `{ known, missing }` counters and a `partial` flag — the same shape pattern the sibling fidelity PRs (#135 / #133 / #134 / #132) already emit.
 - **Codex ingest persists compaction events.** The Codex passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see Codex context compactions with the same event shape Claude uses.
 
+### Changed
+
+- **`burn run <harness>` consolidates the spawn-wrappers** ([#154](https://github.com/AgentWorkforce/burn/issues/154)). The three top-level verbs `burn claude`, `burn codex`, and `burn opencode` are folded into a single `burn run <claude|codex|opencode>` subcommand, dispatched through a `HarnessAdapter` registry at `packages/cli/src/harnesses/`. Adding a new harness is a one-file addition + one-line registration — no driver changes, no help-block edits. The unified driver also emits a uniform `[burn] <name> ingest: N sessions (+M turns)` report line across all three harnesses (previously claude printed a per-file `[burn] ingested ... turns from <file>` line).
+
 ### Removed
 
+- **Legacy `burn claude` / `burn codex` / `burn opencode` verbs** ([#154](https://github.com/AgentWorkforce/burn/issues/154)). The standalone harness verbs are removed in favor of `burn run <name>`. Callers must migrate to the new dispatcher.
 - **`burn rebuild-index`** ([#151](https://github.com/AgentWorkforce/burn/issues/151)). The standalone subcommand has been dropped — it was a thin alias for `burn rebuild --index` with identical behavior. Run `burn rebuild --index` instead.
 
 ## [0.34.0] - 2026-04-27
