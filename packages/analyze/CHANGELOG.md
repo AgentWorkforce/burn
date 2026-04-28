@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-04-28
+
 ### Added
 
 - **Cross-harness edit-heavy session detector** ([#167](https://github.com/AgentWorkforce/burn/issues/167)). `detectPatterns` now flags sessions whose normalized edit-tool count exceeds 4× their read-tool count (with ≥ 5 edits), reaching parity across Claude / Codex / OpenCode via `normalizeToolName`. Reads are restricted to file-content tools (`Read`, `NotebookRead`); `Grep` / `Glob` / `LS` / `Bash` are deliberately excluded — they discover or shell out, but don't record that the model has read the file. Codex's `apply_patch` may bundle multiple files per call, so the same threshold flags Codex more conservatively than a file-level count would — known per-harness tunable. Emits `EditHeavySession { source, sessionId, readCount, editCount, ratio, likelyRetries, cost }` with `ratio = +Infinity` when reads is zero; `likelyRetries` is the sum of `countRetries()` over the session's turns. `PatternsResult` gains an `editHeavySessions` array; `SessionPatternSummary` gains `editHeavyCount`. The cost field is **not** added to `totalPatternCost` because the same edit-bearing turns also feed `editReverts` and `retryLoops` costs — adding them again would double-count.
