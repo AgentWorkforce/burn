@@ -129,6 +129,24 @@ export {
 export type { FidelitySummary } from './fidelity.js';
 export { DEFAULT_RULES, resolveProvider } from './provider-reattribution.js';
 export type { ProviderResolution, ProviderRule } from './provider-reattribution.js';
+export {
+  aggregateByProvider,
+  filterTurnsByProvider,
+  providerFor,
+  providerForModel,
+  providerForTurn,
+  resolveTurnProvider,
+} from './provider.js';
+export type {
+  AggregateByProviderOptions,
+  CoverageField,
+  FieldCoverage,
+  ProviderAggregateRow,
+  ProviderFilter,
+  RowCoverage,
+  TurnProvider,
+  UsageCostAggregateRow,
+} from './provider.js';
 export type {
   AttributeContextInput,
   ContextAttributionResult,
