@@ -525,6 +525,7 @@ async function ingestOpencodeInto(
       const {
         turns,
         content,
+        events,
         userTurns,
         relationships,
         toolResultEvents,
@@ -556,6 +557,9 @@ async function ingestOpencodeInto(
       }
       if (content.length > 0) {
         await appendContent(content);
+      }
+      if (events.length > 0) {
+        await appendCompactions(events);
       }
       if (relationships.length > 0) {
         await appendRelationships(relationships);

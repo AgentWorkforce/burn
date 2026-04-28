@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode compaction parity with Claude / Codex** ([#148](https://github.com/AgentWorkforce/burn/issues/148)). OpenCode passive ingest now detects the synthetic user message OpenCode inserts when context is compacted (a part with `type: "compaction"`), persists it as a ledger compaction event, and anchors it to the assistant turn that finalized just before — so `burn waste --kind compaction` covers OpenCode sessions instead of only Claude / Codex.
+
 ## [0.41.0] - 2026-04-28
 
 ### Added

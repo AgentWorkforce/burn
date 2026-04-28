@@ -61,11 +61,12 @@ function evt(
 // ---------------------------------------------------------------------------
 
 describe('detectStaticConfigBloat — Signal A', () => {
-  it('flags BASH_MAX_OUTPUT_LENGTH > 15000', () => {
+  it('flags BASH_MAX_OUTPUT_LENGTH whose token-equivalent exceeds the threshold', () => {
     const settings: LoadedClaudeSettings[] = [
       {
         path: '/home/u/.claude/settings.json',
-        settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '50000' } },
+        // 80,000 chars ≈ 20,000 tokens — above the 15k-token threshold.
+        settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '80000' } },
       },
     ];
     const out = detectStaticConfigBloat({ settings });
@@ -74,16 +75,30 @@ describe('detectStaticConfigBloat — Signal A', () => {
     assert.equal(flag.kind, 'static-config');
     assert.equal(flag.source, 'claude-code');
     assert.equal(flag.toolName, 'Bash');
-    assert.equal(flag.configuredLimit, 50000);
-    assert.equal(flag.evidencedMaxOutput, 50000);
+    // `configuredLimit` keeps the raw env value (chars) so the user knows
+    // exactly what they typed; `evidencedMaxOutput` is in tokens so it lines
+    // up with Signal B.
+    assert.equal(flag.configuredLimit, 80000);
+    assert.equal(flag.evidencedMaxOutput, 20000);
     assert.equal(flag.occurrenceCount, 1);
     assert.equal(flag.cost, 0);
     assert.deepEqual(flag.evidence, ['/home/u/.claude/settings.json']);
   });
 
-  it('does NOT flag at or below 15000', () => {
+  it('does NOT flag at the 15k-token char-equivalent (60000 chars)', () => {
     const settings: LoadedClaudeSettings[] = [
-      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '15000' } } },
+      // 60,000 chars = 15,000 tokens — exactly at the threshold, not above.
+      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '60000' } } },
+    ];
+    assert.equal(detectStaticConfigBloat({ settings }).length, 0);
+  });
+
+  it('does NOT flag a permissive char value whose token-equivalent is under threshold', () => {
+    // 50,000 chars ≈ 12,500 tokens — below threshold despite looking large in
+    // chars. This is the regression that motivated the unit-conversion fix:
+    // pre-fix, the detector would have flagged this as "above 15000".
+    const settings: LoadedClaudeSettings[] = [
+      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '50000' } } },
     ];
     assert.equal(detectStaticConfigBloat({ settings }).length, 0);
   });
@@ -97,16 +112,20 @@ describe('detectStaticConfigBloat — Signal A', () => {
 
   it('project settings override user settings (last-wins precedence)', () => {
     const settings: LoadedClaudeSettings[] = [
-      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '50000' } } },
-      // Project override at threshold — should NOT fire even though user is bad.
-      { path: '/cwd/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '15000' } } },
+      // User: 80,000 chars ≈ 20,000 tokens (would fire).
+      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '80000' } } },
+      // Project override at threshold (60,000 chars = 15,000 tokens) — should
+      // NOT fire even though user is bad.
+      { path: '/cwd/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '60000' } } },
     ];
     assert.equal(detectStaticConfigBloat({ settings }).length, 0);
   });
 
   it('reports the project settings path when project flips a permissive user value', () => {
     const settings: LoadedClaudeSettings[] = [
+      // User: 15,000 chars ≈ 3,750 tokens (well under).
       { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '15000' } } },
+      // Project: 99,999 chars ≈ 25,000 tokens (over).
       { path: '/cwd/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '99999' } } },
     ];
     const out = detectStaticConfigBloat({ settings });
@@ -116,6 +135,8 @@ describe('detectStaticConfigBloat — Signal A', () => {
   });
 
   it('honors a custom threshold', () => {
+    // 5,000 chars ≈ 1,250 tokens. Threshold 1000 (tokens) → flags;
+    // threshold 10000 (tokens) → doesn't flag.
     const settings: LoadedClaudeSettings[] = [
       { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '5000' } } },
     ];
@@ -155,11 +176,11 @@ describe('loadClaudeSettings — filesystem loader', () => {
 
   it('reads valid settings.json and exposes the env block', async () => {
     const file = path.join(tmp, 'settings.json');
-    await writeFile(file, JSON.stringify({ env: { [BASH_MAX_OUTPUT_ENV_KEY]: '50000' } }), 'utf8');
+    await writeFile(file, JSON.stringify({ env: { [BASH_MAX_OUTPUT_ENV_KEY]: '80000' } }), 'utf8');
     const out = await loadClaudeSettings(file);
     assert.ok(out);
     assert.equal(out!.path, file);
-    assert.equal(out!.settings.env?.[BASH_MAX_OUTPUT_ENV_KEY], '50000');
+    assert.equal(out!.settings.env?.[BASH_MAX_OUTPUT_ENV_KEY], '80000');
   });
 
   it('userClaudeSettingsPath() honors HOME', async () => {
@@ -173,12 +194,13 @@ describe('loadClaudeSettings — filesystem loader', () => {
     const claudeDir = path.join(tmp, '.claude');
     await mkdir(claudeDir, { recursive: true });
     const file = path.join(claudeDir, 'settings.json');
-    await writeFile(file, JSON.stringify({ env: { [BASH_MAX_OUTPUT_ENV_KEY]: '50000' } }), 'utf8');
+    // 80,000 chars ≈ 20,000 tokens — above the 15k-token threshold.
+    await writeFile(file, JSON.stringify({ env: { [BASH_MAX_OUTPUT_ENV_KEY]: '80000' } }), 'utf8');
     const loaded = await loadClaudeSettings(userClaudeSettingsPath());
     assert.ok(loaded);
     const result = detectStaticConfigBloat({ settings: [loaded!] });
     assert.equal(result.length, 1);
-    assert.equal(result[0]!.configuredLimit, 50000);
+    assert.equal(result[0]!.configuredLimit, 80000);
   });
 });
 
@@ -343,7 +365,7 @@ describe('detectToolOutputBloat — orchestration', () => {
   it('runs both signals when given inputs for both', async () => {
     const pricing = await loadBuiltinPricing();
     const settings: LoadedClaudeSettings[] = [
-      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '50000' } } },
+      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '80000' } } },
     ];
     const events = [
       evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 80_000, messageId: 'm1' }),
@@ -365,7 +387,7 @@ describe('detectToolOutputBloat — orchestration', () => {
   it('runs only Signal A when no events are supplied', async () => {
     const pricing = await loadBuiltinPricing();
     const settings: LoadedClaudeSettings[] = [
-      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '50000' } } },
+      { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '80000' } } },
     ];
     const out = detectToolOutputBloat({ settings, pricing });
     assert.equal(out.length, 1);
@@ -396,8 +418,10 @@ describe('toolOutputBloatToFinding — adapter', () => {
       source: 'claude-code',
       kind: 'static-config',
       toolName: 'Bash',
-      configuredLimit: 50000,
-      evidencedMaxOutput: 50000,
+      // configuredLimit is in chars (raw env value); evidencedMaxOutput is in
+      // tokens (consistent with Signal B).
+      configuredLimit: 80000,
+      evidencedMaxOutput: 20000,
       occurrenceCount: 1,
       cost: 0,
       evidence: ['/u/.claude/settings.json'],
@@ -408,7 +432,11 @@ describe('toolOutputBloatToFinding — adapter', () => {
     assert.equal(action.type, 'paste');
     assert.match((action as { label: string }).label, /settings\.json/);
     assert.match((action as { text: string }).text, new RegExp(BASH_MAX_OUTPUT_ENV_KEY));
-    assert.match((action as { text: string }).text, new RegExp(`${DEFAULT_BLOAT_TOKEN_THRESHOLD}`));
+    // Paste suggestion is in chars — at the 15k-token boundary that's 60000.
+    // Asserts the unit-conversion fix (Devin review on PR #180).
+    assert.match((action as { text: string }).text, /"60000"/);
+    // estimatedSavings.tokensPerSession should reflect tokens, not chars.
+    assert.equal(f.estimatedSavings?.tokensPerSession, 20000);
   });
 
   it('emits an instruction-file paste for Signal B', () => {
@@ -449,7 +477,9 @@ describe('detectStaticConfigBloat — settings.json fixture', () => {
     assert.ok(loaded);
     const result = detectStaticConfigBloat({ settings: [loaded!] });
     assert.equal(result.length, 1);
-    assert.equal(result[0]!.configuredLimit, 50000);
+    // Fixture sets BASH_MAX_OUTPUT_LENGTH=80000 (chars ≈ 20000 tokens >
+    // 15000-token threshold).
+    assert.equal(result[0]!.configuredLimit, 80000);
     assert.deepEqual(result[0]!.evidence, [fixture]);
   });
 });

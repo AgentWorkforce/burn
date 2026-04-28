@@ -450,8 +450,10 @@ describe('resolvePatternSelection', () => {
 
   it('returns all detectors when the flag is bare (true)', () => {
     const set = resolvePatternSelection(true);
-    // 8 inherited detectors + tool-output-bloat (#168) = 9.
-    assert.equal(set.size, 9);
+    // 8 inherited + ghost-surface (#166) + tool-output-bloat (#168) = 10.
+    assert.equal(set.size, 10);
+    assert.ok(set.has('ghost-surface'));
+    assert.ok(set.has('tool-output-bloat'));
   });
 });
 

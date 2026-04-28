@@ -3,9 +3,11 @@
 // Two signal sources unified under one detector shape:
 //
 //  - Signal A (Claude-only static config): read `~/.claude/settings.json` and
-//    the project's `.claude/settings.json`. If `env.BASH_MAX_OUTPUT_LENGTH` is
-//    set above the threshold (default 15000), flag it. The fix is the config
-//    knob itself.
+//    the project's `.claude/settings.json`. The setting itself is in
+//    characters, so the parsed value is converted to tokens via the same
+//    `bytes/4` heuristic Signal B uses before comparing against the
+//    token-unit threshold (default 15000 tokens ≈ 60000 chars). The fix is
+//    the config knob itself.
 //
 //  - Signal B (cross-harness session-data evidence): for every session, find
 //    `tool_result` events whose payload exceeds a threshold (default
@@ -43,6 +45,11 @@ export const BASH_MAX_OUTPUT_ENV_KEY = 'BASH_MAX_OUTPUT_LENGTH';
 // that the cache write+read tax dominates the call's actual usefulness.
 export const DEFAULT_BLOAT_TOKEN_THRESHOLD = 15000;
 
+// Inverse of bytesToTokens (kept in lockstep). Used by Signal A to surface
+// a character-unit safe ceiling for `BASH_MAX_OUTPUT_LENGTH`, and by the
+// finding adapter so the paste fix is in the unit `settings.json` speaks.
+const BYTES_PER_TOKEN = 4;
+
 // Minimum number of oversized events across the (source, toolName) bucket
 // before we surface a finding. One stray oversized result is noise; a tool
 // that repeatedly dumps massive output is a pattern.
@@ -61,7 +68,7 @@ const P95_SAMPLE_FLOOR = 20;
 // `byteLen`/`approxTokens` rather than re-deriving from `contentLength`.
 function bytesToTokens(bytes: number): number {
   if (bytes <= 0) return 0;
-  return Math.ceil(bytes / 4);
+  return Math.ceil(bytes / BYTES_PER_TOKEN);
 }
 
 // Severity tiers shared with WasteFinding so a heterogeneous list ranks
@@ -86,12 +93,15 @@ export interface ToolOutputBloat {
   // exclusively). For Signal B it's the harness-native tool name (e.g. Claude
   // 'Bash', OpenCode 'bash', Codex 'shell', or any other tool).
   toolName: string;
-  // Signal A only. The configured BASH_MAX_OUTPUT_LENGTH value when above
-  // threshold. Omitted on Signal B.
+  // Signal A only. The configured `BASH_MAX_OUTPUT_LENGTH` value when above
+  // threshold, in characters (the unit `settings.json` speaks). Omitted on
+  // Signal B.
   configuredLimit?: number;
   // Largest observed tool_result token count. For Signal A this is the
-  // configured limit (the worst case the harness will emit); for Signal B
-  // it's the empirical max seen across the bucket.
+  // configured limit converted via `bytesToTokens` — the worst case the
+  // harness will emit, in tokens. For Signal B it's the empirical max seen
+  // across the bucket. Both branches expose this field in the same unit
+  // (tokens) so consumers don't need to branch on `kind`.
   evidencedMaxOutput: number;
   // P95 of observed tool_result tokens across the bucket (Signal B only).
   // Useful for distinguishing "one fluke" from "this tool routinely dumps
@@ -202,15 +212,21 @@ export function detectStaticConfigBloat(
     }
   }
   if (mergedValue === undefined || sourcePath === undefined) return [];
-  const numeric = parseInt(mergedValue, 10);
-  if (!Number.isFinite(numeric) || numeric <= threshold) return [];
+  const numericChars = parseInt(mergedValue, 10);
+  if (!Number.isFinite(numericChars)) return [];
+  // `BASH_MAX_OUTPUT_LENGTH` is a character count; the threshold is in
+  // tokens. Convert before comparing — Signal B does the same conversion on
+  // its `contentLength`-bytes input so the two signals share one threshold
+  // semantics.
+  const numericTokens = bytesToTokens(numericChars);
+  if (numericTokens <= threshold) return [];
   return [
     {
       source: 'claude-code',
       kind: 'static-config',
       toolName: 'Bash',
-      configuredLimit: numeric,
-      evidencedMaxOutput: numeric,
+      configuredLimit: numericChars,
+      evidencedMaxOutput: numericTokens,
       occurrenceCount: 1,
       cost: 0,
       evidence: [sourcePath],
@@ -452,22 +468,31 @@ export function toolOutputBloatToFinding(bloat: ToolOutputBloat): WasteFinding {
   const sessionId = bloat.kind === 'static-config' ? (bloat.evidence[0] ?? '') : (bloat.evidence[0] ?? '');
 
   if (bloat.kind === 'static-config') {
+    // Paste suggestion is in characters — that's what `BASH_MAX_OUTPUT_LENGTH`
+    // takes. Translate the token-unit threshold to chars via the same ratio
+    // `bytesToTokens` uses so the suggestion sits exactly at the boundary.
+    const safeChars = DEFAULT_BLOAT_TOKEN_THRESHOLD * BYTES_PER_TOKEN;
     const action: WasteAction = {
       type: 'paste',
       label: 'Reduce in settings.json',
-      text: `"${BASH_MAX_OUTPUT_ENV_KEY}": "${DEFAULT_BLOAT_TOKEN_THRESHOLD}"`,
+      text: `"${BASH_MAX_OUTPUT_ENV_KEY}": "${safeChars}"`,
     };
+    const configuredChars = bloat.configuredLimit;
+    const configuredTokens = bloat.evidencedMaxOutput;
     return {
       kind: 'tool-output-bloat',
       severity: 'warn',
       sessionId,
-      title: `${BASH_MAX_OUTPUT_ENV_KEY} configured at ${bloat.configuredLimit?.toLocaleString() ?? '?'} (above ${DEFAULT_BLOAT_TOKEN_THRESHOLD.toLocaleString()})`,
+      title:
+        `${BASH_MAX_OUTPUT_ENV_KEY} configured at ${configuredChars?.toLocaleString() ?? '?'} chars ` +
+        `(≈ ${configuredTokens.toLocaleString()} tokens, above ${DEFAULT_BLOAT_TOKEN_THRESHOLD.toLocaleString()})`,
       detail:
-        `Claude is configured to allow Bash tool output up to ${bloat.configuredLimit?.toLocaleString() ?? '?'} ` +
-        `chars per call. Above ${DEFAULT_BLOAT_TOKEN_THRESHOLD.toLocaleString()} the tool_result rides as ` +
-        `cached input on every subsequent turn until compaction, dominating the call's actual usefulness. ` +
-        `Source file: ${sessionId}.`,
-      estimatedSavings: { tokensPerSession: bloat.configuredLimit ?? 0 },
+        `Claude is configured to allow Bash tool output up to ${configuredChars?.toLocaleString() ?? '?'} ` +
+        `chars (≈ ${configuredTokens.toLocaleString()} tokens) per call. Above ` +
+        `${DEFAULT_BLOAT_TOKEN_THRESHOLD.toLocaleString()} tokens (${safeChars.toLocaleString()} chars) the ` +
+        `tool_result rides as cached input on every subsequent turn until compaction, dominating the ` +
+        `call's actual usefulness. Source file: ${sessionId}.`,
+      estimatedSavings: { tokensPerSession: configuredTokens },
       actions: [action],
     };
   }

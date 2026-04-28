@@ -4,11 +4,13 @@ import {
   aggregateBySubagent,
   attributeWaste,
   compactionLossToFinding,
+  detectGhostSurface,
   detectPatterns,
   detectToolOutputBloat,
   editHeavyToFinding,
   editRevertToFinding,
   failureRunToFinding,
+  ghostSurfaceToFinding,
   loadClaudeSettings,
   loadPricing,
   projectClaudeSettingsPath,
@@ -23,6 +25,8 @@ import {
   type BashAggregation,
   type FidelitySummary,
   type FileAggregation,
+  type GhostSurfaceFinding,
+  type GhostSurfaceInputs,
   type LoadedClaudeSettings,
   type PatternsResult,
   type SubagentAggregation,
@@ -53,7 +57,7 @@ import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'tool-output-bloat'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -555,7 +559,7 @@ export function resolvePatternSelection(flag: string | true): Set<PatternKind> {
 // hasRawContent upstream (the parser computes the hashes from the raw
 // strings). hasToolCalls is the obvious prereq.
 export const PATTERN_REQUIRED: Record<
-  Exclude<PatternKind, 'compaction' | 'tool-output-bloat'>,
+  Exclude<PatternKind, 'compaction' | 'ghost-surface' | 'tool-output-bloat'>,
   ReadonlyArray<keyof Coverage>
 > = {
   retries: ['hasToolCalls', 'hasToolResultEvents'],
@@ -568,6 +572,12 @@ export const PATTERN_REQUIRED: Record<
   'opencode-skill-pruning': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-system-prompt': ['hasToolCalls', 'hasToolResultEvents'],
 };
+// `ghost-surface` is filesystem-bound and only needs `hasToolCalls` to
+// derive observed-names. We treat it as a soft prerequisite — turns missing
+// tool-call records contribute zero to the observed set, which is fine; the
+// detector just over-reports ghosts on those turns. The orchestrator
+// therefore runs ghost-surface on the full slice (no per-detector filtering)
+// like `compaction` does.
 
 interface PatternDetectorCoverage {
   kind: PatternKind;
@@ -595,9 +605,11 @@ export async function runPatternsMode(
   const perDetectorCoverage: PatternDetectorCoverage[] = [];
 
   for (const kind of selected) {
-    if (kind === 'compaction' || kind === 'tool-output-bloat') {
-      // Both detectors read non-TurnRecord ledger streams (compactions /
-      // tool_result_events) and are independent of TurnRecord.fidelity.
+    if (kind === 'compaction' || kind === 'ghost-surface' || kind === 'tool-output-bloat') {
+      // None of these consult TurnRecord.fidelity. `compaction` reads the
+      // ledger compaction stream; `ghost-surface` is filesystem-bound;
+      // `tool-output-bloat` reads `tool_result_events` and (for Signal A)
+      // a static settings.json. All three run on the full slice.
       perDetector.set(kind, turns);
       perDetectorCoverage.push({
         kind,
@@ -627,13 +639,16 @@ export async function runPatternsMode(
     perDetectorCoverage.push(coverage);
   }
 
-  // Refusal: every selected detector refused. `compaction` and
-  // `tool-output-bloat` have no fidelity prereq and are recorded with
+  // Refusal: every selected detector refused. `compaction`, `ghost-surface`,
+  // and `tool-output-bloat` have no fidelity prereq and are recorded with
   // refused:false unconditionally, so their presence in `selected`
   // short-circuits this — we only refuse when the entire selection is
   // fidelity-gated and every detector lost its slice.
   const refusableSelected = perDetectorCoverage.filter(
-    (d) => d.kind !== 'compaction' && d.kind !== 'tool-output-bloat',
+    (d) =>
+      d.kind !== 'compaction' &&
+      d.kind !== 'ghost-surface' &&
+      d.kind !== 'tool-output-bloat',
   );
   const allRefused =
     perDetectorCoverage.length > 0 &&
@@ -642,7 +657,7 @@ export async function runPatternsMode(
   if (allRefused) {
     const lines: string[] = [];
     for (const d of refusableSelected) {
-      const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'tool-output-bloat'>];
+      const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'ghost-surface' | 'tool-output-bloat'>];
       const sourcesClause = d.breakdown ? renderSourcesClause(d.breakdown) : '(unknown sources)';
       lines.push(
         `  ${d.kind}: ${total}/${total} turns lack ${required.map(fmtCoverageKey).join(' + ')} (sources: ${sourcesClause})`,
@@ -667,6 +682,7 @@ export async function runPatternsMode(
             skillPruningProtection: [],
             systemPromptTaxes: [],
             toolOutputBloats: [],
+            ghostSurface: [],
             sessionSummaries: [],
             findings: [],
             fidelity: {
@@ -773,6 +789,18 @@ export async function runPatternsMode(
     });
   }
 
+  // Ghost-surface runs against the on-disk user-installed surface and
+  // cross-references basenames against observed names mined from the turn
+  // stream. Filesystem-bound and harness-aware: each adapter pulls its own
+  // home directory and observed-names slice. Cost is computed against a
+  // representative cacheRead rate (the prefix rides in cache on every turn).
+  let ghostFindings: GhostSurfaceFinding[] = [];
+  if (selected.has('ghost-surface')) {
+    const allTurns = perDetector.get('ghost-surface') ?? turns;
+    const ghostInputs = buildGhostSurfaceInputs(allTurns, pricing);
+    ghostFindings = await detectGhostSurface(ghostInputs);
+  }
+
   // Build session summaries on the union — anything attributed by *any*
   // detector counts. Re-running detectPatterns on a single union slice
   // doesn't work because each detector has its own coverage threshold; instead
@@ -808,6 +836,7 @@ export async function runPatternsMode(
     ...skillRecallDups.map(skillRecallDupToFinding),
     ...skillPruningProtection.map(skillPruningProtectionToFinding),
     ...systemPromptTaxes.map(systemPromptTaxToFinding),
+    ...ghostFindings.map((g) => ghostSurfaceToFinding(g)),
     ...toolOutputBloats.map(toolOutputBloatToFinding),
   ]);
 
@@ -825,6 +854,7 @@ export async function runPatternsMode(
           systemPromptTaxes,
           editHeavySessions,
           toolOutputBloats,
+          ghostSurface: ghostFindings,
           sessionSummaries,
           findings,
           fidelity: {
@@ -904,6 +934,11 @@ export async function runPatternsMode(
     out.push(renderSystemPromptTable(systemPromptTaxes, limit));
     out.push('');
   }
+  if (selected.has('ghost-surface')) {
+    out.push('Ghost user-installed surface (agents/skills/commands/prompts/rules/memories never invoked)');
+    out.push(renderGhostSurfaceTable(ghostFindings, limit));
+    out.push('');
+  }
   if (selected.has('tool-output-bloat')) {
     out.push('Oversized tool output bloat (BASH_MAX_OUTPUT_LENGTH config + cross-harness >15k tok tool_results)');
     out.push(renderToolOutputBloatTable(toolOutputBloats, limit));
@@ -928,7 +963,7 @@ function toJsonDetector(d: PatternDetectorCoverage): {
   }>;
 } {
   const required: ReadonlyArray<keyof Coverage> =
-    d.kind === 'compaction' || d.kind === 'tool-output-bloat'
+    d.kind === 'compaction' || d.kind === 'ghost-surface' || d.kind === 'tool-output-bloat'
       ? []
       : PATTERN_REQUIRED[d.kind];
   const out: ReturnType<typeof toJsonDetector> = {
@@ -954,8 +989,8 @@ function formatPerDetectorNotice(
   total: number,
 ): string | undefined {
   if (d.excluded === 0) return undefined;
-  if (d.kind === 'compaction' || d.kind === 'tool-output-bloat') return undefined;
-  const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'tool-output-bloat'>];
+  if (d.kind === 'compaction' || d.kind === 'ghost-surface' || d.kind === 'tool-output-bloat') return undefined;
+  const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'ghost-surface' | 'tool-output-bloat'>];
   const sourceClauses = d.breakdown ? renderInlineSourceClauses(d.breakdown) : [];
   const requirements = required.map(fmtCoverageKey).join(' + ');
   return `${d.kind}: analyzed ${formatInt(d.analyzed)} of ${formatInt(total)} turns; ${formatInt(d.excluded)} excluded (needs ${requirements}; ${sourceClauses.join(' and ') || 'no source breakdown'})`;
@@ -1309,6 +1344,116 @@ function renderToolOutputBloatTable(bloats: ToolOutputBloat[], limit: number): s
       formatInt(b.evidencedMaxOutput),
       b.evidencedP95Output !== undefined ? formatInt(b.evidencedP95Output) : '—',
       formatUsd(b.cost),
+    ]);
+  }
+  return table(rows);
+}
+
+// Mine observed invocation names from the turn stream. The ghost-surface
+// detector cross-references file basenames against this set per source.
+//
+// We collect, per source:
+//   - normalized + raw tool-call names (so a Claude `Read` and a Codex
+//     `read_file` both register as something the user invoked)
+//   - subagent / agent / task names where they appear (skillName,
+//     subagentType, target paths' basenames for delegation-style calls)
+//
+// Bash command tokens, file paths, and free-form arguments are NOT mined —
+// matching a Claude command file `foo.md` against any token that happens to
+// contain `foo` would mask real ghosts. Names are kept as-is and matched
+// against file stems case-insensitively in the detector.
+export function buildObservedNamesBySource(
+  turns: ReadonlyArray<EnrichedTurn>,
+): Map<SourceKind, Set<string>> {
+  const out = new Map<SourceKind, Set<string>>();
+  for (const t of turns) {
+    let set = out.get(t.source);
+    if (!set) {
+      set = new Set<string>();
+      out.set(t.source, set);
+    }
+    for (const call of t.toolCalls) {
+      set.add(call.name);
+      if (call.skillName) set.add(call.skillName);
+    }
+    if (t.subagent?.subagentType) {
+      set.add(t.subagent.subagentType);
+    }
+  }
+  return out;
+}
+
+export function buildSessionCountBySource(
+  turns: ReadonlyArray<EnrichedTurn>,
+): Map<SourceKind, number> {
+  const seen = new Map<SourceKind, Set<string>>();
+  for (const t of turns) {
+    let set = seen.get(t.source);
+    if (!set) {
+      set = new Set<string>();
+      seen.set(t.source, set);
+    }
+    set.add(t.sessionId);
+  }
+  const out = new Map<SourceKind, number>();
+  for (const [source, set] of seen) out.set(source, set.size);
+  return out;
+}
+
+// Pick a representative dollar-per-token rate for ghost-surface costing.
+// User-installed surface rides in the CACHED prefix on every call after the
+// first, so the cacheRead rate is the right basis. Pricing values are per
+// million tokens, hence the / 1e6 conversion. We pick the cacheRead rate
+// from the most-used model in the slice; ties go to the first-seen model.
+// Falls back to 0 (which produces $0 cost but still surfaces ghosts) when
+// no priced model is available.
+export function pickRepresentativeCacheReadRate(
+  turns: ReadonlyArray<EnrichedTurn>,
+  pricing: Awaited<ReturnType<typeof loadPricing>>,
+): number {
+  const counts = new Map<string, number>();
+  for (const t of turns) {
+    counts.set(t.model, (counts.get(t.model) ?? 0) + 1);
+  }
+  let bestModel: string | undefined;
+  let bestCount = -1;
+  for (const [model, count] of counts) {
+    if (count > bestCount && pricing[model]) {
+      bestModel = model;
+      bestCount = count;
+    }
+  }
+  if (!bestModel) return 0;
+  const rate = pricing[bestModel]!;
+  return rate.cacheRead / 1_000_000;
+}
+
+function buildGhostSurfaceInputs(
+  turns: ReadonlyArray<EnrichedTurn>,
+  pricing: Awaited<ReturnType<typeof loadPricing>>,
+): GhostSurfaceInputs {
+  return {
+    observedNamesBySource: buildObservedNamesBySource(turns),
+    sessionCountBySource: buildSessionCountBySource(turns),
+    dollarPerToken: pickRepresentativeCacheReadRate(turns, pricing),
+  };
+}
+
+function renderGhostSurfaceTable(ghosts: GhostSurfaceFinding[], limit: number): string {
+  if (ghosts.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['source', 'kind', 'path', 'tokens', 'sessions', 'cost', 'note'],
+  ];
+  const slice = ghosts.slice(0, limit);
+  for (const g of slice) {
+    rows.push([
+      g.source,
+      g.kind.replace('ghost-', ''),
+      truncate(g.path, 60),
+      formatInt(g.sizeTokens),
+      formatInt(g.sessionCount),
+      formatUsd(g.cost),
+      g.countedByCatalogBloat ? 'catalog (#54)' : '',
     ]);
   }
   return table(rows);
