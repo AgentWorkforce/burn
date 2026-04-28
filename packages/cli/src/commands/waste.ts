@@ -754,7 +754,7 @@ export async function runPatternsMode(
   let ghostFindings: GhostSurfaceFinding[] = [];
   if (selected.has('ghost-surface')) {
     const allTurns = perDetector.get('ghost-surface') ?? turns;
-    const ghostInputs = buildGhostSurfaceInputs(allTurns, pricing);
+    const ghostInputs = await buildGhostSurfaceInputs(allTurns, pricing);
     ghostFindings = await detectGhostSurface(ghostInputs);
   }
 
@@ -1344,15 +1344,53 @@ export function pickRepresentativeCacheReadRate(
   return rate.cacheRead / 1_000_000;
 }
 
-function buildGhostSurfaceInputs(
+// #172: build a per-session map of user-turn text strings for the slash-
+// command observation pass. We only load content for sessions whose source
+// has a slash-command notion (Claude commands, Codex prompts) — the
+// OpenCode adapter doesn't consume `userTurnTextBySession` so the I/O
+// would be wasted. Sessions whose sidecar is empty (`content.store=off`,
+// pruned, or never captured) are silently absent from the map; the
+// detector's `observedNames` hooks treat that as v1 fallback.
+async function loadUserTurnTextBySession(
+  turns: ReadonlyArray<EnrichedTurn>,
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  // Dedupe by sessionId; only Claude / Codex sessions need mining.
+  const sessionIds = new Set<string>();
+  for (const t of turns) {
+    if (t.source !== 'claude-code' && t.source !== 'codex') continue;
+    sessionIds.add(t.sessionId);
+  }
+  for (const sessionId of sessionIds) {
+    const records = await readContent({ sessionId });
+    if (records.length === 0) continue;
+    const texts: string[] = [];
+    for (const rec of records) {
+      if (rec.role !== 'user' || rec.kind !== 'text') continue;
+      if (typeof rec.text !== 'string' || rec.text.length === 0) continue;
+      texts.push(rec.text);
+    }
+    if (texts.length > 0) out.set(sessionId, texts);
+  }
+  return out;
+}
+
+async function buildGhostSurfaceInputs(
   turns: ReadonlyArray<EnrichedTurn>,
   pricing: Awaited<ReturnType<typeof loadPricing>>,
-): GhostSurfaceInputs {
-  return {
+): Promise<GhostSurfaceInputs> {
+  const userTurnTextBySession = await loadUserTurnTextBySession(turns);
+  const inputs: GhostSurfaceInputs = {
     observedNamesBySource: buildObservedNamesBySource(turns),
     sessionCountBySource: buildSessionCountBySource(turns),
     dollarPerToken: pickRepresentativeCacheReadRate(turns, pricing),
   };
+  // Only attach when non-empty — keeps the v1 fallback path clean for
+  // sessions where the sidecar was unavailable.
+  if (userTurnTextBySession.size > 0) {
+    inputs.userTurnTextBySession = userTurnTextBySession;
+  }
+  return inputs;
 }
 
 function renderGhostSurfaceTable(ghosts: GhostSurfaceFinding[], limit: number): string {

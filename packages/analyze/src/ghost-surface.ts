@@ -23,12 +23,16 @@
 // in the declared catalog are costed normally.
 //
 // #172 follow-up — slash-command-style invocations (e.g. a user typing
-// `/openspec-archive` in the UI) are NOT recorded as tool calls and so won't
-// appear in `observedToolNamesBySource`. The adapter contract reserves a
-// `userTurnTextBySession` input for a future pass that mines slash-command
-// invocations from raw user-turn text. Until that lands, a Claude command
-// or Codex prompt only invoked via slash will be reported as a ghost. See
-// the inline notes on `claudeGhostAdapter` / `codexGhostAdapter`.
+// `/openspec-archive` in the UI) are NOT recorded as tool calls and so
+// won't appear in `observedToolNamesBySource`. To close the gap without a
+// breaking change, each adapter optionally implements `observedNames(inputs)`:
+// the orchestrator unions whatever extra names that returns into the
+// observed-names set before filtering candidates. The Claude and Codex
+// adapters use that hook to mine `userTurnTextBySession` for slash-command
+// markers (`<command-name>` blocks for Claude, literal `/<basename>` matches
+// for Codex). When `userTurnTextBySession` is undefined or empty (content
+// store is `off` / sidecar pruned) the hook is a no-op and the detector
+// falls back to v1 behaviour.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -116,12 +120,14 @@ export interface GhostSurfaceInputs {
   // the current working directory.
   opencodeProjects?: string[];
 
-  // Reserved for #172. When provided, adapters that recognize slash-command
-  // syntax (Claude commands, Codex prompts) will mine these strings for
-  // `/<name>` invocations and add them to the observed-names set before
-  // checking ghosts. The current adapters DO NOT consume this field — see
-  // the inline notes — but the contract is reserved so #172 can be added
-  // without a breaking change.
+  // Per-session list of raw user-turn text strings observed in the ledger
+  // window. The Claude and Codex adapters' optional `observedNames` hook
+  // consumes this map to mine slash-command-style invocations that don't
+  // surface as tool calls (#172). The CLI populates the map from the
+  // per-session content sidecar when content store is `full`; sessions
+  // whose sidecar is empty (hash-only / off / pruned) are simply absent
+  // from the map and the detector falls back to v1 (tool-call only)
+  // behaviour for that source.
   userTurnTextBySession?: Map<string, string[]> | undefined;
 }
 
@@ -131,6 +137,16 @@ export interface GhostSurfaceAdapter {
   // are filesystem-bound; the orchestrator tolerates ENOENT and returns an
   // empty list (the user simply hasn't installed the surface in question).
   enumerate(inputs: GhostSurfaceInputs): Promise<GhostCandidate[]>;
+  // Optional per-adapter observation pass. Returns extra observed names
+  // (e.g. mined from `userTurnTextBySession`) that should be unioned into
+  // the cross-referenced set before deciding which candidates are ghosts.
+  // Returning an empty set is a no-op; the orchestrator never calls this
+  // hook when `userTurnTextBySession` is undefined. The hook is opt-in so
+  // adapters that don't have a slash-command notion (OpenCode) can omit it.
+  observedNames?(
+    inputs: GhostSurfaceInputs,
+    candidates: ReadonlyArray<GhostCandidate>,
+  ): Set<string>;
 }
 
 export interface DetectGhostSurfaceOptions {
@@ -219,6 +235,127 @@ function isPlainTextSurface(name: string): boolean {
   return true;
 }
 
+// -- Slash-command observation (#172) ----------------------------------------
+
+// Claude inlines slash-command expansion into the user message wrapped in a
+// `<command-name>...</command-name>` tag. The inner text is either `/foo`
+// or `foo` depending on Claude's UI version; we accept both. Multi-line
+// content / leading-whitespace / mixed casing are tolerated. We extract the
+// raw stem (`foo`) and let the orchestrator's case-insensitive compare do
+// the rest.
+const CLAUDE_COMMAND_NAME_RE = /<command-name>\s*\/?([\w./:-]+?)\s*<\/command-name>/gi;
+
+export function mineClaudeCommandNames(
+  userTurnTextBySession: Map<string, string[]> | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!userTurnTextBySession || userTurnTextBySession.size === 0) return out;
+  for (const texts of userTurnTextBySession.values()) {
+    for (const text of texts) {
+      if (!text) continue;
+      // String#matchAll requires a /g regex; reset lastIndex isn't an issue
+      // because we instantiate a new RegExp each call below.
+      const re = new RegExp(CLAUDE_COMMAND_NAME_RE.source, 'gi');
+      for (const match of text.matchAll(re)) {
+        const raw = match[1];
+        if (!raw) continue;
+        // Strip a trailing arg list (`foo args` is `<command-name>foo args`)
+        // — Claude has historically wrapped just the name, but a defensive
+        // split keeps us forward-compatible if that changes.
+        const head = raw.split(/[\s]/, 1)[0];
+        if (head) out.add(head);
+      }
+    }
+  }
+  return out;
+}
+
+// Codex slash-commands expand verbatim before sending, so there's no marker
+// to anchor on. We do a literal `/<stem>` match against the on-disk Codex
+// prompt basenames — i.e. the candidate set the adapter just enumerated.
+// Constraining the search to known stems prevents false positives from
+// arbitrary `/usr/local/...` paths or `/path/to/file` substrings in user
+// text. The match is anchored on a non-word character (or string start) on
+// the left to avoid `/foo` matching `/foofoo`, but the right-hand boundary
+// is loose so `/foo bar` and `/foo\n` both match.
+//
+// Limitation: a prompt invoked entirely without typing `/<basename>` (e.g.
+// the user pastes the prompt body manually) won't be recognised. That's
+// the documented false-negative — see the inline note on `codexGhostAdapter`.
+export function mineCodexSlashInvocations(
+  userTurnTextBySession: Map<string, string[]> | undefined,
+  candidates: ReadonlyArray<GhostCandidate>,
+): Set<string> {
+  const out = new Set<string>();
+  if (!userTurnTextBySession || userTurnTextBySession.size === 0) return out;
+  // Build a stem -> raw-name lookup so we can return the original basename
+  // form. Stems are lower-cased for the search but emitted as the original
+  // candidate basename's stem (the orchestrator does case-insensitive
+  // compare anyway, so this is mostly a courtesy for downstream consumers).
+  const stems = new Map<string, string>();
+  for (const cand of candidates) {
+    const stem = stripExtension(cand.basename);
+    if (!stem) continue;
+    stems.set(stem.toLowerCase(), stem);
+  }
+  if (stems.size === 0) return out;
+  for (const texts of userTurnTextBySession.values()) {
+    for (const text of texts) {
+      if (!text) continue;
+      const lower = text.toLowerCase();
+      for (const [stemLower, stemOriginal] of stems) {
+        // Find every occurrence so a single user message that mentions
+        // `/foo` and `/bar` resolves both.
+        let from = 0;
+        while (from <= lower.length) {
+          const idx = lower.indexOf(`/${stemLower}`, from);
+          if (idx < 0) break;
+          // Left boundary: character before the slash must NOT be a word
+          // character — otherwise `https://example.com/foo` and similar
+          // path-y strings would falsely match. (`/` itself is fine as a
+          // boundary; `//foo` is unusual but not a code path we care about.)
+          if (idx > 0) {
+            const left = lower.charCodeAt(idx - 1);
+            if (isWordCharCode(left)) {
+              from = idx + 1;
+              continue;
+            }
+          }
+          // Right boundary: character after the stem must NOT be a word
+          // character or a hyphen. This is what stops `/foo` from matching
+          // `/foobar` (or `/foo-bar` when only `/foo` is installed). A
+          // hyphen is excluded because Codex prompt names commonly use
+          // hyphens — `/openspec-apply` should not de-ghost a stem named
+          // `openspec`.
+          const after = idx + 1 + stemLower.length;
+          if (after < lower.length) {
+            const right = lower.charCodeAt(after);
+            if (isWordCharCode(right) || right === 0x2d /* '-' */) {
+              from = idx + 1;
+              continue;
+            }
+          }
+          out.add(stemOriginal);
+          from = after;
+          break; // matched; move on to the next text body
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function isWordCharCode(c: number): boolean {
+  // [A-Za-z0-9_]. Hyphen is intentionally excluded — see the right-boundary
+  // note in `mineCodexSlashInvocations`.
+  return (
+    (c >= 0x30 && c <= 0x39) ||
+    (c >= 0x41 && c <= 0x5a) ||
+    (c >= 0x61 && c <= 0x7a) ||
+    c === 0x5f
+  );
+}
+
 // -- Claude adapter -----------------------------------------------------------
 //
 // Surfaces under `~/.claude/{agents,skills,commands}/`. Each file's stem is
@@ -226,10 +363,16 @@ function isPlainTextSurface(name: string): boolean {
 // `subagent_type: 'foo'` in a Task tool call.
 //
 // NOTE (#172): slash-command-style invocations (e.g. the user typing `/foo`
-// in the Claude UI) are NOT recorded as tool calls in the session log, so
-// they won't appear in `observedNamesBySource`. A Claude command file
-// invoked exclusively via slash will currently be reported as a ghost.
-// Issue #172 tracks adding `userTurnTextBySession` mining to close this gap.
+// in the Claude UI) are NOT recorded as tool calls in the session log.
+// `observedNames` augments the observed-names set by mining
+// `userTurnTextBySession` for the `<command-name>...</command-name>`
+// markers that Claude inlines into the user message when a slash command
+// expands. Both `<command-name>/foo</command-name>` and bare
+// `<command-name>foo</command-name>` are recognised. When the content
+// sidecar is unavailable (`content.store=off` or pruned), the hook
+// observes nothing and the detector falls back to v1 (tool-call only)
+// behaviour — meaning a slash-only command file may still be reported as
+// a ghost on those sessions.
 export const claudeGhostAdapter: GhostSurfaceAdapter = {
   source: 'claude-code',
   async enumerate(inputs) {
@@ -254,6 +397,9 @@ export const claudeGhostAdapter: GhostSurfaceAdapter = {
     }
     return out;
   },
+  observedNames(inputs) {
+    return mineClaudeCommandNames(inputs.userTurnTextBySession);
+  },
 };
 
 // -- Codex adapter ------------------------------------------------------------
@@ -261,9 +407,17 @@ export const claudeGhostAdapter: GhostSurfaceAdapter = {
 // Surfaces under `~/.codex/{prompts,skills,rules,memories}/`. Same
 // stem-as-invocation-name convention as Claude.
 //
-// NOTE (#172): same caveat — Codex slash-command-style prompt invocations
-// don't surface as tool calls, so a prompt invoked exclusively via slash
-// will be reported as a ghost until #172 mines user-turn text.
+// NOTE (#172): Codex slash-commands expand inline before sending — the
+// prompt body is prepended verbatim to the user's input, with no
+// `<command-name>` marker. `observedNames` mines `userTurnTextBySession`
+// for literal `/<basename>` matches against the on-disk prompt stems.
+// This is intentionally narrow: matching against the prompt's first line
+// or heading would produce false positives whenever the user happens to
+// quote that text. The trade-off is a known false-negative for prompts
+// the user invoked but never typed `/<basename>` for (e.g. when the user
+// pastes the prompt body manually). When the content sidecar is
+// unavailable (`content.store=off` or pruned), the hook observes nothing
+// and the detector falls back to v1 (tool-call only) behaviour.
 export const codexGhostAdapter: GhostSurfaceAdapter = {
   source: 'codex',
   async enumerate(inputs) {
@@ -288,6 +442,9 @@ export const codexGhostAdapter: GhostSurfaceAdapter = {
       }
     }
     return out;
+  },
+  observedNames(inputs, candidates) {
+    return mineCodexSlashInvocations(inputs.userTurnTextBySession, candidates);
   },
 };
 
@@ -460,6 +617,19 @@ export async function detectGhostSurface(
     // without forcing callers to pre-normalize their observed-names input.
     const observedLower = new Set<string>();
     for (const name of observedRaw) observedLower.add(name.toLowerCase());
+    // Adapter-local observation pass (#172). Slash-command invocations
+    // mined from `userTurnTextBySession` are unioned in here so they
+    // de-ghost a basename without leaking into other adapters' observed
+    // sets. Only invoked when `userTurnTextBySession` is provided —
+    // sessions without a content sidecar fall back to v1 behaviour.
+    if (
+      adapter.observedNames !== undefined &&
+      inputs.userTurnTextBySession !== undefined &&
+      inputs.userTurnTextBySession.size > 0
+    ) {
+      const extra = adapter.observedNames(inputs, candidates);
+      for (const name of extra) observedLower.add(name.toLowerCase());
+    }
     const sessionCount = inputs.sessionCountBySource.get(adapter.source) ?? 0;
     for (const cand of candidates) {
       const lookups = namesForLookup(cand.basename);
