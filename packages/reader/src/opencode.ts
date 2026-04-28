@@ -622,6 +622,10 @@ function extractToolsAndFiles(parts: Part[]): {
     };
     const target = pickTarget(tp.tool, input);
     if (target !== undefined) call.target = target;
+    if (tp.tool === 'skill') {
+      const skillName = input.skill ?? input.name ?? input.skill_name;
+      if (typeof skillName === 'string') call.skillName = skillName;
+    }
     toolCalls.push(call);
     if (target !== undefined && isFileTool(tp.tool)) files.add(target);
     if (isFailedTool(tp)) erroredCallIds.add(tp.callID);

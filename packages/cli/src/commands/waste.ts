@@ -34,7 +34,7 @@ import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'opencode-skill-recall', 'opencode-skill-pruning'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -534,6 +534,8 @@ export const PATTERN_REQUIRED: Record<
   retries: ['hasToolCalls', 'hasToolResultEvents'],
   failures: ['hasToolCalls', 'hasToolResultEvents'],
   reverts: ['hasToolCalls', 'hasRawContent'],
+  'opencode-skill-recall': ['hasToolCalls', 'hasToolResultEvents'],
+  'opencode-skill-pruning': ['hasToolCalls', 'hasToolResultEvents'],
 };
 
 interface PatternDetectorCoverage {
@@ -626,6 +628,8 @@ export async function runPatternsMode(
             failureRuns: [],
             compactions: [],
             editReverts: [],
+            skillRecallDups: [],
+            skillPruningProtection: [],
             sessionSummaries: [],
             fidelity: {
               analyzed: 0,
@@ -650,6 +654,8 @@ export async function runPatternsMode(
   let failureRuns: PatternsResult['failureRuns'] = [];
   let compactionLosses: PatternsResult['compactions'] = [];
   let editReverts: PatternsResult['editReverts'] = [];
+  let skillRecallDups: PatternsResult['skillRecallDups'] = [];
+  let skillPruningProtection: PatternsResult['skillPruningProtection'] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
   if (selected.has('retries')) {
@@ -668,6 +674,14 @@ export async function runPatternsMode(
     const r = detectPatterns(perDetector.get('reverts')!, { pricing });
     editReverts = r.editReverts;
   }
+  if (selected.has('opencode-skill-recall')) {
+    const r = detectPatterns(perDetector.get('opencode-skill-recall')!, { pricing, compactions });
+    skillRecallDups = r.skillRecallDups;
+  }
+  if (selected.has('opencode-skill-pruning')) {
+    const r = detectPatterns(perDetector.get('opencode-skill-pruning')!, { pricing, compactions });
+    skillPruningProtection = r.skillPruningProtection;
+  }
 
   // Build session summaries on the union — anything attributed by *any*
   // detector counts. Re-running detectPatterns on a single union slice
@@ -678,6 +692,8 @@ export async function runPatternsMode(
     failureRuns,
     compactionLosses,
     editReverts,
+    skillRecallDups,
+    skillPruningProtection,
   );
 
   // For the "turns analyzed" headline we report the union of analyzed slices —
@@ -700,6 +716,8 @@ export async function runPatternsMode(
           failureRuns,
           compactions: compactionLosses,
           editReverts,
+          skillRecallDups,
+          skillPruningProtection,
           sessionSummaries,
           fidelity: {
             analyzed: analyzedCount,
@@ -751,6 +769,16 @@ export async function runPatternsMode(
   if (selected.has('reverts')) {
     out.push('Edit-revert cycles (file returned to a prior state)');
     out.push(renderRevertTable(editReverts, limit));
+    out.push('');
+  }
+  if (selected.has('opencode-skill-recall')) {
+    out.push('OpenCode skill recall duplicates (same skill called ≥2 times, content not deduplicated)');
+    out.push(renderSkillRecallTable(skillRecallDups, limit));
+    out.push('');
+  }
+  if (selected.has('opencode-skill-pruning')) {
+    out.push('OpenCode skill pruning protection (skill content never evicted from cache)');
+    out.push(renderSkillPruningTable(skillPruningProtection, limit));
     out.push('');
   }
 
@@ -808,6 +836,8 @@ function buildSessionSummaries(
   failureRuns: PatternsResult['failureRuns'],
   compactions: PatternsResult['compactions'],
   editReverts: PatternsResult['editReverts'],
+  skillRecallDups: PatternsResult['skillRecallDups'],
+  skillPruningProtection: PatternsResult['skillPruningProtection'],
 ): PatternsResult['sessionSummaries'] {
   const by = new Map<string, PatternsResult['sessionSummaries'][number]>();
   const get = (sessionId: string): PatternsResult['sessionSummaries'][number] => {
@@ -820,6 +850,8 @@ function buildSessionSummaries(
         consecutiveFailureMax: 0,
         compactionCount: 0,
         editRevertCount: 0,
+        skillRecallDupCount: 0,
+        skillPruningProtectionCount: 0,
         totalRetries: 0,
         totalPatternCost: 0,
       };
@@ -848,6 +880,16 @@ function buildSessionSummaries(
     const row = get(e.sessionId);
     row.editRevertCount++;
     row.totalPatternCost += e.cost;
+  }
+  for (const s of skillRecallDups) {
+    const row = get(s.sessionId);
+    row.skillRecallDupCount++;
+    row.totalPatternCost += s.cost;
+  }
+  for (const s of skillPruningProtection) {
+    const row = get(s.sessionId);
+    row.skillPruningProtectionCount++;
+    row.totalPatternCost += s.cost;
   }
   return [...by.values()].sort((a, b) => b.totalPatternCost - a.totalPatternCost);
 }
@@ -928,6 +970,49 @@ function renderRevertTable(
       String(c.revertTurnIndex),
       String(c.spanTurns),
       formatUsd(c.cost),
+    ]);
+  }
+  return table(rows);
+}
+
+function renderSkillRecallTable(
+  dups: PatternsResult['skillRecallDups'],
+  limit: number,
+): string {
+  if (dups.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'skill', 'calls', 'turns', 'cost'],
+  ];
+  const slice = [...dups].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const d of slice) {
+    rows.push([
+      d.sessionId.slice(0, 8),
+      truncate(d.skillName, 30),
+      String(d.callCount),
+      `${d.firstTurnIndex}–${d.lastTurnIndex}`,
+      formatUsd(d.cost),
+    ]);
+  }
+  return table(rows);
+}
+
+function renderSkillPruningTable(
+  events: PatternsResult['skillPruningProtection'],
+  limit: number,
+): string {
+  if (events.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'skill', 'invokedAt', 'ridingTurns', 'lastCached', 'cost'],
+  ];
+  const slice = [...events].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const e of slice) {
+    rows.push([
+      e.sessionId.slice(0, 8),
+      truncate(e.skillName, 30),
+      String(e.invokedTurnIndex),
+      String(e.ridingTurns),
+      String(e.lastCachedTurnIndex),
+      formatUsd(e.cost),
     ]);
   }
   return table(rows);

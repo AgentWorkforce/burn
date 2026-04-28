@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 ### Added
 
 - **Codex compaction parity with Claude.** Codex passive ingest now detects `compacted` session-log records, persists them as ledger compaction events, and anchors them to the preceding Codex turn so compaction-loss analysis can cover Codex sessions instead of only Claude Code.
+- **OpenCode skill waste detectors** ([#54](https://github.com/AgentWorkforce/burn/issues/54)). Two new `burn waste --patterns` detectors gated to `source === 'opencode'`: `opencode-skill-recall` flags repeated `skill({name})` calls whose content is not deduplicated by the agent, and `opencode-skill-pruning` tracks skill tool results that ride in the cache indefinitely because OpenCode's compaction marks them as prune-protected. `burn diagnose` and `burn waste --patterns --json` now include the new pattern types alongside retry loops, failure runs, compaction losses, and edit reverts.
 
 ## [0.34.0] - 2026-04-27
 

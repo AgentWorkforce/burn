@@ -256,3 +256,244 @@ describe('detectPatterns — defensive', () => {
     assert.deepEqual(result.sessionSummaries, []);
   });
 });
+
+describe('detectPatterns — OpenCode skill recall duplicates', () => {
+  it('detects repeated skill calls with the same name in an OpenCode session', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'opencode' as const,
+        toolCalls: [tc('u2', 'skill', 'h2', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm3',
+        turnIndex: 2,
+        source: 'opencode' as const,
+        toolCalls: [tc('u3', 'skill', 'h3', { skillName: 'react-component' })],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.skillRecallDups.length, 1);
+    const dup = result.skillRecallDups[0]!;
+    assert.equal(dup.skillName, 'react-component');
+    assert.equal(dup.callCount, 3);
+    assert.equal(dup.firstTurnIndex, 0);
+    assert.equal(dup.lastTurnIndex, 2);
+  });
+
+  it('does not trigger on a single skill call', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.skillRecallDups.length, 0);
+  });
+
+  it('does not trigger for non-OpenCode sessions (Claude Code)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'claude-code' as const,
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'claude-code' as const,
+        toolCalls: [tc('u2', 'skill', 'h2', { skillName: 'react-component' })],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.skillRecallDups.length, 0);
+  });
+
+  it('groups different skill names separately', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'opencode' as const,
+        toolCalls: [tc('u2', 'skill', 'h2', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm3',
+        turnIndex: 2,
+        source: 'opencode' as const,
+        toolCalls: [tc('u3', 'skill', 'h3', { skillName: 'testing' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm4',
+        turnIndex: 3,
+        source: 'opencode' as const,
+        toolCalls: [tc('u4', 'skill', 'h4', { skillName: 'testing' })],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.skillRecallDups.length, 2);
+    const react = result.skillRecallDups.find((d) => d.skillName === 'react-component')!;
+    const testing = result.skillRecallDups.find((d) => d.skillName === 'testing')!;
+    assert.ok(react, 'react-component dup found');
+    assert.ok(testing, 'testing dup found');
+    assert.equal(react.callCount, 2);
+    assert.equal(testing.callCount, 2);
+  });
+});
+
+describe('detectPatterns — OpenCode skill pruning protection', () => {
+  it('detects skill content riding in cache after invocation', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        usage: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheCreate5m: 200, cacheCreate1h: 0 },
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+      // Subsequent turns with cacheRead — skill content is riding
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'opencode' as const,
+        usage: { input: 50, output: 30, reasoning: 0, cacheRead: 300, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm3',
+        turnIndex: 2,
+        source: 'opencode' as const,
+        usage: { input: 50, output: 30, reasoning: 0, cacheRead: 350, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.skillPruningProtection.length, 1);
+    const ev = result.skillPruningProtection[0]!;
+    assert.equal(ev.skillName, 'react-component');
+    assert.equal(ev.invokedTurnIndex, 0);
+    assert.equal(ev.ridingTurns, 2);
+    assert.equal(ev.lastCachedTurnIndex, 2);
+  });
+
+  it('does not emit when there are no subsequent cacheRead turns', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        usage: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheCreate5m: 200, cacheCreate1h: 0 },
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'opencode' as const,
+        usage: { input: 50, output: 30, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.skillPruningProtection.length, 0);
+  });
+
+  it('does not trigger for non-OpenCode sessions', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'claude-code' as const,
+        usage: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheCreate5m: 200, cacheCreate1h: 0 },
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'claude-code' as const,
+        usage: { input: 50, output: 30, reasoning: 0, cacheRead: 300, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.skillPruningProtection.length, 0);
+  });
+});
+
+describe('detectPatterns — session summary includes skill detectors', () => {
+  it('aggregates skill recall dup and pruning protection counts', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        usage: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheCreate5m: 200, cacheCreate1h: 0 },
+        toolCalls: [tc('u1', 'skill', 'h1', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'opencode' as const,
+        usage: { input: 100, output: 50, reasoning: 0, cacheRead: 0, cacheCreate5m: 200, cacheCreate1h: 0 },
+        toolCalls: [tc('u2', 'skill', 'h2', { skillName: 'react-component' })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm3',
+        turnIndex: 2,
+        source: 'opencode' as const,
+        usage: { input: 50, output: 30, reasoning: 0, cacheRead: 300, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    const summary = result.sessionSummaries.find((s) => s.sessionId === 's');
+    assert.ok(summary, 'summary exists');
+    assert.equal(summary!.skillRecallDupCount, 1);
+    // Both skill calls have a subsequent cacheRead turn, so each gets a pruning entry.
+    assert.equal(summary!.skillPruningProtectionCount, 2);
+  });
+});

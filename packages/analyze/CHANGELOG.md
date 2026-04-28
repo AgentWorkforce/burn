@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode skill recall duplicate detector.** `detectPatterns` now scans OpenCode sessions for repeated `skill({name})` calls and emits `SkillRecallDup` entries (≥ 2 calls with the same `skillName`). Non-OpenCode sessions are silently skipped.
+- **OpenCode skill pruning protection detector.** `detectPatterns` now tracks each skill tool call in OpenCode sessions and measures how many subsequent turns still carried `cacheRead` tokens — the skill content is never evicted because OpenCode marks it as prune-protected. Emits `SkillPruningProtection` entries with `ridingTurns`, `lastCachedTurnIndex`, and cost.
+- `SessionPatternSummary` gains `skillRecallDupCount` and `skillPruningProtectionCount` fields; `PatternsResult` gains `skillRecallDups` and `skillPruningProtection` arrays.
+
 ## [0.34.0] - 2026-04-27
 
 ### Changed

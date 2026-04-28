@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Codex ingest persists compaction events.** The Codex passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see Codex context compactions with the same event shape Claude uses.
+- **`burn waste --patterns opencode-skill-recall` and `opencode-skill-pruning`** ([#54](https://github.com/AgentWorkforce/burn/issues/54)). Two new pattern kinds gated to OpenCode sessions: `opencode-skill-recall` detects repeated skill invocations with the same name (content is not deduplicated), and `opencode-skill-pruning` tracks skill results that ride in the cache indefinitely (prune-protected by OpenCode's compaction). Both render as tables in text mode and appear in `--json` output. `burn diagnose` also renders the new pattern types for per-session diagnosis.
 
 ## [0.34.0] - 2026-04-27
 
