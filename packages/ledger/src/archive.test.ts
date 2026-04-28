@@ -21,7 +21,9 @@ import {
   getArchiveStatus,
   openArchive,
   rebuildArchive,
+  vacuumArchive,
 } from './archive.js';
+import { withLock } from './lock.js';
 
 function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -1066,6 +1068,100 @@ describe('archive', () => {
 
     // Build re-materializes everything.
     await buildArchive();
+    const status = await getArchiveStatus();
+    assert.equal(status.rowCounts.turns, 1);
+  });
+
+  it('vacuum on a missing archive is a no-op and reports existed=false', async () => {
+    const result = await vacuumArchive();
+    assert.equal(result.existed, false);
+    assert.equal(result.beforeBytes, 0);
+    assert.equal(result.afterBytes, 0);
+    assert.equal(result.reclaimedBytes, 0);
+    // Crucially: vacuum must NOT create the archive file as a side effect.
+    const status = await getArchiveStatus();
+    assert.equal(status.exists, false);
+  });
+
+  it('vacuum reduces file size after rebuild churn', async () => {
+    // Build up enough rows that VACUUM has something measurable to reclaim.
+    // Then rebuild — which deletes + rewrites every row, leaving a large pile
+    // of free pages — and vacuum to confirm the file shrinks.
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 200; i++) {
+      turns.push(
+        fakeTurn({
+          sessionId: `s-vac-${i % 5}`,
+          messageId: `mv-${i}`,
+          turnIndex: i,
+          ts: new Date(Date.UTC(2026, 3, 20, 0, 0, i)).toISOString(),
+          // Vary usage so the writer's content-fingerprint dedup doesn't
+          // collapse them.
+          usage: {
+            input: 100 + i,
+            output: 50 + i,
+            reasoning: 0,
+            cacheRead: 1000 + i,
+            cacheCreate5m: 0,
+            cacheCreate1h: 0,
+          },
+        }),
+      );
+    }
+    await appendTurns(turns);
+    await buildArchive();
+    // Force churn: rebuild from zero deletes all rows then re-inserts them.
+    await rebuildArchive();
+    await rebuildArchive();
+
+    const sizeBefore = (await stat(archivePath())).size;
+    const result = await vacuumArchive();
+    assert.equal(result.existed, true);
+    assert.equal(result.beforeBytes, sizeBefore);
+    // VACUUM + WAL-truncate should not grow the file.
+    assert.ok(
+      result.afterBytes <= result.beforeBytes,
+      `expected afterBytes <= beforeBytes, got ${result.afterBytes} > ${result.beforeBytes}`,
+    );
+    assert.equal(result.reclaimedBytes, result.beforeBytes - result.afterBytes);
+
+    // Sanity: row counts survive vacuum unchanged.
+    const status = await getArchiveStatus();
+    assert.equal(status.rowCounts.turns, turns.length);
+  });
+
+  it('vacuum serializes against a concurrent build via the archive lock', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-lk', messageId: 'lk-1' })]);
+    await buildArchive();
+
+    // Hold the archive lock externally while invoking vacuum + build. They
+    // must both queue behind the holder, then run sequentially without
+    // corrupting the archive.
+    let releaseHolder: () => void = () => {};
+    const holderReleased = new Promise<void>((r) => {
+      releaseHolder = r;
+    });
+    const holder = withLock('archive', async () => {
+      await holderReleased;
+    });
+
+    // Brief delay so the holder grabs the lock before we issue the contenders.
+    await new Promise((r) => setTimeout(r, 20));
+    const vacuumPromise = vacuumArchive();
+    const buildPromise = buildArchive();
+    // Neither should resolve while the holder still has the lock.
+    let resolved = 0;
+    void vacuumPromise.then(() => resolved++);
+    void buildPromise.then(() => resolved++);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(resolved, 0, 'vacuum/build resolved before holder released the lock');
+
+    releaseHolder();
+    await holder;
+    const [vac, _build] = await Promise.all([vacuumPromise, buildPromise]);
+    assert.equal(vac.existed, true);
+
+    // Archive remains queryable and consistent.
     const status = await getArchiveStatus();
     assert.equal(status.rowCounts.turns, 1);
   });

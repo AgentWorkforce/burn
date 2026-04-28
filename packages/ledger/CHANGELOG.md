@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`vacuumArchive()`** ([#104](https://github.com/AgentWorkforce/burn/issues/104)). New exported function that runs SQLite `VACUUM` against `archive.sqlite` (plus a `wal_checkpoint(TRUNCATE)` so the main file actually shrinks on disk) and returns `{ archivePath, existed, beforeBytes, afterBytes, reclaimedBytes }`. Acquires the same `'archive'` lock as `buildArchive` / `rebuildArchive`, so callers can issue it concurrently with a build without corrupting state. No-ops with `existed: false` when the archive file is missing.
+
 ## [0.35.0] - 2026-04-28
 
 ### Changed
