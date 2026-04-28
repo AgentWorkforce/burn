@@ -1,5 +1,4 @@
 export { runSummary } from './commands/summary.js';
-export { runByTool } from './commands/by-tool.js';
 export { runWaste } from './commands/waste.js';
 export { runContext } from './commands/context.js';
 export { runIngest } from './commands/ingest.js';

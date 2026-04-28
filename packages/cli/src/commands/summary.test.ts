@@ -471,6 +471,71 @@ describe('burn summary per-cell fidelity (#136)', () => {
     assert.equal(out.stdout.includes('partial coverage:'), false);
   });
 
+  it('--by-tool emits attributedCost rows and the explanatory footer', async () => {
+    // Two-turn session: turn 0 emits a Read tool_use; turn 1 ingests its
+    // result. The input cost of turn 1 should attribute to Read.
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'bt-1',
+        messageId: 'bt-1',
+        toolCalls: [{ id: 'tc-1', name: 'Read', target: 'a.ts', argsHash: 'aa' }],
+      }),
+      fakeTurn({
+        sessionId: 'bt-1',
+        messageId: 'bt-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+    ]);
+    const out = await captureSummary({ 'by-tool': true });
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /turns analyzed: 2/);
+    assert.match(out.stdout, /Read/);
+    assert.match(out.stdout, /attributedCost/);
+    assert.match(out.stdout, /attributedCost = \(turn N input cost\)/);
+    assert.match(out.stdout, /unattributed cost/);
+  });
+
+  it('--by-tool --json emits { byTool, unattributed } with fidelity', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'btj-1',
+        messageId: 'btj-1',
+        toolCalls: [{ id: 'tc-j', name: 'Edit', target: 'b.ts', argsHash: 'bb' }],
+      }),
+      fakeTurn({
+        sessionId: 'btj-1',
+        messageId: 'btj-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+    ]);
+    const out = await captureSummary({ 'by-tool': true, json: true });
+    assert.equal(out.code, 0);
+    interface Payload {
+      ingest: { ingestedSessions: number; appendedTurns: number };
+      turns: number;
+      byTool: Array<{ tool: string; calls: number; attributedCost: number }>;
+      unattributed: number;
+      fidelity: { summary: unknown };
+    }
+    const payload = JSON.parse(out.stdout) as Payload;
+    assert.equal(payload.turns, 2);
+    assert.ok(Array.isArray(payload.byTool));
+    assert.equal(payload.byTool.some((r) => r.tool === 'Edit'), true);
+    assert.equal(typeof payload.unattributed, 'number');
+    assert.ok(payload.fidelity.summary, 'fidelity.summary block expected');
+  });
+
+  it('--by-tool combined with --by-provider exits non-zero with a clear error', async () => {
+    const out = await captureSummary({ 'by-tool': true, 'by-provider': true });
+    assert.equal(out.code, 2);
+    assert.match(
+      out.stderr,
+      /--by-tool cannot be combined with --by-provider\/--by-subagent-type\/--subagent-tree/,
+    );
+  });
+
   it('footer N sums per-field missing across rows (multi-model regression)', async () => {
     // Devin-review regression: with two model rows that each have some
     // turns missing output, the footer denominator should report the

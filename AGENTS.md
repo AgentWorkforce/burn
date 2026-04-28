@@ -12,7 +12,7 @@ pnpm workspace, six published packages in dependency order:
 @relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
 @relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
-@relayburn/cli      — `burn` binary (summary, by-tool, compare, `burn run <harness>` wrapper, mcp-server, …)
+@relayburn/cli      — `burn` binary (summary, summary --by-tool, compare, `burn run <harness>` wrapper, mcp-server, …)
 relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
 ```
 

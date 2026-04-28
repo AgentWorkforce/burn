@@ -48,6 +48,18 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   const subagentTreeFlag = args.flags['subagent-tree'];
   const subagentTypeFlag = args.flags['by-subagent-type'] === true;
   const byProvider = args.flags['by-provider'] === true;
+  const byTool = args.flags['by-tool'] === true;
+
+  // Mode exclusivity: each "mode flag" produces its own output shape; combining
+  // them silently would surprise the caller (we'd pick one and drop the rest).
+  // Subagent flags already implicitly assume one-axis-at-a-time; --by-tool
+  // makes that explicit.
+  if (byTool && (byProvider || subagentTypeFlag || subagentTreeFlag !== undefined)) {
+    process.stderr.write(
+      'burn: --by-tool cannot be combined with --by-provider/--by-subagent-type/--subagent-tree\n',
+    );
+    return 2;
+  }
 
   const ingestReport = await ingestAll();
   const pricing = await loadPricing();
@@ -58,6 +70,9 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   }
   if (subagentTypeFlag) {
     return renderSubagentTypeMode(args, turns, pricing);
+  }
+  if (byTool) {
+    return renderByToolMode(args, ingestReport, turns, pricing);
   }
 
   const rows = byProvider
@@ -321,6 +336,123 @@ function renderSubagentTreeMode(
   out.push('');
   process.stdout.write(out.join('\n'));
   return 0;
+}
+
+function renderByToolMode(
+  args: ParsedArgs,
+  ingestReport: { ingestedSessions: number; appendedTurns: number },
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+): number {
+  const { byTool, unattributed } = attributeCostToTools(turns, pricing);
+  const fidelity = summarizeFidelity(turns);
+  const sorted = [...byTool.entries()].sort((a, b) => b[1].cost - a[1].cost);
+
+  if (args.flags['json'] === true) {
+    const payload = {
+      ingest: {
+        ingestedSessions: ingestReport.ingestedSessions,
+        appendedTurns: ingestReport.appendedTurns,
+      },
+      turns: turns.length,
+      byTool: sorted.map(([tool, agg]) => ({
+        tool,
+        calls: agg.calls,
+        attributedCost: agg.cost,
+      })),
+      unattributed,
+      fidelity: { summary: fidelity },
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+    return 0;
+  }
+
+  const out: string[] = [];
+  out.push('');
+  out.push(`turns analyzed: ${formatInt(turns.length)}`);
+  out.push('');
+  if (sorted.length === 0) {
+    out.push('no tool calls found for filters.');
+    process.stdout.write(out.join('\n') + '\n');
+    return 0;
+  }
+  const rows: string[][] = [['tool', 'calls', 'attributedCost']];
+  for (const [tool, { calls, cost }] of sorted) {
+    rows.push([tool, formatInt(calls), formatUsd(cost)]);
+  }
+  out.push(table(rows));
+  out.push('');
+  // Keep the explanation of `attributedCost` riding along with the table —
+  // mixing the by-tool number (input-cost split across prior-turn tool calls)
+  // and the by-model `cost` number without context is an easy way to draw the
+  // wrong conclusion.
+  out.push(
+    `attributedCost = (turn N input cost) split evenly across tool_use blocks in turn N-1, grouped by tool name.`,
+  );
+  out.push(`unattributed cost (no prior tool call, e.g. first turn): ${formatUsd(unattributed)}`);
+  out.push('');
+  process.stdout.write(out.join('\n'));
+  return 0;
+}
+
+interface ToolAgg {
+  calls: number;
+  cost: number;
+}
+
+function attributeCostToTools(
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+): { byTool: Map<string, ToolAgg>; unattributed: number } {
+  const byTool = new Map<string, ToolAgg>();
+  let unattributed = 0;
+
+  // Group turns by sessionId then pair each turn with the previous turn's toolCalls.
+  const bySession = new Map<string, EnrichedTurn[]>();
+  for (const t of turns) {
+    let list = bySession.get(t.sessionId);
+    if (!list) {
+      list = [];
+      bySession.set(t.sessionId, list);
+    }
+    list.push(t);
+  }
+
+  for (const list of bySession.values()) {
+    list.sort((a, b) => a.turnIndex - b.turnIndex);
+    for (let i = 0; i < list.length; i++) {
+      const turn = list[i]!;
+      const c = costForTurn(turn, pricing);
+      if (!c) continue;
+      // cost this turn paid to ingest the PRIOR turn's tool outputs:
+      const ingestCost = c.input + c.cacheRead + c.cacheCreate;
+
+      // Also count the tool-calls this turn emits (so they appear even if the next turn is unpriced).
+      for (const tc of turn.toolCalls) {
+        const agg = byTool.get(tc.name) ?? { calls: 0, cost: 0 };
+        agg.calls++;
+        byTool.set(tc.name, agg);
+      }
+
+      if (i === 0) {
+        unattributed += ingestCost;
+        continue;
+      }
+      const prior = list[i - 1]!;
+      if (prior.toolCalls.length === 0) {
+        unattributed += ingestCost;
+        continue;
+      }
+      const share = ingestCost / prior.toolCalls.length;
+      for (const tc of prior.toolCalls) {
+        const agg = byTool.get(tc.name) ?? { calls: 0, cost: 0 };
+        agg.cost += share;
+        byTool.set(tc.name, agg);
+      }
+    }
+  }
+
+  return { byTool, unattributed };
 }
 
 function renderSubagentTypeMode(
