@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Codex compaction markers emit `CompactionEvent`s.** `parseCodexSession` and `parseCodexSessionIncremental` now return an `events` array for Codex, matching Claude's compaction event surface. The reader detects Codex `type: "compacted"` records, anchors each event to the most recent committed Codex turn, and carries that turn through `CodexResumeState` so incremental parses preserve `precedingMessageId` and `tokensBeforeCompact` across cursor boundaries.
+- **`ToolCall.skillName` for OpenCode skill tool calls.** The OpenCode reader now extracts the skill name from the tool input (`skill`, `name`, or `skill_name` field) and populates `skillName` on the `ToolCall` object. This lets downstream detectors group and deduplicate skill invocations without re-parsing args.
 
 ## [0.33.0] - 2026-04-27
 

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode skill recall duplicate detector.** `detectPatterns` now scans OpenCode sessions for repeated `skill({name})` calls and emits `SkillRecallDup` entries (≥ 2 calls with the same `skillName`). Non-OpenCode sessions are silently skipped.
+- **OpenCode skill pruning protection detector.** `detectPatterns` now tracks each skill tool call in OpenCode sessions and measures how many subsequent turns still carried `cacheRead` tokens — the skill content is never evicted because OpenCode marks it as prune-protected. Emits `SkillPruningProtection` entries with `ridingTurns`, `lastCachedTurnIndex`, and cost.
+- **OpenCode system prompt / skill catalog tax detector.** `detectPatterns` now estimates the fixed prefix tax (system prompt + skill catalog) on the first turn of an OpenCode session by subtracting the first user message size (from `UserTurnRecord` blocks) from `cacheCreate`. Emits `SystemPromptTax` entries with `estimatedSystemPromptTokens`, `ridingTurns`, and total cost. Requires `userTurnsBySession` in `DetectPatternsOptions`.
+- `SessionPatternSummary` gains `skillRecallDupCount`, `skillPruningProtectionCount`, and `systemPromptTaxCount` fields; `PatternsResult` gains `skillRecallDups`, `skillPruningProtection`, and `systemPromptTaxes` arrays; `DetectPatternsOptions` gains `userTurnsBySession`.
+
 ## [0.34.0] - 2026-04-27
 
 ### Changed

@@ -30,6 +30,10 @@ export interface ToolCall {
   // strings in the ledger.
   editPreHash?: string;
   editPostHash?: string;
+  // For OpenCode skill tool calls: the skill name extracted from the tool
+  // input. Populated by the OpenCode reader so the analyze package can
+  // detect skill-recall duplication without re-parsing args.
+  skillName?: string;
 }
 
 export interface Subagent {

@@ -40,6 +40,9 @@ export type {
   PatternsResult,
   RetryLoop,
   SessionPatternSummary,
+  SkillPruningProtection,
+  SkillRecallDup,
+  SystemPromptTax,
 } from './patterns.js';
 export { computeQuality, computeOneShotRate, inferOutcome } from './quality.js';
 export type {

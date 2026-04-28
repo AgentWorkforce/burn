@@ -47,7 +47,7 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
     contentBySession,
     userTurnsBySession,
   });
-  const patterns = detectPatterns(turns, { pricing, compactions });
+  const patterns = detectPatterns(turns, { pricing, compactions, userTurnsBySession });
   const files = aggregateByFile(attribution.attributions).slice(0, 5);
   const bashes = aggregateByBash(attribution.attributions).slice(0, 5);
   const subagents = aggregateBySubagent(attribution.attributions).slice(0, 5);
@@ -84,7 +84,7 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   }
   if (summary) {
     out.push(
-      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts`,
+      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts, ${summary.skillRecallDupCount} skill-recall-dups, ${summary.skillPruningProtectionCount} skill-pruning, ${summary.systemPromptTaxCount} system-prompt-tax`,
     );
     out.push(`pattern cost: ${formatUsd(summary.totalPatternCost)}`);
   } else {
@@ -105,6 +105,15 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   out.push('');
   out.push('Edit-revert cycles');
   out.push(renderReverts(scoped.editReverts));
+  out.push('');
+  out.push('OpenCode skill recall duplicates');
+  out.push(renderSkillRecall(scoped.skillRecallDups));
+  out.push('');
+  out.push('OpenCode skill pruning protection');
+  out.push(renderSkillPruning(scoped.skillPruningProtection));
+  out.push('');
+  out.push('OpenCode system prompt / skill catalog tax');
+  out.push(renderSystemPrompt(scoped.systemPromptTaxes));
   out.push('');
 
   out.push('Top files by cost');
@@ -157,6 +166,9 @@ function filterPatterns(patterns: PatternsResult, sessionId: string): PatternsRe
     failureRuns: patterns.failureRuns.filter((r) => r.sessionId === sessionId),
     compactions: patterns.compactions.filter((r) => r.sessionId === sessionId),
     editReverts: patterns.editReverts.filter((r) => r.sessionId === sessionId),
+    skillRecallDups: patterns.skillRecallDups.filter((r) => r.sessionId === sessionId),
+    skillPruningProtection: patterns.skillPruningProtection.filter((r) => r.sessionId === sessionId),
+    systemPromptTaxes: patterns.systemPromptTaxes.filter((r) => r.sessionId === sessionId),
     sessionSummaries: patterns.sessionSummaries.filter((r) => r.sessionId === sessionId),
   };
 }
@@ -210,6 +222,47 @@ function renderReverts(cycles: PatternsResult['editReverts']): string {
       String(c.revertTurnIndex),
       String(c.spanTurns),
       formatUsd(c.cost),
+    ]),
+  ]);
+}
+
+function renderSkillRecall(dups: PatternsResult['skillRecallDups']): string {
+  if (dups.length === 0) return '  (none)';
+  return table([
+    ['skill', 'calls', 'turns', 'cost'],
+    ...dups.map((d) => [
+      truncate(d.skillName, 30),
+      String(d.callCount),
+      `${d.firstTurnIndex}–${d.lastTurnIndex}`,
+      formatUsd(d.cost),
+    ]),
+  ]);
+}
+
+function renderSkillPruning(events: PatternsResult['skillPruningProtection']): string {
+  if (events.length === 0) return '  (none)';
+  return table([
+    ['skill', 'invokedAt', 'ridingTurns', 'lastCached', 'cost'],
+    ...events.map((e) => [
+      truncate(e.skillName, 30),
+      String(e.invokedTurnIndex),
+      String(e.ridingTurns),
+      String(e.lastCachedTurnIndex),
+      formatUsd(e.cost),
+    ]),
+  ]);
+}
+
+function renderSystemPrompt(taxes: PatternsResult['systemPromptTaxes']): string {
+  if (taxes.length === 0) return '  (none)';
+  return table([
+    ['prefix(tok)', 'userMsg(tok)', 'systemPrompt(tok)', 'ridingTurns', 'cost'],
+    ...taxes.map((t) => [
+      formatInt(t.firstTurnCacheCreate),
+      formatInt(t.firstUserMessageTokens),
+      formatInt(t.estimatedSystemPromptTokens),
+      formatInt(t.ridingTurns),
+      formatUsd(t.totalCost),
     ]),
   ]);
 }
