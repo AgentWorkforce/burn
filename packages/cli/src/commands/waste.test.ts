@@ -642,6 +642,31 @@ describe('runPatternsMode — fidelity refusal (#100)', () => {
     assert.match(stderr, /codex/);
   });
 
+  it('JSON-mode refusal includes a findings: [] field for schema parity (#56)', async () => {
+    // Devin review on #175: a JSON consumer that processes the success
+    // schema (which always carries `findings`) shouldn't have to special-
+    // case refusal payloads. Mirror the pattern used by `retryLoops` etc.
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'codex',
+        fidelity: fidelityWith('aggregate-only', 'per-session-aggregate', {
+          hasToolCalls: false,
+          hasToolResultEvents: false,
+        }),
+      }),
+    ];
+    const selected = new Set(['retries'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected),
+    );
+    const payload = JSON.parse(stdout);
+    assert.deepEqual(payload.findings, []);
+  });
+
   it('JSON-mode refusal includes per-detector required prerequisites and refused=true', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: EnrichedTurn[] = [

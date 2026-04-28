@@ -3,14 +3,24 @@ import {
   aggregateByFile,
   aggregateBySubagent,
   attributeWaste,
+  compactionLossToFinding,
   detectPatterns,
+  editHeavyToFinding,
+  editRevertToFinding,
+  failureRunToFinding,
   loadPricing,
+  retryLoopToFinding,
+  skillPruningProtectionToFinding,
+  skillRecallDupToFinding,
+  sortFindings,
   summarizeFidelity,
+  systemPromptTaxToFinding,
   type BashAggregation,
   type FidelitySummary,
   type FileAggregation,
   type PatternsResult,
   type SubagentAggregation,
+  type WasteFinding,
   type WasteResult,
 } from '@relayburn/analyze';
 import {
@@ -172,7 +182,12 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   const pricing = await loadPricing();
   const turns = filterTurnsByProvider(await queryAll(q), providerFilter);
 
-  const patternsFlag = args.flags['patterns'];
+  // `--findings` is the unified-render flag for `--patterns`; passing it
+  // standalone (without `--patterns`) is taken as `--patterns --findings`.
+  // The flag is meaningless under default attribution mode, and a silent
+  // ignore would surprise users.
+  const patternsFlag =
+    args.flags['patterns'] ?? (args.flags['findings'] === true ? true : undefined);
   if (patternsFlag !== undefined) {
     const selected = resolvePatternSelection(patternsFlag);
     const sessionIds = new Set(turns.map((t) => t.sessionId));
@@ -637,6 +652,7 @@ export async function runPatternsMode(
             skillPruningProtection: [],
             systemPromptTaxes: [],
             sessionSummaries: [],
+            findings: [],
             fidelity: {
               analyzed: 0,
               excluded: total,
@@ -732,6 +748,17 @@ export async function runPatternsMode(
   }
   const analyzedCount = analyzedUnion.size;
 
+  const findings: WasteFinding[] = sortFindings([
+    ...retryLoops.map(retryLoopToFinding),
+    ...failureRuns.map(failureRunToFinding),
+    ...compactionLosses.map(compactionLossToFinding),
+    ...editReverts.map(editRevertToFinding),
+    ...editHeavySessions.map(editHeavyToFinding),
+    ...skillRecallDups.map(skillRecallDupToFinding),
+    ...skillPruningProtection.map(skillPruningProtectionToFinding),
+    ...systemPromptTaxes.map(systemPromptTaxToFinding),
+  ]);
+
   if (args.flags['json'] === true) {
     process.stdout.write(
       JSON.stringify(
@@ -746,6 +773,7 @@ export async function runPatternsMode(
           systemPromptTaxes,
           editHeavySessions,
           sessionSummaries,
+          findings,
           fidelity: {
             analyzed: analyzedCount,
             excluded: total - analyzedCount,
@@ -758,6 +786,11 @@ export async function runPatternsMode(
         2,
       ) + '\n',
     );
+    return 0;
+  }
+
+  if (args.flags['findings'] === true) {
+    process.stdout.write(formatFindingsReport(findings, analyzedCount));
     return 0;
   }
 
@@ -1091,6 +1124,38 @@ function renderSystemPromptTable(
     ]);
   }
   return table(rows);
+}
+
+// Unified findings table — one row per WasteFinding, sorted by severity then
+// usdPerSession. Lets callers see retry-loop / failure-run / compaction-loss /
+// edit-revert / edit-heavy / skill-* / system-prompt findings ranked together
+// instead of flipping between four bespoke tables. Per-detector tables
+// remain the default render path; this is opt-in via `--findings`.
+export function formatFindingsReport(findings: WasteFinding[], analyzed: number): string {
+  const out: string[] = [];
+  out.push('');
+  out.push(`turns analyzed: ${formatInt(analyzed)}`);
+  out.push(`findings: ${formatInt(findings.length)}`);
+  out.push('');
+  if (findings.length === 0) {
+    out.push('  (no waste findings)');
+    out.push('');
+    return out.join('\n');
+  }
+  const rows: string[][] = [['severity', 'kind', 'session', 'usd', 'title']];
+  for (const f of findings) {
+    const usd = f.estimatedSavings.usdPerSession;
+    rows.push([
+      f.severity,
+      f.kind,
+      f.sessionId.slice(0, 8),
+      usd !== undefined ? formatUsd(usd) : '—',
+      truncate(f.title, 80),
+    ]);
+  }
+  out.push(table(rows));
+  out.push('');
+  return out.join('\n');
 }
 
 function renderEditHeavyTable(

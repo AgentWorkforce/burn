@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`WasteFinding` / `WasteAction` structured envelope** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). Introduces a common shape — `{ kind, severity, sessionId, title, detail, estimatedSavings, actions }` — that wraps every detector result in `PatternsResult` (`RetryLoop`, `FailureRun`, `CompactionLoss`, `EditRevertCycle`, `EditHeavySession`, `SkillRecallDup`, `SkillPruningProtection`, `SystemPromptTax`). New exports: `findingsFromPatterns(result)` to roll the whole `PatternsResult` into a single severity-ranked list, plus per-detector adapters (`retryLoopToFinding`, `failureRunToFinding`, `compactionLossToFinding`, `editRevertToFinding`, `editHeavyToFinding`, `skillRecallDupToFinding`, `skillPruningProtectionToFinding`, `systemPromptTaxToFinding`) and `sortFindings`. Severity is tiered off `usdPerSession` (≥ $0.50 high, ≥ $0.05 warn, else info); edit-heavy is capped at warn since its cost overlaps retry/revert findings. `WasteAction` is a closed union (`paste` / `command` / `file-content`) so a future `burn waste --apply` can drive a confirmation-gated apply pipeline against typed actions instead of scraping strings. The narrow per-detector result types remain exported for downstream consumers that want them.
+
 ## [0.37.0] - 2026-04-28
 
 ### Added

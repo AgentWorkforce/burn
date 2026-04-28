@@ -45,6 +45,24 @@ export type {
   SkillRecallDup,
   SystemPromptTax,
 } from './patterns.js';
+export {
+  compactionLossToFinding,
+  editHeavyToFinding,
+  editRevertToFinding,
+  failureRunToFinding,
+  findingsFromPatterns,
+  retryLoopToFinding,
+  skillPruningProtectionToFinding,
+  skillRecallDupToFinding,
+  sortFindings,
+  systemPromptTaxToFinding,
+} from './findings.js';
+export type {
+  EstimatedSavings,
+  WasteAction,
+  WasteFinding,
+  WasteSeverity,
+} from './findings.js';
 export { computeQuality, computeOneShotRate, inferOutcome } from './quality.js';
 export type {
   ComputeQualityOptions,
