@@ -348,3 +348,85 @@ describe('burn compare — fidelity gating', () => {
     assert.match(stdout, /excluded 1 turn below usage-only fidelity/);
   });
 });
+
+describe('burn compare — --provider filter', () => {
+  it('filters the compare table to only synthetic-routed turns', async () => {
+    // Pricing classifier maps `hf:deepseek-ai/...` to provider=synthetic.
+    // Anthropic turns fall through to source=claude-code → provider=anthropic.
+    const turns: EnrichedTurn[] = [
+      turn('hf:deepseek-ai/deepseek-r1', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+      }),
+      turn('hf:deepseek-ai/deepseek-r1', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+      }),
+      turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+      }),
+    ];
+    const { result, stdout } = await captureStdout(() =>
+      runCompare(args({ json: true, provider: 'synthetic' }), makeDeps(turns)),
+    );
+    assert.equal(result, 0);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.analyzedTurns, 2);
+    assert.deepEqual(parsed.models, ['hf:deepseek-ai/deepseek-r1']);
+  });
+
+  it('accepts a comma-separated list (matches summary parser)', async () => {
+    const turns: EnrichedTurn[] = [
+      turn('hf:deepseek-ai/deepseek-r1', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+      }),
+      turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+      }),
+      // Codex source → provider=openai → excluded by anthropic,synthetic.
+      turn('gpt-5', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+        source: 'codex',
+      }),
+    ];
+    const { result, stdout } = await captureStdout(() =>
+      runCompare(
+        args({ json: true, provider: 'anthropic,synthetic' }),
+        makeDeps(turns),
+      ),
+    );
+    assert.equal(result, 0);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.analyzedTurns, 2);
+    assert.deepEqual(
+      [...parsed.models].sort(),
+      ['claude-sonnet-4-6', 'hf:deepseek-ai/deepseek-r1'].sort(),
+    );
+  });
+
+  it('renders the empty-table message when the filter excludes every turn', async () => {
+    const turns: EnrichedTurn[] = [
+      turn('claude-sonnet-4-6', 'coding', FULL_FIDELITY, {
+        hasEdits: true,
+        retries: 0,
+      }),
+    ];
+    const { result, stdout } = await captureStdout(() =>
+      runCompare(args({ provider: 'synthetic' }), makeDeps(turns)),
+    );
+    assert.equal(result, 0);
+    assert.match(stdout, /no data to compare/);
+  });
+
+  it('exits 2 when --provider is passed without a value', async () => {
+    const { result, stderr } = await captureStdout(() =>
+      runCompare(args({ provider: true }), makeDeps([])),
+    );
+    assert.equal(result, 2);
+    assert.match(stderr, /--provider requires a value/);
+  });
+});

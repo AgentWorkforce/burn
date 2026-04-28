@@ -15,16 +15,20 @@ import type { FidelityClass } from '@relayburn/reader';
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
 
 Usage:
-  burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>]
-               [--workflow <id>] [--agent <id>] [--min-sample <n>]
+  burn compare [--models a,b] [--provider a,b] [--since 7d] [--project <path>]
+               [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>]
                [--fidelity <class>] [--include-partial] [--json|--csv] [--no-archive]
 
 Flags:
   --models      comma-separated list of model names to include (default: all)
+  --provider    comma-separated list of effective providers to include
+                (e.g. synthetic, anthropic, openai); resolved via the same
+                pricing-layer classifier summary/by-tool/waste use
   --since       relative (e.g. 24h, 7d, 4w) or ISO timestamp; default: all time
   --project     filter by project path or git-canonical projectKey
   --session     filter by sessionId
@@ -100,6 +104,11 @@ export async function runCompare(
 
   const modelsArg = typeof args.flags['models'] === 'string' ? args.flags['models'] : undefined;
   const models = modelsArg ? modelsArg.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  const providerFilter = parseProviderFilter(args.flags['provider']);
+  if (providerFilter instanceof Error) {
+    process.stderr.write(providerFilter.message);
+    return 2;
+  }
   const minSample = typeof args.flags['min-sample'] === 'string'
     ? Number(args.flags['min-sample'])
     : DEFAULT_MIN_SAMPLE;
@@ -159,13 +168,21 @@ export async function runCompare(
   // gate is correctly applied. `--include-partial` / `--fidelity partial`
   // disables filtering and reuses the archive's grouped SQL.
   //
+  // `--provider` likewise bypasses the archive: provider is derived per
+  // turn from (model, source) at query time, and the archive's grouped
+  // SQL doesn't expose that classifier. The in-memory path applies the
+  // filter via `filterTurnsByProvider` before `buildCompareTable`.
+  //
   // Skip the archive when the caller injected `queryAll` (test mode):
   // `buildArchive` and `compareFromArchive` are not part of `CompareDeps`
   // and would hit the real `~/.relayburn/archive.sqlite`, breaking test
   // isolation. The non-archive branch already handles `--fidelity partial`
   // correctly (the filter becomes a no-op).
   const useArchive =
-    !shouldBypassArchive(args) && minFidelity === 'partial' && !deps.queryAll;
+    !shouldBypassArchive(args) &&
+    minFidelity === 'partial' &&
+    !providerFilter &&
+    !deps.queryAll;
   let table: CompareTable;
   let filteredTurns: EnrichedTurn[];
   let summary: FidelitySummary;
@@ -184,11 +201,14 @@ export async function runCompare(
     filteredTurns = turnsForSummary;
     void result.analyzedTurns;
   } else {
-    const turns = await query(q);
-    // Summarize fidelity over the *unfiltered* slice so coverage notes and
-    // the JSON `summary` reflect the input the user actually queried, not
-    // what survived the gate. The summary is what tells them why N turns
-    // were dropped.
+    // `--provider` narrows the queried slice up front so coverage / fidelity
+    // counts reflect the provider-scoped input, not the cross-provider total
+    // (which would over-count "excluded" turns relative to what's rendered).
+    const turns = filterTurnsByProvider(await query(q), providerFilter);
+    // Summarize fidelity over the *unfiltered* slice (modulo provider) so
+    // coverage notes and the JSON `summary` reflect the input the user
+    // actually queried, not what survived the fidelity gate. The summary
+    // is what tells them why N turns were dropped.
     summary = summarizeFidelity(turns);
     // `--fidelity partial` (and its `--include-partial` shorthand) is the
     // "let everything through" escape hatch per #41. The FidelityClass
