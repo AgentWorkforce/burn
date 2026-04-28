@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-04-28
+
+### Added
+
+- **Cross-harness edit-heavy session detector** ([#167](https://github.com/AgentWorkforce/burn/issues/167)). `burn waste --patterns edit-heavy` flags sessions whose edit-tool count exceeds 4× read-tool count (≥ 5 edits) — a fuzzy "many small edits, not enough reads" signal complementary to the existing edit-revert detector. Reaches parity across Claude / Codex / OpenCode through the existing `normalizeToolName` table; renders a table with source, reads, edits, ratio, intra-turn retry count, and cost. Codex's `apply_patch` bundles multiple files per call, so the same threshold flags Codex more conservatively — documented as a known per-harness tunable. First child of [#55](https://github.com/AgentWorkforce/burn/issues/55) (cross-harness codeburn-style waste detectors).
+
 ## [0.35.0] - 2026-04-28
 
 ### Added

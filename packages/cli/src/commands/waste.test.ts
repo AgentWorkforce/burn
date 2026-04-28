@@ -450,7 +450,7 @@ describe('resolvePatternSelection', () => {
 
   it('returns all detectors when the flag is bare (true)', () => {
     const set = resolvePatternSelection(true);
-    assert.equal(set.size, 7);
+    assert.equal(set.size, 8);
   });
 });
 

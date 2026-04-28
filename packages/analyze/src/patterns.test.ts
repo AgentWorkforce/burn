@@ -657,3 +657,145 @@ describe('detectPatterns — OpenCode system prompt tax', () => {
     assert.equal(result.systemPromptTaxes.length, 0);
   });
 });
+
+// One edit-bearing turn per element, six total — above MIN_EDITS=5.
+function editHeavyTurns(source: 'claude-code' | 'codex' | 'opencode', editTool: string, sessionId = 's'): TurnRecord[] {
+  const out: TurnRecord[] = [];
+  for (let i = 0; i < 6; i++) {
+    out.push(
+      turn({
+        sessionId,
+        messageId: `m${i}`,
+        turnIndex: i,
+        source,
+        toolCalls: [tc(`u${i}`, editTool, `h${i}`, { target: `/src/file${i}.ts` })],
+      }),
+    );
+  }
+  return out;
+}
+
+describe('detectPatterns — edit-heavy sessions (cross-harness)', () => {
+  it('flags Claude session with 6 edits and 0 reads', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = editHeavyTurns('claude-code', 'Edit');
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 1);
+    const r = result.editHeavySessions[0]!;
+    assert.equal(r.source, 'claude-code');
+    assert.equal(r.editCount, 6);
+    assert.equal(r.readCount, 0);
+    assert.equal(r.ratio, Number.POSITIVE_INFINITY);
+  });
+
+  it('flags OpenCode session using lowercase tool names', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = editHeavyTurns('opencode', 'edit');
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 1);
+    assert.equal(result.editHeavySessions[0]!.source, 'opencode');
+    assert.equal(result.editHeavySessions[0]!.editCount, 6);
+  });
+
+  it('flags Codex session using apply_patch (normalized to Edit)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = editHeavyTurns('codex', 'apply_patch');
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 1);
+    assert.equal(result.editHeavySessions[0]!.source, 'codex');
+    assert.equal(result.editHeavySessions[0]!.editCount, 6);
+  });
+
+  it('does not flag a session with sufficient reads (ratio under threshold)', async () => {
+    const pricing = await loadBuiltinPricing();
+    // 6 edits, 3 reads → ratio 2.0 ≤ 4. Should not flag.
+    const turns = [
+      ...editHeavyTurns('claude-code', 'Edit'),
+      turn({ sessionId: 's', messageId: 'r1', turnIndex: 6, toolCalls: [tc('r1', 'Read', 'a', { target: '/a.ts' })] }),
+      turn({ sessionId: 's', messageId: 'r2', turnIndex: 7, toolCalls: [tc('r2', 'Read', 'b', { target: '/b.ts' })] }),
+      turn({ sessionId: 's', messageId: 'r3', turnIndex: 8, toolCalls: [tc('r3', 'Read', 'c', { target: '/c.ts' })] }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 0);
+  });
+
+  it('does not flag below MIN_EDITS (4 edits, 0 reads)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 4; i++) {
+      turns.push(
+        turn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          toolCalls: [tc(`u${i}`, 'Edit', `h${i}`, { target: `/f${i}.ts` })],
+        }),
+      );
+    }
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 0);
+  });
+
+  it('grep / glob / LS / bash do NOT count as reads', async () => {
+    const pricing = await loadBuiltinPricing();
+    // 6 edits, plus 5 non-Read tools (Grep/Glob/LS/Bash). Ratio should still
+    // be infinite — reads stay at 0.
+    const turns = [
+      ...editHeavyTurns('claude-code', 'Edit'),
+      turn({ sessionId: 's', messageId: 'g1', turnIndex: 6, toolCalls: [tc('g1', 'Grep', 'a')] }),
+      turn({ sessionId: 's', messageId: 'g2', turnIndex: 7, toolCalls: [tc('g2', 'Glob', 'b')] }),
+      turn({ sessionId: 's', messageId: 'g3', turnIndex: 8, toolCalls: [tc('g3', 'LS', 'c')] }),
+      turn({ sessionId: 's', messageId: 'g4', turnIndex: 9, toolCalls: [tc('g4', 'Bash', 'cat /etc/hosts')] }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 1);
+    assert.equal(result.editHeavySessions[0]!.readCount, 0);
+  });
+
+  it('Codex read_file normalizes to Read and brings ratio under threshold', async () => {
+    const pricing = await loadBuiltinPricing();
+    // 6 edits + 2 read_file calls → ratio 3.0, ≤ 4, no flag.
+    const turns = [
+      ...editHeavyTurns('codex', 'apply_patch'),
+      turn({ sessionId: 's', messageId: 'r1', turnIndex: 6, source: 'codex' as const, toolCalls: [tc('r1', 'read_file', 'a')] }),
+      turn({ sessionId: 's', messageId: 'r2', turnIndex: 7, source: 'codex' as const, toolCalls: [tc('r2', 'read_file', 'b')] }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 0);
+  });
+
+  it('reports likelyRetries from intra-turn edit→bash→edit cycles', async () => {
+    const pricing = await loadBuiltinPricing();
+    // One turn with [Edit, Bash, Edit] = 1 retry. Repeat across 5 turns to
+    // pass MIN_EDITS=5 (each turn contributes 2 edits → 10 edits total).
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 5; i++) {
+      turns.push(
+        turn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          toolCalls: [
+            tc(`e1-${i}`, 'Edit', `h${i}a`, { target: `/f${i}.ts` }),
+            tc(`b-${i}`, 'Bash', `bh${i}`, { target: 'pytest' }),
+            tc(`e2-${i}`, 'Edit', `h${i}b`, { target: `/f${i}.ts` }),
+          ],
+        }),
+      );
+    }
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 1);
+    const r = result.editHeavySessions[0]!;
+    assert.equal(r.editCount, 10);
+    assert.equal(r.likelyRetries, 5, 'one retry per turn × 5 turns');
+  });
+
+  it('aggregates editHeavyCount into the session summary', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = editHeavyTurns('claude-code', 'Edit');
+    const result = detectPatterns(turns, { pricing });
+    const summary = result.sessionSummaries.find((s) => s.sessionId === 's');
+    assert.ok(summary, 'summary present');
+    assert.equal(summary!.editHeavyCount, 1);
+  });
+});

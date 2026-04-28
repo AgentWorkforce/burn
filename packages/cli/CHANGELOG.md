@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`burn by-tool` folded into `burn summary --by-tool`** ([#156](https://github.com/AgentWorkforce/burn/issues/156)). The standalone `burn by-tool` verb has been removed in favor of a `summary` mode flag that sits next to `--by-provider`, `--by-subagent-type`, and `--subagent-tree`. Output columns (`tool | calls | attributedCost`) and the attribution-method footer are unchanged. Folding into `summary` closes the previous filter-parity gap — `--by-tool` now inherits `--workflow`/`--agent` from `summary`'s filter list. JSON shape is `{ ingest, turns, byTool: [{ tool, calls, attributedCost }], unattributed, fidelity }`. Mode flags are mutually exclusive: combining `--by-tool` with `--by-provider`/`--by-subagent-type`/`--subagent-tree` exits non-zero with a clear error. No deprecation alias — callers must migrate to `burn summary --by-tool`.
 
+## [0.37.0] - 2026-04-28
+
+### Added
+
+- **`burn waste --patterns edit-heavy`** ([#167](https://github.com/AgentWorkforce/burn/issues/167)). New cross-harness detector flagging sessions whose edit-tool count exceeds 4× read-tool count (≥ 5 edits). Reaches parity across Claude / Codex / OpenCode through the existing `normalizeToolName` table — Claude `Read`/`Edit`/`Write`/..., OpenCode `read`/`edit`/`write`, Codex `read_file`/`apply_patch` all flow through one detector. Renders a table with source, reads, edits, ratio, intra-turn retry count, and cost; appears in `--json` output as `editHeavySessions`. Coverage prereq is `hasToolCalls` only — tool_result is not consulted, so the detector runs on Codex/OpenCode slices that aggregate-only ledgers can't drive the retry / failure detectors against. `burn diagnose` also renders the new section per-session.
+
 ## [0.36.0] - 2026-04-28
 
 ### Added
