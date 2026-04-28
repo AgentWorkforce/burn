@@ -13,10 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`burn run <harness>` consolidates the spawn-wrappers** ([#154](https://github.com/AgentWorkforce/burn/issues/154)). The three top-level verbs `burn claude`, `burn codex`, and `burn opencode` are now folded under a single `burn run <claude|codex|opencode>` subcommand, dispatched through a `HarnessAdapter` registry at `packages/cli/src/harnesses/`. Adding a new harness is a one-file addition + one-line registration — no driver changes, no help-block edits. The unified driver also emits a uniform `[burn] <name> ingest: N sessions (+M turns)` report line across all three harnesses (previously claude printed a per-file `[burn] ingested ... turns from <file>` line). The legacy verbs continue to work for one minor release; each prints a deprecation notice on stderr and forwards to the new dispatcher. Slated for removal in the next minor release.
+- **`burn run <harness>` consolidates the spawn-wrappers** ([#154](https://github.com/AgentWorkforce/burn/issues/154)). The three top-level verbs `burn claude`, `burn codex`, and `burn opencode` are folded into a single `burn run <claude|codex|opencode>` subcommand, dispatched through a `HarnessAdapter` registry at `packages/cli/src/harnesses/`. Adding a new harness is a one-file addition + one-line registration — no driver changes, no help-block edits. The unified driver also emits a uniform `[burn] <name> ingest: N sessions (+M turns)` report line across all three harnesses (previously claude printed a per-file `[burn] ingested ... turns from <file>` line).
 
 ### Removed
 
+- **Legacy `burn claude` / `burn codex` / `burn opencode` verbs** ([#154](https://github.com/AgentWorkforce/burn/issues/154)). The standalone harness verbs are removed in favor of `burn run <name>`. Callers must migrate to the new dispatcher.
 - **`burn rebuild-index`** ([#151](https://github.com/AgentWorkforce/burn/issues/151)). The standalone subcommand has been dropped — it was a thin alias for `burn rebuild --index` with identical behavior. Run `burn rebuild --index` instead.
 
 ## [0.34.0] - 2026-04-27

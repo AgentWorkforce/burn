@@ -82,8 +82,6 @@ burn run claude --tag workflow=refactor --tag persona=senior-eng -- --resume abc
 
 Codex and OpenCode do not expose Claude-style hooks or a pre-spawn session ID. Their adapters write a v1 pending-stamp manifest under `$RELAYBURN_HOME/pending-stamps/` before spawning, then resolve it against the first matching session file before the first turn is appended. They also run burn's foreground watch loop for the child process lifetime, so long sessions become visible incrementally instead of only after exit. Abandoned pending manifests are cleaned up after 24 hours.
 
-> **Deprecation notice.** The legacy verbs `burn claude`, `burn codex`, and `burn opencode` still work but print a one-line stderr deprecation notice and forward to `burn run <name>`. They will be removed in the next minor release.
-
 For passive ingest without a wrapper, run:
 
 ```

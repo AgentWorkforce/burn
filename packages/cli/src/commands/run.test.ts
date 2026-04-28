@@ -1,8 +1,5 @@
 import { strict as assert } from 'node:assert';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import type { ParsedArgs } from '../args.js';
@@ -10,7 +7,7 @@ import type { IngestReport } from '../ingest.js';
 import type { HarnessAdapter } from '../harnesses/types.js';
 import type { WatchController } from './watch.js';
 
-import { runDeprecatedAlias, runWithAdapter } from './run.js';
+import { runWithAdapter } from './run.js';
 
 function emptyArgs(passthrough: string[] = []): ParsedArgs {
   return { flags: {}, tags: {}, positional: [], passthrough };
@@ -131,56 +128,6 @@ describe('runWithAdapter', () => {
     const reportLine = stderrChunks.find((s) => s.includes('fake-watching ingest:'));
     assert.ok(reportLine, `expected report line in: ${stderrChunks.join('|')}`);
     assert.match(reportLine!, /fake-watching ingest: 3 sessions \(\+8 turns\)/);
-  });
-
-  it('runDeprecatedAlias prints a deprecation warning and delegates to the harness', async () => {
-    // The codex adapter writes a pending stamp under RELAYBURN_HOME; isolate to
-    // a tmpdir so the test does not touch the developer's real ledger.
-    const tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-relay-run-'));
-    const tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-home-run-'));
-    const originalRelay = process.env['RELAYBURN_HOME'];
-    const originalHome = process.env['HOME'];
-    process.env['RELAYBURN_HOME'] = tmpRelay;
-    process.env['HOME'] = tmpHome;
-
-    const stderrChunks: string[] = [];
-    const origWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
-      stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
-      return true;
-    }) as typeof process.stderr.write;
-
-    let spawnedBin = '';
-    let code: number;
-    try {
-      code = await runDeprecatedAlias('codex', emptyArgs(['--help']), {
-        spawn(bin) {
-          spawnedBin = bin;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return fakeChild(0) as any;
-        },
-      });
-    } finally {
-      process.stderr.write = origWrite;
-      if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
-      else delete process.env['RELAYBURN_HOME'];
-      if (originalHome !== undefined) process.env['HOME'] = originalHome;
-      else delete process.env['HOME'];
-      await rm(tmpRelay, { recursive: true, force: true });
-      await rm(tmpHome, { recursive: true, force: true });
-    }
-
-    assert.equal(code, 0);
-    assert.equal(spawnedBin, 'codex');
-    assert.ok(
-      stderrChunks.some((s) => s.includes('`burn codex` is deprecated; use `burn run codex`')),
-      `expected deprecation warning, got: ${stderrChunks.join('|')}`,
-    );
-  });
-
-  it('runDeprecatedAlias rejects unknown harness names with exit code 2', async () => {
-    const code = await runDeprecatedAlias('cursor', emptyArgs([]));
-    assert.equal(code, 2);
   });
 
   it('returns 127 when the child fails to spawn', async () => {

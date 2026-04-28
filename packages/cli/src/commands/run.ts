@@ -116,24 +116,3 @@ export async function runWithAdapter(
   return code;
 }
 
-// Deprecated alias: dispatched when the user invokes `burn claude|codex|opencode`
-// directly. Prints a one-line stderr deprecation notice and forwards to the
-// driver. Slated for removal in the next minor release.
-export async function runDeprecatedAlias(
-  harnessName: string,
-  args: ParsedArgs,
-  opts: RunWrapperOptions = {},
-): Promise<number> {
-  const adapter = lookupHarness(harnessName);
-  if (!adapter) {
-    process.stderr.write(
-      `burn: unknown harness "${harnessName}". Known: ${listHarnessNames().join(', ')}\n`,
-    );
-    return 2;
-  }
-  process.stderr.write(
-    `[burn] \`burn ${harnessName}\` is deprecated; use \`burn run ${harnessName}\`. ` +
-      `The alias will be removed in the next minor release.\n`,
-  );
-  return runWithAdapter(adapter, args, opts);
-}

@@ -6,7 +6,7 @@ export { runIngest } from './commands/ingest.js';
 export { runLimits } from './commands/limits.js';
 export { runPlans } from './commands/plans.js';
 export { runWatch, runWatchTick, startWatchLoop } from './commands/watch.js';
-export { runWrapper, runWithAdapter, runDeprecatedAlias } from './commands/run.js';
+export { runWrapper, runWithAdapter } from './commands/run.js';
 export { parseArgs } from './args.js';
 export { ingestClaudeProjects, ingestCodexSessions, ingestOpencodeSessions, ingestAll } from './ingest.js';
 export { lookupHarness, listHarnessNames } from './harnesses/registry.js';

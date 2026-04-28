@@ -11,7 +11,7 @@ import { runLimits } from './commands/limits.js';
 import { runMcpServer } from './commands/mcp-server.js';
 import { runPlans } from './commands/plans.js';
 import { runRebuild } from './commands/rebuild.js';
-import { runWrapper, runDeprecatedAlias } from './commands/run.js';
+import { runWrapper } from './commands/run.js';
 import { runSummary } from './commands/summary.js';
 import { runWaste } from './commands/waste.js';
 import { runWatch } from './commands/watch.js';
@@ -105,10 +105,6 @@ async function main(): Promise<number> {
       return runCompare(args);
     case 'run':
       return runWrapper(args);
-    case 'claude':
-    case 'codex':
-    case 'opencode':
-      return runDeprecatedAlias(cmd, args);
     case 'watch':
       return runWatch(args);
     case 'ingest':
