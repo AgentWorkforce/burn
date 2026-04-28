@@ -34,7 +34,7 @@ import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -534,6 +534,9 @@ export const PATTERN_REQUIRED: Record<
   retries: ['hasToolCalls', 'hasToolResultEvents'],
   failures: ['hasToolCalls', 'hasToolResultEvents'],
   reverts: ['hasToolCalls', 'hasRawContent'],
+  // Edit-heavy only needs the tool-call stream (counts of read vs edit).
+  // tool_result is not consulted, so `hasToolResultEvents` isn't required.
+  'edit-heavy': ['hasToolCalls'],
   'opencode-skill-recall': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-skill-pruning': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-system-prompt': ['hasToolCalls', 'hasToolResultEvents'],
@@ -629,6 +632,7 @@ export async function runPatternsMode(
             failureRuns: [],
             compactions: [],
             editReverts: [],
+            editHeavySessions: [],
             skillRecallDups: [],
             skillPruningProtection: [],
             systemPromptTaxes: [],
@@ -659,6 +663,7 @@ export async function runPatternsMode(
   let skillRecallDups: PatternsResult['skillRecallDups'] = [];
   let skillPruningProtection: PatternsResult['skillPruningProtection'] = [];
   let systemPromptTaxes: PatternsResult['systemPromptTaxes'] = [];
+  let editHeavySessions: PatternsResult['editHeavySessions'] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
   // Load user turns if the system-prompt detector is selected (needs first
@@ -683,6 +688,10 @@ export async function runPatternsMode(
   if (selected.has('reverts')) {
     const r = detectPatterns(perDetector.get('reverts')!, { pricing, userTurnsBySession });
     editReverts = r.editReverts;
+  }
+  if (selected.has('edit-heavy')) {
+    const r = detectPatterns(perDetector.get('edit-heavy')!, { pricing, userTurnsBySession });
+    editHeavySessions = r.editHeavySessions;
   }
   if (selected.has('opencode-skill-recall')) {
     const r = detectPatterns(perDetector.get('opencode-skill-recall')!, { pricing, compactions, userTurnsBySession });
@@ -709,6 +718,7 @@ export async function runPatternsMode(
     skillRecallDups,
     skillPruningProtection,
     systemPromptTaxes,
+    editHeavySessions,
   );
 
   // For the "turns analyzed" headline we report the union of analyzed slices —
@@ -734,6 +744,7 @@ export async function runPatternsMode(
           skillRecallDups,
           skillPruningProtection,
           systemPromptTaxes,
+          editHeavySessions,
           sessionSummaries,
           fidelity: {
             analyzed: analyzedCount,
@@ -785,6 +796,11 @@ export async function runPatternsMode(
   if (selected.has('reverts')) {
     out.push('Edit-revert cycles (file returned to a prior state)');
     out.push(renderRevertTable(editReverts, limit));
+    out.push('');
+  }
+  if (selected.has('edit-heavy')) {
+    out.push('Edit-heavy sessions (edits/reads > 4, ≥5 edits)');
+    out.push(renderEditHeavyTable(editHeavySessions, limit));
     out.push('');
   }
   if (selected.has('opencode-skill-recall')) {
@@ -860,6 +876,7 @@ function buildSessionSummaries(
   skillRecallDups: PatternsResult['skillRecallDups'],
   skillPruningProtection: PatternsResult['skillPruningProtection'],
   systemPromptTaxes: PatternsResult['systemPromptTaxes'],
+  editHeavySessions: PatternsResult['editHeavySessions'],
 ): PatternsResult['sessionSummaries'] {
   const by = new Map<string, PatternsResult['sessionSummaries'][number]>();
   const get = (sessionId: string): PatternsResult['sessionSummaries'][number] => {
@@ -875,6 +892,7 @@ function buildSessionSummaries(
         skillRecallDupCount: 0,
         skillPruningProtectionCount: 0,
         systemPromptTaxCount: 0,
+        editHeavyCount: 0,
         totalRetries: 0,
         totalPatternCost: 0,
       };
@@ -918,6 +936,13 @@ function buildSessionSummaries(
     const row = get(s.sessionId);
     row.systemPromptTaxCount++;
     row.totalPatternCost += s.totalCost;
+  }
+  for (const e of editHeavySessions) {
+    const row = get(e.sessionId);
+    row.editHeavyCount++;
+    // Cost intentionally omitted from totalPatternCost — see the matching
+    // note in patterns.ts: edit-heavy turns also feed retry-loop and
+    // edit-revert costs, so adding them again would double-count.
   }
   return [...by.values()].sort((a, b) => b.totalPatternCost - a.totalPatternCost);
 }
@@ -1063,6 +1088,29 @@ function renderSystemPromptTable(
       formatInt(t.estimatedSystemPromptTokens),
       formatInt(t.ridingTurns),
       formatUsd(t.totalCost),
+    ]);
+  }
+  return table(rows);
+}
+
+function renderEditHeavyTable(
+  sessions: PatternsResult['editHeavySessions'],
+  limit: number,
+): string {
+  if (sessions.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['source', 'session', 'reads', 'edits', 'ratio', 'retries', 'cost'],
+  ];
+  const slice = [...sessions].sort((a, b) => b.editCount - a.editCount).slice(0, limit);
+  for (const s of slice) {
+    rows.push([
+      s.source,
+      s.sessionId.slice(0, 8),
+      formatInt(s.readCount),
+      formatInt(s.editCount),
+      Number.isFinite(s.ratio) ? s.ratio.toFixed(1) : '∞',
+      String(s.likelyRetries),
+      formatUsd(s.cost),
     ]);
   }
   return table(rows);

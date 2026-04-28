@@ -84,7 +84,7 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   }
   if (summary) {
     out.push(
-      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts, ${summary.skillRecallDupCount} skill-recall-dups, ${summary.skillPruningProtectionCount} skill-pruning, ${summary.systemPromptTaxCount} system-prompt-tax`,
+      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts, ${summary.editHeavyCount} edit-heavy, ${summary.skillRecallDupCount} skill-recall-dups, ${summary.skillPruningProtectionCount} skill-pruning, ${summary.systemPromptTaxCount} system-prompt-tax`,
     );
     out.push(`pattern cost: ${formatUsd(summary.totalPatternCost)}`);
   } else {
@@ -105,6 +105,9 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   out.push('');
   out.push('Edit-revert cycles');
   out.push(renderReverts(scoped.editReverts));
+  out.push('');
+  out.push('Edit-heavy session signal');
+  out.push(renderEditHeavy(scoped.editHeavySessions));
   out.push('');
   out.push('OpenCode skill recall duplicates');
   out.push(renderSkillRecall(scoped.skillRecallDups));
@@ -169,6 +172,7 @@ function filterPatterns(patterns: PatternsResult, sessionId: string): PatternsRe
     skillRecallDups: patterns.skillRecallDups.filter((r) => r.sessionId === sessionId),
     skillPruningProtection: patterns.skillPruningProtection.filter((r) => r.sessionId === sessionId),
     systemPromptTaxes: patterns.systemPromptTaxes.filter((r) => r.sessionId === sessionId),
+    editHeavySessions: patterns.editHeavySessions.filter((r) => r.sessionId === sessionId),
     sessionSummaries: patterns.sessionSummaries.filter((r) => r.sessionId === sessionId),
   };
 }
@@ -249,6 +253,21 @@ function renderSkillPruning(events: PatternsResult['skillPruningProtection']): s
       String(e.ridingTurns),
       String(e.lastCachedTurnIndex),
       formatUsd(e.cost),
+    ]),
+  ]);
+}
+
+function renderEditHeavy(sessions: PatternsResult['editHeavySessions']): string {
+  if (sessions.length === 0) return '  (none)';
+  return table([
+    ['source', 'reads', 'edits', 'ratio', 'retries', 'cost'],
+    ...sessions.map((s) => [
+      s.source,
+      String(s.readCount),
+      String(s.editCount),
+      Number.isFinite(s.ratio) ? s.ratio.toFixed(1) : '∞',
+      String(s.likelyRetries),
+      formatUsd(s.cost),
     ]),
   ]);
 }

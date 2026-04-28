@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn waste --patterns edit-heavy`** ([#167](https://github.com/AgentWorkforce/burn/issues/167)). New cross-harness detector flagging sessions whose edit-tool count exceeds 4× read-tool count (≥ 5 edits). Reaches parity across Claude / Codex / OpenCode through the existing `normalizeToolName` table — Claude `Read`/`Edit`/`Write`/..., OpenCode `read`/`edit`/`write`, Codex `read_file`/`apply_patch` all flow through one detector. Renders a table with source, reads, edits, ratio, intra-turn retry count, and cost; appears in `--json` output as `editHeavySessions`. Coverage prereq is `hasToolCalls` only — tool_result is not consulted, so the detector runs on Codex/OpenCode slices that aggregate-only ledgers can't drive the retry / failure detectors against. `burn diagnose` also renders the new section per-session.
+
 ## [0.36.0] - 2026-04-28
 
 ### Added

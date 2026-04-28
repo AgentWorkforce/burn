@@ -1,4 +1,11 @@
-import type { CompactionEvent, ToolCall, TurnRecord, UserTurnRecord } from '@relayburn/reader';
+import type {
+  CompactionEvent,
+  SourceKind,
+  ToolCall,
+  TurnRecord,
+  UserTurnRecord,
+} from '@relayburn/reader';
+import { countRetries, normalizeToolName } from '@relayburn/reader';
 
 import { costForTurn, costForUsage } from './cost.js';
 import type { PricingTable } from './pricing.js';
@@ -104,6 +111,31 @@ export interface SystemPromptTax {
   totalCost: number;
 }
 
+// Edit-heavy session: edit-tool count >> read-tool count. A session that
+// mostly writes without first reading the surrounding context correlates with
+// careless editing. Complementary to edit-revert — content-hash catches the
+// clean A→B→A revert; ratio catches the fuzzy "many small edits, not enough
+// reads" case.
+//
+// Cross-harness via `normalizeToolName`: Claude `Read`/`Edit`/`Write`/...,
+// OpenCode `read`/`edit`/`write`, Codex `read_file`/`apply_patch`. Codex's
+// `apply_patch` may bundle multiple files per call, so the same threshold
+// flags Codex more conservatively than it would if we counted files — known
+// per-harness tunable, see #167.
+export interface EditHeavySession {
+  source: SourceKind;
+  sessionId: string;
+  readCount: number;
+  editCount: number;
+  // editCount / readCount; +Infinity when reads === 0
+  ratio: number;
+  // Sum of edit→bash→edit retries (from `countRetries`) across the session's
+  // turns. A high retry count alongside a high ratio is the strongest signal.
+  likelyRetries: number;
+  // Sum of per-turn cost across turns containing an edit-tool call.
+  cost: number;
+}
+
 // Per-session rollup mentioned in the issue discussion. Downstream commands
 // (`burn compare --worst`, health grading, etc.) can read this shape without
 // re-running the full detector suite.
@@ -117,6 +149,7 @@ export interface SessionPatternSummary {
   skillRecallDupCount: number;
   skillPruningProtectionCount: number;
   systemPromptTaxCount: number;
+  editHeavyCount: number;
   totalRetries: number;
   totalPatternCost: number;
 }
@@ -129,6 +162,7 @@ export interface PatternsResult {
   skillRecallDups: SkillRecallDup[];
   skillPruningProtection: SkillPruningProtection[];
   systemPromptTaxes: SystemPromptTax[];
+  editHeavySessions: EditHeavySession[];
   sessionSummaries: SessionPatternSummary[];
 }
 
@@ -143,6 +177,24 @@ export interface DetectPatternsOptions {
 const MIN_RETRY_LEN = 3;
 const MIN_FAILURE_RUN_LEN = 3;
 
+// edits / reads above this and editCount ≥ MIN flags the session.
+// Threshold ported from codeburn (Claude-derived). Codex `apply_patch` bundles
+// multiple files per call, so this same threshold flags Codex more
+// conservatively than a file-level count would — documented in #167 as a
+// known per-harness tunable.
+const EDIT_HEAVY_RATIO = 4;
+const EDIT_HEAVY_MIN_EDITS = 5;
+
+// Tools whose normalized name (post `normalizeToolName`) counts as a "read of
+// file content" for the purposes of the read:edit ratio. Grep / Glob / LS
+// don't count — they discover files but don't read content. Bash is excluded
+// for the same reason: the model may `cat` via shell, but identifying that
+// from arguments is fragile and would inflate the read count for unrelated
+// shell calls. Keeping the set narrow matches the codeburn intent ("did the
+// model read the file before editing it?").
+const READ_TOOLS = new Set(['Read', 'NotebookRead']);
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
+
 export function detectPatterns(
   turns: TurnRecord[],
   opts: DetectPatternsOptions,
@@ -155,6 +207,7 @@ export function detectPatterns(
   const skillRecallDups: SkillRecallDup[] = [];
   const skillPruningProtection: SkillPruningProtection[] = [];
   const systemPromptTaxes: SystemPromptTax[] = [];
+  const editHeavySessions: EditHeavySession[] = [];
 
   for (const [sessionId, sessionTurns] of bySession) {
     sessionTurns.sort((a, b) => a.turnIndex - b.turnIndex);
@@ -166,6 +219,7 @@ export function detectPatterns(
     skillRecallDups.push(...detectSkillRecallDupsForSession(sessionId, sessionTurns, opts.pricing));
     skillPruningProtection.push(...detectSkillPruningProtectionForSession(sessionId, sessionTurns, opts.pricing));
     systemPromptTaxes.push(...detectSystemPromptTaxForSession(sessionId, sessionTurns, opts.pricing, opts.userTurnsBySession?.get(sessionId)));
+    editHeavySessions.push(...detectEditHeavyForSession(sessionId, sessionTurns, opts.pricing));
   }
 
   const compactions = opts.compactions
@@ -180,7 +234,17 @@ export function detectPatterns(
     skillRecallDups,
     skillPruningProtection,
     systemPromptTaxes,
-    sessionSummaries: buildSummaries(retryLoops, failureRuns, compactions, editReverts, skillRecallDups, skillPruningProtection, systemPromptTaxes),
+    editHeavySessions,
+    sessionSummaries: buildSummaries(
+      retryLoops,
+      failureRuns,
+      compactions,
+      editReverts,
+      skillRecallDups,
+      skillPruningProtection,
+      systemPromptTaxes,
+      editHeavySessions,
+    ),
   };
 }
 
@@ -557,6 +621,47 @@ function detectSystemPromptTaxForSession(
   }];
 }
 
+function detectEditHeavyForSession(
+  sessionId: string,
+  turns: TurnRecord[],
+  pricing: PricingTable,
+): EditHeavySession[] {
+  if (turns.length === 0) return [];
+
+  let readCount = 0;
+  let editCount = 0;
+  let likelyRetries = 0;
+  const editTurns: TurnRecord[] = [];
+
+  for (const t of turns) {
+    let turnHasEdit = false;
+    for (const call of t.toolCalls) {
+      const name = normalizeToolName(call.name);
+      if (READ_TOOLS.has(name)) readCount++;
+      else if (EDIT_TOOLS.has(name)) {
+        editCount++;
+        turnHasEdit = true;
+      }
+    }
+    if (turnHasEdit) editTurns.push(t);
+    likelyRetries += countRetries(t.toolCalls);
+  }
+
+  if (editCount < EDIT_HEAVY_MIN_EDITS) return [];
+  const ratio = readCount === 0 ? Number.POSITIVE_INFINITY : editCount / readCount;
+  if (ratio <= EDIT_HEAVY_RATIO) return [];
+
+  return [{
+    source: turns[0]!.source,
+    sessionId,
+    readCount,
+    editCount,
+    ratio,
+    likelyRetries,
+    cost: sumCostForTurns(dedupTurns(editTurns), pricing),
+  }];
+}
+
 function dedupTurns(turns: TurnRecord[]): TurnRecord[] {
   const seen = new Set<string>();
   const out: TurnRecord[] = [];
@@ -577,6 +682,7 @@ function buildSummaries(
   skillRecallDups: SkillRecallDup[],
   skillPruningProtection: SkillPruningProtection[],
   systemPromptTaxes: SystemPromptTax[],
+  editHeavySessions: EditHeavySession[],
 ): SessionPatternSummary[] {
   const by = new Map<string, SessionPatternSummary>();
   const get = (sessionId: string): SessionPatternSummary => {
@@ -592,6 +698,7 @@ function buildSummaries(
         skillRecallDupCount: 0,
         skillPruningProtectionCount: 0,
         systemPromptTaxCount: 0,
+        editHeavyCount: 0,
         totalRetries: 0,
         totalPatternCost: 0,
       };
@@ -635,6 +742,13 @@ function buildSummaries(
     const row = get(s.sessionId);
     row.systemPromptTaxCount++;
     row.totalPatternCost += s.totalCost;
+  }
+  for (const e of editHeavySessions) {
+    const row = get(e.sessionId);
+    row.editHeavyCount++;
+    // Cost is recorded on the row but not added to totalPatternCost — the
+    // edit-bearing turns also feed into edit-revert and retry-loop costs, and
+    // adding them again would double-count the same dollars.
   }
   return [...by.values()].sort((a, b) => b.totalPatternCost - a.totalPatternCost);
 }
