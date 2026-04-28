@@ -164,7 +164,7 @@ export function detectPatterns(
     );
     editReverts.push(...detectEditRevertsForSession(sessionId, sessionTurns, opts.pricing));
     skillRecallDups.push(...detectSkillRecallDupsForSession(sessionId, sessionTurns, opts.pricing));
-    skillPruningProtection.push(...detectSkillPruningProtectionForSession(sessionId, sessionTurns, opts.pricing, opts.compactions));
+    skillPruningProtection.push(...detectSkillPruningProtectionForSession(sessionId, sessionTurns, opts.pricing));
     systemPromptTaxes.push(...detectSystemPromptTaxForSession(sessionId, sessionTurns, opts.pricing, opts.userTurnsBySession?.get(sessionId)));
   }
 
@@ -447,23 +447,12 @@ function detectSkillPruningProtectionForSession(
   sessionId: string,
   turns: TurnRecord[],
   pricing: PricingTable,
-  compactions: CompactionEvent[] | undefined,
 ): SkillPruningProtection[] {
   // Only relevant for OpenCode sessions.
   if (turns.length === 0 || turns[0]!.source !== 'opencode') return [];
 
-  const compactionTurnIndexes = new Set<number>();
-  if (compactions) {
-    const turnByMessageId = new Map<string, TurnRecord>();
-    for (const t of turns) turnByMessageId.set(t.messageId, t);
-    for (const c of compactions) {
-      if (c.precedingMessageId) {
-        const preceding = turnByMessageId.get(c.precedingMessageId);
-        if (preceding) compactionTurnIndexes.add(preceding.turnIndex);
-      }
-    }
-  }
-
+  // Skill tool results are prune-protected, so compaction boundaries don't
+  // bound the riding-turn count — the content survives across them.
   const out: SkillPruningProtection[] = [];
   const flat = flattenToolCalls(turns);
   for (const ref of flat) {
