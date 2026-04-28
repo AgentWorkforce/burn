@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode ingest persists compaction events** ([#148](https://github.com/AgentWorkforce/burn/issues/148)). The OpenCode passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see OpenCode context compactions with the same event shape Claude and Codex use.
+
 ## [0.41.0] - 2026-04-28
 
 ### Fixed

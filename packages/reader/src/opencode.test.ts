@@ -226,6 +226,45 @@ describe('parseOpencodeSessionIncremental', () => {
   });
 });
 
+describe('parseOpencodeSession compaction events', () => {
+  it('emits a CompactionEvent anchored to the preceding committed turn', async () => {
+    const { turns, events } = await parseOpencodeSession(
+      sessionFile('with-compaction', 'ses_compact'),
+    );
+
+    // a1 (real) + summary (synthetic) + a2 (post-compaction) — summary turns
+    // are still real assistant turns to the parser.
+    assert.equal(turns.length, 3);
+    assert.equal(events.length, 1);
+
+    const ev = events[0]!;
+    assert.equal(ev.v, 1);
+    assert.equal(ev.source, 'opencode');
+    assert.equal(ev.sessionId, 'ses_compact');
+    assert.equal(ev.ts, '2026-04-24T02:50:03.000Z');
+    assert.equal(ev.precedingMessageId, 'msg_compact_a1');
+
+    const preceding = turns.find((t) => t.messageId === 'msg_compact_a1')!;
+    assert.equal(ev.tokensBeforeCompact, preceding.usage.cacheRead);
+    assert.equal(ev.tokensBeforeCompact, 12000);
+  });
+
+  it('does not re-emit a compaction event when its user message id is already seen', async () => {
+    const file = sessionFile('with-compaction', 'ses_compact');
+    const r = await parseOpencodeSessionIncremental(file, {
+      seenMessageIds: new Set([
+        'msg_compact_a1',
+        'msg_compact_summary',
+        'msg_compact_uc',
+      ]),
+    });
+    assert.equal(r.events.length, 0);
+    // The new assistant turn after the compaction is still emitted.
+    assert.equal(r.turns.length, 1);
+    assert.equal(r.turns[0]!.messageId, 'msg_compact_a2');
+  });
+});
+
 describe('parseOpencodeSession content capture', () => {
   async function withFixture<T>(body: (file: string) => Promise<T>): Promise<T> {
     const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
