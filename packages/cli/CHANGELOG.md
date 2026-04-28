@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn compare --provider <name>`** ([#138](https://github.com/AgentWorkforce/burn/issues/138)). Filters the per-(model, activity) comparison table to turns whose effective provider matches, using the same classifier `summary` / `by-tool` / `waste` already expose. Single value or comma-separated (e.g. `--provider synthetic`, `--provider anthropic,synthetic`); resolution goes through the pricing-layer rules in `resolveProvider`, so `hf:deepseek-ai/...` aggregates under `synthetic`. When the filter is set, `compare` always uses the in-memory path (the SQLite archive's grouped SQL doesn't see the per-turn classifier).
+
 ## [0.35.0] - 2026-04-28
 
 ### Added
