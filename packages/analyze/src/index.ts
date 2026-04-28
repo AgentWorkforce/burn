@@ -35,6 +35,7 @@ export { detectPatterns } from './patterns.js';
 export type {
   CompactionLoss,
   DetectPatternsOptions,
+  EditHeavySession,
   EditRevertCycle,
   FailureRun,
   PatternsResult,
