@@ -25,7 +25,7 @@ Usage:
                      [--by-provider | --by-tool | --by-subagent-type | --subagent-tree <session-id>] [--no-archive]
                      (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
-                     [--patterns[=retries,failures,compaction,reverts]]
+                     [--patterns[=retries,failures,compaction,reverts]] [--findings]
   burn diagnose      <session-id> [--json]
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
   burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)

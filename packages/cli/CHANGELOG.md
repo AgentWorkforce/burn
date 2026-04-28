@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn waste --patterns --findings`** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). Renders every detector's output through one severity-ranked `WasteFinding` table — retry loops / failure runs / compaction losses / edit reverts / edit-heavy / OpenCode skill-* / system-prompt-tax sorted together by severity (high → warn → info) then `usdPerSession`. The existing per-detector tables remain the default render path; `--findings` is opt-in. JSON output (`--patterns --json`) gains a `findings` array alongside the existing per-detector arrays for downstream consumers.
+
 ## [0.38.0] - 2026-04-28
 
 ### Changed
