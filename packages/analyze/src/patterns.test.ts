@@ -4,7 +4,13 @@ import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseClaudeSession } from '@relayburn/reader';
-import type { CompactionEvent, ToolCall, TurnRecord, UserTurnRecord } from '@relayburn/reader';
+import type {
+  CompactionEvent,
+  ContentRecord,
+  ToolCall,
+  TurnRecord,
+  UserTurnRecord,
+} from '@relayburn/reader';
 
 import { detectPatterns } from './patterns.js';
 import { loadBuiltinPricing } from './pricing.js';
@@ -797,5 +803,481 @@ describe('detectPatterns — edit-heavy sessions (cross-harness)', () => {
     const summary = result.sessionSummaries.find((s) => s.sessionId === 's');
     assert.ok(summary, 'summary present');
     assert.equal(summary!.editHeavyCount, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Content-sidecar enrichments (#57)
+// ---------------------------------------------------------------------------
+
+function toolResult(
+  sessionId: string,
+  messageId: string,
+  toolUseId: string,
+  text: string,
+  ts = '2026-04-20T00:00:00.000Z',
+): ContentRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    messageId,
+    ts,
+    role: 'tool_result',
+    kind: 'tool_result',
+    toolResult: {
+      toolUseId,
+      content: text,
+      isError: true,
+    },
+  };
+}
+
+function toolUseRec(
+  sessionId: string,
+  messageId: string,
+  id: string,
+  name: string,
+  input: Record<string, unknown>,
+  ts = '2026-04-20T00:00:00.000Z',
+): ContentRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    messageId,
+    ts,
+    role: 'assistant',
+    kind: 'tool_use',
+    toolUse: { id, name, input },
+  };
+}
+
+describe('detectPatterns — RetryLoop errorSignature enrichment (#57)', () => {
+  it('populates errorSignature when all attempts share a leading line', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 4; i++) {
+      turns.push(
+        turn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          toolCalls: [tc(`u${i}`, 'Bash', 'abc', { isError: true })],
+        }),
+      );
+    }
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [
+      toolResult('s', 'm0', 'u0', "npm ERR! code ENOENT\n  more details\n  more details"),
+      toolResult('s', 'm1', 'u1', "npm ERR! code ENOENT\n  more details"),
+      toolResult('s', 'm2', 'u2', "npm ERR! code ENOENT\n  trailing"),
+      toolResult('s', 'm3', 'u3', "npm ERR! code ENOENT\n  yet again"),
+    ]);
+    const result = detectPatterns(turns, { pricing, contentBySession });
+    assert.equal(result.retryLoops.length, 1);
+    assert.equal(result.retryLoops[0]!.errorSignature, 'npm ERR! code ENOENT');
+  });
+
+  it('marks the first signature with "(signatures diverged)" when attempts diverge', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        turn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          toolCalls: [tc(`u${i}`, 'Bash', 'abc', { isError: true })],
+        }),
+      );
+    }
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [
+      toolResult('s', 'm0', 'u0', 'npm ERR! code ENOENT'),
+      toolResult('s', 'm1', 'u1', 'npm ERR! code EACCES'),
+      toolResult('s', 'm2', 'u2', 'npm ERR! code ENOENT'),
+    ]);
+    const result = detectPatterns(turns, { pricing, contentBySession });
+    assert.equal(result.retryLoops.length, 1);
+    assert.equal(
+      result.retryLoops[0]!.errorSignature,
+      'npm ERR! code ENOENT (signatures diverged)',
+    );
+  });
+
+  it('omits errorSignature when no contentBySession is supplied (graceful degradation)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        turn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          toolCalls: [tc(`u${i}`, 'Bash', 'abc', { isError: true })],
+        }),
+      );
+    }
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.retryLoops.length, 1);
+    assert.equal(result.retryLoops[0]!.errorSignature, undefined);
+  });
+
+  it('omits errorSignature when content has no matching tool_results for the loop', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: TurnRecord[] = [];
+    for (let i = 0; i < 3; i++) {
+      turns.push(
+        turn({
+          sessionId: 's',
+          messageId: `m${i}`,
+          turnIndex: i,
+          toolCalls: [tc(`u${i}`, 'Bash', 'abc', { isError: true })],
+        }),
+      );
+    }
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [
+      // Content present, but for an unrelated toolUseId.
+      toolResult('s', 'm99', 'unrelated', 'something else'),
+    ]);
+    const result = detectPatterns(turns, { pricing, contentBySession });
+    assert.equal(result.retryLoops.length, 1);
+    assert.equal(result.retryLoops[0]!.errorSignature, undefined);
+  });
+});
+
+describe('detectPatterns — FailureRun errorSignatures enrichment (#57)', () => {
+  it('records one entry per distinct tool, in first-seen order', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        toolCalls: [tc('u0', 'Bash', 'a', { isError: true })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        toolCalls: [tc('u1', 'Read', 'b', { isError: true })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 2,
+        toolCalls: [tc('u2', 'Grep', 'c', { isError: true })],
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [
+      toolResult('s', 'm0', 'u0', 'bash: command not found'),
+      toolResult('s', 'm1', 'u1', 'ENOENT: no such file or directory'),
+      toolResult('s', 'm2', 'u2', 'no matches found'),
+    ]);
+    const result = detectPatterns(turns, { pricing, contentBySession });
+    assert.equal(result.failureRuns.length, 1);
+    const sigs = result.failureRuns[0]!.errorSignatures!;
+    assert.deepEqual(sigs, [
+      { tool: 'Bash', firstLine: 'bash: command not found' },
+      { tool: 'Read', firstLine: 'ENOENT: no such file or directory' },
+      { tool: 'Grep', firstLine: 'no matches found' },
+    ]);
+  });
+
+  it('omits errorSignatures field when content is not supplied', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        toolCalls: [tc('u0', 'Bash', 'a', { isError: true })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        toolCalls: [tc('u1', 'Read', 'b', { isError: true })],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 2,
+        toolCalls: [tc('u2', 'Grep', 'c', { isError: true })],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.failureRuns.length, 1);
+    assert.equal(result.failureRuns[0]!.errorSignatures, undefined);
+  });
+});
+
+describe('detectPatterns — CompactionLoss lostWork enrichment (#57)', () => {
+  it('aggregates files and tool counts in the compacted window', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        ts: '2026-04-20T00:00:00.000Z',
+        toolCalls: [
+          tc('u0', 'Edit', 'h0', { target: '/src/foo.ts', editPreHash: 'a', editPostHash: 'b' }),
+          tc('u1', 'Bash', 'h1'),
+        ],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+        toolCalls: [
+          tc('u2', 'Edit', 'h2', { target: '/src/bar.ts', editPreHash: 'c', editPostHash: 'd' }),
+          tc('u3', 'Read', 'h3'),
+          tc('u4', 'Bash', 'h4'),
+        ],
+      }),
+    ];
+    const events: CompactionEvent[] = [
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's',
+        ts: '2026-04-20T00:00:02.000Z',
+        precedingMessageId: 'm1',
+        tokensBeforeCompact: 9000,
+      },
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [toolResult('s', 'm0', 'u0', 'present so the index is non-empty')]);
+    const result = detectPatterns(turns, { pricing, compactions: events, contentBySession });
+    assert.equal(result.compactions.length, 1);
+    const lostWork = result.compactions[0]!.lostWork!;
+    assert.deepEqual(lostWork.files, ['/src/bar.ts', '/src/foo.ts']);
+    assert.equal(lostWork.editCount, 2);
+    assert.equal(lostWork.bashCount, 2);
+    assert.equal(lostWork.readCount, 1);
+  });
+
+  it('windows successive boundaries — second event excludes pre-first-boundary work', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        ts: '2026-04-20T00:00:00.000Z',
+        toolCalls: [tc('u0', 'Edit', 'h0', { target: '/a.ts', editPreHash: 'a', editPostHash: 'b' })],
+      }),
+      // After first boundary
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:02.000Z',
+        toolCalls: [tc('u1', 'Edit', 'h1', { target: '/b.ts', editPreHash: 'c', editPostHash: 'd' })],
+      }),
+    ];
+    const events: CompactionEvent[] = [
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's',
+        ts: '2026-04-20T00:00:01.000Z',
+        precedingMessageId: 'm0',
+        tokensBeforeCompact: 5000,
+      },
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's',
+        ts: '2026-04-20T00:00:03.000Z',
+        precedingMessageId: 'm1',
+        tokensBeforeCompact: 7000,
+      },
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [toolResult('s', 'm0', 'u0', 'x')]);
+    const result = detectPatterns(turns, { pricing, compactions: events, contentBySession });
+    assert.equal(result.compactions.length, 2);
+    assert.deepEqual(result.compactions[0]!.lostWork!.files, ['/a.ts']);
+    assert.deepEqual(result.compactions[1]!.lostWork!.files, ['/b.ts']);
+  });
+
+  it('omits lostWork when contentBySession is not supplied', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        ts: '2026-04-20T00:00:00.000Z',
+        toolCalls: [tc('u0', 'Edit', 'h0', { target: '/src/foo.ts', editPreHash: 'a', editPostHash: 'b' })],
+      }),
+    ];
+    const events: CompactionEvent[] = [
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's',
+        ts: '2026-04-20T00:00:01.000Z',
+        precedingMessageId: 'm0',
+        tokensBeforeCompact: 1000,
+      },
+    ];
+    const result = detectPatterns(turns, { pricing, compactions: events });
+    assert.equal(result.compactions.length, 1);
+    assert.equal(result.compactions[0]!.lostWork, undefined);
+  });
+});
+
+describe('detectPatterns — EditRevertCycle samplePreview enrichment (#57)', () => {
+  it('populates samplePreview with truncated old/new strings from both anchors', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        toolCalls: [
+          tc('u0', 'Edit', 'h0', {
+            target: '/f.ts',
+            editPreHash: 'A',
+            editPostHash: 'B',
+          }),
+        ],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        toolCalls: [
+          tc('u1', 'Edit', 'h1', {
+            target: '/f.ts',
+            editPreHash: 'B',
+            editPostHash: 'A',
+          }),
+        ],
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [
+      toolUseRec('s', 'm0', 'u0', 'Edit', {
+        old_string: 'foo',
+        new_string: 'bar',
+        file_path: '/f.ts',
+      }),
+      toolUseRec('s', 'm1', 'u1', 'Edit', {
+        old_string: 'bar',
+        new_string: 'foo',
+        file_path: '/f.ts',
+      }),
+    ]);
+    const result = detectPatterns(turns, { pricing, contentBySession });
+    assert.equal(result.editReverts.length, 1);
+    const preview = result.editReverts[0]!.samplePreview!;
+    assert.equal(preview.firstEdit.old, 'foo');
+    assert.equal(preview.firstEdit.new, 'bar');
+    assert.equal(preview.revert.old, 'bar');
+    assert.equal(preview.revert.new, 'foo');
+  });
+
+  it('truncates each preview field at ~200 chars with an ellipsis', async () => {
+    const pricing = await loadBuiltinPricing();
+    const long = 'x'.repeat(500);
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        toolCalls: [
+          tc('u0', 'Edit', 'h0', {
+            target: '/f.ts',
+            editPreHash: 'A',
+            editPostHash: 'B',
+          }),
+        ],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        toolCalls: [
+          tc('u1', 'Edit', 'h1', {
+            target: '/f.ts',
+            editPreHash: 'B',
+            editPostHash: 'A',
+          }),
+        ],
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [
+      toolUseRec('s', 'm0', 'u0', 'Edit', { old_string: long, new_string: long }),
+      toolUseRec('s', 'm1', 'u1', 'Edit', { old_string: long, new_string: long }),
+    ]);
+    const result = detectPatterns(turns, { pricing, contentBySession });
+    const preview = result.editReverts[0]!.samplePreview!;
+    assert.ok(preview.firstEdit.old.length <= 200, 'old <= 200');
+    assert.ok(preview.firstEdit.new.length <= 200, 'new <= 200');
+    assert.ok(preview.firstEdit.old.endsWith('…'), 'truncated with ellipsis');
+  });
+
+  it('omits samplePreview when contentBySession is not supplied', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        toolCalls: [
+          tc('u0', 'Edit', 'h0', { target: '/f.ts', editPreHash: 'A', editPostHash: 'B' }),
+        ],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        toolCalls: [
+          tc('u1', 'Edit', 'h1', { target: '/f.ts', editPreHash: 'B', editPostHash: 'A' }),
+        ],
+      }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editReverts.length, 1);
+    assert.equal(result.editReverts[0]!.samplePreview, undefined);
+  });
+
+  it('omits samplePreview when tool_use entries are missing from content', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        toolCalls: [
+          tc('u0', 'Edit', 'h0', { target: '/f.ts', editPreHash: 'A', editPostHash: 'B' }),
+        ],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        toolCalls: [
+          tc('u1', 'Edit', 'h1', { target: '/f.ts', editPreHash: 'B', editPostHash: 'A' }),
+        ],
+      }),
+    ];
+    const contentBySession = new Map<string, ContentRecord[]>();
+    contentBySession.set('s', [
+      // Only tool_results, no tool_use records.
+      toolResult('s', 'm0', 'u0', 'irrelevant'),
+    ]);
+    const result = detectPatterns(turns, { pricing, contentBySession });
+    assert.equal(result.editReverts.length, 1);
+    assert.equal(result.editReverts[0]!.samplePreview, undefined);
   });
 });

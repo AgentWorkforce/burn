@@ -52,7 +52,12 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
     contentBySession,
     userTurnsBySession,
   });
-  const patterns = detectPatterns(turns, { pricing, compactions, userTurnsBySession });
+  const patterns = detectPatterns(turns, {
+    pricing,
+    compactions,
+    userTurnsBySession,
+    contentBySession,
+  });
   const files = aggregateByFile(attribution.attributions).slice(0, 5);
   const bashes = aggregateByBash(attribution.attributions).slice(0, 5);
   const subagents = aggregateBySubagent(attribution.attributions).slice(0, 5);

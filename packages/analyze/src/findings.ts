@@ -86,11 +86,15 @@ function fmtUsd(n: number): string {
 
 export function retryLoopToFinding(loop: RetryLoop): WasteFinding {
   const target = loop.target ? ` ${loop.target}` : '';
+  // Enrichment (#57): if the content sidecar surfaced an error signature,
+  // append it to the title so the report is actionable at a glance ("4×
+  // Bash retries" → "4× Bash retries: 'npm ERR! code ENOENT'").
+  const titleSuffix = loop.errorSignature ? `: '${loop.errorSignature}'` : '';
   return {
     kind: 'retry-loop',
     severity: severityFromUsd(loop.cost),
     sessionId: loop.sessionId,
-    title: `Retry loop: ${loop.tool}${target} failed ${loop.attempts}× in a row`,
+    title: `Retry loop: ${loop.tool}${target} failed ${loop.attempts}× in a row${titleSuffix}`,
     detail:
       `Turns ${loop.startTurnIndex}-${loop.endTurnIndex} are ${loop.attempts} consecutive ` +
       `errored ${loop.tool} calls with the same arguments. Cumulative turn cost ` +
@@ -101,6 +105,15 @@ export function retryLoopToFinding(loop: RetryLoop): WasteFinding {
 }
 
 export function failureRunToFinding(run: FailureRun): WasteFinding {
+  // Enrichment (#57): when content surfaced per-tool error signatures, fold
+  // them into the detail text so the user can diagnose the stuck state
+  // without opening the session file.
+  const sigDetail =
+    run.errorSignatures && run.errorSignatures.length > 0
+      ? ' Errors: ' +
+        run.errorSignatures.map((s) => `${s.tool}='${s.firstLine}'`).join('; ') +
+        '.'
+      : '';
   return {
     kind: 'failure-run',
     severity: severityFromUsd(run.cost),
@@ -110,7 +123,7 @@ export function failureRunToFinding(run: FailureRun): WasteFinding {
       `Turns ${run.startTurnIndex}-${run.endTurnIndex} failed across ` +
       `${run.toolsInvolved.length} distinct tool(s) (${run.toolsInvolved.join(', ')}). ` +
       `Cumulative turn cost ${fmtUsd(run.cost)} — agent likely stuck without ` +
-      `recovering or asking for help.`,
+      `recovering or asking for help.${sigDetail}`,
     estimatedSavings: { usdPerSession: run.cost },
     actions: [diagnoseAction(run.sessionId)],
   };
@@ -119,6 +132,20 @@ export function failureRunToFinding(run: FailureRun): WasteFinding {
 export function compactionLossToFinding(loss: CompactionLoss): WasteFinding {
   const savings: EstimatedSavings = { usdPerSession: loss.cacheLostCost };
   if (loss.tokensBeforeCompact > 0) savings.tokensPerSession = loss.tokensBeforeCompact;
+  // Enrichment (#57): describe what was compacted instead of the bare token
+  // count when the content sidecar is available.
+  const work = loss.lostWork;
+  const lostWorkDetail = work
+    ? ` Compacted window: ${work.editCount} edit(s), ${work.bashCount} bash, ` +
+      `${work.readCount} read(s)` +
+      (work.files.length > 0
+        ? ' on ' +
+          (work.files.length <= 3
+            ? work.files.join(', ')
+            : `${work.files.slice(0, 3).join(', ')} +${work.files.length - 3} more`)
+        : '') +
+      '.'
+    : '';
   return {
     kind: 'compaction-loss',
     severity: severityFromUsd(loss.cacheLostCost),
@@ -127,13 +154,21 @@ export function compactionLossToFinding(loss: CompactionLoss): WasteFinding {
     detail:
       `A compaction at ${loss.ts} discarded ${loss.tokensBeforeCompact.toLocaleString()} ` +
       `tokens of cache. Pre-compact cacheRead cost ${fmtUsd(loss.cacheLostCost)} — that ` +
-      `cache won't be reused on subsequent turns.`,
+      `cache won't be reused on subsequent turns.${lostWorkDetail}`,
     estimatedSavings: savings,
     actions: [diagnoseAction(loss.sessionId)],
   };
 }
 
 export function editRevertToFinding(cycle: EditRevertCycle): WasteFinding {
+  // Enrichment (#57): show the actual strings that were thrashed so users
+  // don't need to grep the session file. Truncated by the detector to
+  // ~200 chars per field.
+  const preview = cycle.samplePreview;
+  const previewDetail = preview
+    ? ` First edit: '${preview.firstEdit.old}' → '${preview.firstEdit.new}'. ` +
+      `Revert: '${preview.revert.old}' → '${preview.revert.new}'.`
+    : '';
   return {
     kind: 'edit-revert',
     severity: severityFromUsd(cycle.cost),
@@ -142,7 +177,7 @@ export function editRevertToFinding(cycle: EditRevertCycle): WasteFinding {
     detail:
       `Turn ${cycle.firstEditTurnIndex} edited ${cycle.filePath}; turn ${cycle.revertTurnIndex} ` +
       `restored a prior file state ${cycle.spanTurns} turns later. Cumulative anchor-turn ` +
-      `cost ${fmtUsd(cycle.cost)} — the intermediate work was erased.`,
+      `cost ${fmtUsd(cycle.cost)} — the intermediate work was erased.${previewDetail}`,
     estimatedSavings: { usdPerSession: cycle.cost },
     actions: [diagnoseAction(cycle.sessionId)],
   };

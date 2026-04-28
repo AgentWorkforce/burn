@@ -689,20 +689,31 @@ export async function runPatternsMode(
     ? await loadUserTurnsBySession(perDetector)
     : undefined;
 
+  // Load content sidecars for the four detectors that surface content-derived
+  // enrichment fields (#57). Detectors fire identically without content; only
+  // the optional enrichment fields (errorSignature, errorSignatures, lostWork,
+  // samplePreview) are absent. We only pay the I/O cost when one of these
+  // detectors is selected.
+  const enrichableDetectors: PatternKind[] = ['retries', 'failures', 'compaction', 'reverts'];
+  const needContent = enrichableDetectors.some((d) => selected.has(d));
+  const contentBySession = needContent
+    ? await loadContentBySession(perDetector, enrichableDetectors)
+    : undefined;
+
   if (selected.has('retries')) {
-    const r = detectPatterns(perDetector.get('retries')!, { pricing, userTurnsBySession });
+    const r = detectPatterns(perDetector.get('retries')!, { pricing, userTurnsBySession, contentBySession });
     retryLoops = r.retryLoops;
   }
   if (selected.has('failures')) {
-    const r = detectPatterns(perDetector.get('failures')!, { pricing, userTurnsBySession });
+    const r = detectPatterns(perDetector.get('failures')!, { pricing, userTurnsBySession, contentBySession });
     failureRuns = r.failureRuns;
   }
   if (selected.has('compaction')) {
-    const r = detectPatterns(perDetector.get('compaction')!, { pricing, compactions, userTurnsBySession });
+    const r = detectPatterns(perDetector.get('compaction')!, { pricing, compactions, userTurnsBySession, contentBySession });
     compactionLosses = r.compactions;
   }
   if (selected.has('reverts')) {
-    const r = detectPatterns(perDetector.get('reverts')!, { pricing, userTurnsBySession });
+    const r = detectPatterns(perDetector.get('reverts')!, { pricing, userTurnsBySession, contentBySession });
     editReverts = r.editReverts;
   }
   if (selected.has('edit-heavy')) {
@@ -1192,6 +1203,30 @@ async function loadUserTurnsBySession(
   for (const sessionId of sessionIds) {
     const userTurns = await queryUserTurns({ sessionId });
     if (userTurns.length > 0) out.set(sessionId, userTurns);
+  }
+  return out;
+}
+
+// Reads the per-session content sidecar for every session that lands in any
+// of the requested detector slices. Sessions whose sidecar is empty (content
+// store is hash-only / off, or content was pruned) are silently omitted —
+// `detectPatterns` keys enrichment off the map being non-empty per session,
+// so the absent entry yields the graceful-degradation behavior promised by
+// #57.
+async function loadContentBySession(
+  perDetector: Map<PatternKind, EnrichedTurn[]>,
+  detectors: PatternKind[],
+): Promise<Map<string, ContentRecord[]>> {
+  const sessionIds = new Set<string>();
+  for (const d of detectors) {
+    const slice = perDetector.get(d);
+    if (!slice) continue;
+    for (const t of slice) sessionIds.add(t.sessionId);
+  }
+  const out = new Map<string, ContentRecord[]>();
+  for (const sessionId of sessionIds) {
+    const records = await readContent({ sessionId });
+    if (records.length > 0) out.set(sessionId, records);
   }
   return out;
 }
