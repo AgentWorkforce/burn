@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Changed
+
+- Provider filters and `burn summary --by-provider` now use the shared analyze provider resolver.
+
 ## [0.42.0] - 2026-04-28
 
 ### Added

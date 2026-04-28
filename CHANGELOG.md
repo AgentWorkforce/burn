@@ -4,6 +4,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- Provider-aware CLI rendering now uses shared analyze helpers for effective-provider resolution and aggregation.
+
 ## [0.42.0] - 2026-04-28
 
 ### Added

@@ -536,6 +536,22 @@ describe('burn summary per-cell fidelity (#136)', () => {
     );
   });
 
+  it('--by-provider combined with subagent modes exits non-zero with a clear error', async () => {
+    const byType = await captureSummary({ 'by-provider': true, 'by-subagent-type': true });
+    assert.equal(byType.code, 2);
+    assert.match(
+      byType.stderr,
+      /--by-provider cannot be combined with --by-subagent-type\/--subagent-tree/,
+    );
+
+    const tree = await captureSummary({ 'by-provider': true, 'subagent-tree': 's-1' });
+    assert.equal(tree.code, 2);
+    assert.match(
+      tree.stderr,
+      /--by-provider cannot be combined with --by-subagent-type\/--subagent-tree/,
+    );
+  });
+
   it('footer N sums per-field missing across rows (multi-model regression)', async () => {
     // Devin-review regression: with two model rows that each have some
     // turns missing output, the footer denominator should report the
