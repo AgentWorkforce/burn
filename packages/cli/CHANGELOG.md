@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode ingest persists compaction events** ([#148](https://github.com/AgentWorkforce/burn/issues/148)). The OpenCode passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see OpenCode context compactions with the same event shape Claude and Codex use.
+
 ## [0.41.0] - 2026-04-28
 
 ### Fixed
@@ -14,8 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pending-stamp resolution no longer cross-contaminates concurrent same-cwd same-harness runs** ([#162](https://github.com/AgentWorkforce/burn/issues/162)). When two `burn run codex` (or two `burn run opencode`) processes are running in the same directory, the `{harness, cwd, mtime ≥ spawnStart, sessionDirHint}` filter cannot tell their stamps apart, so the resolver was applying every matching stamp's enrichment to whichever session ingested first — leaving the other session unstamped. Each session now claims at most one stamp (FIFO by `spawnStartTs`), so the older stamp goes to the first session that ingests and the newer stamp stays pending until its own session shows up. Different cwds, different harnesses, and Claude (which uses pre-allocated session IDs and never writes pending stamps) were unaffected and remain unchanged.
 
 ### Added
-
-- **OpenCode ingest persists compaction events** ([#148](https://github.com/AgentWorkforce/burn/issues/148)). The OpenCode passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see OpenCode context compactions with the same event shape Claude and Codex use.
 
 - **Content-sidecar enrichments surface in `burn diagnose` and `burn waste --patterns`** ([#57](https://github.com/AgentWorkforce/burn/issues/57)). When a session was captured with `content.store=full`, the four waste-pattern detectors now emit additional fields that `burn diagnose <session>` and `burn waste --patterns` render through the existing tables and `WasteFinding` text: retry-loop titles include the shared error-line signature (e.g. `"Bash failed 4× in a row: 'npm ERR! code ENOENT'"`), failure-run details list per-tool first-line errors, compaction-loss details summarize the work in the compacted window (`N edit(s), M bash, K read(s) on src/foo.ts, src/bar.ts`), and edit-revert details show truncated `old_string`/`new_string` previews for both anchor edits. `--json` payloads carry the new fields verbatim (`errorSignature`, `errorSignatures`, `lostWork`, `samplePreview`). Sessions in `content.store=hash-only` or with pruned content render exactly as before. `burn waste` lazily loads content sidecars only for the four enrichable detectors (`retries`/`failures`/`compaction`/`reverts`) and only when at least one is selected, so unrelated runs pay no I/O cost.
 - **Aggregate parser content-capture report in `burn diagnose`** ([#79](https://github.com/AgentWorkforce/burn/issues/79)). `burn diagnose` (no positional argument) now walks the ledger and emits a per-adapter content-capture gap table — total sessions, sessions with ≥1 tool call, gapped sessions (≥1 tool call but zero `tool_result` ContentRecords), orphan tool-call count, and `degradedPct`. Honors `--json` (`{ adapters: [{ adapter, sessions, sessionsWithToolCalls, gappedSessions, orphanToolCalls, degradedPct }, ...], contentMode }`). The existing per-session `burn diagnose <session-id>` behavior is unchanged. Permanent, queryable surface for the gap that the per-invocation ingest warning ([#75](https://github.com/AgentWorkforce/burn/issues/75)) only flags once per `burn` run; rows omit the gap signal with an explanatory note when `RELAYBURN_CONTENT_STORE` is `hash-only` or `off`. Adapters with no sessions in the ledger are omitted entirely.
