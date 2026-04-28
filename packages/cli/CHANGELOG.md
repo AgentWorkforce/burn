@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`burn summary` surfaces per-cell fidelity** ([#136](https://github.com/AgentWorkforce/burn/issues/136)). The (model | provider) table now distinguishes a literal `0` from "no source data" inside individual cells: a token-field cell whose every contributing turn omitted the field renders as `—`, and a cell whose contributing turns are mixed (some reported, some omitted) renders the value with a trailing `*` plus a single footer note (`* partial coverage: N of M turns omitted per-turn token data`). Full-fidelity slices print no marker and no footer, so the common all-Claude case looks identical to before. Records emitted before `TurnRecord.fidelity` existed (pre-#41 ledgers) are treated as best-effort full and never trigger the marker. `--json` output replaces the bare `fidelity: FidelitySummary` block with `fidelity: { summary, perCell }`, where `perCell.cells[]` carries per-(model|provider) per-field `{ known, missing }` counters and a `partial` flag — the same shape pattern the sibling fidelity PRs (#135 / #133 / #134 / #132) already emit.
 - **Codex ingest persists compaction events.** The Codex passive ingest path now appends parser-emitted compactions through the existing ledger compaction writer, so `burn waste --kind compaction` can see Codex context compactions with the same event shape Claude uses.
 
 ### Removed
