@@ -470,4 +470,46 @@ describe('burn summary per-cell fidelity (#136)', () => {
     assert.equal(out.stdout.includes('*'), false);
     assert.equal(out.stdout.includes('partial coverage:'), false);
   });
+
+  it('footer N sums per-field missing across rows (multi-model regression)', async () => {
+    // Devin-review regression: with two model rows that each have some
+    // turns missing output, the footer denominator should report the
+    // cross-row sum of `missing` for the worst-covered field — not the
+    // per-(row, field) max. Two rows × 2 missing-output turns each → 4.
+    const partialOutput = (model: string, sessionId: string, msg: string, ts: string) =>
+      fakeTurn({
+        sessionId,
+        messageId: msg,
+        ts,
+        model,
+        fidelity: partialMissingOutput(),
+      });
+    await appendTurns([
+      // Model A: 1 full + 2 partial-output
+      fakeTurn({
+        sessionId: 'mr-A',
+        messageId: 'mr-A-1',
+        model: 'claude-sonnet-4-6',
+        fidelity: fullFidelity(),
+      }),
+      partialOutput('claude-sonnet-4-6', 'mr-A', 'mr-A-2', '2026-04-20T00:01:00.000Z'),
+      partialOutput('claude-sonnet-4-6', 'mr-A', 'mr-A-3', '2026-04-20T00:02:00.000Z'),
+      // Model B: 1 full + 2 partial-output
+      fakeTurn({
+        sessionId: 'mr-B',
+        messageId: 'mr-B-1',
+        ts: '2026-04-20T00:03:00.000Z',
+        model: 'claude-haiku-4-5',
+        fidelity: fullFidelity(),
+      }),
+      partialOutput('claude-haiku-4-5', 'mr-B', 'mr-B-2', '2026-04-20T00:04:00.000Z'),
+      partialOutput('claude-haiku-4-5', 'mr-B', 'mr-B-3', '2026-04-20T00:05:00.000Z'),
+    ]);
+    const out = await captureSummary({});
+    assert.equal(out.code, 0);
+    // 4 turns missing output across 6 total. The pre-fix bug took the
+    // per-(row, field) max (2 instead of 4); this assertion would have
+    // failed against that arithmetic.
+    assert.match(out.stdout, /partial coverage: 4 of 6 turns/);
+  });
 });

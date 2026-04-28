@@ -415,26 +415,26 @@ function mergeCoverage(cacheCreate: FieldCoverage): FieldCoverage {
   return cacheCreate;
 }
 
-// Footer note explaining the `*` marker. Sums `known` / `missing` across every
-// row's input field as a proxy for "of M turns". Input is the canonical token
-// field — if a record has any per-turn coverage at all, it has input — so
-// treating its counters as the denominator gives an honest "N of M" for the
-// partial-coverage case without having to pick an arbitrary field.
+// Footer note explaining the `*` marker. Denominator is the cross-row sum of
+// `known + missing` for input — input is the canonical token field, so if a
+// record has any per-turn coverage at all, it carries input. Numerator is the
+// worst-covered axis: for each coverage field, sum its `missing` across every
+// row, then take the max. Picking just `input.missing` would understate the
+// gap when the partial coverage is on a *different* field (e.g. an
+// output-omitting collector); picking the per-(row, field) max would
+// understate it across multi-row aggregates. The cross-row sum per field is
+// the right "N of M" — it's the count of turns missing the most-affected
+// field across the whole slice.
 function formatPartialFooter(rows: ReadonlyArray<ModelRow>): string {
   let total = 0;
-  let missing = 0;
   for (const r of rows) {
     total += r.coverage.input.known + r.coverage.input.missing;
-    missing += r.coverage.input.missing;
   }
-  // Sum across every coverage field — input alone may not capture the
-  // "missing" turns when the gap is actually elsewhere (e.g. reasoning-only
-  // collectors that report input but not output). Take the largest missing
-  // count across fields so the footer reflects the worst-covered axis.
-  for (const r of rows) {
-    for (const f of COVERAGE_FIELDS) {
-      if (r.coverage[f].missing > missing) missing = r.coverage[f].missing;
-    }
+  let missing = 0;
+  for (const f of COVERAGE_FIELDS) {
+    let fieldMissing = 0;
+    for (const r of rows) fieldMissing += r.coverage[f].missing;
+    if (fieldMissing > missing) missing = fieldMissing;
   }
   return `${PARTIAL_MARK} partial coverage: ${formatInt(missing)} of ${formatInt(total)} turns omitted per-turn token data`;
 }
