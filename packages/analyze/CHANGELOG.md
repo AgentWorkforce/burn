@@ -1,9 +1,6 @@
 # Changelog
 
-All notable changes to `@relayburn/analyze` will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
@@ -11,166 +8,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Slash-command-style invocations no longer false-flag as ghosts** ([#172](https://github.com/AgentWorkforce/burn/issues/172)). The `GhostSurfaceAdapter` contract gains an optional `observedNames(inputs, candidates)` hook; the orchestrator unions whatever names that returns into the per-source observed set before deciding which candidates are ghosts. `claudeGhostAdapter` mines `userTurnTextBySession` for `<command-name>...</command-name>` markers (both `<command-name>/foo</command-name>` and the bare `<command-name>foo</command-name>` shape are recognised). `codexGhostAdapter` does a literal `/<basename>` match, anchored on word boundaries on both sides so `https://example.com/foo`, `/foo-bar`, and similar non-invocations don't false-positive. Matching is case-insensitive. Behaviour is opt-in / gated on content-sidecar availability — when `userTurnTextBySession` is undefined or empty (sidecar pruned, `content.store=off`), the hook is a no-op and the detector falls back to v1 (tool-call only) behaviour. The inline doc notes on `claudeGhostAdapter` and `codexGhostAdapter` document the remaining false-negative for Codex (a prompt invoked entirely without typing `/<basename>`). New helpers `mineClaudeCommandNames` and `mineCodexSlashInvocations` are exported alongside. **`userTurnTextBySession` is now keyed by `SourceKind` first** (`Map<SourceKind, Map<string, string[]>>`) so the orchestrator passes only the matching source's session texts to each adapter's `observedNames` hook — preventing Claude `<command-name>/foo</command-name>` markers from de-ghosting an identically-named Codex prompt and vice versa.
-- **Oversized tool output bloat detector** ([#168](https://github.com/AgentWorkforce/burn/issues/168)). New `detectToolOutputBloat` that unifies two signal sources under one `ToolOutputBloat` shape (`{ source, kind, toolName, configuredLimit?, evidencedMaxOutput, evidencedP95Output?, occurrenceCount, cost, evidence }`). Signal A (Claude-only static config) reads `~/.claude/settings.json` and the project's `.claude/settings.json` and flags any merged `env.BASH_MAX_OUTPUT_LENGTH` whose token-equivalent (chars ÷ 4) exceeds the 15000-token threshold — i.e. above 60000 characters — project settings override user, last-wins. The shape stores the raw env char value in `configuredLimit` and the converted token count in `evidencedMaxOutput` so consumers don't have to branch on `kind` to know what unit each field is in. Signal B (cross-harness session-data evidence) consumes `ToolResultEventRecord.contentLength` from the #42 substrate, maps bytes → tokens via the same `bytes/4` heuristic (precision deferred to #57), bucketizes by `(source, toolName)` post-`normalizeToolName` so Claude `Bash`, OpenCode `bash`, and Codex `shell` aggregate under canonical `Bash`, and prices the carry cost at the source turn's model input rate. Threshold defaults to `max(15000 tokens, p95 across the slice)` with a sample-size guard so single-event slices don't self-exclude. New exports: `detectToolOutputBloat`, `detectStaticConfigBloat`, `detectObservedBloat`, `loadClaudeSettings`, `userClaudeSettingsPath`, `projectClaudeSettingsPath`, `toolOutputBloatToFinding`, `BASH_MAX_OUTPUT_ENV_KEY`, `DEFAULT_BLOAT_TOKEN_THRESHOLD`. Findings are emitted as `WasteFinding`s with `kind: 'tool-output-bloat'` — Signal A pastes the corrected env line (in chars) into `settings.json`; Signal B pastes a `head` / `tail` / `grep` filtering reminder for the user's CLAUDE.md / AGENTS.md.
-- **Cross-harness ghost user-installed surface detector** ([#166](https://github.com/AgentWorkforce/burn/issues/166)). New `detectGhostSurface` orchestrator + per-harness `GhostSurfaceAdapter`s (`claudeGhostAdapter`, `codexGhostAdapter`, `opencodeGhostAdapter`) flag user-installed surface files (agents/skills/commands/prompts/rules/memories) that ride in every session's system prompt but were never invoked across the observed window. Claude scans `~/.claude/{agents,skills,commands}/`, Codex scans `~/.codex/{prompts,skills,rules,memories}/`, and OpenCode walks each project's `opencode.json` declared skills + custom commands and the project skills folder. Output is a sorted `GhostSurfaceFinding[]` (`source`, `kind`, `path`, `sizeTokens`, `cost`, `sessionCount`, `countedByCatalogBloat?`) with cost = `sizeTokens × sessionCount × dollarPerToken`. Adapters are declarative — adding a new harness is one entry in `DEFAULT_GHOST_ADAPTERS`. The `GhostSurfaceInputs` contract reserves a `userTurnTextBySession` field for the [#172](https://github.com/AgentWorkforce/burn/issues/172) follow-up so slash-command invocation mining can land without a breaking change. OpenCode results dedupe against [#54](https://github.com/AgentWorkforce/burn/issues/54)'s `SystemPromptTax` (catalog-bloat) detector by emitting declared catalog skills with `cost: 0` and `countedByCatalogBloat: true` — the entry is still surfaced so the user knows what to remove from `opencode.json`, but the dollars aren't double-counted. New finding adapter `ghostSurfaceToFinding(...)` produces a `WasteFinding` with a `mv <path> <archive-dir>/` `command`-style `WasteAction` per the [#56](https://github.com/AgentWorkforce/burn/issues/56) envelope.
+- Ghost-surface detection now recognizes Claude command markers and Codex slash prompt invocations when content sidecars are available.
+- Added `detectToolOutputBloat` for oversized tool output from Claude config and observed tool-result events.
+- Added `detectGhostSurface` for unused user-installed agents, skills, commands, prompts, rules, and memories.
 
 ## [0.41.0] - 2026-04-28
 
 ### Added
 
-- **Content-sidecar enrichments for the four waste-pattern detectors** ([#57](https://github.com/AgentWorkforce/burn/issues/57)). When `DetectPatternsOptions.contentBySession` is supplied, `detectPatterns` now populates four optional fields that make detector reports significantly more actionable: `RetryLoop.errorSignature?` (leading error line shared across retried `tool_result`s, or the first attempt's signature with `" (signatures diverged)"` appended when they don't all match), `FailureRun.errorSignatures?` (one `{ tool, firstLine }` entry per distinct tool, in first-seen order), `CompactionLoss.lostWork?` (`{ files, bashCount, editCount, readCount }` aggregated across the window between the previous `compact_boundary` and this one), and `EditRevertCycle.samplePreview?` (truncated `old_string`/`new_string` previews for both anchor edits, capped at ~200 chars per field). Detectors fire identically when content is not supplied — only the enrichment fields are absent, honoring the spec's graceful-degradation contract for `content.store=hash-only` sessions. The `findings.ts` adapters fold these fields into `WasteFinding.title` / `WasteFinding.detail` so they surface in `burn waste` and `burn diagnose --json`.
-- **`WasteFinding` / `WasteAction` structured envelope** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). Introduces a common shape — `{ kind, severity, sessionId, title, detail, estimatedSavings, actions }` — that wraps every detector result in `PatternsResult` (`RetryLoop`, `FailureRun`, `CompactionLoss`, `EditRevertCycle`, `EditHeavySession`, `SkillRecallDup`, `SkillPruningProtection`, `SystemPromptTax`). New exports: `findingsFromPatterns(result)` to roll the whole `PatternsResult` into a single severity-ranked list, plus per-detector adapters (`retryLoopToFinding`, `failureRunToFinding`, `compactionLossToFinding`, `editRevertToFinding`, `editHeavyToFinding`, `skillRecallDupToFinding`, `skillPruningProtectionToFinding`, `systemPromptTaxToFinding`) and `sortFindings`. Severity is tiered off `usdPerSession` (≥ $0.50 high, ≥ $0.05 warn, else info); edit-heavy is capped at warn since its cost overlaps retry/revert findings. `WasteAction` is a closed union (`paste` / `command` / `file-content`) so a future `burn waste --apply` can drive a confirmation-gated apply pipeline against typed actions instead of scraping strings. The narrow per-detector result types remain exported for downstream consumers that want them.
+- Waste-pattern detectors can now include content-sidecar context such as error signatures, lost work summaries, and edit previews.
+- Added the shared `WasteFinding` / `WasteAction` envelope plus adapters for all waste detectors.
 
 ## [0.37.0] - 2026-04-28
 
 ### Added
 
-- **Cross-harness edit-heavy session detector** ([#167](https://github.com/AgentWorkforce/burn/issues/167)). `detectPatterns` now flags sessions whose normalized edit-tool count exceeds 4× their read-tool count (with ≥ 5 edits), reaching parity across Claude / Codex / OpenCode via `normalizeToolName`. Reads are restricted to file-content tools (`Read`, `NotebookRead`); `Grep` / `Glob` / `LS` / `Bash` are deliberately excluded — they discover or shell out, but don't record that the model has read the file. Codex's `apply_patch` may bundle multiple files per call, so the same threshold flags Codex more conservatively than a file-level count would — known per-harness tunable. Emits `EditHeavySession { source, sessionId, readCount, editCount, ratio, likelyRetries, cost }` with `ratio = +Infinity` when reads is zero; `likelyRetries` is the sum of `countRetries()` over the session's turns. `PatternsResult` gains an `editHeavySessions` array; `SessionPatternSummary` gains `editHeavyCount`. The cost field is **not** added to `totalPatternCost` because the same edit-bearing turns also feed `editReverts` and `retryLoops` costs — adding them again would double-count.
+- Added an edit-heavy session detector for sessions with at least five edits and more than four edits per read.
 
 ## [0.35.0] - 2026-04-28
 
 ### Added
 
-- **OpenCode skill recall duplicate detector.** `detectPatterns` now scans OpenCode sessions for repeated `skill({name})` calls and emits `SkillRecallDup` entries (≥ 2 calls with the same `skillName`). Non-OpenCode sessions are silently skipped.
-- **OpenCode skill pruning protection detector.** `detectPatterns` now tracks each skill tool call in OpenCode sessions and measures how many subsequent turns still carried `cacheRead` tokens — the skill content is never evicted because OpenCode marks it as prune-protected. Emits `SkillPruningProtection` entries with `ridingTurns`, `lastCachedTurnIndex`, and cost.
-- **OpenCode system prompt / skill catalog tax detector.** `detectPatterns` now estimates the fixed prefix tax (system prompt + skill catalog) on the first turn of an OpenCode session by subtracting the first user message size (from `UserTurnRecord` blocks) from `cacheCreate`. Emits `SystemPromptTax` entries with `estimatedSystemPromptTokens`, `ridingTurns`, and total cost. Requires `userTurnsBySession` in `DetectPatternsOptions`.
-- `SessionPatternSummary` gains `skillRecallDupCount`, `skillPruningProtectionCount`, and `systemPromptTaxCount` fields; `PatternsResult` gains `skillRecallDups`, `skillPruningProtection`, and `systemPromptTaxes` arrays; `DetectPatternsOptions` gains `userTurnsBySession`.
+- Added OpenCode detectors for repeated skill calls, prune-protected skill results, and system-prompt or skill-catalog tax.
 
 ## [0.34.0] - 2026-04-27
 
 ### Changed
 
-- **`hasMinimumFidelity` and `summarizeFidelity` are now wired into `burn compare`** ([#95](https://github.com/AgentWorkforce/burn/issues/95)). No API change in `@relayburn/analyze` itself — this entry just records the consumer-side adoption of the helpers shipped in 0.14.0 ([#41](https://github.com/AgentWorkforce/burn/issues/41)). See `@relayburn/cli` for the CLI surface (`--fidelity`, `--include-partial`, the new JSON `fidelity` block, and the "excluded N turns" coverage note).
+- `burn compare` now uses analyze fidelity helpers to exclude low-confidence turns by default.
 
 ## [0.33.0] - 2026-04-27
 
 ### Added
 
-- `planUsageFromArchive(plan, { pricing, db, now })` ([#91](https://github.com/AgentWorkforce/burn/issues/91)) — computes `PlanUsage` for a plan via one `SUM(...) GROUP BY (source, model)` query against the archive's `turns` table instead of a full ledger scan. Returns the same shape as `computePlanUsage` so callers can swap paths cleanly. Reuses `costForTurn`'s source-aware reasoning override, so Codex `output_tokens` is not double-billed against `usage.reasoning`.
-- **`PlanUsage.fidelity` annotates per-cycle token-coverage confidence** ([#108](https://github.com/AgentWorkforce/burn/issues/108)). `computePlanUsage` now walks every contributing turn through `summarizeFidelity` and emits a `{ confidence: 'high' | 'low', summary }` block alongside the existing spend/projection fields. `confidence === 'high'` only when every turn in the cycle is `full` or `usage-only` with both per-turn input and output token coverage; otherwise `low`. Records with no `fidelity` field at all (older ledger writers) are treated as best-effort high, matching the codebase's existing backward-compat policy. Spend totals continue to include `partial` / `aggregate-only` / `cost-only` contributions — under-counting is worse than annotating low-confidence — so the cycle's `spentUsd` is the lower bound the consumer renders against the new flag. The `PlanUsageFidelity` type is exported for downstream consumers.
+- Added `planUsageFromArchive()` for archive-backed plan spend queries.
+- `PlanUsage` now includes cycle fidelity confidence and summary data.
 
 ## [0.31.0] - 2026-04-27
 
 ### Added
 
-- **`compareFromArchive(query, opts)`** ([#88](https://github.com/AgentWorkforce/burn/issues/88)). New helper that builds a `CompareTable` directly from `archive.sqlite` via a single grouped `SELECT … GROUP BY model, activity, source` plus a tiny per-(model, activity) follow-up for median retries, instead of streaming every `EnrichedTurn` through `buildCompareTable` in memory. Returns `{ table, analyzedTurns }` so the caller can populate the same "turns analyzed" header the legacy path uses. Output is byte-identical to `buildCompareTable(await queryAll(q), opts)` for the parity fixture; per-source reasoning-mode handling (Codex's `included_in_output`) is preserved by grouping on `source` alongside `(model, activity)`. Powers the migration of `burn compare` to the archive read model.
+- Added `compareFromArchive()` to build compare tables directly from `archive.sqlite`.
 
 ## [0.27.0] - 2026-04-26
 
 ### Changed
 
-- **Waste attribution uses persisted user-turn block sizes before even-split** (#2). `attributeWaste()` accepts `userTurnsBySession` and fills missing per-`toolUseId` sizes from `UserTurnRecord.blocks` when content sidecars are unavailable, while keeping full sidecar content primary when present. Sessions that use this path report `attributionMethod: "user-turn"` instead of degrading to even-split.
+- Waste attribution now uses persisted user-turn block sizes before falling back to even-split attribution.
 
 ## [0.22.0] - 2026-04-26
 
 ### Changed
 
-- Populate TurnRecord.fidelity from OpenCode parser (#89)
+- OpenCode fidelity data is now available to analyze consumers.
 
 ## [0.18.0] - 2026-04-26
 
 ### Fixed
 
-- **Reasoning-token pricing semantics** (#32). Two correctness bugs that distorted reported spend whenever reasoning tokens were involved:
-  - Codex `usage.reasoning` was double-billed at the output rate even though Codex's `output_tokens` already includes reasoning. `burn` now treats Codex turns as `included_in_output` and bills `output` only. On a 10-turn Codex sample (660k input / 53k output / 29k reasoning / 5.6M cacheRead), this drops the reported cost from $4.282607 to $3.846557 — about 11% off the Codex slice.
-  - `cost.reasoning` from the `models.dev` snapshot was discarded during `flatten()`, so any model with a distinct reasoning tariff (e.g. Alibaba Qwen reasoning models) couldn't be priced correctly. The flattener now preserves `reasoning` and tags the entry `reasoningMode: 'separate'`; `costForUsage` honors the distinct tariff.
-- **Waste-attribution session totals now honor the same reasoning-mode semantics** as `costForTurn`. `attributeWaste` previously had a private `costForTurnLocal` that unconditionally billed reasoning at the output rate, which double-billed Codex turns and ignored separate reasoning tariffs in `sessionGrand` / `grandCost` / `unattributedCost`. It now delegates to `costForTurn`, so waste totals match `cost.ts` for any session involving reasoning tokens (Devin review on #73).
+- Fixed reasoning-token pricing. Codex reasoning is no longer double-billed, and distinct reasoning tariffs from pricing data are honored.
+- Waste-attribution totals now use the same reasoning pricing path as per-turn costs.
 
 ### Added
 
-- `ModelCost.reasoningMode: 'included_in_output' | 'separate' | 'same_as_output'` and optional `reasoning` per-million tariff. `ReasoningMode` and `CostForUsageOptions` are exported.
-- `costForUsage(usage, model, pricing, { reasoningMode })` accepts an explicit override. `costForTurn` infers `included_in_output` for `source: 'codex'` automatically.
-- `flatten` is now exported so callers can build `PricingTable`s from in-memory `models.dev` payloads.
+- Added `ModelCost.reasoningMode`, optional reasoning tariffs, `CostForUsageOptions`, and exported `flatten()`.
 
 ## [0.14.0] - 2026-04-25
 
 ### Added
 
-- **`summarizeFidelity(turns)` and `hasMinimumFidelity(fidelity, minimum)`** ([#41](https://github.com/AgentWorkforce/burn/issues/41) — first cut). `summarizeFidelity` walks a slice of turns and returns a `FidelitySummary` with totals broken down by `class`, by `granularity`, and per-field `missingCoverage` counts plus an `unknown` bucket for records emitted before `TurnRecord.fidelity` existed. `hasMinimumFidelity` is the predicate behind a future "default exclude aggregate-only / cost-only" filter for `burn compare` and friends; treats `undefined` fidelity as passing for backward compat. Pure functions — no I/O, safe to call repeatedly.
+- Added `summarizeFidelity()` and `hasMinimumFidelity()` for coverage-aware analysis.
 
 ## [0.13.1] - 2026-04-25
 
 ### Added
 
-- **Synthetic provider reattribution layer (#31).** `resolveProvider(model, rules?)` returns a `{ provider, normalizedModel, matchedRule }` for Synthetic-routed model IDs — the cross-collector reattribution pattern used when a Claude Code or OpenCode session uses a model dispatched through Synthetic.new. First pass covers three prefix shapes (`hf:*`, `accounts/fireworks/models/*`, `synthetic/*`) and exposes `DEFAULT_RULES` plus a `ProviderRule` type so future aggregators (OpenRouter, etc.) plug in via the same scaffolding. Pricing lookup in `costForTurn`, `attributeWaste`, and `attributeClaudeMd`/`attributeContext` all consult the reattribution layer before falling back to the existing `provider/model` strip, so a turn logged with `hf:deepseek-ai/deepseek-r1` resolves to the `deepseek-r1` rate instead of returning `null` across summary, waste, and context views. Reattribution stays query-time only — raw model strings are never mutated in the ledger. Octofriend SQLite fallback and other aggregator prefixes are deferred to follow-up issues.
+- Added query-time provider reattribution for Synthetic-routed model IDs.
 
 ## [0.11.0] - 2026-04-25
 
 ### Added
 
-- **`computePlanUsage(plan, turns, { pricing, now })`** (#39) — aggregates spend over a plan's current cycle and returns a `PlanUsage`: `spentUsd`, `daysElapsed`, `daysInCycle`, `projectedEndOfCycleUsd` (linear extrapolation from observed rate), `overBudget`, `runwayDays` (days of budget left at the current daily rate, only populated when the projection exceeds budget), `resetAt`, and `limitedData` (true when fewer than 7 days have elapsed in the cycle, so renderers can mark projections as low-confidence per the issue's acceptance). Provider-aware filtering: `claude` plans count `claude-code` + `anthropic-api` turns, `cursor` plans count `cursor` turns (no reader emits these yet — see SourceKind), `custom` plans count every turn.
-- **`cycleBounds(resetDay, now)`** — exposed for callers that need the cycle window without a full `PlanUsage`. UTC-anchored, clamps `resetDay > 28` to the actual last-day-of-month so February with `resetDay: 31` resolves to Feb 28/29, handles year-boundary crossings, and never returns a zero-length cycle.
+- Added `computePlanUsage()` for monthly plan spend, projection, budget, and runway calculations.
+- Added `cycleBounds()` for reset-day based billing windows.
 
 ## [0.9.0] - 2026-04-24
 
 ### Added
 
-- **Subagent tree + per-type statistics.** `buildSubagentTree(turns, { pricing })` returns a per-session `SubagentTreeNode` hierarchy: main thread at the root, subagent invocations nested by `parentAgentId`, with `selfCost` / `selfTurns` per node and `cumulativeCost` / `cumulativeTurns` rolled up from leaves. Sidechain turns that arrived without resolvable tree fields attach under a synthetic `(unresolved)` node so their cost isn't dropped. `aggregateSubagentTypeStats(turns, { pricing })` reports invocations, turns, total / median / p95 / mean cost per `subagentType` across sessions (counted once per unique `sessionId + agentId`, not per turn). New exported types: `SubagentTreeNode`, `SubagentTypeStats`, `BuildSubagentTreeOptions`. Consumes the new `TurnRecord.subagent` fields from `@relayburn/reader`. Closes [#8](https://github.com/AgentWorkforce/burn/issues/8).
+- Added `buildSubagentTree()` and `aggregateSubagentTypeStats()`.
 
 ## [0.8.0] - 2026-04-24
 
 ### Added
 
-- **Add Claude hook-based ingest and settings**
+- Added analyze support needed by Claude hook-based ingest.
 
 ## [0.6.0] - 2026-04-24
 
 ### Added
 
-- **Quality signals module.** `computeQuality(turns, opts)` returns two orthogonal per-session signals — `SessionOutcome` (outcome inference) and `OneShotMetrics` (one-shot rate) — for answering "was this work good enough that a cheaper model could have done it." Closes [#6](https://github.com/AgentWorkforce/burn/issues/6). Also exported individually as `inferOutcome` and `computeOneShotRate`.
-  - **Outcome inference** classifies each session as `completed` / `abandoned` / `errored` / `unknown` with explicit `high` / `medium` / `low` confidence and a reason code (`single-exchange`, `too-short`, `recent`, `user-ended`, `user-ended-long`, `failure-streak`, `give-up`, `assistant-ended`, `unknown-ending`, `empty`). Works from turn metadata alone; an optional `contentBySession` map downgrades `assistant-ended` to `give-up/low` when the last assistant text matches known give-up phrases (e.g. `"i'm unable to"`, `"i cannot access"`, `"doesn't appear to exist"`).
-  - **One-shot rate** is `oneShotTurns / editTurns` per session, where a one-shot turn is an edit turn with zero retries. Sidechain (subagent) turns are excluded from the denominator so their retry counts don't poison the parent session's rate. Also returns `totalRetries` as a raw volume signal.
-  - Computed lazily at query time, never persisted to the ledger — upgrading the rules later does not require a rebuild. Requires no prompt storage; the give-up downgrade runs opportunistically when content is available.
-  - Handles sources that don't record `stopReason` (e.g. Codex): the final-turn ending role is reported as `'unknown'` and the session is classified `completed/low` with reason `unknown-ending` rather than being swept into `abandoned`.
-- **Waste-pattern detectors** — retry loops, failure runs, compaction loss, edit-revert. Closes [#11](https://github.com/AgentWorkforce/burn/issues/11).
+- Added quality signals: `computeQuality()`, `inferOutcome()`, and `computeOneShotRate()`.
+- Added waste-pattern detectors for retry loops, failure runs, compaction loss, and edit reverts.
 
 ## [0.5.0] - 2026-04-24
 
 ### Changed
 
-- Clean up changelogs: move [Unreleased] content into 0.3.0/0.4.0 sections
+- Moved earlier unreleased notes into release sections. No package behavior changed.
 
 ## [0.4.0] - 2026-04-23
 
 ### Added
 
-- **Per-tool-call & per-file cost attribution module.** `attributeWaste(turns, {pricing, contentBySession})` returns a per-`tool_use_id` ledger of initial cost (the turn after a tool call, where the result enters context as `input`/`cacheCreate`) plus persistence cost (subsequent turns where it rides along in `cacheRead` until evicted). Sized when content sidecar is available (estimates each tool_result's tokens from its text length); falls back to even-split (initial only) when it isn't.
-- `aggregateByFile`, `aggregateByBash`, `aggregateBySubagent` — collapse the attribution ledger to ranked top-N tables for `Read`/`Edit`/`Write`/`NotebookEdit` (by target path), `Bash` (by `argsHash` so repeated commands collapse), and `Agent`/`Task` (by `subagent_type`).
-- Attribution honors per-paying-turn model rates: initial cost uses turn N+1's rate and (input + cacheCreate) mix; persistence cost uses each ride-along turn's own rate. Sessions that switch models mid-stream are priced correctly.
-- Sibling normalization: when multiple tool_results enter on the same turn, their summed `initialTokens` are capped at the turn's actual `newContent` and split proportionally by size. Persistence likewise allocates each turn's `cacheRead` proportionally across all still-cached results so the per-turn sum never exceeds the actual cached tokens.
+- Added per-tool, per-file, Bash, and subagent cost attribution.
 
 ## [0.3.0] - 2026-04-23
 
 ### Added
 
-- **CLAUDE.md cost attribution module.** `parseClaudeMd(path, text)` / `loadClaudeMdFile(path)` / `findClaudeMdFiles(projectPath)` resolve a project's CLAUDE.md set (root and `.claude/CLAUDE.md`) and split it into sections at the H2 level (H1 fallback), skipping headings inside fenced code blocks.
-- `attributeClaudeMd({files, turns, pricing})` — computes per-session cost as `claude_md_tokens × cacheReadPrice` for every turn whose `cacheRead` is large enough to hold the file. Returns per-section costs proportional to section byte share (strictly additive, so `Σ sectionCost ≤ totalCost`). Includes zero-cost sessions in `sessionCount` / `perSessionAvg` / `perSessionP95` so stats cover the whole query window rather than only cache-hit sessions.
-- `buildAdviseRecommendations(attribution, topN)` + `renderUnifiedDiffForRecommendation(path, text, rec, baseDir?)` — emit read-only unified-diff TRIM hunks for the most expensive non-preamble sections. Paths render POSIX-relative when a `baseDir` is given so the diff applies with standard patch tooling.
-- **Multi-harness context-file attribution.** New `findContextFiles(projectPath)` discovers `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`, each tagged with the `SourceKind[]` it applies to. `attributeContext({files, turns, pricing})` routes turns to files by `source` so Claude Code sessions pay for `CLAUDE.md`, Codex and OpenCode sessions pay for `AGENTS.md`, and neither cross-attributes. Per-file attribution returns one `ClaudeMdAttributionResult` each, plus a grand total across all files.
+- Added context-file parsing, attribution, and trim recommendations for `CLAUDE.md` and `AGENTS.md`.
 
 ### Fixed
 
-- `parseClaudeMd` normalizes CRLF → LF and strips a single trailing newline so `totalLines` and section `endLine` match what an editor shows. Empty input returns zero sections.
-- Strict CommonMark fence-close matching: a line must contain only fence characters (length ≥ opening run) plus optional whitespace to close. A `` ````python `` line nested inside a 3-backtick block no longer closes the fence and corrupts section boundaries.
-- `attributeContext` deduplicates per-session `totalRidingTurns` using max-per-session rather than summing across files, so a session that reads multiple context files isn't double-counted.
+- Fixed markdown section parsing edge cases and duplicate context riding-turn counts.
 
 ## [0.2.0] - 2026-04-23
 
 ### Added
 
-- **`buildCompareTable(turns, opts)`** — bucket turns by `(model, activity)` and emit a `CompareTable` with per-cell metrics: `turns`, `editTurns`, `oneShotTurns`, `pricedTurns`, `totalCost`, `costPerTurn`, `oneShotRate`, `cacheHitRate`, `medianRetries`, plus `noData` / `insufficientSample` flags. Sorts models by total cost descending, categories by total turns descending. Filters: `models[]`, `minSample`.
-- **`DEFAULT_MIN_SAMPLE`** export (defaults to 5).
-- `CompareCell.pricedTurns` distinguishes "cost is zero because the model is free" from "cost is unknown because we have no pricing for this model" — `costPerTurn` is `null` (renders as `—`) when no priced turns, never silently `$0.00`.
-- `CompareCell.noData` is mutually exclusive with `insufficientSample` so consumers can tell "we never saw this combination" apart from "we have data but the sample is small."
-- `--models` filter pre-seeds requested models so a model the user explicitly asked about stays visible (as an all-empty column with coverage notes) even when zero turns matched.
+- Added `buildCompareTable()` and `DEFAULT_MIN_SAMPLE`.
+- Compare cells now distinguish no pricing from zero cost and no data from low sample size.
+- Requested models remain visible even when the filtered slice has no matching turns.
 
 ## [0.1.0] - 2026-04-22
 
 ### Added
 
-- **Initial release.** Pricing loader and per-record cost derivation.
-- `loadBuiltinPricing()` / `loadPricing()` — vendored models.dev snapshot with optional user override at `$RELAYBURN_HOME/models.dev.json`.
-- `costForTurn(turn, pricing)` / `costForUsage(usage, model, pricing)` — per-turn cost breakdown (`input`, `output`, `reasoning` at output rate, `cacheRead`, `cacheCreate`).
-- `sumCosts(costs[])` aggregator.
-- Provider-prefix fallback in lookup so `anthropic/claude-sonnet-4-6` resolves to the `claude-sonnet-4-6` rate.
+- Initial release with pricing loading, per-turn cost calculation, cost aggregation, and provider-prefix fallback.
