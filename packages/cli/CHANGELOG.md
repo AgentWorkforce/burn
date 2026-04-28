@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`burn archive vacuum`** ([#104](https://github.com/AgentWorkforce/burn/issues/104)). New subcommand that runs SQLite `VACUUM` against `archive.sqlite` to reclaim free pages from `INSERT OR REPLACE` churn (stamp re-folds rewrite turn rows; rebuild drops + recreates rows). Acquires the same `'archive'` lock used by `build` / `rebuild`, so a vacuum and a build can be issued concurrently and will serialize without corruption. Text output is a one-liner — `archive: vacuumed 12.3 MB -> 4.1 MB (reclaimed 8.2 MB)` — and `--json` returns `{ archivePath, existed, beforeBytes, afterBytes, reclaimedBytes }`. No-op with a hint if the archive doesn't exist; vacuum never creates an archive as a side effect.
 
+## [0.39.0] - 2026-04-28
+
+### Changed
+
+- **`burn compare` takes models as a required positional, not a flag** ([#159](https://github.com/AgentWorkforce/burn/issues/159)). The verb "compare" implies selection — without an explicit list the old `burn compare` produced a wide N×M survey of every model in the ledger, which is what `burn summary` (with `--by-provider` / `--by-tool`) already covers. The new shape is `burn compare <model_a,model_b[,...]> [flags]` with a minimum of 2 models. Trim/dedupe rules match the old `--models` flag. The `--models` flag is removed; passing it now exits 2 with a pointer to the positional form. Missing or single-model positional likewise exits 2 with `burn compare: needs at least 2 models. Run \`burn summary --by-provider\` (or \`burn summary --by-tool\`) to see which models have data.` Help block, top-level help, and every example in this repo flip to the positional form. No behavioral change to filters, the cell schema, the JSON contract, or aggregation logic.
+
 ## [0.38.0] - 2026-04-28
 
 ### Changed
