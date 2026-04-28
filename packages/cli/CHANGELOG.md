@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-04-28
+
 ### Fixed
 
 - **Pending-stamp resolution no longer cross-contaminates concurrent same-cwd same-harness runs** ([#162](https://github.com/AgentWorkforce/burn/issues/162)). When two `burn run codex` (or two `burn run opencode`) processes are running in the same directory, the `{harness, cwd, mtime ≥ spawnStart, sessionDirHint}` filter cannot tell their stamps apart, so the resolver was applying every matching stamp's enrichment to whichever session ingested first — leaving the other session unstamped. Each session now claims at most one stamp (FIFO by `spawnStartTs`), so the older stamp goes to the first session that ingests and the newer stamp stays pending until its own session shows up. Different cwds, different harnesses, and Claude (which uses pre-allocated session IDs and never writes pending stamps) were unaffected and remain unchanged.

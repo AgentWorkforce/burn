@@ -1,6 +1,6 @@
 {
   "name": "relayburn",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "description": "Token usage & cost attribution for agent CLIs (installs the `burn` command)",
   "type": "module",
   "bin": {

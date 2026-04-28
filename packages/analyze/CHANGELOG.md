@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-04-28
+
 ### Added
 
 - **Content-sidecar enrichments for the four waste-pattern detectors** ([#57](https://github.com/AgentWorkforce/burn/issues/57)). When `DetectPatternsOptions.contentBySession` is supplied, `detectPatterns` now populates four optional fields that make detector reports significantly more actionable: `RetryLoop.errorSignature?` (leading error line shared across retried `tool_result`s, or the first attempt's signature with `" (signatures diverged)"` appended when they don't all match), `FailureRun.errorSignatures?` (one `{ tool, firstLine }` entry per distinct tool, in first-seen order), `CompactionLoss.lostWork?` (`{ files, bashCount, editCount, readCount }` aggregated across the window between the previous `compact_boundary` and this one), and `EditRevertCycle.samplePreview?` (truncated `old_string`/`new_string` previews for both anchor edits, capped at ~200 chars per field). Detectors fire identically when content is not supplied — only the enrichment fields are absent, honoring the spec's graceful-degradation contract for `content.store=hash-only` sessions. The `findings.ts` adapters fold these fields into `WasteFinding.title` / `WasteFinding.detail` so they surface in `burn waste` and `burn diagnose --json`.
