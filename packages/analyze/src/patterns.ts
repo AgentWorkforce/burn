@@ -751,7 +751,7 @@ function summarizeCompactedWindow(
   const files = new Set<string>();
   for (const t of sessionTurns) {
     if (windowStart !== undefined && t.ts <= windowStart) continue;
-    if (t.ts > boundaryTs) break;
+    if (t.ts > boundaryTs) continue;
     for (const call of t.toolCalls) {
       const name = normalizeToolName(call.name);
       if (name === 'Bash') bashCount++;
