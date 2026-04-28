@@ -20,12 +20,18 @@ import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
 
 Usage:
-  burn compare [--models a,b] [--provider a,b] [--since 7d] [--project <path>]
-               [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>]
-               [--fidelity <class>] [--include-partial] [--json|--csv] [--no-archive]
+  burn compare <model_a,model_b[,...]> [--provider a,b] [--since 7d]
+               [--project <path>] [--session <id>] [--workflow <id>]
+               [--agent <id>] [--min-sample <n>] [--fidelity <class>]
+               [--include-partial] [--json|--csv] [--no-archive]
+
+Models:
+  Required comma-separated positional argument naming at least two models
+  to compare (e.g. claude-sonnet-4-6,claude-haiku-4-5). Use
+  \`burn summary --by-provider\` (or \`burn summary --by-tool\`) to discover
+  which models have data in your ledger.
 
 Flags:
-  --models      comma-separated list of model names to include (default: all)
   --provider    comma-separated list of effective providers to include
                 (e.g. synthetic, anthropic, openai); resolved via the same
                 pricing-layer classifier summary/by-tool/waste use
@@ -60,12 +66,15 @@ Cell metrics:
 Missing-data cells render "—", never $0.00 or 0%.
 
 Examples:
-  burn compare --since 30d
-  burn compare --models claude-sonnet-4-6,claude-haiku-4-5 --since 7d
-  burn compare --workflow wf-refactor --json
-  burn compare --fidelity full        # strict: drop anything below full
-  burn compare --include-partial      # include every turn, even cost-only
+  burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 30d
+  burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 7d
+  burn compare claude-opus-4-7,claude-sonnet-4-6 --workflow wf-refactor --json
+  burn compare claude-sonnet-4-6,claude-haiku-4-5 --fidelity full
+  burn compare claude-sonnet-4-6,claude-haiku-4-5 --include-partial
 `;
+
+const NEEDS_MODELS_MSG =
+  'burn compare: needs at least 2 models. Run `burn summary --by-provider` (or `burn summary --by-tool`) to see which models have data.\n';
 
 const FIDELITY_CHOICES: ReadonlyArray<FidelityClass> = [
   'full',
@@ -95,15 +104,42 @@ export async function runCompare(
     process.stdout.write(COMPARE_HELP);
     return 0;
   }
+
+  // `--models` was the old optional flag; #159 made the model list a required
+  // comma-separated positional. Reject the flag explicitly so users on the old
+  // shape land on a clear error pointing them at the new form, not a silent
+  // "needs at least 2 models" message.
+  if ('models' in args.flags) {
+    process.stderr.write(
+      `burn: --models was removed; pass models as a positional argument (e.g. \`burn compare claude-sonnet-4-6,claude-haiku-4-5\`).\n`,
+    );
+    return 2;
+  }
+
+  // Required positional: a comma-separated list of >=2 models. Same
+  // trim/dedupe rules the old --models flag used.
+  const seen = new Set<string>();
+  const models: string[] = [];
+  if (typeof first === 'string') {
+    for (const raw of first.split(',')) {
+      const m = raw.trim();
+      if (!m) continue;
+      if (seen.has(m)) continue;
+      seen.add(m);
+      models.push(m);
+    }
+  }
+  if (models.length < 2) {
+    process.stderr.write(NEEDS_MODELS_MSG);
+    return 2;
+  }
+
   const q: Query = {};
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
   if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
-
-  const modelsArg = typeof args.flags['models'] === 'string' ? args.flags['models'] : undefined;
-  const models = modelsArg ? modelsArg.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
   const providerFilter = parseProviderFilter(args.flags['provider']);
   if (providerFilter instanceof Error) {
     process.stderr.write(providerFilter.message);
@@ -158,8 +194,7 @@ export async function runCompare(
   await ingest();
   const pricing = await loadPricingFn();
 
-  const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample };
-  if (models) opts.models = models;
+  const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample, models };
 
   // Archive path is the default (#88), but it does not yet apply
   // `attribution_fidelity` filtering at the SQL layer. Fall back to the
