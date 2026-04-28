@@ -28,7 +28,7 @@ Flags:
   --models      comma-separated list of model names to include (default: all)
   --provider    comma-separated list of effective providers to include
                 (e.g. synthetic, anthropic, openai); resolved via the same
-                pricing-layer classifier summary/by-tool/waste use
+                pricing-layer classifier summary/waste use
   --since       relative (e.g. 24h, 7d, 4w) or ISO timestamp; default: all time
   --project     filter by project path or git-canonical projectKey
   --session     filter by sessionId

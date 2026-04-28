@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { appendTurns, queryAll } from '@relayburn/ledger';
 import type { TurnRecord } from '@relayburn/reader';
 
-import { runByTool } from './by-tool.js';
 import { runSummary } from './summary.js';
 import { runWaste } from './waste.js';
 import type { ParsedArgs } from '../args.js';
@@ -111,7 +110,7 @@ describe('provider filters', () => {
     assert.equal(raw[0]!.model, 'hf:deepseek-ai/deepseek-r1');
   });
 
-  it('applies --provider synthetic to by-tool', async () => {
+  it('applies --provider synthetic to summary --by-tool', async () => {
     await appendTurns([
       turn({
         sessionId: 's-synth-tool',
@@ -128,7 +127,7 @@ describe('provider filters', () => {
     ]);
 
     const { result, stdout } = await captureStdio(() =>
-      runByTool(args({ provider: 'synthetic' })),
+      runSummary(args({ 'by-tool': true, provider: 'synthetic' })),
     );
     assert.equal(result, 0);
     assert.match(stdout, /turns analyzed: 1/);

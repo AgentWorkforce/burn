@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`burn by-tool` folded into `burn summary --by-tool`** ([#156](https://github.com/AgentWorkforce/burn/issues/156)). The standalone `burn by-tool` verb has been removed in favor of a `summary` mode flag that sits next to `--by-provider`, `--by-subagent-type`, and `--subagent-tree`. Output columns (`tool | calls | attributedCost`) and the attribution-method footer are unchanged. Folding into `summary` closes the previous filter-parity gap — `--by-tool` now inherits `--workflow`/`--agent` from `summary`'s filter list. JSON shape is `{ ingest, turns, byTool: [{ tool, calls, attributedCost }], unattributed, fidelity }`. Mode flags are mutually exclusive: combining `--by-tool` with `--by-provider`/`--by-subagent-type`/`--subagent-tree` exits non-zero with a clear error. No deprecation alias — callers must migrate to `burn summary --by-tool`.
+
 ## [0.36.0] - 2026-04-28
 
 ### Added
