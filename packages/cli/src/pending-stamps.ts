@@ -155,6 +155,11 @@ export async function resolvePendingStampsForSession(
 
   matches.sort((a, b) => a.record.spawnStartTs.localeCompare(b.record.spawnStartTs));
 
+  // Claim at most one stamp per session: when multiple same-harness runs share
+  // a cwd, the cwd+mtime+sessionDirHint filter is too coarse to tell their
+  // stamps apart, so we'd otherwise apply every concurrent run's enrichment to
+  // whichever session ingested first. FIFO (oldest spawnStartTs first) leaves
+  // later stamps to match later sessions.
   const enrichment: Enrichment = {};
   let applied = 0;
   for (const { file, record } of matches) {
@@ -165,6 +170,7 @@ export async function resolvePendingStampsForSession(
       Object.assign(enrichment, record.enrichment);
       applied++;
       await unlink(claimed).catch(() => undefined);
+      break;
     } catch (err) {
       await rename(claimed, file).catch(() => undefined);
       throw err;
