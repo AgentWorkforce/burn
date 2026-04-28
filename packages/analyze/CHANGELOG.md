@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-04-28
+
 ### Added
 
 - **OpenCode skill recall duplicate detector.** `detectPatterns` now scans OpenCode sessions for repeated `skill({name})` calls and emits `SkillRecallDup` entries (≥ 2 calls with the same `skillName`). Non-OpenCode sessions are silently skipped.

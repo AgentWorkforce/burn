@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-04-28
+
 ### Added
 
 - Initial release. Thin wrapper around [`@relayburn/cli`](https://www.npmjs.com/package/@relayburn/cli) — installing `relayburn` globally exposes the same `burn` command. Lets users `npm i -g relayburn` without needing to know the scoped package name.
+

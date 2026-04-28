@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-04-28
+
 ### Added
 
 - **Codex compaction markers emit `CompactionEvent`s.** `parseCodexSession` and `parseCodexSessionIncremental` now return an `events` array for Codex, matching Claude's compaction event surface. The reader detects Codex `type: "compacted"` records, anchors each event to the most recent committed Codex turn, and carries that turn through `CodexResumeState` so incremental parses preserve `precedingMessageId` and `tokensBeforeCompact` across cursor boundaries.
