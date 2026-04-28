@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`burn waste --patterns --findings`** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). Renders every detector's output through one severity-ranked `WasteFinding` table — retry loops / failure runs / compaction losses / edit reverts / edit-heavy / OpenCode skill-* / system-prompt-tax sorted together by severity (high → warn → info) then `usdPerSession`. The existing per-detector tables remain the default render path; `--findings` is opt-in. JSON output (`--patterns --json`) gains a `findings` array alongside the existing per-detector arrays for downstream consumers.
+- **`burn waste --patterns --findings`** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). Renders every detector's output through one severity-ranked `WasteFinding` table — retry loops / failure runs / compaction losses / edit reverts / edit-heavy / OpenCode skill-* / system-prompt-tax sorted together by severity (high → warn → info) then `usdPerSession`. The existing per-detector tables remain the default render path; `--findings` is opt-in. JSON output (`--patterns --json`) gains a `findings` array alongside the existing per-detector arrays for downstream consumers; the JSON refusal payload also carries `findings: []` for schema parity. `burn waste --findings` (without `--patterns`) implies `--patterns` so the flag is never silently ignored.
+
+## [0.40.0] - 2026-04-28
+
+### Added
+
+- **`burn archive vacuum`** ([#104](https://github.com/AgentWorkforce/burn/issues/104)). New subcommand that runs SQLite `VACUUM` against `archive.sqlite` to reclaim free pages from `INSERT OR REPLACE` churn (stamp re-folds rewrite turn rows; rebuild drops + recreates rows). Acquires the same `'archive'` lock used by `build` / `rebuild`, so a vacuum and a build can be issued concurrently and will serialize without corruption. Text output is a one-liner — `archive: vacuumed 12.3 MB -> 4.1 MB (reclaimed 8.2 MB)` — and `--json` returns `{ archivePath, existed, beforeBytes, afterBytes, reclaimedBytes }`. No-op with a hint if the archive doesn't exist; vacuum never creates an archive as a side effect.
 
 ## [0.39.0] - 2026-04-28
 

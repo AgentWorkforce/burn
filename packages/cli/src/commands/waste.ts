@@ -182,7 +182,12 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
   const pricing = await loadPricing();
   const turns = filterTurnsByProvider(await queryAll(q), providerFilter);
 
-  const patternsFlag = args.flags['patterns'];
+  // `--findings` is the unified-render flag for `--patterns`; passing it
+  // standalone (without `--patterns`) is taken as `--patterns --findings`.
+  // The flag is meaningless under default attribution mode, and a silent
+  // ignore would surprise users.
+  const patternsFlag =
+    args.flags['patterns'] ?? (args.flags['findings'] === true ? true : undefined);
   if (patternsFlag !== undefined) {
     const selected = resolvePatternSelection(patternsFlag);
     const sessionIds = new Set(turns.map((t) => t.sessionId));
@@ -647,6 +652,7 @@ export async function runPatternsMode(
             skillPruningProtection: [],
             systemPromptTaxes: [],
             sessionSummaries: [],
+            findings: [],
             fidelity: {
               analyzed: 0,
               excluded: total,
