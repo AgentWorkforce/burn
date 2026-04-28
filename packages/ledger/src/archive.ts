@@ -428,10 +428,14 @@ export async function buildArchive(): Promise<BuildResult> {
  * than implicitly creating one. The CLI prints a hint pointing at `burn
  * archive build` in that case.
  *
- * Sizes are measured from the main `.sqlite` file. We checkpoint WAL with
- * `TRUNCATE` after VACUUM so the main file actually reflects the reclaimed
- * space — without that, freed pages can linger in the WAL sidecar until the
- * next implicit checkpoint.
+ * Sizes are measured from the main `.sqlite` file, taken on the same basis
+ * before and after: we checkpoint WAL with `TRUNCATE` *first* so `beforeBytes`
+ * captures the full database (not "main file minus uncheckpointed pages"),
+ * and again after VACUUM so `afterBytes` reflects the reclaimed space on
+ * disk. Without the pre-vacuum checkpoint, a heavy WAL can make
+ * `reclaimedBytes` come out negative — VACUUM folds the WAL pages into the
+ * main file as part of its work, so the post-vacuum stat would compare
+ * against an artificially small pre-vacuum number.
  */
 export async function vacuumArchive(): Promise<VacuumResult> {
   return withLock('archive', async () => {
@@ -445,17 +449,23 @@ export async function vacuumArchive(): Promise<VacuumResult> {
         reclaimedBytes: 0,
       };
     }
-    const beforeBytes = (await stat(dbPath)).size;
     const db = await openArchive();
+    let beforeBytes: number;
+    let afterBytes: number;
     try {
-      db.exec('VACUUM');
-      // Flush WAL into the main file so the post-vacuum size on disk
-      // reflects the reclaimed pages, not just the in-memory page count.
+      // Pre-vacuum checkpoint: flush any WAL pages into the main file so
+      // `beforeBytes` reflects the full database, on the same basis as the
+      // post-vacuum measurement.
       db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      beforeBytes = (await stat(dbPath)).size;
+      db.exec('VACUUM');
+      // Post-vacuum checkpoint: VACUUM's writes go through the WAL too;
+      // truncate so the main file actually shrinks on disk.
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      afterBytes = (await stat(dbPath)).size;
     } finally {
       db.close();
     }
-    const afterBytes = (await stat(dbPath)).size;
     return {
       archivePath: dbPath,
       existed: true,
