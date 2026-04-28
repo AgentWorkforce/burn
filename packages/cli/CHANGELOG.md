@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`burn archive vacuum`** ([#104](https://github.com/AgentWorkforce/burn/issues/104)). New subcommand that runs SQLite `VACUUM` against `archive.sqlite` to reclaim free pages from `INSERT OR REPLACE` churn (stamp re-folds rewrite turn rows; rebuild drops + recreates rows). Acquires the same `'archive'` lock used by `build` / `rebuild`, so a vacuum and a build can be issued concurrently and will serialize without corruption. Text output is a one-liner — `archive: vacuumed 12.3 MB -> 4.1 MB (reclaimed 8.2 MB)` — and `--json` returns `{ archivePath, existed, beforeBytes, afterBytes, reclaimedBytes }`. No-op with a hint if the archive doesn't exist; vacuum never creates an archive as a side effect.
+
 ## [0.38.0] - 2026-04-28
 
 ### Changed

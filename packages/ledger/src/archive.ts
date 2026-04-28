@@ -257,6 +257,19 @@ export interface ArchiveStatus {
   fidelityHistogram: Record<string, number>;
 }
 
+export interface VacuumResult {
+  /** Absolute path of the archive file inspected. */
+  archivePath: string;
+  /** False iff the archive file did not exist at vacuum time. */
+  existed: boolean;
+  /** Size of `archive.sqlite` before VACUUM, in bytes. */
+  beforeBytes: number;
+  /** Size after VACUUM + WAL truncate, in bytes. */
+  afterBytes: number;
+  /** `beforeBytes - afterBytes`. Zero when nothing was reclaimed. */
+  reclaimedBytes: number;
+}
+
 export interface BuildResult {
   /** Bytes of the ledger that were newly scanned in this call. */
   scannedBytes: number;
@@ -403,6 +416,54 @@ export async function rebuildArchive(): Promise<BuildResult> {
  */
 export async function buildArchive(): Promise<BuildResult> {
   return withLock('archive', () => buildArchiveLocked());
+}
+
+/**
+ * Run SQLite `VACUUM` against the archive to reclaim free pages left behind
+ * by `INSERT OR REPLACE` churn (every stamp re-fold rewrites turn rows;
+ * rebuild drops + recreates rows). Holds the same `'archive'` lock the build
+ * path uses so we don't VACUUM mid-build.
+ *
+ * No-op if the archive file doesn't exist — returns `existed: false` rather
+ * than implicitly creating one. The CLI prints a hint pointing at `burn
+ * archive build` in that case.
+ *
+ * Sizes are measured from the main `.sqlite` file. We checkpoint WAL with
+ * `TRUNCATE` after VACUUM so the main file actually reflects the reclaimed
+ * space — without that, freed pages can linger in the WAL sidecar until the
+ * next implicit checkpoint.
+ */
+export async function vacuumArchive(): Promise<VacuumResult> {
+  return withLock('archive', async () => {
+    const dbPath = archivePath();
+    if (!(await fileExists(dbPath))) {
+      return {
+        archivePath: dbPath,
+        existed: false,
+        beforeBytes: 0,
+        afterBytes: 0,
+        reclaimedBytes: 0,
+      };
+    }
+    const beforeBytes = (await stat(dbPath)).size;
+    const db = await openArchive();
+    try {
+      db.exec('VACUUM');
+      // Flush WAL into the main file so the post-vacuum size on disk
+      // reflects the reclaimed pages, not just the in-memory page count.
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } finally {
+      db.close();
+    }
+    const afterBytes = (await stat(dbPath)).size;
+    return {
+      archivePath: dbPath,
+      existed: true,
+      beforeBytes,
+      afterBytes,
+      reclaimedBytes: beforeBytes - afterBytes,
+    };
+  });
 }
 
 async function buildArchiveLocked(opts: { isRebuild?: boolean } = {}): Promise<BuildResult> {
