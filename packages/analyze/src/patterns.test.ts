@@ -593,6 +593,45 @@ describe('detectPatterns — OpenCode system prompt tax', () => {
     assert.equal(result.systemPromptTaxes.length, 0);
   });
 
+  it('excludes the first turn from ridingTurns even when its cacheRead > 0 (resumed session)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      // First turn carries cacheRead > 0 — e.g., a resumed OpenCode session
+      // where the prefix was already populated. This must not be counted as
+      // a riding turn; it is the establishing turn.
+      turn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 0,
+        source: 'opencode' as const,
+        usage: { input: 5000, output: 200, reasoning: 0, cacheRead: 4000, cacheCreate5m: 5200, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+      turn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 1,
+        source: 'opencode' as const,
+        usage: { input: 100, output: 50, reasoning: 0, cacheRead: 5200, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      }),
+    ];
+    const userTurnsBySession = new Map<string, UserTurnRecord[]>();
+    userTurnsBySession.set('s', [
+      userTurn({
+        sessionId: 's',
+        userUuid: 'u1',
+        blocks: [{ kind: 'text' as const, byteLen: 800, approxTokens: 200 }],
+        followingMessageId: 'm1',
+      }),
+    ]);
+
+    const result = detectPatterns(turns, { pricing, userTurnsBySession });
+    assert.equal(result.systemPromptTaxes.length, 1);
+    const tax = result.systemPromptTaxes[0]!;
+    assert.equal(tax.ridingTurns, 1);
+  });
+
   it('does not emit when first cacheCreate is zero', async () => {
     const pricing = await loadBuiltinPricing();
     const turns = [

@@ -531,9 +531,13 @@ function detectSystemPromptTaxForSession(
   if (systemPromptTokens === 0) return [];
 
   // Count how many subsequent turns carried cacheRead (the prefix was cached).
+  // Skip the first turn — its cost is the cacheCreate, not the riding tax,
+  // and on a resumed session it may already have cacheRead > 0 which would
+  // otherwise inflate the count.
   let ridingTurns = 0;
   let totalCost = 0;
   for (const t of turns) {
+    if (t === firstTurn) continue;
     if (t.usage.cacheRead > 0) {
       ridingTurns++;
       const c = costForTurn(t, pricing);
