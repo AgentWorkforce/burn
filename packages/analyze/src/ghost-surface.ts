@@ -30,9 +30,15 @@
 // observed-names set before filtering candidates. The Claude and Codex
 // adapters use that hook to mine `userTurnTextBySession` for slash-command
 // markers (`<command-name>` blocks for Claude, literal `/<basename>` matches
-// for Codex). When `userTurnTextBySession` is undefined or empty (content
-// store is `off` / sidecar pruned) the hook is a no-op and the detector
-// falls back to v1 behaviour.
+// for Codex). The map is source-keyed first (`Map<SourceKind, Map<string,
+// string[]>>`) so each adapter only sees its own source's text — without
+// that scoping, a Claude `<command-name>/foo</command-name>` marker would
+// de-ghost an identically-named Codex prompt because the Codex miner's
+// word-boundary checks pass against the surrounding XML angle brackets.
+// When `userTurnTextBySession` is undefined or the adapter's source has
+// no entries (content store is `off` / sidecar pruned for every session
+// of that source) the hook is a no-op and the detector falls back to v1
+// behaviour.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -61,10 +67,17 @@ export interface GhostSurfaceFinding {
   // Approximate token cost of the file, computed as Math.ceil(byteLen / 4).
   // Mirrors the cheap heuristic used in `UserTurnBlock.approxTokens`.
   sizeTokens: number;
-  // sizeTokens × sessionCountInWindow × dollar-per-token rate. Zero when
-  // the entry was already counted by the OpenCode catalog-bloat detector
+  // Cumulative cost across the window: sizeTokens × sessionCountInWindow ×
+  // dollar-per-token rate. Drives the CLI's ghost-surface table column. Zero
+  // when the entry was already counted by the OpenCode catalog-bloat detector
   // (#54) — see `countedByCatalogBloat`.
   cost: number;
+  // Per-session cost: sizeTokens × dollar-per-token rate. This is what feeds
+  // severity classification and `estimatedSavings.usdPerSession` in the
+  // unified `WasteFinding` envelope, so a low-traffic ghost isn't ranked as
+  // `high` purely because it rode in many sessions. Zero when
+  // `countedByCatalogBloat` is true.
+  costPerSession: number;
   // Number of sessions observed in the lookback window for this source.
   // Reported alongside cost so the user can sanity-check the multiplier.
   sessionCount: number;
@@ -120,15 +133,22 @@ export interface GhostSurfaceInputs {
   // the current working directory.
   opencodeProjects?: string[];
 
-  // Per-session list of raw user-turn text strings observed in the ledger
-  // window. The Claude and Codex adapters' optional `observedNames` hook
-  // consumes this map to mine slash-command-style invocations that don't
-  // surface as tool calls (#172). The CLI populates the map from the
-  // per-session content sidecar when content store is `full`; sessions
-  // whose sidecar is empty (hash-only / off / pruned) are simply absent
-  // from the map and the detector falls back to v1 (tool-call only)
-  // behaviour for that source.
-  userTurnTextBySession?: Map<string, string[]> | undefined;
+  // Per-source, per-session list of raw user-turn text strings observed in
+  // the ledger window. The Claude and Codex adapters' optional
+  // `observedNames` hook consumes its own source's inner map to mine
+  // slash-command-style invocations that don't surface as tool calls
+  // (#172). The CLI populates this from the per-session content sidecar
+  // when content store is `full`; sessions whose sidecar is empty (hash-only
+  // / off / pruned) are simply absent from the inner map and the detector
+  // falls back to v1 (tool-call only) behaviour for that source.
+  //
+  // The map is keyed by `SourceKind` first so an adapter only ever sees
+  // its own source's text. Without that scoping, a Claude
+  // `<command-name>/foo</command-name>` marker would de-ghost an
+  // identically-named Codex prompt (and vice versa) because the Codex
+  // miner does a literal `/<stem>` match that passes word-boundary checks
+  // against the surrounding `<command-name>` XML angle brackets.
+  userTurnTextBySession?: Map<SourceKind, Map<string, string[]>> | undefined;
 }
 
 export interface GhostSurfaceAdapter {
@@ -398,7 +418,7 @@ export const claudeGhostAdapter: GhostSurfaceAdapter = {
     return out;
   },
   observedNames(inputs) {
-    return mineClaudeCommandNames(inputs.userTurnTextBySession);
+    return mineClaudeCommandNames(inputs.userTurnTextBySession?.get('claude-code'));
   },
 };
 
@@ -444,7 +464,7 @@ export const codexGhostAdapter: GhostSurfaceAdapter = {
     return out;
   },
   observedNames(inputs, candidates) {
-    return mineCodexSlashInvocations(inputs.userTurnTextBySession, candidates);
+    return mineCodexSlashInvocations(inputs.userTurnTextBySession?.get('codex'), candidates);
   },
 };
 
@@ -620,12 +640,18 @@ export async function detectGhostSurface(
     // Adapter-local observation pass (#172). Slash-command invocations
     // mined from `userTurnTextBySession` are unioned in here so they
     // de-ghost a basename without leaking into other adapters' observed
-    // sets. Only invoked when `userTurnTextBySession` is provided —
-    // sessions without a content sidecar fall back to v1 behaviour.
+    // sets. Only invoked when this adapter's source has at least one
+    // session's worth of text — without that gate, a Codex-only run would
+    // still call `claudeGhostAdapter.observedNames` with an undefined map
+    // and the hook would have to defensively no-op. Per-source scoping
+    // also prevents cross-harness contamination: Claude's `<command-name>`
+    // markers are not exposed to the Codex miner, and Codex's literal
+    // `/<stem>` matches are not exposed to the Claude miner.
+    const sourceTexts = inputs.userTurnTextBySession?.get(adapter.source);
     if (
       adapter.observedNames !== undefined &&
-      inputs.userTurnTextBySession !== undefined &&
-      inputs.userTurnTextBySession.size > 0
+      sourceTexts !== undefined &&
+      sourceTexts.size > 0
     ) {
       const extra = adapter.observedNames(inputs, candidates);
       for (const name of extra) observedLower.add(name.toLowerCase());
@@ -635,15 +661,19 @@ export async function detectGhostSurface(
       const lookups = namesForLookup(cand.basename);
       const isInvoked = lookups.some((n) => observedLower.has(n.toLowerCase()));
       if (isInvoked) continue;
+      const costPerSession = cand.countedByCatalogBloat
+        ? 0
+        : cand.sizeTokens * inputs.dollarPerToken;
       const cost = cand.countedByCatalogBloat
         ? 0
-        : cand.sizeTokens * sessionCount * inputs.dollarPerToken;
+        : costPerSession * sessionCount;
       const finding: GhostSurfaceFinding = {
         source: cand.source,
         kind: cand.kind,
         path: cand.path,
         sizeTokens: cand.sizeTokens,
         cost,
+        costPerSession,
         sessionCount,
       };
       if (cand.countedByCatalogBloat !== undefined) {
@@ -690,18 +720,41 @@ export interface GhostSurfaceFindingOptions {
   archiveDir?: string;
 }
 
+// POSIX shell single-quote escape: wrap the string in single quotes and
+// replace each embedded `'` with `'\''`. Safe for paths with spaces, `$`,
+// backticks, or other shell metacharacters.
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+// Synthetic OpenCode paths look like `<configPath>#/skills/<name>` or
+// `<configPath>#/commands/<name>` — they aren't real filesystem paths so a
+// `mv` would fail. Detect them and emit a `paste`-style instruction instead.
+function splitSyntheticPath(p: string): { file: string; pointer: string } | null {
+  const hash = p.indexOf('#');
+  if (hash < 0) return null;
+  return { file: p.slice(0, hash), pointer: p.slice(hash + 1) };
+}
+
 export function ghostSurfaceToFinding(
   ghost: GhostSurfaceFinding,
   options: GhostSurfaceFindingOptions = {},
 ): WasteFinding {
   const archiveDir = options.archiveDir ?? defaultArchiveDir();
-  const action: WasteAction = {
-    type: 'command',
-    label: `Archive ghost ${ghost.kind}`,
-    text: `mkdir -p ${archiveDir} && mv ${ghost.path} ${archiveDir}/`,
-  };
-  const usd = ghost.cost;
-  const severity = severityFromUsd(usd);
+  const synthetic = splitSyntheticPath(ghost.path);
+  const action: WasteAction = synthetic
+    ? {
+        type: 'paste',
+        label: `Remove ghost ${ghost.kind} from ${path.basename(synthetic.file)}`,
+        text: `Edit ${synthetic.file} and remove the entry at ${synthetic.pointer}.`,
+      }
+    : {
+        type: 'command',
+        label: `Archive ghost ${ghost.kind}`,
+        text: `mkdir -p ${shellQuote(archiveDir)} && mv ${shellQuote(ghost.path)} ${shellQuote(archiveDir + '/')}`,
+      };
+  const perSessionUsd = ghost.costPerSession;
+  const severity = severityFromUsd(perSessionUsd);
   // Ghost findings have no per-session id. Use the path as a stable key so
   // the unified finding renderer (which keys by sessionId) doesn't collide
   // multiple ghost findings; severity ranking still works because we ranked
@@ -723,10 +776,10 @@ export function ghostSurfaceToFinding(
       `${ghost.path} is part of the user-installed ${ghost.source} surface ` +
       `(~${ghost.sizeTokens.toLocaleString()} tokens) but its basename was never invoked ` +
       `as a tool / agent / command / prompt in the observed window.${sessionsClause} ` +
-      `Cumulative cost ${fmtUsd(usd)}.${dedupNote}`,
+      `Per-session cost ${fmtUsd(perSessionUsd)}; cumulative ${fmtUsd(ghost.cost)}.${dedupNote}`,
     estimatedSavings: {
       tokensPerSession: ghost.sizeTokens,
-      usdPerSession: usd,
+      usdPerSession: perSessionUsd,
     },
     actions: [action],
   };

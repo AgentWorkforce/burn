@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode compaction parts emit `CompactionEvent`s** ([#148](https://github.com/AgentWorkforce/burn/issues/148)). `parseOpencodeSession` and `parseOpencodeSessionIncremental` now return an `events` array. The reader detects the synthetic user message OpenCode inserts at compaction time (a part with `type: "compaction"`) and anchors each event to the assistant turn whose `time.created` falls just before — `precedingMessageId` is that turn's id, `tokensBeforeCompact` is its `cache.read`. Dedup uses the existing `seenMessageIds` cursor: the compaction-bearing user message id is added to `seen` on emission so resumed incremental passes won't re-emit.
+
 ## [0.35.0] - 2026-04-28
 
 ### Added

@@ -96,7 +96,12 @@ describe('claudeGhostAdapter', () => {
       ]),
       sessionCountBySource: new Map([['claude-code', 10]]),
       userTurnTextBySession: new Map([
-        ['session-1', ['<command-name>/openspec-apply</command-name>\nApply the latest proposal.']],
+        [
+          'claude-code',
+          new Map([
+            ['session-1', ['<command-name>/openspec-apply</command-name>\nApply the latest proposal.']],
+          ]),
+        ],
       ]),
     });
     const ghosts = await detectGhostSurface(inputs);
@@ -115,7 +120,10 @@ describe('claudeGhostAdapter', () => {
       ]),
       sessionCountBySource: new Map([['claude-code', 1]]),
       userTurnTextBySession: new Map([
-        ['session-1', ['<command-name>openspec-apply</command-name>\nbody']],
+        [
+          'claude-code',
+          new Map([['session-1', ['<command-name>openspec-apply</command-name>\nbody']]]),
+        ],
       ]),
     });
     const ghosts = await detectGhostSurface(inputs);
@@ -189,7 +197,10 @@ describe('codexGhostAdapter', () => {
       observedNamesBySource: new Map([['codex', new Set(['refactor', 'code-search'])]]),
       sessionCountBySource: new Map([['codex', 5]]),
       userTurnTextBySession: new Map([
-        ['session-1', ['/openspec-apply\nApply the latest proposal please.']],
+        [
+          'codex',
+          new Map([['session-1', ['/openspec-apply\nApply the latest proposal please.']]]),
+        ],
       ]),
     });
     const ghosts = await detectGhostSurface(inputs);
@@ -210,7 +221,10 @@ describe('codexGhostAdapter', () => {
       observedNamesBySource: new Map([['codex', new Set()]]),
       sessionCountBySource: new Map([['codex', 1]]),
       userTurnTextBySession: new Map([
-        ['session-1', ['Please run the /openspec-apply prompt now.']],
+        [
+          'codex',
+          new Map([['session-1', ['Please run the /openspec-apply prompt now.']]]),
+        ],
       ]),
     });
     const ghosts = await detectGhostSurface(inputs);
@@ -229,7 +243,7 @@ describe('codexGhostAdapter', () => {
       observedNamesBySource: new Map([['codex', new Set()]]),
       sessionCountBySource: new Map([['codex', 1]]),
       userTurnTextBySession: new Map([
-        ['session-1', ['/openspec-apply-foo bar']],
+        ['codex', new Map([['session-1', ['/openspec-apply-foo bar']]])],
       ]),
     });
     const ghosts = await detectGhostSurface(inputs);
@@ -246,7 +260,10 @@ describe('codexGhostAdapter', () => {
       observedNamesBySource: new Map([['codex', new Set()]]),
       sessionCountBySource: new Map([['codex', 1]]),
       userTurnTextBySession: new Map([
-        ['session-1', ['See https://example.com/openspec-apply for docs.']],
+        [
+          'codex',
+          new Map([['session-1', ['See https://example.com/openspec-apply for docs.']]]),
+        ],
       ]),
     });
     const ghosts = await detectGhostSurface(inputs);
@@ -263,7 +280,7 @@ describe('codexGhostAdapter', () => {
       observedNamesBySource: new Map([['codex', new Set()]]),
       sessionCountBySource: new Map([['codex', 1]]),
       userTurnTextBySession: new Map([
-        ['session-1', ['/OPENSPEC-Apply now']],
+        ['codex', new Map([['session-1', ['/OPENSPEC-Apply now']]])],
       ]),
     });
     const ghosts = await detectGhostSurface(inputs);
@@ -271,6 +288,97 @@ describe('codexGhostAdapter', () => {
       (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
     );
     assert.equal(apply, undefined, 'mixed-case /OPENSPEC-Apply de-ghosts the codex prompt');
+  });
+
+  // Regression for Devin's cross-source contamination finding on #172. The
+  // Codex slash miner does a literal `/<stem>` search with word-boundary
+  // anchors. Claude's `<command-name>` XML wrapper has angle brackets on
+  // both sides — neither `<` nor `>` is a word character, so without
+  // per-source scoping a Claude `<command-name>/openspec-apply</command-name>`
+  // marker would falsely de-ghost an identically-named Codex prompt
+  // (`~/.codex/prompts/openspec-apply.md`) that was never invoked under
+  // Codex. Only the matching adapter's source should be passed to its
+  // `observedNames` hook.
+  it('does not de-ghost a Codex prompt from Claude <command-name> markers', async () => {
+    const inputs = makeInputs({
+      // No Codex tool-call observations, no Codex slash invocations either.
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer'])],
+        ['codex', new Set(['refactor'])],
+      ]),
+      sessionCountBySource: new Map([
+        ['claude-code', 1],
+        ['codex', 1],
+      ]),
+      // Claude session has the `<command-name>/openspec-apply</command-name>`
+      // marker; Codex sessions are silent. With the contamination bug this
+      // marker would leak into the Codex miner and de-ghost the Codex
+      // prompt of the same name.
+      userTurnTextBySession: new Map([
+        [
+          'claude-code',
+          new Map([
+            ['claude-session-1', ['<command-name>/openspec-apply</command-name>\nbody']],
+          ]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const codexApply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.ok(
+      codexApply,
+      'Codex openspec-apply.md must remain a ghost — Claude <command-name> markers must not leak across sources',
+    );
+    // Sanity: the Claude side is correctly de-ghosted by its own observation.
+    const claudeApply = ghosts.find(
+      (g) => g.source === 'claude-code' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.equal(
+      claudeApply,
+      undefined,
+      'Claude openspec-apply.md is de-ghosted by its own user-turn marker',
+    );
+  });
+
+  // The mirror case: a Codex `/openspec-apply` invocation must not
+  // de-ghost a Claude command of the same name.
+  it('does not de-ghost a Claude command from Codex /<stem> matches', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer'])],
+        ['codex', new Set(['refactor'])],
+      ]),
+      sessionCountBySource: new Map([
+        ['claude-code', 1],
+        ['codex', 1],
+      ]),
+      userTurnTextBySession: new Map([
+        [
+          'codex',
+          new Map([
+            ['codex-session-1', ['/openspec-apply\nApply the latest proposal.']],
+          ]),
+        ],
+      ]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const claudeApply = ghosts.find(
+      (g) => g.source === 'claude-code' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.ok(
+      claudeApply,
+      'Claude openspec-apply.md must remain a ghost — Codex slash matches must not leak across sources',
+    );
+    const codexApply = ghosts.find(
+      (g) => g.source === 'codex' && g.path.endsWith('openspec-apply.md'),
+    );
+    assert.equal(
+      codexApply,
+      undefined,
+      'Codex openspec-apply.md is de-ghosted by its own slash invocation',
+    );
   });
 });
 
@@ -397,5 +505,60 @@ describe('ghostSurfaceToFinding', () => {
     const finding = ghostSurfaceToFinding(abandoned);
     assert.equal(finding.estimatedSavings.usdPerSession, 0);
     assert.ok(finding.detail.includes('catalog-bloat'));
+  });
+
+  it('uses per-session cost for severity and usdPerSession, not cumulative', async () => {
+    // High session count × small per-session cost — cumulative would cross
+    // the `high` severity threshold, but the per-session impact is `info`.
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([
+        ['claude-code', new Set(['code-reviewer'])],
+      ]),
+      sessionCountBySource: new Map([['claude-code', 100_000]]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const helper = ghosts.find((g) => g.path.endsWith('forgotten-helper.md'))!;
+    // Sanity check: cumulative cost is well above the `high` threshold ($0.50).
+    assert.ok(helper.cost > 1, `expected cumulative cost > $1, got ${helper.cost}`);
+    // Per-session cost is sizeTokens × rate (≈ small number × 1e-6 ≈ <$0.05).
+    assert.ok(
+      helper.costPerSession < 0.05,
+      `per-session cost should be below warn threshold, got ${helper.costPerSession}`,
+    );
+    const finding = ghostSurfaceToFinding(helper, { archiveDir: '/tmp/ghost-archive' });
+    assert.equal(finding.estimatedSavings.usdPerSession, helper.costPerSession);
+    assert.equal(finding.severity, 'info');
+  });
+
+  it('shell-quotes paths with spaces in the mv command', async () => {
+    const ghost = {
+      source: 'claude-code' as const,
+      kind: 'ghost-agent' as const,
+      path: '/Users/me/.claude/agents/my helper.md',
+      sizeTokens: 100,
+      cost: 0.001,
+      costPerSession: 0.0001,
+      sessionCount: 10,
+    };
+    const finding = ghostSurfaceToFinding(ghost, { archiveDir: '/tmp/ghost archive' });
+    const action = finding.actions[0]!;
+    assert.equal(action.type, 'command');
+    assert.ok(action.text.includes(`'/Users/me/.claude/agents/my helper.md'`));
+    assert.ok(action.text.includes(`'/tmp/ghost archive'`));
+  });
+
+  it('emits a paste action (not mv) for synthetic OpenCode JSON-pointer paths', async () => {
+    const inputs = makeInputs({
+      observedNamesBySource: new Map([['opencode', new Set(['deploy'])]]),
+      sessionCountBySource: new Map([['opencode', 5]]),
+    });
+    const ghosts = await detectGhostSurface(inputs);
+    const synthetic = ghosts.find((g) => g.path.includes('#/commands/ghost-command'))!;
+    const finding = ghostSurfaceToFinding(synthetic);
+    const action = finding.actions[0]!;
+    assert.equal(action.type, 'paste');
+    assert.ok(!action.text.includes('mv '), 'paste action should not invoke mv');
+    assert.ok(action.text.includes('opencode.json'));
+    assert.ok(action.text.includes('/commands/ghost-command'));
   });
 });

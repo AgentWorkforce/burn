@@ -6,30 +6,38 @@ import {
   compactionLossToFinding,
   detectGhostSurface,
   detectPatterns,
+  detectToolOutputBloat,
   editHeavyToFinding,
   editRevertToFinding,
   failureRunToFinding,
   ghostSurfaceToFinding,
+  loadClaudeSettings,
   loadPricing,
+  projectClaudeSettingsPath,
   retryLoopToFinding,
   skillPruningProtectionToFinding,
   skillRecallDupToFinding,
   sortFindings,
   summarizeFidelity,
   systemPromptTaxToFinding,
+  toolOutputBloatToFinding,
+  userClaudeSettingsPath,
   type BashAggregation,
   type FidelitySummary,
   type FileAggregation,
   type GhostSurfaceFinding,
   type GhostSurfaceInputs,
+  type LoadedClaudeSettings,
   type PatternsResult,
   type SubagentAggregation,
+  type ToolOutputBloat,
   type WasteFinding,
   type WasteResult,
 } from '@relayburn/analyze';
 import {
   queryAll,
   queryCompactions,
+  queryToolResultEvents,
   queryUserTurns,
   readContent,
   type EnrichedTurn,
@@ -39,6 +47,7 @@ import type {
   ContentRecord,
   Coverage,
   SourceKind,
+  ToolResultEventRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
 
@@ -48,7 +57,7 @@ import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -542,12 +551,15 @@ export function resolvePatternSelection(flag: string | true): Set<PatternKind> {
 // Per-detector coverage prerequisites. `compaction` is intentionally absent —
 // the compaction sidecar is loaded directly from the ledger via
 // `queryCompactions` and is independent of `TurnRecord.fidelity`.
+// `tool-output-bloat` is also absent — it reads the tool-result-event ledger
+// stream directly (issue #168, #42 substrate) and merges Claude settings.json
+// without consulting TurnRecord coverage flags.
 //
 // The revert detector needs editPreHash / editPostHash, which require
 // hasRawContent upstream (the parser computes the hashes from the raw
 // strings). hasToolCalls is the obvious prereq.
 export const PATTERN_REQUIRED: Record<
-  Exclude<PatternKind, 'compaction' | 'ghost-surface'>,
+  Exclude<PatternKind, 'compaction' | 'ghost-surface' | 'tool-output-bloat'>,
   ReadonlyArray<keyof Coverage>
 > = {
   retries: ['hasToolCalls', 'hasToolResultEvents'],
@@ -593,9 +605,11 @@ export async function runPatternsMode(
   const perDetectorCoverage: PatternDetectorCoverage[] = [];
 
   for (const kind of selected) {
-    if (kind === 'compaction' || kind === 'ghost-surface') {
-      // Compaction reads the sidecar directly; ghost-surface is filesystem-
-      // bound. Neither needs `TurnRecord.fidelity` filtering.
+    if (kind === 'compaction' || kind === 'ghost-surface' || kind === 'tool-output-bloat') {
+      // None of these consult TurnRecord.fidelity. `compaction` reads the
+      // ledger compaction stream; `ghost-surface` is filesystem-bound;
+      // `tool-output-bloat` reads `tool_result_events` and (for Signal A)
+      // a static settings.json. All three run on the full slice.
       perDetector.set(kind, turns);
       perDetectorCoverage.push({
         kind,
@@ -625,13 +639,16 @@ export async function runPatternsMode(
     perDetectorCoverage.push(coverage);
   }
 
-  // Refusal: every selected detector refused. Compaction and ghost-surface
-  // have no fidelity prereq and are recorded with refused:false
-  // unconditionally, so their presence in `selected` short-circuits this —
-  // we only refuse when the entire selection is fidelity-gated and every
-  // detector lost its slice.
+  // Refusal: every selected detector refused. `compaction`, `ghost-surface`,
+  // and `tool-output-bloat` have no fidelity prereq and are recorded with
+  // refused:false unconditionally, so their presence in `selected`
+  // short-circuits this — we only refuse when the entire selection is
+  // fidelity-gated and every detector lost its slice.
   const refusableSelected = perDetectorCoverage.filter(
-    (d) => d.kind !== 'compaction' && d.kind !== 'ghost-surface',
+    (d) =>
+      d.kind !== 'compaction' &&
+      d.kind !== 'ghost-surface' &&
+      d.kind !== 'tool-output-bloat',
   );
   const allRefused =
     perDetectorCoverage.length > 0 &&
@@ -640,7 +657,7 @@ export async function runPatternsMode(
   if (allRefused) {
     const lines: string[] = [];
     for (const d of refusableSelected) {
-      const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'ghost-surface'>];
+      const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'ghost-surface' | 'tool-output-bloat'>];
       const sourcesClause = d.breakdown ? renderSourcesClause(d.breakdown) : '(unknown sources)';
       lines.push(
         `  ${d.kind}: ${total}/${total} turns lack ${required.map(fmtCoverageKey).join(' + ')} (sources: ${sourcesClause})`,
@@ -664,6 +681,8 @@ export async function runPatternsMode(
             skillRecallDups: [],
             skillPruningProtection: [],
             systemPromptTaxes: [],
+            toolOutputBloats: [],
+            ghostSurface: [],
             sessionSummaries: [],
             findings: [],
             fidelity: {
@@ -693,6 +712,7 @@ export async function runPatternsMode(
   let skillPruningProtection: PatternsResult['skillPruningProtection'] = [];
   let systemPromptTaxes: PatternsResult['systemPromptTaxes'] = [];
   let editHeavySessions: PatternsResult['editHeavySessions'] = [];
+  let toolOutputBloats: ToolOutputBloat[] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
   // Load user turns if the system-prompt detector is selected (needs first
@@ -745,6 +765,29 @@ export async function runPatternsMode(
     const r = detectPatterns(perDetector.get('opencode-system-prompt')!, { pricing, userTurnsBySession });
     systemPromptTaxes = r.systemPromptTaxes;
   }
+  if (selected.has('tool-output-bloat')) {
+    // Signal A inputs: read both ~/.claude/settings.json and the project's
+    // .claude/settings.json. Project comes last so it overrides the user
+    // file in `detectStaticConfigBloat`'s last-wins merge. Missing or
+    // malformed files yield `undefined` from the loader and are dropped from
+    // the input list — see `loadClaudeSettings`.
+    const settings: LoadedClaudeSettings[] = [];
+    const userLoaded = await loadClaudeSettings(userClaudeSettingsPath());
+    if (userLoaded) settings.push(userLoaded);
+    const projectLoaded = await loadClaudeSettings(projectClaudeSettingsPath());
+    if (projectLoaded) settings.push(projectLoaded);
+
+    // Signal B inputs: stream `tool_result_events` from the ledger. We pass
+    // the full TurnRecord set so the detector can join tool_use_ids back to
+    // tool names + price the carry cost at the correct model rate.
+    const toolResultEvents = await loadToolResultEventsForTurns(turns);
+    toolOutputBloats = detectToolOutputBloat({
+      settings,
+      toolResultEvents,
+      turns,
+      pricing,
+    });
+  }
 
   // Ghost-surface runs against the on-disk user-installed surface and
   // cross-references basenames against observed names mined from the turn
@@ -794,6 +837,7 @@ export async function runPatternsMode(
     ...skillPruningProtection.map(skillPruningProtectionToFinding),
     ...systemPromptTaxes.map(systemPromptTaxToFinding),
     ...ghostFindings.map((g) => ghostSurfaceToFinding(g)),
+    ...toolOutputBloats.map(toolOutputBloatToFinding),
   ]);
 
   if (args.flags['json'] === true) {
@@ -809,6 +853,7 @@ export async function runPatternsMode(
           skillPruningProtection,
           systemPromptTaxes,
           editHeavySessions,
+          toolOutputBloats,
           ghostSurface: ghostFindings,
           sessionSummaries,
           findings,
@@ -894,6 +939,11 @@ export async function runPatternsMode(
     out.push(renderGhostSurfaceTable(ghostFindings, limit));
     out.push('');
   }
+  if (selected.has('tool-output-bloat')) {
+    out.push('Oversized tool output bloat (BASH_MAX_OUTPUT_LENGTH config + cross-harness >15k tok tool_results)');
+    out.push(renderToolOutputBloatTable(toolOutputBloats, limit));
+    out.push('');
+  }
 
   process.stdout.write(out.join('\n'));
   return 0;
@@ -913,7 +963,7 @@ function toJsonDetector(d: PatternDetectorCoverage): {
   }>;
 } {
   const required: ReadonlyArray<keyof Coverage> =
-    d.kind === 'compaction' || d.kind === 'ghost-surface'
+    d.kind === 'compaction' || d.kind === 'ghost-surface' || d.kind === 'tool-output-bloat'
       ? []
       : PATTERN_REQUIRED[d.kind];
   const out: ReturnType<typeof toJsonDetector> = {
@@ -939,8 +989,8 @@ function formatPerDetectorNotice(
   total: number,
 ): string | undefined {
   if (d.excluded === 0) return undefined;
-  if (d.kind === 'compaction' || d.kind === 'ghost-surface') return undefined;
-  const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'ghost-surface'>];
+  if (d.kind === 'compaction' || d.kind === 'ghost-surface' || d.kind === 'tool-output-bloat') return undefined;
+  const required = PATTERN_REQUIRED[d.kind as Exclude<PatternKind, 'compaction' | 'ghost-surface' | 'tool-output-bloat'>];
   const sourceClauses = d.breakdown ? renderInlineSourceClauses(d.breakdown) : [];
   const requirements = required.map(fmtCoverageKey).join(' + ');
   return `${d.kind}: analyzed ${formatInt(d.analyzed)} of ${formatInt(total)} turns; ${formatInt(d.excluded)} excluded (needs ${requirements}; ${sourceClauses.join(' and ') || 'no source breakdown'})`;
@@ -1265,6 +1315,40 @@ async function loadContentBySession(
   return out;
 }
 
+// Pull every `ToolResultEventRecord` whose session appears in `turns`. Used
+// only by `tool-output-bloat`; we filter post-query rather than issuing one
+// per session so we avoid N round-trips on large slices. The ledger reader
+// streams a single pass over the JSONL file regardless.
+async function loadToolResultEventsForTurns(
+  turns: EnrichedTurn[],
+): Promise<ToolResultEventRecord[]> {
+  if (turns.length === 0) return [];
+  const sessionIds = new Set<string>();
+  for (const t of turns) sessionIds.add(t.sessionId);
+  const events = await queryToolResultEvents({});
+  return events.filter((e) => sessionIds.has(e.sessionId));
+}
+
+function renderToolOutputBloatTable(bloats: ToolOutputBloat[], limit: number): string {
+  if (bloats.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['source', 'tool', 'kind', 'count', 'max(tok)', 'p95(tok)', 'cost'],
+  ];
+  const slice = [...bloats].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const b of slice) {
+    rows.push([
+      b.source,
+      b.toolName,
+      b.kind,
+      String(b.occurrenceCount),
+      formatInt(b.evidencedMaxOutput),
+      b.evidencedP95Output !== undefined ? formatInt(b.evidencedP95Output) : '—',
+      formatUsd(b.cost),
+    ]);
+  }
+  return table(rows);
+}
+
 // Mine observed invocation names from the turn stream. The ghost-surface
 // detector cross-references file basenames against this set per source.
 //
@@ -1344,33 +1428,46 @@ export function pickRepresentativeCacheReadRate(
   return rate.cacheRead / 1_000_000;
 }
 
-// #172: build a per-session map of user-turn text strings for the slash-
-// command observation pass. We only load content for sessions whose source
-// has a slash-command notion (Claude commands, Codex prompts) — the
-// OpenCode adapter doesn't consume `userTurnTextBySession` so the I/O
-// would be wasted. Sessions whose sidecar is empty (`content.store=off`,
-// pruned, or never captured) are silently absent from the map; the
+// #172: build a per-source, per-session map of user-turn text strings for
+// the slash-command observation pass. We only load content for sessions
+// whose source has a slash-command notion (Claude commands, Codex prompts)
+// — the OpenCode adapter doesn't consume `userTurnTextBySession` so the I/O
+// would be wasted. The outer source key keeps each adapter's miner scoped
+// to its own harness's text — without it, a Codex `/<stem>` literal match
+// would fire against a Claude `<command-name>/<stem></command-name>` marker
+// (and vice versa), falsely de-ghosting an identically-named surface in
+// the other harness. Sessions whose sidecar is empty (`content.store=off`,
+// pruned, or never captured) are silently absent from the inner map; the
 // detector's `observedNames` hooks treat that as v1 fallback.
 async function loadUserTurnTextBySession(
   turns: ReadonlyArray<EnrichedTurn>,
-): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>();
-  // Dedupe by sessionId; only Claude / Codex sessions need mining.
-  const sessionIds = new Set<string>();
+): Promise<Map<SourceKind, Map<string, string[]>>> {
+  const out = new Map<SourceKind, Map<string, string[]>>();
+  // Dedupe by (source, sessionId); only Claude / Codex sessions need mining.
+  const sessionsBySource = new Map<SourceKind, Set<string>>();
   for (const t of turns) {
     if (t.source !== 'claude-code' && t.source !== 'codex') continue;
-    sessionIds.add(t.sessionId);
-  }
-  for (const sessionId of sessionIds) {
-    const records = await readContent({ sessionId });
-    if (records.length === 0) continue;
-    const texts: string[] = [];
-    for (const rec of records) {
-      if (rec.role !== 'user' || rec.kind !== 'text') continue;
-      if (typeof rec.text !== 'string' || rec.text.length === 0) continue;
-      texts.push(rec.text);
+    let set = sessionsBySource.get(t.source);
+    if (!set) {
+      set = new Set<string>();
+      sessionsBySource.set(t.source, set);
     }
-    if (texts.length > 0) out.set(sessionId, texts);
+    set.add(t.sessionId);
+  }
+  for (const [source, sessionIds] of sessionsBySource) {
+    const inner = new Map<string, string[]>();
+    for (const sessionId of sessionIds) {
+      const records = await readContent({ sessionId });
+      if (records.length === 0) continue;
+      const texts: string[] = [];
+      for (const rec of records) {
+        if (rec.role !== 'user' || rec.kind !== 'text') continue;
+        if (typeof rec.text !== 'string' || rec.text.length === 0) continue;
+        texts.push(rec.text);
+      }
+      if (texts.length > 0) inner.set(sessionId, texts);
+    }
+    if (inner.size > 0) out.set(source, inner);
   }
   return out;
 }
