@@ -233,6 +233,39 @@ describe('burn archive CLI', () => {
     assert.match(out.stdout, /burn archive/);
   });
 
+  it('archive vacuum on a missing archive prints a hint and exits 0', async () => {
+    const out = await captureRun({}, ['vacuum']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /no archive at/);
+    assert.match(out.stdout, /burn archive build/);
+  });
+
+  it('archive vacuum --json shape includes before/after/reclaimed bytes', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-vc', messageId: 'vc-1' })]);
+    await captureRun({}, ['build']);
+    const out = await captureRun({ json: true }, ['vacuum']);
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      existed: boolean;
+      beforeBytes: number;
+      afterBytes: number;
+      reclaimedBytes: number;
+    };
+    assert.equal(parsed.existed, true);
+    assert.equal(typeof parsed.beforeBytes, 'number');
+    assert.equal(typeof parsed.afterBytes, 'number');
+    assert.equal(typeof parsed.reclaimedBytes, 'number');
+    assert.equal(parsed.reclaimedBytes, parsed.beforeBytes - parsed.afterBytes);
+  });
+
+  it('archive vacuum prints a one-line text summary', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-vt', messageId: 'vt-1' })]);
+    await captureRun({}, ['build']);
+    const out = await captureRun({}, ['vacuum']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /archive: vacuumed .* -> .* \(reclaimed .*\)/);
+  });
+
   it('archive with unknown subcommand exits non-zero', async () => {
     const out = await captureRun({}, ['nope']);
     assert.notEqual(out.code, 0);

@@ -37,8 +37,9 @@ export {
   getArchiveStatus,
   openArchive,
   rebuildArchive,
+  vacuumArchive,
 } from './archive.js';
-export type { ArchiveStatus, BuildResult } from './archive.js';
+export type { ArchiveStatus, BuildResult, VacuumResult } from './archive.js';
 export {
   archiveAvailable,
   queryAllFromArchive,

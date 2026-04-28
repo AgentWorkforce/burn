@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Aggregate parser content-capture report in `burn diagnose`** ([#79](https://github.com/AgentWorkforce/burn/issues/79)). `burn diagnose` (no positional argument) now walks the ledger and emits a per-adapter content-capture gap table — total sessions, sessions with ≥1 tool call, gapped sessions (≥1 tool call but zero `tool_result` ContentRecords), orphan tool-call count, and `degradedPct`. Honors `--json` (`{ adapters: [{ adapter, sessions, sessionsWithToolCalls, gappedSessions, orphanToolCalls, degradedPct }, ...], contentMode }`). The existing per-session `burn diagnose <session-id>` behavior is unchanged. Permanent, queryable surface for the gap that the per-invocation ingest warning ([#75](https://github.com/AgentWorkforce/burn/issues/75)) only flags once per `burn` run; rows omit the gap signal with an explanatory note when `RELAYBURN_CONTENT_STORE` is `hash-only` or `off`. Adapters with no sessions in the ledger are omitted entirely.
+- **`burn waste --patterns --findings`** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). Renders every detector's output through one severity-ranked `WasteFinding` table — retry loops / failure runs / compaction losses / edit reverts / edit-heavy / OpenCode skill-* / system-prompt-tax sorted together by severity (high → warn → info) then `usdPerSession`. The existing per-detector tables remain the default render path; `--findings` is opt-in. JSON output (`--patterns --json`) gains a `findings` array alongside the existing per-detector arrays for downstream consumers; the JSON refusal payload also carries `findings: []` for schema parity. `burn waste --findings` (without `--patterns`) implies `--patterns` so the flag is never silently ignored.
+
+## [0.40.0] - 2026-04-28
+
+### Added
+
+- **`burn archive vacuum`** ([#104](https://github.com/AgentWorkforce/burn/issues/104)). New subcommand that runs SQLite `VACUUM` against `archive.sqlite` to reclaim free pages from `INSERT OR REPLACE` churn (stamp re-folds rewrite turn rows; rebuild drops + recreates rows). Acquires the same `'archive'` lock used by `build` / `rebuild`, so a vacuum and a build can be issued concurrently and will serialize without corruption. Text output is a one-liner — `archive: vacuumed 12.3 MB -> 4.1 MB (reclaimed 8.2 MB)` — and `--json` returns `{ archivePath, existed, beforeBytes, afterBytes, reclaimedBytes }`. No-op with a hint if the archive doesn't exist; vacuum never creates an archive as a side effect.
 
 ## [0.39.0] - 2026-04-28
 

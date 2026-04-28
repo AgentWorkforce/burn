@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Structured `WasteFinding` envelope for waste detectors** ([#56](https://github.com/AgentWorkforce/burn/issues/56)). `@relayburn/analyze` now exposes a common `{ kind, severity, sessionId, title, detail, estimatedSavings, actions }` shape that wraps every existing detector result. `burn waste --patterns --findings` renders all detector kinds through one severity-ranked table (high → warn → info, then by `usdPerSession`); `burn waste --patterns --json` gains a `findings` array alongside the existing per-detector arrays. The JSON refusal payload also carries `findings: []` so consumers don't need to special-case it. `burn waste --findings` (without `--patterns`) implies `--patterns` rather than silently falling back to default attribution. The narrow per-detector types remain exported. `WasteAction` is a closed union (`paste` / `command` / `file-content`) so a future `burn waste --apply` can drive a confirmation-gated pipeline against typed actions.
+
 ## [0.39.0] - 2026-04-28
 
 ### Changed

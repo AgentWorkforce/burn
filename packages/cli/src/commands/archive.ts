@@ -2,6 +2,7 @@ import {
   buildArchive,
   getArchiveStatus,
   rebuildArchive,
+  vacuumArchive,
   type BuildResult,
 } from '@relayburn/ledger';
 
@@ -14,6 +15,7 @@ Usage:
   burn archive build       Apply any ledger tail not yet materialized.
   burn archive rebuild     Drop the archive and rebuild from the ledger.
   burn archive status      Print schema version, row counts, and sync state.
+  burn archive vacuum      Reclaim free pages via SQLite VACUUM.
   burn archive --help      Show this help.
 
 The archive is a disposable read model derived from \`ledger.jsonl\`. Deleting
@@ -41,6 +43,8 @@ export async function runArchive(args: ParsedArgs): Promise<number> {
       return runRebuild(args);
     case 'status':
       return runStatus(args);
+    case 'vacuum':
+      return runVacuum(args);
     default:
       process.stderr.write(`burn archive: unknown subcommand: ${sub}\n\n${ARCHIVE_HELP}`);
       return 1;
@@ -112,6 +116,38 @@ async function runStatus(args: ParsedArgs): Promise<number> {
   lines.push(`    compactions:        ${formatInt(status.rowCounts.compactions)}`);
   process.stdout.write(lines.join('\n') + '\n');
   return 0;
+}
+
+async function runVacuum(args: ParsedArgs): Promise<number> {
+  const result = await vacuumArchive();
+  if (args.flags['json'] === true) {
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return 0;
+  }
+  if (!result.existed) {
+    process.stdout.write(
+      `archive: no archive at ${result.archivePath} — run \`burn archive build\` first\n`,
+    );
+    return 0;
+  }
+  process.stdout.write(
+    `archive: vacuumed ${formatBytes(result.beforeBytes)} -> ${formatBytes(result.afterBytes)}` +
+      ` (reclaimed ${formatBytes(result.reclaimedBytes)})\n`,
+  );
+  return 0;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const fixed = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  return `${fixed} ${units[i]}`;
 }
 
 // Exported for tests; the `--json` shape includes `fidelityHistogram`
