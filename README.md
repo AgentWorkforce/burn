@@ -261,7 +261,7 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>]
              [--by-provider | --by-tool | --by-subagent-type | --subagent-tree <session-id>]
 burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>]
-burn compare [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
+burn compare <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
 burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
 burn watch   [--interval <ms>] [--once]
 ```
@@ -271,9 +271,11 @@ Provider filters are applied at query time; raw ledger model strings are not rew
 ### `burn compare` — model comparison by observed activity
 
 Looking at work you actually did, which model handled each activity category best?
-`burn compare` buckets every turn by `(model, activity)` and shows cost-per-turn, one-shot rate, and turn count side-by-side.
+`burn compare` buckets every turn by `(model, activity)` and shows cost-per-turn, one-shot rate, and turn count side-by-side. The model list is a required comma-separated positional argument naming at least two models — use `burn summary --by-provider` (or `--by-tool`) to discover which models have data in your ledger.
 
 ```
+$ burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 30d
+
               claude-sonnet-4-6           claude-haiku-4-5
 Activity      Turns  Cost/turn  1-shot   Turns  Cost/turn  1-shot
 coding          243    $0.020    68%        89   $0.004    51%

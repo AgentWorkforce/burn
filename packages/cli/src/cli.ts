@@ -30,7 +30,7 @@ Usage:
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
   burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
-  burn compare       [--models a,b] [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
+  burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
   burn watch         [--interval <ms>] [--once]
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
@@ -58,7 +58,7 @@ Examples:
   burn context --since 30d
   burn context --kind claude-md
   burn context advise --top 3
-  burn compare --since 30d --models claude-sonnet-4-6,claude-haiku-4-5
+  burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 30d
   burn run claude   --tag workflow=refactor -- --resume
   burn run codex    --tag workflow=refactor
   burn run opencode --tag workflow=refactor

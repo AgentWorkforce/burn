@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Aggregate parser content-capture report in `burn diagnose`** ([#79](https://github.com/AgentWorkforce/burn/issues/79)). `burn diagnose` (no positional argument) now walks the ledger and emits a per-adapter content-capture gap table — total sessions, sessions with ≥1 tool call, gapped sessions (≥1 tool call but zero `tool_result` ContentRecords), orphan tool-call count, and `degradedPct`. Honors `--json` (`{ adapters: [{ adapter, sessions, sessionsWithToolCalls, gappedSessions, orphanToolCalls, degradedPct }, ...], contentMode }`). The existing per-session `burn diagnose <session-id>` behavior is unchanged. Permanent, queryable surface for the gap that the per-invocation ingest warning ([#75](https://github.com/AgentWorkforce/burn/issues/75)) only flags once per `burn` run; rows omit the gap signal with an explanatory note when `RELAYBURN_CONTENT_STORE` is `hash-only` or `off`. Adapters with no sessions in the ledger are omitted entirely.
 
+## [0.39.0] - 2026-04-28
+
+### Changed
+
+- **`burn compare` takes models as a required positional, not a flag** ([#159](https://github.com/AgentWorkforce/burn/issues/159)). The verb "compare" implies selection — without an explicit list the old `burn compare` produced a wide N×M survey of every model in the ledger, which is what `burn summary` (with `--by-provider` / `--by-tool`) already covers. The new shape is `burn compare <model_a,model_b[,...]> [flags]` with a minimum of 2 models. Trim/dedupe rules match the old `--models` flag. The `--models` flag is removed; passing it now exits 2 with a pointer to the positional form. Missing or single-model positional likewise exits 2 with `burn compare: needs at least 2 models. Run \`burn summary --by-provider\` (or \`burn summary --by-tool\`) to see which models have data.` Help block, top-level help, and every example in this repo flip to the positional form. No behavioral change to filters, the cell schema, the JSON contract, or aggregation logic.
+
 ## [0.38.0] - 2026-04-28
 
 ### Changed
