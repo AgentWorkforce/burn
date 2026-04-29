@@ -558,28 +558,30 @@ function registerUserNode(
   nodesByUuid.set(node.uuid, node);
 }
 
-// Light pre-scan of [0, endOffset) that registers LineNodes only — no turn
-// emission, no classification, no content capture. Used by the incremental
-// parser so resuming ingest can still resolve parentUuid chains that reach
-// back before the resume point. Returns the messageId of the last assistant
-// line seen so a resumed pass can anchor `precedingMessageId` on user turns
-// whose preceding assistant was already ingested in a prior pass. Also
-// populates `evidence` (#112) with the relationship signals carried by the
-// already-ingested prefix — `firstParentUuid` and `inLogSessionIds` are file
-// invariants, so a resumed pass that reads only the tail must still see them.
+// Light pre-scan of [0, endOffset) that registers LineNodes and execution
+// graph counters only — no turn emission, no classification, no content
+// capture. Used by the incremental parser so resuming ingest can still
+// resolve parentUuid chains that reach back before the resume point. Returns
+// the messageId of the last assistant line seen so a resumed pass can anchor
+// `precedingMessageId` on user turns whose preceding assistant was already
+// ingested in a prior pass. Also populates `evidence` (#112) with the
+// relationship signals carried by the already-ingested prefix —
+// `firstParentUuid` and `inLogSessionIds` are file invariants, so a resumed
+// pass that reads only the tail must still see them.
 async function prescanNodes(
   filePath: string,
   endOffset: number,
   nodesByUuid: Map<string, LineNode>,
   evidence: ClaudeRelationshipEvidence,
-): Promise<{ lastAssistantMessageId?: string }> {
-  if (endOffset <= 0) return {};
+  toolResultCounters: Map<string, number>,
+): Promise<{ lastAssistantMessageId?: string; nextEventIndex: number }> {
+  if (endOffset <= 0) return { nextEventIndex: 0 };
   const handle = await open(filePath, 'r');
   let buf: Buffer;
   try {
     const st = await handle.stat();
     const length = Math.min(endOffset, st.size);
-    if (length <= 0) return {};
+    if (length <= 0) return { nextEventIndex: 0 };
     buf = Buffer.allocUnsafe(length);
     await handle.read(buf, 0, length, 0);
   } finally {
@@ -587,6 +589,7 @@ async function prescanNodes(
   }
   let p = 0;
   let lastAssistantMessageId: string | undefined;
+  let nextEventIndex = 0;
   while (p < buf.length) {
     const nlIdx = buf.indexOf(0x0a, p);
     if (nlIdx === -1) break;
@@ -614,9 +617,25 @@ async function prescanNodes(
       recordEvidenceFromLine(evidence, ul);
       recordExplicitRelationshipEvidence(evidence, rec);
       recordResumeMarker(evidence, ul);
+      const harvested: ToolResultEventRecord[] = [];
+      nextEventIndex = collectToolResultEvents(
+        ul,
+        harvested,
+        toolResultCounters,
+        nextEventIndex,
+      );
+    } else if (rec.type === 'system') {
+      const systemEvent = buildClaudeSystemToolResultEvent(
+        rec,
+        toolResultCounters,
+        nextEventIndex,
+      );
+      if (systemEvent) nextEventIndex++;
     }
   }
-  const out: { lastAssistantMessageId?: string } = {};
+  const out: { lastAssistantMessageId?: string; nextEventIndex: number } = {
+    nextEventIndex,
+  };
   if (lastAssistantMessageId !== undefined) out.lastAssistantMessageId = lastAssistantMessageId;
   return out;
 }
@@ -1870,10 +1889,19 @@ export async function parseClaudeSessionIncremental(
   // of whether the call started at offset 0 or partway through.
   const fileSessionId = deriveFileSessionId(options);
   const evidence = newEvidence(fileSessionId);
+  const toolResultCounters = new Map<string, number>();
+  let nextEventIndex = 0;
   let prescanLastAssistantMid: string | undefined;
   if (startOffset > 0) {
-    const prescan = await prescanNodes(filePath, startOffset, nodesByUuid, evidence);
+    const prescan = await prescanNodes(
+      filePath,
+      startOffset,
+      nodesByUuid,
+      evidence,
+      toolResultCounters,
+    );
     prescanLastAssistantMid = prescan.lastAssistantMessageId;
+    nextEventIndex = prescan.nextEventIndex;
   }
   const messageIdFirstOffset = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
@@ -1897,8 +1925,6 @@ export async function parseClaudeSessionIncremental(
     offset: number;
     record: ToolResultEventRecord;
   }> = [];
-  const toolResultCounters = new Map<string, number>();
-  let nextEventIndex = 0;
   const pendingRelationships: Array<{
     offset: number;
     record: SessionRelationshipRecord;

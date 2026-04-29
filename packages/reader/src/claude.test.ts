@@ -810,6 +810,93 @@ describe('parseClaudeSessionIncremental', () => {
     assert.equal(second.userTurns[0]!.blocks[0]!.isError, true);
   });
 
+  it('seeds tool-result event counters from the prescan on resumed passes', async () => {
+    const working = path.join(tmp, 'session.jsonl');
+    const sessionId = '66666666-6666-6666-6666-666666666666';
+    const userResult = {
+      parentUuid: null,
+      isSidechain: false,
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_system', content: 'done' }],
+      },
+      uuid: 'u-result-1',
+      timestamp: '2026-04-24T01:00:00.000Z',
+      cwd: '/tmp/project',
+      sessionId,
+    };
+    const incompleteAssistant = {
+      parentUuid: 'u-result-1',
+      isSidechain: false,
+      message: {
+        model: 'claude-sonnet-4-6',
+        id: 'msg_waiting',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'waiting' }],
+        stop_reason: null,
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+      type: 'assistant',
+      uuid: 'u-asst-waiting',
+      timestamp: '2026-04-24T01:00:01.000Z',
+      cwd: '/tmp/project',
+      sessionId,
+    };
+    const systemNotification = {
+      type: 'system',
+      subtype: 'subagent_completed',
+      sessionId,
+      timestamp: '2026-04-24T01:00:02.000Z',
+      parent_tool_use_id: 'toolu_system',
+      agent_id: 'agent-system-2',
+      subagent_session_id: 'session-system-child-2',
+      status: 'completed',
+    };
+    await writeFile(
+      working,
+      [userResult, incompleteAssistant, systemNotification].map((l) => JSON.stringify(l)).join('\n') + '\n',
+      'utf8',
+    );
+
+    const first = await parseClaudeSessionIncremental(working);
+    assert.equal(first.toolResultEvents.length, 1);
+    assert.equal(first.toolResultEvents[0]!.eventSource, 'tool_result');
+    assert.equal(first.toolResultEvents[0]!.toolUseId, 'toolu_system');
+    assert.equal(first.toolResultEvents[0]!.callIndex, 0);
+    assert.equal(first.toolResultEvents[0]!.eventIndex, 0);
+
+    const completeAssistant = {
+      ...incompleteAssistant,
+      message: {
+        ...incompleteAssistant.message,
+        stop_reason: 'end_turn',
+      },
+    };
+    await writeFile(
+      working,
+      [userResult, incompleteAssistant, systemNotification, completeAssistant]
+        .map((l) => JSON.stringify(l))
+        .join('\n') + '\n',
+      'utf8',
+    );
+
+    const second = await parseClaudeSessionIncremental(working, {
+      startOffset: first.endOffset,
+      lastUserText: first.lastUserText,
+    });
+    const event = second.toolResultEvents.find(
+      (e) => e.eventSource === 'subagent_notification',
+    );
+    assert.ok(event, 'resumed pass should emit the deferred system notification');
+    assert.equal(event!.toolUseId, 'toolu_system');
+    assert.equal(event!.callIndex, 1);
+    assert.equal(event!.eventIndex, 1);
+    assert.equal(event!.agentId, 'agent-system-2');
+    assert.equal(event!.subagentSessionId, 'session-system-child-2');
+  });
+
   it('resolves subagent tree fields for sidechain turns discovered after the spawn line (prescan)', async () => {
     // First incremental pass ingests the main thread + Agent spawn line.
     // Second pass starts beyond them and must still populate agentId /
