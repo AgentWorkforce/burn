@@ -2,18 +2,18 @@ import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
 import {
-  attributeContext,
-  buildAdviseRecommendations,
+  attributeOverhead,
+  buildTrimRecommendations,
   describeAppliesTo,
-  findContextFiles,
-  loadContextFile,
+  findOverheadFiles,
+  loadOverheadFile,
   loadPricing,
   renderUnifiedDiffForRecommendation,
-  type AdviseRecommendation,
-  type ContextAttributionResult,
-  type ContextFileAttribution,
-  type ContextFileKind,
-  type ParsedContextFile,
+  type TrimRecommendation,
+  type OverheadAttribution,
+  type OverheadFileAttribution,
+  type OverheadFileKind,
+  type ParsedOverheadFile,
   type SectionCost,
 } from '@relayburn/analyze';
 import { queryAll, type Query } from '@relayburn/ledger';
@@ -23,14 +23,14 @@ import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
-const HELP = `burn context — cost attribution for agent context files (CLAUDE.md, AGENTS.md, …)
+const HELP = `burn overhead — cost attribution for agent overhead files (CLAUDE.md, AGENTS.md, …)
 
 Usage:
-  burn context        [--project <path>] [--since 7d] [--kind <k>] [--json]
-  burn context advise [--project <path>] [--since 7d] [--kind <k>] [--top <n>]
+  burn overhead      [--project <path>] [--since 7d] [--kind <k>] [--json]
+  burn overhead trim [--project <path>] [--since 7d] [--kind <k>] [--top <n>]
 
 What it does:
-  Discovers context files in the project (CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)
+  Discovers overhead files in the project (CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)
   and attributes the cached-prompt cost of each across every session that reads it.
   Different files apply to different harnesses — Claude Code doesn't pay for
   AGENTS.md, Codex/OpenCode don't pay for CLAUDE.md — so turns are filtered by
@@ -40,23 +40,23 @@ Flags:
   --kind <k>   narrow to a single file kind: "claude-md" or "agents-md"
 
 Examples:
-  burn context
-  burn context --since 30d
-  burn context --kind claude-md
-  burn context advise --top 3
+  burn overhead
+  burn overhead --since 30d
+  burn overhead --kind claude-md
+  burn overhead trim --top 3
 `;
 
-const VALID_KINDS: ContextFileKind[] = ['claude-md', 'agents-md'];
+const VALID_KINDS: OverheadFileKind[] = ['claude-md', 'agents-md'];
 
-export async function runContext(args: ParsedArgs): Promise<number> {
+export async function runOverhead(args: ParsedArgs): Promise<number> {
   const sub = args.positional[0];
   if (args.flags['help'] === true || sub === 'help' || sub === '--help' || sub === '-h') {
     process.stdout.write(HELP);
     return 0;
   }
-  if (sub === 'advise') return runAdvise(args);
+  if (sub === 'trim') return runTrim(args);
   if (sub !== undefined && sub !== '') {
-    process.stderr.write(`unknown context subcommand: ${sub}\n\n${HELP}`);
+    process.stderr.write(`unknown overhead subcommand: ${sub}\n\n${HELP}`);
     return 1;
   }
   return runReport(args);
@@ -66,8 +66,8 @@ async function gatherAttribution(
   args: ParsedArgs,
   projectPath: string,
 ): Promise<{
-  files: ParsedContextFile[];
-  attribution: ContextAttributionResult;
+  files: ParsedOverheadFile[];
+  attribution: OverheadAttribution;
 } | null> {
   const kindFilter = parseKindFlag(args.flags['kind']);
   if (kindFilter === 'invalid') {
@@ -76,20 +76,20 @@ async function gatherAttribution(
     );
     return null;
   }
-  let found = await findContextFiles(projectPath);
+  let found = await findOverheadFiles(projectPath);
   if (kindFilter) found = found.filter((f) => f.kind === kindFilter);
   if (found.length === 0) {
     if (kindFilter) {
-      process.stderr.write(`no ${kindFilter} context files found at ${projectPath}\n`);
+      process.stderr.write(`no ${kindFilter} overhead files found at ${projectPath}\n`);
     } else {
       process.stderr.write(
-        `no context files found at ${projectPath} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n`,
+        `no overhead files found at ${projectPath} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n`,
       );
     }
     return null;
   }
-  const files: ParsedContextFile[] = [];
-  for (const f of found) files.push(await loadContextFile(f));
+  const files: ParsedOverheadFile[] = [];
+  for (const f of found) files.push(await loadOverheadFile(f));
 
   const resolved = resolveProject(projectPath);
   const q: Query = { project: resolved.projectKey ?? projectPath };
@@ -98,7 +98,7 @@ async function gatherAttribution(
   await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll(q);
-  const attribution = attributeContext({ files, turns, pricing });
+  const attribution = attributeOverhead({ files, turns, pricing });
   return { files, attribution };
 }
 
@@ -139,7 +139,7 @@ async function runReport(args: ParsedArgs): Promise<number> {
 
   const out: string[] = [];
   out.push('');
-  out.push(`Context files in ${projectPath}:`);
+  out.push(`Overhead files in ${projectPath}:`);
   out.push('');
 
   const sinceLabel = typeof args.flags['since'] === 'string' ? args.flags['since'] : 'all time';
@@ -149,14 +149,14 @@ async function runReport(args: ParsedArgs): Promise<number> {
     out.push('');
   }
 
-  out.push(`Grand total (all context files, ${sinceLabel}): ${formatUsd(data.attribution.grandTotal)}`);
+  out.push(`Grand total (all overhead files, ${sinceLabel}): ${formatUsd(data.attribution.grandTotal)}`);
   out.push('');
   process.stdout.write(out.join('\n'));
   return 0;
 }
 
 function renderFileBlock(
-  fileAttr: ContextFileAttribution,
+  fileAttr: OverheadFileAttribution,
   sinceLabel: string,
   out: string[],
 ): void {
@@ -187,7 +187,7 @@ function renderFileBlock(
   out.push(indent(renderSectionTable(attribution.sectionCosts), '    '));
 }
 
-async function runAdvise(args: ParsedArgs): Promise<number> {
+async function runTrim(args: ParsedArgs): Promise<number> {
   const projectPath = resolveProjectPath(args);
   const data = await gatherAttribution(args, projectPath);
   if (!data) return 1;
@@ -195,14 +195,14 @@ async function runAdvise(args: ParsedArgs): Promise<number> {
   const topPerFile = parseTopN(args.flags['top']);
 
   const out: string[] = [];
-  out.push('# burn context advise — projected savings if trimmed');
-  out.push('# (recommendations only; burn never modifies your context files)');
+  out.push('# burn overhead trim — projected savings if trimmed');
+  out.push('# (recommendations only; burn never modifies your overhead files)');
   out.push('');
 
   const textCache = new Map<string, string>();
   let emitted = 0;
   for (const fileAttr of data.attribution.perFile) {
-    const recs = buildAdviseRecommendations(fileAttr.attribution, topPerFile);
+    const recs = buildTrimRecommendations(fileAttr.attribution, topPerFile);
     if (recs.length === 0) continue;
     out.push(`# === ${path.basename(fileAttr.file.path)} (applies to: ${describeAppliesTo(fileAttr.file.appliesTo)}) ===`);
     out.push('');
@@ -213,14 +213,14 @@ async function runAdvise(args: ParsedArgs): Promise<number> {
     }
     for (const rec of recs) {
       out.push(
-        renderUnifiedDiffForRecommendation(fileAttr.file.path, text, rec as AdviseRecommendation, projectPath),
+        renderUnifiedDiffForRecommendation(fileAttr.file.path, text, rec as TrimRecommendation, projectPath),
       );
       out.push('');
     }
     emitted++;
   }
   if (emitted === 0) {
-    process.stdout.write('# no trim candidates — context files have no headed sections\n');
+    process.stdout.write('# no trim candidates — overhead files have no headed sections\n');
     return 0;
   }
   process.stdout.write(out.join('\n'));
@@ -272,7 +272,7 @@ function parseTopN(v: unknown): number {
   return Math.floor(n);
 }
 
-function parseKindFlag(v: unknown): ContextFileKind | null | 'invalid' {
+function parseKindFlag(v: unknown): OverheadFileKind | null | 'invalid' {
   if (v === undefined || v === true) return null;
   if (typeof v !== 'string') return 'invalid';
   if (v === 'claude-md' || v === 'agents-md') return v;

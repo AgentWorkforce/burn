@@ -163,7 +163,7 @@ export function projectClaudeSettingsPath(cwd: string = process.cwd()): string {
 // when the file is missing or malformed — both cases mean "no setting to
 // check", which is indistinguishable from "no waste". We deliberately do NOT
 // throw on parse errors; the user's misconfigured settings.json should not
-// crash `burn waste`.
+// crash `burn hotspots`.
 export async function loadClaudeSettings(
   filePath: string,
 ): Promise<LoadedClaudeSettings | undefined> {

@@ -338,17 +338,17 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx]!;
 }
 
-export interface AdviseRecommendation {
+export interface TrimRecommendation {
   filePath: string;
   section: MarkdownSection;
   projectedSavingsPerSession: number;
   projectedSavingsAcrossWindow: number;
 }
 
-export function buildAdviseRecommendations(
+export function buildTrimRecommendations(
   attribution: ClaudeMdAttributionResult,
   topN = 3,
-): AdviseRecommendation[] {
+): TrimRecommendation[] {
   // Pick the most expensive non-preamble sections as TRIM candidates.
   const candidates = attribution.sectionCosts.filter((s) => s.section.level > 0);
   const top = candidates.slice(0, topN);
@@ -363,7 +363,7 @@ export function buildAdviseRecommendations(
 export function renderUnifiedDiffForRecommendation(
   filePath: string,
   fileText: string,
-  rec: AdviseRecommendation,
+  rec: TrimRecommendation,
   baseDir?: string,
 ): string {
   const normalized = fileText.replace(/\r\n/g, '\n');

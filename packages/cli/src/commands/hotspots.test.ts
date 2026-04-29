@@ -5,9 +5,9 @@ import { loadBuiltinPricing } from '@relayburn/analyze';
 import type {
   BashAggregation,
   FileAggregation,
-  SessionWasteTotals,
+  SessionTotals,
   SubagentAggregation,
-  WasteResult,
+  HotspotsResult,
 } from '@relayburn/analyze';
 import type { EnrichedTurn } from '@relayburn/ledger';
 import type { Coverage, Fidelity, SourceKind, ToolResultEventRecord } from '@relayburn/reader';
@@ -18,21 +18,21 @@ import {
   describeExcluded,
   fmtCoverageKey,
   formatCoverageNotice,
-  formatWasteReport,
+  formatHotspotsReport,
   isAttributionDegraded,
   renderSourcesClause,
   resolvePatternSelection,
   runPatternsMode,
-  runWasteAttribution,
+  runHotspotsAttribution,
   turnPassesCoverage,
-  type WasteAttributionDeps,
-} from './waste.js';
+  type HotspotsAttributionDeps,
+} from './hotspots.js';
 import type { ParsedArgs } from '../args.js';
 
 function session(
   id: string,
   method: 'sized' | 'even-split',
-): SessionWasteTotals {
+): SessionTotals {
   return {
     sessionId: id,
     grandCost: 1,
@@ -42,7 +42,7 @@ function session(
   };
 }
 
-function makeResult(sessions: SessionWasteTotals[]): WasteResult {
+function makeResult(sessions: SessionTotals[]): HotspotsResult {
   return {
     attributions: [],
     sessionTotals: sessions,
@@ -105,13 +105,13 @@ describe('isAttributionDegraded', () => {
   });
 });
 
-describe('formatWasteReport', () => {
+describe('formatHotspotsReport', () => {
   it('renders no even-split note when all sessions are sized', () => {
     const result = makeResult([
       session('a', 'sized'),
       session('b', 'sized'),
     ]);
-    const out = formatWasteReport({
+    const out = formatHotspotsReport({
       turnsAnalyzed: 100,
       result,
       files: NO_FILES,
@@ -137,7 +137,7 @@ describe('formatWasteReport', () => {
       session('b', 'sized'),
       session('c', 'sized'),
     ]);
-    const out = formatWasteReport({
+    const out = formatHotspotsReport({
       turnsAnalyzed: 100,
       result,
       files: NO_FILES,
@@ -159,7 +159,7 @@ describe('formatWasteReport', () => {
       session('b', 'even-split'),
       session('c', 'sized'),
     ]);
-    const out = formatWasteReport({
+    const out = formatHotspotsReport({
       turnsAnalyzed: 64117,
       result,
       files: NO_FILES,
@@ -192,12 +192,12 @@ describe('formatWasteReport', () => {
   });
 
   it('formats large session counts with thousands separators in the banner', () => {
-    const sessions: SessionWasteTotals[] = [];
+    const sessions: SessionTotals[] = [];
     for (let i = 0; i < 39_587; i++) {
       sessions.push(session(`s${i}`, i < 39_486 ? 'even-split' : 'sized'));
     }
     const result = makeResult(sessions);
-    const out = formatWasteReport({
+    const out = formatHotspotsReport({
       turnsAnalyzed: 64117,
       result,
       files: NO_FILES,
@@ -312,7 +312,7 @@ async function captureStdio<T>(
   }
 }
 
-const EMPTY_DEPS: WasteAttributionDeps = {
+const EMPTY_DEPS: HotspotsAttributionDeps = {
   loadContentForSession: async () => [],
   loadUserTurnsForSession: async () => [],
 };
@@ -470,7 +470,7 @@ describe('resolvePatternSelection', () => {
   });
 });
 
-describe('runWasteAttribution — fidelity refusal (#100)', () => {
+describe('runHotspotsAttribution — fidelity refusal (#100)', () => {
   it('refuses with exit 2, names the missing prerequisite + source kind, when every turn is aggregate-only', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: EnrichedTurn[] = [];
@@ -489,15 +489,15 @@ describe('runWasteAttribution — fidelity refusal (#100)', () => {
       );
     }
     const { result, stdout, stderr } = await captureStdio(() =>
-      runWasteAttribution(args(), turns, pricing, EMPTY_DEPS),
+      runHotspotsAttribution(args(), turns, pricing, EMPTY_DEPS),
     );
     assert.equal(result, 2);
     assert.equal(stdout, '');
-    assert.match(stderr, /burn waste: 142\/142 turns lack tool-call\/tool-result coverage/);
+    assert.match(stderr, /burn hotspots: 142\/142 turns lack tool-call\/tool-result coverage/);
     assert.match(stderr, /codex/);
     assert.match(stderr, /per-session-aggregate/);
     assert.match(stderr, /missing tool-call records, tool-result events/);
-    assert.match(stderr, /No waste analysis was performed/);
+    assert.match(stderr, /No hotspots analysis was performed/);
   });
 
   it('JSON-mode refusal still writes a fidelity block with refused: true and exits 2', async () => {
@@ -515,10 +515,10 @@ describe('runWasteAttribution — fidelity refusal (#100)', () => {
       }),
     ];
     const { result, stdout, stderr } = await captureStdio(() =>
-      runWasteAttribution(args({ json: true }), turns, pricing, EMPTY_DEPS),
+      runHotspotsAttribution(args({ json: true }), turns, pricing, EMPTY_DEPS),
     );
     assert.equal(result, 2);
-    assert.match(stderr, /No waste analysis was performed/);
+    assert.match(stderr, /No hotspots analysis was performed/);
     const payload = JSON.parse(stdout);
     assert.equal(payload.fidelity.refused, true);
     assert.equal(payload.fidelity.analyzed, 0);
@@ -527,20 +527,20 @@ describe('runWasteAttribution — fidelity refusal (#100)', () => {
     assert.equal(payload.fidelity.summary.total, 1);
     assert.equal(payload.fidelity.summary.byClass['aggregate-only'], 1);
     assert.equal(payload.turnsAnalyzed, 0);
-    assert.match(payload.refusalReason, /No waste analysis was performed/);
+    assert.match(payload.refusalReason, /No hotspots analysis was performed/);
   });
 
   it('does not refuse on a fully empty input (no turns at all)', async () => {
     const pricing = await loadBuiltinPricing();
     const { result, stderr } = await captureStdio(() =>
-      runWasteAttribution(args(), [], pricing, EMPTY_DEPS),
+      runHotspotsAttribution(args(), [], pricing, EMPTY_DEPS),
     );
     assert.equal(result, 0, 'empty slice is not a refusal');
     assert.equal(stderr, '');
   });
 });
 
-describe('runWasteAttribution — partial exclusion (#100)', () => {
+describe('runHotspotsAttribution — partial exclusion (#100)', () => {
   it('analyzes only qualifying turns and prints "analyzed N of M" with the exclusion reason', async () => {
     const pricing = await loadBuiltinPricing();
     const goodFidelity = fidelityWith('full', 'per-turn');
@@ -569,7 +569,7 @@ describe('runWasteAttribution — partial exclusion (#100)', () => {
       }),
     ];
     const { result, stdout, stderr } = await captureStdio(() =>
-      runWasteAttribution(args(), turns, pricing, EMPTY_DEPS),
+      runHotspotsAttribution(args(), turns, pricing, EMPTY_DEPS),
     );
     assert.equal(result, 0);
     assert.equal(stderr, '');
@@ -591,7 +591,7 @@ describe('runWasteAttribution — partial exclusion (#100)', () => {
       }),
     ];
     const { result, stdout } = await captureStdio(() =>
-      runWasteAttribution(args(), turns, pricing, EMPTY_DEPS),
+      runHotspotsAttribution(args(), turns, pricing, EMPTY_DEPS),
     );
     assert.equal(result, 0);
     assert.doesNotMatch(stdout, /analyzed \d+ of \d+ turns; \d+ excluded/);
@@ -616,7 +616,7 @@ describe('runWasteAttribution — partial exclusion (#100)', () => {
       }),
     ];
     const { result, stdout } = await captureStdio(() =>
-      runWasteAttribution(args({ json: true }), turns, pricing, EMPTY_DEPS),
+      runHotspotsAttribution(args({ json: true }), turns, pricing, EMPTY_DEPS),
     );
     assert.equal(result, 0);
     const payload = JSON.parse(stdout);
@@ -652,7 +652,7 @@ describe('runPatternsMode — fidelity refusal (#100)', () => {
     );
     assert.equal(result, 2);
     assert.equal(stdout, '');
-    assert.match(stderr, /burn waste --patterns: no selected detectors can run/);
+    assert.match(stderr, /burn hotspots --patterns: no selected detectors can run/);
     assert.match(stderr, /retries: 1\/1 turns lack tool-call records/);
     assert.match(stderr, /failures: 1\/1 turns lack tool-call records/);
     assert.match(stderr, /codex/);

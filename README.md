@@ -260,13 +260,20 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>]
              [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>]
-burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>]
+burn hotspots [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--session <id>]
+burn overhead [trim] [--project <path>] [--since 7d] [--kind <claude-md|agents-md>]
 burn compare <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
 burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
 burn watch   [--interval <ms>] [--once]
 ```
 
 Provider filters are applied at query time; raw ledger model strings are not rewritten. `burn summary --by-provider --provider synthetic` groups Synthetic-routed turns under provider `synthetic` while pricing against the normalized model id. Recognized Synthetic model patterns are `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
+
+### Renames from 0.45
+
+`burn hotspots` replaces `burn waste`; `burn hotspots --session <id>` replaces `burn diagnose <id>`. `burn overhead` replaces `burn context`, and `burn overhead trim` replaces `burn context advise`.
+
+For `@relayburn/analyze`, import `attributeHotspots`, `HotspotsResult`, `SessionTotals`, and `HotspotsOptions` from `hotspots`; import `attributeOverhead`, `findOverheadFiles`, `loadOverheadFile`, `OverheadAttribution`, and `buildTrimRecommendations` for the overhead pipeline.
 
 ### `burn compare` — model comparison by observed activity
 
@@ -333,4 +340,4 @@ User overrides go at `$RELAYBURN_HOME/models.dev.json` (or `~/.relayburn/models.
 
 ## Status
 
-v0: Claude Code reader shipped. OpenCode reader in progress. Codex reader scaffolded. Per-tool-call attribution (`burn waste`), CLAUDE.md hot-path analysis, quota-window tracking (`burn limits`), waste-pattern detection, and subagent-tree queries are scoped and tracked as open issues.
+v0: Claude Code reader shipped. OpenCode reader in progress. Codex reader scaffolded. Per-tool-call attribution (`burn hotspots`), CLAUDE.md hot-path analysis, quota-window tracking (`burn limits`), waste-pattern detection, and subagent-tree queries are scoped and tracked as open issues.

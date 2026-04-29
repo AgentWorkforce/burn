@@ -13,8 +13,8 @@ import {
   aggregateByBash,
   aggregateByFile,
   aggregateBySubagent,
-  attributeWaste,
-} from './waste.js';
+  attributeHotspots,
+} from './hotspots.js';
 
 function tc(id: string, name: string, target?: string): ToolCall {
   return {
@@ -67,14 +67,14 @@ function userTurn(
   };
 }
 
-describe('attributeWaste', () => {
+describe('attributeHotspots', () => {
   it('attributes the persistence of an 8k Read across 20 ride-along turns within ±10% of hand truth', async () => {
     const pricing = await loadBuiltinPricing();
     const rate = pricing['claude-sonnet-4-6']!;
     const READ_TOKENS = 8000;
     const READ_TEXT = 'x'.repeat(READ_TOKENS * 4); // 4 chars/token estimate
 
-    const sessionId = 's-waste-1';
+    const sessionId = 's-hotspots-1';
     const turns: TurnRecord[] = [];
 
     // Turn 0: assistant emits Read tool_use
@@ -120,7 +120,7 @@ describe('attributeWaste', () => {
       toolResultContent(sessionId, 'tu_read_1', READ_TEXT, '2026-04-20T00:00:00.500Z'),
     ]);
 
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     assert.equal(result.attributions.length, 1);
     const a = result.attributions[0]!;
     assert.equal(a.toolUseId, 'tu_read_1');
@@ -177,7 +177,7 @@ describe('attributeWaste', () => {
       toolResultContent(sessionId, 'tu_b', 'y'.repeat(SMALL_TOKENS * 4), '2026-04-20T00:00:00.101Z'),
     ]);
 
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     const files = aggregateByFile(result.attributions);
     assert.equal(files.length, 2);
     assert.equal(files[0]!.path, '/big.ts');
@@ -210,7 +210,7 @@ describe('attributeWaste', () => {
       toolResultContent(sessionId, 'tu_b_1', 'x'.repeat(4000), '2026-04-20T00:00:00.200Z'),
       toolResultContent(sessionId, 'tu_b_2', 'x'.repeat(4000), '2026-04-20T00:00:00.300Z'),
     ]);
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     const bash = aggregateByBash(result.attributions);
     assert.equal(bash.length, 1);
     assert.equal(bash[0]!.callCount, 3);
@@ -237,7 +237,7 @@ describe('attributeWaste', () => {
     contentBySession.set(sessionId, [
       toolResultContent(sessionId, 'tu_a1', 'z'.repeat(8000), '2026-04-20T00:00:00.100Z'),
     ]);
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     const subagents = aggregateBySubagent(result.attributions);
     assert.equal(subagents.length, 1);
     assert.equal(subagents[0]!.subagentType, 'general-purpose');
@@ -262,7 +262,7 @@ describe('attributeWaste', () => {
         usage: { input: 4000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
       }),
     ];
-    const result = attributeWaste(turns, { pricing });
+    const result = attributeHotspots(turns, { pricing });
     assert.equal(result.attributions.length, 2);
     // Even split: each tool gets half of the next turn's input cost.
     const rate = pricing['claude-sonnet-4-6']!;
@@ -306,7 +306,7 @@ describe('attributeWaste', () => {
       ]),
     ]);
 
-    const result = attributeWaste(turns, { pricing, userTurnsBySession });
+    const result = attributeHotspots(turns, { pricing, userTurnsBySession });
     const byId = new Map(result.attributions.map((a) => [a.toolUseId, a]));
     assert.equal(result.sessionTotals[0]!.attributionMethod, 'sized');
     assert.equal(byId.get('tu_big')!.initialTokens, 3000);
@@ -344,7 +344,7 @@ describe('attributeWaste', () => {
       ]),
     ]);
 
-    const result = attributeWaste(turns, {
+    const result = attributeHotspots(turns, {
       pricing,
       contentBySession,
       userTurnsBySession,
@@ -379,7 +379,7 @@ describe('attributeWaste', () => {
       toolResultContent(sessionId, 'tu_big', 'x'.repeat(6000 * 4), '2026-04-20T00:00:00.100Z'),
       toolResultContent(sessionId, 'tu_med', 'y'.repeat(4000 * 4), '2026-04-20T00:00:00.101Z'),
     ]);
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     const summed = result.attributions.reduce((s, a) => s + a.initialTokens, 0);
     assert.ok(summed <= 5000 + 1e-6, `summed=${summed} > newContent=5000`);
     const big = result.attributions.find((a) => a.toolUseId === 'tu_big')!;
@@ -422,7 +422,7 @@ describe('attributeWaste', () => {
       toolResultContent(sessionId, 'tu_a', 'x'.repeat(4000 * 4), '2026-04-20T00:00:00.100Z'),
       toolResultContent(sessionId, 'tu_b', 'y'.repeat(4000 * 4), '2026-04-20T00:00:00.101Z'),
     ]);
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     const summedPersist = result.attributions.reduce((s, a) => s + a.persistenceTokens, 0);
     assert.ok(summedPersist <= 5000 + 1e-6, `summedPersist=${summedPersist} > cacheRead=5000`);
     for (const a of result.attributions) {
@@ -467,7 +467,7 @@ describe('attributeWaste', () => {
     contentBySession.set(sessionId, [
       toolResultContent(sessionId, 'tu_x', 'z'.repeat(TOK * 4), '2026-04-20T00:00:00.100Z'),
     ]);
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     const a = result.attributions[0]!;
     const expectedInitial = (TOK / 1_000_000) * haiku.input;
     const expectedPersistence = (TOK / 1_000_000) * haiku.cacheRead;
@@ -476,9 +476,9 @@ describe('attributeWaste', () => {
   });
 
   it("session grand total honors source-aware reasoning semantics (Codex doesn't double-bill)", async () => {
-    // Regression test: `attributeWaste` must use the canonical `costForTurn`
+    // Regression test: `attributeHotspots` must use the canonical `costForTurn`
     // so it inherits per-source reasoning-billing semantics (`included_in_output`
-    // for Codex). Otherwise waste's `sessionGrand` overstates Codex spend by
+    // for Codex). Otherwise hotspots's `sessionGrand` overstates Codex spend by
     // `reasoning × output_rate`, contradicting `costForTurn` totals.
     const pricing = await loadBuiltinPricing();
     // Pick a model that exists in the snapshot under both Anthropic and openai
@@ -506,7 +506,7 @@ describe('attributeWaste', () => {
         },
       }),
     ];
-    const result = attributeWaste(turns, { pricing });
+    const result = attributeHotspots(turns, { pricing });
 
     const rate = pricing[codexModel]!;
     const expected =
@@ -539,7 +539,7 @@ describe('attributeWaste', () => {
     contentBySession.set(sessionId, [
       toolResultContent(sessionId, 'tu_z', 'q'.repeat(2000 * 4), '2026-04-20T00:00:00.500Z'),
     ]);
-    const result = attributeWaste(turns, { pricing, contentBySession });
+    const result = attributeHotspots(turns, { pricing, contentBySession });
     assert.ok(Math.abs(result.attributedTotal + result.unattributedTotal - result.grandTotal) < 1e-9);
   });
 });

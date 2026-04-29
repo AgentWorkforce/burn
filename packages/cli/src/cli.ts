@@ -3,8 +3,7 @@ import { parseArgs } from './args.js';
 import { runArchive } from './commands/archive.js';
 import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
-import { runContext } from './commands/context.js';
-import { runDiagnose } from './commands/diagnose.js';
+import { runOverhead } from './commands/overhead.js';
 import { runIngest } from './commands/ingest.js';
 import { runLimits } from './commands/limits.js';
 import { runMcpServer } from './commands/mcp-server.js';
@@ -12,7 +11,7 @@ import { runPlans } from './commands/plans.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runWrapper } from './commands/run.js';
 import { runSummary } from './commands/summary.js';
-import { runWaste } from './commands/waste.js';
+import { runHotspots } from './commands/hotspots.js';
 import { runWatch } from './commands/watch.js';
 import { listHarnessNames } from './harnesses/registry.js';
 
@@ -24,12 +23,12 @@ Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--quality]
                      [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>] [--no-archive]
                      (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
-  burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
+  burn hotspots      [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--all] [--json]
+                     [--session <id>]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
-  burn diagnose      [<session-id>] [--json] [--explain-drift]
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
   burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
-  burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
+  burn overhead      [trim] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
   burn watch         [--interval <ms>] [--once] [--opencode-stream] [--opencode-url <url>]
@@ -46,19 +45,18 @@ Examples:
   burn summary --by-subagent-type --since 7d
   burn summary --by-relationship --since 7d
   burn summary --by-tool --since 7d
-  burn waste --since 7d
-  burn waste --patterns --since 7d
-  burn diagnose <session-id>
-  burn diagnose                       # per-adapter content-capture gap report
+  burn hotspots --since 7d
+  burn hotspots --patterns --since 7d
+  burn hotspots --session <session-id>
   burn limits
   burn limits --watch
   burn limits --no-api
   burn plans
   burn plans add --provider claude --preset max
   burn plans set-reset-day claude-max 15
-  burn context --since 30d
-  burn context --kind claude-md
-  burn context advise --top 3
+  burn overhead --since 30d
+  burn overhead --kind claude-md
+  burn overhead trim --top 3
   burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 30d
   burn run claude   --tag workflow=refactor -- --resume
   burn run codex    --tag workflow=refactor
@@ -91,16 +89,14 @@ async function main(): Promise<number> {
   switch (cmd) {
     case 'summary':
       return runSummary(args);
-    case 'waste':
-      return runWaste(args);
-    case 'diagnose':
-      return runDiagnose(args);
+    case 'hotspots':
+      return runHotspots(args);
     case 'limits':
       return runLimits(args);
     case 'plans':
       return runPlans(args);
-    case 'context':
-      return runContext(args);
+    case 'overhead':
+      return runOverhead(args);
     case 'compare':
       return runCompare(args);
     case 'run':

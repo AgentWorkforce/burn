@@ -1,6 +1,6 @@
 export { runSummary } from './commands/summary.js';
-export { runWaste } from './commands/waste.js';
-export { runContext } from './commands/context.js';
+export { runHotspots } from './commands/hotspots.js';
+export { runOverhead } from './commands/overhead.js';
 export { runIngest } from './commands/ingest.js';
 export { runLimits } from './commands/limits.js';
 export { runPlans } from './commands/plans.js';

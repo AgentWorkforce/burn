@@ -19,7 +19,7 @@ import type {
   TurnRecord,
 } from '@relayburn/reader';
 
-import { runDiagnose } from './diagnose.js';
+import { runHotspotsSession } from './hotspots-session.js';
 
 // Cross-batch counter so every fakeTurn lands a unique (ts, model, usage,
 // argsHashPrefix) tuple — otherwise the writer's content-fingerprint dedup
@@ -135,8 +135,8 @@ interface CapturedOutput {
   code: number;
 }
 
-async function captureDiagnose(
-  args: Parameters<typeof runDiagnose>[0],
+async function captureHotspots(
+  args: Parameters<typeof runHotspotsSession>[0],
 ): Promise<CapturedOutput> {
   const origStdout = process.stdout.write.bind(process.stdout);
   const origStderr = process.stderr.write.bind(process.stderr);
@@ -152,7 +152,7 @@ async function captureDiagnose(
   }) as typeof process.stderr.write;
   let code: number;
   try {
-    code = await runDiagnose(args);
+    code = await runHotspotsSession(args);
   } finally {
     process.stdout.write = origStdout;
     process.stderr.write = origStderr;
@@ -160,7 +160,7 @@ async function captureDiagnose(
   return { stdout, stderr, code };
 }
 
-describe('burn diagnose aggregate (#79)', () => {
+describe('burn hotspots --session aggregate (#79)', () => {
   let tmpHome: string;
   let tmpRelay: string;
   const originalHome = process.env['HOME'];
@@ -168,8 +168,8 @@ describe('burn diagnose aggregate (#79)', () => {
   const originalStore = process.env['RELAYBURN_CONTENT_STORE'];
 
   beforeEach(async () => {
-    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-diagnose-home-'));
-    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-diagnose-relay-'));
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-hotspots-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-hotspots-relay-'));
     // Point HOME at an empty dir so ingestAll() finds no transcripts to walk —
     // the test fixtures here are pre-seeded directly into the ledger.
     process.env['HOME'] = tmpHome;
@@ -217,7 +217,7 @@ describe('burn diagnose aggregate (#79)', () => {
       }),
     ]);
 
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: { json: true },
       tags: {},
       positional: [],
@@ -292,7 +292,7 @@ describe('burn diagnose aggregate (#79)', () => {
       }),
     ]);
 
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: { json: true },
       tags: {},
       positional: [],
@@ -341,7 +341,7 @@ describe('burn diagnose aggregate (#79)', () => {
         toolCallIds: ['tu-X'],
       }),
     ]);
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: {},
       tags: {},
       positional: [],
@@ -441,7 +441,7 @@ describe('burn diagnose aggregate (#79)', () => {
       },
     ]);
 
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: { json: true, 'explain-drift': true },
       tags: {},
       positional: [],
@@ -469,7 +469,7 @@ describe('burn diagnose aggregate (#79)', () => {
       },
     ]);
 
-    const human = await captureDiagnose({
+    const human = await captureHotspots({
       flags: { 'explain-drift': true },
       tags: {},
       positional: [],
@@ -490,7 +490,7 @@ describe('burn diagnose aggregate (#79)', () => {
         toolCallIds: ['tu-h'],
       }),
     ]);
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: { json: true },
       tags: {},
       positional: [],
@@ -514,7 +514,7 @@ describe('burn diagnose aggregate (#79)', () => {
     assert.equal(claude!.degradedPct, null);
 
     // Human path includes the explanatory note.
-    const human = await captureDiagnose({
+    const human = await captureHotspots({
       flags: {},
       tags: {},
       positional: [],
@@ -524,11 +524,11 @@ describe('burn diagnose aggregate (#79)', () => {
     assert.match(human.stdout, /content store is hash-only/);
   });
 
-  it('preserves the existing per-session diagnose path when a session id is supplied', async () => {
+  it('preserves the existing per-session hotspots session path when a session id is supplied', async () => {
     // Empty ledger → existing behavior is exit 1 with a "no turns found"
     // message on stderr. We're asserting the per-session branch wasn't
     // accidentally rerouted into the aggregate path.
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: {},
       tags: {},
       positional: ['does-not-exist'],
@@ -596,7 +596,7 @@ describe('burn diagnose aggregate (#79)', () => {
       }),
     ]);
 
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: {},
       tags: {},
       positional: ['diag-parent'],
@@ -615,7 +615,7 @@ describe('burn diagnose aggregate (#79)', () => {
     assert.match(out.stdout, /child-read/);
   });
 
-  it('adds graph arrays to diagnose --json', async () => {
+  it('adds graph arrays to hotspots --session --json', async () => {
     await appendTurns([
       fakeTurn({
         sessionId: 'diag-json',
@@ -638,7 +638,7 @@ describe('burn diagnose aggregate (#79)', () => {
       }),
     ]);
 
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: { json: true },
       tags: {},
       positional: ['diag-json'],
@@ -678,7 +678,7 @@ describe('burn diagnose aggregate (#79)', () => {
       }),
     ]);
 
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: {},
       tags: {},
       positional: ['diag-empty-graph'],
@@ -691,7 +691,7 @@ describe('burn diagnose aggregate (#79)', () => {
   });
 
   it('renders an empty-ledger note when there are no adapter sessions at all', async () => {
-    const out = await captureDiagnose({
+    const out = await captureHotspots({
       flags: {},
       tags: {},
       positional: [],

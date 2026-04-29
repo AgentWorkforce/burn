@@ -10,6 +10,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
+- Renamed the attribution surface: `burn hotspots` replaces `burn waste` and per-session `burn diagnose`, while `burn overhead` replaces `burn context`.
 - `burn summary --subagent-tree` now renders persisted session relationship graphs while preserving legacy subagent-tree output for older data.
 
 ### Fixed
@@ -33,7 +34,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `burn waste --patterns` now bases retry and failure findings on persisted tool-result chronology when available, while preserving legacy fallback behavior.
 - Spawn-env and native sidechain attribution now share session relationship records, and `burn diagnose --explain-drift` surfaces sessions where they disagree.
 - Provider-aware CLI rendering now uses shared analyze helpers for effective-provider resolution and aggregation.
-- Per-tool cost attribution now uses persisted user-turn block sizes in summary and waste reports, with rebuild backfill for historical sessions.
+- Per-tool cost attribution now uses persisted user-turn block sizes in summary and hotspots reports, with rebuild backfill for historical sessions.
 
 ## [0.42.0] - 2026-04-28
 
