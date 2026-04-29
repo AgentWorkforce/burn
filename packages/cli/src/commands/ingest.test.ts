@@ -5,13 +5,160 @@ import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 import {
+  __resetIndexCacheForTesting,
   ledgerPath,
   loadCursors,
+  queryRelationships,
+  queryToolResultEvents,
   queryUserTurns,
   readContent,
 } from '@relayburn/ledger';
 
 import { ingestClaudeHookPayload } from './ingest.js';
+
+function toolTranscript(
+  sessionId: string,
+  cwd: string,
+  toolUseId: string,
+  content: string,
+  isError = false,
+): string {
+  return [
+    JSON.stringify({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'user',
+      message: { role: 'user', content: 'run the tool' },
+      uuid: `${toolUseId}-user-1`,
+      timestamp: '2026-04-22T00:00:00.000Z',
+      cwd,
+      sessionId,
+    }),
+    JSON.stringify({
+      parentUuid: `${toolUseId}-user-1`,
+      isSidechain: false,
+      type: 'assistant',
+      message: {
+        model: 'claude-sonnet-4-6',
+        id: `${toolUseId}-msg-1`,
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: toolUseId, name: 'Bash', input: { command: 'npm test' } },
+        ],
+        stop_reason: 'tool_use',
+        usage: {
+          input_tokens: 3,
+          output_tokens: 5,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+        },
+      },
+      uuid: `${toolUseId}-asst-1`,
+      timestamp: '2026-04-22T00:00:01.000Z',
+      cwd,
+      sessionId,
+    }),
+    JSON.stringify({
+      parentUuid: `${toolUseId}-asst-1`,
+      isSidechain: false,
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError },
+        ],
+      },
+      uuid: `${toolUseId}-user-2`,
+      timestamp: '2026-04-22T00:00:02.000Z',
+      cwd,
+      sessionId,
+    }),
+    '',
+  ].join('\n');
+}
+
+function multiToolTranscript(
+  sessionId: string,
+  cwd: string,
+  tools: Array<{ toolUseId: string; content: string; isError?: boolean }>,
+): string {
+  const lines: string[] = [
+    JSON.stringify({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'user',
+      message: { role: 'user', content: 'run the tools' },
+      uuid: 'multi-user-0',
+      timestamp: '2026-04-22T00:00:00.000Z',
+      cwd,
+      sessionId,
+    }),
+  ];
+  let parentUuid = 'multi-user-0';
+  tools.forEach((tool, idx) => {
+    const assistantUuid = `multi-asst-${idx}`;
+    lines.push(
+      JSON.stringify({
+        parentUuid,
+        isSidechain: false,
+        type: 'assistant',
+        message: {
+          model: 'claude-sonnet-4-6',
+          id: `multi-msg-${idx}`,
+          type: 'message',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: tool.toolUseId,
+              name: 'Bash',
+              input: { command: `echo ${idx}` },
+            },
+          ],
+          stop_reason: 'tool_use',
+          usage: {
+            input_tokens: 3,
+            output_tokens: 5,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+          },
+        },
+        uuid: assistantUuid,
+        timestamp: `2026-04-22T00:00:0${idx + 1}.000Z`,
+        cwd,
+        sessionId,
+      }),
+    );
+    parentUuid = `multi-user-${idx + 1}`;
+    lines.push(
+      JSON.stringify({
+        parentUuid: assistantUuid,
+        isSidechain: false,
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: tool.toolUseId,
+              content: tool.content,
+              is_error: tool.isError === true,
+            },
+          ],
+        },
+        uuid: parentUuid,
+        timestamp: `2026-04-22T00:00:0${idx + 2}.000Z`,
+        cwd,
+        sessionId,
+      }),
+    );
+  });
+  lines.push('');
+  return lines.join('\n');
+}
 
 describe('burn ingest (hook-driven)', () => {
   let tmpRelay: string;
@@ -24,6 +171,7 @@ describe('burn ingest (hook-driven)', () => {
     tmpTranscriptDir = await mkdtemp(path.join(tmpdir(), 'burn-ingest-tx-'));
     process.env['RELAYBURN_HOME'] = tmpRelay;
     delete process.env['RELAYBURN_CONTENT_STORE'];
+    __resetIndexCacheForTesting();
   });
 
   after(async () => {
@@ -126,6 +274,138 @@ describe('burn ingest (hook-driven)', () => {
     assert.ok(toolResultUserTurn, 'tool_result user-turn block is persisted');
     assert.equal(toolResultUserTurn!.precedingMessageId, 'msg-1');
     assert.equal(toolResultUserTurn!.blocks[0]!.approxTokens, Math.ceil(toolResponseText.length / 4));
+  });
+
+  it('emits PreToolUse and PostToolUse events before multi-tool reader replay dedupes', async () => {
+    const sessionId = 'hook-prepost-session';
+    const transcriptPath = path.join(tmpTranscriptDir, `${sessionId}.jsonl`);
+    const tools = [
+      { toolUseId: 'toolu_hook_pair_a', content: 'first passed\n' },
+      { toolUseId: 'toolu_hook_pair_b', content: 'second passed\n' },
+    ];
+    await writeFile(transcriptPath, '', 'utf8');
+
+    for (const tool of tools) {
+      await ingestClaudeHookPayload(
+        JSON.stringify({
+          session_id: sessionId,
+          transcript_path: transcriptPath,
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Bash',
+          tool_use_id: tool.toolUseId,
+          tool_input: { command: 'npm test' },
+        }),
+        { quiet: true },
+      );
+    }
+    for (const tool of tools) {
+      await ingestClaudeHookPayload(
+        JSON.stringify({
+          session_id: sessionId,
+          transcript_path: transcriptPath,
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Bash',
+          tool_use_id: tool.toolUseId,
+          tool_response: tool.content,
+        }),
+        { quiet: true },
+      );
+    }
+    await writeFile(
+      transcriptPath,
+      multiToolTranscript(sessionId, tmpTranscriptDir, tools),
+      'utf8',
+    );
+    await ingestClaudeHookPayload(
+      JSON.stringify({
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+        hook_event_name: 'SessionEnd',
+      }),
+      { quiet: true },
+    );
+
+    const events = await queryToolResultEvents({ sessionId });
+    assert.equal(events.length, 4, 'reader replay should not add duplicate terminal events');
+    assert.deepEqual(events.map((e) => e.eventIndex), [0, 1, 2, 3]);
+    for (const tool of tools) {
+      const running = events.find(
+        (e) => e.toolUseId === tool.toolUseId && e.status === 'running',
+      );
+      const completed = events.find(
+        (e) => e.toolUseId === tool.toolUseId && e.status === 'completed',
+      );
+      assert.ok(running, 'PreToolUse emits a running event');
+      assert.ok(completed, 'PostToolUse emits the terminal event');
+      assert.equal(running!.eventSource, 'tool_result');
+      assert.equal(running!.callIndex, 0);
+      assert.equal(completed!.eventSource, 'tool_result');
+      assert.equal(completed!.callIndex, 1);
+      assert.equal(completed!.contentLength, tool.content.length);
+      assert.equal(typeof completed!.contentHash, 'string');
+    }
+  });
+
+  it('marks PostToolUse hook responses with is_error as errored events', async () => {
+    const sessionId = 'hook-post-error-session';
+    const transcriptPath = path.join(tmpTranscriptDir, `${sessionId}.jsonl`);
+    await writeFile(transcriptPath, '', 'utf8');
+
+    await ingestClaudeHookPayload(
+      JSON.stringify({
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_hook_error',
+        tool_response: { is_error: true, stderr: 'boom' },
+      }),
+      { quiet: true },
+    );
+
+    const events = await queryToolResultEvents({ sessionId });
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.status, 'errored');
+    assert.equal(events[0]!.isError, true);
+    assert.equal(events[0]!.callIndex, 0);
+    assert.equal(events[0]!.eventIndex, 0);
+    assert.equal(typeof events[0]!.contentHash, 'string');
+  });
+
+  it('emits SubagentStop notifications and subagent relationships', async () => {
+    const sessionId = 'hook-subagent-session';
+    const transcriptPath = path.join(tmpTranscriptDir, `${sessionId}.jsonl`);
+    await writeFile(transcriptPath, '', 'utf8');
+
+    await ingestClaudeHookPayload(
+      JSON.stringify({
+        session_id: sessionId,
+        transcript_path: transcriptPath,
+        hook_event_name: 'SubagentStop',
+        tool_use_id: 'toolu_agent_spawn',
+        agent_id: 'agent-123',
+        agent_type: 'Explore',
+        last_assistant_message: 'done',
+      }),
+      { quiet: true },
+    );
+
+    const events = await queryToolResultEvents({ sessionId });
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.eventSource, 'subagent_notification');
+    assert.equal(events[0]!.status, 'completed');
+    assert.equal(events[0]!.toolUseId, 'toolu_agent_spawn');
+    assert.equal(events[0]!.agentId, 'agent-123');
+    assert.equal(events[0]!.contentLength, 'done'.length);
+
+    const relationships = await queryRelationships({ sessionId });
+    assert.equal(relationships.length, 1);
+    assert.equal(relationships[0]!.relationshipType, 'subagent');
+    assert.equal(relationships[0]!.sessionId, sessionId);
+    assert.equal(relationships[0]!.relatedSessionId, sessionId);
+    assert.equal(relationships[0]!.agentId, 'agent-123');
+    assert.equal(relationships[0]!.parentToolUseId, 'toolu_agent_spawn');
+    assert.equal(relationships[0]!.subagentType, 'Explore');
   });
 
   it('is idempotent across repeat hook invocations on the same transcript', async () => {
