@@ -6,12 +6,12 @@ import { plansPath } from './paths.js';
 export type PlanProvider = 'claude' | 'cursor' | 'custom';
 
 export interface Plan {
-  // Stable identifier the user passes to `burn plans remove <id>` and
+  // Stable identifier the user passes to `burn budget plans remove <id>` and
   // `set-reset-day <id>`. Defaults to `<provider>-<preset>` for built-in
   // presets and is required for custom plans.
   id: string;
   provider: PlanProvider;
-  // Human-readable label shown in `burn plans` and `burn limits` output.
+  // Human-readable label shown in `burn budget plans` and `burn budget` output.
   name: string;
   budgetUsd: number;
   // Day-of-month the cycle resets on (1-31). Day 1 is calendar-month reset.
@@ -25,7 +25,7 @@ export interface PlansFile {
 }
 
 export interface PlanPreset {
-  // Key the CLI accepts via `burn plans add --provider claude --preset pro`.
+  // Key the CLI accepts via `burn budget plans add --provider claude --preset pro`.
   preset: string;
   plan: Plan;
 }
@@ -141,4 +141,3 @@ function pickResetDay(v: unknown, label: string): number {
   }
   return v;
 }
-

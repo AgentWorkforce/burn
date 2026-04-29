@@ -73,7 +73,7 @@ export function computePlanUsage(
   const nowMs = now.getTime();
 
   let spent = 0;
-  // Like `burn limits`, `plans` is allowed to count partial / aggregate-only /
+  // Like `burn budget`, plan accounting is allowed to count partial / aggregate-only /
   // cost-only contributions toward the cycle total — under-counting silently is
   // worse than annotating low-confidence. We collect the contributing turns'
   // fidelity blocks here so we can mark the whole cycle low-confidence below

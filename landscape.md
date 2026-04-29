@@ -46,7 +46,7 @@ Burn keeps derived local state deliberately disposable: dedup indexes, content s
 
 **Burn issues from this survey:**
 - #4 (incremental cursors + git canonicalization + dedup index)
-- #5 (`burn limits` quota-window tracking — endpoint list cribbed directly)
+- #5 (`burn budget` quota-window tracking — endpoint list cribbed directly)
 
 **Explicitly not adopted:** 30-minute UTC bucket-at-ingest (wrong for per-tool-call attribution), SessionEnd hook installer (burn's spawner-controlled `--settings` path is strictly better), native macOS app (out of scope), optional cloud leaderboard (off-mission).
 
@@ -290,7 +290,7 @@ Spawner registers `@relayburn/mcp` on every agent. Agent mid-session queries `bu
 
 Plus **structured fix actions** (`WasteAction = { type: 'paste' | 'command' | 'file-content' }`) — better output shape than free-text recommendations. Direct upgrade for #11.
 
-**Plan tracking** (`plan-usage.ts`, `plans.ts`) covers **monthly quota** — orthogonal to #5's 5-hour window. Both matter for Pro/Max users.
+**Plan tracking** (`plan-usage.ts`, `plans.ts`) covers **monthly quota** — now surfaced with the 5-hour window under `burn budget`. Both matter for Pro/Max users.
 
 **Cursor support: unresolved.** Claims to work via the local `cursorDiskKV` SQLite table. Code has no schema validation — silently returns empty on post-Cursor-migration installs. Either Cursor reversed course or codeburn's parser is broken but unreported (3247 stars and April 2026 push doesn't prove the parser works for current Cursor). Empirical verification needed before reopening #22.
 
@@ -344,7 +344,7 @@ For each filed issue, the project(s) it drew from:
 | #2 | Preserve user-turn block sizes | lazyagent (fallback when hooks unavailable) |
 | #3 | `burn hotspots` per-tool-call attribution | Original concept |
 | #4 | Incremental cursors + git-canonical project keys | TokenTracker (cursors, git); tokscale (fingerprint dedup, added later) |
-| #5 | `burn limits` quota-window tracking | TokenTracker (endpoints); ccusage (forecasting, added later) |
+| #5 | `burn budget` quota-window tracking | TokenTracker (endpoints); ccusage (forecasting, added later) |
 | #6 | Outcome/quality signal design | Original concept; prism adherence rejected as primary |
 | #7 | Hook-based Claude ingest via `--settings` | lazyagent |
 | #8 | Subagent tree as first-class | lazyagent |

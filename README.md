@@ -264,6 +264,8 @@ burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] 
 burn hotspots [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--session [id]] [--explain-drift]
 burn overhead [trim] [--project <path>] [--since 7d] [--kind <claude-md|agents-md>]
 burn compare <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
+burn budget [--watch [--interval 5s]] [--json] [--no-api] [--no-forecast]
+burn budget plans [add|remove|set-reset-day] ...
 burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
 burn ingest [--watch|--hook <name>] [--interval <ms>] [--quiet]
 burn state [status] [--json]
@@ -272,6 +274,8 @@ burn state prune [--days <n>] [--force]
 ```
 
 Provider filters are applied at query time; raw ledger model strings are not rewritten. `burn summary --by-provider --provider synthetic` groups Synthetic-routed turns under provider `synthetic` while pricing against the normalized model id. Recognized Synthetic model patterns are `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
+
+`burn budget` combines Claude API quota windows, configured monthly plan cycles, and the local 5-hour usage forecast. Use `burn budget plans` to list plans, `burn budget plans add --provider claude --preset max` to add a built-in plan, and `burn budget plans set-reset-day <id> <day>` to tune cycle boundaries.
 
 ### Renames from 0.45
 
@@ -355,4 +359,4 @@ User overrides go at `$RELAYBURN_HOME/models.dev.json` (or `~/.relayburn/models.
 
 ## Status
 
-v0: Claude Code reader shipped. OpenCode reader in progress. Codex reader scaffolded. Per-tool-call attribution (`burn hotspots`), CLAUDE.md hot-path analysis, quota-window tracking (`burn limits`), waste-pattern detection, and subagent-tree queries are scoped and tracked as open issues.
+v0: Claude Code reader shipped. OpenCode reader in progress. Codex reader scaffolded. Per-tool-call attribution (`burn hotspots`), CLAUDE.md hot-path analysis, quota-window and plan tracking (`burn budget`), waste-pattern detection, and subagent-tree queries are scoped and tracked as open issues.

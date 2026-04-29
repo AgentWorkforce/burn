@@ -10,6 +10,7 @@ All notable changes to `@relayburn/cli`.
 
 ### Changed
 
+- `burn budget` now replaces the old top-level `burn limits` and `burn plans` verbs, with plan management nested under `burn budget plans`.
 - `burn ingest` now owns one-shot, `--watch`, and `--hook claude` modes, replacing the separate `burn watch` command and old `--runtime claude` hook flag.
 - `burn hotspots` replaces `burn waste` and `burn diagnose`; bare `burn hotspots --session` keeps the former aggregate diagnostics, and `burn hotspots --session <id>` keeps the former per-session JSON shape. `burn overhead` and `burn overhead trim` replace `burn context` and `burn context advise`.
 - `burn state` now owns derived-state status, rebuild targets, archive vacuum, and content pruning in one command family.

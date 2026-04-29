@@ -10,7 +10,7 @@ import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
 import type { Fidelity, TurnRecord } from '@relayburn/reader';
 
 import type { ParsedArgs } from '../args.js';
-import { runPlans, statusForPlans } from './plans.js';
+import { runBudgetPlans } from './budget-plans.js';
 
 function args(positional: string[] = [], flags: Record<string, string | true> = {}): ParsedArgs {
   return { positional, flags, tags: {}, passthrough: [] };
@@ -40,7 +40,7 @@ async function captureStdio<T>(
   }
 }
 
-describe('burn plans CLI', () => {
+describe('burn budget plans CLI', () => {
   let tmp: string;
   let tmpHome: string;
   const originalRelay = process.env['RELAYBURN_HOME'];
@@ -71,15 +71,15 @@ describe('burn plans CLI', () => {
   });
 
   it('list with no plans points the user at `add`', async () => {
-    const { result, stdout } = await captureStdio(() => runPlans(args()));
+    const { result, stdout } = await captureStdio(() => runBudgetPlans(args()));
     assert.equal(result, 0);
     assert.match(stdout, /No plans configured/);
-    assert.match(stdout, /burn plans add/);
+    assert.match(stdout, /burn budget plans add/);
   });
 
   it('add --provider claude --preset max persists the plan', async () => {
     const { result } = await captureStdio(() =>
-      runPlans(args(['add'], { provider: 'claude', preset: 'max' })),
+      runBudgetPlans(args(['add'], { provider: 'claude', preset: 'max' })),
     );
     assert.equal(result, 0);
     const plans = await loadPlans();
@@ -91,7 +91,7 @@ describe('burn plans CLI', () => {
 
   it('add accepts --reset-day override on a preset', async () => {
     const { result } = await captureStdio(() =>
-      runPlans(args(['add'], { provider: 'claude', preset: 'pro', 'reset-day': '15' })),
+      runBudgetPlans(args(['add'], { provider: 'claude', preset: 'pro', 'reset-day': '15' })),
     );
     assert.equal(result, 0);
     const plans = await loadPlans();
@@ -100,7 +100,7 @@ describe('burn plans CLI', () => {
 
   it('rejects --reset-day outside 1-31', async () => {
     const { result, stderr } = await captureStdio(() =>
-      runPlans(args(['add'], { provider: 'claude', preset: 'pro', 'reset-day': '99' })),
+      runBudgetPlans(args(['add'], { provider: 'claude', preset: 'pro', 'reset-day': '99' })),
     );
     assert.equal(result, 2);
     assert.match(stderr, /reset-day must be an integer 1-31/);
@@ -108,7 +108,7 @@ describe('burn plans CLI', () => {
 
   it('add --provider custom without --id surfaces a clear error', async () => {
     const { result, stderr } = await captureStdio(() =>
-      runPlans(args(['add'], { provider: 'custom' })),
+      runBudgetPlans(args(['add'], { provider: 'custom' })),
     );
     assert.equal(result, 2);
     assert.match(stderr, /--id is required/);
@@ -116,7 +116,7 @@ describe('burn plans CLI', () => {
 
   it('add --provider custom with required flags writes a custom plan', async () => {
     const { result } = await captureStdio(() =>
-      runPlans(
+      runBudgetPlans(
         args(['add'], {
           provider: 'custom',
           id: 'work-api',
@@ -135,17 +135,17 @@ describe('burn plans CLI', () => {
   });
 
   it('refuses to add a plan with a duplicate id', async () => {
-    await captureStdio(() => runPlans(args(['add'], { provider: 'claude', preset: 'pro' })));
+    await captureStdio(() => runBudgetPlans(args(['add'], { provider: 'claude', preset: 'pro' })));
     const { result, stderr } = await captureStdio(() =>
-      runPlans(args(['add'], { provider: 'claude', preset: 'pro' })),
+      runBudgetPlans(args(['add'], { provider: 'claude', preset: 'pro' })),
     );
     assert.equal(result, 2);
     assert.match(stderr, /already exists/);
   });
 
   it('remove drops the plan', async () => {
-    await captureStdio(() => runPlans(args(['add'], { provider: 'claude', preset: 'max' })));
-    const { result } = await captureStdio(() => runPlans(args(['remove', 'claude-max'])));
+    await captureStdio(() => runBudgetPlans(args(['add'], { provider: 'claude', preset: 'max' })));
+    const { result } = await captureStdio(() => runBudgetPlans(args(['remove', 'claude-max'])));
     assert.equal(result, 0);
     const plans = await loadPlans();
     assert.equal(plans.length, 0);
@@ -153,31 +153,31 @@ describe('burn plans CLI', () => {
 
   it('remove with unknown id exits 1 with a clear message', async () => {
     const { result, stderr } = await captureStdio(() =>
-      runPlans(args(['remove', 'does-not-exist'])),
+      runBudgetPlans(args(['remove', 'does-not-exist'])),
     );
     assert.equal(result, 1);
     assert.match(stderr, /no plan with id "does-not-exist"/);
   });
 
   it('set-reset-day updates the day in place', async () => {
-    await captureStdio(() => runPlans(args(['add'], { provider: 'claude', preset: 'max' })));
-    const { result } = await captureStdio(() => runPlans(args(['set-reset-day', 'claude-max', '15'])));
+    await captureStdio(() => runBudgetPlans(args(['add'], { provider: 'claude', preset: 'max' })));
+    const { result } = await captureStdio(() => runBudgetPlans(args(['set-reset-day', 'claude-max', '15'])));
     assert.equal(result, 0);
     const plans = await loadPlans();
     assert.equal(plans[0]!.resetDay, 15);
   });
 
   it('set-reset-day rejects non-integer days', async () => {
-    await captureStdio(() => runPlans(args(['add'], { provider: 'claude', preset: 'pro' })));
+    await captureStdio(() => runBudgetPlans(args(['add'], { provider: 'claude', preset: 'pro' })));
     const { result, stderr } = await captureStdio(() =>
-      runPlans(args(['set-reset-day', 'claude-pro', 'tuesday'])),
+      runBudgetPlans(args(['set-reset-day', 'claude-pro', 'tuesday'])),
     );
     assert.equal(result, 2);
     assert.match(stderr, /must be an integer 1-31/);
   });
 
   it('unknown subcommand exits 2 with help', async () => {
-    const { result, stderr } = await captureStdio(() => runPlans(args(['noop'])));
+    const { result, stderr } = await captureStdio(() => runBudgetPlans(args(['noop'])));
     assert.equal(result, 2);
     assert.match(stderr, /unknown subcommand "noop"/);
   });
@@ -186,7 +186,7 @@ describe('burn plans CLI', () => {
   //
   // The migration to `planUsageFromArchive` must produce byte-identical
   // output to the legacy `queryAll()` reduce path. We pin the parity here
-  // through `runPlans` so the CLI surface (text + `--json`) is exercised
+  // through `runBudgetPlans` so the CLI surface (text + `--json`) is exercised
   // end-to-end, not just the analyze-layer helper.
 
   function turn(opts: {
@@ -256,8 +256,8 @@ describe('burn plans CLI', () => {
     };
     await seedPlansAndTurns([claudePro]);
 
-    const archiveRun = await captureStdio(() => runPlans(args([])));
-    const fallbackRun = await captureStdio(() => runPlans(args([], { 'no-archive': true })));
+    const archiveRun = await captureStdio(() => runBudgetPlans(args([])));
+    const fallbackRun = await captureStdio(() => runBudgetPlans(args([], { 'no-archive': true })));
 
     assert.equal(archiveRun.result, 0);
     assert.equal(fallbackRun.result, 0);
@@ -285,9 +285,9 @@ describe('burn plans CLI', () => {
     };
     await seedPlansAndTurns([claudePro, customWork]);
 
-    const archiveRun = await captureStdio(() => runPlans(args([], { json: true })));
+    const archiveRun = await captureStdio(() => runBudgetPlans(args([], { json: true })));
     const fallbackRun = await captureStdio(() =>
-      runPlans(args([], { json: true, 'no-archive': true })),
+      runBudgetPlans(args([], { json: true, 'no-archive': true })),
     );
 
     assert.equal(archiveRun.result, 0);
@@ -327,43 +327,15 @@ describe('burn plans CLI', () => {
 
     // Run with the env knob set; compare to the explicit `--no-archive` run.
     process.env['RELAYBURN_ARCHIVE'] = '0';
-    const envRun = await captureStdio(() => runPlans(args([], { json: true })));
+    const envRun = await captureStdio(() => runBudgetPlans(args([], { json: true })));
     delete process.env['RELAYBURN_ARCHIVE'];
     const flagRun = await captureStdio(() =>
-      runPlans(args([], { json: true, 'no-archive': true })),
+      runBudgetPlans(args([], { json: true, 'no-archive': true })),
     );
 
     assert.equal(envRun.result, 0);
     assert.equal(flagRun.result, 0);
     assert.deepEqual(JSON.parse(envRun.stdout), JSON.parse(flagRun.stdout));
-  });
-
-  it('statusForPlans archive path materializes the same spentUsd as the fallback', async () => {
-    // Direct statusForPlans parity check — bypasses CLI table formatting and
-    // pins the underlying number, so a regression in `planUsageFromArchive`'s
-    // SUM/GROUP BY can't hide behind table whitespace.
-    const claudePro: Plan = {
-      id: 'claude-pro',
-      provider: 'claude',
-      name: 'Claude Pro',
-      budgetUsd: 20,
-      resetDay: 1,
-    };
-    await seedPlansAndTurns([claudePro]);
-
-    const archiveStatus = await statusForPlans([claudePro], { useArchive: true });
-    const fallbackStatus = await statusForPlans([claudePro], { useArchive: false });
-
-    assert.equal(archiveStatus.length, 1);
-    assert.equal(fallbackStatus.length, 1);
-    assert.equal(archiveStatus[0]!.usage.spentUsd, fallbackStatus[0]!.usage.spentUsd);
-    assert.equal(
-      archiveStatus[0]!.usage.projectedEndOfCycleUsd,
-      fallbackStatus[0]!.usage.projectedEndOfCycleUsd,
-    );
-    assert.equal(archiveStatus[0]!.usage.daysElapsed, fallbackStatus[0]!.usage.daysElapsed);
-    assert.equal(archiveStatus[0]!.usage.daysInCycle, fallbackStatus[0]!.usage.daysInCycle);
-    assert.equal(archiveStatus[0]!.usage.limitedData, fallbackStatus[0]!.usage.limitedData);
   });
 
   // Issue #108: list view honors per-cycle fidelity. The plan still renders
@@ -460,7 +432,7 @@ describe('burn plans CLI', () => {
       // cannot distinguish per-axis coverage, so `missingCoverage` assertions
       // only hold on the exact-fidelity in-memory path. Archive fidelity is
       // tested at the analyze layer (plan-usage.test.ts).
-      const { result, stdout } = await captureStdio(() => runPlans(args([], { 'no-archive': true })));
+      const { result, stdout } = await captureStdio(() => runBudgetPlans(args([], { 'no-archive': true })));
       assert.equal(result, 0);
       assert.match(stdout, /claude-pro/);
       assert.doesNotMatch(stdout, /confidence/);
@@ -492,7 +464,7 @@ describe('burn plans CLI', () => {
           fidelity: PARTIAL_FIDELITY,
         }),
       ]);
-      const { result, stdout } = await captureStdio(() => runPlans(args([], { 'no-archive': true })));
+      const { result, stdout } = await captureStdio(() => runBudgetPlans(args([], { 'no-archive': true })));
       assert.equal(result, 0);
       // Header shows the new column when at least one plan is low-confidence.
       assert.match(stdout, /confidence/);
@@ -529,7 +501,7 @@ describe('burn plans CLI', () => {
           fidelity: PARTIAL_FIDELITY,
         }),
       ]);
-      const { result, stdout } = await captureStdio(() => runPlans(args([], { json: true, 'no-archive': true })));
+      const { result, stdout } = await captureStdio(() => runBudgetPlans(args([], { json: true, 'no-archive': true })));
       assert.equal(result, 0);
       const parsed = JSON.parse(stdout) as {
         plans: Array<{

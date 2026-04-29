@@ -194,7 +194,7 @@ function forecastWindowStartMs(fiveHour: UsageWindow | undefined, nowMs: number)
 }
 
 // --------------------------------------------------------------------------
-// OAuth token loading. Copied verbatim from packages/cli/src/commands/limits.ts
+// OAuth token loading. Copied verbatim from packages/cli/src/commands/budget.ts
 // (extracting to a shared location would pull token I/O into @relayburn/ledger,
 // which has no transport deps today — punting that refactor to a follow-up).
 // --------------------------------------------------------------------------

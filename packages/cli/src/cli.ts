@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import { parseArgs } from './args.js';
+import { runBudget } from './commands/budget.js';
 import { runCompare } from './commands/compare.js';
 import { runOverhead } from './commands/overhead.js';
 import { runIngest } from './commands/ingest.js';
-import { runLimits } from './commands/limits.js';
 import { runMcpServer } from './commands/mcp-server.js';
-import { runPlans } from './commands/plans.js';
 import { runWrapper } from './commands/run.js';
 import { runState, opportunisticPrune } from './commands/state.js';
 import { runSummary } from './commands/summary.js';
@@ -23,8 +22,7 @@ Usage:
   burn hotspots      [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--session [id]] [--explain-drift]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
-  burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
-  burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
+  burn budget        [--watch [--interval 5s]] [--json] [--no-api] [--no-forecast] [plans ...]
   burn overhead      [trim] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
@@ -45,12 +43,12 @@ Examples:
   burn hotspots --patterns --since 7d
   burn hotspots --session --explain-drift
   burn hotspots --session <session-id>
-  burn limits
-  burn limits --watch
-  burn limits --no-api
-  burn plans
-  burn plans add --provider claude --preset max
-  burn plans set-reset-day claude-max 15
+  burn budget
+  burn budget --watch
+  burn budget --no-api
+  burn budget plans
+  burn budget plans add --provider claude --preset max
+  burn budget plans set-reset-day claude-max 15
   burn overhead --since 30d
   burn overhead --kind claude-md
   burn overhead trim --top 3
@@ -90,10 +88,8 @@ async function main(): Promise<number> {
       return runSummary(args);
     case 'hotspots':
       return runHotspots(args);
-    case 'limits':
-      return runLimits(args);
-    case 'plans':
-      return runPlans(args);
+    case 'budget':
+      return runBudget(args);
     case 'overhead':
       return runOverhead(args);
     case 'compare':
