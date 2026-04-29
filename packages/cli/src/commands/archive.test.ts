@@ -7,7 +7,7 @@ import { after, beforeEach, describe, it } from 'node:test';
 import { appendToolResultEvents, appendTurns, stamp } from '@relayburn/ledger';
 import type { ToolResultEventRecord, TurnRecord } from '@relayburn/reader';
 
-import { runArchive } from './archive.js';
+import { runRebuild } from './rebuild.js';
 
 function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -56,7 +56,7 @@ async function captureRun(
   }) as typeof process.stderr.write;
   let code: number;
   try {
-    code = await runArchive({ flags, tags: {}, positional, passthrough: [] });
+    code = await runRebuild({ flags, tags: {}, positional, passthrough: [] });
   } finally {
     process.stdout.write = origStdout;
     process.stderr.write = origStderr;
@@ -64,7 +64,7 @@ async function captureRun(
   return { stdout, stderr, code };
 }
 
-describe('burn archive CLI', () => {
+describe('burn rebuild archive/status CLI', () => {
   let tmp: string;
   const originalRelay = process.env['RELAYBURN_HOME'];
 
@@ -79,13 +79,17 @@ describe('burn archive CLI', () => {
     await rm(tmp, { recursive: true, force: true });
   });
 
-  it('archive status reports "not built yet" before the first build', async () => {
+  it('rebuild status reports archive "not built yet" before the first build', async () => {
     const out = await captureRun({}, ['status']);
     assert.equal(out.code, 0);
     assert.match(out.stdout, /not built yet/);
+    assert.match(out.stdout, /index:/);
+    assert.match(out.stdout, /content:/);
+    assert.match(out.stdout, /classifier:/);
+    assert.match(out.stdout, /archive:/);
   });
 
-  it('archive build materializes the ledger and status reflects row counts', async () => {
+  it('rebuild archive materializes the ledger and status reflects row counts', async () => {
     await appendTurns([
       fakeTurn({ sessionId: 's-cli', messageId: 'cli-1' }),
       fakeTurn({
@@ -97,7 +101,7 @@ describe('burn archive CLI', () => {
     ]);
     await stamp({ sessionId: 's-cli' }, { workflowId: 'wf-cli' });
 
-    const buildOut = await captureRun({}, ['build']);
+    const buildOut = await captureRun({}, ['archive']);
     assert.equal(buildOut.code, 0);
     assert.match(buildOut.stdout, /archive build complete/);
     assert.match(buildOut.stdout, /2 turns applied/);
@@ -105,33 +109,84 @@ describe('burn archive CLI', () => {
     const statusOut = await captureRun({ json: true }, ['status']);
     assert.equal(statusOut.code, 0);
     const parsed = JSON.parse(statusOut.stdout) as {
-      exists: boolean;
-      upToDate: boolean;
-      rowCounts: { sessions: number; turns: number };
+      archive: {
+        exists: boolean;
+        upToDate: boolean;
+        rowCounts: { sessions: number; turns: number };
+      };
+      index: unknown;
+      content: unknown;
+      classifier: { turns: number; classified: number; missing: number };
     };
-    assert.equal(parsed.exists, true);
-    assert.equal(parsed.upToDate, true);
-    assert.equal(parsed.rowCounts.turns, 2);
-    assert.equal(parsed.rowCounts.sessions, 1);
+    assert.equal(parsed.archive.exists, true);
+    assert.equal(parsed.archive.upToDate, true);
+    assert.equal(parsed.archive.rowCounts.turns, 2);
+    assert.equal(parsed.archive.rowCounts.sessions, 1);
+    assert.ok(parsed.index);
+    assert.ok(parsed.content);
+    assert.equal(parsed.classifier.turns, 2);
+    assert.equal(parsed.classifier.classified, 0);
+    assert.equal(parsed.classifier.missing, 2);
   });
 
-  it('archive rebuild is idempotent against the same ledger', async () => {
+  it('rebuild archive --full is idempotent against the same ledger', async () => {
     await appendTurns([fakeTurn({ sessionId: 's-rb', messageId: 'rb-1' })]);
-    await captureRun({}, ['build']);
+    await captureRun({}, ['archive']);
     const before = await captureRun({ json: true }, ['status']);
     const beforeStatus = JSON.parse(before.stdout) as {
-      rowCounts: { turns: number };
+      archive: { rowCounts: { turns: number } };
     };
 
-    const rebuildOut = await captureRun({}, ['rebuild']);
+    const rebuildOut = await captureRun({ full: true }, ['archive']);
     assert.equal(rebuildOut.code, 0);
     assert.match(rebuildOut.stdout, /rebuilt archive/);
 
     const after = await captureRun({ json: true }, ['status']);
     const afterStatus = JSON.parse(after.stdout) as {
-      rowCounts: { turns: number };
+      archive: { rowCounts: { turns: number } };
     };
-    assert.equal(afterStatus.rowCounts.turns, beforeStatus.rowCounts.turns);
+    assert.equal(afterStatus.archive.rowCounts.turns, beforeStatus.archive.rowCounts.turns);
+  });
+
+  it('rebuild archive --vacuum on a missing archive prints a hint and exits 0', async () => {
+    const out = await captureRun({ vacuum: true }, ['archive']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /no archive/);
+    assert.match(out.stdout, /burn rebuild archive/);
+  });
+
+  it('rebuild archive vacuum --json returns the archive vacuum result', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-vac-cli',
+        messageId: 'vac-cli-1',
+        ts: '2026-04-23T00:00:00.000Z',
+        usage: {
+          input: 123,
+          output: 45,
+          reasoning: 0,
+          cacheRead: 678,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+      }),
+    ]);
+    await captureRun({}, ['archive']);
+
+    const out = await captureRun({ json: true }, ['archive', 'vacuum']);
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      existed: boolean;
+      beforeBytes: number;
+      afterBytes: number;
+      reclaimedBytes: number;
+      archivePath: string;
+    };
+    assert.equal(parsed.existed, true);
+    assert.equal(typeof parsed.beforeBytes, 'number');
+    assert.equal(typeof parsed.afterBytes, 'number');
+    assert.equal(typeof parsed.reclaimedBytes, 'number');
+    assert.match(parsed.archivePath, /archive\.sqlite$/);
   });
 
   it('archive status --json surfaces tool_result_events row count', async () => {
@@ -153,14 +208,14 @@ describe('burn archive CLI', () => {
       },
     ];
     await appendToolResultEvents(events);
-    await captureRun({}, ['build']);
+    await captureRun({}, ['archive']);
 
     const statusOut = await captureRun({ json: true }, ['status']);
     assert.equal(statusOut.code, 0);
     const parsed = JSON.parse(statusOut.stdout) as {
-      rowCounts: { toolResultEvents: number };
+      archive: { rowCounts: { toolResultEvents: number } };
     };
-    assert.equal(parsed.rowCounts.toolResultEvents, 1);
+    assert.equal(parsed.archive.rowCounts.toolResultEvents, 1);
 
     const human = await captureRun({}, ['status']);
     assert.match(human.stdout, /tool_result_events:\s+1/);
@@ -215,60 +270,29 @@ describe('burn archive CLI', () => {
         },
       }),
     ]);
-    await captureRun({}, ['build']);
+    await captureRun({}, ['archive']);
     const statusOut = await captureRun({ json: true }, ['status']);
     assert.equal(statusOut.code, 0);
     const parsed = JSON.parse(statusOut.stdout) as {
-      fidelityHistogram: Record<string, number>;
-      rowCounts: { turns: number };
+      archive: {
+        fidelityHistogram: Record<string, number>;
+        rowCounts: { turns: number };
+      };
     };
-    assert.equal(parsed.rowCounts.turns, 2);
-    assert.equal(parsed.fidelityHistogram['full'], 1);
-    assert.equal(parsed.fidelityHistogram['unknown'], 1);
+    assert.equal(parsed.archive.rowCounts.turns, 2);
+    assert.equal(parsed.archive.fidelityHistogram['full'], 1);
+    assert.equal(parsed.archive.fidelityHistogram['unknown'], 1);
   });
 
-  it('archive with no subcommand prints help and exits 0', async () => {
+  it('rebuild with no target prints help and exits 0', async () => {
     const out = await captureRun({}, []);
     assert.equal(out.code, 0);
-    assert.match(out.stdout, /burn archive/);
+    assert.match(out.stdout, /burn rebuild/);
   });
 
-  it('archive vacuum on a missing archive prints a hint and exits 0', async () => {
-    const out = await captureRun({}, ['vacuum']);
-    assert.equal(out.code, 0);
-    assert.match(out.stdout, /no archive at/);
-    assert.match(out.stdout, /burn archive build/);
-  });
-
-  it('archive vacuum --json shape includes before/after/reclaimed bytes', async () => {
-    await appendTurns([fakeTurn({ sessionId: 's-vc', messageId: 'vc-1' })]);
-    await captureRun({}, ['build']);
-    const out = await captureRun({ json: true }, ['vacuum']);
-    assert.equal(out.code, 0);
-    const parsed = JSON.parse(out.stdout) as {
-      existed: boolean;
-      beforeBytes: number;
-      afterBytes: number;
-      reclaimedBytes: number;
-    };
-    assert.equal(parsed.existed, true);
-    assert.equal(typeof parsed.beforeBytes, 'number');
-    assert.equal(typeof parsed.afterBytes, 'number');
-    assert.equal(typeof parsed.reclaimedBytes, 'number');
-    assert.equal(parsed.reclaimedBytes, parsed.beforeBytes - parsed.afterBytes);
-  });
-
-  it('archive vacuum prints a one-line text summary', async () => {
-    await appendTurns([fakeTurn({ sessionId: 's-vt', messageId: 'vt-1' })]);
-    await captureRun({}, ['build']);
-    const out = await captureRun({}, ['vacuum']);
-    assert.equal(out.code, 0);
-    assert.match(out.stdout, /archive: vacuumed .* -> .* \(reclaimed .*\)/);
-  });
-
-  it('archive with unknown subcommand exits non-zero', async () => {
+  it('rebuild with unknown target exits non-zero', async () => {
     const out = await captureRun({}, ['nope']);
     assert.notEqual(out.code, 0);
-    assert.match(out.stderr, /unknown subcommand/);
+    assert.match(out.stderr, /unknown target/);
   });
 });
