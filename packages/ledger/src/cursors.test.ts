@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 
-import { loadCursors, saveCursors } from './cursors.js';
+import {
+  type FileCursor,
+  loadCursors,
+  saveCursorChanges,
+  saveCursors,
+  updateCursors,
+} from './cursors.js';
 import { cursorsPath } from './paths.js';
 import { withLock } from './lock.js';
 
@@ -95,5 +101,45 @@ describe('cursors', () => {
     const raw = await readFile(cursorsPath(), 'utf8');
     const parsed = JSON.parse(raw);
     assert.ok(parsed.files['/a'].kind === 'codex');
+  });
+
+  it('saves only changed cursor keys so concurrent stream cursor updates survive', async () => {
+    const streamKey = 'opencode-stream:http://127.0.0.1:4096:project';
+    const before: Record<string, FileCursor> = {
+      '/abs/a.jsonl': { kind: 'claude', inode: 1, offsetBytes: 100, mtimeMs: 100 },
+      [streamKey]: {
+        kind: 'opencode-stream',
+        lastEventId: '1',
+        emittedMessageIds: ['m1'],
+        emittedToolEventIds: [],
+      },
+    };
+    const after = structuredClone(before);
+    after['/abs/a.jsonl'] = {
+      kind: 'claude',
+      inode: 1,
+      offsetBytes: 200,
+      mtimeMs: 200,
+    };
+
+    await saveCursors(before);
+    await updateCursors((map) => {
+      map[streamKey] = {
+        kind: 'opencode-stream',
+        lastEventId: '2',
+        emittedMessageIds: ['m1', 'm2'],
+        emittedToolEventIds: ['tool:0'],
+      };
+    });
+    await saveCursorChanges(before, after);
+
+    const got = await loadCursors();
+    assert.deepEqual(got['/abs/a.jsonl'], after['/abs/a.jsonl']);
+    assert.deepEqual(got[streamKey], {
+      kind: 'opencode-stream',
+      lastEventId: '2',
+      emittedMessageIds: ['m1', 'm2'],
+      emittedToolEventIds: ['tool:0'],
+    });
   });
 });

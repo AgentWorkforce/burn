@@ -79,6 +79,16 @@ describe('content sidecar', () => {
     assert.equal(got[1]!.toolUse!.name, 'Bash');
   });
 
+  it('deduplicates identical records when stream and file ingest overlap', async () => {
+    const rec = record({ sessionId: 's-dedupe', messageId: 'm-dedupe' });
+    await appendContent([rec]);
+    await appendContent([rec]);
+
+    const got = await readContent({ sessionId: 's-dedupe' });
+    assert.equal(got.length, 1);
+    assert.equal(got[0]!.text, 'hello world');
+  });
+
   it('filters by messageId', async () => {
     await appendContent([
       record({ sessionId: 's-X', messageId: 'a' }),

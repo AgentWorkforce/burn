@@ -31,8 +31,9 @@ describe('opencode event stream helpers', () => {
     const headers = buildOpencodeEventHeaders({
       OPENCODE_SERVER_USERNAME: 'alice',
       OPENCODE_SERVER_PASSWORD: 'secret',
-    });
+    }, { lastEventId: 'evt_1' });
     assert.equal(headers['Accept'], 'text/event-stream');
+    assert.equal(headers['Last-Event-ID'], 'evt_1');
     assert.equal(headers['Authorization'], 'Basic YWxpY2U6c2VjcmV0');
   });
 
@@ -64,9 +65,14 @@ describe('opencode event stream helpers', () => {
 
   it('consumes an SSE stream and calls onIngestHint for session/message events', async () => {
     let requestedUrl = '';
+    let requestedLastEventId = '';
     const wakeTypes: string[] = [];
-    const fetchImpl = async (url: string): Promise<FetchResponseLike> => {
+    const fetchImpl = async (
+      url: string,
+      init: { headers: Record<string, string> },
+    ): Promise<FetchResponseLike> => {
       requestedUrl = url;
+      requestedLastEventId = init.headers['Last-Event-ID'] ?? '';
       return responseFromChunks([
         'data: {"type":"server.connected","properties":{}}\n\n',
         'data: {"type":"message.part.updated","properties":{"sessionID":"ses_1"}}\n\n',
@@ -76,6 +82,7 @@ describe('opencode event stream helpers', () => {
 
     const report = await consumeOpencodeEventStream({
       baseUrl: 'http://localhost:4096',
+      lastEventId: 'evt_prev',
       fetchImpl,
       env: {},
       onIngestHint(payload) {
@@ -85,6 +92,7 @@ describe('opencode event stream helpers', () => {
     });
 
     assert.equal(requestedUrl, 'http://localhost:4096/event');
+    assert.equal(requestedLastEventId, 'evt_prev');
     assert.deepEqual(report, { events: 3, wakeups: 2 });
     assert.deepEqual(wakeTypes, ['message.part.updated', 'session.updated']);
   });

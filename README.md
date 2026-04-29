@@ -88,7 +88,7 @@ For passive ingest without a wrapper, run:
 burn watch [--interval <ms>] [--opencode-stream] [--opencode-url <url>]
 ```
 
-`burn watch` scans Claude, Codex, and OpenCode stores in the foreground and uses the same cursor + dedup path as the reporting commands. `--opencode-stream` also subscribes to OpenCode's local SSE endpoint (`http://127.0.0.1:4096/event` by default, or `OPENCODE_SERVER_URL`) and wakes the same ingest loop on session/message events; polling remains enabled as the fallback. If the server uses Basic auth, `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` are forwarded. `burn watch --daemon` is reserved but not implemented yet.
+`burn watch` scans Claude, Codex, and OpenCode stores in the foreground and uses the same cursor + dedup path as the reporting commands. `--opencode-stream` also subscribes to OpenCode's local SSE endpoint (`http://127.0.0.1:4096/event` by default, or `OPENCODE_SERVER_URL`) and ingests sessions observed from creation directly from the stream at completed tool-call grain; polling remains enabled as the fallback for already-running sessions, missed events, and drift checks. If the server uses Basic auth, `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` are forwarded. `burn watch --daemon` is reserved but not implemented yet.
 
 ### Spawner env-var contract (workflow / agent attribution)
 

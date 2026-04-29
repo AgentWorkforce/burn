@@ -18,7 +18,7 @@ import {
   loadConfig,
   loadCursors,
   queryToolResultEvents,
-  saveCursors,
+  saveCursorChanges,
   withLock,
 } from '@relayburn/ledger';
 import type { ClaudeCursor } from '@relayburn/ledger';
@@ -471,6 +471,7 @@ async function ingestClaudeTranscript(
 
   const cfg = await loadConfig();
   const cursors = await loadCursors();
+  const before = structuredClone(cursors) as typeof cursors;
   const prior = cursors[file];
   const priorClaude = prior?.kind === 'claude' ? prior : undefined;
   const rotated =
@@ -482,7 +483,7 @@ async function ingestClaudeTranscript(
 
   if (!rotated && startOffset >= st.size) {
     priorClaude.mtimeMs = st.mtimeMs;
-    await saveCursors(cursors);
+    await saveCursorChanges(before, cursors);
     return;
   }
 
@@ -520,7 +521,7 @@ async function ingestClaudeTranscript(
   };
   if (lastUserText) next.lastUserText = lastUserText;
   cursors[file] = next;
-  await saveCursors(cursors);
+  await saveCursorChanges(before, cursors);
 
   if (!opts.quiet && turns.length > 0) {
     process.stderr.write(`[burn] ingested ${turns.length} turns from ${file}\n`);

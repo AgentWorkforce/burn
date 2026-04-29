@@ -63,5 +63,12 @@ export type {
   ParseOpencodeIncrementalOptions,
   ParseOpencodeIncrementalResult,
 } from './opencode.js';
+export { createOpencodeStreamIngestor } from './opencode-stream.js';
+export type {
+  OpencodeStreamCursorState,
+  OpencodeStreamIngestOptions,
+  OpencodeStreamIngestResult,
+  OpencodeStreamIngestor,
+} from './opencode-stream.js';
 export { resolveProject, canonicalizeRemoteUrl, parseGitConfig } from './git.js';
 export type { ResolvedProject } from './git.js';

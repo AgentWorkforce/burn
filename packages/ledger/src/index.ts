@@ -77,8 +77,14 @@ export {
 } from './schema.js';
 export { loadHwm, saveHwm } from './hwm.js';
 export type { HwmEntry, HwmMap } from './hwm.js';
-export { loadCursors, saveCursors } from './cursors.js';
-export type { FileCursor, ClaudeCursor, CodexCursor, OpencodeCursor } from './cursors.js';
+export { loadCursors, saveCursorChanges, saveCursors, updateCursors } from './cursors.js';
+export type {
+  FileCursor,
+  ClaudeCursor,
+  CodexCursor,
+  OpencodeCursor,
+  OpencodeStreamCursor,
+} from './cursors.js';
 export { withLock } from './lock.js';
 export {
   rebuildIndex,

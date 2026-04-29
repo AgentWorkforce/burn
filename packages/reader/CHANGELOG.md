@@ -4,6 +4,18 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+### Added
+
+- OpenCode stream events can now be normalized into turn, content, user-turn, relationship, and tool-result event records for stream-owned sessions.
+
+### Changed
+
+- OpenCode tool-result events now include a conservative per-tool share of the assistant turn's usage when turn-level usage is available.
+
+### Fixed
+
+- OpenCode stream ingestion now keeps tool-result event indexes stable across repeated flushes and clears buffered parts for deleted sessions.
+
 ## [0.45.0] - 2026-04-29
 
 ### Added

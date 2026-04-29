@@ -4,9 +4,17 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `burn watch --opencode-stream` now ingests stream-owned OpenCode sessions directly at completed tool-call grain while keeping file ingest as the fallback.
+
 ### Changed
 
 - `burn summary --subagent-tree` now renders persisted session relationship graphs while preserving legacy subagent-tree output for older data.
+
+### Fixed
+
+- OpenCode stream cursor progress now survives concurrent file-ingest fallback saves.
 
 ## [0.45.0] - 2026-04-29
 

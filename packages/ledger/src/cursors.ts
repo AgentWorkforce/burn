@@ -1,7 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
-import type { CodexLastCompletedTurn, PersistedUserTurnSlot } from '@relayburn/reader';
+import type {
+  CodexLastCompletedTurn,
+  OpencodeStreamCursorState,
+  PersistedUserTurnSlot,
+} from '@relayburn/reader';
 
 import { withLock } from './lock.js';
 import { cursorsPath } from './paths.js';
@@ -40,7 +45,11 @@ export interface OpencodeCursor {
   seenMessageIds: string[];
 }
 
-export type FileCursor = ClaudeCursor | CodexCursor | OpencodeCursor;
+export interface OpencodeStreamCursor extends OpencodeStreamCursorState {
+  kind: 'opencode-stream';
+}
+
+export type FileCursor = ClaudeCursor | CodexCursor | OpencodeCursor | OpencodeStreamCursor;
 
 interface CursorsFile {
   files: Record<string, FileCursor>;
@@ -65,6 +74,60 @@ export async function saveCursors(map: Record<string, FileCursor>): Promise<void
   const payload: CursorsFile = { files: map };
   const tmpPath = `${finalPath}.tmp`;
   await withLock('cursors', async () => {
+    await writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
+    await rename(tmpPath, finalPath);
+  });
+}
+
+export async function saveCursorChanges(
+  before: Record<string, FileCursor>,
+  after: Record<string, FileCursor>,
+): Promise<void> {
+  const changedKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const changes: Array<{ key: string; cursor?: FileCursor }> = [];
+  for (const key of changedKeys) {
+    const prior = before[key];
+    const next = after[key];
+    if (next === undefined) {
+      if (prior !== undefined) changes.push({ key });
+      continue;
+    }
+    if (prior === undefined || !isDeepStrictEqual(prior, next)) {
+      changes.push({ key, cursor: next });
+    }
+  }
+  if (changes.length === 0) return;
+
+  await updateCursors((map) => {
+    for (const change of changes) {
+      if (change.cursor === undefined) {
+        delete map[change.key];
+      } else {
+        map[change.key] = change.cursor;
+      }
+    }
+  });
+}
+
+export async function updateCursors(
+  mutate: (map: Record<string, FileCursor>) => void | Promise<void>,
+): Promise<void> {
+  const finalPath = cursorsPath();
+  await mkdir(path.dirname(finalPath), { recursive: true });
+  const tmpPath = `${finalPath}.tmp`;
+  await withLock('cursors', async () => {
+    let map: Record<string, FileCursor> = {};
+    try {
+      const raw = await readFile(finalPath, 'utf8');
+      const parsed = JSON.parse(raw) as CursorsFile;
+      if (parsed && typeof parsed === 'object' && parsed.files && typeof parsed.files === 'object') {
+        map = parsed.files;
+      }
+    } catch {
+      map = {};
+    }
+    await mutate(map);
+    const payload: CursorsFile = { files: map };
     await writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
     await rename(tmpPath, finalPath);
   });

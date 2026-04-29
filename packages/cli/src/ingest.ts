@@ -29,7 +29,7 @@ import {
   loadConfig,
   loadCursors,
   queryUserTurns,
-  saveCursors,
+  saveCursorChanges,
   type ClaudeCursor,
   type CodexCursor,
   type FileCursor,
@@ -116,36 +116,39 @@ export function setIngestGapWriter(write: (msg: string) => void): (msg: string) 
 export async function ingestClaudeProjects(): Promise<IngestReport> {
   await cleanupStalePendingStamps();
   const cursors = await loadCursors();
+  const before = cloneCursors(cursors);
   const report = emptyReport();
   const contentMode = await resolveContentMode();
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   await ingestClaudeInto(cursors, report, contentMode, gap);
   emitGapWarning('claude', contentMode, gap, moduleGapState);
-  await saveCursors(cursors);
+  await saveCursorChanges(before, cursors);
   return report;
 }
 
 export async function ingestCodexSessions(): Promise<IngestReport> {
   await cleanupStalePendingStamps();
   const cursors = await loadCursors();
+  const before = cloneCursors(cursors);
   const report = emptyReport();
   const contentMode = await resolveContentMode();
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   await ingestCodexInto(cursors, report, contentMode, gap);
   emitGapWarning('codex', contentMode, gap, moduleGapState);
-  await saveCursors(cursors);
+  await saveCursorChanges(before, cursors);
   return report;
 }
 
 export async function ingestOpencodeSessions(): Promise<IngestReport> {
   await cleanupStalePendingStamps();
   const cursors = await loadCursors();
+  const before = cloneCursors(cursors);
   const report = emptyReport();
   const contentMode = await resolveContentMode();
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   await ingestOpencodeInto(cursors, report, contentMode, gap);
   emitGapWarning('opencode', contentMode, gap, moduleGapState);
-  await saveCursors(cursors);
+  await saveCursorChanges(before, cursors);
   return report;
 }
 
@@ -180,6 +183,7 @@ export async function ingestClaudeSession(cwd: string, sessionId: string): Promi
   if (userTurns.length > 0) await appendUserTurns(userTurns);
 
   const cursors = await loadCursors();
+  const before = cloneCursors(cursors);
   const cursor: ClaudeCursor = {
     kind: 'claude',
     inode: st.ino,
@@ -187,7 +191,7 @@ export async function ingestClaudeSession(cwd: string, sessionId: string): Promi
     mtimeMs: st.mtimeMs,
   };
   cursors[file] = cursor;
-  await saveCursors(cursors);
+  await saveCursorChanges(before, cursors);
 
   return { scannedSessions: 1, ingestedSessions: 1, appendedTurns: turns.length };
 }
@@ -195,6 +199,7 @@ export async function ingestClaudeSession(cwd: string, sessionId: string): Promi
 export async function ingestAll(): Promise<IngestReport> {
   await cleanupStalePendingStamps();
   const cursors = await loadCursors();
+  const before = cloneCursors(cursors);
   const report = emptyReport();
   const contentMode = await resolveContentMode();
   const claudeGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
@@ -206,7 +211,7 @@ export async function ingestAll(): Promise<IngestReport> {
   emitGapWarning('claude', contentMode, claudeGap, moduleGapState);
   emitGapWarning('codex', contentMode, codexGap, moduleGapState);
   emitGapWarning('opencode', contentMode, opencodeGap, moduleGapState);
-  await saveCursors(cursors);
+  await saveCursorChanges(before, cursors);
   return report;
 }
 
@@ -589,6 +594,10 @@ async function ingestOpencodeInto(
 
 function emptyReport(): IngestReport {
   return { scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 };
+}
+
+function cloneCursors(cursors: Record<string, FileCursor>): Record<string, FileCursor> {
+  return structuredClone(cursors) as Record<string, FileCursor>;
 }
 
 export interface ReingestContentReport {
