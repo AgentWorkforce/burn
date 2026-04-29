@@ -8,6 +8,10 @@ All notable changes to `@relayburn/cli`.
 
 - `burn watch --opencode-stream` now writes direct stream-derived OpenCode records for sessions observed from creation, including completed tool-call events and stream cursor high-watermarks.
 
+### Fixed
+
+- `burn watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
+
 ## [0.45.0] - 2026-04-29
 
 ### Fixed

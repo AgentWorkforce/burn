@@ -4,6 +4,10 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+### Added
+
+- Added an atomic cursor change-save helper so writers can persist only the cursor keys they touched.
+
 ### Changed
 
 - Content sidecars now skip exact duplicate records so live stream ingest and file fallback can overlap without double-counting content blocks.

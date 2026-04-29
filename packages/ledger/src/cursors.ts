@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import type {
   CodexLastCompletedTurn,
@@ -75,6 +76,36 @@ export async function saveCursors(map: Record<string, FileCursor>): Promise<void
   await withLock('cursors', async () => {
     await writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
     await rename(tmpPath, finalPath);
+  });
+}
+
+export async function saveCursorChanges(
+  before: Record<string, FileCursor>,
+  after: Record<string, FileCursor>,
+): Promise<void> {
+  const changedKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const changes: Array<{ key: string; cursor?: FileCursor }> = [];
+  for (const key of changedKeys) {
+    const prior = before[key];
+    const next = after[key];
+    if (next === undefined) {
+      if (prior !== undefined) changes.push({ key });
+      continue;
+    }
+    if (prior === undefined || !isDeepStrictEqual(prior, next)) {
+      changes.push({ key, cursor: next });
+    }
+  }
+  if (changes.length === 0) return;
+
+  await updateCursors((map) => {
+    for (const change of changes) {
+      if (change.cursor === undefined) {
+        delete map[change.key];
+      } else {
+        map[change.key] = change.cursor;
+      }
+    }
   });
 }
 
