@@ -4,6 +4,8 @@ Reference notes from surveying ten token-usage tools in the Claude Code / multi-
 
 **Burn's meta-goal** (repeated here because it shapes every evaluation below): answer "would the same work cost less on a different model, harness, or tool — in dollars or quota consumption?" Everything in this doc is graded against that question, not against "is this tool well-built."
 
+Burn keeps derived local state deliberately disposable: dedup indexes, content sidecars, activity labels, and the SQLite archive are refreshed through `burn rebuild <target>` rather than separate maintenance verbs.
+
 ## Summary
 
 | # | Project | Stars | Stack | Shape | Load-bearing contribution |

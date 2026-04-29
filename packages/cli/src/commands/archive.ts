@@ -2,66 +2,55 @@ import {
   buildArchive,
   getArchiveStatus,
   rebuildArchive,
-  vacuumArchive,
+  type ArchiveStatus,
   type BuildResult,
 } from '@relayburn/ledger';
 
 import { formatInt } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
-const ARCHIVE_HELP = `burn archive — derived analytics archive (SQLite read model)
+export async function runArchiveBuild(
+  args: ParsedArgs,
+  opts: { full?: boolean } = {},
+): Promise<number> {
+  const result = opts.full ? await rebuildArchive() : await buildArchive();
+  return printArchiveBuildResult(result, args, opts.full ? 'rebuild' : 'build');
+}
 
-Usage:
-  burn archive build       Apply any ledger tail not yet materialized.
-  burn archive rebuild     Drop the archive and rebuild from the ledger.
-  burn archive status      Print schema version, row counts, and sync state.
-  burn archive vacuum      Reclaim free pages via SQLite VACUUM.
-  burn archive --help      Show this help.
-
-The archive is a disposable read model derived from \`ledger.jsonl\`. Deleting
-\`archive.sqlite\` and running \`burn archive rebuild\` always reproduces the
-same state — the ledger remains the canonical event log.
-
-See issue #40 for the broader plan (rewiring read commands onto the archive,
-content-sidecar bridging, full subagent / tool-result event tables).
-`;
-
-export async function runArchive(args: ParsedArgs): Promise<number> {
-  if (args.flags['help'] === true) {
-    process.stdout.write(ARCHIVE_HELP);
+export async function runArchiveStatus(args: ParsedArgs): Promise<number> {
+  const status = await getArchiveStatus();
+  if (args.flags['json'] === true) {
+    process.stdout.write(JSON.stringify(status, null, 2) + '\n');
     return 0;
   }
-  const sub = args.positional[0];
-  switch (sub) {
-    case undefined:
-    case 'help':
-      process.stdout.write(ARCHIVE_HELP);
-      return 0;
-    case 'build':
-      return runBuild(args);
-    case 'rebuild':
-      return runRebuild(args);
-    case 'status':
-      return runStatus(args);
-    case 'vacuum':
-      return runVacuum(args);
-    default:
-      process.stderr.write(`burn archive: unknown subcommand: ${sub}\n\n${ARCHIVE_HELP}`);
-      return 1;
+  process.stdout.write(formatArchiveStatusLines(status).join('\n') + '\n');
+  return 0;
+}
+
+export function formatArchiveStatusLines(status: ArchiveStatus): string[] {
+  const lines: string[] = [];
+  lines.push(`archive: ${status.archivePath}`);
+  if (!status.exists) {
+    lines.push('  status: not built yet - run `burn rebuild archive`');
+    return lines;
   }
+  lines.push(`  schema version: ${status.archiveVersion}`);
+  lines.push(
+    `  ledger cursor: ${formatInt(status.ledgerOffsetBytes)} / ${formatInt(status.ledgerSizeBytes)} bytes` +
+      (status.upToDate ? ' (up to date)' : ' (tail pending)'),
+  );
+  if (status.lastBuiltAt) lines.push(`  last build: ${status.lastBuiltAt}`);
+  if (status.lastRebuildAt) lines.push(`  last full rebuild: ${status.lastRebuildAt}`);
+  lines.push('  rows:');
+  lines.push(`    sessions:           ${formatInt(status.rowCounts.sessions)}`);
+  lines.push(`    turns:              ${formatInt(status.rowCounts.turns)}`);
+  lines.push(`    tool_calls:         ${formatInt(status.rowCounts.toolCalls)}`);
+  lines.push(`    tool_result_events: ${formatInt(status.rowCounts.toolResultEvents)}`);
+  lines.push(`    compactions:        ${formatInt(status.rowCounts.compactions)}`);
+  return lines;
 }
 
-async function runBuild(args: ParsedArgs): Promise<number> {
-  const result = await buildArchive();
-  return printBuildResult(result, args, 'build');
-}
-
-async function runRebuild(args: ParsedArgs): Promise<number> {
-  const result = await rebuildArchive();
-  return printBuildResult(result, args, 'rebuild');
-}
-
-function printBuildResult(
+function printArchiveBuildResult(
   result: BuildResult,
   args: ParsedArgs,
   mode: 'build' | 'rebuild',
@@ -87,69 +76,3 @@ function printBuildResult(
   process.stdout.write(lines.join('\n') + '\n');
   return 0;
 }
-
-async function runStatus(args: ParsedArgs): Promise<number> {
-  const status = await getArchiveStatus();
-  if (args.flags['json'] === true) {
-    process.stdout.write(JSON.stringify(status, null, 2) + '\n');
-    return 0;
-  }
-  const lines: string[] = [];
-  lines.push(`archive: ${status.archivePath}`);
-  if (!status.exists) {
-    lines.push('  status: not built yet — run `burn archive build`');
-    process.stdout.write(lines.join('\n') + '\n');
-    return 0;
-  }
-  lines.push(`  schema version: ${status.archiveVersion}`);
-  lines.push(
-    `  ledger cursor: ${formatInt(status.ledgerOffsetBytes)} / ${formatInt(status.ledgerSizeBytes)} bytes` +
-      (status.upToDate ? ' (up to date)' : ' (tail pending)'),
-  );
-  if (status.lastBuiltAt) lines.push(`  last build: ${status.lastBuiltAt}`);
-  if (status.lastRebuildAt) lines.push(`  last rebuild: ${status.lastRebuildAt}`);
-  lines.push('  rows:');
-  lines.push(`    sessions:           ${formatInt(status.rowCounts.sessions)}`);
-  lines.push(`    turns:              ${formatInt(status.rowCounts.turns)}`);
-  lines.push(`    tool_calls:         ${formatInt(status.rowCounts.toolCalls)}`);
-  lines.push(`    tool_result_events: ${formatInt(status.rowCounts.toolResultEvents)}`);
-  lines.push(`    compactions:        ${formatInt(status.rowCounts.compactions)}`);
-  process.stdout.write(lines.join('\n') + '\n');
-  return 0;
-}
-
-async function runVacuum(args: ParsedArgs): Promise<number> {
-  const result = await vacuumArchive();
-  if (args.flags['json'] === true) {
-    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-    return 0;
-  }
-  if (!result.existed) {
-    process.stdout.write(
-      `archive: no archive at ${result.archivePath} — run \`burn archive build\` first\n`,
-    );
-    return 0;
-  }
-  process.stdout.write(
-    `archive: vacuumed ${formatBytes(result.beforeBytes)} -> ${formatBytes(result.afterBytes)}` +
-      ` (reclaimed ${formatBytes(result.reclaimedBytes)})\n`,
-  );
-  return 0;
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  const fixed = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
-  return `${fixed} ${units[i]}`;
-}
-
-// Exported for tests; the `--json` shape includes `fidelityHistogram`
-// (issue #110). Text mode intentionally omits the histogram per the issue
-// scope — JSON-only surfacing for now.
