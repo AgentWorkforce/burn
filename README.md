@@ -286,6 +286,7 @@ content sidecars, activity labels, and `archive.sqlite` are rebuildable.
 | `rebuild all [--force]` | Run content, index, classify, then archive. |
 | `prune [--days <n>]` | Delete expired content sidecars. Use `forever` to disable. |
 | `prune --force` | Delete recoverable sidecars even if source session files still exist. |
+| `reset [--force] [--reingest] [--json]` | Wipe all derived state (ledger, indexes, cursors, archive, content sidecars). Dry-run without `--force`; preserves config, plans, pricing overrides, and source harness logs. |
 
 | Example | Result |
 |---|---|

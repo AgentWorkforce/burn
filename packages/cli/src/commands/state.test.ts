@@ -1,10 +1,26 @@
 import { strict as assert } from 'node:assert';
-import { mkdtemp, rm, utimes } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { appendContent, appendToolResultEvents, appendTurns, stamp } from '@relayburn/ledger';
+import {
+  __resetIndexCacheForTesting,
+  appendContent,
+  appendToolResultEvents,
+  appendTurns,
+  archivePath,
+  configPath,
+  contentDir,
+  cursorsPath,
+  hwmPath,
+  ledgerContentIndexPath,
+  ledgerIndexPath,
+  ledgerPath,
+  plansPath,
+  pricingOverridePath,
+  stamp,
+} from '@relayburn/ledger';
 import type { ToolResultEventRecord, TurnRecord } from '@relayburn/reader';
 
 import { runState } from './state.js';
@@ -75,6 +91,10 @@ describe('burn state CLI', () => {
     process.env['RELAYBURN_HOME'] = tmp;
     delete process.env['RELAYBURN_CONTENT_STORE'];
     delete process.env['RELAYBURN_PRUNE_FORCE'];
+    // The writer's content-fingerprint dedup is module-scoped and survives
+    // across tests; reset it so per-test seed turns aren't silently skipped
+    // when they happen to share ts/usage/model with a prior test's seed.
+    __resetIndexCacheForTesting();
   });
 
   afterEach(async () => {
@@ -394,5 +414,191 @@ describe('burn state CLI', () => {
     assert.equal(out.code, 0);
     assert.match(out.stdout, /pruned 1 content file/);
     assert.doesNotMatch(out.stdout, /kept .* recoverable/);
+  });
+
+  describe('burn state reset', () => {
+    async function exists(p: string): Promise<boolean> {
+      try {
+        await stat(p);
+        return true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw err;
+      }
+    }
+
+    let seedCounter = 0;
+    async function seedDerivedState(): Promise<void> {
+      // Use a unique sessionId per call so the writer's module-scoped
+      // content-fingerprint dedup cache doesn't silently skip the append on
+      // back-to-back tests sharing this describe block.
+      seedCounter += 1;
+      const sessionId = `s-reset-${seedCounter}`;
+      const messageId = `r-${seedCounter}`;
+      await appendTurns([fakeTurn({ sessionId, messageId })]);
+      await appendContent([
+        {
+          v: 1,
+          source: 'claude-code',
+          sessionId,
+          messageId,
+          ts: '2026-04-20T00:00:00.000Z',
+          role: 'assistant',
+          kind: 'text',
+          text: 'hello',
+        },
+      ]);
+      await captureRun({}, ['rebuild', 'index']);
+      await captureRun({}, ['rebuild', 'archive']);
+      // Synthetic cursors/hwm sidecars so reset has something to delete on
+      // every path even when nothing has been ingested.
+      await writeFile(cursorsPath(), JSON.stringify({ files: {} }));
+      await writeFile(hwmPath(), JSON.stringify({ entries: {} }));
+    }
+
+    async function seedPreservedFiles(): Promise<void> {
+      await mkdir(tmp, { recursive: true });
+      await writeFile(configPath(), JSON.stringify({ keep: 'config' }));
+      await writeFile(plansPath(), JSON.stringify({ keep: 'plans' }));
+      await writeFile(pricingOverridePath(), JSON.stringify({ keep: 'pricing' }));
+    }
+
+    it('dry-run leaves the ledger home untouched and lists targets', async () => {
+      await seedDerivedState();
+      await seedPreservedFiles();
+
+      const out = await captureRun({}, ['reset']);
+      assert.equal(out.code, 0);
+      assert.match(out.stdout, /dry run: would reset/);
+      assert.match(out.stdout, /re-run with --force/);
+
+      // Files still on disk.
+      assert.equal(await exists(ledgerPath()), true);
+      assert.equal(await exists(archivePath()), true);
+      assert.equal(await exists(contentDir()), true);
+      // Preserved files still on disk.
+      assert.equal(await exists(configPath()), true);
+      assert.equal(await exists(plansPath()), true);
+      assert.equal(await exists(pricingOverridePath()), true);
+    });
+
+    it('--force deletes derived state and preserves config/plans/pricing', async () => {
+      await seedDerivedState();
+      await seedPreservedFiles();
+
+      const out = await captureRun({ force: true }, ['reset']);
+      assert.equal(out.code, 0);
+      assert.match(out.stdout, /reset derived state/);
+      assert.match(out.stdout, /total: removed/);
+
+      assert.equal(await exists(ledgerPath()), false);
+      assert.equal(await exists(ledgerIndexPath()), false);
+      assert.equal(await exists(ledgerContentIndexPath()), false);
+      assert.equal(await exists(cursorsPath()), false);
+      assert.equal(await exists(hwmPath()), false);
+      assert.equal(await exists(archivePath()), false);
+      assert.equal(await exists(contentDir()), false);
+
+      assert.equal(await exists(configPath()), true);
+      assert.equal(await exists(plansPath()), true);
+      assert.equal(await exists(pricingOverridePath()), true);
+      assert.equal(
+        JSON.parse(await readFile(configPath(), 'utf8')).keep,
+        'config',
+      );
+    });
+
+    it('--force is idempotent on an already-empty ledger home', async () => {
+      const out1 = await captureRun({ force: true }, ['reset']);
+      assert.equal(out1.code, 0);
+      const out2 = await captureRun({ force: true }, ['reset']);
+      assert.equal(out2.code, 0);
+      assert.match(out2.stdout, /already absent/);
+    });
+
+    it('--json emits a structured summary in dry-run and force modes', async () => {
+      await seedDerivedState();
+      const dry = await captureRun({ json: true }, ['reset']);
+      assert.equal(dry.code, 0);
+      const dryParsed = JSON.parse(dry.stdout) as {
+        dryRun: boolean;
+        forced: boolean;
+        targets: { path: string; kind: string; existed: boolean }[];
+        totals: { filesRemoved: number; bytesFreed: number };
+      };
+      assert.equal(dryParsed.dryRun, true);
+      assert.equal(dryParsed.forced, false);
+      assert.ok(dryParsed.targets.some((t) => t.path === ledgerPath() && t.existed));
+
+      const forced = await captureRun({ json: true, force: true }, ['reset']);
+      assert.equal(forced.code, 0);
+      const forcedParsed = JSON.parse(forced.stdout) as {
+        dryRun: boolean;
+        forced: boolean;
+        reingested: unknown;
+      };
+      assert.equal(forcedParsed.dryRun, false);
+      assert.equal(forcedParsed.forced, true);
+      assert.equal(forcedParsed.reingested, null);
+    });
+
+    it('--reingest without --force is a no-op and warns', async () => {
+      await seedDerivedState();
+
+      const out = await captureRun({ reingest: true }, ['reset']);
+      assert.equal(out.code, 0);
+      assert.match(out.stderr, /--reingest requires --force/);
+      // Files still on disk.
+      assert.equal(await exists(ledgerPath()), true);
+    });
+
+    it('RELAYBURN_HOME override is respected', async () => {
+      // Verify reset only operates on RELAYBURN_HOME, not on a sibling
+      // directory that happens to share the parent.
+      const sibling = await mkdtemp(path.join(tmpdir(), 'burn-state-sibling-'));
+      try {
+        const sentinel = path.join(sibling, 'ledger.jsonl');
+        await writeFile(sentinel, 'should-not-be-deleted');
+
+        await seedDerivedState();
+        const out = await captureRun({ force: true }, ['reset']);
+        assert.equal(out.code, 0);
+
+        assert.equal(await exists(ledgerPath()), false);
+        // Sibling path untouched.
+        assert.equal(await exists(sentinel), true);
+        assert.equal(await readFile(sentinel, 'utf8'), 'should-not-be-deleted');
+      } finally {
+        await rm(sibling, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('burn state reset --reingest', () => {
+    let tmpHome: string;
+    const originalHome = process.env['HOME'];
+
+    beforeEach(async () => {
+      tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-reset-home-'));
+      process.env['HOME'] = tmpHome;
+      __resetIndexCacheForTesting();
+    });
+
+    afterEach(async () => {
+      if (originalHome !== undefined) process.env['HOME'] = originalHome;
+      else delete process.env['HOME'];
+      await rm(tmpHome, { recursive: true, force: true });
+    });
+
+    it('--force --reingest wipes state and runs ingest against (empty) source dirs', async () => {
+      // Seed something deletable so the wipe is observable, but leave the
+      // source harness dirs absent so ingestAll() is a clean no-op.
+      await appendTurns([fakeTurn({ sessionId: 's-reseed', messageId: 'rs-1' })]);
+
+      const out = await captureRun({ force: true, reingest: true }, ['reset']);
+      assert.equal(out.code, 0);
+      assert.match(out.stdout, /reset derived state/);
+      assert.match(out.stdout, /reingested 0 of 0 sessions/);
+    });
   });
 });

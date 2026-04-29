@@ -1,16 +1,20 @@
 import { createReadStream } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
 import {
+  archivePath,
   contentDir,
+  cursorsPath,
   getArchiveStatus,
+  hwmPath,
   isTurnLine,
   isUserTurnLine,
   isValidSessionId,
   ledgerContentIndexPath,
+  ledgerHome,
   ledgerIndexPath,
   ledgerPath,
   loadConfig,
@@ -18,9 +22,10 @@ import {
   rebuildIndex,
   reclassifyLedger,
   retentionMs,
+  withLock,
 } from '@relayburn/ledger';
 
-import { reingestMissingContent } from '../ingest.js';
+import { ingestAll, reingestMissingContent } from '../ingest.js';
 import { formatInt } from '../format.js';
 import { walkJsonl, walkOpencodeSessions } from '../walk.js';
 import type { ParsedArgs } from '../args.js';
@@ -32,11 +37,13 @@ Usage:
   burn state [status] [--json]
   burn state rebuild <target>
   burn state prune [--days <n>] [--force]
+  burn state reset [--force] [--reingest] [--json]
 
 Subcommands:
   status    print derived artifact status for index, content, classifier, archive
   rebuild   rebuild index, classify, content, archive, or all derived artifacts
   prune     prune expired content sidecars
+  reset     wipe all derived state and (optionally) re-ingest from source logs
 
 Run 'burn state rebuild help' for rebuild targets.
 `;
@@ -58,6 +65,34 @@ Targets:
   archive   apply the ledger tail to archive.sqlite; --full rebuilds from zero;
             --vacuum reclaims unused archive pages
   all       run content, index, classify, then archive
+`;
+
+const RESET_HELP = `burn state reset - wipe all derived ledger state
+
+Usage:
+  burn state reset [--force] [--reingest] [--json]
+
+Flags:
+  --force      actually delete. Without this flag, reset is a dry-run that
+               prints the paths and sizes that would be removed.
+  --reingest   after a successful --force wipe, re-parse all source harness
+               logs from offset 0 by calling 'burn ingest'. No-op without
+               --force.
+  --json       emit a JSON summary instead of human-readable output.
+
+Deletes (under \$RELAYBURN_HOME or ~/.relayburn):
+  ledger.jsonl, ledger.idx, ledger.content.idx, cursors.json, hwm.json,
+  archive.sqlite (+ -wal/-shm sidecars), and the content/ directory.
+
+Preserves:
+  config.json, plans.json, models.dev.json, *.lock files. Source harness
+  logs at ~/.claude/projects, ~/.codex/sessions, and the OpenCode storage
+  dir are never touched.
+
+Examples:
+  burn state reset                 # dry-run; prints what would be deleted
+  burn state reset --force         # delete derived state, leave config alone
+  burn state reset --force --reingest
 `;
 
 const PRUNE_HELP = `burn state prune - prune expired content sidecars
@@ -137,6 +172,8 @@ export async function runState(args: ParsedArgs): Promise<number> {
       return runStateRebuild(args);
     case 'prune':
       return runStatePrune(args);
+    case 'reset':
+      return runStateReset(args);
     default:
       process.stderr.write(`burn state: unknown subcommand: ${sub}\n\n${STATE_HELP}`);
       return 1;
@@ -506,6 +543,246 @@ function formatBytes(n: number): string {
   }
   const fixed = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
   return `${fixed} ${units[i]}`;
+}
+
+// --- reset -----------------------------------------------------------------
+
+interface ResetTargetReport {
+  path: string;
+  kind: 'file' | 'dir';
+  existed: boolean;
+  bytes: number;
+  filesRemoved: number;
+}
+
+interface ResetSummary {
+  home: string;
+  forced: boolean;
+  reingestRequested: boolean;
+  reingested: { scannedSessions: number; ingestedSessions: number; appendedTurns: number } | null;
+  targets: ResetTargetReport[];
+  totals: { filesRemoved: number; bytesFreed: number };
+}
+
+async function runStateReset(args: ParsedArgs): Promise<number> {
+  if (args.flags['help'] === true || args.positional[1] === 'help') {
+    process.stdout.write(RESET_HELP);
+    return 0;
+  }
+  const force = args.flags['force'] === true;
+  const reingest = args.flags['reingest'] === true;
+  const json = args.flags['json'] === true;
+
+  return withLock('ledger', async () => {
+    const home = ledgerHome();
+    const targets = await collectResetTargets();
+
+    if (!force) {
+      const summary = buildResetSummary({ home, targets, forced: false, reingestRequested: reingest, reingested: null });
+      if (reingest) {
+        process.stderr.write(
+          `burn state reset: --reingest requires --force; nothing was deleted.\n`,
+        );
+      }
+      writeResetSummary(summary, { json, dryRun: true });
+      return 0;
+    }
+
+    const applied: ResetTargetReport[] = [];
+    for (const t of targets) {
+      applied.push(await applyResetTarget(t, home));
+    }
+
+    let reingested: ResetSummary['reingested'] = null;
+    if (reingest) {
+      const r = await ingestAll();
+      reingested = {
+        scannedSessions: r.scannedSessions,
+        ingestedSessions: r.ingestedSessions,
+        appendedTurns: r.appendedTurns,
+      };
+    }
+
+    const summary = buildResetSummary({ home, targets: applied, forced: true, reingestRequested: reingest, reingested });
+    writeResetSummary(summary, { json, dryRun: false });
+    return 0;
+  });
+}
+
+async function collectResetTargets(): Promise<ResetTargetReport[]> {
+  // Order doesn't matter for correctness, but file sidecars first reads
+  // nicer in the dry-run output: small to large, ledger -> archive -> content.
+  const filePaths: string[] = [
+    ledgerPath(),
+    ledgerIndexPath(),
+    ledgerContentIndexPath(),
+    cursorsPath(),
+    hwmPath(),
+    archivePath(),
+    `${archivePath()}-wal`,
+    `${archivePath()}-shm`,
+  ];
+  const reports: ResetTargetReport[] = [];
+  for (const p of filePaths) {
+    reports.push(await statResetFile(p));
+  }
+  reports.push(await statResetDir(contentDir()));
+  return reports;
+}
+
+async function statResetFile(p: string): Promise<ResetTargetReport> {
+  try {
+    const st = await stat(p);
+    return {
+      path: p,
+      kind: 'file',
+      existed: st.isFile(),
+      bytes: st.isFile() ? st.size : 0,
+      filesRemoved: st.isFile() ? 1 : 0,
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    return { path: p, kind: 'file', existed: false, bytes: 0, filesRemoved: 0 };
+  }
+}
+
+async function statResetDir(dir: string): Promise<ResetTargetReport> {
+  try {
+    const st = await stat(dir);
+    if (!st.isDirectory()) {
+      return { path: dir, kind: 'dir', existed: false, bytes: 0, filesRemoved: 0 };
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    return { path: dir, kind: 'dir', existed: false, bytes: 0, filesRemoved: 0 };
+  }
+  let bytes = 0;
+  let files = 0;
+  for await (const child of walkDirEntries(dir)) {
+    bytes += child.size;
+    files += 1;
+  }
+  return { path: dir, kind: 'dir', existed: true, bytes, filesRemoved: files };
+}
+
+async function* walkDirEntries(
+  dir: string,
+): AsyncGenerator<{ path: string; size: number }> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      yield* walkDirEntries(full);
+    } else if (e.isFile()) {
+      try {
+        const st = await stat(full);
+        yield { path: full, size: st.size };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+    }
+  }
+}
+
+async function applyResetTarget(
+  t: ResetTargetReport,
+  home: string,
+): Promise<ResetTargetReport> {
+  // Belt-and-suspenders: refuse to touch anything that resolves outside
+  // ledgerHome(). The constants we feed in already live there, but a
+  // misconfigured RELAYBURN_HOME or future refactor shouldn't be able to
+  // turn this into an arbitrary-rm.
+  assertInsideHome(t.path, home);
+  if (!t.existed) return t;
+  if (t.kind === 'file') {
+    try {
+      await unlink(t.path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { ...t, existed: false, bytes: 0, filesRemoved: 0 };
+      }
+      throw err;
+    }
+    return t;
+  }
+  await rm(t.path, { recursive: true, force: true });
+  return t;
+}
+
+function assertInsideHome(target: string, home: string): void {
+  const rel = path.relative(home, target);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(
+      `burn state reset: refusing to touch path outside ledger home: ${target}`,
+    );
+  }
+}
+
+interface BuildResetSummaryOpts {
+  home: string;
+  targets: ResetTargetReport[];
+  forced: boolean;
+  reingestRequested: boolean;
+  reingested: ResetSummary['reingested'];
+}
+
+function buildResetSummary(opts: BuildResetSummaryOpts): ResetSummary {
+  let bytes = 0;
+  let files = 0;
+  for (const t of opts.targets) {
+    bytes += t.bytes;
+    files += t.filesRemoved;
+  }
+  return {
+    home: opts.home,
+    forced: opts.forced,
+    reingestRequested: opts.reingestRequested,
+    reingested: opts.reingested,
+    targets: opts.targets,
+    totals: { filesRemoved: files, bytesFreed: bytes },
+  };
+}
+
+function writeResetSummary(
+  summary: ResetSummary,
+  opts: { json: boolean; dryRun: boolean },
+): void {
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ ...summary, dryRun: opts.dryRun }, null, 2) + '\n');
+    return;
+  }
+  const lines: string[] = [];
+  if (opts.dryRun) {
+    lines.push(`dry run: would reset derived state under ${summary.home}`);
+  } else {
+    lines.push(`reset derived state under ${summary.home}`);
+  }
+  for (const t of summary.targets) {
+    const tag = t.existed ? `${formatInt(t.filesRemoved)} file${t.filesRemoved === 1 ? '' : 's'}, ${formatBytes(t.bytes)}` : 'already absent';
+    lines.push(`  ${t.kind === 'dir' ? 'dir ' : 'file'} ${t.path}: ${tag}`);
+  }
+  if (opts.dryRun) {
+    lines.push(
+      `total: ${formatInt(summary.totals.filesRemoved)} file${summary.totals.filesRemoved === 1 ? '' : 's'}, ${formatBytes(summary.totals.bytesFreed)} would be freed`,
+    );
+    lines.push(`re-run with --force to apply.`);
+  } else {
+    lines.push(
+      `total: removed ${formatInt(summary.totals.filesRemoved)} file${summary.totals.filesRemoved === 1 ? '' : 's'}, ${formatBytes(summary.totals.bytesFreed)} freed`,
+    );
+    if (summary.reingested) {
+      lines.push(
+        `reingested ${formatInt(summary.reingested.ingestedSessions)} of ${formatInt(summary.reingested.scannedSessions)} sessions (${formatInt(summary.reingested.appendedTurns)} turns appended)`,
+      );
+    }
+  }
+  process.stdout.write(lines.join('\n') + '\n');
 }
 
 export async function opportunisticPrune(): Promise<void> {
