@@ -1,6 +1,5 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, stat, unlink } from 'node:fs/promises';
-import { createInterface } from 'node:readline';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -49,6 +48,7 @@ import {
   type CompactionLine,
   type Enrichment,
   type StampLine,
+  type StampSelector,
   type ToolResultEventLine,
   type TurnLine,
 } from './schema.js';
@@ -58,7 +58,9 @@ import {
  * statement below changes shape; the next `buildArchive()` call will detect
  * the mismatch in `archive_state.archive_version` and rebuild from scratch.
  */
-export const ARCHIVE_VERSION = 2;
+export const ARCHIVE_VERSION = 3;
+
+const STAMP_WILDCARD = '*';
 
 /**
  * SQL statements that materialize the read model. These are intentionally
@@ -74,6 +76,8 @@ export const ARCHIVE_VERSION = 2;
  *    `content_length` / `content_hash` come straight from the canonical
  *    record; the content sidecar (#33) carries the raw bytes when callers
  *    need them.
+ *  - stamps: indexed copy of stamp ledger lines, used by incremental builds
+ *    to fold enrichment without rescanning the whole ledger.
  *  - archive_state: incremental build cursor + schema version
  */
 const SCHEMA_SQL = `
@@ -211,6 +215,18 @@ CREATE TABLE IF NOT EXISTS tool_result_events (
 CREATE INDEX IF NOT EXISTS idx_tool_result_events_use_id ON tool_result_events(tool_use_id);
 CREATE INDEX IF NOT EXISTS idx_tool_result_events_session ON tool_result_events(source, session_id);
 CREATE INDEX IF NOT EXISTS idx_tool_result_events_subagent ON tool_result_events(subagent_session_id);
+
+CREATE TABLE IF NOT EXISTS stamps (
+  source                TEXT NOT NULL,
+  session_id            TEXT NOT NULL,
+  ts                    TEXT NOT NULL,
+  selector_json         TEXT,
+  enrichment_json       TEXT NOT NULL,
+  ledger_offset_bytes   INTEGER NOT NULL,
+  PRIMARY KEY (source, session_id, ts, ledger_offset_bytes)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stamps_session ON stamps(source, session_id);
 
 CREATE TABLE IF NOT EXISTS compactions (
   source                TEXT NOT NULL,
@@ -522,6 +538,7 @@ async function buildArchiveLocked(opts: { isRebuild?: boolean } = {}): Promise<B
       db.exec('DELETE FROM turns');
       db.exec('DELETE FROM tool_calls');
       db.exec('DELETE FROM tool_result_events');
+      db.exec('DELETE FROM stamps');
       db.exec('DELETE FROM compactions');
       db.prepare(
         'UPDATE archive_state SET ledger_offset_bytes = 0, ledger_mtime_ms = 0 WHERE id = 1',
@@ -580,6 +597,11 @@ interface ApplyResult {
   safeOffset: number;
 }
 
+interface ArchivedStampLine {
+  line: StampLine;
+  ledgerOffsetBytes: number;
+}
+
 /**
  * Stream the ledger from `startOffset` to EOF, splitting on newlines, and
  * apply each parsed line to the archive in a single transaction.
@@ -596,15 +618,12 @@ async function applyLedgerRange(
   ledger: string,
   startOffset: number,
 ): Promise<ApplyResult> {
-  // Two-pass approach: first scan the new tail for stamps, since we need
-  // them to enrich freshly-materialized turns. The full-archive enrichment
-  // path (stamps that arrived earlier and reference newer sessions) is
-  // handled by re-folding affected sessions at the end.
-  //
-  // A future optimization is to keep a `stamps` table and JOIN at query
-  // time, but materializing into the row keeps SELECTs simple and matches
-  // the issue's "materialized enrichment columns" goal.
-  const newStamps: StampLine[] = [];
+  // Two-pass approach: first scan the new tail and keep stamps/turns in
+  // memory, then apply them in one transaction. Stamps are copied into the
+  // archive's indexed `stamps` table before turns are written, so freshly
+  // materialized turns can fold both historical stamps and stamps from this
+  // tail without rescanning the canonical ledger.
+  const newStamps: ArchivedStampLine[] = [];
   const turnLines: TurnLine[] = [];
   const compactionLines: CompactionLine[] = [];
   const toolResultEventLines: ToolResultEventLine[] = [];
@@ -618,7 +637,10 @@ async function applyLedgerRange(
     if (isTurnLine(parsed)) {
       turnLines.push(parsed);
     } else if (isStampLine(parsed)) {
-      newStamps.push(parsed);
+      newStamps.push({
+        line: parsed,
+        ledgerOffsetBytes: item.endOffset - item.byteLength,
+      });
     } else if (isCompactionLine(parsed)) {
       compactionLines.push(parsed);
     } else if (isToolResultEventLine(parsed)) {
@@ -643,18 +665,12 @@ async function applyLedgerRange(
     };
   }
 
-  // Collect every stamp in the ledger up to and including the new tail. We
-  // need the full set to fold onto a turn whose session was first stamped
-  // long ago. Cheap on small ledgers; for huge ledgers a stamp index is the
-  // obvious next step but not in scope for the foundation PR.
-  const allStamps = await collectAllStamps(ledger);
-
   const sessionsTouched = new Set<string>();
   for (const tl of turnLines) {
     sessionsTouched.add(`${tl.record.source}|${tl.record.sessionId}`);
   }
-  for (const s of newStamps) {
-    if (s.selector.sessionId) {
+  for (const { line: s } of newStamps) {
+    if (s.selector.sessionId !== undefined) {
       // Stamps may reference a session whose turns we have not seen in this
       // tail; we still need to touch its row to refold enrichment.
       sessionsTouched.add(`*|${s.selector.sessionId}`);
@@ -665,6 +681,24 @@ async function applyLedgerRange(
   // dominate runtime otherwise (thousands of inserts per ingest is normal).
   db.exec('BEGIN');
   try {
+    if (newStamps.length > 0) {
+      const insertStamp = db.prepare(`
+        INSERT OR REPLACE INTO stamps (
+          source, session_id, ts, selector_json, enrichment_json, ledger_offset_bytes
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      for (const s of newStamps) {
+        writeStamp(insertStamp, s);
+      }
+    }
+
+    const selectStampsForTurn = db.prepare(`
+      SELECT ts, selector_json, enrichment_json
+      FROM stamps
+      WHERE source IN (?, ?) AND session_id IN (?, ?)
+      ORDER BY ts, ledger_offset_bytes
+    `);
+
     const insertTurn = db.prepare(`
       INSERT INTO turns (
         source, session_id, message_id, turn_index, ts, model, project, project_key,
@@ -729,7 +763,7 @@ async function applyLedgerRange(
 
     for (const tl of turnLines) {
       const t = tl.record;
-      const enrichment = foldStamps(t, allStamps);
+      const enrichment = foldStampsForTurn(selectStampsForTurn, t);
       writeTurn(insertTurn, t, enrichment);
       deleteToolCalls.run(t.source, t.sessionId, t.messageId);
       for (let i = 0; i < t.toolCalls.length; i++) {
@@ -748,56 +782,38 @@ async function applyLedgerRange(
       }
     }
 
-    // For every session that received a brand-new stamp in this tail, refold
-    // enrichment onto its existing rows so consumers see the latest values.
+    // For every turn affected by a brand-new stamp in this tail, refold
+    // enrichment so consumers see the latest values.
     if (newStamps.length > 0) {
-      const refold = db.prepare(`
-        SELECT source, session_id, message_id, ts FROM turns
-        WHERE session_id = ?
-      `);
       const refoldUpdate = db.prepare(`
         UPDATE turns
         SET workflow_id = ?, agent_id = ?, persona = ?, tier = ?, enrichment_json = ?
         WHERE source = ? AND session_id = ? AND message_id = ?
       `);
-      const sessionIdsForRefold = new Set<string>();
-      for (const s of newStamps) {
-        if (s.selector.sessionId) sessionIdsForRefold.add(s.selector.sessionId);
-        if (s.selector.messageId) {
-          // messageId stamps are rare but we still need the session row for
-          // the refold lookup; the stamp will only fold onto its one turn.
-          const row = db
-            .prepare('SELECT session_id FROM turns WHERE message_id = ? LIMIT 1')
-            .get(s.selector.messageId) as { session_id?: string } | undefined;
-          if (row?.session_id) sessionIdsForRefold.add(row.session_id);
-        }
-      }
-      for (const sid of sessionIdsForRefold) {
-        const rows = refold.all(sid) as Array<{
-          source: string;
-          session_id: string;
-          message_id: string;
-          ts: string;
-        }>;
-        for (const row of rows) {
-          // Synthesize the minimum TurnRecord shape stampMatches needs.
-          const fakeTurn: Pick<TurnRecord, 'sessionId' | 'messageId' | 'ts'> = {
-            sessionId: row.session_id,
-            messageId: row.message_id,
-            ts: row.ts,
-          };
-          const enrichment = foldStampsAgainst(fakeTurn, allStamps);
-          refoldUpdate.run(
-            enrichment['workflowId'] ?? null,
-            enrichment['agentId'] ?? null,
-            enrichment['persona'] ?? null,
-            enrichment['tier'] ?? null,
-            JSON.stringify(enrichment),
-            row.source,
-            row.session_id,
-            row.message_id,
-          );
-        }
+      const turnsForRefold = collectTurnsAffectedByStamps(
+        db,
+        newStamps.map((s) => s.line),
+      );
+      for (const row of turnsForRefold.values()) {
+        // Synthesize the minimum TurnRecord shape stampMatches needs.
+        const fakeTurn: StampFoldTurn = {
+          source: row.source,
+          sessionId: row.session_id,
+          messageId: row.message_id,
+          ts: row.ts,
+        };
+        const enrichment = foldStampsForTurn(selectStampsForTurn, fakeTurn);
+        refoldUpdate.run(
+          enrichment['workflowId'] ?? null,
+          enrichment['agentId'] ?? null,
+          enrichment['persona'] ?? null,
+          enrichment['tier'] ?? null,
+          JSON.stringify(enrichment),
+          row.source,
+          row.session_id,
+          row.message_id,
+        );
+        sessionsTouched.add(`${row.source}|${row.session_id}`);
       }
     }
 
@@ -1044,16 +1060,57 @@ function writeTurn(
   );
 }
 
-function foldStamps(turn: TurnRecord, stamps: StampLine[]): Enrichment {
-  return foldStampsAgainst(turn, stamps);
+interface StampRow {
+  ts: string;
+  selector_json: string | null;
+  enrichment_json: string;
 }
 
-function foldStampsAgainst(
-  turn: Pick<TurnRecord, 'sessionId' | 'messageId' | 'ts'>,
-  stamps: StampLine[],
+interface RefoldTurnRow {
+  source: string;
+  session_id: string;
+  message_id: string;
+  ts: string;
+}
+
+interface StampFoldTurn {
+  source: string;
+  sessionId: string;
+  messageId: string;
+  ts: string;
+}
+
+function writeStamp(
+  insertStamp: ReturnType<DatabaseSync['prepare']>,
+  stamp: ArchivedStampLine,
+): void {
+  // Stamp ledger lines are source-agnostic today. Store session-scoped stamps
+  // by session and put message/range-only stamps in a wildcard bucket; turn
+  // folding queries read the concrete source/session bucket plus wildcard
+  // buckets and still run `stampMatches` for the final selector check.
+  insertStamp.run(
+    STAMP_WILDCARD,
+    stamp.line.selector.sessionId ?? STAMP_WILDCARD,
+    stamp.line.ts,
+    JSON.stringify(stamp.line.selector),
+    JSON.stringify(stamp.line.enrichment),
+    stamp.ledgerOffsetBytes,
+  );
+}
+
+function foldStampsForTurn(
+  selectStampsForTurn: ReturnType<DatabaseSync['prepare']>,
+  turn: StampFoldTurn,
 ): Enrichment {
+  const rows = selectStampsForTurn.all(
+    turn.source,
+    STAMP_WILDCARD,
+    turn.sessionId,
+    STAMP_WILDCARD,
+  ) as unknown as StampRow[];
   const out: Enrichment = {};
-  for (const s of stamps) {
+  for (const row of rows) {
+    const s = stampFromRow(row);
     if (!stampMatches(s, turn as TurnRecord)) continue;
     for (const [k, v] of Object.entries(s.enrichment)) {
       out[k] = v;
@@ -1062,29 +1119,80 @@ function foldStampsAgainst(
   return out;
 }
 
-async function collectAllStamps(ledger: string): Promise<StampLine[]> {
-  const stamps: StampLine[] = [];
-  if (!(await fileExists(ledger))) return stamps;
-  const rl = createInterface({
-    input: createReadStream(ledger, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
-  });
+function stampFromRow(row: StampRow): StampLine {
+  let selector: StampSelector = {};
+  let enrichment: Enrichment = {};
   try {
-    for await (const line of rl) {
-      const t = line.trim();
-      if (!t) continue;
-      try {
-        const parsed = JSON.parse(t);
-        if (isStampLine(parsed)) stamps.push(parsed);
-      } catch {
-        // skip malformed
-      }
-    }
-  } finally {
-    rl.close();
+    selector = row.selector_json ? (JSON.parse(row.selector_json) as StampSelector) : {};
+  } catch {
+    selector = {};
   }
-  stamps.sort((a, b) => a.ts.localeCompare(b.ts));
-  return stamps;
+  try {
+    enrichment = JSON.parse(row.enrichment_json) as Enrichment;
+  } catch {
+    enrichment = {};
+  }
+  return {
+    v: 1,
+    kind: 'stamp',
+    ts: row.ts,
+    selector,
+    enrichment,
+  };
+}
+
+function collectTurnsAffectedByStamps(
+  db: DatabaseSync,
+  stamps: StampLine[],
+): Map<string, RefoldTurnRow> {
+  const byKey = new Map<string, RefoldTurnRow>();
+  const addRows = (rows: RefoldTurnRow[]) => {
+    for (const row of rows) {
+      byKey.set(`${row.source}|${row.session_id}|${row.message_id}`, row);
+    }
+  };
+
+  const bySession = db.prepare(`
+    SELECT source, session_id, message_id, ts FROM turns
+    WHERE session_id = ?
+  `);
+  const byMessage = db.prepare(`
+    SELECT source, session_id, message_id, ts FROM turns
+    WHERE message_id = ?
+  `);
+
+  for (const stamp of stamps) {
+    const selector = stamp.selector;
+    if (selector.sessionId !== undefined) {
+      addRows(bySession.all(selector.sessionId) as unknown as RefoldTurnRow[]);
+      continue;
+    }
+    if (selector.messageId !== undefined) {
+      addRows(byMessage.all(selector.messageId) as unknown as RefoldTurnRow[]);
+      continue;
+    }
+    if (selector.range) {
+      const wheres: string[] = [];
+      const params: string[] = [];
+      if (selector.range.fromTs) {
+        wheres.push('ts >= ?');
+        params.push(selector.range.fromTs);
+      }
+      if (selector.range.toTs) {
+        wheres.push('ts <= ?');
+        params.push(selector.range.toTs);
+      }
+      const sql = [
+        'SELECT source, session_id, message_id, ts FROM turns',
+        wheres.length > 0 ? `WHERE ${wheres.join(' AND ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      addRows(db.prepare(sql).all(...params) as unknown as RefoldTurnRow[]);
+    }
+  }
+
+  return byKey;
 }
 
 interface JsonlItem {

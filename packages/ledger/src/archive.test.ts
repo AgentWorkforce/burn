@@ -1,7 +1,8 @@
 import { strict as assert } from 'node:assert';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { DatabaseSync } from 'node:sqlite';
 import { after, before, beforeEach, describe, it } from 'node:test';
 
@@ -46,6 +47,23 @@ function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
     project: '/tmp/project',
     ...overrides,
   };
+}
+
+async function appendRawStampLines(count: number, sessionCount: number): Promise<void> {
+  const lines: string[] = [];
+  const base = Date.UTC(2026, 3, 20, 0, 0, 0);
+  for (let i = 0; i < count; i++) {
+    lines.push(
+      JSON.stringify({
+        v: 1,
+        kind: 'stamp',
+        ts: new Date(base + i).toISOString(),
+        selector: { sessionId: `stamp-heavy-${i % sessionCount}` },
+        enrichment: { workflowId: `wf-${i}` },
+      }),
+    );
+  }
+  await appendFile(ledgerPath(), `${lines.join('\n')}\n`, { encoding: 'utf8' });
 }
 
 describe('archive', () => {
@@ -151,6 +169,65 @@ describe('archive', () => {
     }
   });
 
+  it('populates the archive stamps table incrementally and folds older stamps onto later turns', async () => {
+    await stamp({ sessionId: 's-future-archive' }, { workflowId: 'wf-before-turn' });
+    const stampOnly = await buildArchive();
+    assert.equal(stampOnly.stampsApplied, 1);
+    assert.equal(stampOnly.turnsApplied, 0);
+
+    {
+      const db = await openArchive();
+      try {
+        const cols = (db.prepare('PRAGMA table_info(stamps)').all() as Array<{
+          name: string;
+        }>).map((r) => r.name);
+        assert.deepEqual(cols, [
+          'source',
+          'session_id',
+          'ts',
+          'selector_json',
+          'enrichment_json',
+          'ledger_offset_bytes',
+        ]);
+        const indexRows = db.prepare('PRAGMA index_list(stamps)').all() as Array<{
+          name: string;
+        }>;
+        assert.ok(indexRows.some((r) => r.name === 'idx_stamps_session'));
+        const stampRows = db.prepare('SELECT COUNT(*) AS n FROM stamps').get() as {
+          n: number | bigint;
+        };
+        assert.equal(Number(stampRows.n), 1);
+      } finally {
+        db.close();
+      }
+    }
+
+    await appendTurns([
+      fakeTurn({ sessionId: 's-future-archive', messageId: 'm-future-archive' }),
+    ]);
+    const turnOnly = await buildArchive();
+    assert.equal(turnOnly.turnsApplied, 1);
+    assert.equal(turnOnly.stampsApplied, 0);
+
+    const db = await openArchive();
+    try {
+      const row = db
+        .prepare('SELECT workflow_id, enrichment_json FROM turns WHERE message_id = ?')
+        .get('m-future-archive') as {
+        workflow_id: string | null;
+        enrichment_json: string;
+      };
+      assert.equal(row.workflow_id, 'wf-before-turn');
+      assert.equal(JSON.parse(row.enrichment_json)['workflowId'], 'wf-before-turn');
+      const stampRows = db.prepare('SELECT COUNT(*) AS n FROM stamps').get() as {
+        n: number | bigint;
+      };
+      assert.equal(Number(stampRows.n), 1);
+    } finally {
+      db.close();
+    }
+  });
+
   it('refolds enrichment when a stamp arrives after the turn was materialized', async () => {
     await appendTurns([fakeTurn({ sessionId: 's-late', messageId: 'ml-1' })]);
     // First build: no stamp yet.
@@ -183,6 +260,33 @@ describe('archive', () => {
     }
   });
 
+  it('refolds messageId stamps through the archive stamp table', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 's-msg-stamp', messageId: 'msg-a' }),
+      fakeTurn({
+        sessionId: 's-msg-stamp',
+        messageId: 'msg-b',
+        turnIndex: 1,
+        ts: '2026-04-20T00:00:01.000Z',
+      }),
+    ]);
+    await buildArchive();
+
+    await stamp({ messageId: 'msg-b' }, { stepId: 'step-b' });
+    await buildArchive();
+
+    const db = await openArchive();
+    try {
+      const rows = db
+        .prepare('SELECT message_id, enrichment_json FROM turns ORDER BY message_id')
+        .all() as Array<{ message_id: string; enrichment_json: string }>;
+      assert.equal(JSON.parse(rows[0]!.enrichment_json)['stepId'], undefined);
+      assert.equal(JSON.parse(rows[1]!.enrichment_json)['stepId'], 'step-b');
+    } finally {
+      db.close();
+    }
+  });
+
   it('is incrementally idempotent: rebuilding the same ledger twice yields stable counts', async () => {
     await appendTurns([
       fakeTurn({ sessionId: 's-i', messageId: 'mi-1' }),
@@ -197,6 +301,63 @@ describe('archive', () => {
     const status = await getArchiveStatus();
     assert.equal(status.upToDate, true);
     assert.equal(status.rowCounts.turns, 2);
+  });
+
+  it('keeps stamp-heavy incremental builds tied to the ledger tail and uses the stamp index', async () => {
+    await appendRawStampLines(10_000, 1_000);
+    await buildArchive();
+
+    const beforeTail = await getArchiveStatus();
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'stamp-heavy-target',
+        messageId: 'stamp-heavy-tail',
+        ts: '2026-04-21T00:00:00.000Z',
+      }),
+    ]);
+
+    const started = performance.now();
+    const result = await buildArchive();
+    const elapsedMs = performance.now() - started;
+    const afterTail = await getArchiveStatus();
+
+    assert.equal(result.turnsApplied, 1);
+    assert.equal(result.stampsApplied, 0);
+    assert.equal(result.scannedBytes, afterTail.ledgerOffsetBytes - beforeTail.ledgerOffsetBytes);
+    assert.ok(
+      elapsedMs < 1_000,
+      `incremental build over a 10k-stamp history took ${elapsedMs.toFixed(1)}ms`,
+    );
+
+    const db = await openArchive();
+    try {
+      const stampRows = db.prepare('SELECT COUNT(*) AS n FROM stamps').get() as {
+        n: number | bigint;
+      };
+      assert.equal(Number(stampRows.n), 10_000);
+
+      const plan = db
+        .prepare(
+          `EXPLAIN QUERY PLAN
+           SELECT ts, selector_json, enrichment_json
+           FROM stamps
+           WHERE source IN (?, ?) AND session_id IN (?, ?)
+           ORDER BY ts, ledger_offset_bytes`,
+        )
+        .all('claude-code', '*', 'stamp-heavy-target', '*') as Array<{
+        detail: string;
+      }>;
+      assert.ok(
+        plan.some((row) => /USING (?:COVERING )?INDEX|USING PRIMARY KEY/i.test(row.detail)),
+        `expected stamp lookup to use an index, plan was: ${plan.map((row) => row.detail).join(' | ')}`,
+      );
+      assert.ok(
+        !plan.some((row) => /SCAN stamps/i.test(row.detail)),
+        `expected stamp lookup not to scan stamps, plan was: ${plan.map((row) => row.detail).join(' | ')}`,
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it('rebuilds from zero deterministically: same ledger yields same row counts', async () => {
