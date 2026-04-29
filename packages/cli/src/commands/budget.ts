@@ -187,7 +187,7 @@ export async function runBudget(args: ParsedArgs, deps: BudgetDeps = {}): Promis
     let planStatuses: PlanStatus[] = [];
     try {
       planStatuses = await withProgress('loading budget plans', async (task) => {
-        const statuses = await loadPlanStatuses({ quiet: watchFlag !== undefined });
+        const statuses = await loadPlanStatuses({ quiet: true });
         task.succeed(
           `loaded ${statuses.length} budget plan${statuses.length === 1 ? '' : 's'}`,
         );
