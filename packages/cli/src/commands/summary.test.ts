@@ -5,12 +5,13 @@ import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 import {
+  appendUserTurns,
   appendTurns,
   archivePath,
   stamp,
   __resetIndexCacheForTesting,
 } from '@relayburn/ledger';
-import type { Fidelity, TurnRecord } from '@relayburn/reader';
+import type { Fidelity, TurnRecord, UserTurnRecord } from '@relayburn/reader';
 
 import { runSummary } from './summary.js';
 
@@ -33,6 +34,20 @@ function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
     },
     toolCalls: [],
     project: '/tmp/project',
+    ...overrides,
+  };
+}
+
+function fakeUserTurn(overrides: Partial<UserTurnRecord> = {}): UserTurnRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId: 's-1',
+    userUuid: 'u-1',
+    ts: '2026-04-20T00:00:30.000Z',
+    precedingMessageId: 'msg-1',
+    followingMessageId: 'msg-2',
+    blocks: [],
     ...overrides,
   };
 }
@@ -492,11 +507,11 @@ describe('burn summary per-cell fidelity (#136)', () => {
     assert.match(out.stdout, /turns analyzed: 2/);
     assert.match(out.stdout, /Read/);
     assert.match(out.stdout, /attributedCost/);
-    assert.match(out.stdout, /attributedCost = \(turn N input cost\)/);
+    assert.match(out.stdout, /user-turn byte size/);
     assert.match(out.stdout, /unattributed cost/);
   });
 
-  it('--by-tool --json emits { byTool, unattributed } with fidelity', async () => {
+  it('--by-tool --json emits { byTool, unattributed } with fidelity and even-split fallback', async () => {
     await appendTurns([
       fakeTurn({
         sessionId: 'btj-1',
@@ -515,16 +530,82 @@ describe('burn summary per-cell fidelity (#136)', () => {
     interface Payload {
       ingest: { ingestedSessions: number; appendedTurns: number };
       turns: number;
-      byTool: Array<{ tool: string; calls: number; attributedCost: number }>;
+      byTool: Array<{
+        tool: string;
+        calls: number;
+        attributedCost: number;
+        attributionMethod: 'sized' | 'even-split' | 'unattributed';
+      }>;
       unattributed: number;
       fidelity: { summary: unknown };
     }
     const payload = JSON.parse(out.stdout) as Payload;
     assert.equal(payload.turns, 2);
     assert.ok(Array.isArray(payload.byTool));
-    assert.equal(payload.byTool.some((r) => r.tool === 'Edit'), true);
+    const edit = payload.byTool.find((r) => r.tool === 'Edit');
+    assert.ok(edit);
+    assert.equal(edit!.attributionMethod, 'even-split');
     assert.equal(typeof payload.unattributed, 'number');
     assert.ok(payload.fidelity.summary, 'fidelity.summary block expected');
+  });
+
+  it('--by-tool --json uses user-turn byteLen for proportional attribution', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'bt-sized',
+        messageId: 'bt-sized-1',
+        toolCalls: [
+          { id: 'tc-big', name: 'Read', target: 'large.log', argsHash: 'read-big' },
+          { id: 'tc-small', name: 'Bash', target: 'true', argsHash: 'bash-small' },
+        ],
+      }),
+      fakeTurn({
+        sessionId: 'bt-sized',
+        messageId: 'bt-sized-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+    ]);
+    await appendUserTurns([
+      fakeUserTurn({
+        sessionId: 'bt-sized',
+        userUuid: 'bt-sized-u-1',
+        precedingMessageId: 'bt-sized-1',
+        followingMessageId: 'bt-sized-2',
+        blocks: [
+          { kind: 'tool_result', toolUseId: 'tc-big', byteLen: 9000, approxTokens: 2250 },
+          {
+            kind: 'tool_result',
+            toolUseId: 'tc-small',
+            byteLen: 1000,
+            approxTokens: 250,
+            isError: true,
+          },
+          { kind: 'text', byteLen: 50_000, approxTokens: 12_500 },
+        ],
+      }),
+    ]);
+
+    const out = await captureSummary({ 'by-tool': true, json: true });
+    assert.equal(out.code, 0);
+    interface Payload {
+      byTool: Array<{
+        tool: string;
+        attributedCost: number;
+        attributionMethod: 'sized' | 'even-split' | 'unattributed';
+      }>;
+    }
+    const payload = JSON.parse(out.stdout) as Payload;
+    const read = payload.byTool.find((r) => r.tool === 'Read');
+    const bash = payload.byTool.find((r) => r.tool === 'Bash');
+    assert.ok(read);
+    assert.ok(bash);
+    assert.equal(read!.attributionMethod, 'sized');
+    assert.equal(bash!.attributionMethod, 'sized');
+    assert.ok(
+      read!.attributedCost > bash!.attributedCost * 8,
+      `Read should dominate Bash by byteLen: read=${read!.attributedCost} bash=${bash!.attributedCost}`,
+    );
   });
 
   it('--by-tool combined with --by-provider exits non-zero with a clear error', async () => {

@@ -8,6 +8,10 @@ All notable changes to `@relayburn/analyze`.
 
 - Added shared effective-provider helpers and `aggregateByProvider()` for provider-scoped rendering.
 
+### Changed
+
+- Waste attribution now prefers persisted user-turn block sizes over content sidecar estimates before falling back to even-split attribution.
+
 ## [0.42.0] - 2026-04-28
 
 ### Added

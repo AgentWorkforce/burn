@@ -411,16 +411,16 @@ export function formatWasteReport(input: FormatWasteReportInput): string {
     const pct = total > 0 ? (ev / total) * 100 : 0;
     out.push('');
     out.push(
-      `⚠ attribution is degraded: ${formatInt(ev)} of ${formatInt(total)} sessions (${pct.toFixed(1)}%) have no content`,
+      `⚠ attribution is degraded: ${formatInt(ev)} of ${formatInt(total)} sessions (${pct.toFixed(1)}%) have no sized`,
     );
     out.push(
-      '  sidecar, so file / bash / subagent costs for those sessions are approximate',
+      '  tool-result data, so file / bash / subagent costs for those sessions are approximate',
     );
     out.push(
       "  (even-split over turn N+1 input/cacheCreate). Run 'burn rebuild --content'",
     );
     out.push(
-      "  to backfill sidecars from source session files, or see 'burn content' for",
+      "  to backfill source-derived sizes, or see 'burn content' for",
     );
     out.push('  why capture is disabled.');
     out.push('');
@@ -439,11 +439,11 @@ export function formatWasteReport(input: FormatWasteReportInput): string {
       evenSplitSessions.length === result.sessionTotals.length
     ) {
       out.push(
-        'note: no content sidecar data found — using even-split (initial cost only). Enable content.store=full in your config to get persistence attribution.',
+        'note: no user-turn or content sidecar sizes found — using even-split (initial cost only). Run burn rebuild --content or enable content.store=full to improve attribution.',
       );
     } else if (evenSplitSessions.length > 0) {
       out.push(
-        `note: ${evenSplitSessions.length}/${result.sessionTotals.length} sessions used even-split (no content sidecar).`,
+        `note: ${evenSplitSessions.length}/${result.sessionTotals.length} sessions used even-split (no user-turn or content sidecar sizes).`,
       );
     }
   }

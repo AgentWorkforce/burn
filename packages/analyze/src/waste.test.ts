@@ -308,7 +308,7 @@ describe('attributeWaste', () => {
 
     const result = attributeWaste(turns, { pricing, userTurnsBySession });
     const byId = new Map(result.attributions.map((a) => [a.toolUseId, a]));
-    assert.equal(result.sessionTotals[0]!.attributionMethod, 'user-turn');
+    assert.equal(result.sessionTotals[0]!.attributionMethod, 'sized');
     assert.equal(byId.get('tu_big')!.initialTokens, 3000);
     assert.equal(byId.get('tu_small')!.initialTokens, 1000);
     assert.equal(byId.get('tu_big')!.persistenceTokens, 3000);
@@ -316,7 +316,7 @@ describe('attributeWaste', () => {
     assert.ok(byId.get('tu_big')!.totalCost > byId.get('tu_small')!.totalCost);
   });
 
-  it('keeps content sidecar sizes primary over user-turn fallback sizes', async () => {
+  it('prefers user-turn block sizes over content sidecar estimates', async () => {
     const pricing = await loadBuiltinPricing();
     const sessionId = 's-sidecar-primary';
     const turns: TurnRecord[] = [
@@ -330,7 +330,7 @@ describe('attributeWaste', () => {
         sessionId,
         messageId: 'msg-1',
         turnIndex: 1,
-        usage: { input: 5000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        usage: { input: 10_000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
       }),
     ];
     const contentBySession = new Map<string, ContentRecord[]>();
@@ -350,7 +350,7 @@ describe('attributeWaste', () => {
       userTurnsBySession,
     });
     assert.equal(result.sessionTotals[0]!.attributionMethod, 'sized');
-    assert.equal(result.attributions[0]!.initialTokens, 1000);
+    assert.equal(result.attributions[0]!.initialTokens, 9000);
   });
 
   it('caps sibling initial cost at the next turn\'s actual newContent', async () => {

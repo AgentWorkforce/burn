@@ -15,7 +15,7 @@ import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
-import { ledgerPath, queryAll, queryUserTurns } from '@relayburn/ledger';
+import { appendContent, ledgerPath, queryAll, queryUserTurns } from '@relayburn/ledger';
 
 import {
   countToolCallGaps,
@@ -23,6 +23,7 @@ import {
   deriveCodexSessionId,
   ingestCodexSessions,
   ingestOpencodeSessions,
+  reingestMissingContent,
   resetIngestGapWarnings,
   setIngestGapWriter,
 } from './ingest.js';
@@ -253,6 +254,42 @@ describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
     assert.equal(sizeAfter, sizeBefore, 'ledger must not grow on idempotent re-ingest');
     const second = await queryUserTurns();
     assert.equal(second.length, 1, 'still one user-turn line after re-ingest');
+  });
+
+  it('rebuild --content backfills user-turn rows even when content already exists', async () => {
+    const sessionId = '33333333-3333-3333-3333-333333333333';
+    await writeClaudeSession(
+      tmpHome,
+      sessionId,
+      claudeSessionWithToolResultUserTurn(sessionId),
+    );
+    await appendContent([
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId,
+        messageId: 'seed-content',
+        ts: '2026-04-20T00:00:00.000Z',
+        role: 'assistant',
+        kind: 'text',
+        text: 'already had a content sidecar',
+      },
+    ]);
+
+    const report = await reingestMissingContent();
+    assert.equal(report.appendedContent, 0);
+    assert.ok(report.appendedUserTurns > 0, 'user-turn rows should be backfilled');
+
+    const userTurns = await queryUserTurns({ sessionId });
+    assert.ok(
+      userTurns.some((userTurn) =>
+        userTurn.blocks.some(
+          (block) =>
+            block.kind === 'tool_result' && block.toolUseId === 'toolu_rebuild_1',
+        ),
+      ),
+      'tool_result user-turn block should be persisted for sized attribution',
+    );
   });
 });
 
@@ -542,6 +579,110 @@ function claudeSessionWithUserTurn(): string {
       timestamp: '2026-04-20T00:00:01.000Z',
       cwd: '/tmp/project',
       sessionId: sid,
+      version: '2.1.96',
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+function claudeSessionWithToolResultUserTurn(sessionId: string): string {
+  const lines = [
+    {
+      type: 'permission-mode',
+      permissionMode: 'default',
+      sessionId,
+    },
+    {
+      parentUuid: null,
+      isSidechain: false,
+      promptId: 'p-rebuild',
+      type: 'user',
+      message: { role: 'user', content: 'read the log' },
+      uuid: 'u-rebuild-user-1',
+      timestamp: '2026-04-20T00:00:00.000Z',
+      cwd: '/tmp/project',
+      sessionId,
+      version: '2.1.96',
+    },
+    {
+      parentUuid: 'u-rebuild-user-1',
+      isSidechain: false,
+      message: {
+        model: 'claude-sonnet-4-6',
+        id: 'msg_rebuild_1',
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_rebuild_1',
+            name: 'Bash',
+            input: { command: 'cat large.log' },
+          },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+        usage: {
+          input_tokens: 10,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          output_tokens: 5,
+          service_tier: 'standard',
+        },
+      },
+      requestId: 'req_rebuild_1',
+      type: 'assistant',
+      uuid: 'u-rebuild-asst-1',
+      timestamp: '2026-04-20T00:00:01.000Z',
+      cwd: '/tmp/project',
+      sessionId,
+      version: '2.1.96',
+    },
+    {
+      parentUuid: 'u-rebuild-asst-1',
+      isSidechain: false,
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_rebuild_1',
+            content: 'large output from the command',
+          },
+        ],
+      },
+      uuid: 'u-rebuild-tool-result-1',
+      timestamp: '2026-04-20T00:00:02.000Z',
+      cwd: '/tmp/project',
+      sessionId,
+      version: '2.1.96',
+    },
+    {
+      parentUuid: 'u-rebuild-tool-result-1',
+      isSidechain: false,
+      message: {
+        model: 'claude-sonnet-4-6',
+        id: 'msg_rebuild_2',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'done' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: {
+          input_tokens: 100,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          output_tokens: 5,
+          service_tier: 'standard',
+        },
+      },
+      requestId: 'req_rebuild_2',
+      type: 'assistant',
+      uuid: 'u-rebuild-asst-2',
+      timestamp: '2026-04-20T00:00:03.000Z',
+      cwd: '/tmp/project',
+      sessionId,
       version: '2.1.96',
     },
   ];
