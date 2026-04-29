@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import type { ParsedArgs } from '../args.js';
 import type { IngestReport } from '../ingest.js';
 import type { HarnessAdapter } from '../harnesses/types.js';
-import type { WatchController } from './watch.js';
+import type { WatchController } from '../watch-loop.js';
 
 import { runWithAdapter } from './run.js';
 

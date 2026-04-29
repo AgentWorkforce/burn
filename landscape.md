@@ -58,7 +58,7 @@ Burn keeps derived local state deliberately disposable: dedup indexes, content s
 - `internal/claude/parser.go:31-75` — hook event parsing; `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `Notification`, `SessionStart`, `SessionEnd`
 - `internal/app/ingest_claude.go:58-117` — subagent correlation via `PendingAgentSpawn` queue keyed by `tool_use_id`
 - `internal/app/ingest_claude.go:26-33` — OpenCode-wraps-Claude-Code dedup guard
-- `scripts/claude-hook.sh` — 2 lines: `exec "$BIN" ingest --runtime claude`
+- `scripts/claude-hook.sh` — 2 lines: `exec "$BIN" ingest --hook claude`
 
 **The breakthrough finding:** Claude Code's `PostToolUse` hook fires with the full `tool_response` content in the payload. Confirmed at `parser.go:58-61` (`raw["tool_input"]` and `raw["tool_response"]` extraction). That means per-tool-call token sizing doesn't need the delta-math of #2 — the size can be read directly.
 

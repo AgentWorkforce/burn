@@ -6,7 +6,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Added
 
-- `burn watch --opencode-stream` now ingests stream-owned OpenCode sessions directly at completed tool-call grain while keeping file ingest as the fallback.
+- `burn ingest --watch --opencode-stream` now ingests stream-owned OpenCode sessions directly at completed tool-call grain while keeping file ingest as the fallback.
 
 ### Changed
 
