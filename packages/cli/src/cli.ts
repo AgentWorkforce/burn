@@ -22,7 +22,7 @@ const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
   burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--quality]
-                     [--by-provider | --by-tool | --by-subagent-type | --subagent-tree <session-id>] [--no-archive]
+                     [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>] [--no-archive]
                      (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
@@ -44,6 +44,7 @@ Examples:
   burn summary --by-provider --provider synthetic
   burn summary --subagent-tree <session-id>
   burn summary --by-subagent-type --since 7d
+  burn summary --by-relationship --since 7d
   burn summary --by-tool --since 7d
   burn waste --since 7d
   burn waste --patterns --since 7d
