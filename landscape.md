@@ -307,7 +307,7 @@ Plus **structured fix actions** (`WasteAction = { type: 'paste' | 'command' | 'f
 
 ## Landscape takeaways
 
-1. **Nobody else does per-tool-call attribution.** All 10 tools stop at per-message or per-turn totals. Anthropic returns `usage` at the message level, and every surveyed project treated that as a ceiling. Burn's plan — delta-math fallback (#2), hook-path precise (#7), consumed by `burn waste` (#3) — is novel territory.
+1. **Nobody else does per-tool-call attribution.** All 10 tools stop at per-message or per-turn totals. Anthropic returns `usage` at the message level, and every surveyed project treated that as a ceiling. Burn's plan — delta-math fallback (#2), hook-path precise (#7), consumed by `burn hotspots` (#3) — is novel territory.
 
 2. **Nobody has a workflow/stamp concept.** Burn's `@relayburn/ledger.stamp` API for attributing turns to `workflowId` / `agentId` / `persona` at query time is unique in the landscape. Every competitor aggregates by source-harness or model. This is the primitive that makes cross-harness comparison possible for the meta-goal.
 
@@ -342,7 +342,7 @@ For each filed issue, the project(s) it drew from:
 | Issue | Title | Primary source(s) |
 |---|---|---|
 | #2 | Preserve user-turn block sizes | lazyagent (fallback when hooks unavailable) |
-| #3 | `burn waste` per-tool-call attribution | Original concept |
+| #3 | `burn hotspots` per-tool-call attribution | Original concept |
 | #4 | Incremental cursors + git-canonical project keys | TokenTracker (cursors, git); tokscale (fingerprint dedup, added later) |
 | #5 | `burn limits` quota-window tracking | TokenTracker (endpoints); ccusage (forecasting, added later) |
 | #6 | Outcome/quality signal design | Original concept; prism adherence rejected as primary |

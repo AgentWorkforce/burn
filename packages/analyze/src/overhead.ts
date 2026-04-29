@@ -11,29 +11,29 @@ import {
 } from './claude-md.js';
 import type { PricingTable } from './pricing.js';
 
-export type ContextFileKind = 'claude-md' | 'agents-md';
+export type OverheadFileKind = 'claude-md' | 'agents-md';
 
-export interface ContextFile {
-  kind: ContextFileKind;
+export interface OverheadFile {
+  kind: OverheadFileKind;
   path: string;
   // Which agent sources read this file into their cached context. A turn's
   // `source` must be in this list for the file to count toward that turn.
   appliesTo: SourceKind[];
 }
 
-export interface ParsedContextFile {
-  file: ContextFile;
+export interface ParsedOverheadFile {
+  file: OverheadFile;
   parsed: ParsedClaudeMd;
 }
 
-export interface ContextFileAttribution {
-  file: ContextFile;
+export interface OverheadFileAttribution {
+  file: OverheadFile;
   parsed: ParsedClaudeMd;
   attribution: ClaudeMdAttributionResult;
 }
 
-export interface ContextAttributionResult {
-  perFile: ContextFileAttribution[];
+export interface OverheadAttribution {
+  perFile: OverheadFileAttribution[];
   grandTotal: number;
   // Count of distinct turns that contributed to at least one file's cost. Not
   // the sum of per-file ridingTurns (a turn could ride along in multiple
@@ -41,8 +41,8 @@ export interface ContextAttributionResult {
   totalRidingTurns: number;
 }
 
-export interface AttributeContextInput {
-  files: ParsedContextFile[];
+export interface AttributeOverheadInput {
+  files: ParsedOverheadFile[];
   turns: TurnRecord[];
   pricing: PricingTable;
 }
@@ -52,7 +52,7 @@ export interface AttributeContextInput {
 // for CLAUDE.md, and a Claude Code session doesn't pay for AGENTS.md, so
 // attribution must filter turns by source.
 interface Candidate {
-  kind: ContextFileKind;
+  kind: OverheadFileKind;
   relativePath: string;
   appliesTo: SourceKind[];
 }
@@ -63,8 +63,8 @@ const CANDIDATES: readonly Candidate[] = [
   { kind: 'agents-md', relativePath: 'AGENTS.md', appliesTo: ['codex', 'opencode'] },
 ];
 
-export async function findContextFiles(projectPath: string): Promise<ContextFile[]> {
-  const out: ContextFile[] = [];
+export async function findOverheadFiles(projectPath: string): Promise<OverheadFile[]> {
+  const out: OverheadFile[] = [];
   for (const c of CANDIDATES) {
     const abs = path.join(projectPath, c.relativePath);
     try {
@@ -79,13 +79,13 @@ export async function findContextFiles(projectPath: string): Promise<ContextFile
   return out;
 }
 
-export async function loadContextFile(file: ContextFile): Promise<ParsedContextFile> {
+export async function loadOverheadFile(file: OverheadFile): Promise<ParsedOverheadFile> {
   const parsed = await loadClaudeMdFile(file.path);
   return { file, parsed };
 }
 
-export function attributeContext(input: AttributeContextInput): ContextAttributionResult {
-  const perFile: ContextFileAttribution[] = [];
+export function attributeOverhead(input: AttributeOverheadInput): OverheadAttribution {
+  const perFile: OverheadFileAttribution[] = [];
   // Per-session max ridingTurns across every file. The eviction check is
   // `cacheRead >= file_tokens`, so a smaller file always rides along for a
   // superset of the turns that a larger file rides along for (same source,
