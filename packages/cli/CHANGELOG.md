@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-04-29
+
 ### Fixed
 
 - `burn rebuild --content` now fast-skips renamed Codex rollout files using their first-line `session_meta` session id.

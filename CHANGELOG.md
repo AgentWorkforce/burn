@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-04-29
+
 ### Added
 
 - Defaulted user-turn block sizing to cl100k, with a measurement script that reports token-count and tool-attribution drift against the bytes/4 heuristic fallback.

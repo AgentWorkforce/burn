@@ -4,6 +4,8 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-04-29
+
 ### Changed
 
 - Archive builds now materialize stamps in SQLite so incremental turn folding no longer scans the full ledger history.

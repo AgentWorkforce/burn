@@ -4,6 +4,8 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-04-29
+
 ### Added
 
 - Added `readCodexSessionIdHint()` for cheap Codex first-line `session_meta` session-id discovery.
