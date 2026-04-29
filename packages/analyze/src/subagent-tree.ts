@@ -139,12 +139,18 @@ function buildRelationshipAliases(
   for (const t of turns) {
     if (t.subagent?.agentId) sessionsWithNativeSidechains.add(t.sessionId);
   }
+  for (const r of relationships) {
+    if (
+      r.relationshipType === 'subagent' &&
+      r.relatedSessionId === r.sessionId
+    ) {
+      sessionsWithNativeSidechains.add(r.sessionId);
+    }
+  }
 
   const aliases = new Map<string, string>();
   for (const r of relationships) {
-    if (r.relationshipType !== 'subagent' || r.agentId === undefined) {
-      aliases.set(r.sessionId, r.sessionId);
-    }
+    aliases.set(r.sessionId, r.sessionId);
   }
   for (const r of relationships) {
     if (r.relationshipType !== 'subagent') continue;
@@ -152,13 +158,15 @@ function buildRelationshipAliases(
       aliases.set(r.sessionId, r.sessionId);
       continue;
     }
-    aliases.set(r.agentId, r.agentId);
     // Claude sidechains live inside the parent file session, so their
     // relationship row has sessionId=<root session>, agentId=<sidechain id>,
     // and turns already carry subagent.agentId. Child-session sources such as
-    // Codex/OpenCode have no per-turn subagent field, so alias their session
-    // id to the graph node when the session is not a native sidechain holder.
-    if (!sessionsWithNativeSidechains.has(r.sessionId)) aliases.set(r.sessionId, r.agentId);
+    // Codex/OpenCode keep turns under the child session id, so the agent id
+    // aliases to the session id while the session id remains addressable.
+    aliases.set(
+      r.agentId,
+      sessionsWithNativeSidechains.has(r.sessionId) ? r.agentId : r.sessionId,
+    );
   }
   return aliases;
 }

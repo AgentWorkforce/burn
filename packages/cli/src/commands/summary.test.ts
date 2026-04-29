@@ -629,7 +629,7 @@ describe('burn summary --subagent-tree relationships (#109)', () => {
       }),
       fakeTurn({
         source: 'codex',
-        sessionId: 'tree-child',
+        sessionId: 'tree-child-session',
         messageId: 'tree-child-1',
         model: 'gpt-5.1-codex',
       }),
@@ -642,10 +642,10 @@ describe('burn summary --subagent-tree relationships (#109)', () => {
       }),
       fakeRelationship({
         source: 'codex',
-        sessionId: 'tree-child',
+        sessionId: 'tree-child-session',
         relationshipType: 'subagent',
         relatedSessionId: 'tree-parent',
-        agentId: 'tree-child',
+        agentId: 'tree-child-agent',
         subagentType: 'worker',
       }),
     ]);
@@ -661,6 +661,7 @@ describe('burn summary --subagent-tree relationships (#109)', () => {
       selfTurns: number;
       cumulativeTurns: number;
       children: Array<{
+        nodeId: string;
         label: string;
         relationshipType: string;
         selfTurns: number;
@@ -669,9 +670,27 @@ describe('burn summary --subagent-tree relationships (#109)', () => {
     assert.equal(payload.relationshipType, 'root');
     assert.equal(payload.selfTurns, 1);
     assert.equal(payload.cumulativeTurns, 2);
+    assert.equal(payload.children[0]!.nodeId, 'tree-child-session');
     assert.equal(payload.children[0]!.label, 'worker');
     assert.equal(payload.children[0]!.relationshipType, 'subagent');
     assert.equal(payload.children[0]!.selfTurns, 1);
+
+    const childOut = await captureSummary({
+      'subagent-tree': 'tree-child-session',
+      json: true,
+      'no-archive': true,
+    });
+    assert.equal(childOut.code, 0);
+    const childPayload = JSON.parse(childOut.stdout) as {
+      nodeId: string;
+      label: string;
+      relationshipType: string;
+      selfTurns: number;
+    };
+    assert.equal(childPayload.nodeId, 'tree-child-session');
+    assert.equal(childPayload.label, 'worker');
+    assert.equal(childPayload.relationshipType, 'subagent');
+    assert.equal(childPayload.selfTurns, 1);
   });
 
   it('falls back to TurnRecord.subagent when no relationship rows exist', async () => {

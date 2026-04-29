@@ -221,7 +221,7 @@ describe('buildSubagentTree', () => {
       }),
       turn({
         source: 'codex',
-        sessionId: 'agent-child',
+        sessionId: 'child-session',
         messageId: 'child-1',
         model: 'gpt-5.1-codex',
       }),
@@ -234,7 +234,7 @@ describe('buildSubagentTree', () => {
       }),
       relationship({
         source: 'codex',
-        sessionId: 'agent-child',
+        sessionId: 'child-session',
         relationshipType: 'subagent',
         relatedSessionId: 'parent-session',
         agentId: 'agent-child',
@@ -247,8 +247,35 @@ describe('buildSubagentTree', () => {
     assert.equal(root.cumulativeTurns, 2);
     assert.equal(root.children.length, 1);
     assert.equal(root.children[0]!.label, 'worker');
+    assert.equal(root.children[0]!.nodeId, 'child-session');
     assert.equal(root.children[0]!.relationshipType, 'subagent');
     assert.equal(root.children[0]!.selfTurns, 1);
+  });
+
+  it('does not alias native sidechain session roots onto agent ids when turns lack subagent fields', async () => {
+    const pricing = await loadBuiltinPricing();
+    const sessionId = 'partial-claude';
+    const turns: TurnRecord[] = [
+      turn({ sessionId, messageId: 'main-1', model: 'claude-sonnet-4-6' }),
+    ];
+    const relationships: SessionRelationshipRecord[] = [
+      relationship({ sessionId, source: 'claude-code', relationshipType: 'root' }),
+      relationship({
+        sessionId,
+        relationshipType: 'subagent',
+        relatedSessionId: sessionId,
+        agentId: 'u-outer',
+        subagentType: 'Explore',
+      }),
+    ];
+
+    const root = buildSubagentTree(turns, { pricing, relationships }).get(sessionId)!;
+    assert.equal(root.nodeId, sessionId);
+    assert.equal(root.label, 'main');
+    assert.equal(root.selfTurns, 1);
+    assert.equal(root.children.length, 1);
+    assert.equal(root.children[0]!.nodeId, 'u-outer');
+    assert.equal(root.children[0]!.selfTurns, 0);
   });
 });
 

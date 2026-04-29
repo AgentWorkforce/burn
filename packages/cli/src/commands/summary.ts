@@ -42,6 +42,7 @@ import {
   filterTurnsByProvider,
   parseProviderFilter,
 } from '../provider.js';
+import type { ProviderFilter } from '../provider.js';
 
 export async function runSummary(args: ParsedArgs): Promise<number> {
   const q: Query = {};
@@ -107,15 +108,23 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   const pricing = await loadPricing();
   const agentSessionIds =
     agentFilter !== undefined ? await resolveAgentSessionTree(agentFilter) : undefined;
-  const turnQuery = subagentTreeFlag !== undefined ? queryWithoutSession(q) : q;
+  if (subagentTreeFlag !== undefined) {
+    return renderSubagentTreeMode(
+      args,
+      pricing,
+      subagentTreeFlag,
+      q,
+      agentFilter,
+      agentSessionIds,
+      providerFilter,
+    );
+  }
+
   const turns = filterTurnsByProvider(
-    filterTurnsByAgent(await loadTurns(turnQuery, args), agentFilter, agentSessionIds),
+    filterTurnsByAgent(await loadTurns(q, args), agentFilter, agentSessionIds),
     providerFilter,
   );
 
-  if (subagentTreeFlag !== undefined) {
-    return renderSubagentTreeMode(args, turns, pricing, subagentTreeFlag, q);
-  }
   if (subagentTypeFlag) {
     return renderSubagentTypeMode(args, turns, pricing);
   }
@@ -383,10 +392,12 @@ type ModelRow = UsageCostAggregateRow;
 
 async function renderSubagentTreeMode(
   args: ParsedArgs,
-  turns: EnrichedTurn[],
   pricing: Parameters<typeof costForTurn>[1],
   flag: string | true,
   q: Query,
+  agentFilter: string | undefined,
+  agentSessionIds: Set<string> | undefined,
+  providerFilter: ProviderFilter | undefined,
 ): Promise<number> {
   // Accept either `--subagent-tree <id>` or `--subagent-tree` with --session.
   const sessionId = typeof flag === 'string' ? flag : q.sessionId;
@@ -394,7 +405,15 @@ async function renderSubagentTreeMode(
     process.stderr.write('burn: --subagent-tree requires a session id (positional or --session)\n');
     return 2;
   }
-  const relationships = await queryRelationships();
+  const relationships = await collectSubagentTreeRelationships(sessionId, q);
+  const turns = filterTurnsByProvider(
+    filterTurnsByAgent(
+      await loadSubagentTreeTurns(sessionId, relationships, q, args),
+      agentFilter,
+      agentSessionIds,
+    ),
+    providerFilter,
+  );
   const trees = buildSubagentTree(turns, { pricing, relationships });
   const root = trees.get(sessionId) ?? findTreeNode(trees, sessionId);
   if (!root) {
@@ -414,6 +433,59 @@ async function renderSubagentTreeMode(
   out.push('');
   process.stdout.write(out.join('\n'));
   return 0;
+}
+
+async function collectSubagentTreeRelationships(
+  sessionId: string,
+  q: Query,
+): Promise<SessionRelationshipRecord[]> {
+  const queryBase = relationshipQueryForTurnSlice(q);
+  const out = new Map<string, SessionRelationshipRecord>();
+  const seenIds = new Set<string>();
+  const queue = [sessionId];
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    const relationships = await queryRelationships({ ...queryBase, sessionId: id });
+    for (const r of relationships) {
+      out.set(relationshipInstanceKey(r), r);
+      for (const next of relationshipConnectedIds(r)) {
+        if (next.length > 0 && !seenIds.has(next)) queue.push(next);
+      }
+    }
+  }
+
+  return [...out.values()];
+}
+
+function relationshipConnectedIds(r: SessionRelationshipRecord): string[] {
+  const ids = [r.sessionId];
+  if (r.relatedSessionId !== undefined) ids.push(r.relatedSessionId);
+  if (r.agentId !== undefined) ids.push(r.agentId);
+  return ids;
+}
+
+async function loadSubagentTreeTurns(
+  sessionId: string,
+  relationships: readonly SessionRelationshipRecord[],
+  q: Query,
+  args: ParsedArgs,
+): Promise<EnrichedTurn[]> {
+  const sessionIds = new Set<string>([sessionId]);
+  for (const r of relationships) {
+    sessionIds.add(r.sessionId);
+  }
+
+  const byKey = new Map<string, EnrichedTurn>();
+  for (const id of sessionIds) {
+    const turns = await loadTurns({ ...q, sessionId: id }, args);
+    for (const t of turns) {
+      byKey.set(`${t.source}|${t.sessionId}|${t.messageId}`, t);
+    }
+  }
+  return [...byKey.values()];
 }
 
 async function renderByToolMode(
@@ -998,12 +1070,6 @@ async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
     process.stderr.write(`burn: archive read failed (${msg}); falling back to ledger walk\n`);
     return queryAll(q);
   }
-}
-
-function queryWithoutSession(q: Query): Query {
-  const out: Query = { ...q };
-  delete out.sessionId;
-  return out;
 }
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {
