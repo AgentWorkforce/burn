@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Changed
+
+- `burn summary --subagent-tree` now reads persisted session relationships, including child-session subagents and fork/continuation annotations.
+
 ## [0.45.0] - 2026-04-29
 
 ### Fixed
