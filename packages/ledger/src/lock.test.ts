@@ -98,6 +98,20 @@ describe('withLock', () => {
     assert.equal(log.filter((l) => l.startsWith('exit')).length, 2);
   });
 
+  it('allows nested acquisition in the same async flow', async () => {
+    let innerRan = false;
+    await withLock('nested', async () => {
+      await assert.doesNotReject(() => stat(lockPath('nested')));
+      await withLock('nested', async () => {
+        innerRan = true;
+        await assert.doesNotReject(() => stat(lockPath('nested')));
+      });
+      await assert.doesNotReject(() => stat(lockPath('nested')));
+    });
+    assert.equal(innerRan, true);
+    await assert.rejects(() => stat(lockPath('nested')), { code: 'ENOENT' });
+  });
+
   it('exposes a retry budget that spans STALE_MS plus at least one retry cycle', async () => {
     // Static invariant: future tuning of the constants must not re-introduce
     // the #62 gap where the retry budget was shorter than the stale-detection

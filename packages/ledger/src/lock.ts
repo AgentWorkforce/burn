@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { open, stat, unlink, mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -52,12 +53,19 @@ const DEFAULT_OPTIONS: AcquireOptions = {
   staleMs: STALE_MS,
 };
 
+const heldLocks = new AsyncLocalStorage<Set<string>>();
+
 export async function withLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
   const lp = lockPath(name);
+  const held = heldLocks.getStore();
+  if (held?.has(lp)) return fn();
+
   await mkdir(path.dirname(lp), { recursive: true });
   await acquire(lp, DEFAULT_OPTIONS);
+  const nextHeld = new Set(held ?? []);
+  nextHeld.add(lp);
   try {
-    return await fn();
+    return await heldLocks.run(nextHeld, fn);
   } finally {
     try {
       await unlink(lp);
