@@ -4,6 +4,8 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-04-29
+
 ### Added
 
 - Added shared effective-provider helpers and `aggregateByProvider()` for provider-scoped rendering.

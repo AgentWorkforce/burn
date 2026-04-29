@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-04-29
+
 ### Changed
 
 - Spawn-env and native sidechain attribution now share session relationship records, and `burn diagnose --explain-drift` surfaces sessions where they disagree.

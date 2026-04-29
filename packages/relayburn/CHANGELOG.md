@@ -4,6 +4,12 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-04-29
+
+### Changed
+
+- Tighten changelog entries
+
 ## [0.35.0] - 2026-04-28
 
 ### Added

@@ -4,6 +4,8 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-04-29
+
 ### Added
 
 - Session stamps with `parentAgentId` now append a deduped `spawn-env` relationship record for source-agnostic spawn-tree queries.

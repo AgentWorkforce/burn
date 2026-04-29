@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-04-29
+
 ### Added
 
 - `burn diagnose` now reports spawn-env/native relationship drift, with `--explain-drift` for per-session details.
