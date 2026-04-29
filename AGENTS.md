@@ -12,7 +12,7 @@ pnpm workspace, six published packages in dependency order:
 @relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
 @relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
-@relayburn/cli      — `burn` binary (summary, summary --by-tool, compare, `burn run <harness>` wrapper, mcp-server, …)
+@relayburn/cli      — `burn` binary (summary, budget, compare, `burn run <harness>` wrapper, mcp-server, …)
 relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
 ```
 
@@ -121,5 +121,6 @@ The codex / opencode adapters share the pending-stamp + watch-loop shape; both a
 
 - **Architecture / API surface:** read `README.md` first, then the package's `src/index.ts` for exports.
 - **Activity classifier rules:** the rule tables (`TEST_PATTERNS`, `EDIT_TOOLS`, `TOOL_ALIASES`, etc.) live at `packages/reader/src/classifier.ts`. They're the source of truth for what `burn compare` buckets each turn into. Adding a new harness = adding entries to `TOOL_ALIASES`; adding a new category = updating `ActivityCategory` in `packages/reader/src/types.ts` and adding its rule + a test.
+- **Budget commands:** `burn budget` owns quota windows, plan cycles, and forecasts; nested plan CRUD lives under `burn budget plans`.
 - **Ledger schema:** `packages/reader/src/types.ts` (`TurnRecord`, `ContentRecord`) and `packages/ledger/src/schema.ts` (`LedgerLine`, `TurnLine`, `StampLine`). Bump `v` if the on-disk shape changes.
 - **Concurrency:** any read-modify-write on the ledger MUST hold `withLock('ledger', …)` from `@relayburn/ledger`. Append-only writes use the same lock to avoid racing reclassify-style rewrites.

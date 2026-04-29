@@ -20,16 +20,16 @@ import type { ParsedArgs } from '../args.js';
 import { ingestAll } from '../ingest.js';
 import { formatUsd, table } from '../format.js';
 
-const PLANS_HELP = `burn plans — monthly quota tracking against your plan budget
+const BUDGET_PLANS_HELP = `burn budget plans — monthly quota tracking against your plan budget
 
 Usage:
-  burn plans                                              list configured plans + status
-  burn plans add --provider <p> --preset <name>           add a built-in preset
-  burn plans add --id <id> --provider custom \\
+  burn budget plans                                              list configured plans + status
+  burn budget plans add --provider <p> --preset <name>           add a built-in preset
+  burn budget plans add --id <id> --provider custom \\
                  --name <"Label"> --budget <usd> \\
                  [--reset-day <1-31>]                     add a custom plan
-  burn plans remove <id>                                  drop a plan from the list
-  burn plans set-reset-day <id> <day>                     change a plan's reset day
+  burn budget plans remove <id>                                  drop a plan from the list
+  burn budget plans set-reset-day <id> <day>                     change a plan's reset day
 
 Built-in presets:
 ${BUILTIN_PRESETS.map((p) => {
@@ -38,26 +38,26 @@ ${BUILTIN_PRESETS.map((p) => {
 }).join('\n')}
 
 Examples:
-  burn plans add --provider claude --preset max
-  burn plans add --id work-api --provider custom --name "Work Anthropic API" --budget 500
-  burn plans set-reset-day claude-max 15
-  burn plans remove cursor-pro
+  burn budget plans add --provider claude --preset max
+  burn budget plans add --id work-api --provider custom --name "Work Anthropic API" --budget 500
+  burn budget plans set-reset-day claude-max 15
+  burn budget plans remove cursor-pro
 
 Plans are stored at:
   ${plansPath()}
 `;
 
-export async function runPlans(args: ParsedArgs): Promise<number> {
+export async function runBudgetPlans(args: ParsedArgs): Promise<number> {
   const sub = args.positional[0];
-  if (sub === 'help' || sub === '--help' || sub === '-h') {
-    process.stdout.write(PLANS_HELP);
+  if (args.flags['help'] !== undefined || sub === 'help' || sub === '--help' || sub === '-h') {
+    process.stdout.write(BUDGET_PLANS_HELP);
     return 0;
   }
   if (sub === undefined) return runList(args);
   if (sub === 'add') return runAdd(args);
   if (sub === 'remove') return runRemove(args);
   if (sub === 'set-reset-day') return runSetResetDay(args);
-  process.stderr.write(`burn plans: unknown subcommand "${sub}"\n\n${PLANS_HELP}`);
+  process.stderr.write(`burn budget plans: unknown subcommand "${sub}"\n\n${BUDGET_PLANS_HELP}`);
   return 2;
 }
 
@@ -68,7 +68,7 @@ async function runList(args: ParsedArgs): Promise<number> {
 
   if (json) {
     // Hand-shape the per-plan payload so the `fidelity` block is emitted next
-    // to the rest of the cycle stats. Mirrors the shape `burn limits --json`
+    // to the rest of the cycle stats. Mirrors the shape `burn budget --json`
     // would build if it grew the same field — keep the two surfaces parallel.
     const payload = {
       plans: statuses.map((s) => ({
@@ -87,7 +87,7 @@ async function runList(args: ParsedArgs): Promise<number> {
 
   if (statuses.length === 0) {
     process.stdout.write(
-      'No plans configured. Add one with `burn plans add --provider claude --preset pro`.\n',
+      'No plans configured. Add one with `burn budget plans add --provider claude --preset pro`.\n',
     );
     return 0;
   }
@@ -161,7 +161,7 @@ async function runAdd(args: ParsedArgs): Promise<number> {
   const provider = args.flags['provider'];
   if (typeof provider !== 'string' || !isProvider(provider)) {
     process.stderr.write(
-      `burn plans add: --provider must be one of claude, cursor, custom\n\n${PLANS_HELP}`,
+      `burn budget plans add: --provider must be one of claude, cursor, custom\n\n${BUDGET_PLANS_HELP}`,
     );
     return 2;
   }
@@ -172,7 +172,7 @@ async function runAdd(args: ParsedArgs): Promise<number> {
     const found = findPreset(provider, preset);
     if (!found) {
       process.stderr.write(
-        `burn plans add: unknown preset "${provider}/${preset}". Available: ${BUILTIN_PRESETS.map((p) => p.preset).join(', ')}\n`,
+        `burn budget plans add: unknown preset "${provider}/${preset}". Available: ${BUILTIN_PRESETS.map((p) => p.preset).join(', ')}\n`,
       );
       return 2;
     }
@@ -182,14 +182,14 @@ async function runAdd(args: ParsedArgs): Promise<number> {
       plan = customFromFlags(args);
     } catch (err) {
       process.stderr.write(
-        `burn plans add: ${err instanceof Error ? err.message : String(err)}\n` +
+        `burn budget plans add: ${err instanceof Error ? err.message : String(err)}\n` +
           'pass --preset <name> for a built-in plan, or --provider custom with --id/--name/--budget for a custom one.\n',
       );
       return 2;
     }
   } else {
     process.stderr.write(
-      'burn plans add: pass --preset <name> for a built-in plan, or --provider custom with --id/--name/--budget for a custom one.\n',
+      'burn budget plans add: pass --preset <name> for a built-in plan, or --provider custom with --id/--name/--budget for a custom one.\n',
     );
     return 2;
   }
@@ -201,7 +201,7 @@ async function runAdd(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['budget'] === 'string') {
     const n = Number(args.flags['budget']);
     if (!Number.isFinite(n) || n <= 0) {
-      process.stderr.write(`burn plans add: --budget must be a positive number\n`);
+      process.stderr.write(`burn budget plans add: --budget must be a positive number\n`);
       return 2;
     }
     plan.budgetUsd = n;
@@ -209,7 +209,7 @@ async function runAdd(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['reset-day'] === 'string') {
     const day = parseResetDay(args.flags['reset-day']);
     if (day === null) {
-      process.stderr.write(`burn plans add: --reset-day must be an integer 1-31\n`);
+      process.stderr.write(`burn budget plans add: --reset-day must be an integer 1-31\n`);
       return 2;
     }
     plan.resetDay = day;
@@ -218,7 +218,7 @@ async function runAdd(args: ParsedArgs): Promise<number> {
   const existing = await loadPlans();
   if (existing.some((p) => p.id === plan.id)) {
     process.stderr.write(
-      `burn plans add: plan with id "${plan.id}" already exists. Remove it first or pass --id <new-id>.\n`,
+      `burn budget plans add: plan with id "${plan.id}" already exists. Remove it first or pass --id <new-id>.\n`,
     );
     return 2;
   }
@@ -259,13 +259,13 @@ function customFromFlags(args: ParsedArgs): Plan {
 async function runRemove(args: ParsedArgs): Promise<number> {
   const id = args.positional[1];
   if (!id) {
-    process.stderr.write(`burn plans remove: missing plan id\n\n${PLANS_HELP}`);
+    process.stderr.write(`burn budget plans remove: missing plan id\n\n${BUDGET_PLANS_HELP}`);
     return 2;
   }
   const plans = await loadPlans();
   const next = plans.filter((p) => p.id !== id);
   if (next.length === plans.length) {
-    process.stderr.write(`burn plans remove: no plan with id "${id}"\n`);
+    process.stderr.write(`burn budget plans remove: no plan with id "${id}"\n`);
     return 1;
   }
   await savePlans(next);
@@ -278,19 +278,19 @@ async function runSetResetDay(args: ParsedArgs): Promise<number> {
   const dayArg = args.positional[2];
   if (!id || !dayArg) {
     process.stderr.write(
-      `burn plans set-reset-day: usage: burn plans set-reset-day <id> <1-31>\n`,
+      `burn budget plans set-reset-day: usage: burn budget plans set-reset-day <id> <1-31>\n`,
     );
     return 2;
   }
   const day = parseResetDay(dayArg);
   if (day === null) {
-    process.stderr.write(`burn plans set-reset-day: <day> must be an integer 1-31, got ${dayArg}\n`);
+    process.stderr.write(`burn budget plans set-reset-day: <day> must be an integer 1-31, got ${dayArg}\n`);
     return 2;
   }
   const plans = await loadPlans();
   const idx = plans.findIndex((p) => p.id === id);
   if (idx === -1) {
-    process.stderr.write(`burn plans set-reset-day: no plan with id "${id}"\n`);
+    process.stderr.write(`burn budget plans set-reset-day: no plan with id "${id}"\n`);
     return 1;
   }
   plans[idx] = { ...plans[idx]!, resetDay: day };
@@ -303,21 +303,26 @@ export interface PlanStatus {
   usage: PlanUsage;
 }
 
-export interface StatusForPlansOptions {
+interface StatusForPlansOptions {
   /**
    * When true, aggregate spend with one SQL query per plan against the
    * archive (`archive.sqlite`). When false (default), use the legacy
    * `queryAll()` + in-memory reduce path. Defaults to `false` so callers
-   * have to opt in explicitly: `burn plans` wires this to `shouldUseArchive`
-   * (the `--no-archive` flag + `RELAYBURN_ARCHIVE` env var); `burn limits`
+   * have to opt in explicitly: `burn budget plans` wires this to `shouldUseArchive`
+   * (the `--no-archive` flag + `RELAYBURN_ARCHIVE` env var); `burn budget`
    * stays on the legacy path until it's migrated separately. See #91.
    */
   useArchive?: boolean;
 }
 
-// Shared by `burn plans` (list view) and `burn limits` (composite view) so
-// both surfaces show identical numbers.
-export async function statusForPlans(
+export async function loadPlanStatuses(args?: ParsedArgs): Promise<PlanStatus[]> {
+  const plans = await loadPlans();
+  return statusForPlans(plans, { useArchive: args ? shouldUseArchive(args) : false });
+}
+
+// Shared by `burn budget plans` (list view) and `burn budget` (composite view)
+// so both surfaces show identical numbers.
+async function statusForPlans(
   plans: Plan[],
   opts: StatusForPlansOptions = {},
 ): Promise<PlanStatus[]> {

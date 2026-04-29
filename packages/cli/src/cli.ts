@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 import { parseArgs } from './args.js';
 import { runArchive } from './commands/archive.js';
+import { runBudget } from './commands/budget.js';
 import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
 import { runContext } from './commands/context.js';
 import { runDiagnose } from './commands/diagnose.js';
 import { runIngest } from './commands/ingest.js';
-import { runLimits } from './commands/limits.js';
 import { runMcpServer } from './commands/mcp-server.js';
-import { runPlans } from './commands/plans.js';
 import { runRebuild } from './commands/rebuild.js';
 import { runWrapper } from './commands/run.js';
 import { runSummary } from './commands/summary.js';
@@ -27,8 +26,7 @@ Usage:
   burn waste         [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
   burn diagnose      [<session-id>] [--json] [--explain-drift]
-  burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
-  burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
+  burn budget        [--watch [--interval 5s]] [--json] [--no-api] [--no-forecast] [plans ...]
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
@@ -50,12 +48,12 @@ Examples:
   burn waste --patterns --since 7d
   burn diagnose <session-id>
   burn diagnose                       # per-adapter content-capture gap report
-  burn limits
-  burn limits --watch
-  burn limits --no-api
-  burn plans
-  burn plans add --provider claude --preset max
-  burn plans set-reset-day claude-max 15
+  burn budget
+  burn budget --watch
+  burn budget --no-api
+  burn budget plans
+  burn budget plans add --provider claude --preset max
+  burn budget plans set-reset-day claude-max 15
   burn context --since 30d
   burn context --kind claude-md
   burn context advise --top 3
@@ -95,10 +93,8 @@ async function main(): Promise<number> {
       return runWaste(args);
     case 'diagnose':
       return runDiagnose(args);
-    case 'limits':
-      return runLimits(args);
-    case 'plans':
-      return runPlans(args);
+    case 'budget':
+      return runBudget(args);
     case 'context':
       return runContext(args);
     case 'compare':

@@ -5,20 +5,41 @@ import * as path from 'node:path';
 
 import { summarizeFidelity } from '@relayburn/analyze';
 import type { FidelitySummary } from '@relayburn/analyze';
-import { loadPlans, queryAll } from '@relayburn/ledger';
-import type { Plan } from '@relayburn/ledger';
+import { queryAll } from '@relayburn/ledger';
 import type { TurnRecord } from '@relayburn/reader';
 
 import type { ParsedArgs } from '../args.js';
 import { formatUsd } from '../format.js';
 import { ingestAll } from '../ingest.js';
-import { statusForPlans, type PlanStatus } from './plans.js';
+import { loadPlanStatuses as defaultLoadPlanStatuses, runBudgetPlans, type PlanStatus } from './budget-plans.js';
 
 const USAGE_ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
 const ANTHROPIC_OAUTH_BETA = 'oauth-2025-04-20';
 const CACHE_TTL_MS = 30_000;
 const DEFAULT_WATCH_INTERVAL_S = 5;
 const SESSION_DURATION_MS = 5 * 60 * 60 * 1000;
+
+const BUDGET_HELP = `burn budget — quota windows, monthly plans, and local forecast
+
+Usage:
+  burn budget                         show API quota windows, plan cycles, and forecast
+  burn budget --watch [--interval 5s] refresh status until interrupted
+  burn budget --json                  emit machine-readable status
+  burn budget --no-api                skip Claude OAuth quota lookup
+  burn budget --no-forecast           skip local ledger forecast
+  burn budget plans                   list configured monthly plans
+  burn budget plans add ...           add a built-in or custom plan
+  burn budget plans remove <id>       drop a configured plan
+  burn budget plans set-reset-day <id> <day>
+
+Examples:
+  burn budget
+  burn budget --watch --interval 10s
+  burn budget --no-api
+  burn budget plans
+  burn budget plans add --provider claude --preset max
+  burn budget plans set-reset-day claude-max 15
+`;
 
 interface UsageWindow {
   percent_used: number;
@@ -65,7 +86,7 @@ export interface ForecastResult {
   fidelity: ForecastFidelity;
 }
 
-export interface LimitsDeps {
+export interface BudgetDeps {
   loadToken?: () => Promise<string | null>;
   fetchUsage?: (token: string) => Promise<UsageResponse>;
   now?: () => Date;
@@ -73,7 +94,20 @@ export interface LimitsDeps {
   loadPlanStatuses?: () => Promise<PlanStatus[]>;
 }
 
-export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promise<number> {
+export async function runBudget(args: ParsedArgs, deps: BudgetDeps = {}): Promise<number> {
+  const sub = args.positional[0];
+  if (sub === 'plans') {
+    return runBudgetPlans({ ...args, positional: args.positional.slice(1) });
+  }
+  if (args.flags['help'] !== undefined || sub === 'help' || sub === '--help' || sub === '-h') {
+    process.stdout.write(BUDGET_HELP);
+    return 0;
+  }
+  if (sub !== undefined) {
+    process.stderr.write(`burn budget: unknown subcommand "${sub}"\n\n${BUDGET_HELP}`);
+    return 2;
+  }
+
   const watchFlag = args.flags['watch'];
   const json = args.flags['json'] === true;
   const noApi = args.flags['no-api'] === true;
@@ -83,7 +117,7 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
   const fetchUsage = deps.fetchUsage ?? fetchUsageFromApi;
   const now = deps.now ?? (() => new Date());
   const loadForecast = deps.loadForecast ?? loadForecastFromLedger;
-  const loadPlanStatuses = deps.loadPlanStatuses ?? defaultLoadPlanStatuses;
+  const loadPlanStatuses = deps.loadPlanStatuses ?? (() => defaultLoadPlanStatuses());
 
   // Resolve the OAuth token once per invocation, not per render. The macOS
   // Keychain path spawns `security`, which is expensive enough that calling
@@ -93,7 +127,7 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
     token = await loadToken();
     if (!token) {
       process.stderr.write(
-        'burn limits: no Claude OAuth token found. Run `claude /login` to authenticate, ' +
+        'burn budget: no Claude OAuth token found. Run `claude /login` to authenticate, ' +
           'or set CLAUDE_CODE_OAUTH_TOKEN.\n',
       );
       return 2;
@@ -195,10 +229,13 @@ export async function runLimits(args: ParsedArgs, deps: LimitsDeps = {}): Promis
     return exitCode;
   }
 
-  const intervalMs = parseWatchInterval(watchFlag);
+  const intervalFlag = args.flags['interval'];
+  const intervalMs = parseWatchInterval(
+    typeof intervalFlag === 'string' ? intervalFlag : watchFlag,
+  );
   if (intervalMs === null) {
     process.stderr.write(
-      `burn limits: invalid --watch value: ${JSON.stringify(watchFlag)} (expected seconds, e.g. 5 or 5s)\n`,
+      `burn budget: invalid --interval value: ${JSON.stringify(intervalFlag ?? watchFlag)} (expected seconds, e.g. 5 or 5s)\n`,
     );
     return 2;
   }
@@ -521,12 +558,6 @@ async function safeBody(res: Response): Promise<string> {
   }
 }
 
-async function defaultLoadPlanStatuses(): Promise<PlanStatus[]> {
-  const plans: Plan[] = await loadPlans();
-  if (plans.length === 0) return [];
-  return statusForPlans(plans);
-}
-
 async function loadForecastFromLedger(
   windowStartMs: number,
   nowMs: number,
@@ -539,7 +570,7 @@ async function loadForecastFromLedger(
   // every ~5s stays cheap on a steady-state ledger.
   await ingestAll();
   const since = new Date(windowStartMs).toISOString();
-  // Permissive filter (#105): unlike `burn compare`, `limits` consumes the
+  // Permissive filter (#105): unlike `burn compare`, `budget` consumes the
   // entire windowed slice — partial / aggregate-only / cost-only turns still
   // contribute meaningful spend totals. We surface confidence separately
   // rather than refusing data.

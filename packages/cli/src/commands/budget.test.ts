@@ -7,12 +7,12 @@ import { emptyFidelitySummary } from '@relayburn/analyze';
 import {
   deriveForecastFidelity,
   makeCachingFetcher,
-  runLimits,
+  runBudget,
   type ForecastInput,
   type ForecastResult,
-  type LimitsDeps,
+  type BudgetDeps,
   type UsageResponse,
-} from './limits.js';
+} from './budget.js';
 import type { ParsedArgs } from '../args.js';
 
 async function captureStdout<T>(
@@ -41,6 +41,13 @@ async function captureStdout<T>(
 
 function args(flags: Record<string, string | true> = {}): ParsedArgs {
   return { flags, tags: {}, positional: [], passthrough: [] };
+}
+
+function parsed(
+  positional: string[] = [],
+  flags: Record<string, string | true> = {},
+): ParsedArgs {
+  return { flags, tags: {}, positional, passthrough: [] };
 }
 
 const FIXED_NOW = new Date('2026-04-24T12:00:00.000Z');
@@ -92,7 +99,7 @@ function highConfidence(input: ForecastInput): ForecastResult {
   };
 }
 
-function noTokenDeps(): LimitsDeps {
+function noTokenDeps(): BudgetDeps {
   return {
     loadToken: async () => null,
     fetchUsage: async () => ({}),
@@ -102,7 +109,7 @@ function noTokenDeps(): LimitsDeps {
   };
 }
 
-function tokenDeps(usage: UsageResponse, forecast: ForecastInput | null = null): LimitsDeps {
+function tokenDeps(usage: UsageResponse, forecast: ForecastInput | null = null): BudgetDeps {
   return {
     loadToken: async () => 'fake-token',
     fetchUsage: async () => usage,
@@ -112,10 +119,10 @@ function tokenDeps(usage: UsageResponse, forecast: ForecastInput | null = null):
   };
 }
 
-describe('burn limits', () => {
+describe('burn budget', () => {
   it('exits 2 with one-line guidance on stderr when token missing', async () => {
     const { result, stdout, stderr } = await captureStdout(() =>
-      runLimits(args(), noTokenDeps()),
+      runBudget(args(), noTokenDeps()),
     );
     assert.equal(result, 2);
     assert.equal(stdout, '');
@@ -131,7 +138,7 @@ describe('burn limits', () => {
       seven_day_opus: { percent_used: 8, reset_at: '2026-04-28T18:00:00.000Z' },
       extra_usage: { percent_used: 0, reset_at: '2026-04-28T18:00:00.000Z' },
     };
-    const { result, stdout } = await captureStdout(() => runLimits(args(), tokenDeps(usage)));
+    const { result, stdout } = await captureStdout(() => runBudget(args(), tokenDeps(usage)));
     assert.equal(result, 0);
     // 5-hour: reset 2h 14m from FIXED_NOW
     assert.match(stdout, /5-hour\s+34% used\s+resets in 2h 14m/);
@@ -144,7 +151,7 @@ describe('burn limits', () => {
     const usage: UsageResponse = {
       five_hour: { percent_used: 0.42, reset_at: '2026-04-24T13:00:00.000Z' },
     };
-    const { stdout } = await captureStdout(() => runLimits(args(), tokenDeps(usage)));
+    const { stdout } = await captureStdout(() => runBudget(args(), tokenDeps(usage)));
     assert.match(stdout, /5-hour\s+42% used/);
   });
 
@@ -158,7 +165,7 @@ describe('burn limits', () => {
       remainingMs: 2 * 60 * 60 * 1000, // 2h
     };
     const { result, stdout } = await captureStdout(() =>
-      runLimits(args({ json: true }), tokenDeps(usage, forecast)),
+      runBudget(args({ json: true }), tokenDeps(usage, forecast)),
     );
     assert.equal(result, 0);
     const parsed = JSON.parse(stdout);
@@ -171,7 +178,7 @@ describe('burn limits', () => {
   });
 
   it('reports api errors without crashing and exits non-zero', async () => {
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => {
         throw new Error('usage endpoint 401: unauthorized');
@@ -179,7 +186,7 @@ describe('burn limits', () => {
       now: fakeNow,
       loadForecast: async () => null,
     };
-    const { result, stdout } = await captureStdout(() => runLimits(args(), deps));
+    const { result, stdout } = await captureStdout(() => runBudget(args(), deps));
     assert.equal(result, 1);
     assert.match(stdout, /api error: usage endpoint 401/);
   });
@@ -190,7 +197,7 @@ describe('burn limits', () => {
       elapsedMs: 60 * 60 * 1000, // 1h
       remainingMs: 4 * 60 * 60 * 1000, // 4h
     };
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => {
         throw new Error('should not be called when --no-api');
       },
@@ -201,7 +208,7 @@ describe('burn limits', () => {
       loadForecast: async () => highConfidence(forecast),
     };
     const { result, stdout } = await captureStdout(() =>
-      runLimits(args({ 'no-api': true }), deps),
+      runBudget(args({ 'no-api': true }), deps),
     );
     assert.equal(result, 0);
     // 60k / 60min = 1000 tok/min
@@ -215,7 +222,7 @@ describe('burn limits', () => {
       five_hour: { percent_used: 50, reset_at: '2026-04-24T13:00:00.000Z' },
     };
     let forecastCalled = false;
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => usage,
       now: fakeNow,
@@ -225,26 +232,44 @@ describe('burn limits', () => {
       },
     };
     const { result, stdout } = await captureStdout(() =>
-      runLimits(args({ 'no-forecast': true }), deps),
+      runBudget(args({ 'no-forecast': true }), deps),
     );
     assert.equal(result, 0);
     assert.equal(forecastCalled, false);
     assert.doesNotMatch(stdout, /Forecast/);
   });
 
-  it('--watch with non-numeric value exits 2', async () => {
+  it('--watch with non-numeric interval exits 2', async () => {
     const { result, stderr } = await captureStdout(() =>
-      runLimits(args({ watch: 'abc' }), tokenDeps({})),
+      runBudget(args({ watch: true, interval: 'abc' }), tokenDeps({})),
     );
     assert.equal(result, 2);
-    assert.match(stderr, /invalid --watch value/);
+    assert.match(stderr, /invalid --interval value/);
+  });
+
+  it('--help renders budget help without requiring OAuth', async () => {
+    const { result, stdout } = await captureStdout(() =>
+      runBudget(args({ help: true }), noTokenDeps()),
+    );
+    assert.equal(result, 0);
+    assert.match(stdout, /burn budget/);
+    assert.match(stdout, /burn budget plans/);
+  });
+
+  it('dispatches the nested plans help', async () => {
+    const { result, stdout } = await captureStdout(() =>
+      runBudget(parsed(['plans'], { help: true }), noTokenDeps()),
+    );
+    assert.equal(result, 0);
+    assert.match(stdout, /burn budget plans/);
+    assert.match(stdout, /set-reset-day/);
   });
 
   it('renders Monthly plan block when a plan status is provided', async () => {
     const usage: UsageResponse = {
       five_hour: { percent_used: 30, reset_at: '2026-04-24T13:00:00.000Z' },
     };
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => usage,
       now: fakeNow,
@@ -274,7 +299,7 @@ describe('burn limits', () => {
         },
       ],
     };
-    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    const { stdout } = await captureStdout(() => runBudget(args(), deps));
     assert.match(stdout, /Monthly plan \(Claude Max\):/);
     // 87.42 / 200 = 43.71% → rounds to 44%
     assert.match(stdout, /Spent:\s+\$87\.42 \/ \$200\.00\s+\(44%\)/);
@@ -284,7 +309,7 @@ describe('burn limits', () => {
   });
 
   it('annotates plan projection as "(limited data)" when daysElapsed < 7', async () => {
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => ({}),
       now: fakeNow,
@@ -314,7 +339,7 @@ describe('burn limits', () => {
         },
       ],
     };
-    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    const { stdout } = await captureStdout(() => runBudget(args(), deps));
     assert.match(stdout, /\(limited data\)/);
   });
 
@@ -325,7 +350,7 @@ describe('burn limits', () => {
     const usage: UsageResponse = {
       five_hour: { percent_used: 30, reset_at: '2026-04-24T13:00:00.000Z' },
     };
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => usage,
       now: fakeNow,
@@ -334,7 +359,7 @@ describe('burn limits', () => {
         throw new Error('invalid JSON in /home/u/.relayburn/plans.json: Unexpected token');
       },
     };
-    const { result, stdout, stderr } = await captureStdout(() => runLimits(args(), deps));
+    const { result, stdout, stderr } = await captureStdout(() => runBudget(args(), deps));
     assert.equal(result, 0);
     assert.match(stderr, /could not load plans.*invalid JSON/);
     // 5-hour quota block must still render — the OAuth fetch isn't gated on plans.
@@ -343,7 +368,7 @@ describe('burn limits', () => {
   });
 
   it('emits plan statuses in --json output', async () => {
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => ({}),
       now: fakeNow,
@@ -373,7 +398,7 @@ describe('burn limits', () => {
         },
       ],
     };
-    const { stdout } = await captureStdout(() => runLimits(args({ json: true }), deps));
+    const { stdout } = await captureStdout(() => runBudget(args({ json: true }), deps));
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.plans.length, 1);
     assert.equal(parsed.plans[0].id, 'claude-pro');
@@ -399,14 +424,14 @@ describe('burn limits', () => {
         { fidelity: FULL_FIDELITY },
       ]),
     };
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => usage,
       now: fakeNow,
       loadForecast: async () => result,
       loadPlanStatuses: async () => [],
     };
-    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    const { stdout } = await captureStdout(() => runBudget(args(), deps));
     assert.match(stdout, /burn rate/);
     assert.doesNotMatch(stdout, /low-confidence/);
   });
@@ -431,14 +456,14 @@ describe('burn limits', () => {
         { fidelity: PARTIAL_FIDELITY },
       ]),
     };
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => usage,
       now: fakeNow,
       loadForecast: async () => result,
       loadPlanStatuses: async () => [],
     };
-    const { stdout } = await captureStdout(() => runLimits(args(), deps));
+    const { stdout } = await captureStdout(() => runBudget(args(), deps));
     // Forecast is still rendered with both burn rate and projection.
     assert.match(stdout, /burn rate 5\.0k tok\/min/);
     assert.match(stdout, /projected 80% at reset/);
@@ -467,14 +492,14 @@ describe('burn limits', () => {
         { fidelity: PARTIAL_FIDELITY },
       ]),
     };
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => usage,
       now: fakeNow,
       loadForecast: async () => result,
       loadPlanStatuses: async () => [],
     };
-    const { stdout } = await captureStdout(() => runLimits(args({ json: true }), deps));
+    const { stdout } = await captureStdout(() => runBudget(args({ json: true }), deps));
     const parsed = JSON.parse(stdout);
     assert.ok(parsed.forecast.fidelity, 'forecast.fidelity present');
     assert.equal(parsed.forecast.fidelity.confidence, 'low');
@@ -494,7 +519,7 @@ describe('burn limits', () => {
       remainingMs: 2 * 60 * 60 * 1000,
     };
     const { stdout } = await captureStdout(() =>
-      runLimits(args({ json: true }), tokenDeps(usage, forecast)),
+      runBudget(args({ json: true }), tokenDeps(usage, forecast)),
     );
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.forecast.fidelity.confidence, 'high');
@@ -505,7 +530,7 @@ describe('burn limits', () => {
   it('--watch re-evaluates confidence each tick (low → high as full turns arrive)', async () => {
     // Acceptance criteria #105: --watch re-evaluates confidence on each tick.
     // We exercise renderOnce indirectly by toggling the loadForecast result
-    // between calls and checking that runLimits picks up the change. (We
+    // between calls and checking that runBudget picks up the change. (We
     // don't actually run the watch loop here — the loop just calls
     // renderOnce repeatedly, which is what we test below.)
     const usage: UsageResponse = {
@@ -517,7 +542,7 @@ describe('burn limits', () => {
       remainingMs: 2 * 60 * 60 * 1000,
     };
     let tick = 0;
-    const deps: LimitsDeps = {
+    const deps: BudgetDeps = {
       loadToken: async () => 'tok',
       fetchUsage: async () => usage,
       now: fakeNow,
@@ -530,9 +555,9 @@ describe('burn limits', () => {
       },
       loadPlanStatuses: async () => [],
     };
-    const { stdout: first } = await captureStdout(() => runLimits(args(), deps));
+    const { stdout: first } = await captureStdout(() => runBudget(args(), deps));
     assert.match(first, /low-confidence/);
-    const { stdout: second } = await captureStdout(() => runLimits(args(), deps));
+    const { stdout: second } = await captureStdout(() => runBudget(args(), deps));
     assert.doesNotMatch(second, /low-confidence/);
   });
 
@@ -551,7 +576,7 @@ describe('burn limits', () => {
       remainingMs: 108 * 1000,
     };
     const { stdout } = await captureStdout(() =>
-      runLimits(args(), tokenDeps(usage, forecast)),
+      runBudget(args(), tokenDeps(usage, forecast)),
     );
     assert.match(stdout, /projected 1% at reset/);
     assert.doesNotMatch(stdout, /projected (10|100|101)% at reset/);
