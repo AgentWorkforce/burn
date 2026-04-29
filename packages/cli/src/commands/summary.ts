@@ -30,6 +30,7 @@ import type { EnrichedTurn } from '@relayburn/ledger';
 import type {
   ContentRecord,
   Coverage,
+  RelationshipType,
   SessionRelationshipRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
@@ -57,22 +58,47 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
 
   const subagentTreeFlag = args.flags['subagent-tree'];
   const subagentTypeFlag = args.flags['by-subagent-type'] === true;
+  const relationshipFlag = args.flags['by-relationship'];
+  const byRelationship = relationshipFlag !== undefined;
   const byProvider = args.flags['by-provider'] === true;
   const byTool = args.flags['by-tool'] === true;
+  if (
+    relationshipFlag !== undefined &&
+    relationshipFlag !== true &&
+    relationshipFlag !== 'subagent'
+  ) {
+    process.stderr.write('burn: --by-relationship accepts only the optional value "subagent"\n');
+    return 2;
+  }
 
   // Mode exclusivity: each "mode flag" produces its own output shape; combining
   // them silently would surprise the caller (we'd pick one and drop the rest).
   // Subagent flags already implicitly assume one-axis-at-a-time; --by-tool
   // makes that explicit.
-  if (byTool && (byProvider || subagentTypeFlag || subagentTreeFlag !== undefined)) {
+  if (
+    byTool &&
+    (byProvider || subagentTypeFlag || byRelationship || subagentTreeFlag !== undefined)
+  ) {
     process.stderr.write(
-      'burn: --by-tool cannot be combined with --by-provider/--by-subagent-type/--subagent-tree\n',
+      'burn: --by-tool cannot be combined with --by-provider/--by-subagent-type/--by-relationship/--subagent-tree\n',
     );
     return 2;
   }
-  if (byProvider && (subagentTypeFlag || subagentTreeFlag !== undefined)) {
+  if (byProvider && (subagentTypeFlag || byRelationship || subagentTreeFlag !== undefined)) {
     process.stderr.write(
-      'burn: --by-provider cannot be combined with --by-subagent-type/--subagent-tree\n',
+      'burn: --by-provider cannot be combined with --by-subagent-type/--by-relationship/--subagent-tree\n',
+    );
+    return 2;
+  }
+  if (subagentTypeFlag && (byRelationship || subagentTreeFlag !== undefined)) {
+    process.stderr.write(
+      'burn: --by-subagent-type cannot be combined with --by-relationship/--subagent-tree\n',
+    );
+    return 2;
+  }
+  if (byRelationship && subagentTreeFlag !== undefined) {
+    process.stderr.write(
+      'burn: --by-relationship cannot be combined with --subagent-tree\n',
     );
     return 2;
   }
@@ -91,6 +117,9 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   }
   if (subagentTypeFlag) {
     return renderSubagentTypeMode(args, turns, pricing);
+  }
+  if (byRelationship) {
+    return renderRelationshipMode(args, turns, pricing, q, relationshipFlag);
   }
   if (byTool) {
     return renderByToolMode(args, ingestReport, turns, pricing);
@@ -654,6 +683,104 @@ function renderSubagentTypeMode(
   return 0;
 }
 
+async function renderRelationshipMode(
+  args: ParsedArgs,
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+  q: Query,
+  flag: string | true,
+): Promise<number> {
+  const relationships = await queryRelationships(relationshipQueryForTurnSlice(q));
+  const matches = matchRelationshipsToTurns(relationships, turns, pricing);
+  const stats = aggregateRelationshipStats(matches);
+
+  if (flag === 'subagent') {
+    return renderRelationshipSubagentMode(args, stats, matches);
+  }
+
+  if (stats.length === 0) {
+    return renderNoRelationships(args);
+  }
+
+  if (args.flags['json'] === true) {
+    process.stdout.write(JSON.stringify({ relationships: stats }, null, 2) + '\n');
+    return 0;
+  }
+
+  const out: string[] = [];
+  out.push('');
+  out.push(`relationships: ${formatInt(stats.reduce((sum, s) => sum + s.sessionCount, 0))}`);
+  out.push('');
+  const rows: string[][] = [
+    ['relationshipType', 'sessionCount', 'turnCount', 'total', 'median', 'p95', 'mean'],
+  ];
+  for (const s of stats) {
+    rows.push([
+      s.relationshipType,
+      formatInt(s.sessionCount),
+      formatInt(s.turnCount),
+      formatUsd(s.totalCost),
+      formatUsd(s.medianCost),
+      formatUsd(s.p95Cost),
+      formatUsd(s.meanCost),
+    ]);
+  }
+  out.push(table(rows));
+  out.push('');
+  process.stdout.write(out.join('\n'));
+  return 0;
+}
+
+function renderRelationshipSubagentMode(
+  args: ParsedArgs,
+  stats: RelationshipStats[],
+  matches: RelationshipMatch[],
+): number {
+  const subagentStats = aggregateRelationshipSubagentStats(matches);
+  if (subagentStats.length === 0) {
+    return renderNoRelationships(args);
+  }
+
+  if (args.flags['json'] === true) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          relationships: stats.filter((s) => s.relationshipType === 'subagent'),
+          subagentTypes: subagentStats,
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    return 0;
+  }
+
+  const out: string[] = [];
+  out.push('');
+  out.push(
+    `subagent invocations: ${formatInt(subagentStats.reduce((a, s) => a + s.invocations, 0))}`,
+  );
+  out.push('');
+  const rows: string[][] = [
+    ['subagentType', 'invocations', 'turns', 'total', 'median', 'p95', 'mean'],
+  ];
+  for (const s of subagentStats) {
+    rows.push([
+      s.subagentType,
+      formatInt(s.invocations),
+      formatInt(s.turns),
+      formatUsd(s.totalCost),
+      formatUsd(s.medianCost),
+      formatUsd(s.p95Cost),
+      formatUsd(s.meanCost),
+    ]);
+  }
+  out.push(table(rows));
+  out.push('');
+  process.stdout.write(out.join('\n'));
+  return 0;
+}
+
 function renderTree(root: SubagentTreeNode): string[] {
   const out: string[] = [];
   out.push(renderNodeLine(root, ''));
@@ -768,6 +895,15 @@ function buildPerCellFidelity(
 
 const PARTIAL_MARK = '*';
 const DASH = '—';
+const NO_RELATIONSHIPS_MESSAGE =
+  'no SessionRelationshipRecord rows found for the matched slice; ingest a session with execution-graph wiring or run `burn rebuild` once relationship backfill is available';
+
+const RELATIONSHIP_ORDER: RelationshipType[] = [
+  'root',
+  'continuation',
+  'fork',
+  'subagent',
+];
 
 function renderFidelityNotice(f: FidelitySummary): string | undefined {
   // Returns undefined when every classified turn is full fidelity *and* no
@@ -789,6 +925,24 @@ function renderFidelityNotice(f: FidelitySummary): string | undefined {
   if (f.byClass.partial > 0) parts.push(`${f.byClass.partial} partial`);
   if (f.unknown > 0) parts.push(`${f.unknown} unknown`);
   return `fidelity: ${parts.join(' / ')} (use --json for per-field coverage)`;
+}
+
+function renderNoRelationships(args: ParsedArgs): number {
+  if (args.flags['json'] === true) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          relationships: [],
+          message: NO_RELATIONSHIPS_MESSAGE,
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+  } else {
+    process.stdout.write(`${NO_RELATIONSHIPS_MESSAGE}\n`);
+  }
+  return 0;
 }
 
 /**
@@ -861,6 +1015,231 @@ function aggregateTurns(
     }
   }
   return [...byModel.values()].sort((a, b) => b.cost.total - a.cost.total);
+}
+
+function relationshipQueryForTurnSlice(q: Query): Query {
+  // Project/workflow/agent/provider filters have already been applied to the
+  // turn slice. Let matching turns, not relationship timestamps, define the
+  // slice so an old root row can still classify a recent turn in the same
+  // session.
+  const out: Query = {};
+  if (q.sessionId !== undefined) out.sessionId = q.sessionId;
+  if (q.source !== undefined) out.source = q.source;
+  return out;
+}
+
+interface RelationshipTurnIndex {
+  allBySession: Map<string, EnrichedTurn[]>;
+  mainBySession: Map<string, EnrichedTurn[]>;
+  sidechainBySession: Map<string, EnrichedTurn[]>;
+  subagentBySessionAgent: Map<string, EnrichedTurn[]>;
+}
+
+interface RelationshipMatch {
+  relationshipType: RelationshipType;
+  sessionId: string;
+  subagentType?: string;
+  turnCount: number;
+  cost: number;
+}
+
+interface RelationshipStats {
+  relationshipType: RelationshipType;
+  count: number;
+  sessionCount: number;
+  turnCount: number;
+  totalCost: number;
+  medianCost: number;
+  p95Cost: number;
+  meanCost: number;
+}
+
+interface RelationshipSubagentStats {
+  subagentType: string;
+  invocations: number;
+  turns: number;
+  totalCost: number;
+  medianCost: number;
+  p95Cost: number;
+  meanCost: number;
+}
+
+function matchRelationshipsToTurns(
+  relationships: SessionRelationshipRecord[],
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+): RelationshipMatch[] {
+  const index = buildRelationshipTurnIndex(turns);
+  const out: RelationshipMatch[] = [];
+  const seen = new Set<string>();
+  for (const r of relationships) {
+    const key = relationshipInstanceKey(r);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const matchedTurns = turnsForRelationship(r, index);
+    if (matchedTurns.length === 0) continue;
+    const match: RelationshipMatch = {
+      relationshipType: r.relationshipType,
+      sessionId: r.sessionId,
+      turnCount: matchedTurns.length,
+      cost: matchedTurns.reduce((sum, t) => sum + (costForTurn(t, pricing)?.total ?? 0), 0),
+    };
+    const subagentType = relationshipSubagentType(r, matchedTurns);
+    if (subagentType !== undefined) match.subagentType = subagentType;
+    out.push(match);
+  }
+  return out;
+}
+
+function buildRelationshipTurnIndex(turns: EnrichedTurn[]): RelationshipTurnIndex {
+  const allBySession = new Map<string, EnrichedTurn[]>();
+  const mainBySession = new Map<string, EnrichedTurn[]>();
+  const sidechainBySession = new Map<string, EnrichedTurn[]>();
+  const subagentBySessionAgent = new Map<string, EnrichedTurn[]>();
+  for (const turn of turns) {
+    pushMap(allBySession, turn.sessionId, turn);
+    if (isMainThreadTurn(turn)) pushMap(mainBySession, turn.sessionId, turn);
+    if (turn.subagent?.isSidechain) pushMap(sidechainBySession, turn.sessionId, turn);
+    const agentId = turn.subagent?.agentId;
+    if (agentId !== undefined && agentId.length > 0) {
+      pushMap(subagentBySessionAgent, sessionAgentKey(turn.sessionId, agentId), turn);
+    }
+  }
+  return { allBySession, mainBySession, sidechainBySession, subagentBySessionAgent };
+}
+
+function turnsForRelationship(
+  r: SessionRelationshipRecord,
+  index: RelationshipTurnIndex,
+): EnrichedTurn[] {
+  switch (r.relationshipType) {
+    case 'root':
+      return index.mainBySession.get(r.sessionId) ?? [];
+    case 'subagent': {
+      if (r.agentId !== undefined && r.agentId.length > 0) {
+        const direct = index.subagentBySessionAgent.get(sessionAgentKey(r.sessionId, r.agentId));
+        if (direct !== undefined && direct.length > 0) return direct;
+        // Some sources model a spawned agent as its own session and do not
+        // annotate the child turns with `subagent`. In that shape the
+        // relationship row's sessionId/agentId is the only join key.
+        if (r.sessionId === r.agentId) return index.allBySession.get(r.sessionId) ?? [];
+      }
+      const sidechain = index.sidechainBySession.get(r.sessionId);
+      if (sidechain !== undefined && sidechain.length > 0) return sidechain;
+      if (r.source === 'spawn-env') return index.allBySession.get(r.sessionId) ?? [];
+      return [];
+    }
+    case 'continuation':
+    case 'fork':
+      return index.allBySession.get(r.sessionId) ?? [];
+  }
+}
+
+function aggregateRelationshipStats(matches: RelationshipMatch[]): RelationshipStats[] {
+  const byType = new Map<RelationshipType, Map<string, { turns: number; cost: number }>>();
+  for (const match of matches) {
+    let bySession = byType.get(match.relationshipType);
+    if (!bySession) {
+      bySession = new Map();
+      byType.set(match.relationshipType, bySession);
+    }
+    const current = bySession.get(match.sessionId) ?? { turns: 0, cost: 0 };
+    current.turns += match.turnCount;
+    current.cost += match.cost;
+    bySession.set(match.sessionId, current);
+  }
+
+  const out: RelationshipStats[] = [];
+  for (const relationshipType of RELATIONSHIP_ORDER) {
+    const bySession = byType.get(relationshipType);
+    if (!bySession || bySession.size === 0) continue;
+    const costs = [...bySession.values()].map((v) => v.cost).sort((a, b) => a - b);
+    const totalCost = costs.reduce((sum, n) => sum + n, 0);
+    const sessionCount = bySession.size;
+    out.push({
+      relationshipType,
+      count: sessionCount,
+      sessionCount,
+      turnCount: [...bySession.values()].reduce((sum, v) => sum + v.turns, 0),
+      totalCost,
+      medianCost: percentile(costs, 0.5),
+      p95Cost: percentile(costs, 0.95),
+      meanCost: sessionCount > 0 ? totalCost / sessionCount : 0,
+    });
+  }
+  return out;
+}
+
+function aggregateRelationshipSubagentStats(
+  matches: RelationshipMatch[],
+): RelationshipSubagentStats[] {
+  const byType = new Map<string, { turns: number; total: number; costs: number[] }>();
+  for (const match of matches) {
+    if (match.relationshipType !== 'subagent') continue;
+    const type = match.subagentType ?? '(unknown)';
+    const current = byType.get(type) ?? { turns: 0, total: 0, costs: [] };
+    current.turns += match.turnCount;
+    current.total += match.cost;
+    current.costs.push(match.cost);
+    byType.set(type, current);
+  }
+  const out: RelationshipSubagentStats[] = [];
+  for (const [subagentType, agg] of byType) {
+    agg.costs.sort((a, b) => a - b);
+    out.push({
+      subagentType,
+      invocations: agg.costs.length,
+      turns: agg.turns,
+      totalCost: agg.total,
+      medianCost: percentile(agg.costs, 0.5),
+      p95Cost: percentile(agg.costs, 0.95),
+      meanCost: agg.costs.length > 0 ? agg.total / agg.costs.length : 0,
+    });
+  }
+  return out.sort((a, b) => b.totalCost - a.totalCost);
+}
+
+function relationshipSubagentType(
+  relationship: SessionRelationshipRecord,
+  turns: EnrichedTurn[],
+): string | undefined {
+  if (relationship.subagentType !== undefined) return relationship.subagentType;
+  for (const turn of turns) {
+    if (turn.subagent?.subagentType !== undefined) return turn.subagent.subagentType;
+  }
+  return undefined;
+}
+
+function relationshipInstanceKey(r: SessionRelationshipRecord): string {
+  return [
+    r.source,
+    r.relationshipType,
+    r.sessionId,
+    r.relatedSessionId ?? '',
+    r.agentId ?? '',
+    r.parentToolUseId ?? '',
+  ].join('\0');
+}
+
+function sessionAgentKey(sessionId: string, agentId: string): string {
+  return `${sessionId}\0${agentId}`;
+}
+
+function isMainThreadTurn(turn: EnrichedTurn): boolean {
+  const sub = turn.subagent;
+  return !sub || !sub.isSidechain || sub.agentId === turn.sessionId;
+}
+
+function pushMap<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const rank = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1));
+  return sorted[rank]!;
 }
 
 // A turn whose record predates #41 has no `coverage` map; the long-standing

@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { after, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, beforeEach, describe, it } from 'node:test';
 
 import {
   appendRelationships,
@@ -12,7 +12,12 @@ import {
   stamp,
   __resetIndexCacheForTesting,
 } from '@relayburn/ledger';
-import type { Fidelity, TurnRecord, UserTurnRecord } from '@relayburn/reader';
+import type {
+  Fidelity,
+  SessionRelationshipRecord,
+  TurnRecord,
+  UserTurnRecord,
+} from '@relayburn/reader';
 
 import { runSummary } from './summary.js';
 
@@ -49,6 +54,19 @@ function fakeUserTurn(overrides: Partial<UserTurnRecord> = {}): UserTurnRecord {
     precedingMessageId: 'msg-1',
     followingMessageId: 'msg-2',
     blocks: [],
+    ...overrides,
+  };
+}
+
+function fakeRelationship(
+  overrides: Partial<SessionRelationshipRecord> = {},
+): SessionRelationshipRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId: 's-1',
+    relationshipType: 'root',
+    ts: '2026-04-20T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -259,6 +277,315 @@ describe('burn summary archive integration (#82)', () => {
       return idx >= 0 ? s.slice(idx) : s;
     };
     assert.equal(stripPreamble(archiveOut.stdout), stripPreamble(ledgerOut.stdout));
+  });
+});
+
+describe('burn summary --by-relationship (#114)', () => {
+  let tmpHome: string;
+  let tmpRelay: string;
+  const originalHome = process.env['HOME'];
+  const originalRelay = process.env['RELAYBURN_HOME'];
+  const originalArchive = process.env['RELAYBURN_ARCHIVE'];
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-summary-rel-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-summary-rel-relay-'));
+    process.env['HOME'] = tmpHome;
+    process.env['RELAYBURN_HOME'] = tmpRelay;
+    process.env['RELAYBURN_ARCHIVE'] = '0';
+    __resetIndexCacheForTesting();
+  });
+
+  afterEach(async () => {
+    await rm(tmpHome, { recursive: true, force: true });
+    await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  after(async () => {
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
+    else delete process.env['RELAYBURN_HOME'];
+    if (originalArchive !== undefined) process.env['RELAYBURN_ARCHIVE'] = originalArchive;
+    else delete process.env['RELAYBURN_ARCHIVE'];
+  });
+
+  it('renders a relationship table for all four relationship types', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 'rel-root', messageId: 'rel-root-1' }),
+      fakeTurn({
+        sessionId: 'rel-root',
+        messageId: 'rel-sub-1',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+        subagent: {
+          isSidechain: true,
+          agentId: 'agent-explore',
+          parentAgentId: 'rel-root',
+          subagentType: 'Explore',
+        },
+      }),
+      fakeTurn({
+        sessionId: 'rel-cont',
+        messageId: 'rel-cont-1',
+        ts: '2026-04-20T00:02:00.000Z',
+      }),
+      fakeTurn({
+        sessionId: 'rel-fork',
+        messageId: 'rel-fork-1',
+        ts: '2026-04-20T00:03:00.000Z',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({ sessionId: 'rel-root', relationshipType: 'root' }),
+      fakeRelationship({
+        sessionId: 'rel-root',
+        relationshipType: 'subagent',
+        agentId: 'agent-explore',
+        relatedSessionId: 'rel-root',
+        subagentType: 'Explore',
+      }),
+      fakeRelationship({
+        sessionId: 'rel-cont',
+        relationshipType: 'continuation',
+        relatedSessionId: 'rel-parent',
+      }),
+      fakeRelationship({
+        sessionId: 'rel-fork',
+        relationshipType: 'fork',
+        relatedSessionId: 'rel-source',
+        sourceSessionId: 'rel-source',
+      }),
+    ]);
+
+    const out = await captureSummary({ 'by-relationship': true });
+    assert.equal(out.code, 0);
+    assert.match(
+      out.stdout,
+      /relationshipType\s+sessionCount\s+turnCount\s+total\s+median\s+p95\s+mean/,
+    );
+    assert.match(out.stdout, /root\s+1\s+1\s+\$/);
+    assert.match(out.stdout, /continuation\s+1\s+1\s+\$/);
+    assert.match(out.stdout, /fork\s+1\s+1\s+\$/);
+    assert.match(out.stdout, /subagent\s+1\s+1\s+\$/);
+  });
+
+  it('--json emits a stable relationships block', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 'rel-json-root', messageId: 'rel-json-root-1' }),
+      fakeTurn({
+        sessionId: 'rel-json-cont',
+        messageId: 'rel-json-cont-1',
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({ sessionId: 'rel-json-root', relationshipType: 'root' }),
+      fakeRelationship({
+        sessionId: 'rel-json-cont',
+        relationshipType: 'continuation',
+        relatedSessionId: 'rel-json-parent',
+      }),
+    ]);
+
+    const out = await captureSummary({ 'by-relationship': true, json: true });
+    assert.equal(out.code, 0);
+    interface Payload {
+      relationships: Array<{
+        relationshipType: string;
+        count: number;
+        sessionCount: number;
+        turnCount: number;
+        totalCost: number;
+        medianCost: number;
+        p95Cost: number;
+        meanCost: number;
+      }>;
+    }
+    const payload = JSON.parse(out.stdout) as Payload;
+    assert.deepEqual(
+      payload.relationships.map((r) => r.relationshipType),
+      ['root', 'continuation'],
+    );
+    assert.equal(payload.relationships[0]!.count, 1);
+    assert.equal(payload.relationships[0]!.sessionCount, 1);
+    assert.equal(payload.relationships[0]!.turnCount, 1);
+    assert.equal(typeof payload.relationships[0]!.totalCost, 'number');
+    assert.equal(typeof payload.relationships[0]!.medianCost, 'number');
+    assert.equal(typeof payload.relationships[0]!.p95Cost, 'number');
+    assert.equal(typeof payload.relationships[0]!.meanCost, 'number');
+  });
+
+  it('can aggregate a subagent-only slice', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'rel-subonly',
+        messageId: 'rel-subonly-1',
+        subagent: {
+          isSidechain: true,
+          agentId: 'agent-review',
+          parentAgentId: 'rel-subonly',
+          subagentType: 'code-reviewer',
+        },
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({
+        source: 'native-claude',
+        sessionId: 'rel-subonly',
+        relationshipType: 'subagent',
+        agentId: 'agent-review',
+        relatedSessionId: 'rel-subonly',
+        subagentType: 'code-reviewer',
+      }),
+    ]);
+
+    const out = await captureSummary({ 'by-relationship': true, json: true });
+    assert.equal(out.code, 0);
+    const payload = JSON.parse(out.stdout) as {
+      relationships: Array<{
+        relationshipType: string;
+        count: number;
+        sessionCount: number;
+        turnCount: number;
+        totalCost: number;
+      }>;
+    };
+    assert.equal(payload.relationships.length, 1);
+    assert.equal(payload.relationships[0]!.relationshipType, 'subagent');
+    assert.equal(payload.relationships[0]!.count, 1);
+    assert.equal(payload.relationships[0]!.sessionCount, 1);
+    assert.equal(payload.relationships[0]!.turnCount, 1);
+    assert.equal(typeof payload.relationships[0]!.totalCost, 'number');
+  });
+
+  it('joins spawn-env child-session relationships to turns without subagent metadata', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'rel-spawn-child',
+        messageId: 'rel-spawn-child-1',
+        source: 'codex',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({
+        source: 'spawn-env',
+        sessionId: 'rel-spawn-child',
+        relationshipType: 'subagent',
+        relatedSessionId: 'rel-spawn-parent',
+        agentId: 'agent-spawn-child',
+        subagentType: 'worker',
+      }),
+    ]);
+
+    const out = await captureSummary({ 'by-relationship': 'subagent', json: true });
+    assert.equal(out.code, 0);
+    const payload = JSON.parse(out.stdout) as {
+      relationships: Array<{ relationshipType: string; turnCount: number }>;
+      subagentTypes: Array<{
+        subagentType: string;
+        invocations: number;
+        turns: number;
+        totalCost: number;
+        medianCost: number;
+        p95Cost: number;
+        meanCost: number;
+      }>;
+    };
+    assert.equal(payload.relationships[0]!.relationshipType, 'subagent');
+    assert.equal(payload.relationships[0]!.turnCount, 1);
+    assert.deepEqual(payload.subagentTypes, [
+      {
+        subagentType: 'worker',
+        invocations: 1,
+        turns: 1,
+        totalCost: payload.subagentTypes[0]!.totalCost,
+        medianCost: payload.subagentTypes[0]!.medianCost,
+        p95Cost: payload.subagentTypes[0]!.p95Cost,
+        meanCost: payload.subagentTypes[0]!.meanCost,
+      },
+    ]);
+  });
+
+  it('--by-relationship=subagent renders the subagent type breakdown', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'rel-types',
+        messageId: 'rel-types-1',
+        subagent: {
+          isSidechain: true,
+          agentId: 'agent-explore-1',
+          parentAgentId: 'rel-types',
+          subagentType: 'Explore',
+        },
+      }),
+      fakeTurn({
+        sessionId: 'rel-types',
+        messageId: 'rel-types-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+        subagent: {
+          isSidechain: true,
+          agentId: 'agent-explore-2',
+          parentAgentId: 'rel-types',
+          subagentType: 'Explore',
+        },
+      }),
+      fakeTurn({
+        sessionId: 'rel-types',
+        messageId: 'rel-types-3',
+        turnIndex: 2,
+        ts: '2026-04-20T00:02:00.000Z',
+        subagent: {
+          isSidechain: true,
+          agentId: 'agent-review-1',
+          parentAgentId: 'rel-types',
+          subagentType: 'code-reviewer',
+        },
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({
+        source: 'native-claude',
+        sessionId: 'rel-types',
+        relationshipType: 'subagent',
+        agentId: 'agent-explore-1',
+        relatedSessionId: 'rel-types',
+        subagentType: 'Explore',
+      }),
+      fakeRelationship({
+        source: 'native-claude',
+        sessionId: 'rel-types',
+        relationshipType: 'subagent',
+        agentId: 'agent-explore-2',
+        relatedSessionId: 'rel-types',
+        subagentType: 'Explore',
+      }),
+      fakeRelationship({
+        source: 'native-claude',
+        sessionId: 'rel-types',
+        relationshipType: 'subagent',
+        agentId: 'agent-review-1',
+        relatedSessionId: 'rel-types',
+        subagentType: 'code-reviewer',
+      }),
+    ]);
+
+    const out = await captureSummary({ 'by-relationship': 'subagent' });
+    assert.equal(out.code, 0);
+    assert.match(
+      out.stdout,
+      /subagentType\s+invocations\s+turns\s+total\s+median\s+p95\s+mean/,
+    );
+    assert.match(out.stdout, /Explore\s+2\s+2\s+\$/);
+    assert.match(out.stdout, /code-reviewer\s+1\s+1\s+\$/);
+  });
+
+  it('prints a clear message when no relationship rows match the slice', async () => {
+    await appendTurns([fakeTurn({ sessionId: 'rel-empty', messageId: 'rel-empty-1' })]);
+    const out = await captureSummary({ 'by-relationship': true });
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /no SessionRelationshipRecord rows found for the matched slice/);
   });
 });
 
@@ -653,7 +980,7 @@ describe('burn summary per-cell fidelity (#136)', () => {
     assert.equal(out.code, 2);
     assert.match(
       out.stderr,
-      /--by-tool cannot be combined with --by-provider\/--by-subagent-type\/--subagent-tree/,
+      /--by-tool cannot be combined with --by-provider\/--by-subagent-type\/--by-relationship\/--subagent-tree/,
     );
   });
 
@@ -662,14 +989,14 @@ describe('burn summary per-cell fidelity (#136)', () => {
     assert.equal(byType.code, 2);
     assert.match(
       byType.stderr,
-      /--by-provider cannot be combined with --by-subagent-type\/--subagent-tree/,
+      /--by-provider cannot be combined with --by-subagent-type\/--by-relationship\/--subagent-tree/,
     );
 
     const tree = await captureSummary({ 'by-provider': true, 'subagent-tree': 's-1' });
     assert.equal(tree.code, 2);
     assert.match(
       tree.stderr,
-      /--by-provider cannot be combined with --by-subagent-type\/--subagent-tree/,
+      /--by-provider cannot be combined with --by-subagent-type\/--by-relationship\/--subagent-tree/,
     );
   });
 
