@@ -260,6 +260,7 @@ describe('findings — findingsFromPatterns rolls up the full PatternsResult', (
       sessionId: SESSION,
       retryLoopCount: 1,
       failureRunCount: 1,
+      cancellationRunCount: 0,
       consecutiveFailureMax: 3,
       compactionCount: 1,
       editRevertCount: 1,
@@ -272,6 +273,7 @@ describe('findings — findingsFromPatterns rolls up the full PatternsResult', (
     };
     const result: PatternsResult = {
       retryLoops: [baseRetryLoop],
+      cancelledRuns: [],
       failureRuns: [
         {
           sessionId: SESSION,

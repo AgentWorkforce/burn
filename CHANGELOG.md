@@ -8,6 +8,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
+- `burn waste --patterns` now bases retry and failure findings on persisted tool-result chronology when available, while preserving legacy fallback behavior.
 - Spawn-env and native sidechain attribution now share session relationship records, and `burn diagnose --explain-drift` surfaces sessions where they disagree.
 - Provider-aware CLI rendering now uses shared analyze helpers for effective-provider resolution and aggregation.
 - Per-tool cost attribution now uses persisted user-turn block sizes in summary and waste reports, with rebuild backfill for historical sessions.

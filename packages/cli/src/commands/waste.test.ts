@@ -10,7 +10,7 @@ import type {
   WasteResult,
 } from '@relayburn/analyze';
 import type { EnrichedTurn } from '@relayburn/ledger';
-import type { Coverage, Fidelity, SourceKind } from '@relayburn/reader';
+import type { Coverage, Fidelity, SourceKind, ToolResultEventRecord } from '@relayburn/reader';
 
 import {
   ATTRIBUTION_REQUIRED,
@@ -268,6 +268,22 @@ function makeTurn(
   };
 }
 
+function makeToolResultEvent(
+  overrides: Partial<ToolResultEventRecord> & {
+    sessionId: string;
+    toolUseId: string;
+    eventIndex: number;
+    status: ToolResultEventRecord['status'];
+  },
+): ToolResultEventRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    eventSource: 'tool_result',
+    ...overrides,
+  };
+}
+
 function args(flags: Record<string, string | true> = {}): ParsedArgs {
   return { flags, tags: {}, positional: [], passthrough: [] };
 }
@@ -424,15 +440,10 @@ describe('describeExcluded / source clauses (#100)', () => {
 });
 
 describe('PATTERN_REQUIRED prerequisites (#100)', () => {
-  it('matches the spec: retries/failures need tool-result events; reverts needs raw content', () => {
-    assert.deepEqual([...PATTERN_REQUIRED.retries].sort(), [
-      'hasToolCalls',
-      'hasToolResultEvents',
-    ]);
-    assert.deepEqual([...PATTERN_REQUIRED.failures].sort(), [
-      'hasToolCalls',
-      'hasToolResultEvents',
-    ]);
+  it('matches the spec: retries/failures can fall back to tool-call errors; reverts needs raw content', () => {
+    assert.deepEqual([...PATTERN_REQUIRED.retries].sort(), ['hasToolCalls']);
+    assert.deepEqual([...PATTERN_REQUIRED.failures].sort(), ['hasToolCalls']);
+    assert.deepEqual([...PATTERN_REQUIRED.cancellations].sort(), ['hasToolCalls']);
     assert.deepEqual([...PATTERN_REQUIRED.reverts].sort(), [
       'hasRawContent',
       'hasToolCalls',
@@ -450,8 +461,10 @@ describe('resolvePatternSelection', () => {
 
   it('returns all detectors when the flag is bare (true)', () => {
     const set = resolvePatternSelection(true);
-    // 8 inherited + ghost-surface (#166) + tool-output-bloat (#168) = 10.
-    assert.equal(set.size, 10);
+    // 8 inherited + cancellations (#113) + ghost-surface (#166) +
+    // tool-output-bloat (#168) = 11.
+    assert.equal(set.size, 11);
+    assert.ok(set.has('cancellations'));
     assert.ok(set.has('ghost-surface'));
     assert.ok(set.has('tool-output-bloat'));
   });
@@ -640,8 +653,8 @@ describe('runPatternsMode — fidelity refusal (#100)', () => {
     assert.equal(result, 2);
     assert.equal(stdout, '');
     assert.match(stderr, /burn waste --patterns: no selected detectors can run/);
-    assert.match(stderr, /retries: 1\/1 turns lack tool-call records \+ tool-result events/);
-    assert.match(stderr, /failures: 1\/1 turns lack tool-call records \+ tool-result events/);
+    assert.match(stderr, /retries: 1\/1 turns lack tool-call records/);
+    assert.match(stderr, /failures: 1\/1 turns lack tool-call records/);
     assert.match(stderr, /codex/);
   });
 
@@ -695,7 +708,7 @@ describe('runPatternsMode — fidelity refusal (#100)', () => {
       (d: { kind: string }) => d.kind === 'retries',
     );
     assert.ok(retries, 'retries detector reported');
-    assert.deepEqual(retries.required.sort(), ['hasToolCalls', 'hasToolResultEvents']);
+    assert.deepEqual(retries.required.sort(), ['hasToolCalls']);
     assert.equal(retries.refused, true);
     assert.equal(retries.analyzed, 0);
     assert.equal(retries.excluded, 1);
@@ -707,10 +720,10 @@ describe('runPatternsMode — fidelity refusal (#100)', () => {
 describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
   it('names the missing coverage flag per detector when a source is excluded', async () => {
     const pricing = await loadBuiltinPricing();
-    // Three claude turns with full fidelity; two codex turns with partial
-    // fidelity (no tool-result events). Selecting --patterns retries,failures
-    // should analyze only the claude turns and emit a per-detector notice
-    // naming the missing prereq.
+    // Three claude turns with full fidelity; two codex turns without
+    // tool-call records. Selecting --patterns retries,failures should analyze
+    // only the claude turns and emit a per-detector notice naming the missing
+    // prereq.
     const turns: EnrichedTurn[] = [];
     for (let i = 0; i < 3; i++) {
       turns.push(
@@ -730,7 +743,10 @@ describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
           messageId: `b${i}`,
           turnIndex: i,
           source: 'codex',
-          fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+          fidelity: fidelityWith('partial', 'per-turn', {
+            hasToolCalls: false,
+            hasToolResultEvents: false,
+          }),
         }),
       );
     }
@@ -741,9 +757,9 @@ describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
     assert.equal(result, 0);
     assert.equal(stderr, '');
     // Per-detector lines should mention the missing prereq + source.
-    assert.match(stdout, /retries: analyzed 3 of 5 turns; 2 excluded \(needs tool-call records \+ tool-result events;/);
-    assert.match(stdout, /failures: analyzed 3 of 5 turns; 2 excluded \(needs tool-call records \+ tool-result events;/);
-    assert.match(stdout, /missing tool-result events/);
+    assert.match(stdout, /retries: analyzed 3 of 5 turns; 2 excluded \(needs tool-call records;/);
+    assert.match(stdout, /failures: analyzed 3 of 5 turns; 2 excluded \(needs tool-call records;/);
+    assert.match(stdout, /missing tool-call records/);
     assert.match(stdout, /\(codex\)/);
   });
 
@@ -762,7 +778,10 @@ describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
         messageId: 'b1',
         turnIndex: 0,
         source: 'codex',
-        fidelity: fidelityWith('partial', 'per-turn', { hasToolResultEvents: false }),
+        fidelity: fidelityWith('partial', 'per-turn', {
+          hasToolCalls: false,
+          hasToolResultEvents: false,
+        }),
       }),
     ];
     const selected = new Set(['retries', 'failures', 'reverts'] as const);
@@ -778,15 +797,15 @@ describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
       (d: { kind: string }) => d.kind === 'reverts',
     );
     assert.ok(retries && reverts);
-    assert.deepEqual(retries.required.sort(), ['hasToolCalls', 'hasToolResultEvents']);
+    assert.deepEqual(retries.required.sort(), ['hasToolCalls']);
     assert.deepEqual(reverts.required.sort(), ['hasRawContent', 'hasToolCalls']);
-    // The codex turn here passes reverts (it has hasRawContent + hasToolCalls
-    // by default in fullCoverage()) but fails retries.
+    // The codex turn here lacks tool-call records, so it fails both retries
+    // and reverts.
     assert.equal(retries.excluded, 1);
     assert.equal(retries.excludedBySource[0].source, 'codex');
     assert.deepEqual(
       retries.excludedBySource[0].missingCoverage.sort(),
-      ['hasToolResultEvents'],
+      ['hasToolCalls'],
     );
   });
 
@@ -944,5 +963,92 @@ describe('runPatternsMode — per-detector partial exclusion (#100)', () => {
     );
     assert.equal(compaction.refused, false);
     assert.equal(compaction.analyzed, 3);
+  });
+
+  it('JSON mode annotates graph-backed retry findings with eventSource (#113)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'claude-code',
+        toolCalls: [{ id: 'u0', name: 'Bash', argsHash: 'same' }],
+      }),
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        source: 'claude-code',
+        toolCalls: [{ id: 'u1', name: 'Bash', argsHash: 'same' }],
+      }),
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 2,
+        source: 'claude-code',
+        toolCalls: [{ id: 'u2', name: 'Bash', argsHash: 'same' }],
+      }),
+    ];
+    const toolResultEvents = [
+      makeToolResultEvent({ sessionId: 's', toolUseId: 'u0', eventIndex: 0, status: 'errored' }),
+      makeToolResultEvent({ sessionId: 's', toolUseId: 'u1', eventIndex: 1, status: 'errored' }),
+      makeToolResultEvent({ sessionId: 's', toolUseId: 'u2', eventIndex: 2, status: 'errored' }),
+    ];
+    const selected = new Set(['retries'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected, {
+        toolResultEvents,
+      }),
+    );
+
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.retryLoops[0].eventSource, 'tool_result');
+    assert.equal(payload.findings[0].eventSource, 'tool_result');
+  });
+
+  it('JSON mode separates cancelled graph events from retry/failure output (#113)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'claude-code',
+        toolCalls: [{ id: 'u0', name: 'Bash', argsHash: 'same', isError: true }],
+      }),
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm1',
+        turnIndex: 1,
+        source: 'claude-code',
+        toolCalls: [{ id: 'u1', name: 'Bash', argsHash: 'same', isError: true }],
+      }),
+      makeTurn({
+        sessionId: 's',
+        messageId: 'm2',
+        turnIndex: 2,
+        source: 'claude-code',
+        toolCalls: [{ id: 'u2', name: 'Bash', argsHash: 'same', isError: true }],
+      }),
+    ];
+    const toolResultEvents = [
+      makeToolResultEvent({ sessionId: 's', toolUseId: 'u0', eventIndex: 0, status: 'cancelled' }),
+      makeToolResultEvent({ sessionId: 's', toolUseId: 'u1', eventIndex: 1, status: 'cancelled' }),
+      makeToolResultEvent({ sessionId: 's', toolUseId: 'u2', eventIndex: 2, status: 'cancelled' }),
+    ];
+    const selected = new Set(['retries', 'failures'] as const);
+    const { stdout } = await captureStdio(() =>
+      runPatternsMode(args({ json: true }), turns, pricing, [], selected, {
+        toolResultEvents,
+      }),
+    );
+
+    const payload = JSON.parse(stdout);
+    assert.deepEqual(payload.retryLoops, []);
+    assert.deepEqual(payload.failureRuns, []);
+    assert.equal(payload.cancelledRuns.length, 1);
+    assert.equal(payload.cancelledRuns[0].eventSource, 'tool_result');
+    assert.equal(payload.findings[0].kind, 'cancellation-run');
   });
 });

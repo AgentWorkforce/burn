@@ -3,6 +3,7 @@ import {
   aggregateByFile,
   aggregateBySubagent,
   attributeWaste,
+  cancellationRunToFinding,
   compactionLossToFinding,
   detectGhostSurface,
   detectPatterns,
@@ -57,7 +58,7 @@ import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -207,7 +208,7 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
     const compactions = selected.has('compaction')
       ? (await queryCompactions(q)).filter((c) => sessionIds.has(c.sessionId))
       : [];
-    return runPatternsMode(args, turns, pricing, compactions, selected);
+    return runPatternsMode(args, turns, pricing, compactions, selected, { query: q });
   }
 
   return runWasteAttribution(args, turns, pricing);
@@ -562,8 +563,9 @@ export const PATTERN_REQUIRED: Record<
   Exclude<PatternKind, 'compaction' | 'ghost-surface' | 'tool-output-bloat'>,
   ReadonlyArray<keyof Coverage>
 > = {
-  retries: ['hasToolCalls', 'hasToolResultEvents'],
-  failures: ['hasToolCalls', 'hasToolResultEvents'],
+  retries: ['hasToolCalls'],
+  failures: ['hasToolCalls'],
+  cancellations: ['hasToolCalls'],
   reverts: ['hasToolCalls', 'hasRawContent'],
   // Edit-heavy only needs the tool-call stream (counts of read vs edit).
   // tool_result is not consulted, so `hasToolResultEvents` isn't required.
@@ -589,12 +591,20 @@ interface PatternDetectorCoverage {
   refused: boolean;
 }
 
+export interface PatternsModeDeps {
+  // Tests can inject a fixture slice; production loads from the ledger using
+  // `query` and then filters to the selected turn sessions.
+  toolResultEvents?: ToolResultEventRecord[];
+  query?: Query;
+}
+
 export async function runPatternsMode(
   args: ParsedArgs,
   turns: EnrichedTurn[],
   pricing: Awaited<ReturnType<typeof loadPricing>>,
   compactions: Awaited<ReturnType<typeof queryCompactions>>,
   selected: Set<PatternKind>,
+  deps: PatternsModeDeps = {},
 ): Promise<number> {
   const total = turns.length;
   const fidelityAll = summarizeFidelity(turns);
@@ -675,6 +685,7 @@ export async function runPatternsMode(
             turnsAnalyzed: 0,
             retryLoops: [],
             failureRuns: [],
+            cancelledRuns: [],
             compactions: [],
             editReverts: [],
             editHeavySessions: [],
@@ -706,6 +717,7 @@ export async function runPatternsMode(
   // Run each enabled detector on its own filtered slice.
   let retryLoops: PatternsResult['retryLoops'] = [];
   let failureRuns: PatternsResult['failureRuns'] = [];
+  let cancelledRuns: PatternsResult['cancelledRuns'] = [];
   let compactionLosses: PatternsResult['compactions'] = [];
   let editReverts: PatternsResult['editReverts'] = [];
   let skillRecallDups: PatternsResult['skillRecallDups'] = [];
@@ -733,13 +745,48 @@ export async function runPatternsMode(
     ? await loadContentBySession(perDetector, enrichableDetectors)
     : undefined;
 
+  const needToolResultEvents =
+    selected.has('retries') || selected.has('failures') || selected.has('cancellations');
+  const toolResultEvents = needToolResultEvents
+    ? (deps.toolResultEvents ?? await loadToolResultEventsForTurns(turns, deps.query))
+    : undefined;
+
   if (selected.has('retries')) {
-    const r = detectPatterns(perDetector.get('retries')!, { pricing, userTurnsBySession, contentBySession });
+    const r = detectPatterns(perDetector.get('retries')!, {
+      pricing,
+      userTurnsBySession,
+      contentBySession,
+      toolResultEvents,
+    });
     retryLoops = r.retryLoops;
   }
   if (selected.has('failures')) {
-    const r = detectPatterns(perDetector.get('failures')!, { pricing, userTurnsBySession, contentBySession });
+    const r = detectPatterns(perDetector.get('failures')!, {
+      pricing,
+      userTurnsBySession,
+      contentBySession,
+      toolResultEvents,
+    });
     failureRuns = r.failureRuns;
+  }
+  if (selected.has('cancellations')) {
+    const r = detectPatterns(perDetector.get('cancellations')!, {
+      pricing,
+      userTurnsBySession,
+      contentBySession,
+      toolResultEvents,
+    });
+    cancelledRuns = r.cancelledRuns;
+  } else if (selected.has('retries') || selected.has('failures')) {
+    const statusTurns =
+      perDetector.get('retries') ?? perDetector.get('failures') ?? [];
+    const r = detectPatterns(statusTurns, {
+      pricing,
+      userTurnsBySession,
+      contentBySession,
+      toolResultEvents,
+    });
+    cancelledRuns = r.cancelledRuns;
   }
   if (selected.has('compaction')) {
     const r = detectPatterns(perDetector.get('compaction')!, { pricing, compactions, userTurnsBySession, contentBySession });
@@ -780,7 +827,7 @@ export async function runPatternsMode(
     // Signal B inputs: stream `tool_result_events` from the ledger. We pass
     // the full TurnRecord set so the detector can join tool_use_ids back to
     // tool names + price the carry cost at the correct model rate.
-    const toolResultEvents = await loadToolResultEventsForTurns(turns);
+    const toolResultEvents = await loadToolResultEventsForTurns(turns, deps.query);
     toolOutputBloats = detectToolOutputBloat({
       settings,
       toolResultEvents,
@@ -808,6 +855,7 @@ export async function runPatternsMode(
   sessionSummaries = buildSessionSummaries(
     retryLoops,
     failureRuns,
+    cancelledRuns,
     compactionLosses,
     editReverts,
     skillRecallDups,
@@ -830,6 +878,7 @@ export async function runPatternsMode(
   const findings: WasteFinding[] = sortFindings([
     ...retryLoops.map(retryLoopToFinding),
     ...failureRuns.map(failureRunToFinding),
+    ...cancelledRuns.map(cancellationRunToFinding),
     ...compactionLosses.map(compactionLossToFinding),
     ...editReverts.map(editRevertToFinding),
     ...editHeavySessions.map(editHeavyToFinding),
@@ -847,6 +896,7 @@ export async function runPatternsMode(
           turnsAnalyzed: analyzedCount,
           retryLoops,
           failureRuns,
+          cancelledRuns,
           compactions: compactionLosses,
           editReverts,
           skillRecallDups,
@@ -902,6 +952,11 @@ export async function runPatternsMode(
   if (selected.has('failures')) {
     out.push('Consecutive tool-failure runs (≥3 distinct tools failing in sequence)');
     out.push(renderFailureTable(failureRuns, limit));
+    out.push('');
+  }
+  if (selected.has('cancellations') || cancelledRuns.length > 0) {
+    out.push('Cancelled tool/subagent runs');
+    out.push(renderCancellationTable(cancelledRuns, limit));
     out.push('');
   }
   if (selected.has('compaction')) {
@@ -999,6 +1054,7 @@ function formatPerDetectorNotice(
 function buildSessionSummaries(
   retryLoops: PatternsResult['retryLoops'],
   failureRuns: PatternsResult['failureRuns'],
+  cancelledRuns: PatternsResult['cancelledRuns'],
   compactions: PatternsResult['compactions'],
   editReverts: PatternsResult['editReverts'],
   skillRecallDups: PatternsResult['skillRecallDups'],
@@ -1014,6 +1070,7 @@ function buildSessionSummaries(
         sessionId,
         retryLoopCount: 0,
         failureRunCount: 0,
+        cancellationRunCount: 0,
         consecutiveFailureMax: 0,
         compactionCount: 0,
         editRevertCount: 0,
@@ -1039,6 +1096,11 @@ function buildSessionSummaries(
     row.failureRunCount++;
     if (f.length > row.consecutiveFailureMax) row.consecutiveFailureMax = f.length;
     row.totalPatternCost += f.cost;
+  }
+  for (const c of cancelledRuns) {
+    const row = get(c.sessionId);
+    row.cancellationRunCount++;
+    row.totalPatternCost += c.cost;
   }
   for (const c of compactions) {
     const row = get(c.sessionId);
@@ -1106,6 +1168,25 @@ function renderFailureTable(runs: PatternsResult['failureRuns'], limit: number):
       String(r.length),
       `${r.startTurnIndex}–${r.endTurnIndex}`,
       truncate(r.toolsInvolved.join(', '), 40),
+      formatUsd(r.cost),
+    ]);
+  }
+  return table(rows);
+}
+
+function renderCancellationTable(runs: PatternsResult['cancelledRuns'], limit: number): string {
+  if (runs.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'length', 'turns', 'tools', 'source', 'cost'],
+  ];
+  const slice = [...runs].sort((a, b) => b.cost - a.cost).slice(0, limit);
+  for (const r of slice) {
+    rows.push([
+      r.sessionId.slice(0, 8),
+      String(r.length),
+      `${r.startTurnIndex}–${r.endTurnIndex}`,
+      truncate(r.toolsInvolved.join(', '), 40),
+      r.eventSource,
       formatUsd(r.cost),
     ]);
   }
@@ -1315,17 +1396,18 @@ async function loadContentBySession(
   return out;
 }
 
-// Pull every `ToolResultEventRecord` whose session appears in `turns`. Used
-// only by `tool-output-bloat`; we filter post-query rather than issuing one
-// per session so we avoid N round-trips on large slices. The ledger reader
-// streams a single pass over the JSONL file regardless.
+// Pull every `ToolResultEventRecord` whose session appears in `turns`.
+// Pattern graph detectors and tool-output-bloat both use this. We filter
+// post-query rather than issuing one per session so we avoid N round-trips on
+// large slices; the ledger reader streams a single pass over the JSONL file.
 async function loadToolResultEventsForTurns(
   turns: EnrichedTurn[],
+  q: Query = {},
 ): Promise<ToolResultEventRecord[]> {
   if (turns.length === 0) return [];
   const sessionIds = new Set<string>();
   for (const t of turns) sessionIds.add(t.sessionId);
-  const events = await queryToolResultEvents({});
+  const events = await queryToolResultEvents(q);
   return events.filter((e) => sessionIds.has(e.sessionId));
 }
 

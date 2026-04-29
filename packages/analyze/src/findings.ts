@@ -10,10 +10,12 @@
 // `WasteAction`s instead of scraping strings.
 
 import type {
+  CancellationRun,
   CompactionLoss,
   EditHeavySession,
   EditRevertCycle,
   FailureRun,
+  PatternEventSource,
   PatternsResult,
   RetryLoop,
   SkillPruningProtection,
@@ -48,8 +50,8 @@ export interface EstimatedSavings {
 
 export interface WasteFinding {
   // Stable kind tag. Matches the `--patterns` flag value where applicable
-  // (`retry-loop`, `failure-run`, `compaction-loss`, `edit-revert`,
-  // `edit-heavy`, `skill-recall-dup`, `skill-pruning-protection`,
+  // (`retry-loop`, `failure-run`, `cancellation-run`, `compaction-loss`,
+  // `edit-revert`, `edit-heavy`, `skill-recall-dup`, `skill-pruning-protection`,
   // `system-prompt-tax`). New detectors should pick a kebab-case noun.
   kind: string;
   severity: WasteSeverity;
@@ -58,6 +60,8 @@ export interface WasteFinding {
   detail: string;
   estimatedSavings: EstimatedSavings;
   actions: WasteAction[];
+  // Present for graph-backed retry/failure/cancellation findings.
+  eventSource?: PatternEventSource;
 }
 
 // Severity tiers driven by `usdPerSession`. Consistent across detectors so
@@ -90,7 +94,7 @@ export function retryLoopToFinding(loop: RetryLoop): WasteFinding {
   // append it to the title so the report is actionable at a glance ("4×
   // Bash retries" → "4× Bash retries: 'npm ERR! code ENOENT'").
   const titleSuffix = loop.errorSignature ? `: '${loop.errorSignature}'` : '';
-  return {
+  const finding: WasteFinding = {
     kind: 'retry-loop',
     severity: severityFromUsd(loop.cost),
     sessionId: loop.sessionId,
@@ -102,6 +106,8 @@ export function retryLoopToFinding(loop: RetryLoop): WasteFinding {
     estimatedSavings: { usdPerSession: loop.cost },
     actions: [diagnoseAction(loop.sessionId)],
   };
+  if (loop.eventSource !== undefined) finding.eventSource = loop.eventSource;
+  return finding;
 }
 
 export function failureRunToFinding(run: FailureRun): WasteFinding {
@@ -114,7 +120,7 @@ export function failureRunToFinding(run: FailureRun): WasteFinding {
         run.errorSignatures.map((s) => `${s.tool}='${s.firstLine}'`).join('; ') +
         '.'
       : '';
-  return {
+  const finding: WasteFinding = {
     kind: 'failure-run',
     severity: severityFromUsd(run.cost),
     sessionId: run.sessionId,
@@ -126,6 +132,24 @@ export function failureRunToFinding(run: FailureRun): WasteFinding {
       `recovering or asking for help.${sigDetail}`,
     estimatedSavings: { usdPerSession: run.cost },
     actions: [diagnoseAction(run.sessionId)],
+  };
+  if (run.eventSource !== undefined) finding.eventSource = run.eventSource;
+  return finding;
+}
+
+export function cancellationRunToFinding(run: CancellationRun): WasteFinding {
+  const toolList = run.toolsInvolved.join(', ');
+  return {
+    kind: 'cancellation-run',
+    severity: severityFromUsd(run.cost),
+    sessionId: run.sessionId,
+    title: `Cancellation run: ${run.length} cancelled tool call${run.length === 1 ? '' : 's'}`,
+    detail:
+      `Turns ${run.startTurnIndex}-${run.endTurnIndex} ended with cancelled ` +
+      `tool/subagent status (${toolList}). Cumulative turn cost ${fmtUsd(run.cost)}.`,
+    estimatedSavings: { usdPerSession: run.cost },
+    actions: [diagnoseAction(run.sessionId)],
+    eventSource: run.eventSource,
   };
 }
 
@@ -266,6 +290,7 @@ export function findingsFromPatterns(result: PatternsResult): WasteFinding[] {
   const findings: WasteFinding[] = [];
   for (const r of result.retryLoops) findings.push(retryLoopToFinding(r));
   for (const f of result.failureRuns) findings.push(failureRunToFinding(f));
+  for (const c of result.cancelledRuns) findings.push(cancellationRunToFinding(c));
   for (const c of result.compactions) findings.push(compactionLossToFinding(c));
   for (const e of result.editReverts) findings.push(editRevertToFinding(e));
   for (const e of result.editHeavySessions) findings.push(editHeavyToFinding(e));
