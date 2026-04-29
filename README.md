@@ -259,7 +259,7 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>]
-             [--by-provider | --by-tool | --by-subagent-type | --subagent-tree <session-id>]
+             [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>]
 burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>]
 burn compare <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
 burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
