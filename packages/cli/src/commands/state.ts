@@ -4,33 +4,12 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
-import {
-  archivePath,
-  contentDir,
-  cursorsPath,
-  getArchiveStatus,
-  hwmPath,
-  invalidateIndexCache,
-  isTurnLine,
-  isUserTurnLine,
-  isValidSessionId,
-  ledgerContentIndexPath,
-  ledgerHome,
-  ledgerIndexPath,
-  ledgerPath,
-  loadConfig,
-  pruneContent,
-  rebuildIndex,
-  reclassifyLedger,
-  retentionMs,
-  withLock,
-} from '@relayburn/ledger';
-
-import { ingestAll, reingestMissingContent } from '../ingest.js';
 import { formatInt } from '../format.js';
-import { walkJsonl, walkOpencodeSessions } from '../walk.js';
 import type { ParsedArgs } from '../args.js';
-import { formatArchiveStatusLines, runArchiveBuild, runArchiveVacuum } from './archive.js';
+
+type LedgerModule = typeof import('@relayburn/ledger');
+type ArchiveStatus = Awaited<ReturnType<LedgerModule['getArchiveStatus']>>;
+type FormatArchiveStatusLines = (status: ArchiveStatus) => string[];
 
 const STATE_HELP = `burn state - inspect and maintain derived ledger state
 
@@ -138,7 +117,7 @@ interface StateStatus {
     classified: number;
     missing: number;
   };
-  archive: Awaited<ReturnType<typeof getArchiveStatus>>;
+  archive: ArchiveStatus;
 }
 
 interface ContentSidecarStatus {
@@ -219,6 +198,7 @@ async function runArchiveTarget(args: ParsedArgs): Promise<number> {
     process.stderr.write(`burn state rebuild archive: --full and --vacuum cannot be combined\n`);
     return 1;
   }
+  const { runArchiveBuild, runArchiveVacuum } = await import('./archive.js');
   if (vacuum) return runArchiveVacuum(args);
   return runArchiveBuild(args, { full: args.flags['full'] === true });
 }
@@ -228,6 +208,7 @@ async function runAll(args: ParsedArgs): Promise<number> {
   await rebuildContent(lines);
   await rebuildIndexTarget(lines);
   await rebuildClassify(lines, args.flags['force'] === true);
+  const { runArchiveBuild } = await import('./archive.js');
   const flags = { ...args.flags };
   delete flags['json'];
   const archiveArgs = { ...args, flags };
@@ -259,6 +240,7 @@ async function runContentRebuild(): Promise<number> {
 }
 
 async function rebuildClassify(lines: string[], force: boolean): Promise<void> {
+  const { reclassifyLedger } = await import('@relayburn/ledger');
   const report = await reclassifyLedger({ force });
   const unchanged = report.processed - report.changed;
   lines.push(
@@ -278,6 +260,7 @@ async function rebuildClassify(lines: string[], force: boolean): Promise<void> {
 }
 
 async function rebuildContent(lines: string[]): Promise<void> {
+  const { reingestMissingContent } = await import('../ingest.js');
   const r = await reingestMissingContent();
   lines.push(
     `reingested derived content for ${formatInt(r.reingestedSessions)} sessions` +
@@ -290,6 +273,7 @@ async function rebuildContent(lines: string[]): Promise<void> {
 }
 
 async function rebuildIndexTarget(lines: string[]): Promise<void> {
+  const { rebuildIndex } = await import('@relayburn/ledger');
   const { ids, content } = await rebuildIndex();
   lines.push(
     `rebuilt ledger index: ${formatInt(ids)} id hashes, ${formatInt(content)} content fingerprints`,
@@ -302,11 +286,17 @@ async function runStatus(args: ParsedArgs): Promise<number> {
     process.stdout.write(JSON.stringify(status, null, 2) + '\n');
     return 0;
   }
-  process.stdout.write(formatStateStatusLines(status).join('\n') + '\n');
+  const { formatArchiveStatusLines } = await import('./archive.js');
+  process.stdout.write(formatStateStatusLines(status, formatArchiveStatusLines).join('\n') + '\n');
   return 0;
 }
 
 async function collectStateStatus(): Promise<StateStatus> {
+  const {
+    getArchiveStatus,
+    ledgerContentIndexPath,
+    ledgerIndexPath,
+  } = await import('@relayburn/ledger');
   const [ids, content, contentSidecar, ledgerCounts, archive] = await Promise.all([
     indexFileStatus(ledgerIndexPath()),
     indexFileStatus(ledgerContentIndexPath()),
@@ -342,6 +332,7 @@ async function indexFileStatus(filePath: string): Promise<IndexFileStatus> {
 }
 
 async function contentSidecarStatus(): Promise<ContentSidecarStatus> {
+  const { contentDir, isValidSessionId } = await import('@relayburn/ledger');
   const dir = contentDir();
   let entries: string[];
   try {
@@ -385,6 +376,7 @@ async function contentSidecarStatus(): Promise<ContentSidecarStatus> {
 }
 
 async function ledgerDerivedCounts(): Promise<LedgerDerivedCounts> {
+  const { isTurnLine, isUserTurnLine, ledgerPath } = await import('@relayburn/ledger');
   const filePath = ledgerPath();
   const exists = await stat(filePath)
     .then((s) => s.isFile())
@@ -419,7 +411,10 @@ async function ledgerDerivedCounts(): Promise<LedgerDerivedCounts> {
   return counts;
 }
 
-function formatStateStatusLines(status: StateStatus): string[] {
+function formatStateStatusLines(
+  status: StateStatus,
+  formatArchiveStatusLines: FormatArchiveStatusLines,
+): string[] {
   const lines: string[] = [];
   lines.push('derived state:');
   lines.push('index:');
@@ -478,6 +473,7 @@ async function captureStdout(fn: () => Promise<number>): Promise<{ code: number;
 }
 
 async function runStatePrune(args: ParsedArgs): Promise<number> {
+  const { loadConfig, pruneContent, retentionMs } = await import('@relayburn/ledger');
   const cfg = await loadConfig();
   let retention: number | 'forever';
   if (typeof args.flags['days'] === 'string') {
@@ -498,7 +494,7 @@ async function runStatePrune(args: ParsedArgs): Promise<number> {
     return 0;
   }
   const force = args.flags['force'] === true || isForceEnv();
-  const opts: Parameters<typeof pruneContent>[0] = { olderThanMs: ms };
+  const opts: Parameters<LedgerModule['pruneContent']>[0] = { olderThanMs: ms };
   if (!force) {
     const sources = await loadSourceSessionIds();
     opts.isRecoverable = (sessionId) => sources.has(sessionId);
@@ -570,6 +566,7 @@ async function runStateReset(args: ParsedArgs): Promise<number> {
     process.stdout.write(RESET_HELP);
     return 0;
   }
+  const { invalidateIndexCache, ledgerHome, withLock } = await import('@relayburn/ledger');
   const force = args.flags['force'] === true;
   const reingest = args.flags['reingest'] === true;
   const json = args.flags['json'] === true;
@@ -607,6 +604,7 @@ async function runStateReset(args: ParsedArgs): Promise<number> {
 
   let reingested: ResetSummary['reingested'] = null;
   if (reingest) {
+    const { ingestAll } = await import('../ingest.js');
     const r = await ingestAll();
     reingested = {
       scannedSessions: r.scannedSessions,
@@ -621,17 +619,27 @@ async function runStateReset(args: ParsedArgs): Promise<number> {
 }
 
 async function collectResetTargets(): Promise<ResetTargetReport[]> {
+  const {
+    archivePath,
+    contentDir,
+    cursorsPath,
+    hwmPath,
+    ledgerContentIndexPath,
+    ledgerIndexPath,
+    ledgerPath,
+  } = await import('@relayburn/ledger');
   // Order doesn't matter for correctness, but file sidecars first reads
   // nicer in the dry-run output: small to large, ledger -> archive -> content.
+  const archive = archivePath();
   const filePaths: string[] = [
     ledgerPath(),
     ledgerIndexPath(),
     ledgerContentIndexPath(),
     cursorsPath(),
     hwmPath(),
-    archivePath(),
-    `${archivePath()}-wal`,
-    `${archivePath()}-shm`,
+    archive,
+    `${archive}-wal`,
+    `${archive}-shm`,
   ];
   const reports: ResetTargetReport[] = [];
   for (const p of filePaths) {
@@ -798,6 +806,7 @@ function writeResetSummary(
 
 export async function opportunisticPrune(): Promise<void> {
   try {
+    const { loadConfig, pruneContent, retentionMs } = await import('@relayburn/ledger');
     const cfg = await loadConfig();
     if (cfg.content.store === 'off') return;
     const ms = retentionMs(cfg.content.retentionDays);
@@ -806,7 +815,7 @@ export async function opportunisticPrune(): Promise<void> {
     // Reclaiming recoverable disk requires explicit `burn state prune --force`.
     // The exception is RELAYBURN_PRUNE_FORCE=1 for unattended automation that
     // genuinely wants the old behavior.
-    const opts: Parameters<typeof pruneContent>[0] = { olderThanMs: ms };
+    const opts: Parameters<LedgerModule['pruneContent']>[0] = { olderThanMs: ms };
     if (!isForceEnv()) {
       const sources = await loadSourceSessionIds();
       opts.isRecoverable = (sessionId) => sources.has(sessionId);
@@ -879,6 +888,7 @@ async function collectClaudeSessionIds(out: Set<string>): Promise<void> {
 async function collectCodexSessionIds(out: Set<string>): Promise<void> {
   let files: string[];
   try {
+    const { walkJsonl } = await import('../walk.js');
     files = await walkJsonl(CODEX_SESSIONS);
   } catch {
     return;
@@ -893,6 +903,7 @@ async function collectCodexSessionIds(out: Set<string>): Promise<void> {
 async function collectOpencodeSessionIds(out: Set<string>): Promise<void> {
   let files: string[];
   try {
+    const { walkOpencodeSessions } = await import('../walk.js');
     files = await walkOpencodeSessions(OPENCODE_SESSION_ROOT);
   } catch {
     return;

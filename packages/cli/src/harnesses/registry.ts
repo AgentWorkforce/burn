@@ -1,20 +1,20 @@
-import { claudeAdapter } from './claude.js';
-import { codexAdapter } from './codex.js';
-import { opencodeAdapter } from './opencode.js';
 import type { HarnessAdapter } from './types.js';
 
-// Static registry of known harnesses. Adding a fourth harness is a one-line
-// import + one-line array entry — no driver changes, no help-block edits.
-const ADAPTERS: ReadonlyArray<HarnessAdapter> = [
-  claudeAdapter,
-  codexAdapter,
-  opencodeAdapter,
-];
+type AdapterLoader = () => Promise<HarnessAdapter>;
 
-export function lookupHarness(name: string): HarnessAdapter | undefined {
-  return ADAPTERS.find((a) => a.name === name);
+// Static registry of known harnesses. Adapter modules are loaded lazily so
+// top-level help and unrelated commands do not pay ingest/ledger startup cost.
+const ADAPTERS: Record<string, AdapterLoader> = {
+  claude: async () => (await import('./claude.js')).claudeAdapter,
+  codex: async () => (await import('./codex.js')).codexAdapter,
+  opencode: async () => (await import('./opencode.js')).opencodeAdapter,
+};
+
+export async function lookupHarness(name: string): Promise<HarnessAdapter | undefined> {
+  const load = Object.hasOwn(ADAPTERS, name) ? ADAPTERS[name] : undefined;
+  return load ? load() : undefined;
 }
 
 export function listHarnessNames(): string[] {
-  return ADAPTERS.map((a) => a.name);
+  return Object.keys(ADAPTERS);
 }
