@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `burn state --help`, `burn run`, and `burn mcp-server` now skip opportunistic content pruning so help output and latency-sensitive startup are not delayed by retention scans.
+
 ## [1.1.0] - 2026-04-29
 
 ### Added
@@ -27,7 +31,6 @@ All notable changes to `@relayburn/cli`.
 
 ### Fixed
 
-- `burn state --help`, `burn run`, and `burn mcp-server` now skip opportunistic content pruning so help output and latency-sensitive startup are not delayed by retention scans.
 - `burn state rebuild archive vacuum` now preserves archive space reclamation after the top-level archive command removal.
 - `burn state` status now streams ledger counts instead of materializing all turns.
 - `burn ingest --watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
