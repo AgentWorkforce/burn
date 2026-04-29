@@ -709,6 +709,33 @@ describe('parseCodexSession execution graph (#42 / #87)', () => {
     assert.equal(roots[0]!.sessionId, 'sess_simple_1');
     assert.equal(roots[0]!.relatedSessionId, undefined);
     assert.equal(roots[0]!.ts, '2026-04-20T00:00:00.000Z');
+    assert.equal(roots[0]!.sourceVersion, '0.121.0');
+  });
+
+  it('emits fork and continuation rows from session_meta payloads', async () => {
+    const { relationships } = await parseCodexSession(
+      path.join(FIXTURES, 'session-meta-relationships.jsonl'),
+    );
+    const root = relationships.find((r) => r.relationshipType === 'root');
+    const fork = relationships.find((r) => r.relationshipType === 'fork');
+    const continuation = relationships.find((r) => r.relationshipType === 'continuation');
+    assert.equal(relationships.filter((r) => r.relationshipType === 'root').length, 1);
+    assert.equal(relationships.filter((r) => r.relationshipType === 'fork').length, 1);
+    assert.equal(relationships.filter((r) => r.relationshipType === 'continuation').length, 1);
+    assert.ok(root);
+    assert.ok(fork);
+    assert.ok(continuation);
+
+    for (const row of [root!, fork!, continuation!]) {
+      assert.equal(row.source, 'codex');
+      assert.equal(row.sessionId, 'sess_meta_child');
+      assert.equal(row.sourceSessionId, 'sess_original');
+      assert.equal(row.sourceVersion, '0.130.0');
+      assert.equal(row.ts, '2026-04-24T00:00:00.000Z');
+    }
+
+    assert.equal(fork!.relatedSessionId, 'sess_fork_base');
+    assert.equal(continuation!.relatedSessionId, 'sess_previous');
   });
 
   it('emits a ToolResultEventRecord per function_call_output / custom_tool_call_output', async () => {
@@ -920,6 +947,82 @@ describe('parseCodexSessionIncremental execution graph dedup (#87)', () => {
       ].sort();
       const fullKeys = fullPass.toolResultEvents.map(key).sort();
       assert.deepEqual(combined, fullKeys);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not re-emit session_meta fork/continuation rows after an incremental resume', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-meta-inc-'));
+    try {
+      const firstMeta = {
+        timestamp: '2026-04-24T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'sess_meta_resume',
+          cwd: '/tmp/project',
+          timestamp: '2026-04-24T00:00:00.000Z',
+          cli_version: '0.130.0',
+          sourceSessionId: 'sess_source',
+          forkSessionId: 'sess_fork',
+          continuedFromSessionId: 'sess_prev',
+        },
+      };
+      const duplicateMeta = {
+        timestamp: '2026-04-24T00:00:01.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'sess_meta_resume',
+          cwd: '/tmp/project',
+          timestamp: '2026-04-24T00:00:01.000Z',
+          cli_version: '0.130.0',
+          sourceSessionId: 'sess_source',
+          forkSessionId: 'sess_fork',
+          continuedFromSessionId: 'sess_prev',
+        },
+      };
+      const firstLines = [
+        firstMeta,
+        { timestamp: '2026-04-24T00:00:00.050Z', type: 'turn_context', payload: { turn_id: 'turn_meta_a', cwd: '/tmp/project', model: 'gpt-5.4' } },
+        { timestamp: '2026-04-24T00:00:00.100Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn_meta_a' } },
+        { timestamp: '2026-04-24T00:00:00.200Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10 } } } },
+        { timestamp: '2026-04-24T00:00:00.300Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn_meta_a' } },
+      ];
+      const secondLines = [
+        duplicateMeta,
+        { timestamp: '2026-04-24T00:00:01.050Z', type: 'turn_context', payload: { turn_id: 'turn_meta_b', cwd: '/tmp/project', model: 'gpt-5.4' } },
+        { timestamp: '2026-04-24T00:00:01.100Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn_meta_b' } },
+        { timestamp: '2026-04-24T00:00:01.200Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 150, cached_input_tokens: 0, output_tokens: 20 } } } },
+        { timestamp: '2026-04-24T00:00:01.300Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn_meta_b' } },
+      ];
+
+      const file = path.join(tmp, 'session.jsonl');
+      await writeFile(file, firstLines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+      const first = await parseCodexSessionIncremental(file);
+      assert.equal(first.relationships.filter((r) => r.relationshipType === 'fork').length, 1);
+      assert.equal(
+        first.relationships.filter((r) => r.relationshipType === 'continuation').length,
+        1,
+      );
+
+      await writeFile(
+        file,
+        [...firstLines, ...secondLines].map((l) => JSON.stringify(l)).join('\n') + '\n',
+        'utf8',
+      );
+      const second = await parseCodexSessionIncremental(file, {
+        startOffset: first.endOffset,
+        resume: first.resume,
+      });
+      assert.equal(
+        second.relationships.some(
+          (r) => r.relationshipType === 'fork' || r.relationshipType === 'continuation',
+        ),
+        false,
+        'duplicate session_meta should not re-emit already committed metadata edges',
+      );
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

@@ -48,6 +48,10 @@ export interface CodexResumeState {
   // any already-emitted (sessionId, toolUseId, eventIndex) tuple, and so the
   // root relationship row is emitted exactly once per session id.
   rootSessionEmitted?: boolean;
+  // Session-meta fork / continuation rows already committed. Codex can repeat
+  // session_meta records after restarts; this keeps resumed parses from
+  // re-emitting the same metadata edge.
+  sessionMetaRelationshipKeys?: string[];
   nextEventIndex?: number;
   // Per-tool-call event counter — eventually filled with the `callIndex`
   // for the next event seen for this call_id. Codex tool calls almost
@@ -93,6 +97,14 @@ interface SessionMetaPayload {
   id?: string;
   cwd?: string;
   timestamp?: string;
+  cli_version?: string;
+  version?: string;
+  sourceSessionId?: string;
+  source_session_id?: string;
+  forkSessionId?: string;
+  fork_session_id?: string;
+  continuedFromSessionId?: string;
+  continued_from_session_id?: string;
 }
 
 interface TurnContextPayload {
@@ -367,6 +379,9 @@ export async function parseCodexSessionIncremental(
   // resume blob so `eventIndex` stays session-monotonic across re-ingest
   // cycles and the root row is emitted exactly once per session id.
   let rootSessionEmitted = options.resume?.rootSessionEmitted === true;
+  const seenSessionMetaRelationshipKeys = new Set(
+    options.resume?.sessionMetaRelationshipKeys ?? [],
+  );
   let nextEventIndex = options.resume?.nextEventIndex ?? 0;
   const toolResultCounters = new Map<string, number>();
   if (options.resume?.toolResultCounters) {
@@ -402,6 +417,7 @@ export async function parseCodexSessionIncremental(
   let committedUserTurnsCount = 0;
   let committedUserTurnSlot: UserTurnSlot = cloneSlot(userTurnSlot);
   let committedRootSessionEmitted = rootSessionEmitted;
+  let committedSessionMetaRelationshipKeys = new Set(seenSessionMetaRelationshipKeys);
   let committedNextEventIndex = nextEventIndex;
   let committedToolResultCounters = new Map(toolResultCounters);
   let lastCompletedTurn = cloneLastCompletedTurn(options.resume?.lastCompletedTurn);
@@ -448,8 +464,16 @@ export async function parseCodexSessionIncremental(
         const ts = typeof sp.timestamp === 'string' ? sp.timestamp : rec.timestamp;
         pendingRelationships.push({
           offset: lineEndOffset,
-          record: buildRootRelationship(sessionId, ts),
+          record: buildRootRelationship(sessionId, ts, sp),
         });
+      }
+      if (typeof sessionId === 'string' && sessionId.length > 0) {
+        for (const row of buildSessionMetaRelationships(sessionId, sp, rec.timestamp)) {
+          const key = codexRelationshipKey(row);
+          if (seenSessionMetaRelationshipKeys.has(key)) continue;
+          seenSessionMetaRelationshipKeys.add(key);
+          pendingRelationships.push({ offset: lineEndOffset, record: row });
+        }
       }
       continue;
     }
@@ -598,6 +622,7 @@ export async function parseCodexSessionIncremental(
           committedUserTurnsCount = userTurns.length;
           committedUserTurnSlot = cloneSlot(userTurnSlot);
           committedRootSessionEmitted = rootSessionEmitted;
+          committedSessionMetaRelationshipKeys = new Set(seenSessionMetaRelationshipKeys);
           committedNextEventIndex = nextEventIndex;
           committedToolResultCounters = new Map(toolResultCounters);
           committedLastCompletedTurn = cloneLastCompletedTurn(lastCompletedTurn);
@@ -941,6 +966,7 @@ export async function parseCodexSessionIncremental(
     turnContexts: Object.fromEntries(committedTurnContexts),
     userTurnSlot: cloneSlot(committedUserTurnSlot),
     rootSessionEmitted: committedRootSessionEmitted,
+    sessionMetaRelationshipKeys: [...committedSessionMetaRelationshipKeys],
     nextEventIndex: committedNextEventIndex,
     toolResultCounters: Object.fromEntries(committedToolResultCounters),
   };
@@ -1028,6 +1054,7 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
       turnContexts: {},
       userTurnSlot: { blocks: [], ts: '' },
       rootSessionEmitted: false,
+      sessionMetaRelationshipKeys: [],
       nextEventIndex: 0,
       toolResultCounters: {},
     };
@@ -1037,6 +1064,7 @@ function cloneResume(r: CodexResumeState | undefined): CodexResumeState {
     sessionId: r.sessionId,
     turnContexts: { ...r.turnContexts },
     rootSessionEmitted: r.rootSessionEmitted === true,
+    sessionMetaRelationshipKeys: [...(r.sessionMetaRelationshipKeys ?? [])],
     nextEventIndex: r.nextEventIndex ?? 0,
     toolResultCounters: { ...(r.toolResultCounters ?? {}) },
   };
@@ -1236,6 +1264,7 @@ function pickCustomToolTarget(name: string, input: string): string | undefined {
 function buildRootRelationship(
   sessionId: string,
   ts?: string,
+  meta?: SessionMetaPayload,
 ): SessionRelationshipRecord {
   const row: SessionRelationshipRecord = {
     v: 1,
@@ -1244,7 +1273,78 @@ function buildRootRelationship(
     relationshipType: 'root',
   };
   if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+  applyCodexSessionMetaProvenance(row, meta);
   return row;
+}
+
+function buildSessionMetaRelationships(
+  sessionId: string,
+  meta: SessionMetaPayload,
+  fallbackTs?: string,
+): SessionRelationshipRecord[] {
+  const rows: SessionRelationshipRecord[] = [];
+  const ts = stringField(meta, ['timestamp']) ?? fallbackTs;
+  const forkSessionId = stringField(meta, ['forkSessionId', 'fork_session_id']);
+  if (forkSessionId !== undefined && forkSessionId !== sessionId) {
+    const row: SessionRelationshipRecord = {
+      v: 1,
+      source: 'codex',
+      sessionId,
+      relatedSessionId: forkSessionId,
+      relationshipType: 'fork',
+    };
+    if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+    applyCodexSessionMetaProvenance(row, meta);
+    rows.push(row);
+  }
+  const continuedFromSessionId = stringField(meta, [
+    'continuedFromSessionId',
+    'continued_from_session_id',
+  ]);
+  if (continuedFromSessionId !== undefined && continuedFromSessionId !== sessionId) {
+    const row: SessionRelationshipRecord = {
+      v: 1,
+      source: 'codex',
+      sessionId,
+      relatedSessionId: continuedFromSessionId,
+      relationshipType: 'continuation',
+    };
+    if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+    applyCodexSessionMetaProvenance(row, meta);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function applyCodexSessionMetaProvenance(
+  row: SessionRelationshipRecord,
+  meta: SessionMetaPayload | undefined,
+): void {
+  if (!meta) return;
+  const sourceSessionId = stringField(meta, ['sourceSessionId', 'source_session_id']);
+  if (sourceSessionId !== undefined) row.sourceSessionId = sourceSessionId;
+  const sourceVersion = stringField(meta, ['cli_version', 'version']);
+  if (sourceVersion !== undefined) row.sourceVersion = sourceVersion;
+}
+
+function stringField(obj: object, keys: ReadonlyArray<string>): string | undefined {
+  const record = obj as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function codexRelationshipKey(row: SessionRelationshipRecord): string {
+  return [
+    row.source,
+    row.sessionId,
+    row.relationshipType,
+    row.relatedSessionId ?? '',
+    row.agentId ?? '',
+    row.parentToolUseId ?? '',
+  ].join('|');
 }
 
 // Build / refresh the SessionRelationshipRecord for a `spawn_agent` call once

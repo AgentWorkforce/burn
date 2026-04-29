@@ -204,6 +204,26 @@ describe('parseClaudeSession', () => {
     assert.equal(innerSpawn!.agentId, 'u-sub2-user');
   });
 
+  it('emits system subagent notifications as ToolResultEventRecords', async () => {
+    const { events, toolResultEvents } = await parseClaudeSession(
+      path.join(FIXTURES, 'system-subagent-notification.jsonl'),
+    );
+    assert.equal(events.length, 0, 'subagent system notifications are not compaction events');
+    assert.equal(toolResultEvents.length, 1);
+    const ev = toolResultEvents[0]!;
+    assert.equal(ev.source, 'claude-code');
+    assert.equal(ev.sessionId, '22222222-2222-2222-2222-222222222222');
+    assert.equal(ev.toolUseId, 'toolu_system');
+    assert.equal(ev.eventSource, 'subagent_notification');
+    assert.equal(ev.status, 'completed');
+    assert.equal(ev.agentId, 'agent-system-1');
+    assert.equal(ev.subagentSessionId, 'session-system-child');
+    assert.equal(ev.callIndex, 0);
+    assert.equal(ev.eventIndex, 0);
+    assert.equal(typeof ev.contentLength, 'number');
+    assert.equal(typeof ev.contentHash, 'string');
+  });
+
   it('attaches per-turn fidelity metadata with full coverage on a normal turn', async () => {
     const { turns } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
     const t = turns[0]!;
@@ -790,6 +810,93 @@ describe('parseClaudeSessionIncremental', () => {
     assert.equal(second.userTurns[0]!.blocks[0]!.isError, true);
   });
 
+  it('seeds tool-result event counters from the prescan on resumed passes', async () => {
+    const working = path.join(tmp, 'session.jsonl');
+    const sessionId = '66666666-6666-6666-6666-666666666666';
+    const userResult = {
+      parentUuid: null,
+      isSidechain: false,
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_system', content: 'done' }],
+      },
+      uuid: 'u-result-1',
+      timestamp: '2026-04-24T01:00:00.000Z',
+      cwd: '/tmp/project',
+      sessionId,
+    };
+    const incompleteAssistant = {
+      parentUuid: 'u-result-1',
+      isSidechain: false,
+      message: {
+        model: 'claude-sonnet-4-6',
+        id: 'msg_waiting',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'waiting' }],
+        stop_reason: null,
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+      type: 'assistant',
+      uuid: 'u-asst-waiting',
+      timestamp: '2026-04-24T01:00:01.000Z',
+      cwd: '/tmp/project',
+      sessionId,
+    };
+    const systemNotification = {
+      type: 'system',
+      subtype: 'subagent_completed',
+      sessionId,
+      timestamp: '2026-04-24T01:00:02.000Z',
+      parent_tool_use_id: 'toolu_system',
+      agent_id: 'agent-system-2',
+      subagent_session_id: 'session-system-child-2',
+      status: 'completed',
+    };
+    await writeFile(
+      working,
+      [userResult, incompleteAssistant, systemNotification].map((l) => JSON.stringify(l)).join('\n') + '\n',
+      'utf8',
+    );
+
+    const first = await parseClaudeSessionIncremental(working);
+    assert.equal(first.toolResultEvents.length, 1);
+    assert.equal(first.toolResultEvents[0]!.eventSource, 'tool_result');
+    assert.equal(first.toolResultEvents[0]!.toolUseId, 'toolu_system');
+    assert.equal(first.toolResultEvents[0]!.callIndex, 0);
+    assert.equal(first.toolResultEvents[0]!.eventIndex, 0);
+
+    const completeAssistant = {
+      ...incompleteAssistant,
+      message: {
+        ...incompleteAssistant.message,
+        stop_reason: 'end_turn',
+      },
+    };
+    await writeFile(
+      working,
+      [userResult, incompleteAssistant, systemNotification, completeAssistant]
+        .map((l) => JSON.stringify(l))
+        .join('\n') + '\n',
+      'utf8',
+    );
+
+    const second = await parseClaudeSessionIncremental(working, {
+      startOffset: first.endOffset,
+      lastUserText: first.lastUserText,
+    });
+    const event = second.toolResultEvents.find(
+      (e) => e.eventSource === 'subagent_notification',
+    );
+    assert.ok(event, 'resumed pass should emit the deferred system notification');
+    assert.equal(event!.toolUseId, 'toolu_system');
+    assert.equal(event!.callIndex, 1);
+    assert.equal(event!.eventIndex, 1);
+    assert.equal(event!.agentId, 'agent-system-2');
+    assert.equal(event!.subagentSessionId, 'session-system-child-2');
+  });
+
   it('resolves subagent tree fields for sidechain turns discovered after the spawn line (prescan)', async () => {
     // First incremental pass ingests the main thread + Agent spawn line.
     // Second pass starts beyond them and must still populate agentId /
@@ -860,6 +967,63 @@ describe('parseClaudeSession fork / continuation relationships (#112)', () => {
     assert.equal(root!.sessionId, 'resume-marker');
     assert.equal(root!.sourceSessionId, '99999999-9999-9999-9999-999999999999');
     assert.equal(root!.sourceVersion, '2.1.97');
+  });
+
+  it('emits explicit line-level fork and continuation rows', async () => {
+    const file = path.join(FIXTURES, 'explicit-line-relationships.jsonl');
+    const { relationships, evidence } = await parseClaudeSession(file, { sessionPath: file });
+
+    const continuation = relationships.find((r) => r.relationshipType === 'continuation');
+    const fork = relationships.find((r) => r.relationshipType === 'fork');
+    assert.ok(continuation, 'continuedFromSessionId must produce a continuation row');
+    assert.ok(fork, 'forkSessionId must produce a fork row');
+
+    assert.equal(continuation!.sessionId, 'explicit-line-relationships');
+    assert.equal(continuation!.relatedSessionId, 'original-session');
+    assert.equal(continuation!.sourceSessionId, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb');
+    assert.equal(continuation!.sourceVersion, '2.1.98');
+    assert.equal(fork!.sessionId, 'explicit-line-relationships');
+    assert.equal(fork!.relatedSessionId, 'fork-source-session');
+    assert.equal(fork!.sourceSessionId, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb');
+    assert.equal(fork!.sourceVersion, '2.1.98');
+
+    assert.deepEqual(evidence.explicitContinuationTargetSessionIds, ['original-session']);
+    assert.deepEqual(evidence.explicitForkTargetSessionIds, ['fork-source-session']);
+  });
+
+  it('reconciliation skips a continuation edge already emitted from an explicit line field', async () => {
+    const originalFile = path.join(FIXTURES, 'original-session.jsonl');
+    const explicitFile = path.join(FIXTURES, 'explicit-line-relationships.jsonl');
+    const { evidence: originalEv } = await parseClaudeSession(originalFile, {
+      sessionPath: originalFile,
+    });
+    const { relationships, evidence: explicitEv } = await parseClaudeSession(explicitFile, {
+      sessionPath: explicitFile,
+    });
+    assert.ok(
+      relationships.some(
+        (r) =>
+          r.relationshipType === 'continuation' &&
+          r.sessionId === 'explicit-line-relationships' &&
+          r.relatedSessionId === 'original-session',
+      ),
+      'the local parser emitted the explicit continuation row',
+    );
+
+    const reconciled = reconcileClaudeSessionRelationships([
+      { evidence: originalEv },
+      { evidence: explicitEv },
+    ]);
+    assert.equal(
+      reconciled.some(
+        (r) =>
+          r.relationshipType === 'continuation' &&
+          r.sessionId === 'explicit-line-relationships' &&
+          r.relatedSessionId === 'original-session',
+      ),
+      false,
+      'cross-file parentUuid inference must not duplicate the explicit edge',
+    );
   });
 
   it('captures firstParentUuid from the first non-sidechain user line even when a sidechain user line precedes it', async () => {
