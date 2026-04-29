@@ -4,6 +4,8 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-29
+
 ### Added
 
 - Added an atomic cursor change-save helper so writers can persist only the cursor keys they touched.

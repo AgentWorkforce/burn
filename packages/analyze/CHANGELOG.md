@@ -4,6 +4,8 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-29
+
 ### Changed
 
 - Renamed the public attribution APIs: `attributeHotspots` replaces `attributeWaste`, and `attributeOverhead` / `buildTrimRecommendations` replace the old context and advise names.

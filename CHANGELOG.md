@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-29
+
 ### Added
 
 - `burn ingest --watch --opencode-stream` now ingests stream-owned OpenCode sessions directly at completed tool-call grain while keeping file ingest as the fallback.

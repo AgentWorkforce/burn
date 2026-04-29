@@ -4,6 +4,12 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-29
+
+### Fixed
+
+- Fix budget command references
+
 ## [0.43.0] - 2026-04-29
 
 ### Changed

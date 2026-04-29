@@ -4,6 +4,8 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-29
+
 ### Added
 
 - OpenCode stream events can now be normalized into turn, content, user-turn, relationship, and tool-result event records for stream-owned sessions.

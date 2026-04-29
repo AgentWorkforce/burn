@@ -4,6 +4,8 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-29
+
 ### Fixed
 
 - Published `relayburn` README examples now use `burn budget --watch` instead of the removed `burn limits` command.
