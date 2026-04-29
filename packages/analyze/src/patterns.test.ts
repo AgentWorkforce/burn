@@ -8,6 +8,7 @@ import type {
   CompactionEvent,
   ContentRecord,
   ToolCall,
+  ToolResultEventRecord,
   TurnRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
@@ -39,6 +40,22 @@ function turn(overrides: Partial<TurnRecord> & { sessionId: string; messageId: s
   };
 }
 
+function event(
+  overrides: Partial<ToolResultEventRecord> & {
+    sessionId: string;
+    toolUseId: string;
+    eventIndex: number;
+    status: ToolResultEventRecord['status'];
+  },
+): ToolResultEventRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    eventSource: 'tool_result',
+    ...overrides,
+  };
+}
+
 describe('detectPatterns — retry loops', () => {
   it('reports one retry-loop of length 4 for 4 consecutive identical failing Bash calls', async () => {
     const pricing = await loadBuiltinPricing();
@@ -51,6 +68,23 @@ describe('detectPatterns — retry loops', () => {
     assert.equal(loop.startTurnIndex, 0);
     assert.equal(loop.endTurnIndex, 3);
     assert.ok(loop.cost > 0, 'cost should be nonzero (sum of retry-turn costs)');
+  });
+
+  it('reports the same retry loop from ToolResultEventRecord chronology and annotates eventSource', async () => {
+    const pricing = await loadBuiltinPricing();
+    const { turns, toolResultEvents } = await parseClaudeSession(
+      path.join(FIXTURES, 'retry-loop.jsonl'),
+    );
+    const legacy = detectPatterns(turns, { pricing });
+    const graph = detectPatterns(turns, { pricing, toolResultEvents });
+    assert.equal(graph.retryLoops.length, 1);
+    assert.equal(graph.failureRuns.length, 0);
+    const graphLoop = graph.retryLoops[0]!;
+    assert.equal(graphLoop.eventSource, 'tool_result');
+    assert.deepEqual(
+      { ...graphLoop, eventSource: undefined },
+      { ...legacy.retryLoops[0]!, eventSource: undefined },
+    );
   });
 
   it('does not trigger on 2 consecutive failures (below threshold)', async () => {
@@ -75,6 +109,29 @@ describe('detectPatterns — retry loops', () => {
     ];
     const result = detectPatterns(turns, { pricing });
     assert.equal(result.retryLoops.length, 0);
+  });
+
+  it('mixes graph-backed sessions with legacy fallback sessions', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({ sessionId: 'graph', messageId: 'g1', turnIndex: 0, toolCalls: [tc('g1', 'Bash', 'same')] }),
+      turn({ sessionId: 'graph', messageId: 'g2', turnIndex: 1, toolCalls: [tc('g2', 'Bash', 'same')] }),
+      turn({ sessionId: 'graph', messageId: 'g3', turnIndex: 2, toolCalls: [tc('g3', 'Bash', 'same')] }),
+      turn({ sessionId: 'fallback', messageId: 'f1', turnIndex: 0, toolCalls: [tc('f1', 'Bash', 'same', { isError: true })] }),
+      turn({ sessionId: 'fallback', messageId: 'f2', turnIndex: 1, toolCalls: [tc('f2', 'Bash', 'same', { isError: true })] }),
+      turn({ sessionId: 'fallback', messageId: 'f3', turnIndex: 2, toolCalls: [tc('f3', 'Bash', 'same', { isError: true })] }),
+    ];
+    const toolResultEvents = [
+      event({ sessionId: 'graph', toolUseId: 'g1', eventIndex: 0, status: 'errored' }),
+      event({ sessionId: 'graph', toolUseId: 'g2', eventIndex: 1, status: 'errored' }),
+      event({ sessionId: 'graph', toolUseId: 'g3', eventIndex: 2, status: 'errored' }),
+    ];
+
+    const result = detectPatterns(turns, { pricing, toolResultEvents });
+    assert.equal(result.retryLoops.length, 2);
+    const bySession = new Map(result.retryLoops.map((loop) => [loop.sessionId, loop]));
+    assert.equal(bySession.get('graph')!.eventSource, 'tool_result');
+    assert.equal(bySession.get('fallback')!.eventSource, undefined);
   });
 });
 
@@ -110,6 +167,48 @@ describe('detectPatterns — consecutive failure runs', () => {
     const result = detectPatterns(turns, { pricing });
     assert.equal(result.retryLoops.length, 1, 'retry loop reported');
     assert.equal(result.failureRuns.length, 0, 'same-key streak is NOT a failure run');
+  });
+
+  it('counts chained subagent_notification errors even when toolCalls have no isError flag', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({ sessionId: 's', messageId: 'm1', turnIndex: 0, toolCalls: [tc('a1', 'Agent', 'agent:one')] }),
+      turn({ sessionId: 's', messageId: 'm2', turnIndex: 1, toolCalls: [tc('a2', 'Agent', 'agent:two')] }),
+      turn({ sessionId: 's', messageId: 'm3', turnIndex: 2, toolCalls: [tc('a3', 'Agent', 'agent:three')] }),
+    ];
+    const toolResultEvents = [
+      event({ sessionId: 's', toolUseId: 'a1', eventIndex: 0, status: 'errored', eventSource: 'subagent_notification' }),
+      event({ sessionId: 's', toolUseId: 'a2', eventIndex: 1, status: 'errored', eventSource: 'subagent_notification' }),
+      event({ sessionId: 's', toolUseId: 'a3', eventIndex: 2, status: 'errored', eventSource: 'subagent_notification' }),
+    ];
+
+    const result = detectPatterns(turns, { pricing, toolResultEvents });
+    assert.equal(result.failureRuns.length, 1);
+    assert.equal(result.failureRuns[0]!.length, 3);
+    assert.equal(result.failureRuns[0]!.eventSource, 'subagent_notification');
+  });
+});
+
+describe('detectPatterns — cancelled graph events', () => {
+  it('keeps cancellations out of retry/failure detectors and reports them separately', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      turn({ sessionId: 's', messageId: 'm1', turnIndex: 0, toolCalls: [tc('c1', 'Bash', 'same', { isError: true })] }),
+      turn({ sessionId: 's', messageId: 'm2', turnIndex: 1, toolCalls: [tc('c2', 'Bash', 'same', { isError: true })] }),
+      turn({ sessionId: 's', messageId: 'm3', turnIndex: 2, toolCalls: [tc('c3', 'Bash', 'same', { isError: true })] }),
+    ];
+    const toolResultEvents = [
+      event({ sessionId: 's', toolUseId: 'c1', eventIndex: 0, status: 'cancelled' }),
+      event({ sessionId: 's', toolUseId: 'c2', eventIndex: 1, status: 'cancelled' }),
+      event({ sessionId: 's', toolUseId: 'c3', eventIndex: 2, status: 'cancelled' }),
+    ];
+
+    const result = detectPatterns(turns, { pricing, toolResultEvents });
+    assert.equal(result.retryLoops.length, 0);
+    assert.equal(result.failureRuns.length, 0);
+    assert.equal(result.cancelledRuns.length, 1);
+    assert.equal(result.cancelledRuns[0]!.length, 3);
+    assert.equal(result.cancelledRuns[0]!.eventSource, 'tool_result');
   });
 });
 
@@ -257,6 +356,7 @@ describe('detectPatterns — defensive', () => {
     const result = detectPatterns([], { pricing, compactions: [] as CompactionEvent[] });
     assert.deepEqual(result.retryLoops, []);
     assert.deepEqual(result.failureRuns, []);
+    assert.deepEqual(result.cancelledRuns, []);
     assert.deepEqual(result.compactions, []);
     assert.deepEqual(result.editReverts, []);
     assert.deepEqual(result.sessionSummaries, []);

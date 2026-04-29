@@ -14,6 +14,7 @@ All notable changes to `@relayburn/cli`.
 
 ### Changed
 
+- `burn waste --patterns` now reads tool-result event chronology for retry, failure, and cancellation findings, including graph-backed `eventSource` in JSON output.
 - `burn summary --agent` now includes sessions linked by relationship records, not only turns stamped with the agent id.
 - Provider filters and `burn summary --by-provider` now use the shared analyze provider resolver.
 - `burn summary --by-tool` now uses persisted user-turn block sizes for proportional attribution and reports each JSON row's attribution method.

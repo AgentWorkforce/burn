@@ -10,6 +10,7 @@ All notable changes to `@relayburn/analyze`.
 
 ### Changed
 
+- `detectPatterns()` now uses persisted tool-result event chronology for retry and failure detection, with legacy `toolCalls[].isError` fallback when graph rows are absent.
 - Waste attribution now prefers persisted user-turn block sizes over content sidecar estimates before falling back to even-split attribution.
 
 ## [0.42.0] - 2026-04-28

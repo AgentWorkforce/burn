@@ -4,6 +4,8 @@ import type {
   ContentToolResult,
   SourceKind,
   ToolCall,
+  ToolResultEventRecord,
+  ToolResultEventSource,
   TurnRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
@@ -12,10 +14,14 @@ import { countRetries, normalizeToolName } from '@relayburn/reader';
 import { costForTurn, costForUsage } from './cost.js';
 import type { PricingTable } from './pricing.js';
 
-// Retry loops: ≥ 3 strictly-consecutive tool calls that share (toolName,
-// argsHash) and all carry tool_result.is_error=true. The flattened tool-call
-// stream is what matters — a different tool (or different args) interleaved
-// between two candidates breaks the streak, even within the same turn.
+export type PatternEventSource = ToolResultEventSource | 'mixed';
+
+// Retry loops: ≥ 3 strictly-consecutive failed tool attempts that share
+// (toolName, argsHash). ToolResultEventRecord chronology is the primary
+// signal; sessions with no graph events fall back to toolCalls[].isError.
+// The flattened tool-call/event stream is what matters — a different tool
+// (or different args) interleaved between two candidates breaks the streak,
+// even within the same turn.
 export interface RetryLoop {
   sessionId: string;
   tool: string;
@@ -36,6 +42,8 @@ export interface RetryLoop {
   // when no content was supplied or none of the retry tool_uses had a
   // matching tool_result in the sidecar.
   errorSignature?: string;
+  // Present when this finding came from ToolResultEventRecord chronology.
+  eventSource?: PatternEventSource;
 }
 
 // Consecutive tool failures: ≥ 3 consecutive errored tool results using
@@ -55,6 +63,21 @@ export interface FailureRun {
   // the sidecar are omitted. Absent when no content was supplied or no
   // signatures could be extracted.
   errorSignatures?: Array<{ tool: string; firstLine: string }>;
+  // Present when this finding came from ToolResultEventRecord chronology.
+  eventSource?: PatternEventSource;
+}
+
+// Cancelled tool/subagent runs are separated from retry/failure patterns:
+// an interrupted Bash or abandoned subagent is not the same thing as an
+// errored attempt, but it is still useful graph-backed chronology.
+export interface CancellationRun {
+  sessionId: string;
+  length: number;
+  startTurnIndex: number;
+  endTurnIndex: number;
+  toolsInvolved: string[];
+  cost: number;
+  eventSource: PatternEventSource;
 }
 
 export interface CompactionLoss {
@@ -178,6 +201,7 @@ export interface SessionPatternSummary {
   sessionId: string;
   retryLoopCount: number;
   failureRunCount: number;
+  cancellationRunCount: number;
   consecutiveFailureMax: number;
   compactionCount: number;
   editRevertCount: number;
@@ -192,6 +216,7 @@ export interface SessionPatternSummary {
 export interface PatternsResult {
   retryLoops: RetryLoop[];
   failureRuns: FailureRun[];
+  cancelledRuns: CancellationRun[];
   compactions: CompactionLoss[];
   editReverts: EditRevertCycle[];
   skillRecallDups: SkillRecallDup[];
@@ -212,6 +237,11 @@ export interface DetectPatternsOptions {
   // (error signatures, compacted-window summaries, edit previews). Detectors
   // run identically without it — only the enrichment fields are absent.
   contentBySession?: Map<string, ContentRecord[]> | undefined;
+  // Tool-result / subagent / queue / progress chronology. When supplied for a
+  // session, retry/failure/cancellation detectors use it instead of
+  // reconstructing status from TurnRecord.toolCalls[].isError. Sessions with
+  // no matching events keep the legacy fallback path.
+  toolResultEvents?: ToolResultEventRecord[] | undefined;
 }
 
 const MIN_RETRY_LEN = 3;
@@ -246,9 +276,11 @@ export function detectPatterns(
   opts: DetectPatternsOptions,
 ): PatternsResult {
   const bySession = groupBySession(turns);
+  const eventsBySession = groupToolResultEventsBySession(opts.toolResultEvents);
 
   const retryLoops: RetryLoop[] = [];
   const failureRuns: FailureRun[] = [];
+  const cancelledRuns: CancellationRun[] = [];
   const editReverts: EditRevertCycle[] = [];
   const skillRecallDups: SkillRecallDup[] = [];
   const skillPruningProtection: SkillPruningProtection[] = [];
@@ -258,10 +290,26 @@ export function detectPatterns(
   for (const [sessionId, sessionTurns] of bySession) {
     sessionTurns.sort((a, b) => a.turnIndex - b.turnIndex);
     const contentIndex = buildContentIndex(opts.contentBySession?.get(sessionId));
-    retryLoops.push(...detectRetryLoopsForSession(sessionId, sessionTurns, opts.pricing, contentIndex));
-    failureRuns.push(
-      ...detectFailureRunsForSession(sessionId, sessionTurns, opts.pricing, contentIndex),
-    );
+    const sessionEvents = eventsBySession.get(sessionId) ?? [];
+    if (sessionEvents.length > 0) {
+      const graphPatterns = detectGraphStatusPatternsForSession(
+        sessionId,
+        sessionTurns,
+        sessionEvents,
+        opts.pricing,
+        contentIndex,
+      );
+      retryLoops.push(...graphPatterns.retryLoops);
+      failureRuns.push(...graphPatterns.failureRuns);
+      cancelledRuns.push(...graphPatterns.cancelledRuns);
+    } else {
+      retryLoops.push(
+        ...detectRetryLoopsForSession(sessionId, sessionTurns, opts.pricing, contentIndex),
+      );
+      failureRuns.push(
+        ...detectFailureRunsForSession(sessionId, sessionTurns, opts.pricing, contentIndex),
+      );
+    }
     editReverts.push(...detectEditRevertsForSession(sessionId, sessionTurns, opts.pricing, contentIndex));
     skillRecallDups.push(...detectSkillRecallDupsForSession(sessionId, sessionTurns, opts.pricing));
     skillPruningProtection.push(...detectSkillPruningProtectionForSession(sessionId, sessionTurns, opts.pricing));
@@ -276,6 +324,7 @@ export function detectPatterns(
   return {
     retryLoops,
     failureRuns,
+    cancelledRuns,
     compactions,
     editReverts,
     skillRecallDups,
@@ -285,6 +334,7 @@ export function detectPatterns(
     sessionSummaries: buildSummaries(
       retryLoops,
       failureRuns,
+      cancelledRuns,
       compactions,
       editReverts,
       skillRecallDups,
@@ -308,6 +358,22 @@ function groupBySession(turns: TurnRecord[]): Map<string, TurnRecord[]> {
   return by;
 }
 
+function groupToolResultEventsBySession(
+  events: ToolResultEventRecord[] | undefined,
+): Map<string, ToolResultEventRecord[]> {
+  const by = new Map<string, ToolResultEventRecord[]>();
+  if (!events) return by;
+  for (const event of events) {
+    let list = by.get(event.sessionId);
+    if (!list) {
+      list = [];
+      by.set(event.sessionId, list);
+    }
+    list.push(event);
+  }
+  return by;
+}
+
 interface ToolCallRef {
   turn: TurnRecord;
   call: ToolCall;
@@ -317,6 +383,148 @@ function flattenToolCalls(turns: TurnRecord[]): ToolCallRef[] {
   const out: ToolCallRef[] = [];
   for (const turn of turns) {
     for (const call of turn.toolCalls) out.push({ turn, call });
+  }
+  return out;
+}
+
+interface ToolResultEventRef {
+  event: ToolResultEventRecord;
+  turn: TurnRecord | undefined;
+  call: ToolCall | undefined;
+  tool: string;
+  target: string | undefined;
+  argsHash: string | undefined;
+  turnIndex: number;
+}
+
+interface GraphStatusPatterns {
+  retryLoops: RetryLoop[];
+  failureRuns: FailureRun[];
+  cancelledRuns: CancellationRun[];
+}
+
+function detectGraphStatusPatternsForSession(
+  sessionId: string,
+  turns: TurnRecord[],
+  events: ToolResultEventRecord[],
+  pricing: PricingTable,
+  contentIndex: ContentIndex | null,
+): GraphStatusPatterns {
+  const terminalRefs = buildTerminalEventRefs(sessionId, turns, events);
+  return {
+    retryLoops: detectGraphRetryLoopsForSession(sessionId, terminalRefs, pricing, contentIndex),
+    failureRuns: detectGraphFailureRunsForSession(sessionId, terminalRefs, pricing, contentIndex),
+    cancelledRuns: detectGraphCancellationRunsForSession(sessionId, terminalRefs, pricing),
+  };
+}
+
+function buildTerminalEventRefs(
+  sessionId: string,
+  turns: TurnRecord[],
+  events: ToolResultEventRecord[],
+): ToolResultEventRef[] {
+  const byToolUseId = new Map<string, ToolCallRef>();
+  const turnByMessageId = new Map<string, TurnRecord>();
+  for (const turn of turns) {
+    turnByMessageId.set(turn.messageId, turn);
+    for (const call of turn.toolCalls) byToolUseId.set(call.id, { turn, call });
+  }
+
+  // Collapse progress/fanout rows to the final observed status for each
+  // toolUseId. A trailing `running` row means no terminal status landed yet,
+  // so it is excluded below.
+  const terminalByToolUseId = new Map<string, ToolResultEventRecord>();
+  for (const event of [...events].sort(compareToolResultEvents)) {
+    if (event.sessionId !== sessionId) continue;
+    terminalByToolUseId.set(event.toolUseId, event);
+  }
+
+  const out: ToolResultEventRef[] = [];
+  for (const event of [...terminalByToolUseId.values()].sort(compareToolResultEvents)) {
+    if (event.status === 'running') continue;
+    const callRef = byToolUseId.get(event.toolUseId);
+    const turn = callRef?.turn ?? findTurnForEvent(event, turns, turnByMessageId);
+    out.push({
+      event,
+      turn,
+      call: callRef?.call,
+      tool: displayToolName(event, callRef?.call),
+      target: callRef?.call.target,
+      argsHash: callRef?.call.argsHash,
+      turnIndex: turn?.turnIndex ?? event.eventIndex,
+    });
+  }
+  return out;
+}
+
+function compareToolResultEvents(
+  a: ToolResultEventRecord,
+  b: ToolResultEventRecord,
+): number {
+  if (a.eventIndex !== b.eventIndex) return a.eventIndex - b.eventIndex;
+  const ts = (a.ts ?? '').localeCompare(b.ts ?? '');
+  if (ts !== 0) return ts;
+  return a.toolUseId.localeCompare(b.toolUseId);
+}
+
+function findTurnForEvent(
+  event: ToolResultEventRecord,
+  turns: TurnRecord[],
+  turnByMessageId: Map<string, TurnRecord>,
+): TurnRecord | undefined {
+  if (event.messageId) {
+    const byMessage = turnByMessageId.get(event.messageId);
+    if (byMessage) return byMessage;
+  }
+  if (!event.ts) return undefined;
+  let best: TurnRecord | undefined;
+  for (const turn of turns) {
+    if (turn.ts <= event.ts) {
+      best = turn;
+      continue;
+    }
+    if (!best) return turn;
+    break;
+  }
+  return best;
+}
+
+function displayToolName(
+  event: ToolResultEventRecord,
+  call: ToolCall | undefined,
+): string {
+  if (call) return call.name;
+  switch (event.eventSource) {
+    case 'subagent_notification':
+      return 'Subagent';
+    case 'function_call_output':
+      return 'FunctionCall';
+    case 'queue_event':
+      return 'QueueEvent';
+    case 'progress_event':
+      return 'ProgressEvent';
+    case 'tool_result':
+      return 'Tool';
+  }
+}
+
+function coalesceEventSource(refs: ToolResultEventRef[]): PatternEventSource {
+  const sources = new Set(refs.map((r) => r.event.eventSource));
+  return sources.size === 1 ? refs[0]!.event.eventSource : 'mixed';
+}
+
+function dedupDefinedTurns(refs: ToolResultEventRef[]): TurnRecord[] {
+  const turns: TurnRecord[] = [];
+  for (const ref of refs) {
+    if (ref.turn) turns.push(ref.turn);
+  }
+  return dedupTurns(turns);
+}
+
+function eventRefsToToolCallRefs(refs: ToolResultEventRef[]): ToolCallRef[] {
+  const out: ToolCallRef[] = [];
+  for (const ref of refs) {
+    if (ref.turn && ref.call) out.push({ turn: ref.turn, call: ref.call });
   }
   return out;
 }
@@ -430,6 +638,143 @@ function sumCostForTurns(turns: TurnRecord[], pricing: PricingTable): number {
     if (c) sum += c.total;
   }
   return sum;
+}
+
+function detectGraphRetryLoopsForSession(
+  sessionId: string,
+  refs: ToolResultEventRef[],
+  pricing: PricingTable,
+  contentIndex: ContentIndex | null,
+): RetryLoop[] {
+  const loops: RetryLoop[] = [];
+  let streak: ToolResultEventRef[] = [];
+
+  const commit = (): void => {
+    if (streak.length < MIN_RETRY_LEN) return;
+    const first = streak[0]!;
+    const last = streak[streak.length - 1]!;
+    const contributingTurns = dedupDefinedTurns(streak);
+    const loop: RetryLoop = {
+      sessionId,
+      tool: first.tool,
+      target: first.target,
+      argsHash: first.argsHash!,
+      attempts: streak.length,
+      startTurnIndex: first.turnIndex,
+      endTurnIndex: last.turnIndex,
+      cost: sumCostForTurns(contributingTurns, pricing),
+      eventSource: coalesceEventSource(streak),
+    };
+    const sig = retryLoopSignature(eventRefsToToolCallRefs(streak), contentIndex);
+    if (sig !== undefined) loop.errorSignature = sig;
+    loops.push(loop);
+  };
+
+  for (const ref of refs) {
+    if (ref.event.status !== 'errored' || !ref.call || !ref.argsHash) {
+      commit();
+      streak = [];
+      continue;
+    }
+    if (streak.length === 0) {
+      streak = [ref];
+      continue;
+    }
+    const head = streak[0]!;
+    if (head.tool === ref.tool && head.argsHash === ref.argsHash) {
+      streak.push(ref);
+    } else {
+      commit();
+      streak = [ref];
+    }
+  }
+  commit();
+  return loops;
+}
+
+function detectGraphFailureRunsForSession(
+  sessionId: string,
+  refs: ToolResultEventRef[],
+  pricing: PricingTable,
+  contentIndex: ContentIndex | null,
+): FailureRun[] {
+  const runs: FailureRun[] = [];
+  let streak: ToolResultEventRef[] = [];
+
+  const commit = (): void => {
+    if (streak.length < MIN_FAILURE_RUN_LEN) return;
+    const keys = new Set(streak.map(statusPatternKey));
+    const hasNonToolResult = streak.some((r) => r.event.eventSource !== 'tool_result');
+    // A same-(tool,args) tool_result run is a retry loop. Non-tool_result
+    // terminal events (notably subagent notifications) remain failure runs:
+    // they represent child invocations ending badly, not a parent retry loop.
+    if (keys.size < 2 && !hasNonToolResult) return;
+    const first = streak[0]!;
+    const last = streak[streak.length - 1]!;
+    const tools = Array.from(new Set(streak.map((r) => r.tool)));
+    const run: FailureRun = {
+      sessionId,
+      length: streak.length,
+      startTurnIndex: first.turnIndex,
+      endTurnIndex: last.turnIndex,
+      toolsInvolved: tools,
+      cost: sumCostForTurns(dedupDefinedTurns(streak), pricing),
+      eventSource: coalesceEventSource(streak),
+    };
+    const sigs = failureRunSignatures(eventRefsToToolCallRefs(streak), contentIndex);
+    if (sigs.length > 0) run.errorSignatures = sigs;
+    runs.push(run);
+  };
+
+  for (const ref of refs) {
+    if (ref.event.status === 'errored') {
+      streak.push(ref);
+    } else {
+      commit();
+      streak = [];
+    }
+  }
+  commit();
+  return runs;
+}
+
+function detectGraphCancellationRunsForSession(
+  sessionId: string,
+  refs: ToolResultEventRef[],
+  pricing: PricingTable,
+): CancellationRun[] {
+  const runs: CancellationRun[] = [];
+  let streak: ToolResultEventRef[] = [];
+
+  const commit = (): void => {
+    if (streak.length === 0) return;
+    const first = streak[0]!;
+    const last = streak[streak.length - 1]!;
+    runs.push({
+      sessionId,
+      length: streak.length,
+      startTurnIndex: first.turnIndex,
+      endTurnIndex: last.turnIndex,
+      toolsInvolved: Array.from(new Set(streak.map((r) => r.tool))),
+      cost: sumCostForTurns(dedupDefinedTurns(streak), pricing),
+      eventSource: coalesceEventSource(streak),
+    });
+  };
+
+  for (const ref of refs) {
+    if (ref.event.status === 'cancelled') {
+      streak.push(ref);
+    } else {
+      commit();
+      streak = [];
+    }
+  }
+  commit();
+  return runs;
+}
+
+function statusPatternKey(ref: ToolResultEventRef): string {
+  return `${ref.tool}|${ref.argsHash ?? ref.event.toolUseId}`;
 }
 
 function detectRetryLoopsForSession(
@@ -974,6 +1319,7 @@ function dedupTurns(turns: TurnRecord[]): TurnRecord[] {
 function buildSummaries(
   retryLoops: RetryLoop[],
   failureRuns: FailureRun[],
+  cancelledRuns: CancellationRun[],
   compactions: CompactionLoss[],
   editReverts: EditRevertCycle[],
   skillRecallDups: SkillRecallDup[],
@@ -989,6 +1335,7 @@ function buildSummaries(
         sessionId,
         retryLoopCount: 0,
         failureRunCount: 0,
+        cancellationRunCount: 0,
         consecutiveFailureMax: 0,
         compactionCount: 0,
         editRevertCount: 0,
@@ -1014,6 +1361,11 @@ function buildSummaries(
     row.failureRunCount++;
     if (f.length > row.consecutiveFailureMax) row.consecutiveFailureMax = f.length;
     row.totalPatternCost += f.cost;
+  }
+  for (const c of cancelledRuns) {
+    const row = get(c.sessionId);
+    row.cancellationRunCount++;
+    row.totalPatternCost += c.cost;
   }
   for (const c of compactions) {
     const row = get(c.sessionId);

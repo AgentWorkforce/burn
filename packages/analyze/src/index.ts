@@ -33,11 +33,13 @@ export type {
 } from './subagent-tree.js';
 export { detectPatterns } from './patterns.js';
 export type {
+  CancellationRun,
   CompactionLoss,
   DetectPatternsOptions,
   EditHeavySession,
   EditRevertCycle,
   FailureRun,
+  PatternEventSource,
   PatternsResult,
   RetryLoop,
   SessionPatternSummary,
@@ -46,6 +48,7 @@ export type {
   SystemPromptTax,
 } from './patterns.js';
 export {
+  cancellationRunToFinding,
   compactionLossToFinding,
   editHeavyToFinding,
   editRevertToFinding,

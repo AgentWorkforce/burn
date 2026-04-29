@@ -73,6 +73,7 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
     compactions,
     userTurnsBySession,
     contentBySession,
+    toolResultEvents,
   });
   const files = aggregateByFile(attribution.attributions).slice(0, 5);
   const bashes = aggregateByBash(attribution.attributions).slice(0, 5);
@@ -116,7 +117,7 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   }
   if (summary) {
     out.push(
-      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts, ${summary.editHeavyCount} edit-heavy, ${summary.skillRecallDupCount} skill-recall-dups, ${summary.skillPruningProtectionCount} skill-pruning, ${summary.systemPromptTaxCount} system-prompt-tax`,
+      `patterns: ${summary.retryLoopCount} retry-loops, ${summary.failureRunCount} failure-runs (max ${summary.consecutiveFailureMax}), ${summary.cancellationRunCount} cancellations, ${summary.compactionCount} compactions, ${summary.editRevertCount} edit-reverts, ${summary.editHeavyCount} edit-heavy, ${summary.skillRecallDupCount} skill-recall-dups, ${summary.skillPruningProtectionCount} skill-pruning, ${summary.systemPromptTaxCount} system-prompt-tax`,
     );
     out.push(`pattern cost: ${formatUsd(summary.totalPatternCost)}`);
   } else {
@@ -142,6 +143,9 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   out.push('');
   out.push('Consecutive failure runs');
   out.push(renderFailures(scoped.failureRuns));
+  out.push('');
+  out.push('Cancelled tool/subagent runs');
+  out.push(renderCancellations(scoped.cancelledRuns));
   out.push('');
   out.push('Compaction events');
   out.push(renderCompactions(scoped.compactions));
@@ -390,6 +394,7 @@ function filterPatterns(patterns: PatternsResult, sessionId: string): PatternsRe
   return {
     retryLoops: patterns.retryLoops.filter((r) => r.sessionId === sessionId),
     failureRuns: patterns.failureRuns.filter((r) => r.sessionId === sessionId),
+    cancelledRuns: patterns.cancelledRuns.filter((r) => r.sessionId === sessionId),
     compactions: patterns.compactions.filter((r) => r.sessionId === sessionId),
     editReverts: patterns.editReverts.filter((r) => r.sessionId === sessionId),
     skillRecallDups: patterns.skillRecallDups.filter((r) => r.sessionId === sessionId),
@@ -422,6 +427,20 @@ function renderFailures(runs: PatternsResult['failureRuns']): string {
       String(r.length),
       `${r.startTurnIndex}–${r.endTurnIndex}`,
       truncate(r.toolsInvolved.join(', '), 40),
+      formatUsd(r.cost),
+    ]),
+  ]);
+}
+
+function renderCancellations(runs: PatternsResult['cancelledRuns']): string {
+  if (runs.length === 0) return '  (none)';
+  return table([
+    ['length', 'turns', 'tools', 'source', 'cost'],
+    ...runs.map((r) => [
+      String(r.length),
+      `${r.startTurnIndex}–${r.endTurnIndex}`,
+      truncate(r.toolsInvolved.join(', '), 40),
+      r.eventSource,
       formatUsd(r.cost),
     ]),
   ]);
