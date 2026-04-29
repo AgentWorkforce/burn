@@ -6,7 +6,11 @@ All notable changes to `@relayburn/analyze`.
 
 ### Changed
 
-- `detectToolOutputBloat` now reads cl100k `approxTokens` from user-turn `tool_result` blocks (content-sidecar enrichment from #2/#86) instead of deriving tokens from `contentLength` via the bytes/4 heuristic. Events without matching enriched blocks (e.g. legacy ledgers) fall back to the bytes/4 path. Net effect on findings: real text-heavy tool output is sized roughly the same; highly compressible payloads (large repetitive logs, base64 dumps) score lower in token terms and may slip below the 15k threshold — re-tune `DEFAULT_BLOAT_TOKEN_THRESHOLD` if your sessions are dominated by such content.
+- `detectToolOutputBloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment, with a bytes/4 fallback for legacy ledgers. Highly compressible payloads (repetitive logs, base64 dumps) score lower in tokens and may slip below the 15k default threshold.
+
+### Fixed
+
+- `detectObservedBloat` no longer double-counts a tool call when its `tool_result` is followed by a `subagent_notification` (or other non-carrier event) sharing the same `toolUseId`. Non-carrier events are now sized by their own `contentLength` instead of inheriting the carrier's enriched token count.
 
 ## [0.44.0] - 2026-04-29
 

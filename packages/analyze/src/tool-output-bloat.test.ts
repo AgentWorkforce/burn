@@ -451,6 +451,56 @@ describe('detectObservedBloat — Signal B', () => {
     // Without a model we still emit the bucket but cost is 0.
     assert.equal(out[0]!.cost, 0);
   });
+
+  it('does not double-count when one tool call emits a tool_result + subagent_notification', async () => {
+    const pricing = await loadBuiltinPricing();
+    // One carrier (`tool_result`) plus a non-carrier `subagent_notification`
+    // sharing the same toolUseId — Claude reader emits this shape when a
+    // sidechain wraps up. The enriched approxTokens belongs to the
+    // tool_result payload only; the notification is a small status update
+    // that happens to share the toolUseId. Without the carrier filter, the
+    // enrichment lookup hands the notification the carrier's full token
+    // count and we'd count the same payload twice.
+    const events = [
+      evt({
+        sessionId: 's1',
+        toolUseId: 'tu_a',
+        eventIndex: 0,
+        callIndex: 0,
+        messageId: 'm1',
+        eventSource: 'tool_result',
+      }),
+      evt({
+        sessionId: 's1',
+        toolUseId: 'tu_a',
+        eventIndex: 1,
+        callIndex: 1,
+        messageId: 'm1',
+        eventSource: 'subagent_notification',
+        contentLength: 200,
+      }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 80_000, approxTokens: 20_000 }],
+      }),
+    ];
+    const turns = [
+      turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
+    ];
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
+    assert.equal(out.length, 1);
+    assert.equal(
+      out[0]!.occurrenceCount,
+      1,
+      'subagent_notification must not inherit the carrier event\'s enriched approxTokens',
+    );
+    assert.equal(out[0]!.evidencedMaxOutput, 20_000);
+  });
 });
 
 // ---------------------------------------------------------------------------
