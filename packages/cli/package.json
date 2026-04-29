@@ -25,7 +25,8 @@
     "@relayburn/reader": "workspace:*",
     "@relayburn/ledger": "workspace:*",
     "@relayburn/analyze": "workspace:*",
-    "@relayburn/mcp": "workspace:*"
+    "@relayburn/mcp": "workspace:*",
+    "ora": "^9.4.0"
   },
   "repository": {
     "type": "git",

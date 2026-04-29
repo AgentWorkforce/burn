@@ -11,7 +11,13 @@ import type { TurnRecord } from '@relayburn/reader';
 import type { ParsedArgs } from '../args.js';
 import { formatUsd } from '../format.js';
 import { ingestAll } from '../ingest.js';
-import { loadPlanStatuses as defaultLoadPlanStatuses, runBudgetPlans, type PlanStatus } from './budget-plans.js';
+import { withProgress } from '../progress.js';
+import {
+  loadPlanStatuses as defaultLoadPlanStatuses,
+  runBudgetPlans,
+  type LoadPlanStatusesOptions,
+  type PlanStatus,
+} from './budget-plans.js';
 
 const USAGE_ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
 const ANTHROPIC_OAUTH_BETA = 'oauth-2025-04-20';
@@ -91,7 +97,7 @@ export interface BudgetDeps {
   fetchUsage?: (token: string) => Promise<UsageResponse>;
   now?: () => Date;
   loadForecast?: (windowStartMs: number, nowMs: number) => Promise<ForecastResult | null>;
-  loadPlanStatuses?: () => Promise<PlanStatus[]>;
+  loadPlanStatuses?: (opts?: LoadPlanStatusesOptions) => Promise<PlanStatus[]>;
 }
 
 export async function runBudget(args: ParsedArgs, deps: BudgetDeps = {}): Promise<number> {
@@ -117,14 +123,19 @@ export async function runBudget(args: ParsedArgs, deps: BudgetDeps = {}): Promis
   const fetchUsage = deps.fetchUsage ?? fetchUsageFromApi;
   const now = deps.now ?? (() => new Date());
   const loadForecast = deps.loadForecast ?? loadForecastFromLedger;
-  const loadPlanStatuses = deps.loadPlanStatuses ?? (() => defaultLoadPlanStatuses());
+  const loadPlanStatuses = deps.loadPlanStatuses ?? ((opts?: LoadPlanStatusesOptions) =>
+    defaultLoadPlanStatuses(undefined, opts));
 
   // Resolve the OAuth token once per invocation, not per render. The macOS
   // Keychain path spawns `security`, which is expensive enough that calling
   // it on every --watch tick (every 5s by default) would dominate the loop.
   let token: string | null = null;
   if (!noApi) {
-    token = await loadToken();
+    token = await withProgress('loading Claude OAuth token', async (task) => {
+      const loaded = await loadToken();
+      task.succeed(loaded ? 'loaded Claude OAuth token' : 'Claude OAuth token not found');
+      return loaded;
+    }, { quiet: watchFlag !== undefined });
     if (!token) {
       process.stderr.write(
         'burn budget: no Claude OAuth token found. Run `claude /login` to authenticate, ' +
@@ -141,7 +152,11 @@ export async function runBudget(args: ParsedArgs, deps: BudgetDeps = {}): Promis
     let usageError: string | null = null;
     if (token !== null) {
       try {
-        usage = await fetchOnce(token);
+        usage = await withProgress('fetching Claude usage', async (task) => {
+          const fetched = await fetchOnce(token);
+          task.succeed('fetched Claude usage');
+          return fetched;
+        }, { quiet: watchFlag !== undefined });
       } catch (err) {
         usageError = err instanceof Error ? err.message : String(err);
       }
@@ -151,7 +166,11 @@ export async function runBudget(args: ParsedArgs, deps: BudgetDeps = {}): Promis
     let forecast: { window: ForecastWindow; data: ForecastInput; fidelity: ForecastFidelity } | null = null;
     if (!noForecast) {
       const windowStartMs = forecastWindowStartMs(usage?.five_hour, nowDate);
-      const result = await loadForecast(windowStartMs, nowDate.getTime());
+      const result = await withProgress('forecasting from local ledger', async (task) => {
+        const forecastResult = await loadForecast(windowStartMs, nowDate.getTime());
+        task.succeed(forecastResult ? 'forecasted from local ledger' : 'no local forecast data');
+        return forecastResult;
+      }, { quiet: watchFlag !== undefined });
       if (result) {
         forecast = { window: { startMs: windowStartMs }, data: result.input, fidelity: result.fidelity };
       }
@@ -167,7 +186,13 @@ export async function runBudget(args: ParsedArgs, deps: BudgetDeps = {}): Promis
     // once on stderr and degrade to an empty plan list.
     let planStatuses: PlanStatus[] = [];
     try {
-      planStatuses = await loadPlanStatuses();
+      planStatuses = await withProgress('loading budget plans', async (task) => {
+        const statuses = await loadPlanStatuses({ quiet: true });
+        task.succeed(
+          `loaded ${statuses.length} budget plan${statuses.length === 1 ? '' : 's'}`,
+        );
+        return statuses;
+      }, { quiet: watchFlag !== undefined });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[burn] warning: could not load plans (${msg})\n`);

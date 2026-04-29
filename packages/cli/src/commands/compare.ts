@@ -16,6 +16,7 @@ import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
+import { withProgress } from '../progress.js';
 
 const COMPARE_HELP = `burn compare — per-(model, activity) comparison table
 
@@ -191,8 +192,21 @@ export async function runCompare(
   const query = deps.queryAll ?? queryAll;
   const loadPricingFn = deps.loadPricing ?? loadPricing;
 
-  await ingest();
-  const pricing = await loadPricingFn();
+  if (deps.ingestAll) {
+    await withProgress('ingesting latest sessions', async (task) => {
+      await ingest();
+      task.succeed('ingested latest sessions');
+    });
+  } else {
+    await withProgress('ingesting latest sessions', (task) =>
+      ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    );
+  }
+  const pricing = await withProgress('loading pricing snapshot', async (task) => {
+    const loaded = await loadPricingFn();
+    task.succeed('loaded pricing snapshot');
+    return loaded;
+  });
 
   const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample, models };
 
@@ -225,13 +239,30 @@ export async function runCompare(
     // Materialize the ledger tail before reading. ingestAll() above only
     // writes to the JSONL ledger; the archive is a derived read model that
     // needs an explicit catch-up build to reflect the just-appended turns.
-    await buildArchive();
-    const result = await compareFromArchive(q, opts);
+    await withProgress('updating archive', async (task) => {
+      const archiveResult = await buildArchive();
+      task.succeed(
+        `updated archive: ${formatInt(archiveResult.turnsApplied)} turn` +
+          `${archiveResult.turnsApplied === 1 ? '' : 's'} applied`,
+      );
+    });
+    const result = await withProgress('building compare table from archive', async (task) => {
+      const archiveCompare = await compareFromArchive(q, opts);
+      task.succeed(
+        `built compare table from ${formatInt(archiveCompare.analyzedTurns)} turn` +
+          `${archiveCompare.analyzedTurns === 1 ? '' : 's'}`,
+      );
+      return archiveCompare;
+    });
     table = result.table;
     // For fidelity-permissive mode the JSON summary reflects everything in
     // the queried slice; we still emit a zero-excluded breakdown so the
     // schema is stable.
-    const turnsForSummary = await query(q);
+    const turnsForSummary = await withProgress('reading turns for fidelity summary', async (task) => {
+      const turns = await query(q);
+      task.succeed(`read ${formatInt(turns.length)} turn${turns.length === 1 ? '' : 's'}`);
+      return turns;
+    });
     summary = summarizeFidelity(turnsForSummary);
     filteredTurns = turnsForSummary;
     void result.analyzedTurns;
@@ -239,7 +270,12 @@ export async function runCompare(
     // `--provider` narrows the queried slice up front so coverage / fidelity
     // counts reflect the provider-scoped input, not the cross-provider total
     // (which would over-count "excluded" turns relative to what's rendered).
-    const turns = filterTurnsByProvider(await query(q), providerFilter);
+    const queriedTurns = await withProgress('reading ledger turns', async (task) => {
+      const turns = await query(q);
+      task.succeed(`read ${formatInt(turns.length)} turn${turns.length === 1 ? '' : 's'}`);
+      return turns;
+    });
+    const turns = filterTurnsByProvider(queriedTurns, providerFilter);
     // Summarize fidelity over the *unfiltered* slice (modulo provider) so
     // coverage notes and the JSON `summary` reflect the input the user
     // actually queried, not what survived the fidelity gate. The summary
@@ -253,7 +289,14 @@ export async function runCompare(
     filteredTurns = minFidelity === 'partial'
       ? turns
       : turns.filter((t) => hasMinimumFidelity(t.fidelity, minFidelity));
-    table = buildCompareTable(filteredTurns, opts);
+    table = await withProgress('building compare table', async (task) => {
+      const built = buildCompareTable(filteredTurns, opts);
+      task.succeed(
+        `built compare table from ${formatInt(filteredTurns.length)} turn` +
+          `${filteredTurns.length === 1 ? '' : 's'}`,
+      );
+      return built;
+    });
   }
   const excluded = computeExcluded(summary, minFidelity);
 

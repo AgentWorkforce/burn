@@ -10,7 +10,7 @@ import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
 import type { Fidelity, TurnRecord } from '@relayburn/reader';
 
 import type { ParsedArgs } from '../args.js';
-import { runBudgetPlans } from './budget-plans.js';
+import { loadPlanStatuses, runBudgetPlans } from './budget-plans.js';
 
 function args(positional: string[] = [], flags: Record<string, string | true> = {}): ParsedArgs {
   return { positional, flags, tags: {}, passthrough: [] };
@@ -46,6 +46,7 @@ describe('burn budget plans CLI', () => {
   const originalRelay = process.env['RELAYBURN_HOME'];
   const originalHome = process.env['HOME'];
   const originalArchive = process.env['RELAYBURN_ARCHIVE'];
+  const originalProgress = process.env['RELAYBURN_PROGRESS'];
 
   beforeEach(async () => {
     tmp = await mkdtemp(path.join(tmpdir(), 'burn-plans-cli-'));
@@ -57,6 +58,7 @@ describe('burn budget plans CLI', () => {
     // test ledger and contaminate parity numbers.
     process.env['HOME'] = tmpHome;
     delete process.env['RELAYBURN_ARCHIVE'];
+    delete process.env['RELAYBURN_PROGRESS'];
   });
 
   after(async () => {
@@ -66,6 +68,8 @@ describe('burn budget plans CLI', () => {
     else delete process.env['HOME'];
     if (originalArchive !== undefined) process.env['RELAYBURN_ARCHIVE'] = originalArchive;
     else delete process.env['RELAYBURN_ARCHIVE'];
+    if (originalProgress !== undefined) process.env['RELAYBURN_PROGRESS'] = originalProgress;
+    else delete process.env['RELAYBURN_PROGRESS'];
     await rm(tmp, { recursive: true, force: true });
     await rm(tmpHome, { recursive: true, force: true });
   });
@@ -96,6 +100,26 @@ describe('burn budget plans CLI', () => {
     assert.equal(result, 0);
     const plans = await loadPlans();
     assert.equal(plans[0]!.resetDay, 15);
+  });
+
+  it('can silence nested plan-status progress output', async () => {
+    await savePlans([
+      {
+        id: 'claude-pro',
+        provider: 'claude',
+        name: 'Claude Pro',
+        budgetUsd: 20,
+        resetDay: 1,
+      },
+    ]);
+    process.env['RELAYBURN_PROGRESS'] = '1';
+
+    const { result, stderr } = await captureStdio(() =>
+      loadPlanStatuses(undefined, { quiet: true }),
+    );
+
+    assert.equal(result.length, 1);
+    assert.equal(stderr, '');
   });
 
   it('rejects --reset-day outside 1-31', async () => {

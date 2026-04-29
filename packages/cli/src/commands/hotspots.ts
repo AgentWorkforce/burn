@@ -56,6 +56,7 @@ import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
+import { withProgress } from '../progress.js';
 import { runHotspotsSession } from './hotspots-session.js';
 
 const DEFAULT_TOP_N = 10;
@@ -199,9 +200,20 @@ export async function runHotspots(args: ParsedArgs): Promise<number> {
     return 2;
   }
 
-  await ingestAll();
-  const pricing = await loadPricing();
-  const turns = filterTurnsByProvider(await queryAll(q), providerFilter);
+  await withProgress('ingesting latest sessions', (task) =>
+    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+  );
+  const pricing = await withProgress('loading pricing snapshot', async (task) => {
+    const loaded = await loadPricing();
+    task.succeed('loaded pricing snapshot');
+    return loaded;
+  });
+  const queriedTurns = await withProgress('reading ledger turns', async (task) => {
+    const rows = await queryAll(q);
+    task.succeed(`read ${formatInt(rows.length)} turn${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
+  const turns = filterTurnsByProvider(queriedTurns, providerFilter);
 
   // `--findings` is the unified-render flag for `--patterns`; passing it
   // standalone (without `--patterns`) is taken as `--patterns --findings`.
@@ -213,7 +225,15 @@ export async function runHotspots(args: ParsedArgs): Promise<number> {
     const selected = resolvePatternSelection(patternsFlag);
     const sessionIds = new Set(turns.map((t) => t.sessionId));
     const compactions = selected.has('compaction')
-      ? (await queryCompactions(q)).filter((c) => sessionIds.has(c.sessionId))
+      ? (
+          await withProgress('reading compaction events', async (task) => {
+            const rows = await queryCompactions(q);
+            task.succeed(
+              `read ${formatInt(rows.length)} compaction event${rows.length === 1 ? '' : 's'}`,
+            );
+            return rows;
+          })
+        ).filter((c) => sessionIds.has(c.sessionId))
       : [];
     return runPatternsMode(args, turns, pricing, compactions, selected, { query: q });
   }
@@ -742,7 +762,11 @@ export async function runPatternsMode(
   const needUserTurns =
     selected.has('opencode-system-prompt') || selected.has('tool-output-bloat');
   const userTurnsBySession = needUserTurns
-    ? await loadUserTurnsBySession(perDetector)
+    ? await withProgress('reading user turns for pattern detectors', async (task) => {
+        const rows = await loadUserTurnsBySession(perDetector);
+        task.succeed(`read user turns for ${formatInt(rows.size)} session${rows.size === 1 ? '' : 's'}`);
+        return rows;
+      })
     : undefined;
 
   // Load content sidecars for the four detectors that surface content-derived
@@ -753,13 +777,24 @@ export async function runPatternsMode(
   const enrichableDetectors: PatternKind[] = ['retries', 'failures', 'compaction', 'reverts'];
   const needContent = enrichableDetectors.some((d) => selected.has(d));
   const contentBySession = needContent
-    ? await loadContentBySession(perDetector, enrichableDetectors)
+    ? await withProgress('reading content for pattern detectors', async (task) => {
+        const rows = await loadContentBySession(perDetector, enrichableDetectors);
+        task.succeed(`read content for ${formatInt(rows.size)} session${rows.size === 1 ? '' : 's'}`);
+        return rows;
+      })
     : undefined;
 
   const needToolResultEvents =
     selected.has('retries') || selected.has('failures') || selected.has('cancellations');
   const toolResultEvents = needToolResultEvents
-    ? (deps.toolResultEvents ?? await loadToolResultEventsForTurns(turns, deps.query))
+    ? (
+        deps.toolResultEvents ??
+        await withProgress('reading tool-result events for patterns', async (task) => {
+          const rows = await loadToolResultEventsForTurns(turns, deps.query);
+          task.succeed(`read ${formatInt(rows.length)} tool-result event${rows.length === 1 ? '' : 's'}`);
+          return rows;
+        })
+      )
     : undefined;
 
   if (selected.has('retries')) {
@@ -829,11 +864,18 @@ export async function runPatternsMode(
     // file in `detectStaticConfigBloat`'s last-wins merge. Missing or
     // malformed files yield `undefined` from the loader and are dropped from
     // the input list — see `loadClaudeSettings`.
-    const settings: LoadedClaudeSettings[] = [];
-    const userLoaded = await loadClaudeSettings(userClaudeSettingsPath());
-    if (userLoaded) settings.push(userLoaded);
-    const projectLoaded = await loadClaudeSettings(projectClaudeSettingsPath());
-    if (projectLoaded) settings.push(projectLoaded);
+    const settings = await withProgress('loading Claude settings', async (task) => {
+      const loadedSettings: LoadedClaudeSettings[] = [];
+      const userLoaded = await loadClaudeSettings(userClaudeSettingsPath());
+      if (userLoaded) loadedSettings.push(userLoaded);
+      const projectLoaded = await loadClaudeSettings(projectClaudeSettingsPath());
+      if (projectLoaded) loadedSettings.push(projectLoaded);
+      task.succeed(
+        `loaded ${formatInt(loadedSettings.length)} Claude settings file` +
+          `${loadedSettings.length === 1 ? '' : 's'}`,
+      );
+      return loadedSettings;
+    });
 
     // Signal B inputs: stream `tool_result_events` from the ledger. We pass
     // the full TurnRecord set so the detector can join tool_use_ids back to
@@ -844,16 +886,24 @@ export async function runPatternsMode(
     // reused across detectors — flatten its values here since the detector
     // keys lookups by `(source|sessionId|toolUseId)` and doesn't need the
     // per-session structure preserved.
-    const toolResultEvents = await loadToolResultEventsForTurns(turns, deps.query);
+    const toolResultEvents = await withProgress('reading tool-result events for output bloat', async (task) => {
+      const rows = await loadToolResultEventsForTurns(turns, deps.query);
+      task.succeed(`read ${formatInt(rows.length)} tool-result event${rows.length === 1 ? '' : 's'}`);
+      return rows;
+    });
     const allUserTurns: UserTurnRecord[] = userTurnsBySession
       ? [...userTurnsBySession.values()].flat()
       : [];
-    toolOutputBloats = detectToolOutputBloat({
-      settings,
-      toolResultEvents,
-      userTurns: allUserTurns,
-      turns,
-      pricing,
+    toolOutputBloats = await withProgress('detecting tool output bloat', async (task) => {
+      const rows = detectToolOutputBloat({
+        settings,
+        toolResultEvents,
+        userTurns: allUserTurns,
+        turns,
+        pricing,
+      });
+      task.succeed(`detected ${formatInt(rows.length)} tool-output bloat finding${rows.length === 1 ? '' : 's'}`);
+      return rows;
     });
   }
 
@@ -865,8 +915,16 @@ export async function runPatternsMode(
   let ghostFindings: GhostSurfaceFinding[] = [];
   if (selected.has('ghost-surface')) {
     const allTurns = perDetector.get('ghost-surface') ?? turns;
-    const ghostInputs = await buildGhostSurfaceInputs(allTurns, pricing);
-    ghostFindings = await detectGhostSurface(ghostInputs);
+    const ghostInputs = await withProgress('building ghost-surface inputs', async (task) => {
+      const inputs = await buildGhostSurfaceInputs(allTurns, pricing);
+      task.succeed('built ghost-surface inputs');
+      return inputs;
+    });
+    ghostFindings = await withProgress('detecting ghost surfaces', async (task) => {
+      const findings = await detectGhostSurface(ghostInputs);
+      task.succeed(`detected ${formatInt(findings.length)} ghost-surface finding${findings.length === 1 ? '' : 's'}`);
+      return findings;
+    });
   }
 
   // Build session summaries on the union — anything attributed by *any*

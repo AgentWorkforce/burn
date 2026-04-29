@@ -38,6 +38,7 @@ import type {
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { withProgress } from '../progress.js';
 import {
   filterTurnsByProvider,
   parseProviderFilter,
@@ -104,10 +105,24 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return 2;
   }
 
-  const ingestReport = await ingestAll();
-  const pricing = await loadPricing();
+  const ingestReport = await withProgress('ingesting latest sessions', (task) =>
+    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+  );
+  const pricing = await withProgress('loading pricing snapshot', async (task) => {
+    const loaded = await loadPricing();
+    task.succeed('loaded pricing snapshot');
+    return loaded;
+  });
   const agentSessionIds =
-    agentFilter !== undefined ? await resolveAgentSessionTree(agentFilter) : undefined;
+    agentFilter !== undefined
+      ? await withProgress('resolving agent session tree', async (task) => {
+          const ids = await resolveAgentSessionTree(agentFilter);
+          task.succeed(
+            `resolved ${formatInt(ids.size)} linked session${ids.size === 1 ? '' : 's'}`,
+          );
+          return ids;
+        })
+      : undefined;
   if (subagentTreeFlag !== undefined) {
     return renderSubagentTreeMode(
       args,
@@ -245,8 +260,16 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   }
 
   if (args.flags['quality'] === true) {
-    const contentBySession = await loadContentForQuality(turns);
-    const quality = computeQuality(turns, { contentBySession });
+    const contentBySession = await withProgress('reading content for quality summary', async (task) => {
+      const content = await loadContentForQuality(turns);
+      task.succeed(`read content for ${formatInt(content.size)} session${content.size === 1 ? '' : 's'}`);
+      return content;
+    });
+    const quality = await withProgress('computing quality summary', async (task) => {
+      const result = computeQuality(turns, { contentBySession });
+      task.succeed('computed quality summary');
+      return result;
+    });
     lines.push(renderQuality(quality));
     lines.push('');
   }
@@ -405,16 +428,28 @@ async function renderSubagentTreeMode(
     process.stderr.write('burn: --subagent-tree requires a session id (positional or --session)\n');
     return 2;
   }
-  const relationships = await collectSubagentTreeRelationships(sessionId, q);
+  const relationships = await withProgress('reading subagent relationships', async (task) => {
+    const rows = await collectSubagentTreeRelationships(sessionId, q);
+    task.succeed(`read ${formatInt(rows.length)} relationship${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
   const turns = filterTurnsByProvider(
     filterTurnsByAgent(
-      await loadSubagentTreeTurns(sessionId, relationships, q, args),
+      await withProgress('reading subagent tree turns', async (task) => {
+        const rows = await loadSubagentTreeTurns(sessionId, relationships, q, args);
+        task.succeed(`read ${formatInt(rows.length)} turn${rows.length === 1 ? '' : 's'}`);
+        return rows;
+      }),
       agentFilter,
       agentSessionIds,
     ),
     providerFilter,
   );
-  const trees = buildSubagentTree(turns, { pricing, relationships });
+  const trees = await withProgress('building subagent tree', async (task) => {
+    const built = buildSubagentTree(turns, { pricing, relationships });
+    task.succeed(`built ${formatInt(built.size)} subagent tree${built.size === 1 ? '' : 's'}`);
+    return built;
+  });
   const root = trees.get(sessionId) ?? findTreeNode(trees, sessionId);
   if (!root) {
     process.stdout.write(`no turns found for session ${sessionId}\n`);
@@ -494,12 +529,20 @@ async function renderByToolMode(
   turns: EnrichedTurn[],
   pricing: Parameters<typeof costForTurn>[1],
 ): Promise<number> {
-  const userTurnsBySession = await loadUserTurnsForByTool(turns);
-  const { byTool, unattributed } = attributeCostToTools(
-    turns,
-    pricing,
-    userTurnsBySession,
-  );
+  const userTurnsBySession = await withProgress('reading user turns for tool attribution', async (task) => {
+    const rows = await loadUserTurnsForByTool(turns);
+    task.succeed(`read user turns for ${formatInt(rows.size)} session${rows.size === 1 ? '' : 's'}`);
+    return rows;
+  });
+  const { byTool, unattributed } = await withProgress('attributing tool cost', async (task) => {
+    const result = attributeCostToTools(
+      turns,
+      pricing,
+      userTurnsBySession,
+    );
+    task.succeed(`attributed cost to ${formatInt(result.byTool.size)} tool${result.byTool.size === 1 ? '' : 's'}`);
+    return result;
+  });
   const fidelity = summarizeFidelity(turns);
   const sorted = [...byTool.entries()].sort((a, b) => b[1].cost - a[1].cost);
 
@@ -759,7 +802,11 @@ async function renderRelationshipMode(
   q: Query,
   flag: string | true,
 ): Promise<number> {
-  const relationships = await queryRelationships(relationshipQueryForTurnSlice(q));
+  const relationships = await withProgress('reading session relationships', async (task) => {
+    const rows = await queryRelationships(relationshipQueryForTurnSlice(q));
+    task.succeed(`read ${formatInt(rows.length)} relationship${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
   const matches = matchRelationshipsToTurns(relationships, turns, pricing);
   const stats = aggregateRelationshipStats(matches);
 
@@ -1057,18 +1104,36 @@ async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
   const noArchiveFlag = args.flags['no-archive'] === true;
   const envDisabled = process.env['RELAYBURN_ARCHIVE'] === '0';
   if (noArchiveFlag || envDisabled) {
-    return queryAll(q);
+    return withProgress('reading ledger turns', async (task) => {
+      const turns = await queryAll(q);
+      task.succeed(`read ${formatInt(turns.length)} ledger turn${turns.length === 1 ? '' : 's'}`);
+      return turns;
+    });
   }
   try {
-    await buildArchive();
-    return await queryAllFromArchive(q);
+    await withProgress('updating archive', async (task) => {
+      const result = await buildArchive();
+      task.succeed(
+        `updated archive: ${formatInt(result.turnsApplied)} turn` +
+          `${result.turnsApplied === 1 ? '' : 's'} applied`,
+      );
+    });
+    return await withProgress('querying archive', async (task) => {
+      const turns = await queryAllFromArchive(q);
+      task.succeed(`read ${formatInt(turns.length)} archive turn${turns.length === 1 ? '' : 's'}`);
+      return turns;
+    });
   } catch (err) {
     // Don't let an archive-side failure (corrupt sqlite, schema mismatch we
     // didn't recover from cleanly, etc.) take down `burn summary`. Surface
     // the reason on stderr and fall back to the streaming reader.
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`burn: archive read failed (${msg}); falling back to ledger walk\n`);
-    return queryAll(q);
+    return withProgress('reading ledger turns', async (task) => {
+      const turns = await queryAll(q);
+      task.succeed(`read ${formatInt(turns.length)} ledger turn${turns.length === 1 ? '' : 's'}`);
+      return turns;
+    });
   }
 }
 

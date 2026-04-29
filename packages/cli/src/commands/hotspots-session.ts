@@ -28,6 +28,7 @@ import type {
 import { countToolCallGaps, ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { withProgress } from '../progress.js';
 
 export async function runHotspotsSession(
   args: ParsedArgs,
@@ -37,19 +38,42 @@ export async function runHotspotsSession(
     return runHotspotsGapReport(args);
   }
 
-  await ingestAll();
-  const pricing = await loadPricing();
-  const turns = await queryAll({ sessionId });
+  await withProgress('ingesting latest sessions', (task) =>
+    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+  );
+  const pricing = await withProgress('loading pricing snapshot', async (task) => {
+    const loaded = await loadPricing();
+    task.succeed('loaded pricing snapshot');
+    return loaded;
+  });
+  const turns = await withProgress('reading session turns', async (task) => {
+    const rows = await queryAll({ sessionId });
+    task.succeed(`read ${formatInt(rows.length)} session turn${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
   if (turns.length === 0) {
     process.stderr.write(`burn hotspots --session: no turns found for session ${sessionId}\n`);
     return 1;
   }
-  const compactions = await queryCompactions({ sessionId });
-  const relationships = await queryRelationships({ sessionId });
+  const compactions = await withProgress('reading session compactions', async (task) => {
+    const rows = await queryCompactions({ sessionId });
+    task.succeed(`read ${formatInt(rows.length)} compaction event${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
+  const relationships = await withProgress('reading session relationships', async (task) => {
+    const rows = await queryRelationships({ sessionId });
+    task.succeed(`read ${formatInt(rows.length)} relationship${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
   const graphSessionIds = collectGraphSessionIds(sessionId, relationships);
-  const eventBatches = await Promise.all(
-    [...graphSessionIds].map((sid) => queryToolResultEvents({ sessionId: sid })),
-  );
+  const eventBatches = await withProgress('reading tool-result events', async (task) => {
+    const batches = await Promise.all(
+      [...graphSessionIds].map((sid) => queryToolResultEvents({ sessionId: sid })),
+    );
+    const total = batches.reduce((sum, batch) => sum + batch.length, 0);
+    task.succeed(`read ${formatInt(total)} tool-result event${total === 1 ? '' : 's'}`);
+    return batches;
+  });
   const toolResultEvents = sortToolResultEvents(
     eventBatches.reduce<ToolResultEventRecord[]>((out, batch) => {
       out.push(...batch);
@@ -58,24 +82,40 @@ export async function runHotspotsSession(
   );
   const toolResultStatusBySession = summarizeToolResultStatuses(toolResultEvents);
 
-  const contentRecords: ContentRecord[] = await readContent({ sessionId });
+  const contentRecords: ContentRecord[] = await withProgress('reading session content', async (task) => {
+    const records = await readContent({ sessionId });
+    task.succeed(`read ${formatInt(records.length)} content record${records.length === 1 ? '' : 's'}`);
+    return records;
+  });
   const contentBySession = new Map<string, ContentRecord[]>();
   if (contentRecords.length > 0) contentBySession.set(sessionId, contentRecords);
-  const userTurns: UserTurnRecord[] = await queryUserTurns({ sessionId });
+  const userTurns: UserTurnRecord[] = await withProgress('reading user turns', async (task) => {
+    const rows = await queryUserTurns({ sessionId });
+    task.succeed(`read ${formatInt(rows.length)} user turn${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
   const userTurnsBySession = new Map<string, UserTurnRecord[]>();
   if (userTurns.length > 0) userTurnsBySession.set(sessionId, userTurns);
 
-  const attribution = attributeHotspots(turns, {
-    pricing,
-    contentBySession,
-    userTurnsBySession,
+  const attribution = await withProgress('attributing hotspots', async (task) => {
+    const result = attributeHotspots(turns, {
+      pricing,
+      contentBySession,
+      userTurnsBySession,
+    });
+    task.succeed('attributed hotspots');
+    return result;
   });
-  const patterns = detectPatterns(turns, {
-    pricing,
-    compactions,
-    userTurnsBySession,
-    contentBySession,
-    toolResultEvents,
+  const patterns = await withProgress('detecting session patterns', async (task) => {
+    const result = detectPatterns(turns, {
+      pricing,
+      compactions,
+      userTurnsBySession,
+      contentBySession,
+      toolResultEvents,
+    });
+    task.succeed('detected session patterns');
+    return result;
   });
   const files = aggregateByFile(attribution.attributions).slice(0, 5);
   const bashes = aggregateByBash(attribution.attributions).slice(0, 5);
@@ -568,11 +608,25 @@ interface RelationshipDriftReport {
 }
 
 async function runHotspotsGapReport(args: ParsedArgs): Promise<number> {
-  await ingestAll();
-  const config = await loadConfig();
+  await withProgress('ingesting latest sessions', (task) =>
+    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+  );
+  const config = await withProgress('loading burn configuration', async (task) => {
+    const loaded = await loadConfig();
+    task.succeed('loaded burn configuration');
+    return loaded;
+  });
   const contentMode = config.content.store;
-  const turns = await queryAll();
-  const relationships = await queryRelationships();
+  const turns = await withProgress('reading ledger turns', async (task) => {
+    const rows = await queryAll();
+    task.succeed(`read ${formatInt(rows.length)} turn${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
+  const relationships = await withProgress('reading session relationships', async (task) => {
+    const rows = await queryRelationships();
+    task.succeed(`read ${formatInt(rows.length)} relationship${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
 
   const sessionsByAdapter = new Map<Adapter, Map<string, TurnRecord[]>>();
   const adapterBySession = new Map<string, Adapter>();
