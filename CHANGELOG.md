@@ -4,6 +4,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Fixed
+
+- `burn rebuild --content` now fast-skips renamed Codex rollout files using their embedded session metadata.
+
 ## [0.43.0] - 2026-04-29
 
 ### Changed

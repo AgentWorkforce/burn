@@ -291,6 +291,28 @@ describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
       'tool_result user-turn block should be persisted for sized attribution',
     );
   });
+
+  it('rebuild --content skips renamed Codex rollouts using session_meta ids', async () => {
+    const sessionId = 'sess_codex_renamed_rebuild_skip';
+    await writeCodexSession(
+      tmpHome,
+      'renamed-codex-rebuild',
+      codexSessionWithUserTurnBridgeChunks(sessionId).join(''),
+    );
+
+    await ingestCodexSessions();
+    const sizeBefore = (await stat(ledgerPath())).size;
+
+    const report = await reingestMissingContent();
+    const sizeAfter = (await stat(ledgerPath())).size;
+
+    assert.equal(report.scannedFiles, 1);
+    assert.equal(report.skippedExisting, 1);
+    assert.equal(report.reingestedSessions, 0);
+    assert.equal(report.appendedContent, 0);
+    assert.equal(report.appendedUserTurns, 0);
+    assert.equal(sizeAfter, sizeBefore, 'ledger must not grow for already-covered renamed rollouts');
+  });
 });
 
 describe('pending stamp ingest', () => {
@@ -392,6 +414,21 @@ describe('pending stamp ingest', () => {
     );
 
     assert.equal(await deriveCodexSessionId(file), 'sess_from_meta');
+  });
+
+  it('derives a codex session id from a canonical filename without reading the file', async () => {
+    const sessionId = '11111111-2222-3333-4444-555555555555';
+    const file = path.join(
+      tmpHome,
+      '.codex',
+      'sessions',
+      '2026',
+      '04',
+      '24',
+      `rollout-2026-04-24T00-00-00-000Z-${sessionId}.jsonl`,
+    );
+
+    assert.equal(await deriveCodexSessionId(file), sessionId);
   });
 });
 
