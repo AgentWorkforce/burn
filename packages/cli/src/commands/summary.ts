@@ -145,7 +145,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     // JSON contract: numeric usage fields are always numbers, but the
     // companion `fidelity` block is the only honest answer to "are these
     // zeros real?". Programmatic consumers should consult `summary` (the
-    // slice-wide rollup, same shape compare/waste/budget emit) and
+    // slice-wide rollup, same shape compare/hotspots/budget emit) and
     // `perCell` (per-(model|provider) per-field known/missing counts) before
     // trusting any aggregate.
     const perCell = buildPerCellFidelity(rows, byProvider ? 'provider' : 'model');
@@ -962,7 +962,7 @@ interface PerCellFidelityBlock {
 }
 
 // Per-(model|provider) per-field coverage block for `--json`. Shape mirrors
-// the pattern compare/waste use: a `summary` (slice-wide rollup) plus an
+// the pattern compare/hotspots use: a `summary` (slice-wide rollup) plus an
 // optional `perCell` payload programmatic callers can render without
 // re-walking the ledger. Empty `cells` array (no rows in scope) is a valid
 // payload — callers should treat it the same as "every cell is full".

@@ -17,7 +17,7 @@ Flags:
   --days <n>   override retention (number of days, or 'forever' to disable)
   --force      delete sidecars even when the source session file still exists.
                Default behavior keeps recoverable sidecars in place because
-               'burn rebuild --content' can rederive them from the source.
+               'burn rebuild content' can rederive them from the source.
 
 Examples:
   burn content prune
@@ -135,7 +135,7 @@ export async function opportunisticPrune(): Promise<void> {
 //
 // Walk the same source roots that `ingest.ts` uses and build an in-memory
 // Set<sessionId>. Used to answer "is the upstream agent's session file still
-// on disk?" — if yes, the sidecar is recoverable via `burn rebuild --content`
+// on disk?" — if yes, the sidecar is recoverable via `burn rebuild content`
 // and prune should skip it.
 //
 // Cost: one readdir pass per root; ~100ms even on large ledgers. Run

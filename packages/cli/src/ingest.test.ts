@@ -256,7 +256,7 @@ describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
     assert.equal(second.length, 1, 'still one user-turn line after re-ingest');
   });
 
-  it('rebuild --content backfills user-turn rows even when content already exists', async () => {
+  it('rebuild content backfills user-turn rows even when content already exists', async () => {
     const sessionId = '33333333-3333-3333-3333-333333333333';
     await writeClaudeSession(
       tmpHome,
@@ -292,7 +292,7 @@ describe('ingest forwards UserTurnRecord into the ledger (#94)', () => {
     );
   });
 
-  it('rebuild --content skips renamed Codex rollouts using session_meta ids', async () => {
+  it('rebuild content skips renamed Codex rollouts using session_meta ids', async () => {
     const sessionId = 'sess_codex_renamed_rebuild_skip';
     await writeCodexSession(
       tmpHome,

@@ -2,7 +2,7 @@ import * as path from 'node:path';
 
 import type { IngestReport } from '../ingest.js';
 import { writePendingStamp } from '../pending-stamps.js';
-import { startWatchLoop, type WatchController } from '../commands/watch.js';
+import { startWatchLoop, type WatchController } from '../watch-loop.js';
 
 import type { HarnessAdapter, HarnessRunContext, HarnessSpawnPlan } from './types.js';
 

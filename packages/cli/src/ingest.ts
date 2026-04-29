@@ -68,7 +68,7 @@ export interface IngestReport {
 // Per-adapter content-capture gap aggregator. A "gap" is a session that the
 // parser emitted in `contentMode === 'full'` mode with at least one tool call
 // in a committed turn but zero `tool_result` ContentRecords — the load-bearing
-// kind for `burn waste`'s tool-call attribution. See #59 / #33.
+// kind for `burn hotspots`'s tool-call attribution. See #59 / #33.
 //
 // We accumulate per adapter across the ingest loop and emit a single warning
 // at the end. Suppression is per-process: once an adapter has warned, later
@@ -220,7 +220,7 @@ export async function ingestAll(): Promise<IngestReport> {
 // "affected" iff (a) it produced ≥1 turn with ≥1 tool call and (b) no
 // tool_result records were captured for it. Per the issue, we ignore the
 // `text`/`thinking`/`tool_use` content kinds because their absence is not
-// load-bearing for `burn waste` attribution.
+// load-bearing for `burn hotspots` attribution.
 export function countToolCallGaps(
   turns: readonly TurnRecord[],
   content: readonly ContentRecord[],
@@ -255,7 +255,7 @@ function emitGapWarning(
   state.write(
     `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
       `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
-      `adapter, so burn waste will use user-turn block sizes when available, then fall back to even-split attribution. See #33.\n`,
+      `adapter, so burn hotspots will use user-turn block sizes when available, then fall back to even-split attribution. See #33.\n`,
   );
 }
 
@@ -610,7 +610,7 @@ export interface ReingestContentReport {
 }
 
 // Re-parse source session files to populate missing content sidecars and
-// user-turn rows. Used by `burn rebuild --content` to fix up historical
+// user-turn rows. Used by `burn rebuild content` to fix up historical
 // sessions ingested before those derived records were written (or where the
 // sidecar was pruned). Does NOT touch cursors, ledger turns, or compactions.
 export async function reingestMissingContent(): Promise<ReingestContentReport> {

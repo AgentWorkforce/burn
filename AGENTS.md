@@ -32,6 +32,8 @@ pnpm run pricing:update   # refresh the vendored models.dev snapshot
 
 Tests run from `dist/` so a stale build will lie. If a test fails unexpectedly, rebuild before debugging.
 
+Terminology note: the old `waste` / `diagnose` CLI and analyze API names are now `hotspots`, and the old `context` / `context advise` surface is now `overhead` / `overhead trim`. Do not add compatibility aliases for the old names.
+
 ## Changelog
 
 Curate `[Unreleased]` in the relevant per-package `packages/*/CHANGELOG.md` as you land PRs — write the entry the way you'd want it to read in a release note. At publish time, the workflow (`.github/workflows/publish.yml`) **promotes** your `[Unreleased]` block verbatim into `## [x.y.z] - DATE` and resets `[Unreleased]` to empty. No double-writing, no post-release hand-editing.
@@ -116,6 +118,8 @@ export const cursorAdapter: HarnessAdapter = {
 Then add it to the registry array in `harnesses/registry.ts`. The CLI help block reads `listHarnessNames()` so it updates automatically.
 
 The codex / opencode adapters share the pending-stamp + watch-loop shape; both are constructed via `createPendingStampAdapter` in `harnesses/pending-stamp.ts`. New harnesses with the same shape can reuse it.
+
+`burn ingest` owns passive ingest modes: no flags scans all session stores once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven Claude hook path. The reusable polling controller lives in `packages/cli/src/watch-loop.ts`; import `startWatchLoop` from there for adapters.
 
 ## When in doubt
 

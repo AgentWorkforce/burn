@@ -47,7 +47,7 @@ describe('buildClaudeHookSettings', () => {
       assert.ok(matchers && matchers.length > 0, `missing hook for ${evt}`);
       const cmd = matchers[0]!.hooks[0]!;
       assert.equal(cmd.type, 'command');
-      assert.equal(cmd.command, 'burn ingest --runtime claude --quiet');
+      assert.equal(cmd.command, 'burn ingest --hook claude --quiet');
     }
   });
 
@@ -79,14 +79,14 @@ describe('buildClaudeHookSettings', () => {
     const { settings } = buildClaudeHookSettings({ burnBin: '/opt/tools/burn' });
     const parsed = parse(settings);
     const cmd = parsed.hooks['PostToolUse']![0]!.hooks[0]!.command;
-    assert.equal(cmd, '/opt/tools/burn ingest --runtime claude --quiet');
+    assert.equal(cmd, '/opt/tools/burn ingest --hook claude --quiet');
   });
 
   it('shell-quotes a burnBin path that contains spaces', () => {
     const { settings } = buildClaudeHookSettings({ burnBin: '/opt/path with space/burn' });
     const parsed = parse(settings);
     const cmd = parsed.hooks['PreToolUse']![0]!.hooks[0]!.command;
-    assert.equal(cmd, `'/opt/path with space/burn' ingest --runtime claude --quiet`);
+    assert.equal(cmd, `'/opt/path with space/burn' ingest --hook claude --quiet`);
   });
 
   it('produces settings that round-trip through JSON.parse', () => {

@@ -7,21 +7,21 @@ export type { CompareCategory, CompareCell, CompareOptions, CompareTable } from 
 export { compareFromArchive } from './compare-archive.js';
 export type { CompareFromArchiveResult } from './compare-archive.js';
 export {
-  attributeWaste,
+  attributeHotspots,
   aggregateByFile,
   aggregateByBash,
   aggregateBySubagent,
-} from './waste.js';
+} from './hotspots.js';
 export type {
   AttributionMethod,
-  AttributeWasteOptions,
+  HotspotsOptions,
   BashAggregation,
   FileAggregation,
-  SessionWasteTotals,
+  SessionTotals,
   SubagentAggregation,
   ToolAttribution,
-  WasteResult,
-} from './waste.js';
+  HotspotsResult,
+} from './hotspots.js';
 export {
   aggregateSubagentTypeStats,
   buildSubagentTree,
@@ -96,14 +96,14 @@ export type {
 } from './quality.js';
 export {
   attributeClaudeMd,
-  buildAdviseRecommendations,
+  buildTrimRecommendations,
   findClaudeMdFiles,
   loadClaudeMdFile,
   parseClaudeMd,
   renderUnifiedDiffForRecommendation,
 } from './claude-md.js';
 export type {
-  AdviseRecommendation,
+  TrimRecommendation,
   AttributeClaudeMdInput,
   ClaudeMdAttributionResult,
   MarkdownSection,
@@ -112,11 +112,11 @@ export type {
   SessionClaudeMdCost,
 } from './claude-md.js';
 export {
-  attributeContext,
+  attributeOverhead,
   describeAppliesTo,
-  findContextFiles,
-  loadContextFile,
-} from './context-md.js';
+  findOverheadFiles,
+  loadOverheadFile,
+} from './overhead.js';
 export { computePlanUsage, cycleBounds, planUsageFromArchive } from './plan-usage.js';
 export type {
   ComputePlanUsageFromArchiveOptions,
@@ -151,13 +151,13 @@ export type {
   UsageCostAggregateRow,
 } from './provider.js';
 export type {
-  AttributeContextInput,
-  ContextAttributionResult,
-  ContextFile,
-  ContextFileAttribution,
-  ContextFileKind,
-  ParsedContextFile,
-} from './context-md.js';
+  AttributeOverheadInput,
+  OverheadAttribution,
+  OverheadFile,
+  OverheadFileAttribution,
+  OverheadFileKind,
+  ParsedOverheadFile,
+} from './overhead.js';
 export {
   claudeGhostAdapter,
   codexGhostAdapter,

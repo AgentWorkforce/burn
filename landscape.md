@@ -4,6 +4,8 @@ Reference notes from surveying ten token-usage tools in the Claude Code / multi-
 
 **Burn's meta-goal** (repeated here because it shapes every evaluation below): answer "would the same work cost less on a different model, harness, or tool — in dollars or quota consumption?" Everything in this doc is graded against that question, not against "is this tool well-built."
 
+Burn keeps derived local state deliberately disposable: dedup indexes, content sidecars, activity labels, and the SQLite archive are refreshed through `burn rebuild <target>` rather than separate maintenance verbs.
+
 ## Summary
 
 | # | Project | Stars | Stack | Shape | Load-bearing contribution |
@@ -56,7 +58,7 @@ Reference notes from surveying ten token-usage tools in the Claude Code / multi-
 - `internal/claude/parser.go:31-75` — hook event parsing; `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `Notification`, `SessionStart`, `SessionEnd`
 - `internal/app/ingest_claude.go:58-117` — subagent correlation via `PendingAgentSpawn` queue keyed by `tool_use_id`
 - `internal/app/ingest_claude.go:26-33` — OpenCode-wraps-Claude-Code dedup guard
-- `scripts/claude-hook.sh` — 2 lines: `exec "$BIN" ingest --runtime claude`
+- `scripts/claude-hook.sh` — 2 lines: `exec "$BIN" ingest --hook claude`
 
 **The breakthrough finding:** Claude Code's `PostToolUse` hook fires with the full `tool_response` content in the payload. Confirmed at `parser.go:58-61` (`raw["tool_input"]` and `raw["tool_response"]` extraction). That means per-tool-call token sizing doesn't need the delta-math of #2 — the size can be read directly.
 
@@ -305,7 +307,7 @@ Plus **structured fix actions** (`WasteAction = { type: 'paste' | 'command' | 'f
 
 ## Landscape takeaways
 
-1. **Nobody else does per-tool-call attribution.** All 10 tools stop at per-message or per-turn totals. Anthropic returns `usage` at the message level, and every surveyed project treated that as a ceiling. Burn's plan — delta-math fallback (#2), hook-path precise (#7), consumed by `burn waste` (#3) — is novel territory.
+1. **Nobody else does per-tool-call attribution.** All 10 tools stop at per-message or per-turn totals. Anthropic returns `usage` at the message level, and every surveyed project treated that as a ceiling. Burn's plan — delta-math fallback (#2), hook-path precise (#7), consumed by `burn hotspots` (#3) — is novel territory.
 
 2. **Nobody has a workflow/stamp concept.** Burn's `@relayburn/ledger.stamp` API for attributing turns to `workflowId` / `agentId` / `persona` at query time is unique in the landscape. Every competitor aggregates by source-harness or model. This is the primitive that makes cross-harness comparison possible for the meta-goal.
 
@@ -340,7 +342,7 @@ For each filed issue, the project(s) it drew from:
 | Issue | Title | Primary source(s) |
 |---|---|---|
 | #2 | Preserve user-turn block sizes | lazyagent (fallback when hooks unavailable) |
-| #3 | `burn waste` per-tool-call attribution | Original concept |
+| #3 | `burn hotspots` per-tool-call attribution | Original concept |
 | #4 | Incremental cursors + git-canonical project keys | TokenTracker (cursors, git); tokscale (fingerprint dedup, added later) |
 | #5 | `burn budget` quota-window tracking | TokenTracker (endpoints); ccusage (forecasting, added later) |
 | #6 | Outcome/quality signal design | Original concept; prism adherence rejected as primary |
