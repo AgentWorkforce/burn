@@ -4,6 +4,10 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+### Changed
+
+- Ledger reads, writes, locks, and content sidecars now run through the file-backed storage adapter seam without changing the JSONL filesystem output.
+
 ## [1.0.0] - 2026-04-29
 
 ### Added
