@@ -7,6 +7,7 @@ All notable changes to `@relayburn/cli`.
 ### Added
 
 - `burn diagnose` now reports spawn-env/native relationship drift, with `--explain-drift` for per-session details.
+- `burn diagnose <session>` now surfaces session relationships and tool-result chronology from the execution graph.
 - `burn ingest --runtime claude` now records hook-path tool-result events for Claude `PreToolUse`, `PostToolUse`, `SubagentStop`, and tool-tied `Notification` payloads.
 - `burn summary --by-relationship` now rolls up cost and turn metrics by persisted session relationship type, with `--by-relationship=subagent` for subagent-type detail.
 - `burn watch --opencode-stream` can subscribe to OpenCode's local SSE endpoint and wake ingest immediately on session/message events while polling remains the fallback.

@@ -8,9 +8,16 @@ import {
   __resetIndexCacheForTesting,
   appendContent,
   appendRelationships,
+  appendToolResultEvents,
   appendTurns,
 } from '@relayburn/ledger';
-import type { ContentRecord, SourceKind, TurnRecord } from '@relayburn/reader';
+import type {
+  ContentRecord,
+  SessionRelationshipRecord,
+  SourceKind,
+  ToolResultEventRecord,
+  TurnRecord,
+} from '@relayburn/reader';
 
 import { runDiagnose } from './diagnose.js';
 
@@ -84,6 +91,41 @@ function toolResultContent(opts: {
       toolUseId: opts.toolUseId,
       content: 'ok',
     },
+  };
+}
+
+function fakeRelationship(
+  overrides: Partial<SessionRelationshipRecord> = {},
+): SessionRelationshipRecord {
+  return {
+    v: 1,
+    source: 'native-claude',
+    sessionId: 's-1',
+    relationshipType: 'root',
+    ts: '2026-04-20T00:00:01.000Z',
+    ...overrides,
+  };
+}
+
+function fakeToolResultEvent(
+  overrides: Partial<ToolResultEventRecord> & {
+    sessionId: string;
+    toolUseId: string;
+    eventIndex: number;
+  },
+): ToolResultEventRecord {
+  const { sessionId, toolUseId, eventIndex, ...rest } = overrides;
+  return {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    toolUseId,
+    eventIndex,
+    ts: `2026-04-20T00:02:${String(eventIndex).padStart(2, '0')}.000Z`,
+    status: 'completed',
+    eventSource: 'tool_result',
+    contentLength: 2,
+    ...rest,
   };
 }
 
@@ -494,6 +536,158 @@ describe('burn diagnose aggregate (#79)', () => {
     });
     assert.equal(out.code, 1);
     assert.match(out.stderr, /no turns found for session does-not-exist/);
+  });
+
+  it('renders relationship rows and linked tool-result chronology for a session', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'diag-parent',
+        messageId: 'diag-parent-1',
+      }),
+      fakeTurn({
+        sessionId: 'diag-child',
+        messageId: 'diag-child-1',
+        ts: '2026-04-20T00:03:00.000Z',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({
+        sessionId: 'diag-parent',
+        relationshipType: 'root',
+      }),
+      fakeRelationship({
+        sessionId: 'diag-child',
+        relatedSessionId: 'diag-parent',
+        relationshipType: 'subagent',
+        parentToolUseId: 'tool-spawn',
+        agentId: 'agent-review',
+        subagentType: 'code-reviewer',
+        description: 'inspect execution graph',
+      }),
+    ]);
+    await appendToolResultEvents([
+      fakeToolResultEvent({
+        sessionId: 'diag-parent',
+        toolUseId: 'tool-spawn',
+        eventIndex: 0,
+        status: 'errored',
+        contentLength: 120,
+      }),
+      fakeToolResultEvent({
+        sessionId: 'diag-parent',
+        toolUseId: 'tool-spawn',
+        eventIndex: 1,
+        status: 'errored',
+        contentLength: 128,
+      }),
+      fakeToolResultEvent({
+        sessionId: 'diag-parent',
+        toolUseId: 'tool-spawn',
+        eventIndex: 2,
+        status: 'completed',
+        contentLength: 80,
+      }),
+      fakeToolResultEvent({
+        sessionId: 'diag-child',
+        toolUseId: 'child-read',
+        eventIndex: 0,
+        status: 'errored',
+        contentLength: 64,
+      }),
+    ]);
+
+    const out = await captureDiagnose({
+      flags: {},
+      tags: {},
+      positional: ['diag-parent'],
+      passthrough: [],
+    });
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /tool results: 1 of 2 tool calls errored across 2 linked sessions/);
+    assert.match(out.stdout, /Session relationships/);
+    assert.match(out.stdout, /diag-child/);
+    assert.match(out.stdout, /subagent/);
+    assert.match(out.stdout, /code-reviewer/);
+    assert.match(out.stdout, /tool-spawn/);
+    assert.match(out.stdout, /inspect execution graph/);
+    assert.match(out.stdout, /Tool result chronology/);
+    assert.match(out.stdout, /errored \(2x\)/);
+    assert.match(out.stdout, /child-read/);
+  });
+
+  it('adds graph arrays to diagnose --json', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'diag-json',
+        messageId: 'diag-json-1',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({
+        sessionId: 'diag-json',
+        relationshipType: 'root',
+      }),
+    ]);
+    await appendToolResultEvents([
+      fakeToolResultEvent({
+        sessionId: 'diag-json',
+        toolUseId: 'json-read',
+        eventIndex: 0,
+        status: 'completed',
+        contentLength: 42,
+      }),
+    ]);
+
+    const out = await captureDiagnose({
+      flags: { json: true },
+      tags: {},
+      positional: ['diag-json'],
+      passthrough: [],
+    });
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      relationships: SessionRelationshipRecord[];
+      toolResultEvents: ToolResultEventRecord[];
+      toolResultStatusBySession: Array<{
+        sessionId: string;
+        toolCalls: number;
+        completed: number;
+      }>;
+    };
+    assert.equal(parsed.relationships.length, 1);
+    assert.equal(parsed.relationships[0]!.relationshipType, 'root');
+    assert.equal(parsed.toolResultEvents.length, 1);
+    assert.equal(parsed.toolResultEvents[0]!.toolUseId, 'json-read');
+    assert.deepEqual(parsed.toolResultStatusBySession, [
+      {
+        sessionId: 'diag-json',
+        toolCalls: 1,
+        completed: 1,
+        errored: 0,
+        cancelled: 0,
+        unknown: 0,
+      },
+    ]);
+  });
+
+  it('keeps the human per-session output unchanged when no graph rows exist', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'diag-empty-graph',
+        messageId: 'diag-empty-graph-1',
+      }),
+    ]);
+
+    const out = await captureDiagnose({
+      flags: {},
+      tags: {},
+      positional: ['diag-empty-graph'],
+      passthrough: [],
+    });
+    assert.equal(out.code, 0);
+    assert.doesNotMatch(out.stdout, /Session relationships/);
+    assert.doesNotMatch(out.stdout, /Tool result chronology/);
+    assert.doesNotMatch(out.stdout, /tool results:/);
   });
 
   it('renders an empty-ledger note when there are no adapter sessions at all', async () => {

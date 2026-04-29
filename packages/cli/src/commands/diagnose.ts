@@ -12,6 +12,7 @@ import {
   queryAll,
   queryCompactions,
   queryRelationships,
+  queryToolResultEvents,
   queryUserTurns,
   readContent,
 } from '@relayburn/ledger';
@@ -19,6 +20,7 @@ import type {
   ContentRecord,
   SessionRelationshipRecord,
   SourceKind,
+  ToolResultEventRecord,
   TurnRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
@@ -41,6 +43,18 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
     return 1;
   }
   const compactions = await queryCompactions({ sessionId });
+  const relationships = await queryRelationships({ sessionId });
+  const graphSessionIds = collectGraphSessionIds(sessionId, relationships);
+  const eventBatches = await Promise.all(
+    [...graphSessionIds].map((sid) => queryToolResultEvents({ sessionId: sid })),
+  );
+  const toolResultEvents = sortToolResultEvents(
+    eventBatches.reduce<ToolResultEventRecord[]>((out, batch) => {
+      out.push(...batch);
+      return out;
+    }, []),
+  );
+  const toolResultStatusBySession = summarizeToolResultStatuses(toolResultEvents);
 
   const contentRecords: ContentRecord[] = await readContent({ sessionId });
   const contentBySession = new Map<string, ContentRecord[]>();
@@ -75,6 +89,9 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
           topFiles: files,
           topBashes: bashes,
           topSubagents: subagents,
+          relationships,
+          toolResultEvents,
+          toolResultStatusBySession,
         },
         null,
         2,
@@ -89,6 +106,9 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   out.push('');
   out.push(`session: ${sessionId}`);
   out.push(`turns: ${formatInt(turns.length)}`);
+  if (toolResultStatusBySession.length > 0) {
+    out.push(renderToolResultStatusLine(toolResultStatusBySession));
+  }
   if (totals) {
     out.push(
       `cost: ${formatUsd(totals.grandCost)} (attributed ${formatUsd(totals.attributedCost)}, unattributed ${formatUsd(totals.unattributedCost)})`,
@@ -105,6 +125,17 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   out.push('');
 
   const scoped = filterPatterns(patterns, sessionId);
+
+  if (relationships.length > 0) {
+    out.push('Session relationships');
+    out.push(renderRelationships(relationships));
+    out.push('');
+  }
+  if (toolResultEvents.length > 0) {
+    out.push('Tool result chronology');
+    out.push(renderToolResultChronology(toolResultEvents));
+    out.push('');
+  }
 
   out.push('Retry loops');
   out.push(renderRetries(scoped.retryLoops));
@@ -173,6 +204,186 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
 
   process.stdout.write(out.join('\n'));
   return 0;
+}
+
+const DASH = '—';
+const RELATIONSHIP_ORDER = new Map<string, number>([
+  ['root', 0],
+  ['subagent', 1],
+  ['continuation', 2],
+  ['fork', 3],
+]);
+
+interface ToolResultStatusSummary {
+  sessionId: string;
+  toolCalls: number;
+  completed: number;
+  errored: number;
+  cancelled: number;
+  unknown: number;
+}
+
+function collectGraphSessionIds(
+  sessionId: string,
+  relationships: readonly SessionRelationshipRecord[],
+): Set<string> {
+  const out = new Set<string>([sessionId]);
+  for (const r of relationships) {
+    out.add(r.sessionId);
+    if (r.relatedSessionId) out.add(r.relatedSessionId);
+  }
+  return out;
+}
+
+function sortToolResultEvents(
+  events: readonly ToolResultEventRecord[],
+): ToolResultEventRecord[] {
+  return [...events].sort((a, b) => {
+    const session = a.sessionId.localeCompare(b.sessionId);
+    if (session !== 0) return session;
+    const tool = a.toolUseId.localeCompare(b.toolUseId);
+    if (tool !== 0) return tool;
+    return a.eventIndex - b.eventIndex;
+  });
+}
+
+function summarizeToolResultStatuses(
+  events: readonly ToolResultEventRecord[],
+): ToolResultStatusSummary[] {
+  const bySession = new Map<string, Map<string, ToolResultEventRecord[]>>();
+  for (const event of events) {
+    let byTool = bySession.get(event.sessionId);
+    if (!byTool) {
+      byTool = new Map();
+      bySession.set(event.sessionId, byTool);
+    }
+    const bucket = byTool.get(event.toolUseId);
+    if (bucket) bucket.push(event);
+    else byTool.set(event.toolUseId, [event]);
+  }
+
+  const out: ToolResultStatusSummary[] = [];
+  for (const [sessionId, byTool] of bySession) {
+    const row: ToolResultStatusSummary = {
+      sessionId,
+      toolCalls: 0,
+      completed: 0,
+      errored: 0,
+      cancelled: 0,
+      unknown: 0,
+    };
+    for (const toolEvents of byTool.values()) {
+      row.toolCalls++;
+      const status = terminalToolStatus(toolEvents);
+      row[status]++;
+    }
+    out.push(row);
+  }
+  return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
+function terminalToolStatus(
+  events: readonly ToolResultEventRecord[],
+): 'completed' | 'errored' | 'cancelled' | 'unknown' {
+  const sorted = sortToolResultEvents(events);
+  const latest = sorted[sorted.length - 1];
+  switch (latest?.status) {
+    case 'completed':
+    case 'errored':
+    case 'cancelled':
+      return latest.status;
+    default:
+      return 'unknown';
+  }
+}
+
+function renderToolResultStatusLine(
+  summaries: readonly ToolResultStatusSummary[],
+): string {
+  const totals = summaries.reduce<ToolResultStatusSummary>(
+    (acc, row) => {
+      acc.toolCalls += row.toolCalls;
+      acc.completed += row.completed;
+      acc.errored += row.errored;
+      acc.cancelled += row.cancelled;
+      acc.unknown += row.unknown;
+      return acc;
+    },
+    {
+      sessionId: '',
+      toolCalls: 0,
+      completed: 0,
+      errored: 0,
+      cancelled: 0,
+      unknown: 0,
+    },
+  );
+  const callWord = totals.toolCalls === 1 ? 'tool call' : 'tool calls';
+  const sessionSuffix =
+    summaries.length > 1 ? ` across ${formatInt(summaries.length)} linked sessions` : '';
+  return `tool results: ${formatInt(totals.errored)} of ${formatInt(totals.toolCalls)} ${callWord} errored${sessionSuffix} (completed ${formatInt(totals.completed)}, cancelled ${formatInt(totals.cancelled)}, unknown ${formatInt(totals.unknown)})`;
+}
+
+function renderRelationships(
+  relationships: readonly SessionRelationshipRecord[],
+): string {
+  const sorted = [...relationships].sort((a, b) => {
+    const aOrder = RELATIONSHIP_ORDER.get(a.relationshipType) ?? 99;
+    const bOrder = RELATIONSHIP_ORDER.get(b.relationshipType) ?? 99;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    const session = a.sessionId.localeCompare(b.sessionId);
+    if (session !== 0) return session;
+    return (a.ts ?? '').localeCompare(b.ts ?? '');
+  });
+  return table([
+    ['session', 'type', 'related', 'source', 'subagentType', 'parentToolUseId', 'description'],
+    ...sorted.map((r) => [
+      truncate(r.sessionId, 24),
+      r.relationshipType,
+      truncate(r.relatedSessionId ?? DASH, 24),
+      r.source,
+      truncate(r.subagentType ?? DASH, 24),
+      truncate(r.parentToolUseId ?? DASH, 24),
+      truncate(r.description ?? DASH, 36),
+    ]),
+  ]);
+}
+
+function renderToolResultChronology(
+  events: readonly ToolResultEventRecord[],
+): string {
+  const errorCounts = new Map<string, number>();
+  for (const event of events) {
+    if (event.status !== 'errored') continue;
+    const key = toolEventKey(event);
+    errorCounts.set(key, (errorCounts.get(key) ?? 0) + 1);
+  }
+  return table([
+    ['toolUseId', 'session', 'event', 'ts', 'status', 'eventSource', 'contentLength'],
+    ...sortToolResultEvents(events).map((event) => [
+      truncate(event.toolUseId, 24),
+      truncate(event.sessionId, 24),
+      formatInt(event.eventIndex),
+      truncate(event.ts ?? DASH, 24),
+      renderToolEventStatus(event, errorCounts.get(toolEventKey(event)) ?? 0),
+      event.eventSource,
+      event.contentLength === undefined ? DASH : formatInt(event.contentLength),
+    ]),
+  ]);
+}
+
+function toolEventKey(event: ToolResultEventRecord): string {
+  return `${event.sessionId}\0${event.toolUseId}`;
+}
+
+function renderToolEventStatus(
+  event: ToolResultEventRecord,
+  erroredEventsForTool: number,
+): string {
+  if (event.status === 'errored' && erroredEventsForTool > 1) {
+    return `errored (${formatInt(erroredEventsForTool)}x)`;
+  }
+  return event.status;
 }
 
 function filterPatterns(patterns: PatternsResult, sessionId: string): PatternsResult {
