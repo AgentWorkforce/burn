@@ -431,6 +431,7 @@ describe('burn summary --by-relationship (#114)', () => {
     ]);
     await appendRelationships([
       fakeRelationship({
+        source: 'native-claude',
         sessionId: 'rel-subonly',
         relationshipType: 'subagent',
         agentId: 'agent-review',
@@ -456,6 +457,54 @@ describe('burn summary --by-relationship (#114)', () => {
     assert.equal(payload.relationships[0]!.sessionCount, 1);
     assert.equal(payload.relationships[0]!.turnCount, 1);
     assert.equal(typeof payload.relationships[0]!.totalCost, 'number');
+  });
+
+  it('joins spawn-env child-session relationships to turns without subagent metadata', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'rel-spawn-child',
+        messageId: 'rel-spawn-child-1',
+        source: 'codex',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({
+        source: 'spawn-env',
+        sessionId: 'rel-spawn-child',
+        relationshipType: 'subagent',
+        relatedSessionId: 'rel-spawn-parent',
+        agentId: 'agent-spawn-child',
+        subagentType: 'worker',
+      }),
+    ]);
+
+    const out = await captureSummary({ 'by-relationship': 'subagent', json: true });
+    assert.equal(out.code, 0);
+    const payload = JSON.parse(out.stdout) as {
+      relationships: Array<{ relationshipType: string; turnCount: number }>;
+      subagentTypes: Array<{
+        subagentType: string;
+        invocations: number;
+        turns: number;
+        totalCost: number;
+        medianCost: number;
+        p95Cost: number;
+        meanCost: number;
+      }>;
+    };
+    assert.equal(payload.relationships[0]!.relationshipType, 'subagent');
+    assert.equal(payload.relationships[0]!.turnCount, 1);
+    assert.deepEqual(payload.subagentTypes, [
+      {
+        subagentType: 'worker',
+        invocations: 1,
+        turns: 1,
+        totalCost: payload.subagentTypes[0]!.totalCost,
+        medianCost: payload.subagentTypes[0]!.medianCost,
+        p95Cost: payload.subagentTypes[0]!.p95Cost,
+        meanCost: payload.subagentTypes[0]!.meanCost,
+      },
+    ]);
   });
 
   it('--by-relationship=subagent renders the subagent type breakdown', async () => {
@@ -497,6 +546,7 @@ describe('burn summary --by-relationship (#114)', () => {
     ]);
     await appendRelationships([
       fakeRelationship({
+        source: 'native-claude',
         sessionId: 'rel-types',
         relationshipType: 'subagent',
         agentId: 'agent-explore-1',
@@ -504,6 +554,7 @@ describe('burn summary --by-relationship (#114)', () => {
         subagentType: 'Explore',
       }),
       fakeRelationship({
+        source: 'native-claude',
         sessionId: 'rel-types',
         relationshipType: 'subagent',
         agentId: 'agent-explore-2',
@@ -511,6 +562,7 @@ describe('burn summary --by-relationship (#114)', () => {
         subagentType: 'Explore',
       }),
       fakeRelationship({
+        source: 'native-claude',
         sessionId: 'rel-types',
         relationshipType: 'subagent',
         agentId: 'agent-review-1',

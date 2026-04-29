@@ -1036,7 +1036,6 @@ interface RelationshipTurnIndex {
 }
 
 interface RelationshipMatch {
-  source: SessionRelationshipRecord['source'];
   relationshipType: RelationshipType;
   sessionId: string;
   subagentType?: string;
@@ -1080,7 +1079,6 @@ function matchRelationshipsToTurns(
     const matchedTurns = turnsForRelationship(r, index);
     if (matchedTurns.length === 0) continue;
     const match: RelationshipMatch = {
-      source: r.source,
       relationshipType: r.relationshipType,
       sessionId: r.sessionId,
       turnCount: matchedTurns.length,
@@ -1099,17 +1097,12 @@ function buildRelationshipTurnIndex(turns: EnrichedTurn[]): RelationshipTurnInde
   const sidechainBySession = new Map<string, EnrichedTurn[]>();
   const subagentBySessionAgent = new Map<string, EnrichedTurn[]>();
   for (const turn of turns) {
-    const key = sourceSessionKey(turn.source, turn.sessionId);
-    pushMap(allBySession, key, turn);
-    if (isMainThreadTurn(turn)) pushMap(mainBySession, key, turn);
-    if (turn.subagent?.isSidechain) pushMap(sidechainBySession, key, turn);
+    pushMap(allBySession, turn.sessionId, turn);
+    if (isMainThreadTurn(turn)) pushMap(mainBySession, turn.sessionId, turn);
+    if (turn.subagent?.isSidechain) pushMap(sidechainBySession, turn.sessionId, turn);
     const agentId = turn.subagent?.agentId;
     if (agentId !== undefined && agentId.length > 0) {
-      pushMap(
-        subagentBySessionAgent,
-        sourceSessionAgentKey(turn.source, turn.sessionId, agentId),
-        turn,
-      );
+      pushMap(subagentBySessionAgent, sessionAgentKey(turn.sessionId, agentId), turn);
     }
   }
   return { allBySession, mainBySession, sidechainBySession, subagentBySessionAgent };
@@ -1119,26 +1112,26 @@ function turnsForRelationship(
   r: SessionRelationshipRecord,
   index: RelationshipTurnIndex,
 ): EnrichedTurn[] {
-  const sessionKey = sourceSessionKey(r.source, r.sessionId);
   switch (r.relationshipType) {
     case 'root':
-      return index.mainBySession.get(sessionKey) ?? [];
+      return index.mainBySession.get(r.sessionId) ?? [];
     case 'subagent': {
       if (r.agentId !== undefined && r.agentId.length > 0) {
-        const direct = index.subagentBySessionAgent.get(
-          sourceSessionAgentKey(r.source, r.sessionId, r.agentId),
-        );
+        const direct = index.subagentBySessionAgent.get(sessionAgentKey(r.sessionId, r.agentId));
         if (direct !== undefined && direct.length > 0) return direct;
         // Some sources model a spawned agent as its own session and do not
         // annotate the child turns with `subagent`. In that shape the
         // relationship row's sessionId/agentId is the only join key.
-        if (r.sessionId === r.agentId) return index.allBySession.get(sessionKey) ?? [];
+        if (r.sessionId === r.agentId) return index.allBySession.get(r.sessionId) ?? [];
       }
-      return index.sidechainBySession.get(sessionKey) ?? [];
+      const sidechain = index.sidechainBySession.get(r.sessionId);
+      if (sidechain !== undefined && sidechain.length > 0) return sidechain;
+      if (r.source === 'spawn-env') return index.allBySession.get(r.sessionId) ?? [];
+      return [];
     }
     case 'continuation':
     case 'fork':
-      return index.allBySession.get(sessionKey) ?? [];
+      return index.allBySession.get(r.sessionId) ?? [];
   }
 }
 
@@ -1150,11 +1143,10 @@ function aggregateRelationshipStats(matches: RelationshipMatch[]): RelationshipS
       bySession = new Map();
       byType.set(match.relationshipType, bySession);
     }
-    const key = sourceSessionKey(match.source, match.sessionId);
-    const current = bySession.get(key) ?? { turns: 0, cost: 0 };
+    const current = bySession.get(match.sessionId) ?? { turns: 0, cost: 0 };
     current.turns += match.turnCount;
     current.cost += match.cost;
-    bySession.set(key, current);
+    bySession.set(match.sessionId, current);
   }
 
   const out: RelationshipStats[] = [];
@@ -1229,12 +1221,8 @@ function relationshipInstanceKey(r: SessionRelationshipRecord): string {
   ].join('\0');
 }
 
-function sourceSessionKey(source: string, sessionId: string): string {
-  return `${source}\0${sessionId}`;
-}
-
-function sourceSessionAgentKey(source: string, sessionId: string, agentId: string): string {
-  return `${source}\0${sessionId}\0${agentId}`;
+function sessionAgentKey(sessionId: string, agentId: string): string {
+  return `${sessionId}\0${agentId}`;
 }
 
 function isMainThreadTurn(turn: EnrichedTurn): boolean {
