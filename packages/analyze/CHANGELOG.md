@@ -4,6 +4,12 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-04-29
+
+### Changed
+
+- Use tool-result events for waste patterns
+
 ## [0.43.0] - 2026-04-29
 
 ### Added
