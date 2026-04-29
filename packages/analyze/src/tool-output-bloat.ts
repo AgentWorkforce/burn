@@ -17,8 +17,12 @@
 //
 // Both signals emit the same `ToolOutputBloat` shape so the CLI can render a
 // single severity-ranked list. `cost` is the rough USD waste attributed to
-// carrying the oversized payload — bytes-to-tokens is via the `bytes/4`
-// heuristic (issue #107) until #57 lands a precise byte→token rule.
+// carrying the oversized payload — Signal B uses per-call cl100k
+// `approxTokens` from user-turn `tool_result` blocks (content-sidecar
+// enrichment from #2/#86), with a `bytes/4` fallback when an event has no
+// matching enriched block (e.g. ledgers written before the enrichment
+// landed). Signal A continues to use `bytes/4` for the character-unit
+// config values.
 
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -29,6 +33,7 @@ import {
   type SourceKind,
   type ToolResultEventRecord,
   type TurnRecord,
+  type UserTurnRecord,
 } from '@relayburn/reader';
 
 import { lookupModelRate } from './cost.js';
@@ -62,10 +67,9 @@ const DEFAULT_MIN_OCCURRENCES = 1;
 // single-session debug ledger still surfaces oversized events.
 const P95_SAMPLE_FLOOR = 20;
 
-// bytes → tokens heuristic. Cancels exactly with the bytes/4 used elsewhere
-// in the codebase (`bytesToApproxTokens` in reader/userTurn.ts; issue #107).
-// TODO(#57): once the content-sidecar enrichment lands, prefer the per-call
-// `byteLen`/`approxTokens` rather than re-deriving from `contentLength`.
+// bytes → tokens heuristic. Used by Signal A for character-unit config values.
+// Matches the `bytes/4` heuristic used elsewhere in the codebase
+// (`bytesToApproxTokens` in reader/userTurn.ts).
 function bytesToTokens(bytes: number): number {
   if (bytes <= 0) return 0;
   return Math.ceil(bytes / BYTES_PER_TOKEN);
@@ -239,15 +243,19 @@ export function detectStaticConfigBloat(
 // ---------------------------------------------------------------------------
 
 export interface DetectObservedBloatOptions {
-  // Cross-harness tool-result events. Required field is `contentLength`
-  // (substrate from #42); events without a content length are skipped — we
-  // can't size them.
+  // Cross-harness tool-result events. Each event is sized via
+  // `sizeEventTokens`: enrichment-first for carriers, `contentLength`
+  // fallback otherwise. Events with neither are dropped.
   toolResultEvents: ToolResultEventRecord[];
-  // Turn records keyed alongside the events. Used to:
-  //   1. Look up `toolName` for each event (joined by `tool_use_id`).
-  //   2. Look up the model that consumed the next turn so we can price the
-  //      oversized cache-input ride at the correct rate.
-  // Tests can pass an empty array — the detector falls back to "Unknown"
+  // User-turn records carrying per-call cl100k `approxTokens` on
+  // `tool_result` blocks (content-sidecar enrichment from #2/#86). Joined
+  // to carrier events by `(source|sessionId|toolUseId)`. Pass `[]` to
+  // force the `bytesToTokens(contentLength)` fallback (legacy ledgers).
+  userTurns: UserTurnRecord[];
+  // Turn records keyed alongside the events. Used to look up `toolName`
+  // (joined by `tool_use_id`) and the model that consumed the next turn
+  // so we can price the oversized cache-input ride at the correct rate.
+  // Tests can pass an empty array — the detector falls back to "<unknown>"
   // tool names and a zero cost in that case (the bucket still emits).
   turns: TurnRecord[];
   pricing: PricingTable;
@@ -267,13 +275,33 @@ interface ToolUseLookup {
   // harnesses (unlikely but possible — Codex `call_*`, Claude UUIDs) don't
   // overwrite each other.
   toolNameByUseId: Map<string, string>;
+  // `(source|sessionId|toolUseId)` -> approxTokens from user-turn blocks.
+  // Populated from content-sidecar enrichment; falls back to 0 when missing.
+  approxTokensByUseId: Map<string, number>;
   // `(source|sessionId|messageId)` -> model. Same dedupe rationale.
   modelByMessageId: Map<string, string>;
 }
 
-function buildLookup(turns: TurnRecord[]): ToolUseLookup {
+function buildLookup(userTurns: UserTurnRecord[], turns: TurnRecord[]): ToolUseLookup {
   const toolNameByUseId = new Map<string, string>();
+  const approxTokensByUseId = new Map<string, number>();
   const modelByMessageId = new Map<string, string>();
+
+  // Build approxTokens lookup from user-turn blocks (content-sidecar
+  // enrichment). Skip blocks with `approxTokens <= 0`: a non-positive value
+  // means the block was either truly empty (skip) or the enrichment is
+  // malformed (let the per-event `contentLength` fallback take over). Either
+  // way, leaving the entry out of the map yields the right behavior.
+  for (const userTurn of userTurns) {
+    for (const block of userTurn.blocks) {
+      if (block.kind !== 'tool_result' || !block.toolUseId) continue;
+      if (block.approxTokens <= 0) continue;
+      const key = `${userTurn.source}|${userTurn.sessionId}|${block.toolUseId}`;
+      approxTokensByUseId.set(key, block.approxTokens);
+    }
+  }
+
+  // Build tool name and model lookups from turn records
   for (const t of turns) {
     modelByMessageId.set(`${t.source}|${t.sessionId}|${t.messageId}`, t.model);
     for (const call of t.toolCalls) {
@@ -281,7 +309,7 @@ function buildLookup(turns: TurnRecord[]): ToolUseLookup {
       toolNameByUseId.set(`${t.source}|${t.sessionId}|${call.id}`, call.name);
     }
   }
-  return { toolNameByUseId, modelByMessageId };
+  return { toolNameByUseId, approxTokensByUseId, modelByMessageId };
 }
 
 // p95 of an array of numbers. Empty array → 0.
@@ -304,13 +332,45 @@ function priceCarryCost(tokens: number, model: string, pricing: PricingTable): n
   return (tokens / 1_000_000) * rate.input;
 }
 
+// `tool_result` (Claude/Anthropic) and `function_call_output` (Codex) are the
+// canonical "carrier" events for a tool call — each represents the single
+// payload returned to the model. Other event types (`subagent_notification`,
+// `queue_event`, `progress_event`) can share the same `toolUseId` with a
+// carrier but carry their own independent payloads (status updates, progress
+// fanout). The user-turn enrichment is keyed by `toolUseId` and represents
+// the carrier's tokens — applying it to non-carrier events would attribute
+// the carrier's bytes to every notification and double-count the bucket.
+function isCarrierEvent(e: ToolResultEventRecord): boolean {
+  return e.eventSource === 'tool_result' || e.eventSource === 'function_call_output';
+}
+
+// Per-event token size. Carrier events prefer the user-turn enrichment
+// (cl100k accuracy from #2/#86) and fall back to `bytesToTokens(contentLength)`
+// for legacy ledgers without enrichment. Non-carrier events always size by
+// their own `contentLength` so they don't inherit the carrier's payload.
+// Returns `undefined` when the event has no usable size (drop it).
+function sizeEventTokens(
+  e: ToolResultEventRecord,
+  lookup: ToolUseLookup,
+): number | undefined {
+  if (isCarrierEvent(e)) {
+    const useKey = `${e.source}|${e.sessionId}|${e.toolUseId}`;
+    const enriched = lookup.approxTokensByUseId.get(useKey);
+    if (enriched !== undefined) return enriched;
+  }
+  if (typeof e.contentLength === 'number' && e.contentLength > 0) {
+    return bytesToTokens(e.contentLength);
+  }
+  return undefined;
+}
+
 export function detectObservedBloat(
   opts: DetectObservedBloatOptions,
 ): ToolOutputBloat[] {
-  const events = opts.toolResultEvents.filter((e) => typeof e.contentLength === 'number' && e.contentLength > 0);
+  const events = opts.toolResultEvents;
   if (events.length === 0) return [];
 
-  const lookup = buildLookup(opts.turns);
+  const lookup = buildLookup(opts.userTurns, opts.turns);
   const minOccurrences = opts.minOccurrences ?? DEFAULT_MIN_OCCURRENCES;
 
   // Compute the threshold: max(default, p95 across all events). The p95 only
@@ -320,7 +380,8 @@ export function detectObservedBloat(
   // 15k floor only.
   const allTokens: number[] = [];
   for (const e of events) {
-    allTokens.push(bytesToTokens(e.contentLength!));
+    const tokens = sizeEventTokens(e, lookup);
+    if (tokens !== undefined && tokens > 0) allTokens.push(tokens);
   }
   const p95 = allTokens.length >= P95_SAMPLE_FLOOR ? percentile(allTokens, 95) : 0;
   const threshold = opts.threshold ?? Math.max(DEFAULT_BLOAT_TOKEN_THRESHOLD, p95);
@@ -336,8 +397,8 @@ export function detectObservedBloat(
   }
   const buckets = new Map<string, Bucket>();
   for (const e of events) {
-    const tokens = bytesToTokens(e.contentLength!);
-    if (tokens <= threshold) continue;
+    const tokens = sizeEventTokens(e, lookup);
+    if (tokens === undefined || tokens === 0 || tokens <= threshold) continue;
     const useKey = `${e.source}|${e.sessionId}|${e.toolUseId}`;
     const rawName = lookup.toolNameByUseId.get(useKey);
     const toolName = rawName ? normalizeToolName(rawName) : '<unknown>';
@@ -408,6 +469,7 @@ export interface DetectToolOutputBloatOptions {
   settings?: LoadedClaudeSettings[];
   // Signal B inputs.
   toolResultEvents?: ToolResultEventRecord[];
+  userTurns?: UserTurnRecord[];
   turns?: TurnRecord[];
   pricing: PricingTable;
   // Shared tunables (apply to both signals).
@@ -431,6 +493,7 @@ export function detectToolOutputBloat(
     out.push(
       ...detectObservedBloat({
         toolResultEvents: opts.toolResultEvents,
+        userTurns: opts.userTurns ?? [],
         turns: opts.turns ?? [],
         pricing: opts.pricing,
         ...(opts.threshold !== undefined ? { threshold: opts.threshold } : {}),
