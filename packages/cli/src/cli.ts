@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 import { parseArgs } from './args.js';
 import { runCompare } from './commands/compare.js';
-import { runContent, opportunisticPrune } from './commands/content.js';
 import { runOverhead } from './commands/overhead.js';
 import { runIngest } from './commands/ingest.js';
 import { runLimits } from './commands/limits.js';
 import { runMcpServer } from './commands/mcp-server.js';
 import { runPlans } from './commands/plans.js';
-import { runRebuild } from './commands/rebuild.js';
 import { runWrapper } from './commands/run.js';
+import { runState, opportunisticPrune } from './commands/state.js';
 import { runSummary } from './commands/summary.js';
 import { runHotspots } from './commands/hotspots.js';
 import { listHarnessNames } from './harnesses/registry.js';
@@ -31,8 +30,9 @@ Usage:
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
   burn ingest        [--watch|--hook <name>] [--interval <ms>] [--quiet]
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
-  burn content prune [--days <n>] [--force]
-  burn rebuild       index | classify | content | archive [--full|--vacuum] | all | status [--json]
+  burn state         [status] [--json]
+  burn state rebuild index | classify | content | archive [--full|--vacuum] | all
+  burn state prune   [--days <n>] [--force]
 
 Examples:
   burn summary --since 24h
@@ -61,12 +61,12 @@ Examples:
   burn ingest
   burn ingest --watch
   burn ingest --watch --opencode-stream
-  burn content prune --days 30
-  burn rebuild status
-  burn rebuild archive
-  burn rebuild archive --full
-  burn rebuild archive vacuum
-  burn rebuild classify
+  burn state
+  burn state prune --days 30
+  burn state rebuild archive
+  burn state rebuild archive --full
+  burn state rebuild archive vacuum
+  burn state rebuild classify
 
 Provider filters are query-time only. Synthetic-routed models are recognized
 from hf:*, accounts/fireworks/models/*, and synthetic/* model IDs and are
@@ -82,7 +82,7 @@ async function main(): Promise<number> {
   const args = parseArgs(rest);
   // Opportunistic content-sidecar retention prune on every invocation.
   // Best-effort; never fails the CLI.
-  if (cmd !== 'content') {
+  if (!(cmd === 'state' && args.positional[0] === 'prune')) {
     await opportunisticPrune();
   }
   switch (cmd) {
@@ -104,10 +104,8 @@ async function main(): Promise<number> {
       return runIngest(args);
     case 'mcp-server':
       return runMcpServer(args);
-    case 'content':
-      return runContent(args);
-    case 'rebuild':
-      return runRebuild(args);
+    case 'state':
+      return runState(args);
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 1;

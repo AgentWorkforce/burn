@@ -989,7 +989,7 @@ function buildPerCellFidelity(
 const PARTIAL_MARK = '*';
 const DASH = '—';
 const NO_RELATIONSHIPS_MESSAGE =
-  'no SessionRelationshipRecord rows found for the matched slice; ingest a session with execution-graph wiring or run `burn rebuild` once relationship backfill is available';
+  'no SessionRelationshipRecord rows found for the matched slice; ingest a session with execution-graph wiring or run `burn state rebuild` once relationship backfill is available';
 
 const RELATIONSHIP_ORDER: RelationshipType[] = [
   'root',

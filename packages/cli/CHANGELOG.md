@@ -12,19 +12,19 @@ All notable changes to `@relayburn/cli`.
 
 - `burn ingest` now owns one-shot, `--watch`, and `--hook claude` modes, replacing the separate `burn watch` command and old `--runtime claude` hook flag.
 - `burn hotspots` replaces `burn waste` and `burn diagnose`; bare `burn hotspots --session` keeps the former aggregate diagnostics, and `burn hotspots --session <id>` keeps the former per-session JSON shape. `burn overhead` and `burn overhead trim` replace `burn context` and `burn context advise`.
+- `burn state` now owns derived-state status, rebuild targets, archive vacuum, and content pruning in one command family.
 - `burn hotspots --patterns tool-output-bloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment instead of bytes/4 estimates. Findings on highly compressible payloads (repetitive logs, base64 dumps) may shift below the 15k default threshold.
-- `burn rebuild <target>` now owns derived-state maintenance for indexes, classification, content, archive builds, and status in one command family.
 - `burn summary --subagent-tree` now reads persisted session relationships, including child-session subagents and fork/continuation annotations.
 
 ### Fixed
 
-- `burn rebuild archive vacuum` now preserves archive space reclamation after the top-level archive command removal.
-- `burn rebuild status` now streams ledger counts instead of materializing all turns.
+- `burn state rebuild archive vacuum` now preserves archive space reclamation after the top-level archive command removal.
+- `burn state` status now streams ledger counts instead of materializing all turns.
 - `burn ingest --watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
 
 ### Removed
 
-- Removed the top-level `burn archive` command. Use `burn rebuild archive`, `burn rebuild archive --full`, `burn rebuild archive vacuum`, or `burn rebuild status`.
+- Removed the top-level `burn archive`, `burn rebuild`, and `burn content` commands. Use `burn state`, `burn state rebuild <target>`, or `burn state prune`.
 
 ## [0.45.0] - 2026-04-29
 
