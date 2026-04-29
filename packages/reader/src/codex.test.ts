@@ -4,10 +4,78 @@ import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { parseCodexSession, parseCodexSessionIncremental } from './codex.js';
+import {
+  parseCodexSession,
+  parseCodexSessionIncremental,
+  readCodexSessionIdHint,
+} from './codex.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.resolve(__dirname, '..', '..', '..', 'tests', 'fixtures', 'codex');
+
+describe('readCodexSessionIdHint', () => {
+  it('returns the session_meta id from the first JSONL line', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-hint-'));
+    try {
+      const file = path.join(tmp, 'renamed-rollout.jsonl');
+      await writeFile(
+        file,
+        JSON.stringify({
+          timestamp: '2026-04-20T00:00:00.000Z',
+          type: 'session_meta',
+          payload: {
+            id: 'sess_hint_1',
+            cwd: '/tmp/project',
+            timestamp: '2026-04-20T00:00:00.000Z',
+          },
+        }) + '\n',
+        'utf8',
+      );
+
+      assert.equal(await readCodexSessionIdHint(file), 'sess_hint_1');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null when the first JSONL line is malformed', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-hint-bad-'));
+    try {
+      const file = path.join(tmp, 'renamed-rollout.jsonl');
+      await writeFile(
+        file,
+        [
+          '{"type":"session_meta","payload":',
+          JSON.stringify({ type: 'session_meta', payload: { id: 'sess_second_line' } }),
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      assert.equal(await readCodexSessionIdHint(file), null);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null for an empty file', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const tmp = await mkdtemp(path.join(tmpdir(), 'burn-codex-hint-empty-'));
+    try {
+      const file = path.join(tmp, 'empty.jsonl');
+      await writeFile(file, '', 'utf8');
+
+      assert.equal(await readCodexSessionIdHint(file), null);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('parseCodexSession', () => {
   it('parses a simple one-turn session', async () => {

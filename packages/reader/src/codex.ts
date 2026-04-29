@@ -107,6 +107,12 @@ interface SessionMetaPayload {
   continued_from_session_id?: string;
 }
 
+function sessionMetaPayloadId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const id = (payload as SessionMetaPayload).id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
 interface TurnContextPayload {
   turn_id?: string;
   cwd?: string;
@@ -309,6 +315,37 @@ export async function parseCodexSession(
   return { turns, content, events, userTurns, relationships, toolResultEvents };
 }
 
+export async function readCodexSessionIdHint(filePath: string): Promise<string | null> {
+  try {
+    const handle = await open(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(8192);
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+      if (bytesRead === 0) return null;
+
+      const raw = buf.subarray(0, bytesRead).toString('utf8');
+      const newline = raw.indexOf('\n');
+      const firstLine = (newline === -1 ? raw : raw.slice(0, newline)).replace(/\r$/, '').trim();
+      if (!firstLine) return null;
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(firstLine);
+      } catch {
+        return null;
+      }
+      if (!parsed || typeof parsed !== 'object') return null;
+      const rec = parsed as { type?: unknown; payload?: unknown };
+      if (rec.type !== 'session_meta') return null;
+      return sessionMetaPayloadId(rec.payload);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 export async function parseCodexSessionIncremental(
   filePath: string,
   options: ParseCodexIncrementalOptions = {},
@@ -448,7 +485,8 @@ export async function parseCodexSessionIncremental(
 
     if (rec.type === 'session_meta') {
       const sp = payload as SessionMetaPayload;
-      if (typeof sp.id === 'string') sessionId = sp.id;
+      const metaSessionId = sessionMetaPayloadId(payload);
+      if (metaSessionId) sessionId = metaSessionId;
       if (typeof sp.cwd === 'string') {
         sessionCwd = sp.cwd;
         if (openTurn && openTurn.project === undefined) openTurn.project = sp.cwd;

@@ -1,4 +1,4 @@
-import { open, readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -7,6 +7,7 @@ import {
   parseClaudeSessionIncremental,
   parseCodexSessionIncremental,
   parseOpencodeSessionIncremental,
+  readCodexSessionIdHint,
   reconcileClaudeSessionRelationships,
 } from '@relayburn/reader';
 import type {
@@ -763,49 +764,15 @@ async function appendReingestedDerivedRecords(
 
 // Codex filenames are `rollout-<timestamp>-<uuid>.jsonl` where the UUID is the
 // session id. Extract it for a cheap skip check before parsing. If the pattern
-// doesn't match, return null and fall back to post-filtering.
+// doesn't match, peek at Codex's first-line session_meta hint before falling
+// back to post-filtering.
 export async function deriveCodexSessionId(file: string): Promise<string | null> {
   const base = path.basename(file, '.jsonl');
   const m = base.match(
     /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/,
   );
   if (m) return m[1]!;
-  return readCodexSessionMetaId(file);
-}
-
-async function readCodexSessionMetaId(file: string): Promise<string | null> {
-  // session_meta is always the first JSONL line, so an 8 KB prefix is more
-  // than enough — avoids loading multi-MB rollouts during rebuild --content
-  // (#125 review).
-  let raw: string;
-  try {
-    const handle = await open(file, 'r');
-    try {
-      const buf = Buffer.alloc(8192);
-      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
-      raw = buf.subarray(0, bytesRead).toString('utf8');
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return null;
-  }
-  for (const line of raw.split(/\r?\n/, 20)) {
-    const text = line.trim();
-    if (!text) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== 'object') continue;
-    const rec = parsed as { type?: unknown; payload?: unknown };
-    if (rec.type !== 'session_meta' || !rec.payload || typeof rec.payload !== 'object') continue;
-    const id = (rec.payload as { id?: unknown }).id;
-    return typeof id === 'string' && id.length > 0 ? id : null;
-  }
-  return null;
+  return readCodexSessionIdHint(file);
 }
 
 async function listDirs(parent: string): Promise<string[]> {

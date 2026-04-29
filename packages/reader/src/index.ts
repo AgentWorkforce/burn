@@ -41,7 +41,11 @@ export type {
   ClaudeRelationshipEvidence,
   ReconcileClaudeRelationshipsInput,
 } from './claude.js';
-export { parseCodexSession, parseCodexSessionIncremental } from './codex.js';
+export {
+  parseCodexSession,
+  parseCodexSessionIncremental,
+  readCodexSessionIdHint,
+} from './codex.js';
 export type {
   ParseCodexOptions,
   ParseCodexResult,
