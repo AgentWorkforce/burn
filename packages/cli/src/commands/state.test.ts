@@ -1,13 +1,13 @@
 import { strict as assert } from 'node:assert';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { after, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { appendToolResultEvents, appendTurns, stamp } from '@relayburn/ledger';
+import { appendContent, appendToolResultEvents, appendTurns, stamp } from '@relayburn/ledger';
 import type { ToolResultEventRecord, TurnRecord } from '@relayburn/reader';
 
-import { runRebuild } from './rebuild.js';
+import { runState } from './state.js';
 
 function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -56,7 +56,7 @@ async function captureRun(
   }) as typeof process.stderr.write;
   let code: number;
   try {
-    code = await runRebuild({ flags, tags: {}, positional, passthrough: [] });
+    code = await runState({ flags, tags: {}, positional, passthrough: [] });
   } finally {
     process.stdout.write = origStdout;
     process.stderr.write = origStderr;
@@ -64,23 +64,31 @@ async function captureRun(
   return { stdout, stderr, code };
 }
 
-describe('burn rebuild archive/status CLI', () => {
+describe('burn state CLI', () => {
   let tmp: string;
   const originalRelay = process.env['RELAYBURN_HOME'];
+  const originalStore = process.env['RELAYBURN_CONTENT_STORE'];
+  const originalForce = process.env['RELAYBURN_PRUNE_FORCE'];
 
   beforeEach(async () => {
-    tmp = await mkdtemp(path.join(tmpdir(), 'burn-archive-cli-'));
+    tmp = await mkdtemp(path.join(tmpdir(), 'burn-state-cli-'));
     process.env['RELAYBURN_HOME'] = tmp;
+    delete process.env['RELAYBURN_CONTENT_STORE'];
+    delete process.env['RELAYBURN_PRUNE_FORCE'];
   });
 
-  after(async () => {
+  afterEach(async () => {
     if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
     else delete process.env['RELAYBURN_HOME'];
+    if (originalStore !== undefined) process.env['RELAYBURN_CONTENT_STORE'] = originalStore;
+    else delete process.env['RELAYBURN_CONTENT_STORE'];
+    if (originalForce !== undefined) process.env['RELAYBURN_PRUNE_FORCE'] = originalForce;
+    else delete process.env['RELAYBURN_PRUNE_FORCE'];
     await rm(tmp, { recursive: true, force: true });
   });
 
-  it('rebuild status reports archive "not built yet" before the first build', async () => {
-    const out = await captureRun({}, ['status']);
+  it('state reports archive "not built yet" before the first build', async () => {
+    const out = await captureRun({}, []);
     assert.equal(out.code, 0);
     assert.match(out.stdout, /not built yet/);
     assert.match(out.stdout, /index:/);
@@ -89,7 +97,22 @@ describe('burn rebuild archive/status CLI', () => {
     assert.match(out.stdout, /archive:/);
   });
 
-  it('rebuild archive materializes the ledger and status reflects row counts', async () => {
+  it('state status --json includes all derived artifacts', async () => {
+    const out = await captureRun({ json: true }, ['status']);
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      archive: unknown;
+      index: unknown;
+      content: unknown;
+      classifier: unknown;
+    };
+    assert.ok(parsed.archive);
+    assert.ok(parsed.index);
+    assert.ok(parsed.content);
+    assert.ok(parsed.classifier);
+  });
+
+  it('state rebuild archive materializes the ledger and status reflects row counts', async () => {
     await appendTurns([
       fakeTurn({ sessionId: 's-cli', messageId: 'cli-1' }),
       fakeTurn({
@@ -101,7 +124,7 @@ describe('burn rebuild archive/status CLI', () => {
     ]);
     await stamp({ sessionId: 's-cli' }, { workflowId: 'wf-cli' });
 
-    const buildOut = await captureRun({}, ['archive']);
+    const buildOut = await captureRun({}, ['rebuild', 'archive']);
     assert.equal(buildOut.code, 0);
     assert.match(buildOut.stdout, /archive build complete/);
     assert.match(buildOut.stdout, /2 turns applied/);
@@ -114,28 +137,22 @@ describe('burn rebuild archive/status CLI', () => {
         upToDate: boolean;
         rowCounts: { sessions: number; turns: number };
       };
-      index: unknown;
-      content: unknown;
-      classifier: unknown;
     };
     assert.equal(parsed.archive.exists, true);
     assert.equal(parsed.archive.upToDate, true);
     assert.equal(parsed.archive.rowCounts.turns, 2);
     assert.equal(parsed.archive.rowCounts.sessions, 1);
-    assert.ok(parsed.index);
-    assert.ok(parsed.content);
-    assert.ok(parsed.classifier);
   });
 
-  it('rebuild archive --full is idempotent against the same ledger', async () => {
+  it('state rebuild archive --full is idempotent against the same ledger', async () => {
     await appendTurns([fakeTurn({ sessionId: 's-rb', messageId: 'rb-1' })]);
-    await captureRun({}, ['archive']);
+    await captureRun({}, ['rebuild', 'archive']);
     const before = await captureRun({ json: true }, ['status']);
     const beforeStatus = JSON.parse(before.stdout) as {
       archive: { rowCounts: { turns: number } };
     };
 
-    const rebuildOut = await captureRun({ full: true }, ['archive']);
+    const rebuildOut = await captureRun({ full: true }, ['rebuild', 'archive']);
     assert.equal(rebuildOut.code, 0);
     assert.match(rebuildOut.stdout, /rebuilt archive/);
 
@@ -146,7 +163,7 @@ describe('burn rebuild archive/status CLI', () => {
     assert.equal(afterStatus.archive.rowCounts.turns, beforeStatus.archive.rowCounts.turns);
   });
 
-  it('archive status --json surfaces tool_result_events row count', async () => {
+  it('state status --json surfaces tool_result_events row count', async () => {
     await appendTurns([fakeTurn({ sessionId: 's-tre-cli', messageId: 'tre-cli-1' })]);
     const events: ToolResultEventRecord[] = [
       {
@@ -165,7 +182,7 @@ describe('burn rebuild archive/status CLI', () => {
       },
     ];
     await appendToolResultEvents(events);
-    await captureRun({}, ['archive']);
+    await captureRun({}, ['rebuild', 'archive']);
 
     const statusOut = await captureRun({ json: true }, ['status']);
     assert.equal(statusOut.code, 0);
@@ -178,10 +195,10 @@ describe('burn rebuild archive/status CLI', () => {
     assert.match(human.stdout, /tool_result_events:\s+1/);
   });
 
-  it('archive status --json surfaces a fidelity histogram on turns (#110)', async () => {
+  it('state status --json surfaces a fidelity histogram on turns (#110)', async () => {
     // Use distinctive ts/usage so the writer's content-fingerprint dedup
     // doesn't collide with prior CLI tests in the same module (the in-memory
-    // index cache is module-scoped — see #110 / writer.ts).
+    // index cache is module-scoped - see #110 / writer.ts).
     await appendTurns([
       fakeTurn({
         sessionId: 's-fid',
@@ -211,7 +228,6 @@ describe('burn rebuild archive/status CLI', () => {
           class: 'full',
         },
       }),
-      // Older line — no fidelity at all.
       fakeTurn({
         sessionId: 's-fid',
         messageId: 'fid-2',
@@ -227,7 +243,7 @@ describe('burn rebuild archive/status CLI', () => {
         },
       }),
     ]);
-    await captureRun({}, ['archive']);
+    await captureRun({}, ['rebuild', 'archive']);
     const statusOut = await captureRun({ json: true }, ['status']);
     assert.equal(statusOut.code, 0);
     const parsed = JSON.parse(statusOut.stdout) as {
@@ -241,15 +257,93 @@ describe('burn rebuild archive/status CLI', () => {
     assert.equal(parsed.archive.fidelityHistogram['unknown'], 1);
   });
 
-  it('rebuild with no target prints help and exits 0', async () => {
-    const out = await captureRun({}, []);
-    assert.equal(out.code, 0);
-    assert.match(out.stdout, /burn rebuild/);
+  it('state rebuild with no target prints help and exits non-zero', async () => {
+    const out = await captureRun({}, ['rebuild']);
+    assert.equal(out.code, 2);
+    assert.match(out.stderr, /missing target/);
+    assert.match(out.stderr, /burn state rebuild/);
   });
 
-  it('rebuild with unknown target exits non-zero', async () => {
-    const out = await captureRun({}, ['nope']);
+  it('state rebuild index refreshes ledger indexes', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-index', messageId: 'index-1' })]);
+    const out = await captureRun({}, ['rebuild', 'index']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /rebuilt ledger index/);
+  });
+
+  it('state rebuild with unknown target exits non-zero', async () => {
+    const out = await captureRun({}, ['rebuild', 'nope']);
     assert.notEqual(out.code, 0);
     assert.match(out.stderr, /unknown target/);
+  });
+
+  it('state with unknown subcommand exits non-zero', async () => {
+    const out = await captureRun({}, ['nope']);
+    assert.notEqual(out.code, 0);
+    assert.match(out.stderr, /unknown subcommand/);
+  });
+
+  it('state prune returns non-zero and prints help on invalid --days instead of throwing', async () => {
+    const out = await captureRun({ days: 'not-a-number' }, ['prune']);
+    assert.equal(out.code, 2);
+    assert.match(out.stderr, /invalid --days value/);
+  });
+
+  it('state prune accepts numeric --days and exits 0', async () => {
+    const out = await captureRun({ days: '30' }, ['prune']);
+    assert.equal(out.code, 0);
+  });
+
+  it('state prune accepts forever and exits 0', async () => {
+    const out = await captureRun({ days: 'forever' }, ['prune']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /retention=forever/);
+  });
+
+  it('state prune --force bypasses the recoverable check and deletes per retention', async () => {
+    await appendContent([
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-force',
+        messageId: 'm',
+        ts: '2026-04-20T00:00:00.000Z',
+        role: 'assistant',
+        kind: 'text',
+        text: 'hi',
+      },
+    ]);
+    const sidecar = path.join(tmp, 'content', 's-force.jsonl');
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await utimes(sidecar, longAgo, longAgo);
+
+    const out = await captureRun({ days: '90', force: true }, ['prune']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /pruned 1 content file/);
+    assert.doesNotMatch(out.stdout, /kept .* recoverable/);
+  });
+
+  it('RELAYBURN_PRUNE_FORCE=1 env var bypasses the recoverable check', async () => {
+    await appendContent([
+      {
+        v: 1,
+        source: 'claude-code',
+        sessionId: 's-env-force',
+        messageId: 'm',
+        ts: '2026-04-20T00:00:00.000Z',
+        role: 'assistant',
+        kind: 'text',
+        text: 'hi',
+      },
+    ]);
+    const sidecar = path.join(tmp, 'content', 's-env-force.jsonl');
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await utimes(sidecar, longAgo, longAgo);
+
+    process.env['RELAYBURN_PRUNE_FORCE'] = '1';
+    const out = await captureRun({ days: '90' }, ['prune']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /pruned 1 content file/);
+    assert.doesNotMatch(out.stdout, /kept .* recoverable/);
   });
 });

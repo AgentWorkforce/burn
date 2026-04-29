@@ -10,7 +10,7 @@ All notable changes to `@relayburn/cli`.
 
 ### Changed
 
-- `burn rebuild <target>` now owns derived-state maintenance for indexes, classification, content, archive builds, and status in one command family.
+- `burn state` now owns derived-state status, rebuild targets, and content pruning in one command family.
 - `burn waste --patterns tool-output-bloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment instead of bytes/4 estimates. Findings on highly compressible payloads (repetitive logs, base64 dumps) may shift below the 15k default threshold.
 - `burn summary --subagent-tree` now reads persisted session relationships, including child-session subagents and fork/continuation annotations.
 
@@ -20,7 +20,7 @@ All notable changes to `@relayburn/cli`.
 
 ### Removed
 
-- Removed the top-level `burn archive` command. Use `burn rebuild archive`, `burn rebuild archive --full`, or `burn rebuild status`.
+- Removed the top-level `burn archive`, `burn rebuild`, and `burn content` commands. Use `burn state`, `burn state rebuild <target>`, or `burn state prune`.
 
 ## [0.45.0] - 2026-04-29
 

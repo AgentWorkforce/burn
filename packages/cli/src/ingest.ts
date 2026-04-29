@@ -610,7 +610,7 @@ export interface ReingestContentReport {
 }
 
 // Re-parse source session files to populate missing content sidecars and
-// user-turn rows. Used by `burn rebuild content` to fix up historical
+// user-turn rows. Used by `burn state rebuild content` to fix up historical
 // sessions ingested before those derived records were written (or where the
 // sidecar was pruned). Does NOT touch cursors, ledger turns, or compactions.
 export async function reingestMissingContent(): Promise<ReingestContentReport> {

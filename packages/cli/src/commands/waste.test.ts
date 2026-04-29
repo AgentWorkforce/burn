@@ -174,8 +174,8 @@ describe('formatWasteReport', () => {
       /⚠ attribution is degraded: 2 of 3 sessions \(66\.7%\) have no sized/,
     );
     // Remediation pointer is present.
-    assert.match(out, /burn rebuild content/);
-    assert.match(out, /burn content/);
+    assert.match(out, /burn state rebuild content/);
+    assert.match(out, /burn state/);
     // Softened attributed line uses ≈ and the qualifier.
     assert.match(out, /attributed ≈ \$25\.00\s+\(approximate — see above\)/);
     // Unattributed line keeps its breakdown.
