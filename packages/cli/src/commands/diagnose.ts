@@ -11,11 +11,13 @@ import {
   loadConfig,
   queryAll,
   queryCompactions,
+  queryRelationships,
   queryUserTurns,
   readContent,
 } from '@relayburn/ledger';
 import type {
   ContentRecord,
+  SessionRelationshipRecord,
   SourceKind,
   TurnRecord,
   UserTurnRecord,
@@ -301,11 +303,12 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…';
 }
 
-// Aggregate per-adapter content-capture gap report (#79). Walks the ledger and
-// tells the user how many sessions per adapter have ≥1 tool call but zero
-// `tool_result` ContentRecords — the symptom that motivated #58 / #59. Unlike
-// the per-invocation ingest warning (which fires once per `burn` run for a
-// fresh affected session), this is a permanent, queryable surface.
+// Aggregate per-adapter content-capture gap report (#79) plus relationship
+// attribution drift (#103). Walks the ledger and tells the user how many
+// sessions per adapter have ≥1 tool call but zero `tool_result` ContentRecords
+// — the symptom that motivated #58 / #59. Unlike the per-invocation ingest
+// warning (which fires once per `burn` run for a fresh affected session), this
+// is a permanent, queryable surface.
 type Adapter = 'claude' | 'codex' | 'opencode';
 const ADAPTER_ORDER: Adapter[] = ['claude', 'codex', 'opencode'];
 
@@ -320,16 +323,31 @@ interface AdapterRow {
   degradedPct: number | null;
 }
 
+interface RelationshipDriftDetail {
+  sessionId: string;
+  adapter: Adapter;
+  reason: 'spawn-env-without-native';
+  envParentAgentId: string;
+}
+
+interface RelationshipDriftReport {
+  sessions: number;
+  details: RelationshipDriftDetail[];
+}
+
 async function runDiagnoseAggregate(args: ParsedArgs): Promise<number> {
   await ingestAll();
   const config = await loadConfig();
   const contentMode = config.content.store;
   const turns = await queryAll();
+  const relationships = await queryRelationships();
 
   const sessionsByAdapter = new Map<Adapter, Map<string, TurnRecord[]>>();
+  const adapterBySession = new Map<string, Adapter>();
   for (const t of turns) {
     const adapter = sourceToAdapter(t.source);
     if (!adapter) continue;
+    adapterBySession.set(t.sessionId, adapter);
     let bySession = sessionsByAdapter.get(adapter);
     if (!bySession) {
       bySession = new Map();
@@ -380,10 +398,23 @@ async function runDiagnoseAggregate(args: ParsedArgs): Promise<number> {
     };
     rows.push(row);
   }
+  const relationshipDrift = findRelationshipDrift(relationships, adapterBySession);
 
   if (args.flags['json'] === true) {
+    const payload: {
+      adapters: AdapterRow[];
+      contentMode: string;
+      relationshipDrift: RelationshipDriftReport | { sessions: number };
+    } = {
+      adapters: rows,
+      contentMode,
+      relationshipDrift:
+        args.flags['explain-drift'] === true
+          ? relationshipDrift
+          : { sessions: relationshipDrift.sessions },
+    };
     process.stdout.write(
-      JSON.stringify({ adapters: rows, contentMode }, null, 2) + '\n',
+      JSON.stringify(payload, null, 2) + '\n',
     );
     return 0;
   }
@@ -434,8 +465,86 @@ async function runDiagnoseAggregate(args: ParsedArgs): Promise<number> {
     );
   }
   out.push('');
+  out.push('Relationship attribution drift');
+  out.push(`  sessions: ${formatInt(relationshipDrift.sessions)}`);
+  if (args.flags['explain-drift'] === true) {
+    if (relationshipDrift.details.length === 0) {
+      out.push('  (none)');
+    } else {
+      out.push(
+        table([
+          ['session', 'adapter', 'reason', 'envParentAgentId'],
+          ...relationshipDrift.details.map((d) => [
+            d.sessionId,
+            d.adapter,
+            d.reason,
+            d.envParentAgentId,
+          ]),
+        ]),
+      );
+    }
+  }
+  out.push('');
   process.stdout.write(out.join('\n'));
   return 0;
+}
+
+function findRelationshipDrift(
+  relationships: readonly SessionRelationshipRecord[],
+  adapterBySession: ReadonlyMap<string, Adapter>,
+): RelationshipDriftReport {
+  const spawnEnvBySession = new Map<string, SessionRelationshipRecord[]>();
+  const nativeBySession = new Map<string, SessionRelationshipRecord[]>();
+  for (const r of relationships) {
+    if (r.relationshipType !== 'subagent') continue;
+    if (r.source === 'spawn-env') {
+      pushRelationship(spawnEnvBySession, r);
+    } else if (r.source === 'native-claude' || r.source === 'native-opencode') {
+      pushRelationship(nativeBySession, r);
+    }
+  }
+
+  const details: RelationshipDriftDetail[] = [];
+  for (const [sessionId, envRows] of spawnEnvBySession) {
+    const adapter = adapterBySession.get(sessionId);
+    if (adapter !== 'claude' && adapter !== 'opencode') continue;
+    const nativeRows = nativeBySession.get(sessionId) ?? [];
+    if (nativeRows.length > 0) continue;
+    const envParentAgentId = firstRelatedSessionId(envRows);
+    if (envParentAgentId === undefined) continue;
+    details.push({
+      sessionId,
+      adapter,
+      reason: 'spawn-env-without-native',
+      envParentAgentId,
+    });
+  }
+
+  details.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+  return { sessions: details.length, details };
+}
+
+function pushRelationship(
+  target: Map<string, SessionRelationshipRecord[]>,
+  relationship: SessionRelationshipRecord,
+): void {
+  let list = target.get(relationship.sessionId);
+  if (!list) {
+    list = [];
+    target.set(relationship.sessionId, list);
+  }
+  list.push(relationship);
+}
+
+function firstRelatedSessionId(
+  relationships: readonly SessionRelationshipRecord[],
+): string | undefined {
+  for (const r of relationships) {
+    if (typeof r.relatedSessionId === 'string' && r.relatedSessionId.length > 0) {
+      return r.relatedSessionId;
+    }
+  }
+  return undefined;
 }
 
 function sourceToAdapter(source: SourceKind): Adapter | null {

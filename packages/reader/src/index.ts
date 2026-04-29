@@ -12,6 +12,7 @@ export type {
   ContentToolUse,
   ContentToolResult,
   ContentStoreMode,
+  RelationshipSourceKind,
   RelationshipType,
   SessionRelationshipRecord,
   ToolResultStatus,

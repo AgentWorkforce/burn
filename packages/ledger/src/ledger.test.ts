@@ -118,6 +118,22 @@ describe('ledger', () => {
     assert.deepEqual(b.enrichment, {});
   });
 
+  it('emits a spawn-env relationship when a session stamp carries parentAgentId', async () => {
+    await stamp(
+      { sessionId: 's-child' },
+      { agentId: 'ag-child', parentAgentId: 'ag-parent', harness: 'codex' },
+    );
+    const got = await queryRelationships();
+    assert.equal(got.length, 1);
+    const rel = got[0]!;
+    assert.equal(rel.source, 'spawn-env');
+    assert.equal(rel.sessionId, 's-child');
+    assert.equal(rel.relatedSessionId, 'ag-parent');
+    assert.equal(rel.relationshipType, 'subagent');
+    assert.equal(rel.agentId, 'ag-child');
+    assert.equal(typeof rel.ts, 'string');
+  });
+
   it('applies messageId stamp only to that one turn', async () => {
     await appendTurns([
       fakeTurn({ sessionId: 's-A', messageId: 'm1' }),

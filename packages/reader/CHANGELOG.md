@@ -4,6 +4,10 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+### Changed
+
+- Claude and OpenCode subagent relationship rows now identify native parent-signal sources separately from parser root/session records.
+
 ## [0.42.0] - 2026-04-28
 
 ### Added

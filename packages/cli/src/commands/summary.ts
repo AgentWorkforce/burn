@@ -49,7 +49,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
-  if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
+  const agentFilter = typeof args.flags['agent'] === 'string' ? args.flags['agent'] : undefined;
   const providerFilter = parseProviderFilter(args.flags['provider']);
   if (providerFilter instanceof Error) {
     process.stderr.write(providerFilter.message);
@@ -105,7 +105,12 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
 
   const ingestReport = await ingestAll();
   const pricing = await loadPricing();
-  const turns = filterTurnsByProvider(await loadTurns(q, args), providerFilter);
+  const agentSessionIds =
+    agentFilter !== undefined ? await resolveAgentSessionTree(agentFilter) : undefined;
+  const turns = filterTurnsByProvider(
+    filterTurnsByAgent(await loadTurns(q, args), agentFilter, agentSessionIds),
+    providerFilter,
+  );
 
   if (subagentTreeFlag !== undefined) {
     return renderSubagentTreeMode(args, turns, pricing, subagentTreeFlag, q);
@@ -238,6 +243,57 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
 
   process.stdout.write(lines.join('\n'));
   return 0;
+}
+
+async function resolveAgentSessionTree(agentId: string): Promise<Set<string>> {
+  return collectAgentSessionTree(await queryRelationships(), agentId);
+}
+
+function collectAgentSessionTree(
+  relationships: readonly SessionRelationshipRecord[],
+  agentId: string,
+): Set<string> {
+  const byParent = new Map<string, SessionRelationshipRecord[]>();
+  for (const r of relationships) {
+    if (r.relationshipType !== 'subagent') continue;
+    if (typeof r.relatedSessionId !== 'string' || r.relatedSessionId.length === 0) continue;
+    let list = byParent.get(r.relatedSessionId);
+    if (!list) {
+      list = [];
+      byParent.set(r.relatedSessionId, list);
+    }
+    list.push(r);
+  }
+
+  const sessions = new Set<string>();
+  const seenParents = new Set<string>();
+  const queue = [agentId];
+  while (queue.length > 0) {
+    const parent = queue.shift()!;
+    if (seenParents.has(parent)) continue;
+    seenParents.add(parent);
+    for (const child of byParent.get(parent) ?? []) {
+      sessions.add(child.sessionId);
+      queue.push(child.sessionId);
+      if (typeof child.agentId === 'string' && child.agentId.length > 0) {
+        queue.push(child.agentId);
+      }
+    }
+  }
+  return sessions;
+}
+
+function filterTurnsByAgent(
+  turns: EnrichedTurn[],
+  agentId: string | undefined,
+  sessionIds: Set<string> | undefined,
+): EnrichedTurn[] {
+  if (agentId === undefined) return turns;
+  return turns.filter((t) => {
+    if (t.enrichment['agentId'] === agentId) return true;
+    if (t.enrichment['parentAgentId'] === agentId) return true;
+    return sessionIds?.has(t.sessionId) === true;
+  });
 }
 
 async function loadContentForQuality(
