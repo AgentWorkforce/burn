@@ -4,6 +4,8 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-29
+
 ### Added
 
 - Exposed `invalidateIndexCache()` so callers that wipe the on-disk index can drop the in-memory dedup cache before the next write.

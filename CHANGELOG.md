@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-29
+
 ### Changed
 
 - Publish workflow now creates one GitHub Release per lockstep publish, anchored to `relayburn`, with all package versions listed in the release body.
