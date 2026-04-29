@@ -117,6 +117,8 @@ Then add it to the registry array in `harnesses/registry.ts`. The CLI help block
 
 The codex / opencode adapters share the pending-stamp + watch-loop shape; both are constructed via `createPendingStampAdapter` in `harnesses/pending-stamp.ts`. New harnesses with the same shape can reuse it.
 
+`burn ingest` owns passive ingest modes: no flags scans all session stores once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven Claude hook path. The reusable polling controller lives in `packages/cli/src/watch-loop.ts`; import `startWatchLoop` from there for adapters.
+
 ## When in doubt
 
 - **Architecture / API surface:** read `README.md` first, then the package's `src/index.ts` for exports.

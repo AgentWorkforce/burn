@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 
-import { parseClaudeSessionIncremental } from '@relayburn/reader';
+import { createOpencodeStreamIngestor, parseClaudeSessionIncremental } from '@relayburn/reader';
 import type {
   SessionRelationshipRecord,
   ToolResultEventRecord,
@@ -19,21 +19,39 @@ import {
   loadCursors,
   queryToolResultEvents,
   saveCursorChanges,
+  updateCursors,
   withLock,
 } from '@relayburn/ledger';
-import type { ClaudeCursor } from '@relayburn/ledger';
+import type { ClaudeCursor, OpencodeStreamCursor } from '@relayburn/ledger';
 
 import type { ParsedArgs } from '../args.js';
+import { formatInt } from '../format.js';
+import { startOpencodeEventStream } from '../opencode-stream.js';
+import { resolvePendingStampsForSession } from '../pending-stamps.js';
+import {
+  runIngestTick,
+  startWatchLoop,
+  type WatchController,
+} from '../watch-loop.js';
 
-const INGEST_HELP = `burn ingest — hook-driven ingest from an agent harness
+export {
+  runIngestTick,
+  startWatchLoop,
+  type StartWatchLoopOptions,
+  type WatchController,
+} from '../watch-loop.js';
+
+const INGEST_HELP = `burn ingest — incremental ingest from agent session stores
 
 Usage:
-  burn ingest --runtime claude [--quiet]
+  burn ingest [--quiet]
+  burn ingest --watch [--interval <ms>] [--quiet] [--opencode-stream] [--opencode-url <url>]
+  burn ingest --hook claude [--quiet]
 
-Reads a hook payload JSON from stdin and incrementally ingests the session
-transcript it references. Safe to call from every Claude Code hook
-(PreToolUse, PostToolUse, UserPromptSubmit, SubagentStop, SessionEnd) — the
-ledger's cursor + dedup index keep re-invocations idempotent.
+Default mode scans Claude Code, Codex, and OpenCode session stores once.
+--watch keeps that scan loop running in the foreground.
+--hook claude reads a Claude Code hook payload JSON from stdin and ingests the
+transcript it references. Safe to call from every Claude Code hook.
 `;
 
 interface ClaudeHookPayload extends Record<string, unknown> {
@@ -60,23 +78,224 @@ interface HookEventDraft {
 }
 
 export async function runIngest(args: ParsedArgs): Promise<number> {
-  const runtime = typeof args.flags['runtime'] === 'string' ? args.flags['runtime'] : undefined;
   const quiet = args.flags['quiet'] === true;
   if (args.positional[0] === 'help' || args.flags['help'] === true) {
     process.stdout.write(INGEST_HELP);
     return 0;
   }
-  if (!runtime) {
-    process.stderr.write(`burn: ingest requires --runtime <claude>\n\n${INGEST_HELP}`);
+
+  const watch = args.flags['watch'] === true;
+  const hook = hookName(args.flags['hook']);
+  if (watch && hook !== undefined) {
+    process.stderr.write(`burn: ingest --watch and --hook are mutually exclusive\n\n${INGEST_HELP}`);
     return 2;
   }
-  if (runtime !== 'claude') {
-    process.stderr.write(`burn: unsupported runtime: ${runtime}\n\n${INGEST_HELP}`);
+  if (args.flags['hook'] === true) {
+    process.stderr.write(`burn: ingest --hook requires a harness name\n\n${INGEST_HELP}`);
+    return 2;
+  }
+  if (args.flags['runtime'] !== undefined) {
+    process.stderr.write(`burn: ingest --runtime is not supported; use --hook claude\n\n${INGEST_HELP}`);
     return 2;
   }
 
+  if (!watch) {
+    warnIfIgnoredWithoutWatch(args, quiet);
+  }
+
+  if (hook !== undefined) return runIngestHook(hook, quiet);
+  if (watch) return runIngestWatch(args, quiet);
+  return runIngestOnce();
+}
+
+async function runIngestHook(hook: string, quiet: boolean): Promise<number> {
+  if (hook !== 'claude') {
+    process.stderr.write(`burn: unsupported hook harness: ${hook}\n\n${INGEST_HELP}`);
+    return 2;
+  }
   const raw = await readStdin();
   return ingestClaudeHookPayload(raw, { quiet });
+}
+
+async function runIngestOnce(): Promise<number> {
+  const report = await runIngestTick();
+  process.stdout.write(renderIngestReport(report));
+  return 0;
+}
+
+async function runIngestWatch(args: ParsedArgs, quiet: boolean): Promise<number> {
+  if (args.flags['daemon'] === true) {
+    process.stderr.write(
+      `burn: ingest --watch --daemon is not supported yet; run burn ingest --watch in the foreground.\n`,
+    );
+    return 2;
+  }
+  if (typeof args.flags['opencode-stream'] === 'string') {
+    process.stderr.write(`burn: ingest --opencode-stream does not take a value\n`);
+    return 2;
+  }
+
+  const intervalMs = parseIntervalMs(args.flags['interval']);
+  if (intervalMs === null) {
+    process.stderr.write(`burn: ingest --interval must be a positive integer in milliseconds\n`);
+    return 2;
+  }
+
+  if (!quiet) {
+    process.stderr.write(`[burn] ingest: foreground ingest every ${intervalMs}ms; Ctrl-C to stop\n`);
+  }
+  const controller = startWatchLoop({
+    intervalMs,
+    immediate: true,
+    onReport(report) {
+      if (!quiet && report.appendedTurns > 0) process.stderr.write(renderIngestReport(report));
+    },
+    onError(err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[burn] ingest: ${msg}\n`);
+    },
+  });
+  const stream =
+    args.flags['opencode-stream'] === true
+      ? await startDirectOpencodeStream(args, controller, quiet)
+      : undefined;
+
+  await waitForStopSignal();
+  if (stream) await stream.stop();
+  await controller.stop();
+  return 0;
+}
+
+async function startDirectOpencodeStream(
+  args: ParsedArgs,
+  controller: WatchController,
+  quiet: boolean,
+): Promise<ReturnType<typeof startOpencodeEventStream>> {
+  const streamFlags = opencodeStreamFlags(args);
+  const cursorKey = `opencode-stream:${streamFlags.baseUrl ?? process.env['OPENCODE_SERVER_URL'] ?? 'http://127.0.0.1:4096'}:${streamFlags.global === true ? 'global' : 'project'}`;
+  const cursors = await loadCursors();
+  const prior = cursors[cursorKey]?.kind === 'opencode-stream'
+    ? (cursors[cursorKey] as OpencodeStreamCursor)
+    : undefined;
+  const config = await loadConfig();
+  const ingestorOpts: Parameters<typeof createOpencodeStreamIngestor>[0] = {
+    contentMode: config.content.store,
+  };
+  if (prior !== undefined) ingestorOpts.cursor = prior;
+  const ingestor = await createOpencodeStreamIngestor(ingestorOpts);
+  const streamOpts: Parameters<typeof startOpencodeEventStream>[0] = {
+    ...streamFlags,
+    onOpen(url) {
+      if (!quiet) process.stderr.write(`[burn] ingest: OpenCode event stream ${url}\n`);
+    },
+    async onEvent(event, payload) {
+      const result = await ingestor.ingest(payload, event.id);
+      if (result.turns.length > 0) {
+        const stamped = new Set<string>();
+        for (const turn of result.turns) {
+          if (stamped.has(turn.sessionId)) continue;
+          stamped.add(turn.sessionId);
+          const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
+            harness: 'opencode',
+            sessionId: turn.sessionId,
+            sessionMtimeMs: Date.now(),
+          };
+          if (turn.project !== undefined) candidate.cwd = turn.project;
+          await resolvePendingStampsForSession(candidate);
+        }
+        await appendTurns(result.turns);
+      }
+      if (result.content.length > 0) await appendContent(result.content);
+      if (result.relationships.length > 0) await appendRelationships(result.relationships);
+      if (result.toolResultEvents.length > 0) {
+        await appendToolResultEvents(result.toolResultEvents);
+      }
+      if (result.userTurns.length > 0) await appendUserTurns(result.userTurns);
+      await updateCursors((map) => {
+        map[cursorKey] = { kind: 'opencode-stream', ...result.cursor };
+      });
+      if (!quiet && result.turns.length > 0) {
+        process.stderr.write(
+          renderIngestReport({
+            scannedSessions: 0,
+            ingestedSessions: 1,
+            appendedTurns: result.turns.length,
+          }),
+        );
+      }
+    },
+    onIngestHint() {
+      void controller.tick();
+    },
+    onError(err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[burn] ingest: OpenCode event stream unavailable (${msg}); polling continues\n`,
+      );
+    },
+  };
+  if (prior?.lastEventId !== undefined) streamOpts.lastEventId = prior.lastEventId;
+  return startOpencodeEventStream(streamOpts);
+}
+
+function renderIngestReport(report: {
+  ingestedSessions: number;
+  appendedTurns: number;
+  scannedSessions?: number;
+}): string {
+  return (
+    `[burn] ingest: ingested ${formatInt(report.ingestedSessions)} session` +
+    `${report.ingestedSessions === 1 ? '' : 's'} ` +
+    `(+${formatInt(report.appendedTurns)} turn${report.appendedTurns === 1 ? '' : 's'})\n`
+  );
+}
+
+function parseIntervalMs(raw: string | true | undefined): number | null {
+  if (raw === undefined || raw === true) return 1000;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+function hookName(raw: string | true | undefined): string | undefined {
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+function stringFlag(raw: string | true | undefined): string | undefined {
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+function warnIfIgnoredWithoutWatch(args: ParsedArgs, quiet: boolean): void {
+  if (quiet) return;
+  const ignored: string[] = [];
+  if (args.flags['interval'] !== undefined) ignored.push('--interval');
+  if (args.flags['opencode-stream'] !== undefined) ignored.push('--opencode-stream');
+  if (args.flags['opencode-url'] !== undefined) ignored.push('--opencode-url');
+  if (args.flags['opencode-global'] !== undefined) ignored.push('--opencode-global');
+  if (args.flags['daemon'] !== undefined) ignored.push('--daemon');
+  for (const flag of ignored) {
+    process.stderr.write(`burn: ingest ${flag} is only used with --watch; ignoring\n`);
+  }
+}
+
+function opencodeStreamFlags(args: ParsedArgs): { baseUrl?: string; global?: boolean } {
+  const out: { baseUrl?: string; global?: boolean } = {};
+  const baseUrl = stringFlag(args.flags['opencode-url']);
+  if (baseUrl !== undefined) out.baseUrl = baseUrl;
+  if (args.flags['opencode-global'] === true) out.global = true;
+  return out;
+}
+
+async function waitForStopSignal(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const done = (): void => {
+      process.off('SIGINT', done);
+      process.off('SIGTERM', done);
+      resolve();
+    };
+    process.once('SIGINT', done);
+    process.once('SIGTERM', done);
+  });
 }
 
 export async function ingestClaudeHookPayload(

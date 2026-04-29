@@ -13,7 +13,6 @@ import { runRebuild } from './commands/rebuild.js';
 import { runWrapper } from './commands/run.js';
 import { runSummary } from './commands/summary.js';
 import { runWaste } from './commands/waste.js';
-import { runWatch } from './commands/watch.js';
 import { listHarnessNames } from './harnesses/registry.js';
 
 const HARNESS_LIST = listHarnessNames().join('|');
@@ -32,8 +31,7 @@ Usage:
   burn context       [advise] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
-  burn watch         [--interval <ms>] [--once] [--opencode-stream] [--opencode-url <url>]
-  burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
+  burn ingest        [--watch|--hook <name>] [--interval <ms>] [--quiet]
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
   burn content prune [--days <n>] [--force]
   burn archive       build | rebuild | status [--json]
@@ -63,8 +61,9 @@ Examples:
   burn run claude   --tag workflow=refactor -- --resume
   burn run codex    --tag workflow=refactor
   burn run opencode --tag workflow=refactor
-  burn watch
-  burn watch --opencode-stream
+  burn ingest
+  burn ingest --watch
+  burn ingest --watch --opencode-stream
   burn content prune --days 30
   burn archive status
   burn archive build
@@ -105,8 +104,6 @@ async function main(): Promise<number> {
       return runCompare(args);
     case 'run':
       return runWrapper(args);
-    case 'watch':
-      return runWatch(args);
     case 'ingest':
       return runIngest(args);
     case 'mcp-server':

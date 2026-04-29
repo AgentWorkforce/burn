@@ -15,7 +15,7 @@ export interface ClaudeHookSettingsResult {
 
 // Event names Claude Code will dispatch hook payloads for. Each fires with a
 // JSON payload on stdin that includes `session_id` and `transcript_path`;
-// `burn ingest --runtime claude` consumes that uniformly and incrementally
+// `burn ingest --hook claude` consumes that uniformly and incrementally
 // parses the transcript. Safe to register all of them — the ledger's cursor +
 // dedup index make repeated invocations idempotent.
 //
@@ -52,7 +52,7 @@ export function buildClaudeHookSettings(
 ): ClaudeHookSettingsResult {
   const sessionId = randomUUID();
   const burnBin = options.burnBin ?? 'burn';
-  const command = `${shellQuote(burnBin)} ingest --runtime claude --quiet`;
+  const command = `${shellQuote(burnBin)} ingest --hook claude --quiet`;
 
   const hooks: Partial<Record<HookEvent, HookMatcher[]>> = {};
   for (const evt of TOOL_MATCHED_EVENTS) {
