@@ -562,7 +562,7 @@ function buildContentIndex(records: ContentRecord[] | undefined): ContentIndex |
 }
 
 // Stringify a tool_result content block to plain text for signature
-// extraction. Mirrors `stringifyToolResult` in waste.ts (kept in-module to
+// extraction. Mirrors `stringifyToolResult` in hotspots.ts (kept in-module to
 // avoid a public export of an internal helper); structured blocks fall back
 // to JSON so an `is_error` payload still has *something* readable.
 function stringifyToolResultContent(content: unknown): string {
@@ -909,7 +909,7 @@ function failureRunSignatures(
   // tool_result we observe for each tool — that's the "what blew up first"
   // signature the user wants to read in a report. Subsequent failures for
   // the same tool may have different signatures; if the user wants those
-  // they can `burn diagnose <session>`.
+  // they can `burn hotspots --session <session>`.
   const out: Array<{ tool: string; firstLine: string }> = [];
   const seen = new Set<string>();
   for (const ref of streak) {

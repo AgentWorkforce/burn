@@ -6,7 +6,7 @@
 // downstream consumers that want it. This module wraps each one in a common
 // `WasteFinding` shape so the CLI can render every detector through one
 // table renderer, severity-rank a heterogeneous list, and (eventually) drive
-// a confirmation-gated `burn waste --apply` pipeline against typed
+// a confirmation-gated `burn hotspots --apply` pipeline against typed
 // `WasteAction`s instead of scraping strings.
 
 import type {
@@ -23,7 +23,7 @@ import type {
   SystemPromptTax,
 } from './patterns.js';
 
-// A typed action a finding suggests the user (or `burn waste --apply`) take.
+// A typed action a finding suggests the user (or `burn hotspots --apply`) take.
 // `paste` is text the user copies somewhere (CLAUDE.md, an agent prompt, a
 // chat message); `command` is a shell command; `file-content` is a full file
 // body to write to disk. Keeping the union closed lets `--apply` decide what
@@ -76,11 +76,11 @@ function severityFromUsd(usd: number): WasteSeverity {
   return 'info';
 }
 
-function diagnoseAction(sessionId: string): WasteAction {
+function hotspotsAction(sessionId: string): WasteAction {
   return {
     type: 'command',
     label: 'Inspect this session',
-    text: `burn diagnose ${sessionId}`,
+    text: `burn hotspots --session ${sessionId}`,
   };
 }
 
@@ -104,7 +104,7 @@ export function retryLoopToFinding(loop: RetryLoop): WasteFinding {
       `errored ${loop.tool} calls with the same arguments. Cumulative turn cost ` +
       `${fmtUsd(loop.cost)} — the agent kept retrying without changing inputs.`,
     estimatedSavings: { usdPerSession: loop.cost },
-    actions: [diagnoseAction(loop.sessionId)],
+    actions: [hotspotsAction(loop.sessionId)],
   };
   if (loop.eventSource !== undefined) finding.eventSource = loop.eventSource;
   return finding;
@@ -131,7 +131,7 @@ export function failureRunToFinding(run: FailureRun): WasteFinding {
       `Cumulative turn cost ${fmtUsd(run.cost)} — agent likely stuck without ` +
       `recovering or asking for help.${sigDetail}`,
     estimatedSavings: { usdPerSession: run.cost },
-    actions: [diagnoseAction(run.sessionId)],
+    actions: [hotspotsAction(run.sessionId)],
   };
   if (run.eventSource !== undefined) finding.eventSource = run.eventSource;
   return finding;
@@ -148,7 +148,7 @@ export function cancellationRunToFinding(run: CancellationRun): WasteFinding {
       `Turns ${run.startTurnIndex}-${run.endTurnIndex} ended with cancelled ` +
       `tool/subagent status (${toolList}). Cumulative turn cost ${fmtUsd(run.cost)}.`,
     estimatedSavings: { usdPerSession: run.cost },
-    actions: [diagnoseAction(run.sessionId)],
+    actions: [hotspotsAction(run.sessionId)],
     eventSource: run.eventSource,
   };
 }
@@ -180,7 +180,7 @@ export function compactionLossToFinding(loss: CompactionLoss): WasteFinding {
       `tokens of cache. Pre-compact cacheRead cost ${fmtUsd(loss.cacheLostCost)} — that ` +
       `cache won't be reused on subsequent turns.${lostWorkDetail}`,
     estimatedSavings: savings,
-    actions: [diagnoseAction(loss.sessionId)],
+    actions: [hotspotsAction(loss.sessionId)],
   };
 }
 
@@ -203,7 +203,7 @@ export function editRevertToFinding(cycle: EditRevertCycle): WasteFinding {
       `restored a prior file state ${cycle.spanTurns} turns later. Cumulative anchor-turn ` +
       `cost ${fmtUsd(cycle.cost)} — the intermediate work was erased.${previewDetail}`,
     estimatedSavings: { usdPerSession: cycle.cost },
-    actions: [diagnoseAction(cycle.sessionId)],
+    actions: [hotspotsAction(cycle.sessionId)],
   };
 }
 
@@ -224,7 +224,7 @@ export function editHeavyToFinding(session: EditHeavySession): WasteFinding {
       `turn cost ${fmtUsd(session.cost)} — careless editing without first reading ` +
       `surrounding context.`,
     estimatedSavings: { usdPerSession: session.cost },
-    actions: [diagnoseAction(session.sessionId)],
+    actions: [hotspotsAction(session.sessionId)],
   };
 }
 
@@ -239,7 +239,7 @@ export function skillRecallDupToFinding(dup: SkillRecallDup): WasteFinding {
       `calls (turns ${dup.firstTurnIndex}-${dup.lastTurnIndex}) re-injects the full ` +
       `SKILL.md content into context. Cumulative turn cost ${fmtUsd(dup.cost)}.`,
     estimatedSavings: { usdPerSession: dup.cost },
-    actions: [diagnoseAction(dup.sessionId)],
+    actions: [hotspotsAction(dup.sessionId)],
   };
 }
 
@@ -257,7 +257,7 @@ export function skillPruningProtectionToFinding(
       `cacheRead at turn ${prot.lastCachedTurnIndex}. Invoke + riding-turn cost ` +
       `${fmtUsd(prot.cost)}.`,
     estimatedSavings: { usdPerSession: prot.cost },
-    actions: [diagnoseAction(prot.sessionId)],
+    actions: [hotspotsAction(prot.sessionId)],
   };
 }
 
@@ -279,7 +279,7 @@ export function systemPromptTaxToFinding(tax: SystemPromptTax): WasteFinding {
       tokensPerSession: ridingTokens,
       usdPerSession: tax.totalCost,
     },
-    actions: [diagnoseAction(tax.sessionId)],
+    actions: [hotspotsAction(tax.sessionId)],
   };
 }
 

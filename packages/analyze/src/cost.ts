@@ -88,7 +88,7 @@ function reasoningModeForSource(source: SourceKind): ReasoningMode | undefined {
 
 // Shared lookup: direct match → synthetic reattribution (issue #31, e.g.
 // `hf:deepseek-ai/...`, `accounts/fireworks/models/...`) → generic
-// `provider/model` strip. Used by costForUsage here and by attributeWaste /
+// `provider/model` strip. Used by costForUsage here and by attributeHotspots /
 // attributeClaudeMd so synthetic-routed turns price consistently across views.
 export function lookupModelRate(model: string, pricing: PricingTable): ModelCost | undefined {
   const direct = pricing[model];

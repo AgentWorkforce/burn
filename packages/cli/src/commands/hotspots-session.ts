@@ -2,7 +2,7 @@ import {
   aggregateByBash,
   aggregateByFile,
   aggregateBySubagent,
-  attributeWaste,
+  attributeHotspots,
   detectPatterns,
   loadPricing,
   type PatternsResult,
@@ -29,17 +29,19 @@ import { countToolCallGaps, ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 
-export async function runDiagnose(args: ParsedArgs): Promise<number> {
-  const sessionId = args.positional[0];
+export async function runHotspotsSession(
+  args: ParsedArgs,
+  sessionId = args.positional[0],
+): Promise<number> {
   if (!sessionId) {
-    return runDiagnoseAggregate(args);
+    return runHotspotsGapReport(args);
   }
 
   await ingestAll();
   const pricing = await loadPricing();
   const turns = await queryAll({ sessionId });
   if (turns.length === 0) {
-    process.stderr.write(`burn diagnose: no turns found for session ${sessionId}\n`);
+    process.stderr.write(`burn hotspots --session: no turns found for session ${sessionId}\n`);
     return 1;
   }
   const compactions = await queryCompactions({ sessionId });
@@ -63,7 +65,7 @@ export async function runDiagnose(args: ParsedArgs): Promise<number> {
   const userTurnsBySession = new Map<string, UserTurnRecord[]>();
   if (userTurns.length > 0) userTurnsBySession.set(sessionId, userTurns);
 
-  const attribution = attributeWaste(turns, {
+  const attribution = attributeHotspots(turns, {
     pricing,
     contentBySession,
     userTurnsBySession,
@@ -565,7 +567,7 @@ interface RelationshipDriftReport {
   details: RelationshipDriftDetail[];
 }
 
-async function runDiagnoseAggregate(args: ParsedArgs): Promise<number> {
+async function runHotspotsGapReport(args: ParsedArgs): Promise<number> {
   await ingestAll();
   const config = await loadConfig();
   const contentMode = config.content.store;

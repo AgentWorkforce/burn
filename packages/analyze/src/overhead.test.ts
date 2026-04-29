@@ -8,11 +8,11 @@ import type { SourceKind, TurnRecord } from '@relayburn/reader';
 
 import { loadClaudeMdFile, parseClaudeMd } from './claude-md.js';
 import {
-  attributeContext,
-  findContextFiles,
-  type ContextFile,
-  type ParsedContextFile,
-} from './context-md.js';
+  attributeOverhead,
+  findOverheadFiles,
+  type OverheadFile,
+  type ParsedOverheadFile,
+} from './overhead.js';
 import { loadBuiltinPricing } from './pricing.js';
 
 function turn(over: Partial<TurnRecord> & {
@@ -31,7 +31,7 @@ function turn(over: Partial<TurnRecord> & {
   };
 }
 
-describe('findContextFiles', () => {
+describe('findOverheadFiles', () => {
   let tmp: string;
   before(async () => {
     tmp = await mkdtemp(path.join(tmpdir(), 'ctx-find-'));
@@ -45,7 +45,7 @@ describe('findContextFiles', () => {
     await mkdir(path.join(tmp, '.claude'), { recursive: true });
     await writeFile(path.join(tmp, '.claude', 'CLAUDE.md'), '# nested');
     await writeFile(path.join(tmp, 'AGENTS.md'), '# agents');
-    const files = await findContextFiles(tmp);
+    const files = await findOverheadFiles(tmp);
     assert.equal(files.length, 3);
     const root = files.find((f) => path.basename(f.path) === 'CLAUDE.md' && path.basename(path.dirname(f.path)) !== '.claude')!;
     const nested = files.find((f) => path.basename(f.path) === 'CLAUDE.md' && path.basename(path.dirname(f.path)) === '.claude')!;
@@ -58,7 +58,7 @@ describe('findContextFiles', () => {
   });
 });
 
-describe('attributeContext', () => {
+describe('attributeOverhead', () => {
   it('routes Claude Code turns to CLAUDE.md and Codex/OpenCode turns to AGENTS.md', async () => {
     const pricing = await loadBuiltinPricing();
     const rate = pricing['claude-sonnet-4-6']!;
@@ -66,7 +66,7 @@ describe('attributeContext', () => {
     const claudeMd = parseClaudeMd('/p/CLAUDE.md', '## Claude\n' + 'c'.repeat(4000));
     const agentsMd = parseClaudeMd('/p/AGENTS.md', '## Agents\n' + 'a'.repeat(4000));
 
-    const files: ParsedContextFile[] = [
+    const files: ParsedOverheadFile[] = [
       {
         file: { kind: 'claude-md', path: '/p/CLAUDE.md', appliesTo: ['claude-code'] },
         parsed: claudeMd,
@@ -104,7 +104,7 @@ describe('attributeContext', () => {
       }),
     ];
 
-    const result = attributeContext({ files, turns, pricing });
+    const result = attributeOverhead({ files, turns, pricing });
     assert.equal(result.perFile.length, 2);
 
     const claudeAttr = result.perFile.find((p) => p.file.kind === 'claude-md')!;
@@ -140,7 +140,7 @@ describe('attributeContext', () => {
     const pricing = await loadBuiltinPricing();
     const small = parseClaudeMd('/p/CLAUDE.md', '## S\n' + 'x'.repeat(2000));
     const big = parseClaudeMd('/p/.claude/CLAUDE.md', '## B\n' + 'y'.repeat(36000));
-    const files: ParsedContextFile[] = [
+    const files: ParsedOverheadFile[] = [
       {
         file: { kind: 'claude-md', path: '/p/CLAUDE.md', appliesTo: ['claude-code'] },
         parsed: small,
@@ -170,7 +170,7 @@ describe('attributeContext', () => {
         usage: { input: 10, output: 10, reasoning: 0, cacheRead: small.tokens + 500, cacheCreate5m: 0, cacheCreate1h: 0 },
       }));
     }
-    const result = attributeContext({ files, turns, pricing });
+    const result = attributeOverhead({ files, turns, pricing });
     const smallAttr = result.perFile.find((p) => p.parsed === small)!;
     const bigAttr = result.perFile.find((p) => p.parsed === big)!;
     assert.equal(smallAttr.attribution.sessionCosts[0]!.ridingTurns, 8); // all 8
@@ -183,7 +183,7 @@ describe('attributeContext', () => {
     const pricing = await loadBuiltinPricing();
     const claudeMd = parseClaudeMd('/p/CLAUDE.md', '## C\n' + 'x'.repeat(4000));
     const agentsMd = parseClaudeMd('/p/AGENTS.md', '## A\n' + 'y'.repeat(4000));
-    const files: ParsedContextFile[] = [
+    const files: ParsedOverheadFile[] = [
       {
         file: { kind: 'claude-md', path: '/p/CLAUDE.md', appliesTo: ['claude-code'] },
         parsed: claudeMd,
@@ -202,7 +202,7 @@ describe('attributeContext', () => {
         usage: { input: 10, output: 10, reasoning: 0, cacheRead: 50_000, cacheCreate5m: 0, cacheCreate1h: 0 },
       }),
     ];
-    const result = attributeContext({ files, turns, pricing });
+    const result = attributeOverhead({ files, turns, pricing });
     const claudeAttr = result.perFile.find((p) => p.file.kind === 'claude-md')!;
     // No claude-code turns ⇒ claude-md file has zero cost, zero sessions.
     assert.equal(claudeAttr.attribution.totalCost, 0);
@@ -210,7 +210,7 @@ describe('attributeContext', () => {
   });
 });
 
-describe('loadContextFile integration', () => {
+describe('loadOverheadFile integration', () => {
   let tmp: string;
   before(async () => {
     tmp = await mkdtemp(path.join(tmpdir(), 'ctx-load-'));
@@ -219,11 +219,11 @@ describe('loadContextFile integration', () => {
     await rm(tmp, { recursive: true, force: true });
   });
 
-  it('parses AGENTS.md via findContextFiles + loadClaudeMdFile', async () => {
+  it('parses AGENTS.md via findOverheadFiles + loadClaudeMdFile', async () => {
     await writeFile(path.join(tmp, 'AGENTS.md'), '## Section\nbody');
-    const files = await findContextFiles(tmp);
+    const files = await findOverheadFiles(tmp);
     assert.equal(files.length, 1);
-    const f = files[0] as ContextFile;
+    const f = files[0] as OverheadFile;
     const parsed = await loadClaudeMdFile(f.path);
     assert.equal(parsed.sections[0]!.heading, '## Section');
   });

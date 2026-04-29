@@ -28,7 +28,7 @@ export interface ToolAttribution {
   totalCost: number;
 }
 
-export interface SessionWasteTotals {
+export interface SessionTotals {
   sessionId: string;
   grandCost: number;
   attributedCost: number;
@@ -36,15 +36,15 @@ export interface SessionWasteTotals {
   attributionMethod: AttributionMethod;
 }
 
-export interface WasteResult {
+export interface HotspotsResult {
   attributions: ToolAttribution[];
-  sessionTotals: SessionWasteTotals[];
+  sessionTotals: SessionTotals[];
   grandTotal: number;
   attributedTotal: number;
   unattributedTotal: number;
 }
 
-export interface AttributeWasteOptions {
+export interface HotspotsOptions {
   pricing: PricingTable;
   // sessionId -> ContentRecord[] in source order
   contentBySession?: Map<string, ContentRecord[]>;
@@ -60,10 +60,10 @@ interface PerTurnContent {
   toolResultText: Map<string, string>;
 }
 
-export function attributeWaste(
+export function attributeHotspots(
   turns: TurnRecord[],
-  opts: AttributeWasteOptions,
-): WasteResult {
+  opts: HotspotsOptions,
+): HotspotsResult {
   const { pricing, contentBySession, userTurnsBySession } = opts;
   const bySession = new Map<string, TurnRecord[]>();
   for (const t of turns) {
@@ -76,7 +76,7 @@ export function attributeWaste(
   }
 
   const attributions: ToolAttribution[] = [];
-  const sessionTotals: SessionWasteTotals[] = [];
+  const sessionTotals: SessionTotals[] = [];
   let grandTotal = 0;
   let attributedTotal = 0;
 
@@ -97,7 +97,7 @@ export function attributeWaste(
 
     let sessionGrand = 0;
     for (const t of sessionTurns) {
-      // Use the canonical `costForTurn` so waste-attribution totals stay
+      // Use the canonical `costForTurn` so hotspots attribution totals stay
       // consistent with `cost.ts` for sessions involving reasoning tokens
       // (Codex `included_in_output`, models with a separate reasoning tariff,
       // etc.). Returns null for unknown models — skip those, same as before.

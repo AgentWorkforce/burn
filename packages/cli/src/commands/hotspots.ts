@@ -2,7 +2,7 @@ import {
   aggregateByBash,
   aggregateByFile,
   aggregateBySubagent,
-  attributeWaste,
+  attributeHotspots,
   cancellationRunToFinding,
   compactionLossToFinding,
   detectGhostSurface,
@@ -33,7 +33,7 @@ import {
   type SubagentAggregation,
   type ToolOutputBloat,
   type WasteFinding,
-  type WasteResult,
+  type HotspotsResult,
 } from '@relayburn/analyze';
 import {
   queryAll,
@@ -56,6 +56,7 @@ import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';
+import { runHotspotsSession } from './hotspots-session.js';
 
 const DEFAULT_TOP_N = 10;
 const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat'] as const;
@@ -68,7 +69,7 @@ type PatternKind = (typeof PATTERN_KINDS)[number];
 const EVEN_SPLIT_DEGRADED_THRESHOLD = 0.5;
 
 export function isAttributionDegraded(
-  result: WasteResult,
+  result: HotspotsResult,
   threshold: number = EVEN_SPLIT_DEGRADED_THRESHOLD,
 ): boolean {
   if (result.sessionTotals.length === 0) return false;
@@ -78,7 +79,7 @@ export function isAttributionDegraded(
   return evenSplit / result.sessionTotals.length >= threshold;
 }
 
-// Coverage flags a turn must carry to participate in `attributeWaste` and the
+// Coverage flags a turn must carry to participate in `attributeHotspots` and the
 // matching aggregators. A turn missing either flag has no chronology we can
 // allocate cost against (no per-call records, or no result-side bytes to
 // allocate the next-turn input delta over). Records without `fidelity` (older
@@ -180,11 +181,17 @@ export function renderSourcesClause(breakdown: CoverageGapBreakdown): string {
   return rows.join('; ');
 }
 
-export async function runWaste(args: ParsedArgs): Promise<number> {
+export async function runHotspots(args: ParsedArgs): Promise<number> {
+  if (typeof args.flags['session'] === 'string') {
+    return runHotspotsSession(args, args.flags['session']);
+  }
+  if (args.flags['session'] === true) {
+    return runHotspotsSession(args);
+  }
+
   const q: Query = {};
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
-  if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
   if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
   const providerFilter = parseProviderFilter(args.flags['provider']);
   if (providerFilter instanceof Error) {
@@ -211,22 +218,22 @@ export async function runWaste(args: ParsedArgs): Promise<number> {
     return runPatternsMode(args, turns, pricing, compactions, selected, { query: q });
   }
 
-  return runWasteAttribution(args, turns, pricing);
+  return runHotspotsAttribution(args, turns, pricing);
 }
 
 // Exposed for tests so they can drive the orchestration with fixture turns
 // and a mocked content/userTurns loader. Production callers go through
-// `runWaste`, which fetches both via the ledger.
-export interface WasteAttributionDeps {
+// `runHotspots`, which fetches both via the ledger.
+export interface HotspotsAttributionDeps {
   loadContentForSession?: (sessionId: string) => Promise<ContentRecord[]>;
   loadUserTurnsForSession?: (sessionId: string) => Promise<UserTurnRecord[]>;
 }
 
-export async function runWasteAttribution(
+export async function runHotspotsAttribution(
   args: ParsedArgs,
   turns: EnrichedTurn[],
   pricing: Awaited<ReturnType<typeof loadPricing>>,
-  deps: WasteAttributionDeps = {},
+  deps: HotspotsAttributionDeps = {},
 ): Promise<number> {
   const total = turns.length;
   const eligible: EnrichedTurn[] = [];
@@ -245,8 +252,8 @@ export async function runWasteAttribution(
     const breakdown = describeExcluded(excluded, ATTRIBUTION_REQUIRED);
     const sourcesClause = renderSourcesClause(breakdown);
     const message =
-      `burn waste: ${total}/${total} turns lack tool-call/tool-result coverage required for waste attribution. ` +
-      `Sources: ${sourcesClause}. No waste analysis was performed.`;
+      `burn hotspots: ${total}/${total} turns lack tool-call/tool-result coverage required for hotspots attribution. ` +
+      `Sources: ${sourcesClause}. No hotspots analysis was performed.`;
     if (args.flags['json'] === true) {
       process.stdout.write(
         JSON.stringify(
@@ -294,7 +301,7 @@ export async function runWasteAttribution(
     if (userTurns.length > 0) userTurnsBySession.set(sessionId, userTurns);
   }
 
-  const result = attributeWaste(eligible, {
+  const result = attributeHotspots(eligible, {
     pricing,
     contentBySession,
     userTurnsBySession,
@@ -339,7 +346,7 @@ export async function runWasteAttribution(
   const showAll = args.flags['all'] === true;
   const limit = showAll ? Number.POSITIVE_INFINITY : DEFAULT_TOP_N;
 
-  const reportInput: FormatWasteReportInput = {
+  const reportInput: FormatHotspotsReportInput = {
     turnsAnalyzed: eligible.length,
     result,
     files,
@@ -349,7 +356,7 @@ export async function runWasteAttribution(
     degraded,
   };
   if (coverageNotice !== undefined) reportInput.coverageNotice = coverageNotice;
-  process.stdout.write(formatWasteReport(reportInput));
+  process.stdout.write(formatHotspotsReport(reportInput));
   return 0;
 }
 
@@ -381,9 +388,9 @@ export function formatCoverageNotice(
   return `analyzed ${formatInt(analyzed)} of ${formatInt(total)} turns; ${formatInt(excluded)} excluded for ${sourceClauses.join(' and ')}`;
 }
 
-interface FormatWasteReportInput {
+interface FormatHotspotsReportInput {
   turnsAnalyzed: number;
-  result: WasteResult;
+  result: HotspotsResult;
   files: FileAggregation[];
   bashes: BashAggregation[];
   subagents: SubagentAggregation[];
@@ -392,7 +399,7 @@ interface FormatWasteReportInput {
   coverageNotice?: string;
 }
 
-export function formatWasteReport(input: FormatWasteReportInput): string {
+export function formatHotspotsReport(input: FormatHotspotsReportInput): string {
   const { turnsAnalyzed, result, files, bashes, subagents, limit, degraded, coverageNotice } = input;
   const evenSplitSessions = result.sessionTotals.filter(
     (s) => s.attributionMethod === 'even-split',
@@ -418,7 +425,7 @@ export function formatWasteReport(input: FormatWasteReportInput): string {
       '  tool-result data, so file / bash / subagent costs for those sessions are approximate',
     );
     out.push(
-      "  (even-split over turn N+1 input/cacheCreate). Run 'burn rebuild --content'",
+      "  (even-split over turn N+1 input/cacheCreate). Run 'burn rebuild content'",
     );
     out.push(
       "  to backfill source-derived sizes, or see 'burn content' for",
@@ -440,7 +447,7 @@ export function formatWasteReport(input: FormatWasteReportInput): string {
       evenSplitSessions.length === result.sessionTotals.length
     ) {
       out.push(
-        'note: no user-turn or content sidecar sizes found — using even-split (initial cost only). Run burn rebuild --content or enable content.store=full to improve attribution.',
+        'note: no user-turn or content sidecar sizes found — using even-split (initial cost only). Run burn rebuild content or enable content.store=full to improve attribution.',
       );
     } else if (evenSplitSessions.length > 0) {
       out.push(
@@ -674,7 +681,7 @@ export async function runPatternsMode(
       );
     }
     const message =
-      `burn waste --patterns: no selected detectors can run on this slice.\n` +
+      `burn hotspots --patterns: no selected detectors can run on this slice.\n` +
       lines.join('\n') +
       `\nNo pattern analysis was performed.`;
 
@@ -1328,7 +1335,7 @@ export function formatFindingsReport(findings: WasteFinding[], analyzed: number)
   out.push(`findings: ${formatInt(findings.length)}`);
   out.push('');
   if (findings.length === 0) {
-    out.push('  (no waste findings)');
+    out.push('  (no hotspot findings)');
     out.push('');
     return out.join('\n');
   }
