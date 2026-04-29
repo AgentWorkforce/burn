@@ -263,13 +263,13 @@ const EDIT_HEAVY_MIN_EDITS = 5;
 
 // Tools whose normalized name (post `normalizeToolName`) counts as a "read of
 // file content" for the purposes of the read:edit ratio. Grep / Glob / LS
-// don't count — they discover files but don't read content. Bash is excluded
-// for the same reason: the model may `cat` via shell, but identifying that
-// from arguments is fragile and would inflate the read count for unrelated
-// shell calls. Keeping the set narrow matches the codeburn intent ("did the
-// model read the file before editing it?").
+// don't count — they discover files but don't read content. Codex also has no
+// dedicated read in some traces; the helper below recognizes its obvious
+// `cat`/`head`/`tail` shell reads without broadening Bash for other harnesses.
 const READ_TOOLS = new Set(['Read', 'NotebookRead']);
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
+const CODEX_SHELL_NAMES = new Set(['exec_command', 'shell']);
+const CODEX_SHELL_READ_COMMANDS = new Set(['cat', 'head', 'tail']);
 
 export function detectPatterns(
   turns: TurnRecord[],
@@ -1279,7 +1279,7 @@ function detectEditHeavyForSession(
     let turnHasEdit = false;
     for (const call of t.toolCalls) {
       const name = normalizeToolName(call.name);
-      if (READ_TOOLS.has(name)) readCount++;
+      if (isReadForEditHeavy(call, t.source)) readCount++;
       else if (EDIT_TOOLS.has(name)) {
         editCount++;
         turnHasEdit = true;
@@ -1302,6 +1302,86 @@ function detectEditHeavyForSession(
     likelyRetries,
     cost: sumCostForTurns(dedupTurns(editTurns), pricing),
   }];
+}
+
+function isReadForEditHeavy(call: ToolCall, source: SourceKind): boolean {
+  if (READ_TOOLS.has(normalizeToolName(call.name))) return true;
+  return source === 'codex' && isCodexShellFileRead(call);
+}
+
+function isCodexShellFileRead(call: ToolCall): boolean {
+  if (!CODEX_SHELL_NAMES.has(call.name)) return false;
+  if (!call.target) return false;
+  return shellCommandHasFileRead(call.target);
+}
+
+function shellCommandHasFileRead(command: string): boolean {
+  for (const segment of command.split(/(?:&&|\|\||;|\n)/)) {
+    if (shellSegmentStartsWithFileRead(segment)) return true;
+  }
+  return false;
+}
+
+function shellSegmentStartsWithFileRead(segment: string): boolean {
+  const tokens = shellWords(segment);
+  let i = 0;
+  while (i < tokens.length && isShellEnvAssignment(tokens[i]!)) i++;
+  if (i >= tokens.length) return false;
+
+  const command = commandBasename(tokens[i]!);
+  if (!CODEX_SHELL_READ_COMMANDS.has(command)) return false;
+  return hasShellFileOperand(command, tokens.slice(i + 1));
+}
+
+function shellWords(segment: string): string[] {
+  return segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+}
+
+function isShellEnvAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+}
+
+function commandBasename(token: string): string {
+  const unquoted = stripShellQuotes(token);
+  const slash = unquoted.lastIndexOf('/');
+  return slash >= 0 ? unquoted.slice(slash + 1) : unquoted;
+}
+
+function stripShellQuotes(token: string): string {
+  if (token.length >= 2) {
+    const first = token[0];
+    const last = token[token.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return token.slice(1, -1);
+    }
+  }
+  return token;
+}
+
+function hasShellFileOperand(command: string, tokens: string[]): boolean {
+  let skipNext = false;
+  for (const raw of tokens) {
+    const token = stripShellQuotes(raw);
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token === '|' || token === '&&' || token === '||' || token === ';') break;
+    if (/^\d*>/.test(token) || token.startsWith('>')) {
+      if (/^\d*>+$/.test(token) || /^>+$/.test(token)) skipNext = true;
+      continue;
+    }
+    if (token.startsWith('<')) continue;
+    if (token === '-') continue;
+    if ((command === 'head' || command === 'tail') && (token === '-n' || token === '-c' || token === '--lines' || token === '--bytes')) {
+      skipNext = true;
+      continue;
+    }
+    if ((command === 'head' || command === 'tail') && /^[+-]?\d+$/.test(token)) continue;
+    if (token.startsWith('-')) continue;
+    return true;
+  }
+  return false;
 }
 
 function dedupTurns(turns: TurnRecord[]): TurnRecord[] {

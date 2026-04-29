@@ -842,9 +842,9 @@ describe('detectPatterns — edit-heavy sessions (cross-harness)', () => {
     assert.equal(result.editHeavySessions.length, 0);
   });
 
-  it('grep / glob / LS / bash do NOT count as reads', async () => {
+  it('grep / glob / LS / Claude Bash do NOT count as reads', async () => {
     const pricing = await loadBuiltinPricing();
-    // 6 edits, plus 5 non-Read tools (Grep/Glob/LS/Bash). Ratio should still
+    // 6 edits, plus non-Read tools (Grep/Glob/LS/Bash). Ratio should still
     // be infinite — reads stay at 0.
     const turns = [
       ...editHeavyTurns('claude-code', 'Edit'),
@@ -852,6 +852,41 @@ describe('detectPatterns — edit-heavy sessions (cross-harness)', () => {
       turn({ sessionId: 's', messageId: 'g2', turnIndex: 7, toolCalls: [tc('g2', 'Glob', 'b')] }),
       turn({ sessionId: 's', messageId: 'g3', turnIndex: 8, toolCalls: [tc('g3', 'LS', 'c')] }),
       turn({ sessionId: 's', messageId: 'g4', turnIndex: 9, toolCalls: [tc('g4', 'Bash', 'cat /etc/hosts')] }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 1);
+    assert.equal(result.editHeavySessions[0]!.readCount, 0);
+  });
+
+  it('counts Codex shell cat/head/tail file reads in the read:edit ratio', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      ...editHeavyTurns('codex', 'apply_patch'),
+      turn({ sessionId: 's', messageId: 'r1', turnIndex: 6, source: 'codex' as const, toolCalls: [tc('r1', 'shell', 'a', { target: 'cat package.json' })] }),
+      turn({ sessionId: 's', messageId: 'r2', turnIndex: 7, source: 'codex' as const, toolCalls: [tc('r2', 'exec_command', 'b', { target: 'head -n 20 src/main.ts' })] }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 0);
+  });
+
+  it('reports a remaining Codex edit-heavy session with one shell file read', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      ...editHeavyTurns('codex', 'apply_patch'),
+      turn({ sessionId: 's', messageId: 'r1', turnIndex: 6, source: 'codex' as const, toolCalls: [tc('r1', 'exec_command', 'a', { target: 'tail -n 50 src/main.ts' })] }),
+    ];
+    const result = detectPatterns(turns, { pricing });
+    assert.equal(result.editHeavySessions.length, 1);
+    assert.equal(result.editHeavySessions[0]!.readCount, 1);
+    assert.equal(result.editHeavySessions[0]!.ratio, 6);
+  });
+
+  it('does not count unrelated Codex shell commands as reads', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns = [
+      ...editHeavyTurns('codex', 'apply_patch'),
+      turn({ sessionId: 's', messageId: 'b1', turnIndex: 6, source: 'codex' as const, toolCalls: [tc('b1', 'shell', 'a', { target: 'git status' })] }),
+      turn({ sessionId: 's', messageId: 'b2', turnIndex: 7, source: 'codex' as const, toolCalls: [tc('b2', 'exec_command', 'b', { target: 'git log --oneline | head -n 5' })] }),
     ];
     const result = detectPatterns(turns, { pricing });
     assert.equal(result.editHeavySessions.length, 1);
