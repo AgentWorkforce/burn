@@ -100,7 +100,11 @@ describe('runWithAdapter', () => {
     };
 
     const stderrChunks: string[] = [];
+    const originalProgress = process.env['RELAYBURN_PROGRESS'];
+    const originalIsTTY = process.stderr.isTTY;
     const origWrite = process.stderr.write.bind(process.stderr);
+    process.env['RELAYBURN_PROGRESS'] = '1';
+    process.stderr.isTTY = false;
     process.stderr.write = ((chunk: string | Uint8Array): boolean => {
       stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
       return true;
@@ -117,6 +121,9 @@ describe('runWithAdapter', () => {
       });
     } finally {
       process.stderr.write = origWrite;
+      process.stderr.isTTY = originalIsTTY;
+      if (originalProgress !== undefined) process.env['RELAYBURN_PROGRESS'] = originalProgress;
+      else delete process.env['RELAYBURN_PROGRESS'];
     }
 
     assert.equal(code, 0);
@@ -128,6 +135,10 @@ describe('runWithAdapter', () => {
     const reportLine = stderrChunks.find((s) => s.includes('fake-watching ingest:'));
     assert.ok(reportLine, `expected report line in: ${stderrChunks.join('|')}`);
     assert.match(reportLine!, /fake-watching ingest: 3 sessions \(\+8 turns\)/);
+    assert.ok(
+      stderrChunks.some((s) => s.includes('finalized fake-watching ingest')),
+      `expected final ingest success line in: ${stderrChunks.join('|')}`,
+    );
   });
 
   it('returns 127 when the child fails to spawn', async () => {

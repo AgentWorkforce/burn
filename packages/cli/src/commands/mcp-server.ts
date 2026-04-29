@@ -7,6 +7,7 @@ import {
 
 import { ingestAll } from '../ingest.js';
 import type { ParsedArgs } from '../args.js';
+import { withProgress } from '../progress.js';
 
 const MCP_HELP = `burn mcp-server — stdio MCP server exposing read-only ledger queries
 
@@ -34,7 +35,9 @@ export async function runMcpServer(args: ParsedArgs): Promise<number> {
   // doesn't return zeros for a session that's already had activity. Cheap on
   // a steady-state ledger thanks to the cursor index.
   try {
-    await ingestAll();
+    await withProgress('mcp server initial ingest', (task) =>
+      ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    );
   } catch (err) {
     // Don't fail server startup on a partial ingest — let the tools handle
     // missing data gracefully. Log to stderr (which Claude Code surfaces in
@@ -48,7 +51,13 @@ export async function runMcpServer(args: ParsedArgs): Promise<number> {
   // Idempotent and incremental — a no-op when nothing has changed since the
   // last build (issue #97).
   try {
-    await buildArchive();
+    await withProgress('mcp server archive warmup', async (task) => {
+      const result = await buildArchive();
+      task.succeed(
+        `mcp archive warmup: ${result.turnsApplied} turn` +
+          `${result.turnsApplied === 1 ? '' : 's'} applied`,
+      );
+    });
   } catch (err) {
     // Tools fall back to `queryAll` if the archive is unavailable; log the
     // build failure so an operator can spot a persistent breakage but don't

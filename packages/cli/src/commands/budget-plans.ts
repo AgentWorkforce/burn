@@ -18,7 +18,8 @@ import type { PlanUsage } from '@relayburn/analyze';
 
 import type { ParsedArgs } from '../args.js';
 import { ingestAll } from '../ingest.js';
-import { formatUsd, table } from '../format.js';
+import { formatInt, formatUsd, table } from '../format.js';
+import { withProgress } from '../progress.js';
 
 const BUDGET_PLANS_HELP = `burn budget plans — monthly quota tracking against your plan budget
 
@@ -303,6 +304,10 @@ export interface PlanStatus {
   usage: PlanUsage;
 }
 
+export interface LoadPlanStatusesOptions {
+  quiet?: boolean;
+}
+
 interface StatusForPlansOptions {
   /**
    * When true, aggregate spend with one SQL query per plan against the
@@ -313,11 +318,18 @@ interface StatusForPlansOptions {
    * stays on the legacy path until it's migrated separately. See #91.
    */
   useArchive?: boolean;
+  quiet?: boolean;
 }
 
-export async function loadPlanStatuses(args?: ParsedArgs): Promise<PlanStatus[]> {
+export async function loadPlanStatuses(
+  args?: ParsedArgs,
+  opts: LoadPlanStatusesOptions = {},
+): Promise<PlanStatus[]> {
   const plans = await loadPlans();
-  return statusForPlans(plans, { useArchive: args ? shouldUseArchive(args) : false });
+  return statusForPlans(plans, {
+    useArchive: args ? shouldUseArchive(args) : false,
+    ...progressOptions(opts),
+  });
 }
 
 // Shared by `burn budget plans` (list view) and `burn budget` (composite view)
@@ -327,15 +339,30 @@ async function statusForPlans(
   opts: StatusForPlansOptions = {},
 ): Promise<PlanStatus[]> {
   if (plans.length === 0) return [];
-  await ingestAll();
-  const pricing = await loadPricing();
+  const progress = progressOptions(opts);
+  await withProgress(
+    'ingesting latest sessions',
+    (task) => ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    progress,
+  );
+  const pricing = await withProgress('loading pricing snapshot', async (task) => {
+    const loaded = await loadPricing();
+    task.succeed('loaded pricing snapshot');
+    return loaded;
+  }, progress);
   const useArchive = opts.useArchive ?? false;
 
   if (useArchive) {
     // Materialize the ledger tail into the archive once before any plan
     // queries so `SELECT SUM(...) FROM turns` sees every turn the legacy
     // `queryAll()` path would have. Cheap when up to date (idempotent).
-    await buildArchive();
+    await withProgress('updating archive', async (task) => {
+      const result = await buildArchive();
+      task.succeed(
+        `updated archive: ${formatInt(result.turnsApplied)} turn` +
+          `${result.turnsApplied === 1 ? '' : 's'} applied`,
+      );
+    }, progress);
     const db = await openArchive();
     try {
       const now = new Date();
@@ -357,8 +384,16 @@ async function statusForPlans(
     })
     .reduce((a, b) => Math.min(a, b), Date.now());
   const since = new Date(oldestStart).toISOString();
-  const turns = await queryAll({ since });
+  const turns = await withProgress('reading ledger turns', async (task) => {
+    const rows = await queryAll({ since });
+    task.succeed(`read ${formatInt(rows.length)} turn${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  }, progress);
   return plans.map((plan) => ({ usage: computePlanUsage(plan, turns, { pricing }) }));
+}
+
+function progressOptions(opts: { quiet?: boolean }): { quiet?: boolean } {
+  return opts.quiet === undefined ? {} : { quiet: opts.quiet };
 }
 
 /**

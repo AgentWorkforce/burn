@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 
 import { formatInt } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { withProgress } from '../progress.js';
 
 type LedgerModule = typeof import('@relayburn/ledger');
 type ArchiveStatus = Awaited<ReturnType<LedgerModule['getArchiveStatus']>>;
@@ -241,7 +242,11 @@ async function runContentRebuild(): Promise<number> {
 
 async function rebuildClassify(lines: string[], force: boolean): Promise<void> {
   const { reclassifyLedger } = await import('@relayburn/ledger');
-  const report = await reclassifyLedger({ force });
+  const report = await withProgress('reclassifying ledger turns', async (task) => {
+    const r = await reclassifyLedger({ force });
+    task.succeed(`reclassified ${formatInt(r.processed)} turn${r.processed === 1 ? '' : 's'}`);
+    return r;
+  });
   const unchanged = report.processed - report.changed;
   lines.push(
     `reclassified ${formatInt(report.processed)} of ${formatInt(report.scanned)} turns` +
@@ -261,7 +266,16 @@ async function rebuildClassify(lines: string[], force: boolean): Promise<void> {
 
 async function rebuildContent(lines: string[]): Promise<void> {
   const { reingestMissingContent } = await import('../ingest.js');
-  const r = await reingestMissingContent();
+  const r = await withProgress('rebuilding content sidecars', async (task) => {
+    const report = await reingestMissingContent({
+      onProgress: (message) => task.update(`content rebuild: ${message}`),
+    });
+    task.succeed(
+      `rebuilt content sidecars for ${formatInt(report.reingestedSessions)} session` +
+        `${report.reingestedSessions === 1 ? '' : 's'}`,
+    );
+    return report;
+  });
   lines.push(
     `reingested derived content for ${formatInt(r.reingestedSessions)} sessions` +
       ` (${formatInt(r.scannedFiles)} files scanned,` +
@@ -274,14 +288,25 @@ async function rebuildContent(lines: string[]): Promise<void> {
 
 async function rebuildIndexTarget(lines: string[]): Promise<void> {
   const { rebuildIndex } = await import('@relayburn/ledger');
-  const { ids, content } = await rebuildIndex();
+  const { ids, content } = await withProgress('rebuilding ledger indexes', async (task) => {
+    const result = await rebuildIndex();
+    task.succeed(
+      `rebuilt ledger indexes: ${formatInt(result.ids)} id hashes, ` +
+        `${formatInt(result.content)} content fingerprints`,
+    );
+    return result;
+  });
   lines.push(
     `rebuilt ledger index: ${formatInt(ids)} id hashes, ${formatInt(content)} content fingerprints`,
   );
 }
 
 async function runStatus(args: ParsedArgs): Promise<number> {
-  const status = await collectStateStatus();
+  const status = await withProgress('checking derived state', async (task) => {
+    const s = await collectStateStatus();
+    task.succeed('checked derived state');
+    return s;
+  });
   if (args.flags['json'] === true) {
     process.stdout.write(JSON.stringify(status, null, 2) + '\n');
     return 0;
@@ -496,10 +521,18 @@ async function runStatePrune(args: ParsedArgs): Promise<number> {
   const force = args.flags['force'] === true || isForceEnv();
   const opts: Parameters<LedgerModule['pruneContent']>[0] = { olderThanMs: ms };
   if (!force) {
-    const sources = await loadSourceSessionIds();
+    const sources = await withProgress('scanning source session files', async (task) => {
+      const result = await loadSourceSessionIds();
+      task.succeed(`scanned ${formatInt(result.size)} source session id${result.size === 1 ? '' : 's'}`);
+      return result;
+    });
     opts.isRecoverable = (sessionId) => sources.has(sessionId);
   }
-  const result = await pruneContent(opts);
+  const result = await withProgress('pruning content sidecars', async (task) => {
+    const r = await pruneContent(opts);
+    task.succeed(`pruned ${formatInt(r.filesDeleted)} content file${r.filesDeleted === 1 ? '' : 's'}`);
+    return r;
+  });
   process.stdout.write(
     `pruned ${formatInt(result.filesDeleted)} content file${result.filesDeleted === 1 ? '' : 's'} (${formatBytes(result.bytesFreed)})\n`,
   );

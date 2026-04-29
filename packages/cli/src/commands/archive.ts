@@ -9,17 +9,30 @@ import {
 
 import { formatInt } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { withProgress } from '../progress.js';
 
 export async function runArchiveBuild(
   args: ParsedArgs,
   opts: { full?: boolean } = {},
 ): Promise<number> {
-  const result = opts.full ? await rebuildArchive() : await buildArchive();
+  const mode = opts.full ? 'rebuilding archive from ledger' : 'building archive tail';
+  const result = await withProgress(mode, async (task) => {
+    const r = opts.full ? await rebuildArchive() : await buildArchive();
+    task.succeed(
+      `${opts.full ? 'rebuilt' : 'built'} archive: ` +
+        `${formatInt(r.turnsApplied)} turn${r.turnsApplied === 1 ? '' : 's'} applied`,
+    );
+    return r;
+  });
   return printArchiveBuildResult(result, args, opts.full ? 'rebuild' : 'build');
 }
 
 export async function runArchiveStatus(args: ParsedArgs): Promise<number> {
-  const status = await getArchiveStatus();
+  const status = await withProgress('checking archive status', async (task) => {
+    const s = await getArchiveStatus();
+    task.succeed('checked archive status');
+    return s;
+  });
   if (args.flags['json'] === true) {
     process.stdout.write(JSON.stringify(status, null, 2) + '\n');
     return 0;
@@ -29,7 +42,11 @@ export async function runArchiveStatus(args: ParsedArgs): Promise<number> {
 }
 
 export async function runArchiveVacuum(args: ParsedArgs): Promise<number> {
-  const result = await vacuumArchive();
+  const result = await withProgress('vacuuming archive', async (task) => {
+    const r = await vacuumArchive();
+    task.succeed('vacuumed archive');
+    return r;
+  });
   if (args.flags['json'] === true) {
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return 0;

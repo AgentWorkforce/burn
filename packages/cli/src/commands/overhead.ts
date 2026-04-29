@@ -22,6 +22,7 @@ import { resolveProject } from '@relayburn/reader';
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
+import { withProgress } from '../progress.js';
 
 const HELP = `burn overhead — cost attribution for agent overhead files (CLAUDE.md, AGENTS.md, …)
 
@@ -76,7 +77,11 @@ async function gatherAttribution(
     );
     return null;
   }
-  let found = await findOverheadFiles(projectPath);
+  let found = await withProgress('finding overhead files', async (task) => {
+    const files = await findOverheadFiles(projectPath);
+    task.succeed(`found ${formatInt(files.length)} overhead file${files.length === 1 ? '' : 's'}`);
+    return files;
+  });
   if (kindFilter) found = found.filter((f) => f.kind === kindFilter);
   if (found.length === 0) {
     if (kindFilter) {
@@ -89,16 +94,33 @@ async function gatherAttribution(
     return null;
   }
   const files: ParsedOverheadFile[] = [];
-  for (const f of found) files.push(await loadOverheadFile(f));
+  await withProgress('loading overhead files', async (task) => {
+    for (const f of found) files.push(await loadOverheadFile(f));
+    task.succeed(`loaded ${formatInt(files.length)} overhead file${files.length === 1 ? '' : 's'}`);
+  });
 
   const resolved = resolveProject(projectPath);
   const q: Query = { project: resolved.projectKey ?? projectPath };
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
 
-  await ingestAll();
-  const pricing = await loadPricing();
-  const turns = await queryAll(q);
-  const attribution = attributeOverhead({ files, turns, pricing });
+  await withProgress('ingesting latest sessions', (task) =>
+    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+  );
+  const pricing = await withProgress('loading pricing snapshot', async (task) => {
+    const loaded = await loadPricing();
+    task.succeed('loaded pricing snapshot');
+    return loaded;
+  });
+  const turns = await withProgress('reading ledger turns', async (task) => {
+    const rows = await queryAll(q);
+    task.succeed(`read ${formatInt(rows.length)} turn${rows.length === 1 ? '' : 's'}`);
+    return rows;
+  });
+  const attribution = await withProgress('attributing overhead cost', async (task) => {
+    const result = attributeOverhead({ files, turns, pricing });
+    task.succeed('attributed overhead cost');
+    return result;
+  });
   return { files, attribution };
 }
 
