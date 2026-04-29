@@ -197,5 +197,47 @@ export async function stamp(
     selector,
     enrichment,
   };
-  await appendLines([line]);
+  const relationship = spawnEnvRelationshipFromStamp(line);
+  if (!relationship) {
+    await appendLines([line]);
+    return;
+  }
+
+  const idx = await loadIndex();
+  const id = relationshipIdHash(relationship);
+  if (idx.ids.has(id)) {
+    await appendLines([line]);
+    return;
+  }
+  idx.ids.add(id);
+  await appendLines([
+    line,
+    {
+      v: 1,
+      kind: 'relationship',
+      record: relationship,
+    },
+  ]);
+  await appendHashes([id], []);
+}
+
+function spawnEnvRelationshipFromStamp(
+  line: StampLine,
+): SessionRelationshipRecord | null {
+  const sessionId = line.selector.sessionId;
+  if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
+  const parentAgentId = line.enrichment['parentAgentId'];
+  if (typeof parentAgentId !== 'string' || parentAgentId.length === 0) return null;
+
+  const relationship: SessionRelationshipRecord = {
+    v: 1,
+    source: 'spawn-env',
+    sessionId,
+    relatedSessionId: parentAgentId,
+    relationshipType: 'subagent',
+    ts: line.ts,
+  };
+  const agentId = line.enrichment['agentId'];
+  if (typeof agentId === 'string' && agentId.length > 0) relationship.agentId = agentId;
+  return relationship;
 }

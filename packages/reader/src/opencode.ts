@@ -436,7 +436,7 @@ function buildOpencodeRelationships(
   if (typeof session.parentID === 'string' && session.parentID.length > 0) {
     const sub: SessionRelationshipRecord = {
       v: 1,
-      source: 'opencode',
+      source: 'native-opencode',
       sessionId: session.id,
       relatedSessionId: session.parentID,
       relationshipType: 'subagent',

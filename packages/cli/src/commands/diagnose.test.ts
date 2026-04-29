@@ -7,6 +7,7 @@ import { after, beforeEach, describe, it } from 'node:test';
 import {
   __resetIndexCacheForTesting,
   appendContent,
+  appendRelationships,
   appendTurns,
 } from '@relayburn/ledger';
 import type { ContentRecord, SourceKind, TurnRecord } from '@relayburn/reader';
@@ -314,6 +315,127 @@ describe('burn diagnose aggregate (#79)', () => {
     assert.match(out.stdout, /degraded%/);
     // codex row: 1 session, 1 with tool calls, 1 gapped, 100% degraded.
     assert.match(out.stdout, /100\.0%/);
+  });
+
+  it('reports spawn-env/native relationship drift with opt-in details', async () => {
+    await appendTurns([
+      fakeTurn({
+        source: 'claude-code',
+        sessionId: 'cl-drift',
+        messageId: 'cl-drift-1',
+      }),
+      fakeTurn({
+        source: 'claude-code',
+        sessionId: 'cl-native-only',
+        messageId: 'cl-native-only-1',
+      }),
+      fakeTurn({
+        source: 'claude-code',
+        sessionId: 'cl-agree',
+        messageId: 'cl-agree-1',
+      }),
+      fakeTurn({
+        source: 'codex',
+        sessionId: 'cx-env-only',
+        messageId: 'cx-env-only-1',
+      }),
+      fakeTurn({
+        source: 'opencode',
+        sessionId: 'oc-agree',
+        messageId: 'oc-agree-1',
+      }),
+    ]);
+    await appendRelationships([
+      {
+        v: 1,
+        source: 'spawn-env',
+        sessionId: 'cl-drift',
+        relatedSessionId: 'ag-parent',
+        relationshipType: 'subagent',
+      },
+      {
+        v: 1,
+        source: 'native-claude',
+        sessionId: 'cl-native-only',
+        relatedSessionId: 'cl-parent',
+        relationshipType: 'subagent',
+        agentId: 'ag-native',
+      },
+      {
+        v: 1,
+        source: 'spawn-env',
+        sessionId: 'cl-agree',
+        relatedSessionId: 'ag-parent',
+        relationshipType: 'subagent',
+      },
+      {
+        v: 1,
+        source: 'native-claude',
+        sessionId: 'cl-agree',
+        relatedSessionId: 'cl-parent',
+        relationshipType: 'subagent',
+        agentId: 'ag-claude-native',
+      },
+      {
+        v: 1,
+        source: 'spawn-env',
+        sessionId: 'cx-env-only',
+        relatedSessionId: 'ag-parent',
+        relationshipType: 'subagent',
+      },
+      {
+        v: 1,
+        source: 'spawn-env',
+        sessionId: 'oc-agree',
+        relatedSessionId: 'ag-parent',
+        relationshipType: 'subagent',
+      },
+      {
+        v: 1,
+        source: 'native-opencode',
+        sessionId: 'oc-agree',
+        relatedSessionId: 'oc-parent',
+        relationshipType: 'subagent',
+      },
+    ]);
+
+    const out = await captureDiagnose({
+      flags: { json: true, 'explain-drift': true },
+      tags: {},
+      positional: [],
+      passthrough: [],
+    });
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      relationshipDrift: {
+        sessions: number;
+        details: Array<{
+          sessionId: string;
+          adapter: string;
+          reason: string;
+          envParentAgentId: string;
+        }>;
+      };
+    };
+    assert.equal(parsed.relationshipDrift.sessions, 1);
+    assert.deepEqual(parsed.relationshipDrift.details, [
+      {
+        sessionId: 'cl-drift',
+        adapter: 'claude',
+        reason: 'spawn-env-without-native',
+        envParentAgentId: 'ag-parent',
+      },
+    ]);
+
+    const human = await captureDiagnose({
+      flags: { 'explain-drift': true },
+      tags: {},
+      positional: [],
+      passthrough: [],
+    });
+    assert.equal(human.code, 0);
+    assert.match(human.stdout, /Relationship attribution drift/);
+    assert.match(human.stdout, /cl-drift/);
   });
 
   it('omits the gap signal and prints a note when content store is hash-only', async () => {

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 
 import {
+  appendRelationships,
   appendUserTurns,
   appendTurns,
   archivePath,
@@ -96,6 +97,7 @@ describe('burn summary archive integration (#82)', () => {
     process.env['HOME'] = tmpHome;
     process.env['RELAYBURN_HOME'] = tmpRelay;
     delete process.env['RELAYBURN_ARCHIVE'];
+    __resetIndexCacheForTesting();
   });
 
   after(async () => {
@@ -176,6 +178,44 @@ describe('burn summary archive integration (#82)', () => {
 
     // The archive should still be missing — we hit the legacy `queryAll` path.
     await assert.rejects(stat(archivePath()), /ENOENT/);
+  });
+
+  it('--agent includes sessions linked by relationship records', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 's-parent', messageId: 'parent-1' }),
+      fakeTurn({
+        sessionId: 's-child',
+        messageId: 'child-1',
+        ts: '2026-04-20T00:01:00.000Z',
+        usage: {
+          input: 2000,
+          output: 500,
+          reasoning: 0,
+          cacheRead: 1000,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+      }),
+    ]);
+    await appendRelationships([
+      {
+        v: 1,
+        source: 'spawn-env',
+        sessionId: 's-child',
+        relatedSessionId: 'ag-parent',
+        relationshipType: 'subagent',
+        agentId: 'ag-child',
+      },
+    ]);
+
+    const out = await captureSummary({
+      json: true,
+      agent: 'ag-parent',
+      'no-archive': true,
+    });
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as { turns: number };
+    assert.equal(parsed.turns, 1);
   });
 
   it('RELAYBURN_ARCHIVE=0 env disables the archive path (fallback)', async () => {
