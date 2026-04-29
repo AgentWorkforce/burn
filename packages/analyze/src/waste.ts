@@ -48,12 +48,12 @@ export interface AttributeWasteOptions {
   pricing: PricingTable;
   // sessionId -> ContentRecord[] in source order
   contentBySession?: Map<string, ContentRecord[]>;
-  // sessionId -> UserTurnRecord[] in source order. Used as a sized fallback
-  // when full content sidecars are missing; sidecar content stays primary.
+  // sessionId -> UserTurnRecord[] in source order. Preferred as the sized
+  // source because it survives hash-only/off content capture modes.
   userTurnsBySession?: Map<string, UserTurnRecord[]>;
 }
 
-export type AttributionMethod = 'sized' | 'user-turn' | 'even-split';
+export type AttributionMethod = 'sized' | 'even-split';
 
 interface PerTurnContent {
   // tool_result text by toolUseId for this turn's user message
@@ -147,29 +147,24 @@ function attributeSession(
 
   // Build tool-result size index by toolUseId across the full session.
   const sizeByToolUseId = new Map<string, number>();
+  for (const userTurn of userTurns) {
+    for (const block of userTurn.blocks) {
+      if (block.kind !== 'tool_result' || !block.toolUseId) continue;
+      sizeByToolUseId.set(block.toolUseId, Math.max(0, block.approxTokens));
+    }
+  }
+
   if (toolResultsByTurnTs) {
     for (const perTurn of toolResultsByTurnTs.values()) {
       for (const [toolUseId, text] of perTurn.toolResultText) {
+        if (sizeByToolUseId.has(toolUseId)) continue;
         sizeByToolUseId.set(toolUseId, estimateTokens(text));
       }
     }
   }
 
-  const haveSidecarSizes = sizeByToolUseId.size > 0;
-  for (const userTurn of userTurns) {
-    for (const block of userTurn.blocks) {
-      if (block.kind !== 'tool_result' || !block.toolUseId) continue;
-      if (sizeByToolUseId.has(block.toolUseId)) continue;
-      sizeByToolUseId.set(block.toolUseId, Math.max(0, block.approxTokens));
-    }
-  }
-
   const haveAnySizes = sizeByToolUseId.size > 0;
-  const method: AttributionMethod = haveSidecarSizes
-    ? 'sized'
-    : haveAnySizes
-      ? 'user-turn'
-      : 'even-split';
+  const method: AttributionMethod = haveAnySizes ? 'sized' : 'even-split';
 
   const attributions: ToolAttribution[] = [];
   // Attributions emitted at the immediately-prior turn that have not yet been

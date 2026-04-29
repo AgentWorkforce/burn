@@ -171,7 +171,7 @@ describe('formatWasteReport', () => {
     // Banner is emitted with the warning glyph and the right counts.
     assert.match(
       out,
-      /⚠ attribution is degraded: 2 of 3 sessions \(66\.7%\) have no content/,
+      /⚠ attribution is degraded: 2 of 3 sessions \(66\.7%\) have no sized/,
     );
     // Remediation pointer is present.
     assert.match(out, /burn rebuild --content/);

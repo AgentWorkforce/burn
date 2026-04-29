@@ -7,6 +7,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ### Changed
 
 - Provider-aware CLI rendering now uses shared analyze helpers for effective-provider resolution and aggregation.
+- Per-tool cost attribution now uses persisted user-turn block sizes in summary and waste reports, with rebuild backfill for historical sessions.
 
 ## [0.42.0] - 2026-04-28
 

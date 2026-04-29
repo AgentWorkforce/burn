@@ -11,6 +11,8 @@ All notable changes to `@relayburn/cli`.
 ### Changed
 
 - Provider filters and `burn summary --by-provider` now use the shared analyze provider resolver.
+- `burn summary --by-tool` now uses persisted user-turn block sizes for proportional attribution and reports each JSON row's attribution method.
+- `burn rebuild --content` now backfills missing user-turn rows for historical sessions, even when content sidecars already exist.
 
 ## [0.42.0] - 2026-04-28
 

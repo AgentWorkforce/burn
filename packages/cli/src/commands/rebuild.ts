@@ -17,7 +17,7 @@ Flags:
   --reclassify  re-run the activity classifier on every ledger turn
   --force       with --reclassify, overwrite activity even if already set
   --content     re-parse source session files to populate missing content
-                sidecars. Skips sessions that already have content on disk.
+                sidecars and user-turn rows. Skips sessions already complete.
                 Does not touch cursors or existing ledger rows.
 
 `;
@@ -57,10 +57,11 @@ export async function runRebuild(args: ParsedArgs): Promise<number> {
   if (doContent) {
     const r = await reingestMissingContent();
     lines.push(
-      `reingested content for ${formatInt(r.reingestedSessions)} sessions` +
+      `reingested derived content for ${formatInt(r.reingestedSessions)} sessions` +
         ` (${formatInt(r.scannedFiles)} files scanned,` +
-        ` ${formatInt(r.skippedExisting)} already had content,` +
+        ` ${formatInt(r.skippedExisting)} already complete,` +
         ` ${formatInt(r.appendedContent)} records appended,` +
+        ` ${formatInt(r.appendedUserTurns)} user turns appended,` +
         ` ${formatInt(r.failed)} failed)`,
     );
   }

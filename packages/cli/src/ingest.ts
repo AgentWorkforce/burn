@@ -15,6 +15,7 @@ import type {
   ContentStoreMode,
   ReconcileClaudeRelationshipsInput,
   TurnRecord,
+  UserTurnRecord,
 } from '@relayburn/reader';
 import {
   appendCompactions,
@@ -26,6 +27,7 @@ import {
   listContentSessionIds,
   loadConfig,
   loadCursors,
+  queryUserTurns,
   saveCursors,
   type ClaudeCursor,
   type CodexCursor,
@@ -593,31 +595,36 @@ export interface ReingestContentReport {
   skippedExisting: number;
   reingestedSessions: number;
   appendedContent: number;
+  appendedUserTurns: number;
   failed: number;
 }
 
-// Re-parse source session files to populate missing content sidecars. Used by
-// `burn rebuild --content` to fix up historical sessions ingested before the
-// sidecar was written (or where the sidecar was pruned). Does NOT touch
-// cursors, ledger turns, or compactions — only writes content records for
-// sessions that currently have no sidecar on disk.
+// Re-parse source session files to populate missing content sidecars and
+// user-turn rows. Used by `burn rebuild --content` to fix up historical
+// sessions ingested before those derived records were written (or where the
+// sidecar was pruned). Does NOT touch cursors, ledger turns, or compactions.
 export async function reingestMissingContent(): Promise<ReingestContentReport> {
-  const existing = await listContentSessionIds();
+  const existingContent = await listContentSessionIds();
+  const existingUserTurns = new Set(
+    (await queryUserTurns()).map((userTurn) => userTurn.sessionId),
+  );
   const report: ReingestContentReport = {
     scannedFiles: 0,
     skippedExisting: 0,
     reingestedSessions: 0,
     appendedContent: 0,
+    appendedUserTurns: 0,
     failed: 0,
   };
-  await reingestClaudeContent(existing, report);
-  await reingestCodexContent(existing, report);
-  await reingestOpencodeContent(existing, report);
+  await reingestClaudeContent(existingContent, existingUserTurns, report);
+  await reingestCodexContent(existingContent, existingUserTurns, report);
+  await reingestOpencodeContent(existingContent, existingUserTurns, report);
   return report;
 }
 
 async function reingestClaudeContent(
-  existing: Set<string>,
+  existingContent: Set<string>,
+  existingUserTurns: Set<string>,
   report: ReingestContentReport,
 ): Promise<void> {
   const projects = await listDirs(claudeProjectsDir());
@@ -626,23 +633,23 @@ async function reingestClaudeContent(
     for (const file of files) {
       report.scannedFiles++;
       const sessionId = path.basename(file, '.jsonl');
-      if (existing.has(sessionId)) {
+      if (existingContent.has(sessionId) && existingUserTurns.has(sessionId)) {
         report.skippedExisting++;
         continue;
       }
       try {
-        const { content } = await parseClaudeSessionIncremental(file, {
+        const { content, userTurns } = await parseClaudeSessionIncremental(file, {
           startOffset: 0,
           sessionPath: file,
           contentMode: 'full',
         });
-        const filtered = content.filter((c) => !existing.has(c.sessionId));
-        if (filtered.length > 0) {
-          await appendContent(filtered);
-          report.appendedContent += filtered.length;
-          report.reingestedSessions++;
-          for (const c of filtered) existing.add(c.sessionId);
-        }
+        await appendReingestedDerivedRecords(
+          content,
+          userTurns,
+          existingContent,
+          existingUserTurns,
+          report,
+        );
       } catch (err) {
         report.failed++;
         const msg = err instanceof Error ? err.message : String(err);
@@ -653,29 +660,34 @@ async function reingestClaudeContent(
 }
 
 async function reingestCodexContent(
-  existing: Set<string>,
+  existingContent: Set<string>,
+  existingUserTurns: Set<string>,
   report: ReingestContentReport,
 ): Promise<void> {
   for (const file of await walkJsonl(codexSessionsDir())) {
     report.scannedFiles++;
     const derived = await deriveCodexSessionId(file);
-    if (derived && existing.has(derived)) {
+    if (
+      derived &&
+      existingContent.has(derived) &&
+      existingUserTurns.has(derived)
+    ) {
       report.skippedExisting++;
       continue;
     }
     try {
-      const { content } = await parseCodexSessionIncremental(file, {
+      const { content, userTurns } = await parseCodexSessionIncremental(file, {
         startOffset: 0,
         sessionPath: file,
         contentMode: 'full',
       });
-      const filtered = content.filter((c) => !existing.has(c.sessionId));
-      if (filtered.length > 0) {
-        await appendContent(filtered);
-        report.appendedContent += filtered.length;
-        report.reingestedSessions++;
-        for (const c of filtered) existing.add(c.sessionId);
-      }
+      await appendReingestedDerivedRecords(
+        content,
+        userTurns,
+        existingContent,
+        existingUserTurns,
+        report,
+      );
     } catch (err) {
       report.failed++;
       const msg = err instanceof Error ? err.message : String(err);
@@ -685,35 +697,68 @@ async function reingestCodexContent(
 }
 
 async function reingestOpencodeContent(
-  existing: Set<string>,
+  existingContent: Set<string>,
+  existingUserTurns: Set<string>,
   report: ReingestContentReport,
 ): Promise<void> {
   for (const file of await walkOpencodeSessions(opencodeSessionRoot())) {
     report.scannedFiles++;
     const sessionId = path.basename(file, '.json');
-    if (existing.has(sessionId)) {
+    if (existingContent.has(sessionId) && existingUserTurns.has(sessionId)) {
       report.skippedExisting++;
       continue;
     }
     try {
-      const { content } = await parseOpencodeSessionIncremental(file, {
+      const { content, userTurns } = await parseOpencodeSessionIncremental(file, {
         sessionPath: file,
         seenMessageIds: new Set<string>(),
         contentMode: 'full',
       });
-      const filtered = content.filter((c) => !existing.has(c.sessionId));
-      if (filtered.length > 0) {
-        await appendContent(filtered);
-        report.appendedContent += filtered.length;
-        report.reingestedSessions++;
-        for (const c of filtered) existing.add(c.sessionId);
-      }
+      await appendReingestedDerivedRecords(
+        content,
+        userTurns,
+        existingContent,
+        existingUserTurns,
+        report,
+      );
     } catch (err) {
       report.failed++;
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[burn] reingest skipped ${file}: ${msg}\n`);
     }
   }
+}
+
+async function appendReingestedDerivedRecords(
+  content: readonly ContentRecord[],
+  userTurns: readonly UserTurnRecord[],
+  existingContent: Set<string>,
+  existingUserTurns: Set<string>,
+  report: ReingestContentReport,
+): Promise<void> {
+  const filteredContent = content.filter((c) => !existingContent.has(c.sessionId));
+  const filteredUserTurns = userTurns.filter(
+    (userTurn) => !existingUserTurns.has(userTurn.sessionId),
+  );
+  if (filteredContent.length === 0 && filteredUserTurns.length === 0) return;
+
+  if (filteredContent.length > 0) {
+    await appendContent(filteredContent);
+    report.appendedContent += filteredContent.length;
+    for (const c of filteredContent) existingContent.add(c.sessionId);
+  }
+  if (filteredUserTurns.length > 0) {
+    await appendUserTurns([...filteredUserTurns]);
+    report.appendedUserTurns += filteredUserTurns.length;
+    for (const userTurn of filteredUserTurns) {
+      existingUserTurns.add(userTurn.sessionId);
+    }
+  }
+
+  const sessions = new Set<string>();
+  for (const c of filteredContent) sessions.add(c.sessionId);
+  for (const userTurn of filteredUserTurns) sessions.add(userTurn.sessionId);
+  report.reingestedSessions += sessions.size;
 }
 
 // Codex filenames are `rollout-<timestamp>-<uuid>.jsonl` where the UUID is the

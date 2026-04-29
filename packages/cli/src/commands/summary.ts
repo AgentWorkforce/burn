@@ -21,11 +21,12 @@ import {
   buildArchive,
   queryAll,
   queryAllFromArchive,
+  queryUserTurns,
   readContent,
   type Query,
 } from '@relayburn/ledger';
 import type { EnrichedTurn } from '@relayburn/ledger';
-import type { ContentRecord, Coverage } from '@relayburn/reader';
+import type { ContentRecord, Coverage, UserTurnRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -327,13 +328,18 @@ function renderSubagentTreeMode(
   return 0;
 }
 
-function renderByToolMode(
+async function renderByToolMode(
   args: ParsedArgs,
   ingestReport: { ingestedSessions: number; appendedTurns: number },
   turns: EnrichedTurn[],
   pricing: Parameters<typeof costForTurn>[1],
-): number {
-  const { byTool, unattributed } = attributeCostToTools(turns, pricing);
+): Promise<number> {
+  const userTurnsBySession = await loadUserTurnsForByTool(turns);
+  const { byTool, unattributed } = attributeCostToTools(
+    turns,
+    pricing,
+    userTurnsBySession,
+  );
   const fidelity = summarizeFidelity(turns);
   const sorted = [...byTool.entries()].sort((a, b) => b[1].cost - a[1].cost);
 
@@ -348,6 +354,7 @@ function renderByToolMode(
         tool,
         calls: agg.calls,
         attributedCost: agg.cost,
+        attributionMethod: toolAttributionMethod(agg),
       })),
       unattributed,
       fidelity: { summary: fidelity },
@@ -376,9 +383,11 @@ function renderByToolMode(
   // and the by-model `cost` number without context is an easy way to draw the
   // wrong conclusion.
   out.push(
-    `attributedCost = (turn N input cost) split evenly across tool_use blocks in turn N-1, grouped by tool name.`,
+    `attributedCost = turn N ingest cost assigned to turn N-1 tool_use blocks by user-turn byte size when available, otherwise split evenly.`,
   );
-  out.push(`unattributed cost (no prior tool call, e.g. first turn): ${formatUsd(unattributed)}`);
+  out.push(
+    `unattributed cost (no prior tool call or non-tool user text): ${formatUsd(unattributed)}`,
+  );
   out.push('');
   process.stdout.write(out.join('\n'));
   return 0;
@@ -387,11 +396,21 @@ function renderByToolMode(
 interface ToolAgg {
   calls: number;
   cost: number;
+  sizedCost: number;
+  evenSplitCost: number;
+}
+
+type ByToolAttributionMethod = 'sized' | 'even-split' | 'unattributed';
+
+interface UserTurnSizeBucket {
+  toolBytesById: Map<string, number>;
+  totalBytes: number;
 }
 
 function attributeCostToTools(
   turns: EnrichedTurn[],
   pricing: Parameters<typeof costForTurn>[1],
+  userTurnsBySession: Map<string, UserTurnRecord[]> = new Map(),
 ): { byTool: Map<string, ToolAgg>; unattributed: number } {
   const byTool = new Map<string, ToolAgg>();
   let unattributed = 0;
@@ -409,6 +428,11 @@ function attributeCostToTools(
 
   for (const list of bySession.values()) {
     list.sort((a, b) => a.turnIndex - b.turnIndex);
+    const sessionId = list[0]?.sessionId;
+    const userTurnSizeIndex =
+      sessionId === undefined
+        ? new Map<string, UserTurnSizeBucket>()
+        : indexUserTurnBlockSizes(userTurnsBySession.get(sessionId) ?? []);
     for (let i = 0; i < list.length; i++) {
       const turn = list[i]!;
       const c = costForTurn(turn, pricing);
@@ -418,7 +442,7 @@ function attributeCostToTools(
 
       // Also count the tool-calls this turn emits (so they appear even if the next turn is unpriced).
       for (const tc of turn.toolCalls) {
-        const agg = byTool.get(tc.name) ?? { calls: 0, cost: 0 };
+        const agg = byTool.get(tc.name) ?? emptyToolAgg();
         agg.calls++;
         byTool.set(tc.name, agg);
       }
@@ -432,16 +456,100 @@ function attributeCostToTools(
         unattributed += ingestCost;
         continue;
       }
-      const share = ingestCost / prior.toolCalls.length;
-      for (const tc of prior.toolCalls) {
-        const agg = byTool.get(tc.name) ?? { calls: 0, cost: 0 };
-        agg.cost += share;
-        byTool.set(tc.name, agg);
+      const sizes = userTurnSizeIndex.get(bridgeKey(prior.messageId, turn.messageId));
+      const sizedBytes = sizes
+        ? prior.toolCalls.reduce(
+            (sum, tc) => sum + (sizes.toolBytesById.get(tc.id) ?? 0),
+            0,
+          )
+        : 0;
+      if (sizes && sizedBytes > 0) {
+        const allocatableCost =
+          sizes.totalBytes > 0
+            ? ingestCost * Math.min(1, sizedBytes / sizes.totalBytes)
+            : ingestCost;
+        unattributed += ingestCost - allocatableCost;
+        const rawShares: Array<{ tool: string; cost: number }> = [];
+        for (const tc of prior.toolCalls) {
+          const bytes = sizes.toolBytesById.get(tc.id) ?? 0;
+          if (bytes <= 0) continue;
+          rawShares.push({ tool: tc.name, cost: (bytes / sizedBytes) * allocatableCost });
+        }
+        const rawSubtotal = rawShares.reduce((sum, row) => sum + row.cost, 0);
+        const scale = rawSubtotal > allocatableCost && rawSubtotal > 0
+          ? allocatableCost / rawSubtotal
+          : 1;
+        for (const row of rawShares) {
+          const share = row.cost * scale;
+          const agg = byTool.get(row.tool) ?? emptyToolAgg();
+          agg.cost += share;
+          agg.sizedCost += share;
+          byTool.set(row.tool, agg);
+        }
+      } else {
+        const share = ingestCost / prior.toolCalls.length;
+        for (const tc of prior.toolCalls) {
+          const agg = byTool.get(tc.name) ?? emptyToolAgg();
+          agg.cost += share;
+          agg.evenSplitCost += share;
+          byTool.set(tc.name, agg);
+        }
       }
     }
   }
 
   return { byTool, unattributed };
+}
+
+async function loadUserTurnsForByTool(
+  turns: EnrichedTurn[],
+): Promise<Map<string, UserTurnRecord[]>> {
+  const sessionIds = [...new Set(turns.map((t) => t.sessionId))];
+  const out = new Map<string, UserTurnRecord[]>();
+  for (const sessionId of sessionIds) {
+    const userTurns = await queryUserTurns({ sessionId });
+    if (userTurns.length > 0) out.set(sessionId, userTurns);
+  }
+  return out;
+}
+
+function indexUserTurnBlockSizes(
+  userTurns: readonly UserTurnRecord[],
+): Map<string, UserTurnSizeBucket> {
+  const out = new Map<string, UserTurnSizeBucket>();
+  for (const userTurn of userTurns) {
+    if (!userTurn.precedingMessageId || !userTurn.followingMessageId) continue;
+    const key = bridgeKey(userTurn.precedingMessageId, userTurn.followingMessageId);
+    let bucket = out.get(key);
+    if (!bucket) {
+      bucket = { toolBytesById: new Map<string, number>(), totalBytes: 0 };
+      out.set(key, bucket);
+    }
+    for (const block of userTurn.blocks) {
+      const bytes = Math.max(0, block.byteLen);
+      bucket.totalBytes += bytes;
+      if (block.kind !== 'tool_result' || !block.toolUseId) continue;
+      bucket.toolBytesById.set(
+        block.toolUseId,
+        (bucket.toolBytesById.get(block.toolUseId) ?? 0) + bytes,
+      );
+    }
+  }
+  return out;
+}
+
+function bridgeKey(precedingMessageId: string, followingMessageId: string): string {
+  return `${precedingMessageId}\0${followingMessageId}`;
+}
+
+function emptyToolAgg(): ToolAgg {
+  return { calls: 0, cost: 0, sizedCost: 0, evenSplitCost: 0 };
+}
+
+function toolAttributionMethod(agg: ToolAgg): ByToolAttributionMethod {
+  if (agg.sizedCost === 0 && agg.evenSplitCost === 0) return 'unattributed';
+  if (agg.sizedCost >= agg.evenSplitCost) return 'sized';
+  return 'even-split';
 }
 
 function renderSubagentTypeMode(
