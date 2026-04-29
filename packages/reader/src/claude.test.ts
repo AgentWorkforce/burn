@@ -181,6 +181,7 @@ describe('parseClaudeSession', () => {
 
     // Outer subagent: parent is the main session id.
     assert.equal(outer.agentId, 'u-sub1-user');
+    assert.equal(outer.source, 'native-claude');
     assert.equal(outer.parentToolUseId, 'toolu_outer');
     assert.equal(outer.relatedSessionId, '55555555-5555-5555-5555-555555555555');
     assert.equal(outer.description, 'Research the codebase');
@@ -1053,4 +1054,3 @@ describe('parseClaudeSession fork / continuation relationships (#112)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 });
-

@@ -6,10 +6,12 @@ All notable changes to `@relayburn/cli`.
 
 ### Added
 
+- `burn diagnose` now reports spawn-env/native relationship drift, with `--explain-drift` for per-session details.
 - `burn watch --opencode-stream` can subscribe to OpenCode's local SSE endpoint and wake ingest immediately on session/message events while polling remains the fallback.
 
 ### Changed
 
+- `burn summary --agent` now includes sessions linked by relationship records, not only turns stamped with the agent id.
 - Provider filters and `burn summary --by-provider` now use the shared analyze provider resolver.
 - `burn summary --by-tool` now uses persisted user-turn block sizes for proportional attribution and reports each JSON row's attribution method.
 - `burn rebuild --content` now backfills missing user-turn rows for historical sessions, even when content sidecars already exist.

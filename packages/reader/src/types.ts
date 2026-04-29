@@ -6,6 +6,12 @@ export type SourceKind =
   | 'openai-api'
   | 'gemini-api';
 
+export type RelationshipSourceKind =
+  | SourceKind
+  | 'spawn-env'
+  | 'native-claude'
+  | 'native-opencode';
+
 export interface Usage {
   input: number;
   output: number;
@@ -220,7 +226,7 @@ export type RelationshipType = 'root' | 'continuation' | 'fork' | 'subagent';
 
 export interface SessionRelationshipRecord {
   v: 1;
-  source: SourceKind;
+  source: RelationshipSourceKind;
   // The session this row is "about". For a root, this is the session itself.
   // For a subagent / fork / continuation, this is the *child* session — i.e.
   // the one that was spawned, forked, or continued.

@@ -750,7 +750,7 @@ describe('parseOpencodeSession execution graph (#42 / #93)', () => {
     const subRows = relationships.filter((r) => r.relationshipType === 'subagent');
     assert.equal(subRows.length, 1, 'exactly one subagent row');
     const sub = subRows[0]!;
-    assert.equal(sub.source, 'opencode');
+    assert.equal(sub.source, 'native-opencode');
     assert.equal(sub.sessionId, 'ses_child', 'row is keyed on the child');
     assert.equal(sub.relatedSessionId, 'ses_multi', 'parent session id mirrored to relatedSessionId');
     const root = relationships.find((r) => r.relationshipType === 'root');

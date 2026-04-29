@@ -982,7 +982,7 @@ function collectSubagentRelationships(
     seen.add(agentId);
     const row: SessionRelationshipRecord = {
       v: 1,
-      source: 'claude-code',
+      source: 'native-claude',
       sessionId: t.sessionId,
       relationshipType: 'subagent',
       agentId,
