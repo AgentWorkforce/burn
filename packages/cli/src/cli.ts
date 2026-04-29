@@ -24,7 +24,7 @@ Usage:
                      [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>] [--no-archive]
                      (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
   burn hotspots      [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--all] [--json]
-                     [--session <id>]
+                     [--session [id]] [--explain-drift]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
   burn limits        [--watch [5s]] [--json] [--no-api] [--no-forecast]
   burn plans         [add|remove|set-reset-day] …  (run \`burn plans help\` for full usage)
@@ -47,6 +47,7 @@ Examples:
   burn summary --by-tool --since 7d
   burn hotspots --since 7d
   burn hotspots --patterns --since 7d
+  burn hotspots --session --explain-drift
   burn hotspots --session <session-id>
   burn limits
   burn limits --watch

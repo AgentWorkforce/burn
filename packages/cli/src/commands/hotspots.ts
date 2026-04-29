@@ -186,8 +186,7 @@ export async function runHotspots(args: ParsedArgs): Promise<number> {
     return runHotspotsSession(args, args.flags['session']);
   }
   if (args.flags['session'] === true) {
-    process.stderr.write('burn hotspots: --session requires a session id\n');
-    return 2;
+    return runHotspotsSession(args);
   }
 
   const q: Query = {};

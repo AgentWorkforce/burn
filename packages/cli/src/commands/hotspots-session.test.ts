@@ -19,7 +19,9 @@ import type {
   TurnRecord,
 } from '@relayburn/reader';
 
+import { runHotspots } from './hotspots.js';
 import { runHotspotsSession } from './hotspots-session.js';
+import type { ParsedArgs } from '../args.js';
 
 // Cross-batch counter so every fakeTurn lands a unique (ts, model, usage,
 // argsHashPrefix) tuple — otherwise the writer's content-fingerprint dedup
@@ -136,7 +138,8 @@ interface CapturedOutput {
 }
 
 async function captureHotspots(
-  args: Parameters<typeof runHotspotsSession>[0],
+  args: ParsedArgs,
+  runner: (args: ParsedArgs) => Promise<number> = runHotspotsSession,
 ): Promise<CapturedOutput> {
   const origStdout = process.stdout.write.bind(process.stdout);
   const origStderr = process.stderr.write.bind(process.stderr);
@@ -152,7 +155,7 @@ async function captureHotspots(
   }) as typeof process.stderr.write;
   let code: number;
   try {
-    code = await runHotspotsSession(args);
+    code = await runner(args);
   } finally {
     process.stdout.write = origStdout;
     process.stderr.write = origStderr;
@@ -188,6 +191,28 @@ describe('burn hotspots --session aggregate (#79)', () => {
     else delete process.env['RELAYBURN_CONTENT_STORE'];
     await rm(tmpHome, { recursive: true, force: true });
     await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  it('routes bare hotspots --session through the aggregate gap report', async () => {
+    const out = await captureHotspots(
+      {
+        flags: { session: true, json: true },
+        tags: {},
+        positional: [],
+        passthrough: [],
+      },
+      runHotspots,
+    );
+    assert.equal(out.code, 0);
+    assert.equal(out.stderr, '');
+    const parsed = JSON.parse(out.stdout) as {
+      adapters: unknown[];
+      contentMode: string;
+      relationshipDrift: { sessions: number };
+    };
+    assert.deepEqual(parsed.adapters, []);
+    assert.equal(parsed.contentMode, 'full');
+    assert.equal(parsed.relationshipDrift.sessions, 0);
   });
 
   it('reports zero gaps on a ledger where every adapter captures tool_result records', async () => {

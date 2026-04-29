@@ -10,7 +10,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
-- Renamed the attribution surface: `burn hotspots` replaces `burn waste` and per-session `burn diagnose`, while `burn overhead` replaces `burn context`.
+- Renamed the attribution surface: `burn hotspots` replaces `burn waste` and `burn diagnose`, while `burn overhead` replaces `burn context`.
 - `burn summary --subagent-tree` now renders persisted session relationship graphs while preserving legacy subagent-tree output for older data.
 
 ### Fixed

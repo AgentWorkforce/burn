@@ -260,7 +260,7 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>]
              [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>]
-burn hotspots [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--session <id>]
+burn hotspots [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--session [id]] [--explain-drift]
 burn overhead [trim] [--project <path>] [--since 7d] [--kind <claude-md|agents-md>]
 burn compare <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
 burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
@@ -271,7 +271,7 @@ Provider filters are applied at query time; raw ledger model strings are not rew
 
 ### Renames from 0.45
 
-`burn hotspots` replaces `burn waste`; `burn hotspots --session <id>` replaces `burn diagnose <id>`. `burn overhead` replaces `burn context`, and `burn overhead trim` replaces `burn context advise`.
+`burn hotspots` replaces `burn waste`; `burn hotspots --session` replaces aggregate `burn diagnose`, including `--explain-drift`, and `burn hotspots --session <id>` replaces `burn diagnose <id>`. `burn overhead` replaces `burn context`, and `burn overhead trim` replaces `burn context advise`.
 
 For `@relayburn/analyze`, import `attributeHotspots`, `HotspotsResult`, `SessionTotals`, and `HotspotsOptions` from `hotspots`; import `attributeOverhead`, `findOverheadFiles`, `loadOverheadFile`, `OverheadAttribution`, and `buildTrimRecommendations` for the overhead pipeline.
 
