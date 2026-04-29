@@ -124,14 +124,12 @@ export async function runWithAdapter(
     }
     finalTask.update(`running final ${adapter.name} ingest pass`);
     finalReport = await adapter.afterExit(ctx, plan);
-    finalReport = await adapter.afterExit(ctx, plan);
     finalTask.succeed(`finalized ${adapter.name} ingest`);
   } catch (err) {
     finalTask.fail(`final ${adapter.name} ingest failed`);
     throw err;
   } finally {
     finalTask.stop();
-  }
   }
   totalIngestedSessions += finalReport.ingestedSessions;
   totalAppendedTurns += finalReport.appendedTurns;
