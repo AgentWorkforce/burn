@@ -1,4 +1,8 @@
-import type { TurnRecord } from '@relayburn/reader';
+import type {
+  RelationshipType,
+  SessionRelationshipRecord,
+  TurnRecord,
+} from '@relayburn/reader';
 
 import { costForTurn } from './cost.js';
 import type { PricingTable } from './pricing.js';
@@ -11,6 +15,9 @@ export interface SubagentTreeNode {
   // '(unknown)' for sidechain turns whose tree fields couldn't be resolved
   // from passive data.
   label: string;
+  // Relationship edge that introduced this node. The main-thread root is
+  // `root`; legacy TurnRecord.subagent fallback nodes are `subagent`.
+  relationshipType: RelationshipType;
   // Agent/Task subagent_type from the spawning tool input, when known.
   subagentType?: string;
   // Agent/Task description from the spawning tool input, when known.
@@ -31,11 +38,15 @@ export interface SubagentTreeNode {
 
 export interface BuildSubagentTreeOptions {
   pricing: PricingTable;
+  relationships?: readonly SessionRelationshipRecord[];
 }
 
 // Build per-session subagent trees. Each session produces one tree whose root
 // represents the main thread (non-sidechain turns). Children are subagent
 // invocations grouped by `subagent.agentId`, nested by `parentAgentId`.
+// When SessionRelationshipRecord rows are provided, they are the primary tree
+// substrate and TurnRecord.subagent is used only to attach turn costs and fill
+// legacy gaps.
 //
 // Sessions with sidechain turns whose tree fields are absent (e.g. incomplete
 // incremental ingest) still emit a tree; those turns attach to a synthetic
@@ -43,6 +54,16 @@ export interface BuildSubagentTreeOptions {
 export function buildSubagentTree(
   turns: TurnRecord[],
   opts: BuildSubagentTreeOptions,
+): Map<string, SubagentTreeNode> {
+  if (opts.relationships && opts.relationships.length > 0) {
+    return buildRelationshipTrees(turns, opts.relationships, opts.pricing);
+  }
+  return buildLegacySubagentTrees(turns, opts.pricing);
+}
+
+function buildLegacySubagentTrees(
+  turns: TurnRecord[],
+  pricing: PricingTable,
 ): Map<string, SubagentTreeNode> {
   const bySession = new Map<string, TurnRecord[]>();
   for (const t of turns) {
@@ -56,7 +77,7 @@ export function buildSubagentTree(
 
   const out = new Map<string, SubagentTreeNode>();
   for (const [sessionId, sessionTurns] of bySession) {
-    const root = buildSessionTree(sessionId, sessionTurns, opts.pricing);
+    const root = buildSessionTree(sessionId, sessionTurns, pricing);
     out.set(sessionId, root);
   }
   return out;
@@ -64,6 +85,302 @@ export function buildSubagentTree(
 
 interface MutableNode extends SubagentTreeNode {
   children: MutableNode[];
+}
+
+interface GraphState {
+  aliasById: Map<string, string>;
+  nodeById: Map<string, MutableNode>;
+  modelsByNode: Map<string, Set<string>>;
+  parentByNode: Map<string, string>;
+}
+
+function buildRelationshipTrees(
+  turns: TurnRecord[],
+  relationships: readonly SessionRelationshipRecord[],
+  pricing: PricingTable,
+): Map<string, SubagentTreeNode> {
+  const state: GraphState = {
+    aliasById: buildRelationshipAliases(turns, relationships),
+    nodeById: new Map(),
+    modelsByNode: new Map(),
+    parentByNode: new Map(),
+  };
+
+  for (const r of relationships) {
+    const id = canonicalId(state, relationshipNodeId(r));
+    const node = ensureNode(state, id, labelForRelationship(r), r.relationshipType);
+    applyRelationshipMetadata(node, r);
+    if (r.relationshipType === 'root' || r.relatedSessionId === undefined) continue;
+    const parentId = canonicalId(state, r.relatedSessionId);
+    ensureNode(state, parentId, parentId, 'root');
+    if (!state.parentByNode.has(id)) state.parentByNode.set(id, parentId);
+  }
+
+  addLegacySubagentGaps(state, turns);
+  ensureTurnSessionRoots(state, turns);
+  attachGraphChildren(state);
+  attachTurnCosts(state, turns, pricing);
+
+  const out = new Map<string, SubagentTreeNode>();
+  const childIds = collectAttachedChildIds(state);
+  for (const [id, node] of state.nodeById) {
+    if (childIds.has(id)) continue;
+    finalizeTree(state, node);
+    out.set(id, node);
+  }
+  return out;
+}
+
+function buildRelationshipAliases(
+  turns: readonly TurnRecord[],
+  relationships: readonly SessionRelationshipRecord[],
+): Map<string, string> {
+  const sessionsWithNativeSidechains = new Set<string>();
+  for (const t of turns) {
+    if (t.subagent?.agentId) sessionsWithNativeSidechains.add(t.sessionId);
+  }
+  for (const r of relationships) {
+    if (
+      r.relationshipType === 'subagent' &&
+      r.relatedSessionId === r.sessionId
+    ) {
+      sessionsWithNativeSidechains.add(r.sessionId);
+    }
+  }
+
+  const aliases = new Map<string, string>();
+  for (const r of relationships) {
+    aliases.set(r.sessionId, r.sessionId);
+  }
+  for (const r of relationships) {
+    if (r.relationshipType !== 'subagent') continue;
+    if (r.agentId === undefined) {
+      aliases.set(r.sessionId, r.sessionId);
+      continue;
+    }
+    // Claude sidechains live inside the parent file session, so their
+    // relationship row has sessionId=<root session>, agentId=<sidechain id>,
+    // and turns already carry subagent.agentId. Child-session sources such as
+    // Codex/OpenCode keep turns under the child session id, so the agent id
+    // aliases to the session id while the session id remains addressable.
+    aliases.set(
+      r.agentId,
+      sessionsWithNativeSidechains.has(r.sessionId) ? r.agentId : r.sessionId,
+    );
+  }
+  return aliases;
+}
+
+function relationshipNodeId(r: SessionRelationshipRecord): string {
+  if (r.relationshipType === 'subagent') return r.agentId ?? r.sessionId;
+  return r.sessionId;
+}
+
+function canonicalId(state: GraphState, id: string): string {
+  return state.aliasById.get(id) ?? id;
+}
+
+function ensureNode(
+  state: GraphState,
+  id: string,
+  label: string,
+  relationshipType: RelationshipType,
+): MutableNode {
+  let node = state.nodeById.get(id);
+  if (!node) {
+    node = {
+      nodeId: id,
+      label,
+      relationshipType,
+      models: [],
+      selfTurns: 0,
+      selfCost: 0,
+      cumulativeTurns: 0,
+      cumulativeCost: 0,
+      depth: -1,
+      children: [],
+    };
+    state.nodeById.set(id, node);
+    state.modelsByNode.set(id, new Set());
+  }
+  return node;
+}
+
+function labelForRelationship(r: SessionRelationshipRecord): string {
+  if (r.relationshipType === 'root') return 'main';
+  if (r.relationshipType === 'subagent') return r.subagentType ?? '(unknown)';
+  return r.sessionId;
+}
+
+function applyRelationshipMetadata(node: MutableNode, r: SessionRelationshipRecord): void {
+  if (r.relationshipType === 'root') {
+    if (node.relationshipType === 'root') node.label = 'main';
+    return;
+  }
+
+  node.relationshipType = r.relationshipType;
+  node.label = labelForRelationship(r);
+  if (r.subagentType !== undefined) node.subagentType = r.subagentType;
+  if (r.description !== undefined) node.description = r.description;
+}
+
+function addLegacySubagentGaps(state: GraphState, turns: readonly TurnRecord[]): void {
+  for (const t of turns) {
+    const sub = t.subagent;
+    if (!sub?.agentId) continue;
+    const id = canonicalId(state, sub.agentId);
+    const node = ensureNode(
+      state,
+      id,
+      sub.subagentType ?? '(unknown)',
+      'subagent',
+    );
+    if (node.relationshipType === 'root') node.relationshipType = 'subagent';
+    if (node.label === '(unknown)' && sub.subagentType !== undefined) {
+      node.label = sub.subagentType;
+    }
+    if (node.subagentType === undefined && sub.subagentType !== undefined) {
+      node.subagentType = sub.subagentType;
+    }
+    if (node.description === undefined && sub.description !== undefined) {
+      node.description = sub.description;
+    }
+    if (state.parentByNode.has(id)) continue;
+    const parentId = canonicalId(state, sub.parentAgentId ?? t.sessionId);
+    state.parentByNode.set(id, parentId);
+  }
+}
+
+function ensureTurnSessionRoots(state: GraphState, turns: readonly TurnRecord[]): void {
+  for (const t of turns) {
+    const id = canonicalId(state, t.sessionId);
+    const node = ensureNode(state, id, 'main', 'root');
+    if (node.relationshipType === 'root') node.label = 'main';
+  }
+  for (const parentId of state.parentByNode.values()) {
+    ensureNode(state, parentId, parentId, 'root');
+  }
+}
+
+function attachGraphChildren(state: GraphState): void {
+  for (const [id, parentId] of state.parentByNode) {
+    const node = state.nodeById.get(id);
+    if (!node) continue;
+    const resolvedParentId = resolveGraphParent(id, parentId, state.parentByNode);
+    if (resolvedParentId === undefined) continue;
+    const parent = state.nodeById.get(resolvedParentId);
+    if (!parent) continue;
+    if (!parent.children.includes(node)) parent.children.push(node);
+  }
+}
+
+function collectAttachedChildIds(state: GraphState): Set<string> {
+  const out = new Set<string>();
+  for (const node of state.nodeById.values()) {
+    for (const child of node.children) out.add(child.nodeId);
+  }
+  return out;
+}
+
+function attachTurnCosts(
+  state: GraphState,
+  turns: readonly TurnRecord[],
+  pricing: PricingTable,
+): void {
+  const unresolvedByParent = new Map<string, MutableNode>();
+  for (const t of turns) {
+    const cost = costForTurn(t, pricing)?.total ?? 0;
+    const sub = t.subagent;
+    if (sub && !sub.agentId) {
+      const parentId = canonicalId(state, t.sessionId);
+      let unresolved = unresolvedByParent.get(parentId);
+      if (!unresolved) {
+        unresolved = ensureNode(
+          state,
+          `${parentId}:__unresolved`,
+          '(unresolved)',
+          'subagent',
+        );
+        state.parentByNode.set(unresolved.nodeId, parentId);
+        const parent = state.nodeById.get(parentId);
+        if (parent && !parent.children.includes(unresolved)) parent.children.push(unresolved);
+        unresolvedByParent.set(parentId, unresolved);
+      }
+      addTurnToNode(state, unresolved.nodeId, t, cost);
+      continue;
+    }
+
+    const id = sub?.agentId ? canonicalId(state, sub.agentId) : canonicalId(state, t.sessionId);
+    ensureNode(state, id, sub?.subagentType ?? 'main', sub ? 'subagent' : 'root');
+    addTurnToNode(state, id, t, cost);
+  }
+}
+
+function addTurnToNode(
+  state: GraphState,
+  id: string,
+  turn: TurnRecord,
+  cost: number,
+): void {
+  const node = state.nodeById.get(id);
+  if (!node) return;
+  node.selfTurns++;
+  node.selfCost += cost;
+  if (turn.model) {
+    let models = state.modelsByNode.get(id);
+    if (!models) {
+      models = new Set();
+      state.modelsByNode.set(id, models);
+    }
+    models.add(turn.model);
+  }
+}
+
+function finalizeTree(state: GraphState, root: MutableNode): void {
+  const queue: Array<{ node: MutableNode; depth: number }> = [{ node: root, depth: 0 }];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    if (seen.has(node.nodeId)) continue;
+    seen.add(node.nodeId);
+    node.depth = depth;
+    for (const child of node.children) {
+      queue.push({ node: child, depth: depth + 1 });
+    }
+  }
+
+  foldCumulative(root);
+  assignModelArrays(state, root);
+  sortTree(root);
+}
+
+function assignModelArrays(state: GraphState, root: MutableNode): void {
+  const queue: MutableNode[] = [root];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    if (seen.has(node.nodeId)) continue;
+    seen.add(node.nodeId);
+    const models = state.modelsByNode.get(node.nodeId);
+    if (models) node.models = [...models].sort();
+    for (const child of node.children) queue.push(child);
+  }
+}
+
+function resolveGraphParent(
+  id: string,
+  parentId: string,
+  parentByNode: Map<string, string>,
+): string | undefined {
+  if (parentId === id) return undefined;
+  const seen = new Set<string>([id]);
+  let cursor = parentId;
+  while (parentByNode.has(cursor)) {
+    if (seen.has(cursor)) return undefined;
+    seen.add(cursor);
+    cursor = parentByNode.get(cursor)!;
+  }
+  return parentId;
 }
 
 function buildSessionTree(
@@ -74,6 +391,7 @@ function buildSessionTree(
   const root: MutableNode = {
     nodeId: sessionId,
     label: 'main',
+    relationshipType: 'root',
     models: [],
     selfTurns: 0,
     selfCost: 0,
@@ -109,6 +427,7 @@ function buildSessionTree(
         unresolved = {
           nodeId: `${sessionId}:__unresolved`,
           label: '(unresolved)',
+          relationshipType: 'subagent',
           models: [],
           selfTurns: 0,
           selfCost: 0,
@@ -130,6 +449,7 @@ function buildSessionTree(
       node = {
         nodeId: agentId,
         label: t.subagent.subagentType ?? '(unknown)',
+        relationshipType: 'subagent',
         models: [],
         selfTurns: 0,
         selfCost: 0,

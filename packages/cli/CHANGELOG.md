@@ -8,6 +8,10 @@ All notable changes to `@relayburn/cli`.
 
 - `burn watch --opencode-stream` now writes direct stream-derived OpenCode records for sessions observed from creation, including completed tool-call events and stream cursor high-watermarks.
 
+### Changed
+
+- `burn summary --subagent-tree` now reads persisted session relationships, including child-session subagents and fork/continuation annotations.
+
 ### Fixed
 
 - `burn watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
