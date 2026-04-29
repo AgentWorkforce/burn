@@ -15,6 +15,7 @@ import type {
 import { withLock } from './lock.js';
 import {
   ledgerContentIndexPath,
+  ledgerHome,
   ledgerIndexPath,
   ledgerPath,
 } from './paths.js';
@@ -101,21 +102,35 @@ export function turnContentFingerprint(t: TurnRecord): string {
   return createHash('sha256').update(composite).digest('hex').slice(0, 16);
 }
 
-let cache: { ids: Set<string>; content: Set<string>; contentOrder: string[] } | undefined;
+// Keyed on ledgerHome() so a `RELAYBURN_HOME` change (tests, CLI invocations
+// that re-parent the ledger dir) invalidates the cache automatically — the
+// hashes from the prior home would otherwise mask records under the new one.
+let cache:
+  | { home: string; ids: Set<string>; content: Set<string>; contentOrder: string[] }
+  | undefined;
 
 export async function loadIndex(): Promise<{ ids: Set<string>; content: Set<string> }> {
-  if (cache) return { ids: cache.ids, content: cache.content };
+  const home = ledgerHome();
+  if (cache && cache.home === home) return { ids: cache.ids, content: cache.content };
   const ids = await loadHashFile(ledgerIndexPath());
   const contentLines = await loadHashFileAsArray(ledgerContentIndexPath());
   const tail = contentLines.slice(Math.max(0, contentLines.length - CONTENT_WINDOW));
   const content = new Set(tail);
-  cache = { ids, content, contentOrder: [...tail] };
+  cache = { home, ids, content, contentOrder: [...tail] };
   return { ids, content };
 }
 
-export function __resetIndexCacheForTesting(): void {
+// Drop the in-memory dedup cache. Callers that wipe the on-disk index
+// (`burn state reset`, etc.) MUST call this after deletion so the next
+// loadIndex() re-reads from the empty files instead of returning hashes
+// loaded before the wipe — otherwise post-reset writes get silently
+// deduped against records that no longer exist.
+export function invalidateIndexCache(): void {
   cache = undefined;
 }
+
+// Test alias kept for back-compat with existing call sites.
+export const __resetIndexCacheForTesting = invalidateIndexCache;
 
 async function loadHashFile(p: string): Promise<Set<string>> {
   const lines = await loadHashFileAsArray(p);
@@ -142,8 +157,9 @@ export async function appendHashes(idHashes: string[], contentHashes: string[]):
       await appendFile(ledgerIndexPath(), idHashes.join('\n') + '\n', 'utf8');
     }
     if (contentHashes.length > 0) {
-      // Maintain rolling window on disk
-      if (!cache) await loadIndex();
+      // Maintain rolling window on disk. loadIndex() is home-aware, so this
+      // also reloads after a RELAYBURN_HOME swap.
+      await loadIndex();
       const order = cache!.contentOrder;
       for (const h of contentHashes) order.push(h);
       if (order.length > CONTENT_WINDOW) {
@@ -223,6 +239,7 @@ export async function rebuildIndex(): Promise<{ ids: number; content: number }> 
   });
 
   cache = {
+    home: ledgerHome(),
     ids: new Set(ids),
     content: new Set(contentTail),
     contentOrder: [...contentTail],

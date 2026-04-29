@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn state reset` wipes all derived ledger state (ledger, indexes, cursors, archive, content sidecars) in one command, with `--force` to apply, `--reingest` to immediately re-parse source logs, and `--json` for scripted use; preserves config, plans, and pricing overrides.
+
 ## [1.0.0] - 2026-04-29
 
 ### Added

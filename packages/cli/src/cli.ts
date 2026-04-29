@@ -31,6 +31,7 @@ Usage:
   burn state         [status] [--json]
   burn state rebuild index | classify | content | archive [--full|--vacuum] | all
   burn state prune   [--days <n>] [--force]
+  burn state reset   [--force] [--reingest] [--json]
 
 Examples:
   burn summary --since 24h
