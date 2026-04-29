@@ -7,7 +7,12 @@ import { classifyActivity } from './classifier.js';
 import { EMPTY_COVERAGE, makeFidelity } from './fidelity.js';
 import { resolveProject } from './git.js';
 import { argsHash, contentHash } from './hash.js';
-import { makeTextBlock, makeToolResultBlock } from './userTurn.js';
+import {
+  createUserTurnTokenCounter,
+  makeTextBlock,
+  makeToolResultBlock,
+} from './userTurn.js';
+import type { UserTurnTokenCounter, UserTurnTokenizer } from './userTurn.js';
 import type {
   CompactionEvent,
   ContentRecord,
@@ -141,6 +146,10 @@ interface WorkingRecord {
 export interface ParseOptions {
   sessionPath?: string;
   contentMode?: ContentStoreMode;
+  // Controls how UserTurnBlock.approxTokens is computed. The default uses
+  // cl100k; callers can opt into the historical bytes/4 heuristic for a cheap
+  // proportional signal.
+  tokenizer?: UserTurnTokenizer;
   // The session id derived from the on-disk filename (e.g. the `.jsonl`
   // basename for Claude). When omitted but `sessionPath` is set, the parser
   // derives it from the basename. Used as the authoritative "file session id"
@@ -224,6 +233,7 @@ export async function parseClaudeSession(
 ): Promise<ParseResult> {
   const contentMode = options.contentMode ?? 'off';
   const captureContent = contentMode === 'full';
+  const tokenCounter = await createUserTurnTokenCounter(options.tokenizer);
   const working = new Map<string, WorkingRecord>();
   const order: string[] = [];
   const nodesByUuid = new Map<string, LineNode>();
@@ -342,7 +352,7 @@ export async function parseClaudeSession(
           toolResultCounters,
           nextEventIndex,
         );
-        const userTurn = buildUserTurnRecord(ul, lastAssistantMessageId);
+        const userTurn = buildUserTurnRecord(ul, lastAssistantMessageId, tokenCounter);
         if (userTurn) {
           userTurns.push(userTurn);
           pendingUserTurn = userTurn;
@@ -757,18 +767,18 @@ function extractUserContent(line: UserLine): ContentRecord[] {
 // when the line lacks a session id or uuid (we'd have nothing to anchor it
 // to), or carries no measurable blocks.
 //
-// Token estimate uses the `bytes/4` heuristic. The issue notes a tokenizer
-// could be wired in later (cl100k via @dqbd/tiktoken) — measure first; for
-// proportional allocation across blocks within the same user turn the
-// heuristic is fine, the constant cancels.
+// Token estimate uses the parser-selected user-turn tokenizer. The explicit
+// `heuristic` mode is still useful for proportional allocation across blocks
+// within the same user turn, where the constant cancels.
 function buildUserTurnRecord(
   line: UserLine,
   precedingMessageId: string | undefined,
+  tokenCounter: UserTurnTokenCounter,
 ): UserTurnRecord | undefined {
   const sessionId = line.sessionId;
   const userUuid = line.uuid;
   if (!sessionId || !userUuid) return undefined;
-  const blocks = extractUserTurnBlocks(line);
+  const blocks = extractUserTurnBlocks(line, tokenCounter);
   if (blocks.length === 0) return undefined;
   const record: UserTurnRecord = {
     v: 1,
@@ -782,11 +792,14 @@ function buildUserTurnRecord(
   return record;
 }
 
-function extractUserTurnBlocks(line: UserLine): UserTurnBlock[] {
+function extractUserTurnBlocks(
+  line: UserLine,
+  tokenCounter: UserTurnTokenCounter,
+): UserTurnBlock[] {
   const out: UserTurnBlock[] = [];
   const body = line.message?.content;
   if (typeof body === 'string') {
-    if (body.length > 0) out.push(makeTextBlock(body));
+    if (body.length > 0) out.push(makeTextBlock(body, tokenCounter));
     return out;
   }
   if (!Array.isArray(body)) return out;
@@ -795,10 +808,14 @@ function extractUserTurnBlocks(line: UserLine): UserTurnBlock[] {
     if (block.type === 'tool_result') {
       const tr = block as { tool_use_id?: string; content?: unknown; is_error?: boolean };
       if (typeof tr.tool_use_id !== 'string') continue;
-      out.push(makeToolResultBlock(tr.tool_use_id, tr.content, tr.is_error === true));
+      out.push(
+        makeToolResultBlock(tr.tool_use_id, tr.content, tr.is_error === true, tokenCounter),
+      );
     } else if (block.type === 'text') {
       const tb = block as { text?: string };
-      if (typeof tb.text === 'string' && tb.text.length > 0) out.push(makeTextBlock(tb.text));
+      if (typeof tb.text === 'string' && tb.text.length > 0) {
+        out.push(makeTextBlock(tb.text, tokenCounter));
+      }
     }
   }
   return out;
@@ -1873,6 +1890,7 @@ export async function parseClaudeSessionIncremental(
     await handle.close();
   }
 
+  const tokenCounter = await createUserTurnTokenCounter(options.tokenizer);
   const working = new Map<string, WorkingRecord>();
   const order: string[] = [];
   const nodesByUuid = new Map<string, LineNode>();
@@ -2042,7 +2060,7 @@ export async function parseClaudeSessionIncremental(
       for (const ev of harvested) {
         pendingToolResultEvents.push({ offset: lineStartOffset, record: ev });
       }
-      const userTurn = buildUserTurnRecord(ul, lastAssistantMessageId);
+      const userTurn = buildUserTurnRecord(ul, lastAssistantMessageId, tokenCounter);
       if (userTurn) {
         pendingUserTurns.push({ offset: lineStartOffset, record: userTurn });
         pendingUserTurnInc = userTurn;

@@ -176,9 +176,11 @@ export interface UserTurnBlock {
   // request — `JSON.stringify`'d when content is structured, raw UTF-8 length
   // when it's a plain string.
   byteLen: number;
-  // Cheap heuristic (`Math.ceil(byteLen / 4)`) suitable for proportional
-  // allocation across tool calls within a user turn. Not a tokenizer; callers
-  // that need accuracy can re-tokenize from the content sidecar.
+  // Token estimate for this block. Parsers default to `tokenizer: 'cl100k'`
+  // for a tokenizer-backed absolute estimate. Callers can opt into the
+  // historical `Math.ceil(byteLen / 4)` heuristic for cheap proportional
+  // allocation across tool calls within one user turn. The field remains
+  // approximate because provider/model tokenizers differ.
   approxTokens: number;
   // True iff the source carried `is_error: true` for this tool_result.
   isError?: boolean;

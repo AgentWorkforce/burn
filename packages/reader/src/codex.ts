@@ -19,11 +19,20 @@ import type {
   UserTurnBlock,
   UserTurnRecord,
 } from './types.js';
-import { makeTextBlock, makeToolResultBlock } from './userTurn.js';
+import {
+  createUserTurnTokenCounter,
+  makeTextBlock,
+  makeToolResultBlock,
+} from './userTurn.js';
+import type { UserTurnTokenCounter, UserTurnTokenizer } from './userTurn.js';
 
 export interface ParseCodexOptions {
   sessionPath?: string;
   contentMode?: ContentStoreMode;
+  // Controls how UserTurnBlock.approxTokens is computed. The default uses
+  // cl100k; callers can opt into the historical bytes/4 heuristic for a cheap
+  // proportional signal.
+  tokenizer?: UserTurnTokenizer;
 }
 
 export interface ParseCodexIncrementalOptions extends ParseCodexOptions {
@@ -377,6 +386,7 @@ export async function parseCodexSessionIncremental(
   }
 
   const captureContent = options.contentMode === 'full';
+  const tokenCounter = await createUserTurnTokenCounter(options.tokenizer);
 
   let sessionId = options.resume?.sessionId ?? '';
   let sessionCwd: string | undefined = options.resume?.sessionCwd;
@@ -756,7 +766,7 @@ export async function parseCodexSessionIncremental(
           else pendingUserText = appendText(pendingUserText, text);
           // Capture the user prose as a UserTurnBlock for the slot bridging
           // the previous and next assistant turn (issue #81).
-          userTurnSlot.blocks.push(makeTextBlock(text));
+          userTurnSlot.blocks.push(makeTextBlock(text, tokenCounter));
           if (!userTurnSlot.ts && itemTs) userTurnSlot.ts = itemTs;
           if (captureContent) {
             pushContent(openTurn, pendingContent, {
@@ -817,7 +827,9 @@ export async function parseCodexSessionIncremental(
         // isError is filled in at task_complete using `erroredCallIds`, since
         // exec_command_end / patch_apply_end ordering relative to the output
         // payload isn't guaranteed.
-        userTurnSlot.blocks.push(makeToolResultBlock(out.call_id, out.output));
+        userTurnSlot.blocks.push(
+          makeToolResultBlock(out.call_id, out.output, undefined, tokenCounter),
+        );
         if (!userTurnSlot.ts && itemTs) userTurnSlot.ts = itemTs;
         // Build the ToolResultEventRecord (#42 / #87). Status is derived from
         // `erroredCallIds` if exec_command_end / patch_apply_end already fired

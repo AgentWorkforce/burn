@@ -273,7 +273,7 @@ describe('burn ingest (hook-driven)', () => {
     );
     assert.ok(toolResultUserTurn, 'tool_result user-turn block is persisted');
     assert.equal(toolResultUserTurn!.precedingMessageId, 'msg-1');
-    assert.equal(toolResultUserTurn!.blocks[0]!.approxTokens, Math.ceil(toolResponseText.length / 4));
+    assert.equal(toolResultUserTurn!.blocks[0]!.approxTokens, 7);
   });
 
   it('emits PreToolUse and PostToolUse events before multi-tool reader replay dedupes', async () => {

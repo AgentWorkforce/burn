@@ -7,6 +7,7 @@ All notable changes to `@relayburn/reader`.
 ### Added
 
 - Added `readCodexSessionIdHint()` for cheap Codex first-line `session_meta` session-id discovery.
+- Claude, Codex, and OpenCode parsers now default user-turn token estimates to lazily loaded `@dqbd/tiktoken` cl100k, with `tokenizer: 'heuristic'` available as a cheap fallback.
 
 ## [0.43.0] - 2026-04-29
 

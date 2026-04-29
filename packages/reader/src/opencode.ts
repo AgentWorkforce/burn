@@ -20,11 +20,20 @@ import type {
   UserTurnBlock,
   UserTurnRecord,
 } from './types.js';
-import { makeTextBlock, makeToolResultBlock } from './userTurn.js';
+import {
+  createUserTurnTokenCounter,
+  makeTextBlock,
+  makeToolResultBlock,
+} from './userTurn.js';
+import type { UserTurnTokenCounter, UserTurnTokenizer } from './userTurn.js';
 
 export interface ParseOpencodeOptions {
   sessionPath?: string;
   contentMode?: ContentStoreMode;
+  // Controls how UserTurnBlock.approxTokens is computed. The default uses
+  // cl100k; callers can opt into the historical bytes/4 heuristic for a cheap
+  // proportional signal.
+  tokenizer?: UserTurnTokenizer;
 }
 
 interface SessionInfo {
@@ -162,6 +171,7 @@ export async function parseOpencodeSessionIncremental(
   users.sort((a, b) => a.time.created - b.time.created);
 
   const captureContent = options.contentMode === 'full';
+  const tokenCounter = await createUserTurnTokenCounter(options.tokenizer);
   const isSidechain = typeof session.parentID === 'string' && session.parentID.length > 0;
   const seen = new Set<string>(options.seenMessageIds ?? []);
   const turns: TurnRecord[] = [];
@@ -197,6 +207,7 @@ export async function parseOpencodeSessionIncremental(
       prev,
       m,
       userMsgForGap,
+      tokenCounter,
     );
     if (userTurn) userTurns.push(userTurn);
 
@@ -459,6 +470,7 @@ async function buildOpencodeUserTurnRecord(
   prev: AssistantMessage | undefined,
   next: AssistantMessage,
   userMsg: UserMessage | undefined,
+  tokenCounter: UserTurnTokenCounter,
 ): Promise<UserTurnRecord | undefined> {
   const blocks: UserTurnBlock[] = [];
 
@@ -473,7 +485,7 @@ async function buildOpencodeUserTurnRecord(
       const state = tp.state;
       if (!state || !Object.prototype.hasOwnProperty.call(state, 'output')) continue;
       const isError = isFailedTool(tp);
-      blocks.push(makeToolResultBlock(tp.callID, state.output ?? '', isError));
+      blocks.push(makeToolResultBlock(tp.callID, state.output ?? '', isError, tokenCounter));
     }
   }
 
@@ -487,7 +499,9 @@ async function buildOpencodeUserTurnRecord(
     for (const p of userParts) {
       if (p.type !== 'text') continue;
       const tp = p as TextPart;
-      if (typeof tp.text === 'string' && tp.text.length > 0) blocks.push(makeTextBlock(tp.text));
+      if (typeof tp.text === 'string' && tp.text.length > 0) {
+        blocks.push(makeTextBlock(tp.text, tokenCounter));
+      }
     }
   }
 

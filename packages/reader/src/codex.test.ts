@@ -698,7 +698,7 @@ describe('parseCodexSession user-turn block sizes (issue #81)', () => {
     assert.equal(pre!.blocks.length, 1);
     assert.equal(pre!.blocks[0]!.kind, 'text');
     assert.equal(pre!.blocks[0]!.byteLen, Buffer.byteLength('fix the build', 'utf8'));
-    assert.equal(pre!.blocks[0]!.approxTokens, Math.ceil(13 / 4));
+    assert.equal(pre!.blocks[0]!.approxTokens, 3);
 
     // Between turn 1 and 2: tool output from turn 1 + inter-turn user text.
     assert.equal(between12!.precedingMessageId, 'turn_utb_1');
@@ -708,7 +708,7 @@ describe('parseCodexSession user-turn block sizes (issue #81)', () => {
     assert.ok(tr1);
     assert.equal(tr1!.toolUseId, 'call_b1');
     assert.equal(tr1!.byteLen, Buffer.byteLength('a\n', 'utf8'));
-    assert.equal(tr1!.approxTokens, Math.ceil(2 / 4));
+    assert.equal(tr1!.approxTokens, 2);
     assert.equal(tr1!.isError, undefined, 'successful exec → no isError');
     const txt = between12!.blocks.find((b) => b.kind === 'text');
     assert.ok(txt);
@@ -757,6 +757,32 @@ describe('parseCodexSession user-turn block sizes (issue #81)', () => {
         ratio >= 1 / 3 && ratio <= 3,
         `input delta ${lhs} and user turn tokens ${userTurnTokens} differ by more than 3x`,
       );
+    }
+  });
+
+  it('can opt into heuristic UserTurnBlock token estimates', async () => {
+    const { userTurns } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+      { tokenizer: 'heuristic' },
+    );
+    const first = userTurns[0]!;
+    assert.equal(first.blocks[0]!.byteLen, Buffer.byteLength('fix the build', 'utf8'));
+    assert.equal(first.blocks[0]!.approxTokens, Math.ceil(13 / 4));
+  });
+
+  it('reconciles default cl100k user-turn block tokens against input deltas within ±5%', async () => {
+    const { turns, userTurns } = await parseCodexSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    const byFollowing = new Map(userTurns.map((u) => [u.followingMessageId ?? '', u]));
+    for (let i = 1; i < turns.length; i++) {
+      const prev = turns[i - 1]!;
+      const cur = turns[i]!;
+      const userTokens =
+        byFollowing.get(cur.messageId)?.blocks.reduce((s, b) => s + b.approxTokens, 0) ?? 0;
+      const inputDelta = cur.usage.input - prev.usage.output;
+      const relative = Math.abs(userTokens - inputDelta) / Math.max(inputDelta, 1);
+      assert.ok(relative <= 0.05, `${cur.messageId}: delta=${inputDelta}, cl100k=${userTokens}`);
     }
   });
 

@@ -12,6 +12,6 @@
     "input": 8,
     "output": 10,
     "reasoning": 0,
-    "cache": { "read": 12, "write": 22 }
+    "cache": { "read": 12, "write": 21 }
   }
 }

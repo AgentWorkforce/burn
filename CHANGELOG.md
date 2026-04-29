@@ -4,6 +4,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- Defaulted user-turn block sizing to cl100k, with a measurement script that reports token-count and tool-attribution drift against the bytes/4 heuristic fallback.
+
 ### Fixed
 
 - `burn rebuild --content` now fast-skips renamed Codex rollout files using their embedded session metadata.
