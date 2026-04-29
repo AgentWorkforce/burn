@@ -12,11 +12,18 @@ All notable changes to `@relayburn/cli`.
 
 - `burn hotspots` replaces `burn waste` and `burn diagnose`; bare `burn hotspots --session` keeps the former aggregate diagnostics, and `burn hotspots --session <id>` keeps the former per-session JSON shape. `burn overhead` and `burn overhead trim` replace `burn context` and `burn context advise`.
 - `burn hotspots --patterns tool-output-bloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment instead of bytes/4 estimates. Findings on highly compressible payloads (repetitive logs, base64 dumps) may shift below the 15k default threshold.
+- `burn rebuild <target>` now owns derived-state maintenance for indexes, classification, content, archive builds, and status in one command family.
 - `burn summary --subagent-tree` now reads persisted session relationships, including child-session subagents and fork/continuation annotations.
 
 ### Fixed
 
+- `burn rebuild archive vacuum` now preserves archive space reclamation after the top-level archive command removal.
+- `burn rebuild status` now streams ledger counts instead of materializing all turns.
 - `burn watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
+
+### Removed
+
+- Removed the top-level `burn archive` command. Use `burn rebuild archive`, `burn rebuild archive --full`, `burn rebuild archive vacuum`, or `burn rebuild status`.
 
 ## [0.45.0] - 2026-04-29
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { parseArgs } from './args.js';
-import { runArchive } from './commands/archive.js';
 import { runCompare } from './commands/compare.js';
 import { runContent, opportunisticPrune } from './commands/content.js';
 import { runOverhead } from './commands/overhead.js';
@@ -35,8 +34,7 @@ Usage:
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
   burn content prune [--days <n>] [--force]
-  burn archive       build | rebuild | status [--json]
-  burn rebuild         --index | --reclassify [--force]
+  burn rebuild       index | classify | content | archive [--full|--vacuum] | all | status [--json]
 
 Examples:
   burn summary --since 24h
@@ -65,10 +63,11 @@ Examples:
   burn watch
   burn watch --opencode-stream
   burn content prune --days 30
-  burn archive status
-  burn archive build
-  burn archive rebuild
-  burn rebuild --reclassify
+  burn rebuild status
+  burn rebuild archive
+  burn rebuild archive --full
+  burn rebuild archive vacuum
+  burn rebuild classify
 
 Provider filters are query-time only. Synthetic-routed models are recognized
 from hf:*, accounts/fireworks/models/*, and synthetic/* model IDs and are
@@ -110,8 +109,6 @@ async function main(): Promise<number> {
       return runMcpServer(args);
     case 'content':
       return runContent(args);
-    case 'archive':
-      return runArchive(args);
     case 'rebuild':
       return runRebuild(args);
     default:
