@@ -23,5 +23,5 @@
 {"timestamp":"2026-04-21T00:00:02.400Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"echo done\"}","call_id":"call_b3"}}
 {"timestamp":"2026-04-21T00:00:02.500Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call_b3","turn_id":"turn_utb_3","exit_code":0}}
 {"timestamp":"2026-04-21T00:00:02.600Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_b3","output":"done\n"}}
-{"timestamp":"2026-04-21T00:00:02.900Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":202,"cached_input_tokens":0,"output_tokens":110}}}}
+{"timestamp":"2026-04-21T00:00:02.900Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":198,"cached_input_tokens":0,"output_tokens":110}}}}
 {"timestamp":"2026-04-21T00:00:03.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_utb_3"}}

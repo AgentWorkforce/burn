@@ -306,7 +306,7 @@ describe('parseClaudeSession user-turn block sizes (issue #2)', () => {
     assert.equal(first.blocks.length, 1);
     assert.equal(first.blocks[0]!.kind, 'text');
     assert.equal(first.blocks[0]!.byteLen, 'please fix the build'.length);
-    assert.equal(first.blocks[0]!.approxTokens, Math.ceil('please fix the build'.length / 4));
+    assert.equal(first.blocks[0]!.approxTokens, 4);
 
     // Second user turn: two tool_results (small Bash output, large Read output).
     assert.equal(second.precedingMessageId, 'msg_utb_1');
@@ -335,8 +335,8 @@ describe('parseClaudeSession user-turn block sizes (issue #2)', () => {
     // For the next assistant turn N+1 with the same model and no compaction
     // between, the input-side bytes the user contributed roughly equal:
     //   (input_tokens(N+1) + cacheCreate(N+1)) - output_tokens(N) - cacheRead(N+1)
-    // We only need an order-of-magnitude assertion here — the heuristic is
-    // bytes/4, accuracy depends on the tokenizer. Treat as a sanity gate.
+    // We only need an order-of-magnitude assertion here — exact reconciliation
+    // still depends on provider/model tokenizer behavior. Treat as a sanity gate.
     const { turns, userTurns } = await parseClaudeSession(
       path.join(FIXTURES, 'user-turn-blocks.jsonl'),
     );
@@ -351,6 +351,33 @@ describe('parseClaudeSession user-turn block sizes (issue #2)', () => {
       // Sanity: both sides should be positive when there was real I/O.
       assert.ok(userTokens > 0, `user turn ${u.userUuid} should contribute tokens`);
       assert.ok(inputDelta > 0, `delta for ${u.followingMessageId} should be positive`);
+    }
+  });
+
+  it('can opt into heuristic UserTurnBlock token estimates', async () => {
+    const { userTurns } = await parseClaudeSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+      { tokenizer: 'heuristic' },
+    );
+    const first = userTurns[0]!;
+    assert.equal(first.blocks[0]!.byteLen, Buffer.byteLength('please fix the build', 'utf8'));
+    assert.equal(first.blocks[0]!.approxTokens, Math.ceil('please fix the build'.length / 4));
+  });
+
+  it('reconciles default cl100k user-turn block tokens against input-side delta within ±5%', async () => {
+    const { turns, userTurns } = await parseClaudeSession(
+      path.join(FIXTURES, 'user-turn-blocks.jsonl'),
+    );
+    const turnByMid = new Map(turns.map((t) => [t.messageId, t] as const));
+    for (const u of userTurns) {
+      if (!u.precedingMessageId || !u.followingMessageId) continue;
+      const prev = turnByMid.get(u.precedingMessageId)!;
+      const next = turnByMid.get(u.followingMessageId)!;
+      const inputDelta =
+        next.usage.input + next.usage.cacheCreate5m + next.usage.cacheCreate1h - prev.usage.output;
+      const userTokens = u.blocks.reduce((s, b) => s + b.approxTokens, 0);
+      const relative = Math.abs(userTokens - inputDelta) / Math.max(inputDelta, 1);
+      assert.ok(relative <= 0.05, `${u.userUuid}: delta=${inputDelta}, cl100k=${userTokens}`);
     }
   });
 

@@ -57,7 +57,11 @@ importers:
         specifier: workspace:*
         version: link:../reader
 
-  packages/reader: {}
+  packages/reader:
+    dependencies:
+      '@dqbd/tiktoken':
+        specifier: ^1.0.22
+        version: 1.0.22
 
   packages/relayburn:
     dependencies:
@@ -66,6 +70,9 @@ importers:
         version: link:../cli
 
 packages:
+
+  '@dqbd/tiktoken@1.0.22':
+    resolution: {integrity: sha512-RYhO8xeHkMNX5Ixqf4M1Ve3siCYJY/dI0yLnlX4M4oIEDOvjMIQ+E+3OUpAaZcWTaMtQJzGcDAghYfllpx3i/w==}
 
   '@types/node@22.19.17':
     resolution: {integrity: sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q==}
@@ -79,6 +86,8 @@ packages:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
 snapshots:
+
+  '@dqbd/tiktoken@1.0.22': {}
 
   '@types/node@22.19.17':
     dependencies:

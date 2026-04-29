@@ -644,7 +644,7 @@ describe('parseOpencodeSession user-turn block sizes (issue #86)', () => {
     assert.equal(pre!.blocks.length, 1);
     assert.equal(pre!.blocks[0]!.kind, 'text');
     assert.equal(pre!.blocks[0]!.byteLen, Buffer.byteLength('fix the build', 'utf8'));
-    assert.equal(pre!.blocks[0]!.approxTokens, Math.ceil(13 / 4));
+    assert.equal(pre!.blocks[0]!.approxTokens, 3);
 
     // a1 → a2 gap: tool outputs from a1's parts + user text from u2.
     assert.equal(between!.precedingMessageId, 'msg_utb_a1');
@@ -656,14 +656,14 @@ describe('parseOpencodeSession user-turn block sizes (issue #86)', () => {
     assert.ok(okBlock);
     assert.equal(okBlock!.kind, 'tool_result');
     assert.equal(okBlock!.byteLen, Buffer.byteLength('ok\n', 'utf8'));
-    assert.equal(okBlock!.approxTokens, Math.ceil(3 / 4));
+    assert.equal(okBlock!.approxTokens, 2);
     assert.equal(okBlock!.isError, undefined);
 
     const failBlock = between!.blocks.find((b) => b.toolUseId === 'call_fail');
     assert.ok(failBlock);
     assert.equal(failBlock!.kind, 'tool_result');
     assert.equal(failBlock!.byteLen, Buffer.byteLength('ERROR: tests failed', 'utf8'));
-    assert.equal(failBlock!.approxTokens, Math.ceil(19 / 4));
+    assert.equal(failBlock!.approxTokens, 4);
     assert.equal(failBlock!.isError, true, 'exit!=0 surfaces isError on the block');
 
     const txtBlock = between!.blocks.find((b) => b.kind === 'text');
@@ -687,7 +687,31 @@ describe('parseOpencodeSession user-turn block sizes (issue #86)', () => {
     // OpenCode usage maps cache.write → cacheCreate5m.
     const lhs = cur.usage.input + cur.usage.cacheCreate5m - prev.usage.output;
     assert.ok(lhs > 0, '(input + cacheWrite)(N+1) - output(N) should be positive');
-    assert.equal(lhs, userTurnTokens, 'fixture is engineered for an exact reconciliation match');
+    assert.ok(
+      Math.abs(lhs - userTurnTokens) <= 1,
+      `default cl100k should stay close on the fixture: delta=${lhs}, tokens=${userTurnTokens}`,
+    );
+  });
+
+  it('can opt into heuristic UserTurnBlock token estimates', async () => {
+    const file = sessionFile('user-turn-blocks', 'ses_utb');
+    const { userTurns } = await parseOpencodeSession(file, { tokenizer: 'heuristic' });
+    const pre = userTurns[0]!;
+    assert.equal(pre.blocks[0]!.byteLen, Buffer.byteLength('fix the build', 'utf8'));
+    assert.equal(pre.blocks[0]!.approxTokens, Math.ceil(13 / 4));
+  });
+
+  it('reconciles default cl100k user-turn block tokens against input + cacheWrite delta within ±5%', async () => {
+    const file = sessionFile('user-turn-blocks', 'ses_utb');
+    const { turns, userTurns } = await parseOpencodeSession(file);
+    const between = userTurns.find((u) => u.followingMessageId === 'msg_utb_a2');
+    assert.ok(between);
+    const userTokens = between!.blocks.reduce((s, b) => s + b.approxTokens, 0);
+    const prev = turns[0]!;
+    const cur = turns[1]!;
+    const inputDelta = cur.usage.input + cur.usage.cacheCreate5m - prev.usage.output;
+    const relative = Math.abs(userTokens - inputDelta) / Math.max(inputDelta, 1);
+    assert.ok(relative <= 0.05, `delta=${inputDelta}, cl100k=${userTokens}`);
   });
 
   it('emits empty userTurns for a session with no measurable user-side blocks', async () => {
