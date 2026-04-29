@@ -7,6 +7,7 @@ All notable changes to `@relayburn/analyze`.
 ### Changed
 
 - `buildSubagentTree()` now consumes `SessionRelationshipRecord` graphs when available, with legacy `TurnRecord.subagent` fallback and per-node `relationshipType`.
+- Edit-heavy detection now counts Codex `shell`/`exec_command` file reads through `cat`, `head`, and `tail`.
 
 ## [0.44.0] - 2026-04-29
 
