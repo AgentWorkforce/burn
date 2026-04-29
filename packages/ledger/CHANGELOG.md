@@ -4,6 +4,10 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The index-sidecar cache is now keyed on `ledgerHome()`, so `RELAYBURN_HOME` swaps invalidate it instead of leaking dedup hashes from the prior home.
+
 ## [1.0.0] - 2026-04-29
 
 ### Added

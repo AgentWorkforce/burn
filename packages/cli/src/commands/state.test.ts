@@ -5,7 +5,6 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import {
-  __resetIndexCacheForTesting,
   appendContent,
   appendToolResultEvents,
   appendTurns,
@@ -91,10 +90,6 @@ describe('burn state CLI', () => {
     process.env['RELAYBURN_HOME'] = tmp;
     delete process.env['RELAYBURN_CONTENT_STORE'];
     delete process.env['RELAYBURN_PRUNE_FORCE'];
-    // The writer's content-fingerprint dedup is module-scoped and survives
-    // across tests; reset it so per-test seed turns aren't silently skipped
-    // when they happen to share ts/usage/model with a prior test's seed.
-    __resetIndexCacheForTesting();
   });
 
   afterEach(async () => {
@@ -581,7 +576,6 @@ describe('burn state CLI', () => {
     beforeEach(async () => {
       tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-reset-home-'));
       process.env['HOME'] = tmpHome;
-      __resetIndexCacheForTesting();
     });
 
     afterEach(async () => {
