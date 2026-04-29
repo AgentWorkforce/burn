@@ -4,6 +4,10 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+### Changed
+
+- Content sidecars now skip exact duplicate records so live stream ingest and file fallback can overlap without double-counting content blocks.
+
 ## [0.45.0] - 2026-04-29
 
 ### Changed

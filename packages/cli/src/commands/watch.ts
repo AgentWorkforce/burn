@@ -2,6 +2,19 @@ import type { ParsedArgs } from '../args.js';
 import { formatInt } from '../format.js';
 import { ingestAll, type IngestReport } from '../ingest.js';
 import { startOpencodeEventStream } from '../opencode-stream.js';
+import { resolvePendingStampsForSession } from '../pending-stamps.js';
+import { createOpencodeStreamIngestor } from '@relayburn/reader';
+import {
+  appendContent,
+  appendRelationships,
+  appendToolResultEvents,
+  appendTurns,
+  appendUserTurns,
+  loadConfig,
+  loadCursors,
+  updateCursors,
+  type OpencodeStreamCursor,
+} from '@relayburn/ledger';
 
 const WATCH_HELP = `burn watch — foreground incremental ingest
 
@@ -74,27 +87,84 @@ export async function runWatch(args: ParsedArgs): Promise<number> {
   });
   const stream =
     args.flags['opencode-stream'] === true
-      ? startOpencodeEventStream({
-          ...opencodeStreamFlags(args),
-          onOpen(url) {
-            process.stderr.write(`[burn] watch: OpenCode event stream ${url}\n`);
-          },
-          onIngestHint() {
-            void controller.tick();
-          },
-          onError(err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            process.stderr.write(
-              `[burn] watch: OpenCode event stream unavailable (${msg}); polling continues\n`,
-            );
-          },
-        })
+      ? await startDirectOpencodeStream(args, controller)
       : undefined;
 
   await waitForStopSignal();
   if (stream) await stream.stop();
   await controller.stop();
   return 0;
+}
+
+async function startDirectOpencodeStream(
+  args: ParsedArgs,
+  controller: WatchController,
+): Promise<ReturnType<typeof startOpencodeEventStream>> {
+  const streamFlags = opencodeStreamFlags(args);
+  const cursorKey = `opencode-stream:${streamFlags.baseUrl ?? process.env['OPENCODE_SERVER_URL'] ?? 'http://127.0.0.1:4096'}:${streamFlags.global === true ? 'global' : 'project'}`;
+  const cursors = await loadCursors();
+  const prior = cursors[cursorKey]?.kind === 'opencode-stream'
+    ? (cursors[cursorKey] as OpencodeStreamCursor)
+    : undefined;
+  const config = await loadConfig();
+  const ingestorOpts: Parameters<typeof createOpencodeStreamIngestor>[0] = {
+    contentMode: config.content.store,
+  };
+  if (prior !== undefined) ingestorOpts.cursor = prior;
+  const ingestor = await createOpencodeStreamIngestor(ingestorOpts);
+  const streamOpts: Parameters<typeof startOpencodeEventStream>[0] = {
+    ...streamFlags,
+    onOpen(url) {
+      process.stderr.write(`[burn] watch: OpenCode event stream ${url}\n`);
+    },
+    async onEvent(event, payload) {
+      const result = await ingestor.ingest(payload, event.id);
+      if (result.turns.length > 0) {
+        const stamped = new Set<string>();
+        for (const turn of result.turns) {
+          if (stamped.has(turn.sessionId)) continue;
+          stamped.add(turn.sessionId);
+          const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
+            harness: 'opencode',
+            sessionId: turn.sessionId,
+            sessionMtimeMs: Date.now(),
+          };
+          if (turn.project !== undefined) candidate.cwd = turn.project;
+          await resolvePendingStampsForSession(candidate);
+        }
+        await appendTurns(result.turns);
+      }
+      if (result.content.length > 0) await appendContent(result.content);
+      if (result.relationships.length > 0) await appendRelationships(result.relationships);
+      if (result.toolResultEvents.length > 0) {
+        await appendToolResultEvents(result.toolResultEvents);
+      }
+      if (result.userTurns.length > 0) await appendUserTurns(result.userTurns);
+      await updateCursors((map) => {
+        map[cursorKey] = { kind: 'opencode-stream', ...result.cursor };
+      });
+      if (result.turns.length > 0) {
+        process.stderr.write(
+          renderWatchReport({
+            scannedSessions: 0,
+            ingestedSessions: 1,
+            appendedTurns: result.turns.length,
+          }),
+        );
+      }
+    },
+    onIngestHint() {
+      void controller.tick();
+    },
+    onError(err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[burn] watch: OpenCode event stream unavailable (${msg}); polling continues\n`,
+      );
+    },
+  };
+  if (prior?.lastEventId !== undefined) streamOpts.lastEventId = prior.lastEventId;
+  return startOpencodeEventStream(streamOpts);
 }
 
 export async function runWatchTick(): Promise<IngestReport> {

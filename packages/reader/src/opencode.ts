@@ -280,6 +280,7 @@ export async function parseOpencodeSessionIncremental(
       m.sessionID,
       m.id,
       new Date(m.time.created).toISOString(),
+      usage,
       toolResultEvents,
       callIndexCounters,
       nextEventIndex,
@@ -376,17 +377,25 @@ function collectOpencodeToolResultEvents(
   sessionId: string,
   messageId: string,
   ts: string,
+  turnUsage: Usage,
   out: ToolResultEventRecord[],
   callIndexCounters: Map<string, number>,
   startEventIndex: number,
 ): number {
   let nextIndex = startEventIndex;
+  const terminalTools = parts.filter(isTerminalToolPart);
+  const usageShare =
+    terminalTools.length > 0 ? divideUsage(turnUsage, terminalTools.length) : undefined;
+  const usageAttribution =
+    terminalTools.length === 1
+      ? 'single-tool-turn'
+      : terminalTools.length > 1
+        ? 'even-split-turn'
+        : undefined;
   for (const p of parts) {
-    if (p.type !== 'tool') continue;
-    const tp = p as ToolPart;
-    if (typeof tp.callID !== 'string' || tp.callID.length === 0) continue;
-    const state = tp.state;
-    if (!state || !Object.prototype.hasOwnProperty.call(state, 'output')) continue;
+    if (!isTerminalToolPart(p)) continue;
+    const tp = p;
+    const state = tp.state!;
     const isError = isFailedTool(tp);
     const callIndex = callIndexCounters.get(tp.callID) ?? 0;
     callIndexCounters.set(tp.callID, callIndex + 1);
@@ -403,12 +412,36 @@ function collectOpencodeToolResultEvents(
       eventSource: 'tool_result',
     };
     if (isError) record.isError = true;
+    if (usageShare !== undefined) {
+      record.usage = usageShare;
+      if (usageAttribution !== undefined) record.usageAttribution = usageAttribution;
+    }
     const measured = measureOpencodeToolOutput(state.output);
     if (measured.length !== undefined) record.contentLength = measured.length;
     if (measured.hash !== undefined) record.contentHash = measured.hash;
     out.push(record);
   }
   return nextIndex;
+}
+
+function isTerminalToolPart(p: Part): p is ToolPart & { callID: string } {
+  if (p.type !== 'tool') return false;
+  const tp = p as ToolPart;
+  if (typeof tp.callID !== 'string' || tp.callID.length === 0) return false;
+  const state = tp.state;
+  return !!state && Object.prototype.hasOwnProperty.call(state, 'output');
+}
+
+function divideUsage(usage: Usage, divisor: number): Usage {
+  if (divisor <= 1) return { ...usage };
+  return {
+    input: usage.input / divisor,
+    output: usage.output / divisor,
+    reasoning: usage.reasoning / divisor,
+    cacheRead: usage.cacheRead / divisor,
+    cacheCreate5m: usage.cacheCreate5m / divisor,
+    cacheCreate1h: usage.cacheCreate1h / divisor,
+  };
 }
 
 function measureOpencodeToolOutput(output: unknown): { length?: number; hash?: string } {

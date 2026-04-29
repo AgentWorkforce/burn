@@ -304,6 +304,13 @@ export interface ToolResultEventRecord {
   contentHash?: string;
   isError?: boolean;
 
+  // Optional per-tool-call share of the assistant turn's usage. Some sources
+  // expose usage only at the completed assistant-message / step boundary, not
+  // per individual tool. When present, this is the parser's conservative
+  // allocation of that turn-level usage onto the terminal tool-result events.
+  usage?: Usage;
+  usageAttribution?: 'single-tool-turn' | 'even-split-turn';
+
   // For tool calls that spawn a subagent (Agent / Task / spawn_agent), the
   // child session id once the spawn resolves.
   subagentSessionId?: string;

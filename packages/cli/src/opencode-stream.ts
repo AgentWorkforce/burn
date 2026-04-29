@@ -26,11 +26,12 @@ export type FetchLike = (
 export interface ConsumeOpencodeEventStreamOptions {
   baseUrl?: string;
   global?: boolean;
+  lastEventId?: string;
   fetchImpl?: FetchLike;
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
-  onEvent?: (event: SseEvent, payload: unknown) => void;
-  onIngestHint?: (payload: unknown) => void;
+  onEvent?: (event: SseEvent, payload: unknown) => void | Promise<void>;
+  onIngestHint?: (payload: unknown) => void | Promise<void>;
 }
 
 export interface OpencodeEventStreamController {
@@ -59,8 +60,12 @@ export function resolveOpencodeEventUrl(
 
 export function buildOpencodeEventHeaders(
   env: NodeJS.ProcessEnv = process.env,
+  opts: { lastEventId?: string } = {},
 ): Record<string, string> {
   const headers: Record<string, string> = { Accept: 'text/event-stream' };
+  if (opts.lastEventId !== undefined && opts.lastEventId.length > 0) {
+    headers['Last-Event-ID'] = opts.lastEventId;
+  }
   const password = env['OPENCODE_SERVER_PASSWORD'];
   if (password !== undefined && password.length > 0) {
     const username = env['OPENCODE_SERVER_USERNAME'] || 'opencode';
@@ -133,8 +138,10 @@ export async function consumeOpencodeEventStream(
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
   const env = opts.env ?? process.env;
   const url = resolveOpencodeEventUrl(opts.baseUrl, resolveUrlOptions(opts.global, env));
+  const headerOpts: { lastEventId?: string } = {};
+  if (opts.lastEventId !== undefined) headerOpts.lastEventId = opts.lastEventId;
   const response = await fetchImpl(url, {
-    headers: buildOpencodeEventHeaders(env),
+    headers: buildOpencodeEventHeaders(env, headerOpts),
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
   if (!response.ok) {
@@ -163,10 +170,10 @@ export async function consumeOpencodeEventStream(
       if (!parsed) continue;
       const payload = parseEventPayload(parsed.data);
       events++;
-      opts.onEvent?.(parsed, payload);
+      await opts.onEvent?.(parsed, payload);
       if (isOpencodeIngestHint(payload)) {
         wakeups++;
-        opts.onIngestHint?.(payload);
+        await opts.onIngestHint?.(payload);
       }
     }
   }
@@ -176,10 +183,10 @@ export async function consumeOpencodeEventStream(
   if (trailing) {
     const payload = parseEventPayload(trailing.data);
     events++;
-    opts.onEvent?.(trailing, payload);
+    await opts.onEvent?.(trailing, payload);
     if (isOpencodeIngestHint(payload)) {
       wakeups++;
-      opts.onIngestHint?.(payload);
+      await opts.onIngestHint?.(payload);
     }
   }
 

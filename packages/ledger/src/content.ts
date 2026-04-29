@@ -70,8 +70,22 @@ async function appendSessionContent(
   records: ContentRecord[],
 ): Promise<void> {
   const file = contentFilePath(sessionId);
-  const payload = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
   await withLock(`content.${sessionId}`, async () => {
+    const lines = records.map((r) => JSON.stringify(r));
+    let existing = new Set<string>();
+    try {
+      const raw = await readFile(file, 'utf8');
+      existing = new Set(raw.split('\n').filter((line) => line.length > 0));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    const fresh = lines.filter((line) => {
+      if (existing.has(line)) return false;
+      existing.add(line);
+      return true;
+    });
+    if (fresh.length === 0) return;
+    const payload = fresh.join('\n') + '\n';
     await appendFile(file, payload, { encoding: 'utf8' });
   });
 }

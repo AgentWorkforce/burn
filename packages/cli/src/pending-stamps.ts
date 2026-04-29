@@ -36,7 +36,7 @@ export interface PendingStampWriteResult {
 export interface PendingStampSessionCandidate {
   harness: PendingStampHarness;
   sessionId: string;
-  sessionPath: string;
+  sessionPath?: string;
   sessionMtimeMs?: number;
   cwd?: string;
 }
@@ -185,7 +185,7 @@ function pendingStampMatches(
   candidate: PendingStampSessionCandidate,
 ): boolean {
   if (record.harness !== candidate.harness) return false;
-  if (record.sessionDirHint !== undefined) {
+  if (record.sessionDirHint !== undefined && candidate.sessionPath !== undefined) {
     const rel = path.relative(record.sessionDirHint, path.resolve(candidate.sessionPath));
     if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
   }

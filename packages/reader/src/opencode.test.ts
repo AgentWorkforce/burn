@@ -912,6 +912,8 @@ describe('parseOpencodeSession execution graph (#42 / #93)', () => {
       assert.equal(ok.callIndex, 0);
       assert.equal(ok.eventIndex, 0);
       assert.equal(ok.ts, new Date(1_777_000_000_000).toISOString());
+      assert.equal(ok.usageAttribution, 'even-split-turn');
+      assert.equal(ok.usage?.input, 5 / 3);
 
       const errStatus = byId.get('call_err_status')!;
       assert.equal(errStatus.status, 'errored', 'state.status=error → errored');
