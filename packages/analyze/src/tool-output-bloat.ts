@@ -17,9 +17,12 @@
 //
 // Both signals emit the same `ToolOutputBloat` shape so the CLI can render a
 // single severity-ranked list. `cost` is the rough USD waste attributed to
-// carrying the oversized payload — Signal B uses per-call `approxTokens` from
-// user-turn blocks (content-sidecar enrichment), while Signal A uses the
-// `bytes/4` heuristic for character-unit config values.
+// carrying the oversized payload — Signal B uses per-call cl100k
+// `approxTokens` from user-turn `tool_result` blocks (content-sidecar
+// enrichment from #2/#86), with a `bytes/4` fallback when an event has no
+// matching enriched block (e.g. ledgers written before the enrichment
+// landed). Signal A continues to use `bytes/4` for the character-unit
+// config values.
 
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -280,12 +283,17 @@ function buildLookup(userTurns: UserTurnRecord[], turns: TurnRecord[]): ToolUseL
   const approxTokensByUseId = new Map<string, number>();
   const modelByMessageId = new Map<string, string>();
 
-  // Build approxTokens lookup from user-turn blocks (content-sidecar enrichment)
+  // Build approxTokens lookup from user-turn blocks (content-sidecar
+  // enrichment). Skip blocks with `approxTokens <= 0`: a non-positive value
+  // means the block was either truly empty (skip) or the enrichment is
+  // malformed (let the per-event `contentLength` fallback take over). Either
+  // way, leaving the entry out of the map yields the right behavior.
   for (const userTurn of userTurns) {
     for (const block of userTurn.blocks) {
       if (block.kind !== 'tool_result' || !block.toolUseId) continue;
+      if (block.approxTokens <= 0) continue;
       const key = `${userTurn.source}|${userTurn.sessionId}|${block.toolUseId}`;
-      approxTokensByUseId.set(key, Math.max(0, block.approxTokens));
+      approxTokensByUseId.set(key, block.approxTokens);
     }
   }
 

@@ -600,20 +600,44 @@ describe('detectStaticConfigBloat — settings.json fixture', () => {
 });
 
 describe('detectObservedBloat — cross-harness fixtures (#168 acceptance)', () => {
-  it('flags Claude Bash oversized output from a real session fixture', async () => {
+  it('flags Claude Bash oversized output from a real session fixture (enriched path)', async () => {
     const pricing = await loadBuiltinPricing();
     const fixture = path.join(FIXTURES_ROOT, 'claude', 'oversized-bash-output.jsonl');
     const parsed = await parseClaudeSession(fixture);
-    // Old fixture doesn't have enriched user-turn blocks, so we pass empty userTurns
-    // and rely on the contentLength fallback. The unit tests above cover the
-    // enriched data path.
+    // Pass `parsed.userTurns` so the detector exercises the enriched
+    // `approxTokens` path used in production. The fixture's tool_result is
+    // 80,000 repeated 'x' chars, which cl100k tokenizes to ~10k tokens (vs
+    // 20k under the bytes/4 heuristic) — repeated single-char content is
+    // pathologically compressible by BPE. Use a lower threshold so the
+    // assertion still trips; the synthetic content is what makes the floor
+    // unrealistic, not the detector logic.
+    const out = detectObservedBloat({
+      toolResultEvents: parsed.toolResultEvents,
+      userTurns: parsed.userTurns,
+      turns: parsed.turns,
+      pricing,
+      threshold: 5_000,
+    });
+    assert.equal(out.length, 1, 'expected one bloat bucket');
+    assert.equal(out[0]!.source, 'claude-code');
+    assert.equal(out[0]!.toolName, 'Bash');
+    assert.ok(out[0]!.evidencedMaxOutput > 5_000);
+  });
+
+  it('flags Claude Bash oversized output via the contentLength fallback (legacy ledgers)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const fixture = path.join(FIXTURES_ROOT, 'claude', 'oversized-bash-output.jsonl');
+    const parsed = await parseClaudeSession(fixture);
+    // Simulates a ledger written before #2/#86 landed, where
+    // `tool_result_events` carry `contentLength` but no matching enriched
+    // user-turn record exists. The detector should fall back to bytes/4.
     const out = detectObservedBloat({
       toolResultEvents: parsed.toolResultEvents,
       userTurns: [],
       turns: parsed.turns,
       pricing,
     });
-    assert.equal(out.length, 1, 'expected one bloat bucket');
+    assert.equal(out.length, 1, 'expected one bloat bucket via fallback');
     assert.equal(out[0]!.source, 'claude-code');
     assert.equal(out[0]!.toolName, 'Bash');
     assert.ok(out[0]!.evidencedMaxOutput >= DEFAULT_BLOAT_TOKEN_THRESHOLD);
@@ -623,12 +647,15 @@ describe('detectObservedBloat — cross-harness fixtures (#168 acceptance)', () 
     const pricing = await loadBuiltinPricing();
     const fixture = path.join(FIXTURES_ROOT, 'codex', 'oversized-shell-output.jsonl');
     const parsed = await parseCodexSession(fixture);
-    // Old fixture doesn't have enriched user-turn blocks, so we pass empty userTurns
-    // and rely on the contentLength fallback. The unit tests above cover the
-    // enriched data path.
+    // The Codex reader doesn't emit `UserTurnRecord`s for this fixture's
+    // shape (rollout JSONL with `function_call_output` items lacks the
+    // boundary cues the user-turn synthesis needs), so `parsed.userTurns`
+    // is empty here and the detector falls through to the `contentLength`
+    // fallback. Passing `parsed.userTurns` rather than a hardcoded `[]`
+    // keeps the test honest if the reader gains user-turn coverage later.
     const out = detectObservedBloat({
       toolResultEvents: parsed.toolResultEvents,
-      userTurns: [],
+      userTurns: parsed.userTurns,
       turns: parsed.turns,
       pricing,
     });

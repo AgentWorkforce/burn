@@ -727,9 +727,13 @@ export async function runPatternsMode(
   let toolOutputBloats: ToolOutputBloat[] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
-  // Load user turns if the system-prompt detector is selected (needs first
-  // user message size to estimate the system prompt / skill catalog tax).
-  const needUserTurns = selected.has('opencode-system-prompt');
+  // Load user turns when any detector that consumes them is selected:
+  //   - opencode-system-prompt: needs first user message size to estimate the
+  //     system prompt / skill catalog tax.
+  //   - tool-output-bloat: joins per-call `approxTokens` from user-turn
+  //     `tool_result` blocks for cl100k-accurate sizing of oversized output.
+  const needUserTurns =
+    selected.has('opencode-system-prompt') || selected.has('tool-output-bloat');
   const userTurnsBySession = needUserTurns
     ? await loadUserTurnsBySession(perDetector)
     : undefined;
@@ -827,15 +831,16 @@ export async function runPatternsMode(
     // Signal B inputs: stream `tool_result_events` from the ledger. We pass
     // the full TurnRecord set so the detector can join tool_use_ids back to
     // tool names + price the carry cost at the correct model rate. We also
-    // pass userTurns for enriched approxTokens from the content-sidecar.
+    // pass userTurns so the detector can join per-call cl100k `approxTokens`
+    // from the content-sidecar enrichment instead of re-deriving from
+    // `contentLength`. The map is loaded once at the top of the function and
+    // reused across detectors — flatten its values here since the detector
+    // keys lookups by `(source|sessionId|toolUseId)` and doesn't need the
+    // per-session structure preserved.
     const toolResultEvents = await loadToolResultEventsForTurns(turns, deps.query);
-    const userTurnsBySession = await loadUserTurnsBySession(
-      new Map([['tool-output-bloat', turns]]),
-    );
-    const allUserTurns: UserTurnRecord[] = [];
-    for (const sessionTurns of userTurnsBySession.values()) {
-      allUserTurns.push(...sessionTurns);
-    }
+    const allUserTurns: UserTurnRecord[] = userTurnsBySession
+      ? [...userTurnsBySession.values()].flat()
+      : [];
     toolOutputBloats = detectToolOutputBloat({
       settings,
       toolResultEvents,
