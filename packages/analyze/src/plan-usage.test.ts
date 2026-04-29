@@ -238,8 +238,8 @@ describe('computePlanUsage', () => {
   });
 
   // Issue #108: fidelity-aware totals. The plan view continues to count every
-  // turn that lands in the cycle (no fidelity-based filter — `plans`, like
-  // `limits`, is permissive), but annotates the cycle as low-confidence when
+  // turn that lands in the cycle (no fidelity-based filter — budget plan
+  // accounting is permissive), but annotates the cycle as low-confidence when
   // any contributing turn lacks per-turn input/output token coverage.
   it('reports high-confidence fidelity when every cycle turn is full', () => {
     const turns: TurnRecord[] = [
