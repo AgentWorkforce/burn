@@ -44,7 +44,7 @@ export async function runWrapper(
     process.stdout.write(RUN_HELP);
     return (harnessName || args.flags['help'] === true) ? 0 : 2;
   }
-  const adapter = lookupHarness(harnessName);
+  const adapter = await lookupHarness(harnessName);
   if (!adapter) {
     process.stderr.write(
       `burn: unknown harness "${harnessName}". Known: ${listHarnessNames().join(', ')}\n`,
@@ -115,4 +115,3 @@ export async function runWithAdapter(
   );
   return code;
 }
-
