@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -12,25 +13,43 @@ import {
   ledgerContentIndexPath,
   ledgerIndexPath,
   ledgerPath,
+  loadConfig,
+  pruneContent,
   rebuildIndex,
   reclassifyLedger,
+  retentionMs,
 } from '@relayburn/ledger';
 
 import { reingestMissingContent } from '../ingest.js';
 import { formatInt } from '../format.js';
+import { walkJsonl, walkOpencodeSessions } from '../walk.js';
 import type { ParsedArgs } from '../args.js';
 import { formatArchiveStatusLines, runArchiveBuild, runArchiveVacuum } from './archive.js';
 
-const REBUILD_HELP = `burn rebuild - rebuild derived ledger artifacts
+const STATE_HELP = `burn state - inspect and maintain derived ledger state
 
 Usage:
-  burn rebuild index
-  burn rebuild classify [--force]
-  burn rebuild content
-  burn rebuild archive [--full|--vacuum] [--json]
-  burn rebuild archive vacuum [--json]
-  burn rebuild all [--force]
-  burn rebuild status [--json]
+  burn state [status] [--json]
+  burn state rebuild <target>
+  burn state prune [--days <n>] [--force]
+
+Subcommands:
+  status    print derived artifact status for index, content, classifier, archive
+  rebuild   rebuild index, classify, content, archive, or all derived artifacts
+  prune     prune expired content sidecars
+
+Run 'burn state rebuild help' for rebuild targets.
+`;
+
+const REBUILD_HELP = `burn state rebuild - rebuild derived ledger artifacts
+
+Usage:
+  burn state rebuild index
+  burn state rebuild classify [--force]
+  burn state rebuild content
+  burn state rebuild archive [--full|--vacuum] [--json]
+  burn state rebuild archive vacuum [--json]
+  burn state rebuild all [--force]
 
 Targets:
   index     rebuild the sidecar id and content-fingerprint indexes
@@ -39,8 +58,23 @@ Targets:
   archive   apply the ledger tail to archive.sqlite; --full rebuilds from zero;
             --vacuum reclaims unused archive pages
   all       run content, index, classify, then archive
-  status    print derived artifact status for index, content, classifier, archive
+`;
 
+const PRUNE_HELP = `burn state prune - prune expired content sidecars
+
+Usage:
+  burn state prune [--days <n>] [--force]
+
+Flags:
+  --days <n>   override retention (number of days, or 'forever' to disable)
+  --force      delete sidecars even when the source session file still exists.
+               Default behavior keeps recoverable sidecars in place because
+               'burn state rebuild content' can rederive them from the source.
+
+Examples:
+  burn state prune
+  burn state prune --days 30
+  burn state prune --force
 `;
 
 interface IndexFileStatus {
@@ -50,7 +84,7 @@ interface IndexFileStatus {
   entries: number;
 }
 
-interface RebuildStatus {
+interface StateStatus {
   index: {
     ids: IndexFileStatus;
     content: IndexFileStatus;
@@ -85,45 +119,66 @@ interface LedgerDerivedCounts {
   userTurns: number;
 }
 
-export async function runRebuild(args: ParsedArgs): Promise<number> {
+export async function runState(args: ParsedArgs): Promise<number> {
   if (args.flags['help'] === true) {
-    process.stdout.write(REBUILD_HELP);
+    process.stdout.write(STATE_HELP);
     return 0;
   }
 
-  const target = args.positional[0];
-  switch (target) {
+  const sub = args.positional[0];
+  switch (sub) {
     case undefined:
+    case 'status':
+      return runStatus(args);
     case 'help':
+      process.stdout.write(STATE_HELP);
+      return 0;
+    case 'rebuild':
+      return runStateRebuild(args);
+    case 'prune':
+      return runStatePrune(args);
+    default:
+      process.stderr.write(`burn state: unknown subcommand: ${sub}\n\n${STATE_HELP}`);
+      return 1;
+  }
+}
+
+async function runStateRebuild(args: ParsedArgs): Promise<number> {
+  const target = args.positional[1];
+  switch (target) {
+    case 'help':
+    case '--help':
+    case '-h':
       process.stdout.write(REBUILD_HELP);
       return 0;
+    case undefined:
+      process.stderr.write(`burn state rebuild: missing target\n\n${REBUILD_HELP}`);
+      return 2;
     case 'index':
       return runIndex();
     case 'classify':
       return runClassify(args);
     case 'content':
-      return runContent();
+      return runContentRebuild();
     case 'archive':
       return runArchiveTarget(args);
     case 'all':
       return runAll(args);
-    case 'status':
-      return runStatus(args);
     default:
-      process.stderr.write(`burn rebuild: unknown target: ${target}\n\n${REBUILD_HELP}`);
+      process.stderr.write(`burn state rebuild: unknown target: ${target}\n\n${REBUILD_HELP}`);
       return 1;
   }
 }
 
 async function runArchiveTarget(args: ParsedArgs): Promise<number> {
-  const action = args.positional[1];
+  const action = args.positional[2];
   const vacuum = args.flags['vacuum'] === true || action === 'vacuum';
   if (action !== undefined && action !== 'build' && action !== 'vacuum') {
-    process.stderr.write(`burn rebuild archive: unknown action: ${action}\n\n${REBUILD_HELP}`);
+    process.stderr.write(`burn state rebuild archive: unknown action: ${action}\n\n${REBUILD_HELP}`);
     return 1;
   }
   if (vacuum && args.flags['full'] === true) {
-    process.stderr.write(`burn rebuild archive: --full and --vacuum cannot be combined\n`);
+    process.stderr.write(`burn state rebuild archive: --full and --vacuum cannot be combined\n`);
     return 1;
   }
   if (vacuum) return runArchiveVacuum(args);
@@ -158,7 +213,7 @@ async function runClassify(args: ParsedArgs): Promise<number> {
   return 0;
 }
 
-async function runContent(): Promise<number> {
+async function runContentRebuild(): Promise<number> {
   const lines: string[] = [];
   await rebuildContent(lines);
   process.stdout.write(lines.join('\n') + '\n');
@@ -204,16 +259,16 @@ async function rebuildIndexTarget(lines: string[]): Promise<void> {
 }
 
 async function runStatus(args: ParsedArgs): Promise<number> {
-  const status = await collectRebuildStatus();
+  const status = await collectStateStatus();
   if (args.flags['json'] === true) {
     process.stdout.write(JSON.stringify(status, null, 2) + '\n');
     return 0;
   }
-  process.stdout.write(formatRebuildStatusLines(status).join('\n') + '\n');
+  process.stdout.write(formatStateStatusLines(status).join('\n') + '\n');
   return 0;
 }
 
-async function collectRebuildStatus(): Promise<RebuildStatus> {
+async function collectStateStatus(): Promise<StateStatus> {
   const [ids, content, contentSidecar, ledgerCounts, archive] = await Promise.all([
     indexFileStatus(ledgerIndexPath()),
     indexFileStatus(ledgerContentIndexPath()),
@@ -326,7 +381,7 @@ async function ledgerDerivedCounts(): Promise<LedgerDerivedCounts> {
   return counts;
 }
 
-function formatRebuildStatusLines(status: RebuildStatus): string[] {
+function formatStateStatusLines(status: StateStatus): string[] {
   const lines: string[] = [];
   lines.push('derived state:');
   lines.push('index:');
@@ -381,5 +436,180 @@ async function captureStdout(fn: () => Promise<number>): Promise<{ code: number;
     return { code, stdout };
   } finally {
     process.stdout.write = origStdout;
+  }
+}
+
+async function runStatePrune(args: ParsedArgs): Promise<number> {
+  const cfg = await loadConfig();
+  let retention: number | 'forever';
+  if (typeof args.flags['days'] === 'string') {
+    const parsed = parseRetention(args.flags['days']);
+    if (parsed === null) {
+      process.stderr.write(
+        `burn state prune: invalid --days value: ${JSON.stringify(args.flags['days'])} (expected a number or "forever")\n\n${PRUNE_HELP}`,
+      );
+      return 2;
+    }
+    retention = parsed;
+  } else {
+    retention = cfg.content.retentionDays;
+  }
+  const ms = retentionMs(retention);
+  if (ms === null) {
+    process.stdout.write(`content retention=forever - nothing to prune\n`);
+    return 0;
+  }
+  const force = args.flags['force'] === true || isForceEnv();
+  const opts: Parameters<typeof pruneContent>[0] = { olderThanMs: ms };
+  if (!force) {
+    const sources = await loadSourceSessionIds();
+    opts.isRecoverable = (sessionId) => sources.has(sessionId);
+  }
+  const result = await pruneContent(opts);
+  process.stdout.write(
+    `pruned ${formatInt(result.filesDeleted)} content file${result.filesDeleted === 1 ? '' : 's'} (${formatBytes(result.bytesFreed)})\n`,
+  );
+  if (!force && result.skippedRecoverable > 0) {
+    process.stdout.write(
+      `kept ${formatInt(result.skippedRecoverable)} recoverable sidecar${result.skippedRecoverable === 1 ? '' : 's'} whose source files still exist\n` +
+        `  (use 'burn state prune --force' to delete them anyway)\n`,
+    );
+  }
+  return 0;
+}
+
+function parseRetention(s: string): number | 'forever' | null {
+  const trimmed = s.trim().toLowerCase();
+  if (trimmed === '') return null;
+  if (trimmed === 'forever') return 'forever';
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  if (n < 0) return 'forever';
+  return n;
+}
+
+function isForceEnv(): boolean {
+  const raw = process.env['RELAYBURN_PRUNE_FORCE'];
+  if (typeof raw !== 'string') return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} bytes`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const fixed = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  return `${fixed} ${units[i]}`;
+}
+
+export async function opportunisticPrune(): Promise<void> {
+  try {
+    const cfg = await loadConfig();
+    if (cfg.content.store === 'off') return;
+    const ms = retentionMs(cfg.content.retentionDays);
+    if (ms === null) return;
+    // Opportunistic prune always applies the recoverable-source check.
+    // Reclaiming recoverable disk requires explicit `burn state prune --force`.
+    // The exception is RELAYBURN_PRUNE_FORCE=1 for unattended automation that
+    // genuinely wants the old behavior.
+    const opts: Parameters<typeof pruneContent>[0] = { olderThanMs: ms };
+    if (!isForceEnv()) {
+      const sources = await loadSourceSessionIds();
+      opts.isRecoverable = (sessionId) => sources.has(sessionId);
+    }
+    await pruneContent(opts);
+  } catch (err) {
+    // Best-effort - never fail a CLI operation because of prune, but surface
+    // the reason on stderr so persistent failures are diagnosable.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[burn] opportunistic content prune failed: ${msg}\n`);
+  }
+}
+
+// --- source index ----------------------------------------------------------
+//
+// Walk the same source roots that `ingest.ts` uses and build an in-memory
+// Set<sessionId>. Used to answer "is the upstream agent's session file still
+// on disk?" - if yes, the sidecar is recoverable via `burn state rebuild content`
+// and prune should skip it.
+//
+// Cost: one readdir pass per root; ~100ms even on large ledgers. Run
+// synchronously at prune time; callers cache the result for the duration of
+// a single prune call.
+
+const CLAUDE_PROJECTS = path.join(homedir(), '.claude', 'projects');
+const CODEX_SESSIONS = path.join(homedir(), '.codex', 'sessions');
+const OPENCODE_STORAGE = path.join(homedir(), '.local', 'share', 'opencode', 'storage');
+const OPENCODE_SESSION_ROOT = path.join(OPENCODE_STORAGE, 'session');
+
+// Codex filenames are `rollout-<timestamp>-<uuid>.jsonl` where the trailing
+// UUID is the session id used for the sidecar. We extract that suffix.
+const CODEX_UUID_SUFFIX =
+  /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+
+export async function loadSourceSessionIds(): Promise<Set<string>> {
+  const out = new Set<string>();
+  await Promise.all([
+    collectClaudeSessionIds(out),
+    collectCodexSessionIds(out),
+    collectOpencodeSessionIds(out),
+  ]);
+  return out;
+}
+
+async function collectClaudeSessionIds(out: Set<string>): Promise<void> {
+  let projects: string[];
+  try {
+    const entries = await readdir(CLAUDE_PROJECTS, { withFileTypes: true });
+    projects = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => path.join(CLAUDE_PROJECTS, e.name));
+  } catch {
+    return;
+  }
+  for (const dir of projects) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      if (!e.name.endsWith('.jsonl')) continue;
+      out.add(e.name.slice(0, -'.jsonl'.length));
+    }
+  }
+}
+
+async function collectCodexSessionIds(out: Set<string>): Promise<void> {
+  let files: string[];
+  try {
+    files = await walkJsonl(CODEX_SESSIONS);
+  } catch {
+    return;
+  }
+  for (const file of files) {
+    const base = path.basename(file, '.jsonl');
+    const m = base.match(CODEX_UUID_SUFFIX);
+    if (m) out.add(m[1]!);
+  }
+}
+
+async function collectOpencodeSessionIds(out: Set<string>): Promise<void> {
+  let files: string[];
+  try {
+    files = await walkOpencodeSessions(OPENCODE_SESSION_ROOT);
+  } catch {
+    return;
+  }
+  for (const file of files) {
+    out.add(path.basename(file, '.json'));
   }
 }

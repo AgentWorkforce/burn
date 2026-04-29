@@ -425,10 +425,10 @@ export function formatHotspotsReport(input: FormatHotspotsReportInput): string {
       '  tool-result data, so file / bash / subagent costs for those sessions are approximate',
     );
     out.push(
-      "  (even-split over turn N+1 input/cacheCreate). Run 'burn rebuild content'",
+      "  (even-split over turn N+1 input/cacheCreate). Run 'burn state rebuild content'",
     );
     out.push(
-      "  to backfill source-derived sizes, or see 'burn content' for",
+      "  to backfill source-derived sizes, or see 'burn state' for",
     );
     out.push('  why capture is disabled.');
     out.push('');
@@ -447,7 +447,7 @@ export function formatHotspotsReport(input: FormatHotspotsReportInput): string {
       evenSplitSessions.length === result.sessionTotals.length
     ) {
       out.push(
-        'note: no user-turn or content sidecar sizes found — using even-split (initial cost only). Run burn rebuild content or enable content.store=full to improve attribution.',
+        'note: no user-turn or content sidecar sizes found — using even-split (initial cost only). Run burn state rebuild content or enable content.store=full to improve attribution.',
       );
     } else if (evenSplitSessions.length > 0) {
       out.push(

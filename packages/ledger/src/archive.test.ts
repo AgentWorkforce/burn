@@ -715,7 +715,7 @@ describe('archive', () => {
     ]);
     await buildArchive();
 
-    // Simulate `burn rebuild --reclassify` rewriting the ledger to a smaller
+    // Simulate `burn state rebuild classify --force` rewriting the ledger to a smaller
     // size: nuke the file and the dedup index, then write a single fresh
     // turn. Build should detect the cursor is past EOF and rebuild from
     // byte zero.

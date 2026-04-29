@@ -185,7 +185,7 @@ A **content sidecar** (enabled by default) stores the full conversation separate
 
 Content is stored because it meaningfully strengthens several attribution and diagnostic paths — tool-call sizing becomes exact (no delta estimation), outcome inference gets a real signal, CLAUDE.md adherence checking becomes possible, and waste patterns can surface the specific error text that caused a retry loop rather than just a count.
 
-Retention defaults to 90 days for the sidecar, forever for the main ledger. Configure via `RELAYBURN_CONTENT_TTL_DAYS`. Prune is **source-aware**: a sidecar whose upstream session file (`~/.claude/projects/…`, `~/.codex/sessions/…`, `~/.local/share/opencode/storage/…`) still exists is left in place, because `burn rebuild content` can rederive it. Run `burn content prune --force` (or set `RELAYBURN_PRUNE_FORCE=1`) to delete recoverable sidecars anyway.
+Retention defaults to 90 days for the sidecar, forever for the main ledger. Configure via `RELAYBURN_CONTENT_TTL_DAYS`. Prune is **source-aware**: a sidecar whose upstream session file (`~/.claude/projects/…`, `~/.codex/sessions/…`, `~/.local/share/opencode/storage/…`) still exists is left in place, because `burn state rebuild content` can rederive it. Run `burn state prune --force` (or set `RELAYBURN_PRUNE_FORCE=1`) to delete recoverable sidecars anyway.
 
 Three content modes:
 
@@ -268,7 +268,9 @@ burn budget [--watch [--interval 5s]] [--json] [--no-api] [--no-forecast]
 burn budget plans [add|remove|set-reset-day] ...
 burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
 burn ingest [--watch|--hook <name>] [--interval <ms>] [--quiet]
-burn rebuild index | classify | content | archive [--full|--vacuum] | all | status [--json]
+burn state [status] [--json]
+burn state rebuild index | classify | content | archive [--full|--vacuum] | all
+burn state prune [--days <n>] [--force]
 ```
 
 Provider filters are applied at query time; raw ledger model strings are not rewritten. `burn summary --by-provider --provider synthetic` groups Synthetic-routed turns under provider `synthetic` while pricing against the normalized model id. Recognized Synthetic model patterns are `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
@@ -308,22 +310,25 @@ By default, `burn compare` only aggregates turns with `usage-only` fidelity or b
 
 Output formats: TTY table (default), `--json` for scripts, `--csv` for spreadsheets. `--json` and `--csv` are mutually exclusive. The `--json` payload includes a `fidelity` block (`{ minimum, excluded, summary }`) computed against the unfiltered slice so consumers can render their own coverage UI.
 
-### `burn rebuild` — refresh derived state
+### `burn state` — inspect and refresh derived state
 
-Burn stores a canonical append-only ledger plus rebuildable derived artifacts: the dedup indexes, content sidecars, activity labels, and `archive.sqlite` read model. Use `burn rebuild <target>` to refresh one artifact, or `burn rebuild all` to run content -> index -> classify -> archive.
+Burn stores a canonical append-only ledger plus rebuildable derived artifacts: the dedup indexes, content sidecars, activity labels, and `archive.sqlite` read model. Use `burn state` or `burn state status` to inspect all derived artifacts, `burn state rebuild <target>` to refresh one artifact, or `burn state rebuild all` to run content -> index -> classify -> archive.
 
 ```
-burn rebuild status                 # index/content/classifier/archive status
-burn rebuild content                # backfill missing content sidecars and user turns
-burn rebuild index                  # rebuild ledger.idx and ledger.content.idx
-burn rebuild classify               # fill in missing activity labels
-burn rebuild classify --force       # overwrite every turn's activity
-burn rebuild archive                # apply the ledger tail to archive.sqlite
-burn rebuild archive --full         # drop and rebuild archive.sqlite from zero
-burn rebuild all                    # content -> index -> classify -> archive
+burn state                          # index/content/classifier/archive status
+burn state status --json            # machine-readable derived state status
+burn state rebuild content          # backfill missing content sidecars and user turns
+burn state rebuild index            # rebuild ledger.idx and ledger.content.idx
+burn state rebuild classify         # fill in missing activity labels
+burn state rebuild classify --force # overwrite every turn's activity
+burn state rebuild archive          # apply the ledger tail to archive.sqlite
+burn state rebuild archive --full   # drop and rebuild archive.sqlite from zero
+burn state rebuild archive vacuum   # reclaim unused archive.sqlite pages
+burn state rebuild all              # content -> index -> classify -> archive
+burn state prune --days 30          # prune expired content sidecars
 ```
 
-Ingested turns are classified at write time. If you upgrade burn or a classifier rule changes, already-ingested turns keep the label they had when they were written. `burn rebuild classify` re-runs the classifier across the whole ledger using whatever signals are still available (tool calls from the ledger, user prompts and errored tool_results from the content sidecar when present).
+Ingested turns are classified at write time. If you upgrade burn or a classifier rule changes, already-ingested turns keep the label they had when they were written. `burn state rebuild classify` re-runs the classifier across the whole ledger using whatever signals are still available (tool calls from the ledger, user prompts and errored tool_results from the content sidecar when present).
 
 Classification rebuilds are non-destructive by default: turns that already have an activity stay as-is. `--force` is useful after a rule change when you want the whole ledger to reflect the new rules. The ledger is rewritten atomically under the same lock that `ingest` uses.
 

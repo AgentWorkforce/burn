@@ -36,7 +36,7 @@ export async function runArchiveVacuum(args: ParsedArgs): Promise<number> {
   }
   if (!result.existed) {
     process.stdout.write(
-      `archive: no archive at ${result.archivePath} - run \`burn rebuild archive\` first\n`,
+      `archive: no archive at ${result.archivePath} - run \`burn state rebuild archive\` first\n`,
     );
     return 0;
   }
@@ -51,7 +51,7 @@ export function formatArchiveStatusLines(status: ArchiveStatus): string[] {
   const lines: string[] = [];
   lines.push(`archive: ${status.archivePath}`);
   if (!status.exists) {
-    lines.push('  status: not built yet - run `burn rebuild archive`');
+    lines.push('  status: not built yet - run `burn state rebuild archive`');
     return lines;
   }
   lines.push(`  schema version: ${status.archiveVersion}`);
