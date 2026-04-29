@@ -1,14 +1,17 @@
+import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
+import { createInterface } from 'node:readline';
 
 import {
   contentDir,
   getArchiveStatus,
+  isTurnLine,
+  isUserTurnLine,
   isValidSessionId,
   ledgerContentIndexPath,
   ledgerIndexPath,
-  queryAll,
-  queryUserTurns,
+  ledgerPath,
   rebuildIndex,
   reclassifyLedger,
 } from '@relayburn/ledger';
@@ -16,7 +19,7 @@ import {
 import { reingestMissingContent } from '../ingest.js';
 import { formatInt } from '../format.js';
 import type { ParsedArgs } from '../args.js';
-import { formatArchiveStatusLines, runArchiveBuild } from './archive.js';
+import { formatArchiveStatusLines, runArchiveBuild, runArchiveVacuum } from './archive.js';
 
 const REBUILD_HELP = `burn rebuild - rebuild derived ledger artifacts
 
@@ -24,7 +27,8 @@ Usage:
   burn rebuild index
   burn rebuild classify [--force]
   burn rebuild content
-  burn rebuild archive [--full] [--json]
+  burn rebuild archive [--full|--vacuum] [--json]
+  burn rebuild archive vacuum [--json]
   burn rebuild all [--force]
   burn rebuild status [--json]
 
@@ -32,7 +36,8 @@ Targets:
   index     rebuild the sidecar id and content-fingerprint indexes
   classify  re-run the activity classifier on ledger turns
   content   re-parse source session files to populate missing content
-  archive   apply the ledger tail to archive.sqlite; --full rebuilds from zero
+  archive   apply the ledger tail to archive.sqlite; --full rebuilds from zero;
+            --vacuum reclaims unused archive pages
   all       run content, index, classify, then archive
   status    print derived artifact status for index, content, classifier, archive
 
@@ -66,6 +71,20 @@ interface RebuildStatus {
   archive: Awaited<ReturnType<typeof getArchiveStatus>>;
 }
 
+interface ContentSidecarStatus {
+  path: string;
+  exists: boolean;
+  files: number;
+  sessions: number;
+  bytes: number;
+}
+
+interface LedgerDerivedCounts {
+  turns: number;
+  classified: number;
+  userTurns: number;
+}
+
 export async function runRebuild(args: ParsedArgs): Promise<number> {
   if (args.flags['help'] === true) {
     process.stdout.write(REBUILD_HELP);
@@ -85,7 +104,7 @@ export async function runRebuild(args: ParsedArgs): Promise<number> {
     case 'content':
       return runContent();
     case 'archive':
-      return runArchiveBuild(args, { full: args.flags['full'] === true });
+      return runArchiveTarget(args);
     case 'all':
       return runAll(args);
     case 'status':
@@ -94,6 +113,21 @@ export async function runRebuild(args: ParsedArgs): Promise<number> {
       process.stderr.write(`burn rebuild: unknown target: ${target}\n\n${REBUILD_HELP}`);
       return 1;
   }
+}
+
+async function runArchiveTarget(args: ParsedArgs): Promise<number> {
+  const action = args.positional[1];
+  const vacuum = args.flags['vacuum'] === true || action === 'vacuum';
+  if (action !== undefined && action !== 'build' && action !== 'vacuum') {
+    process.stderr.write(`burn rebuild archive: unknown action: ${action}\n\n${REBUILD_HELP}`);
+    return 1;
+  }
+  if (vacuum && args.flags['full'] === true) {
+    process.stderr.write(`burn rebuild archive: --full and --vacuum cannot be combined\n`);
+    return 1;
+  }
+  if (vacuum) return runArchiveVacuum(args);
+  return runArchiveBuild(args, { full: args.flags['full'] === true });
 }
 
 async function runAll(args: ParsedArgs): Promise<number> {
@@ -180,17 +214,21 @@ async function runStatus(args: ParsedArgs): Promise<number> {
 }
 
 async function collectRebuildStatus(): Promise<RebuildStatus> {
-  const [ids, content, contentSidecar, classifier, archive] = await Promise.all([
+  const [ids, content, contentSidecar, ledgerCounts, archive] = await Promise.all([
     indexFileStatus(ledgerIndexPath()),
     indexFileStatus(ledgerContentIndexPath()),
-    contentStatus(),
-    classifierStatus(),
+    contentSidecarStatus(),
+    ledgerDerivedCounts(),
     getArchiveStatus(),
   ]);
   return {
     index: { ids, content },
-    content: contentSidecar,
-    classifier,
+    content: { ...contentSidecar, userTurns: ledgerCounts.userTurns },
+    classifier: {
+      turns: ledgerCounts.turns,
+      classified: ledgerCounts.classified,
+      missing: ledgerCounts.turns - ledgerCounts.classified,
+    },
     archive,
   };
 }
@@ -210,21 +248,19 @@ async function indexFileStatus(filePath: string): Promise<IndexFileStatus> {
   }
 }
 
-async function contentStatus(): Promise<RebuildStatus['content']> {
+async function contentSidecarStatus(): Promise<ContentSidecarStatus> {
   const dir = contentDir();
   let entries: string[];
   try {
     entries = await readdir(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    const userTurns = await queryUserTurns();
     return {
       path: dir,
       exists: false,
       files: 0,
       sessions: 0,
       bytes: 0,
-      userTurns: userTurns.length,
     };
   }
 
@@ -246,25 +282,48 @@ async function contentStatus(): Promise<RebuildStatus['content']> {
       // Raced with prune; ignore the vanished file.
     }
   }
-  const userTurns = await queryUserTurns();
   return {
     path: dir,
     exists: true,
     files,
     sessions,
     bytes,
-    userTurns: userTurns.length,
   };
 }
 
-async function classifierStatus(): Promise<RebuildStatus['classifier']> {
-  const turns = await queryAll();
-  const classified = turns.filter((t) => typeof t.activity === 'string').length;
-  return {
-    turns: turns.length,
-    classified,
-    missing: turns.length - classified,
-  };
+async function ledgerDerivedCounts(): Promise<LedgerDerivedCounts> {
+  const filePath = ledgerPath();
+  const exists = await stat(filePath)
+    .then((s) => s.isFile())
+    .catch(() => false);
+  if (!exists) return { turns: 0, classified: 0, userTurns: 0 };
+
+  const counts: LedgerDerivedCounts = { turns: 0, classified: 0, userTurns: 0 };
+  const rl = createInterface({
+    input: createReadStream(filePath, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      if (isTurnLine(parsed)) {
+        counts.turns++;
+        if (typeof parsed.record.activity === 'string') counts.classified++;
+      } else if (isUserTurnLine(parsed)) {
+        counts.userTurns++;
+      }
+    }
+  } finally {
+    rl.close();
+  }
+  return counts;
 }
 
 function formatRebuildStatusLines(status: RebuildStatus): string[] {

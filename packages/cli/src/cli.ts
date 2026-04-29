@@ -35,7 +35,7 @@ Usage:
   burn ingest        --runtime claude [--quiet]     (reads hook payload on stdin)
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
   burn content prune [--days <n>] [--force]
-  burn rebuild       index | classify | content | archive [--full] | all | status [--json]
+  burn rebuild       index | classify | content | archive [--full|--vacuum] | all | status [--json]
 
 Examples:
   burn summary --since 24h
@@ -67,6 +67,7 @@ Examples:
   burn rebuild status
   burn rebuild archive
   burn rebuild archive --full
+  burn rebuild archive vacuum
   burn rebuild classify
 
 Provider filters are query-time only. Synthetic-routed models are recognized

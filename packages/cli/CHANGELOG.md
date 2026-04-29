@@ -16,11 +16,13 @@ All notable changes to `@relayburn/cli`.
 
 ### Fixed
 
+- `burn rebuild archive vacuum` now preserves archive space reclamation after the top-level archive command removal.
+- `burn rebuild status` now streams ledger counts instead of materializing all turns.
 - `burn watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
 
 ### Removed
 
-- Removed the top-level `burn archive` command. Use `burn rebuild archive`, `burn rebuild archive --full`, or `burn rebuild status`.
+- Removed the top-level `burn archive` command. Use `burn rebuild archive`, `burn rebuild archive --full`, `burn rebuild archive vacuum`, or `burn rebuild status`.
 
 ## [0.45.0] - 2026-04-29
 
