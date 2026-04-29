@@ -7,6 +7,7 @@ All notable changes to `@relayburn/cli`.
 ### Changed
 
 - `burn waste --patterns tool-output-bloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment instead of bytes/4 estimates. Findings on highly compressible payloads (repetitive logs, base64 dumps) may shift below the 15k default threshold.
+- `burn summary --subagent-tree` now reads persisted session relationships, including child-session subagents and fork/continuation annotations.
 
 ## [0.45.0] - 2026-04-29
 

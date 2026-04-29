@@ -7,6 +7,7 @@ All notable changes to `@relayburn/analyze`.
 ### Changed
 
 - `detectToolOutputBloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment, with a bytes/4 fallback for legacy ledgers. Highly compressible payloads (repetitive logs, base64 dumps) score lower in tokens and may slip below the 15k default threshold.
+- `buildSubagentTree()` now consumes `SessionRelationshipRecord` graphs when available, with legacy `TurnRecord.subagent` fallback and per-node `relationshipType`.
 
 ### Fixed
 
