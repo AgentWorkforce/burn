@@ -8,7 +8,7 @@ import type { TurnRecord } from '@relayburn/reader';
 
 import {
   attributeClaudeMd,
-  buildAdviseRecommendations,
+  buildTrimRecommendations,
   findClaudeMdFiles,
   loadClaudeMdFile,
   parseClaudeMd,
@@ -311,7 +311,7 @@ describe('findClaudeMdFiles', () => {
   });
 });
 
-describe('buildAdviseRecommendations + renderUnifiedDiffForRecommendation', () => {
+describe('buildTrimRecommendations + renderUnifiedDiffForRecommendation', () => {
   it('emits a TRIM diff for the largest section that hand-applies cleanly', async () => {
     const pricing = await loadBuiltinPricing();
     const text = [
@@ -326,7 +326,7 @@ describe('buildAdviseRecommendations + renderUnifiedDiffForRecommendation', () =
       turn({ sessionId, messageId: 'm0', turnIndex: 0, usage: { input: 50, output: 10, reasoning: 0, cacheRead: parsed.tokens + 1000, cacheCreate5m: 0, cacheCreate1h: 0 } }),
     ];
     const attribution = attributeClaudeMd({ files: [parsed], turns, pricing });
-    const recs = buildAdviseRecommendations(attribution, 1);
+    const recs = buildTrimRecommendations(attribution, 1);
     assert.equal(recs.length, 1);
     assert.equal(recs[0]!.section.heading, '## Big');
     const diff = renderUnifiedDiffForRecommendation('/p/CLAUDE.md', text, recs[0]!);
@@ -344,7 +344,7 @@ describe('buildAdviseRecommendations + renderUnifiedDiffForRecommendation', () =
       turn({ sessionId: 's', messageId: 'm', turnIndex: 0, usage: { input: 10, output: 10, reasoning: 0, cacheRead: parsed.tokens + 100, cacheCreate5m: 0, cacheCreate1h: 0 } }),
     ];
     const attribution = attributeClaudeMd({ files: [parsed], turns, pricing });
-    const recs = buildAdviseRecommendations(attribution, 1);
+    const recs = buildTrimRecommendations(attribution, 1);
     const diff = renderUnifiedDiffForRecommendation(
       '/home/u/repo/CLAUDE.md',
       text,

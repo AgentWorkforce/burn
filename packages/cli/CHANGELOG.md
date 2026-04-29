@@ -6,17 +6,21 @@ All notable changes to `@relayburn/cli`.
 
 ### Added
 
-- `burn watch --opencode-stream` now writes direct stream-derived OpenCode records for sessions observed from creation, including completed tool-call events and stream cursor high-watermarks.
+- `burn ingest --watch --opencode-stream` now writes direct stream-derived OpenCode records for sessions observed from creation, including completed tool-call events and stream cursor high-watermarks.
 
 ### Changed
 
-- `burn state` now owns derived-state status, rebuild targets, and content pruning in one command family.
-- `burn waste --patterns tool-output-bloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment instead of bytes/4 estimates. Findings on highly compressible payloads (repetitive logs, base64 dumps) may shift below the 15k default threshold.
+- `burn ingest` now owns one-shot, `--watch`, and `--hook claude` modes, replacing the separate `burn watch` command and old `--runtime claude` hook flag.
+- `burn hotspots` replaces `burn waste` and `burn diagnose`; bare `burn hotspots --session` keeps the former aggregate diagnostics, and `burn hotspots --session <id>` keeps the former per-session JSON shape. `burn overhead` and `burn overhead trim` replace `burn context` and `burn context advise`.
+- `burn state` now owns derived-state status, rebuild targets, archive vacuum, and content pruning in one command family.
+- `burn hotspots --patterns tool-output-bloat` now sizes oversized tool output via cl100k token counts from user-turn enrichment instead of bytes/4 estimates. Findings on highly compressible payloads (repetitive logs, base64 dumps) may shift below the 15k default threshold.
 - `burn summary --subagent-tree` now reads persisted session relationships, including child-session subagents and fork/continuation annotations.
 
 ### Fixed
 
-- `burn watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
+- `burn state rebuild archive vacuum` now preserves archive space reclamation after the top-level archive command removal.
+- `burn state` status now streams ledger counts instead of materializing all turns.
+- `burn ingest --watch --opencode-stream` now preserves stream cursor progress when polling fallback saves file-ingest cursors concurrently.
 
 ### Removed
 

@@ -1,7 +1,7 @@
 import type { Enrichment } from '@relayburn/ledger';
 
 import type { IngestReport } from '../ingest.js';
-import type { WatchController } from '../commands/watch.js';
+import type { WatchController } from '../watch-loop.js';
 
 export interface HarnessRunContext {
   cwd: string;

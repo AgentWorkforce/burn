@@ -2,6 +2,7 @@ import {
   buildArchive,
   getArchiveStatus,
   rebuildArchive,
+  vacuumArchive,
   type ArchiveStatus,
   type BuildResult,
 } from '@relayburn/ledger';
@@ -24,6 +25,25 @@ export async function runArchiveStatus(args: ParsedArgs): Promise<number> {
     return 0;
   }
   process.stdout.write(formatArchiveStatusLines(status).join('\n') + '\n');
+  return 0;
+}
+
+export async function runArchiveVacuum(args: ParsedArgs): Promise<number> {
+  const result = await vacuumArchive();
+  if (args.flags['json'] === true) {
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return 0;
+  }
+  if (!result.existed) {
+    process.stdout.write(
+      `archive: no archive at ${result.archivePath} - run \`burn state rebuild archive\` first\n`,
+    );
+    return 0;
+  }
+  process.stdout.write(
+    `archive: vacuumed ${formatBytes(result.beforeBytes)} -> ${formatBytes(result.afterBytes)}` +
+      ` (reclaimed ${formatBytes(result.reclaimedBytes)})\n`,
+  );
   return 0;
 }
 
@@ -75,4 +95,17 @@ function printArchiveBuildResult(
   lines.push(`  ${formatInt(result.scannedBytes)} bytes scanned from ledger tail`);
   process.stdout.write(lines.join('\n') + '\n');
   return 0;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const fixed = v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+  return `${fixed} ${units[i]}`;
 }

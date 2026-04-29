@@ -52,7 +52,7 @@ describe('findings — retry loop adapter', () => {
     assert.equal(f.estimatedSavings.usdPerSession, 0.6);
     assert.equal(f.actions.length, 1);
     assert.equal(f.actions[0]!.type, 'command');
-    assert.match((f.actions[0] as { text: string }).text, /burn diagnose/);
+    assert.match((f.actions[0] as { text: string }).text, /burn hotspots --session/);
   });
 
   it('downgrades severity below thresholds', () => {

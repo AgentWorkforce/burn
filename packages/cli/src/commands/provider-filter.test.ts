@@ -8,7 +8,7 @@ import { appendTurns, queryAll } from '@relayburn/ledger';
 import type { TurnRecord } from '@relayburn/reader';
 
 import { runSummary } from './summary.js';
-import { runWaste } from './waste.js';
+import { runHotspots } from './hotspots.js';
 import type { ParsedArgs } from '../args.js';
 
 async function captureStdio<T>(
@@ -135,30 +135,30 @@ describe('provider filters', () => {
     assert.doesNotMatch(stdout, /Bash/);
   });
 
-  it('applies --provider synthetic to waste', async () => {
+  it('applies --provider synthetic to hotspots', async () => {
     await appendTurns([
       turn({
-        sessionId: 's-synth-waste',
-        messageId: 'm-synth-waste',
+        sessionId: 's-synth-hotspots',
+        messageId: 'm-synth-hotspots',
         model: 'hf:deepseek-ai/deepseek-r1',
-        toolCalls: [{ id: 'tc-synth-waste', name: 'Bash', target: 'pnpm test', argsHash: 'aaa' }],
+        toolCalls: [{ id: 'tc-synth-hotspots', name: 'Bash', target: 'pnpm test', argsHash: 'aaa' }],
       }),
       turn({
-        sessionId: 's-anthropic-waste',
-        messageId: 'm-anthropic-waste',
+        sessionId: 's-anthropic-hotspots',
+        messageId: 'm-anthropic-hotspots',
         ts: '2026-04-20T00:00:02.000Z',
-        toolCalls: [{ id: 'tc-anthropic-waste', name: 'Read', target: 'anthropic.ts', argsHash: 'bbb' }],
+        toolCalls: [{ id: 'tc-anthropic-hotspots', name: 'Read', target: 'anthropic.ts', argsHash: 'bbb' }],
       }),
     ]);
 
     const { result, stdout } = await captureStdio(() =>
-      runWaste(args({ provider: 'synthetic', json: true })),
+      runHotspots(args({ provider: 'synthetic', json: true })),
     );
     assert.equal(result, 0);
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.turnsAnalyzed, 1);
     assert.equal(parsed.sessions.length, 1);
-    assert.equal(parsed.sessions[0].sessionId, 's-synth-waste');
+    assert.equal(parsed.sessions[0].sessionId, 's-synth-hotspots');
     assert.ok(parsed.grandTotal > 0);
   });
 });

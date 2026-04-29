@@ -17,7 +17,7 @@ import { contentDir, contentFilePath, isValidSessionId } from './paths.js';
 export interface PruneOptions {
   olderThanMs: number;
   // When provided, prune skips sessions for which the callback returns true —
-  // the source session file still exists upstream and `burn rebuild --content`
+  // the source session file still exists upstream and `burn state rebuild content`
   // can rederive the sidecar at any time, so deleting it would be silently
   // lossy. The ledger package stays decoupled from adapter-specific paths;
   // the caller (CLI) builds the source index and supplies the predicate.
@@ -160,7 +160,7 @@ export async function pruneContent(options: PruneOptions): Promise<PruneResult> 
       // directory reliably.
       if (st.mtimeMs > cutoff) return null;
       // Source-aware protection: if the upstream agent's session file still
-      // exists, the sidecar is recoverable via `burn rebuild --content`, so
+      // exists, the sidecar is recoverable via `burn state rebuild content`, so
       // deleting it on retention alone is silently lossy. Callers opt in by
       // supplying `isRecoverable`; the ledger package itself never reaches
       // out to adapter-specific paths.

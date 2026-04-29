@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,13 +33,14 @@ describe('burn CLI state dispatch', () => {
     await rm(tmp, { recursive: true, force: true });
   });
 
-  function runCli(args: string[]): CliResult {
+  function runCli(args: string[], env: Record<string, string> = {}): CliResult {
     const result = spawnSync(process.execPath, [cliPath, ...args], {
       encoding: 'utf8',
       env: {
         ...process.env,
         RELAYBURN_HOME: tmp,
         RELAYBURN_CONTENT_STORE: 'off',
+        ...env,
       },
     });
     return {
@@ -73,6 +74,24 @@ describe('burn CLI state dispatch', () => {
     const out = runCli(['state', 'prune', '--days', 'forever']);
     assert.equal(out.status, 0);
     assert.match(out.stdout, /retention=forever/);
+  });
+
+  it('burn state prune skips opportunistic pruning even when flags precede the subcommand', async () => {
+    const sessionId = '123e4567-e89b-12d3-a456-426614174000';
+    const contentPath = path.join(tmp, 'content', `${sessionId}.jsonl`);
+    await mkdir(path.dirname(contentPath), { recursive: true });
+    await writeFile(contentPath, '{}\n', 'utf8');
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await utimes(contentPath, longAgo, longAgo);
+
+    const out = runCli(['state', '--days', 'forever', 'prune'], {
+      RELAYBURN_CONTENT_STORE: 'full',
+      RELAYBURN_CONTENT_TTL_DAYS: '90',
+    });
+
+    assert.equal(out.status, 0);
+    assert.match(out.stdout, /retention=forever/);
+    await access(contentPath);
   });
 
   it('burn state rejects unknown subcommands', () => {

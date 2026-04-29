@@ -85,10 +85,11 @@ Codex and OpenCode do not expose Claude-style hooks or a pre-spawn session ID. T
 For passive ingest without a wrapper, run:
 
 ```
-burn watch [--interval <ms>] [--opencode-stream] [--opencode-url <url>]
+burn ingest
+burn ingest --watch [--interval <ms>] [--opencode-stream] [--opencode-url <url>]
 ```
 
-`burn watch` scans Claude, Codex, and OpenCode stores in the foreground and uses the same cursor + dedup path as the reporting commands. `--opencode-stream` also subscribes to OpenCode's local SSE endpoint (`http://127.0.0.1:4096/event` by default, or `OPENCODE_SERVER_URL`) and ingests sessions observed from creation directly from the stream at completed tool-call grain; polling remains enabled as the fallback for already-running sessions, missed events, and drift checks. If the server uses Basic auth, `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` are forwarded. `burn watch --daemon` is reserved but not implemented yet.
+`burn ingest` scans Claude, Codex, and OpenCode stores once and uses the same cursor + dedup path as the reporting commands. `burn ingest --watch` keeps that scan loop running in the foreground. `--opencode-stream` also subscribes to OpenCode's local SSE endpoint (`http://127.0.0.1:4096/event` by default, or `OPENCODE_SERVER_URL`) and ingests sessions observed from creation directly from the stream at completed tool-call grain; polling remains enabled as the fallback for already-running sessions, missed events, and drift checks. If the server uses Basic auth, `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` are forwarded.
 
 ### Spawner env-var contract (workflow / agent attribution)
 
@@ -135,7 +136,7 @@ spawn('claude', [
 ]);
 ```
 
-`buildClaudeHookSettings({ burnBin? })` returns a fresh UUID and a JSON string wiring every Claude Code hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) to `burn ingest --runtime claude --quiet`. The command is safe to re-fire on every hook — the ledger's cursor and dedup index keep ingestion idempotent, so the hook path and the JSONL-reader path are reconcilable against the same session. Tool-call failures ride in the normal `PostToolUse` payload (surfaced as `ToolCall.isError` on the resulting `TurnRecord`), not a distinct `PostToolUseFailure` event.
+`buildClaudeHookSettings({ burnBin? })` returns a fresh UUID and a JSON string wiring every Claude Code hook event (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `SessionEnd`) to `burn ingest --hook claude --quiet`. The command is safe to re-fire on every hook — the ledger's cursor and dedup index keep ingestion idempotent, so the hook path and the JSONL-reader path are reconcilable against the same session. Tool-call failures ride in the normal `PostToolUse` payload (surfaced as `ToolCall.isError` on the resulting `TurnRecord`), not a distinct `PostToolUseFailure` event.
 
 ## Data model
 
@@ -260,16 +261,23 @@ You can override per-call via `costForUsage(usage, model, pricing, { reasoningMo
 ```
 burn summary [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>]
              [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>]
-burn waste [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--provider <p>]
+burn hotspots [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--session [id]] [--explain-drift]
+burn overhead [trim] [--project <path>] [--since 7d] [--kind <claude-md|agents-md>]
 burn compare <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--fidelity <class>] [--include-partial] [--json|--csv]
 burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
-burn watch   [--interval <ms>] [--once]
+burn ingest [--watch|--hook <name>] [--interval <ms>] [--quiet]
 burn state [status] [--json]
-burn state rebuild index | classify | content | archive [--full] | all
+burn state rebuild index | classify | content | archive [--full|--vacuum] | all
 burn state prune [--days <n>] [--force]
 ```
 
 Provider filters are applied at query time; raw ledger model strings are not rewritten. `burn summary --by-provider --provider synthetic` groups Synthetic-routed turns under provider `synthetic` while pricing against the normalized model id. Recognized Synthetic model patterns are `hf:*`, `accounts/fireworks/models/*`, and `synthetic/*`.
+
+### Renames from 0.45
+
+`burn hotspots` replaces `burn waste`; `burn hotspots --session` replaces aggregate `burn diagnose`, including `--explain-drift`, and `burn hotspots --session <id>` replaces `burn diagnose <id>`. `burn overhead` replaces `burn context`, and `burn overhead trim` replaces `burn context advise`.
+
+For `@relayburn/analyze`, import `attributeHotspots`, `HotspotsResult`, `SessionTotals`, and `HotspotsOptions` from `hotspots`; import `attributeOverhead`, `findOverheadFiles`, `loadOverheadFile`, `OverheadAttribution`, and `buildTrimRecommendations` for the overhead pipeline.
 
 ### `burn compare` — model comparison by observed activity
 
@@ -311,6 +319,7 @@ burn state rebuild classify         # fill in missing activity labels
 burn state rebuild classify --force # overwrite every turn's activity
 burn state rebuild archive          # apply the ledger tail to archive.sqlite
 burn state rebuild archive --full   # drop and rebuild archive.sqlite from zero
+burn state rebuild archive vacuum   # reclaim unused archive.sqlite pages
 burn state rebuild all              # content -> index -> classify -> archive
 burn state prune --days 30          # prune expired content sidecars
 ```
@@ -346,4 +355,4 @@ User overrides go at `$RELAYBURN_HOME/models.dev.json` (or `~/.relayburn/models.
 
 ## Status
 
-v0: Claude Code reader shipped. OpenCode reader in progress. Codex reader scaffolded. Per-tool-call attribution (`burn waste`), CLAUDE.md hot-path analysis, quota-window tracking (`burn limits`), waste-pattern detection, and subagent-tree queries are scoped and tracked as open issues.
+v0: Claude Code reader shipped. OpenCode reader in progress. Codex reader scaffolded. Per-tool-call attribution (`burn hotspots`), CLAUDE.md hot-path analysis, quota-window tracking (`burn limits`), waste-pattern detection, and subagent-tree queries are scoped and tracked as open issues.

@@ -1,10 +1,11 @@
 export { runSummary } from './commands/summary.js';
-export { runWaste } from './commands/waste.js';
-export { runContext } from './commands/context.js';
+export { runHotspots } from './commands/hotspots.js';
+export { runOverhead } from './commands/overhead.js';
 export { runIngest } from './commands/ingest.js';
 export { runLimits } from './commands/limits.js';
 export { runPlans } from './commands/plans.js';
-export { runWatch, runWatchTick, startWatchLoop } from './commands/watch.js';
+export { runIngestTick, startWatchLoop } from './commands/ingest.js';
+export type { StartWatchLoopOptions, WatchController } from './commands/ingest.js';
 export { runWrapper, runWithAdapter } from './commands/run.js';
 export { parseArgs } from './args.js';
 export { ingestClaudeProjects, ingestCodexSessions, ingestOpencodeSessions, ingestAll } from './ingest.js';

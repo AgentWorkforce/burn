@@ -711,7 +711,7 @@ function severityFromUsd(usd: number): WasteFinding['severity'] {
 // `~/.relayburn/ghost-archive/` keeps the move local to the relayburn data
 // dir so the user can reverse the action without polluting the harness's
 // own home directory. The CLI may override this when a future
-// `burn waste --apply` flag wants to confirm the destination.
+// `burn hotspots --apply` flag wants to confirm the destination.
 function defaultArchiveDir(): string {
   return path.join(os.homedir(), '.relayburn', 'ghost-archive');
 }
@@ -761,7 +761,7 @@ export function ghostSurfaceToFinding(
   // by usdPerSession in `sortFindings`.
   const sessionId = `ghost:${ghost.path}`;
   const dedupNote = ghost.countedByCatalogBloat
-    ? ' Cost is reported as $0 here because the OpenCode catalog-bloat detector already attributes this entry — see `burn waste --patterns opencode-system-prompt`.'
+    ? ' Cost is reported as $0 here because the OpenCode catalog-bloat detector already attributes this entry — see `burn hotspots --patterns opencode-system-prompt`.'
     : '';
   const sessionsClause =
     ghost.sessionCount > 0

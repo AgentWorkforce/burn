@@ -137,11 +137,19 @@ describe('burn state CLI', () => {
         upToDate: boolean;
         rowCounts: { sessions: number; turns: number };
       };
+      index: unknown;
+      content: unknown;
+      classifier: { turns: number; classified: number; missing: number };
     };
     assert.equal(parsed.archive.exists, true);
     assert.equal(parsed.archive.upToDate, true);
     assert.equal(parsed.archive.rowCounts.turns, 2);
     assert.equal(parsed.archive.rowCounts.sessions, 1);
+    assert.ok(parsed.index);
+    assert.ok(parsed.content);
+    assert.equal(parsed.classifier.turns, 2);
+    assert.equal(parsed.classifier.classified, 0);
+    assert.equal(parsed.classifier.missing, 2);
   });
 
   it('state rebuild archive --full is idempotent against the same ledger', async () => {
@@ -161,6 +169,47 @@ describe('burn state CLI', () => {
       archive: { rowCounts: { turns: number } };
     };
     assert.equal(afterStatus.archive.rowCounts.turns, beforeStatus.archive.rowCounts.turns);
+  });
+
+  it('state rebuild archive --vacuum on a missing archive prints a hint and exits 0', async () => {
+    const out = await captureRun({ vacuum: true }, ['rebuild', 'archive']);
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /no archive/);
+    assert.match(out.stdout, /burn state rebuild archive/);
+  });
+
+  it('state rebuild archive vacuum --json returns the archive vacuum result', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-vac-cli',
+        messageId: 'vac-cli-1',
+        ts: '2026-04-23T00:00:00.000Z',
+        usage: {
+          input: 123,
+          output: 45,
+          reasoning: 0,
+          cacheRead: 678,
+          cacheCreate5m: 0,
+          cacheCreate1h: 0,
+        },
+      }),
+    ]);
+    await captureRun({}, ['rebuild', 'archive']);
+
+    const out = await captureRun({ json: true }, ['rebuild', 'archive', 'vacuum']);
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      existed: boolean;
+      beforeBytes: number;
+      afterBytes: number;
+      reclaimedBytes: number;
+      archivePath: string;
+    };
+    assert.equal(parsed.existed, true);
+    assert.equal(typeof parsed.beforeBytes, 'number');
+    assert.equal(typeof parsed.afterBytes, 'number');
+    assert.equal(typeof parsed.reclaimedBytes, 'number');
+    assert.match(parsed.archivePath, /archive\.sqlite$/);
   });
 
   it('state status --json surfaces tool_result_events row count', async () => {
