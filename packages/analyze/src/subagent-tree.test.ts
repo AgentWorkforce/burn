@@ -1,7 +1,11 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import type { Subagent, TurnRecord } from '@relayburn/reader';
+import type {
+  SessionRelationshipRecord,
+  Subagent,
+  TurnRecord,
+} from '@relayburn/reader';
 
 import { loadBuiltinPricing } from './pricing.js';
 import { aggregateSubagentTypeStats, buildSubagentTree } from './subagent-tree.js';
@@ -11,7 +15,7 @@ function turn(
 ): TurnRecord {
   const base: TurnRecord = {
     v: 1,
-    source: 'claude-code',
+    source: overrides.source ?? 'claude-code',
     sessionId: overrides.sessionId,
     messageId: overrides.messageId,
     turnIndex: overrides.turnIndex ?? 0,
@@ -33,6 +37,17 @@ function turn(
 
 function sub(fields: Partial<Subagent>): Subagent {
   return { isSidechain: true, ...fields };
+}
+
+function relationship(
+  overrides: Partial<SessionRelationshipRecord> & { sessionId: string },
+): SessionRelationshipRecord {
+  return {
+    v: 1,
+    source: 'native-claude',
+    relationshipType: 'root',
+    ...overrides,
+  };
 }
 
 describe('buildSubagentTree', () => {
@@ -133,6 +148,106 @@ describe('buildSubagentTree', () => {
     const root = trees.get(sessionId)!;
     assert.equal(root.children.length, 1);
     assert.equal(root.children[0]!.label, '(unresolved)');
+    assert.equal(root.children[0]!.selfTurns, 1);
+  });
+
+  it('builds the same Claude tree from SessionRelationshipRecord rows', async () => {
+    const pricing = await loadBuiltinPricing();
+    const sessionId = 'sess-graph';
+    const turns: TurnRecord[] = [
+      turn({ sessionId, messageId: 'm1', model: 'claude-sonnet-4-6', turnIndex: 0 }),
+      turn({
+        sessionId,
+        messageId: 'o1',
+        model: 'claude-haiku-4-5',
+        turnIndex: 1,
+        subagent: sub({
+          agentId: 'u-outer',
+          parentAgentId: sessionId,
+          subagentType: 'Explore',
+          description: 'Research',
+          parentToolUseId: 'toolu_outer',
+        }),
+      }),
+      turn({
+        sessionId,
+        messageId: 'i1',
+        model: 'claude-haiku-4-5',
+        turnIndex: 2,
+        subagent: sub({
+          agentId: 'u-inner',
+          parentAgentId: 'u-outer',
+          subagentType: 'code-reviewer',
+          parentToolUseId: 'toolu_inner',
+        }),
+      }),
+    ];
+    const relationships: SessionRelationshipRecord[] = [
+      relationship({ sessionId, source: 'claude-code', relationshipType: 'root' }),
+      relationship({
+        sessionId,
+        relationshipType: 'subagent',
+        relatedSessionId: sessionId,
+        agentId: 'u-outer',
+        subagentType: 'Explore',
+        description: 'Research',
+        parentToolUseId: 'toolu_outer',
+      }),
+      relationship({
+        sessionId,
+        relationshipType: 'subagent',
+        relatedSessionId: 'u-outer',
+        agentId: 'u-inner',
+        subagentType: 'code-reviewer',
+        parentToolUseId: 'toolu_inner',
+      }),
+    ];
+
+    const legacy = buildSubagentTree(turns, { pricing }).get(sessionId)!;
+    const graph = buildSubagentTree(turns, { pricing, relationships }).get(sessionId)!;
+    assert.deepEqual(graph, legacy);
+    assert.equal(graph.relationshipType, 'root');
+    assert.equal(graph.children[0]!.relationshipType, 'subagent');
+  });
+
+  it('joins child-session relationship rows to turns without per-turn subagent metadata', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: TurnRecord[] = [
+      turn({
+        source: 'codex',
+        sessionId: 'parent-session',
+        messageId: 'parent-1',
+        model: 'gpt-5.1-codex',
+      }),
+      turn({
+        source: 'codex',
+        sessionId: 'agent-child',
+        messageId: 'child-1',
+        model: 'gpt-5.1-codex',
+      }),
+    ];
+    const relationships: SessionRelationshipRecord[] = [
+      relationship({
+        source: 'codex',
+        sessionId: 'parent-session',
+        relationshipType: 'root',
+      }),
+      relationship({
+        source: 'codex',
+        sessionId: 'agent-child',
+        relationshipType: 'subagent',
+        relatedSessionId: 'parent-session',
+        agentId: 'agent-child',
+        subagentType: 'worker',
+      }),
+    ];
+
+    const root = buildSubagentTree(turns, { pricing, relationships }).get('parent-session')!;
+    assert.equal(root.selfTurns, 1);
+    assert.equal(root.cumulativeTurns, 2);
+    assert.equal(root.children.length, 1);
+    assert.equal(root.children[0]!.label, 'worker');
+    assert.equal(root.children[0]!.relationshipType, 'subagent');
     assert.equal(root.children[0]!.selfTurns, 1);
   });
 });

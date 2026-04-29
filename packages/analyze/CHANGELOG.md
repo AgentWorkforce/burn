@@ -4,6 +4,10 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+### Changed
+
+- `buildSubagentTree()` now consumes `SessionRelationshipRecord` graphs when available, with legacy `TurnRecord.subagent` fallback and per-node `relationshipType`.
+
 ## [0.44.0] - 2026-04-29
 
 ### Changed

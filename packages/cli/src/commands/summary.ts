@@ -107,8 +107,9 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   const pricing = await loadPricing();
   const agentSessionIds =
     agentFilter !== undefined ? await resolveAgentSessionTree(agentFilter) : undefined;
+  const turnQuery = subagentTreeFlag !== undefined ? queryWithoutSession(q) : q;
   const turns = filterTurnsByProvider(
-    filterTurnsByAgent(await loadTurns(q, args), agentFilter, agentSessionIds),
+    filterTurnsByAgent(await loadTurns(turnQuery, args), agentFilter, agentSessionIds),
     providerFilter,
   );
 
@@ -380,26 +381,22 @@ const COVERAGE_FLAG: Record<CoverageField, keyof Coverage> = {
 
 type ModelRow = UsageCostAggregateRow;
 
-function renderSubagentTreeMode(
+async function renderSubagentTreeMode(
   args: ParsedArgs,
   turns: EnrichedTurn[],
   pricing: Parameters<typeof costForTurn>[1],
   flag: string | true,
   q: Query,
-): number {
+): Promise<number> {
   // Accept either `--subagent-tree <id>` or `--subagent-tree` with --session.
   const sessionId = typeof flag === 'string' ? flag : q.sessionId;
   if (!sessionId) {
     process.stderr.write('burn: --subagent-tree requires a session id (positional or --session)\n');
     return 2;
   }
-  const sessionTurns = turns.filter((t) => t.sessionId === sessionId);
-  if (sessionTurns.length === 0) {
-    process.stdout.write(`no turns found for session ${sessionId}\n`);
-    return 0;
-  }
-  const trees = buildSubagentTree(sessionTurns, { pricing });
-  const root = trees.get(sessionId);
+  const relationships = await queryRelationships();
+  const trees = buildSubagentTree(turns, { pricing, relationships });
+  const root = trees.get(sessionId) ?? findTreeNode(trees, sessionId);
   if (!root) {
     process.stdout.write(`no turns found for session ${sessionId}\n`);
     return 0;
@@ -781,6 +778,26 @@ function renderRelationshipSubagentMode(
   return 0;
 }
 
+function findTreeNode(
+  trees: ReadonlyMap<string, SubagentTreeNode>,
+  nodeId: string,
+): SubagentTreeNode | undefined {
+  for (const root of trees.values()) {
+    const found = findNode(root, nodeId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function findNode(node: SubagentTreeNode, nodeId: string): SubagentTreeNode | undefined {
+  if (node.nodeId === nodeId) return node;
+  for (const child of node.children) {
+    const found = findNode(child, nodeId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 function renderTree(root: SubagentTreeNode): string[] {
   const out: string[] = [];
   out.push(renderNodeLine(root, ''));
@@ -802,10 +819,14 @@ function renderChildren(node: SubagentTreeNode, prefix: string, out: string[]): 
 
 function renderNodeLine(node: SubagentTreeNode, indent: string): string {
   const label = node.label;
+  const relationship =
+    node.relationshipType !== 'root' && node.relationshipType !== 'subagent'
+      ? ` [${node.relationshipType}]`
+      : '';
   const model = node.models.length > 0 ? ` (${node.models.join(', ')})` : '';
   const cost = formatUsd(node.cumulativeCost);
   const turns = `[${formatInt(node.cumulativeTurns)} turn${node.cumulativeTurns === 1 ? '' : 's'}]`;
-  return `${indent}${label}${model}  ${cost}  ${turns}`;
+  return `${indent}${label}${relationship}${model}  ${cost}  ${turns}`;
 }
 
 // Render one token-field cell. Three cases:
@@ -977,6 +998,12 @@ async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
     process.stderr.write(`burn: archive read failed (${msg}); falling back to ledger walk\n`);
     return queryAll(q);
   }
+}
+
+function queryWithoutSession(q: Query): Query {
+  const out: Query = { ...q };
+  delete out.sessionId;
+  return out;
 }
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {

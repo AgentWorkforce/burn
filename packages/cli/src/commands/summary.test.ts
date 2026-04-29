@@ -589,6 +589,148 @@ describe('burn summary --by-relationship (#114)', () => {
   });
 });
 
+describe('burn summary --subagent-tree relationships (#109)', () => {
+  let tmpHome: string;
+  let tmpRelay: string;
+  const originalHome = process.env['HOME'];
+  const originalRelay = process.env['RELAYBURN_HOME'];
+  const originalArchive = process.env['RELAYBURN_ARCHIVE'];
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-summary-tree-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-summary-tree-relay-'));
+    process.env['HOME'] = tmpHome;
+    process.env['RELAYBURN_HOME'] = tmpRelay;
+    process.env['RELAYBURN_ARCHIVE'] = '0';
+    __resetIndexCacheForTesting();
+  });
+
+  afterEach(async () => {
+    await rm(tmpHome, { recursive: true, force: true });
+    await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  after(async () => {
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
+    else delete process.env['RELAYBURN_HOME'];
+    if (originalArchive !== undefined) process.env['RELAYBURN_ARCHIVE'] = originalArchive;
+    else delete process.env['RELAYBURN_ARCHIVE'];
+  });
+
+  it('--json includes relationshipType and renders child-session subagents', async () => {
+    await appendTurns([
+      fakeTurn({
+        source: 'codex',
+        sessionId: 'tree-parent',
+        messageId: 'tree-parent-1',
+        model: 'gpt-5.1-codex',
+      }),
+      fakeTurn({
+        source: 'codex',
+        sessionId: 'tree-child',
+        messageId: 'tree-child-1',
+        model: 'gpt-5.1-codex',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({
+        source: 'codex',
+        sessionId: 'tree-parent',
+        relationshipType: 'root',
+      }),
+      fakeRelationship({
+        source: 'codex',
+        sessionId: 'tree-child',
+        relationshipType: 'subagent',
+        relatedSessionId: 'tree-parent',
+        agentId: 'tree-child',
+        subagentType: 'worker',
+      }),
+    ]);
+
+    const out = await captureSummary({
+      'subagent-tree': 'tree-parent',
+      json: true,
+      'no-archive': true,
+    });
+    assert.equal(out.code, 0);
+    const payload = JSON.parse(out.stdout) as {
+      relationshipType: string;
+      selfTurns: number;
+      cumulativeTurns: number;
+      children: Array<{
+        label: string;
+        relationshipType: string;
+        selfTurns: number;
+      }>;
+    };
+    assert.equal(payload.relationshipType, 'root');
+    assert.equal(payload.selfTurns, 1);
+    assert.equal(payload.cumulativeTurns, 2);
+    assert.equal(payload.children[0]!.label, 'worker');
+    assert.equal(payload.children[0]!.relationshipType, 'subagent');
+    assert.equal(payload.children[0]!.selfTurns, 1);
+  });
+
+  it('falls back to TurnRecord.subagent when no relationship rows exist', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 'tree-legacy', messageId: 'tree-legacy-1' }),
+      fakeTurn({
+        sessionId: 'tree-legacy',
+        messageId: 'tree-legacy-sub-1',
+        turnIndex: 1,
+        subagent: {
+          isSidechain: true,
+          agentId: 'legacy-agent',
+          parentAgentId: 'tree-legacy',
+          subagentType: 'Explore',
+        },
+      }),
+    ]);
+
+    const out = await captureSummary({
+      'subagent-tree': 'tree-legacy',
+      json: true,
+      'no-archive': true,
+    });
+    assert.equal(out.code, 0);
+    const payload = JSON.parse(out.stdout) as {
+      children: Array<{ label: string; relationshipType: string; selfTurns: number }>;
+    };
+    assert.equal(payload.children[0]!.label, 'Explore');
+    assert.equal(payload.children[0]!.relationshipType, 'subagent');
+    assert.equal(payload.children[0]!.selfTurns, 1);
+  });
+
+  it('annotates non-subagent relationship nodes in text output', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 'tree-root', messageId: 'tree-root-1' }),
+      fakeTurn({
+        sessionId: 'tree-fork',
+        messageId: 'tree-fork-1',
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+    ]);
+    await appendRelationships([
+      fakeRelationship({ sessionId: 'tree-root', relationshipType: 'root' }),
+      fakeRelationship({
+        sessionId: 'tree-fork',
+        relationshipType: 'fork',
+        relatedSessionId: 'tree-root',
+      }),
+    ]);
+
+    const out = await captureSummary({
+      'subagent-tree': 'tree-root',
+      'no-archive': true,
+    });
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /tree-fork \[fork\]/);
+  });
+});
+
 describe('burn summary per-cell fidelity (#136)', () => {
   let tmpHome: string;
   let tmpRelay: string;
