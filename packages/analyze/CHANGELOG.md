@@ -4,6 +4,10 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+### Changed
+
+- `detectToolOutputBloat` now uses enriched `approxTokens` from user-turn blocks instead of deriving from `contentLength`, with fallback for legacy data.
+
 ## [0.44.0] - 2026-04-29
 
 ### Changed

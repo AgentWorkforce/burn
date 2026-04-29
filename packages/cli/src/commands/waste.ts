@@ -826,11 +826,20 @@ export async function runPatternsMode(
 
     // Signal B inputs: stream `tool_result_events` from the ledger. We pass
     // the full TurnRecord set so the detector can join tool_use_ids back to
-    // tool names + price the carry cost at the correct model rate.
+    // tool names + price the carry cost at the correct model rate. We also
+    // pass userTurns for enriched approxTokens from the content-sidecar.
     const toolResultEvents = await loadToolResultEventsForTurns(turns, deps.query);
+    const userTurnsBySession = await loadUserTurnsBySession(
+      new Map([['tool-output-bloat', turns]]),
+    );
+    const allUserTurns: UserTurnRecord[] = [];
+    for (const sessionTurns of userTurnsBySession.values()) {
+      allUserTurns.push(...sessionTurns);
+    }
     toolOutputBloats = detectToolOutputBloat({
       settings,
       toolResultEvents,
+      userTurns: allUserTurns,
       turns,
       pricing,
     });

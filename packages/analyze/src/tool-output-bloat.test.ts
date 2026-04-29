@@ -10,6 +10,7 @@ import type {
   ToolCall,
   ToolResultEventRecord,
   TurnRecord,
+  UserTurnRecord,
 } from '@relayburn/reader';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,13 +46,25 @@ function turn(o: Partial<TurnRecord> & { sessionId: string; messageId: string; t
 }
 
 function evt(
-  o: Partial<ToolResultEventRecord> & { sessionId: string; toolUseId: string; eventIndex: number; contentLength: number },
+  o: Partial<ToolResultEventRecord> & { sessionId: string; toolUseId: string; eventIndex: number },
 ): ToolResultEventRecord {
   return {
     v: 1,
     source: 'claude-code',
     eventSource: 'tool_result',
     status: 'completed',
+    ...o,
+  };
+}
+
+function userTurn(
+  o: Partial<UserTurnRecord> & { sessionId: string; userUuid: string },
+): UserTurnRecord {
+  return {
+    v: 1,
+    source: 'claude-code',
+    ts: '2026-04-20T00:00:00.500Z',
+    blocks: [],
     ...o,
   };
 }
@@ -211,14 +224,23 @@ describe('loadClaudeSettings — filesystem loader', () => {
 describe('detectObservedBloat — Signal B', () => {
   it('flags Claude Bash tool_result events above the 15k-token threshold', async () => {
     const pricing = await loadBuiltinPricing();
-    // 80,000 bytes ≈ 20,000 tokens — well above the 15k threshold.
+    // 20,000 tokens — well above the 15k threshold.
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 80_000, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 80_000, approxTokens: 20_000 }],
+      }),
     ];
     const turns = [
       turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
     ];
-    const out = detectObservedBloat({ toolResultEvents: events, turns, pricing });
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
     assert.equal(out.length, 1);
     const b = out[0]!;
     assert.equal(b.kind, 'observed-bloat');
@@ -232,34 +254,66 @@ describe('detectObservedBloat — Signal B', () => {
 
   it('does NOT flag below the threshold', async () => {
     const pricing = await loadBuiltinPricing();
-    // 40,000 bytes ≈ 10,000 tokens — under threshold.
+    // 10,000 tokens — under threshold.
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 40_000, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 40_000, approxTokens: 10_000 }],
+      }),
     ];
     const turns = [
       turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
     ];
-    const out = detectObservedBloat({ toolResultEvents: events, turns, pricing });
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
     assert.equal(out.length, 0);
   });
 
   it('aggregates multiple oversized events into one (source, toolName) bucket', async () => {
     const pricing = await loadBuiltinPricing();
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 80_000, messageId: 'm1' }),
-      evt({ sessionId: 's2', toolUseId: 'tu_b', eventIndex: 0, contentLength: 100_000, messageId: 'm2' }),
-      evt({ sessionId: 's3', toolUseId: 'tu_c', eventIndex: 0, contentLength: 120_000, messageId: 'm3' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
+      evt({ sessionId: 's2', toolUseId: 'tu_b', eventIndex: 0, messageId: 'm2' }),
+      evt({ sessionId: 's3', toolUseId: 'tu_c', eventIndex: 0, messageId: 'm3' }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 80_000, approxTokens: 20_000 }],
+      }),
+      userTurn({
+        sessionId: 's2',
+        userUuid: 'u2',
+        precedingMessageId: 'm2',
+        followingMessageId: 'm3',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_b', byteLen: 100_000, approxTokens: 25_000 }],
+      }),
+      userTurn({
+        sessionId: 's3',
+        userUuid: 'u3',
+        precedingMessageId: 'm3',
+        followingMessageId: 'm4',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_c', byteLen: 120_000, approxTokens: 30_000 }],
+      }),
     ];
     const turns = [
       turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
       turn({ sessionId: 's2', messageId: 'm2', turnIndex: 0, toolCalls: [tc('tu_b', 'Bash')] }),
       turn({ sessionId: 's3', messageId: 'm3', turnIndex: 0, toolCalls: [tc('tu_c', 'Bash')] }),
     ];
-    const out = detectObservedBloat({ toolResultEvents: events, turns, pricing });
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
     assert.equal(out.length, 1);
     const b = out[0]!;
     assert.equal(b.occurrenceCount, 3);
-    assert.equal(b.evidencedMaxOutput, 30_000); // ceil(120_000 / 4)
+    assert.equal(b.evidencedMaxOutput, 30_000);
     assert.equal(b.evidence.length, 3);
   });
 
@@ -267,14 +321,13 @@ describe('detectObservedBloat — Signal B', () => {
     const pricing = await loadBuiltinPricing();
     const events = [
       // Claude Bash
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 80_000, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
       // Codex shell
       evt({
         source: 'codex',
         sessionId: 's2',
         toolUseId: 'call_b',
         eventIndex: 0,
-        contentLength: 90_000,
         messageId: 'm2',
       }),
       // OpenCode bash
@@ -283,8 +336,32 @@ describe('detectObservedBloat — Signal B', () => {
         sessionId: 's3',
         toolUseId: 'opc_c',
         eventIndex: 0,
-        contentLength: 85_000,
         messageId: 'm3',
+      }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 80_000, approxTokens: 20_000 }],
+      }),
+      userTurn({
+        source: 'codex',
+        sessionId: 's2',
+        userUuid: 'u2',
+        precedingMessageId: 'm2',
+        followingMessageId: 'm3',
+        blocks: [{ kind: 'tool_result', toolUseId: 'call_b', byteLen: 90_000, approxTokens: 22_500 }],
+      }),
+      userTurn({
+        source: 'opencode',
+        sessionId: 's3',
+        userUuid: 'u3',
+        precedingMessageId: 'm3',
+        followingMessageId: 'm4',
+        blocks: [{ kind: 'tool_result', toolUseId: 'opc_c', byteLen: 85_000, approxTokens: 21_250 }],
       }),
     ];
     const turns: TurnRecord[] = [
@@ -304,7 +381,7 @@ describe('detectObservedBloat — Signal B', () => {
         toolCalls: [tc('opc_c', 'bash')],
       }),
     ];
-    const out = detectObservedBloat({ toolResultEvents: events, turns, pricing });
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
     // Three distinct (source, toolName) buckets — Claude Bash, Codex shell
     // (normalizes to Bash), OpenCode bash (normalizes to Bash) all get their
     // own row, keyed by source. Cross-harness aggregation under the
@@ -315,30 +392,40 @@ describe('detectObservedBloat — Signal B', () => {
     for (const b of out) assert.equal(b.toolName, 'Bash');
   });
 
-  it('skips events without contentLength', async () => {
+  it('skips events without matching user-turn blocks', async () => {
     const pricing = await loadBuiltinPricing();
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 0, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
     ];
+    const userTurns: UserTurnRecord[] = [];
     const turns = [
       turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
     ];
-    const out = detectObservedBloat({ toolResultEvents: events, turns, pricing });
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
     assert.equal(out.length, 0);
   });
 
   it('honors a custom threshold', async () => {
     const pricing = await loadBuiltinPricing();
-    // 4,000 bytes = 1,000 tokens — under default 15k but over a 500-token threshold.
+    // 1,000 tokens — under default 15k but over a 500-token threshold.
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 4_000, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 4_000, approxTokens: 1_000 }],
+      }),
     ];
     const turns = [
       turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
     ];
-    const def = detectObservedBloat({ toolResultEvents: events, turns, pricing });
+    const def = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
     assert.equal(def.length, 0);
-    const tight = detectObservedBloat({ toolResultEvents: events, turns, pricing, threshold: 500 });
+    const tight = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing, threshold: 500 });
     assert.equal(tight.length, 1);
     assert.equal(tight[0]!.evidencedMaxOutput, 1000);
   });
@@ -346,10 +433,19 @@ describe('detectObservedBloat — Signal B', () => {
   it('falls back to <unknown> when the tool_use_id has no matching turn', async () => {
     const pricing = await loadBuiltinPricing();
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'orphan', eventIndex: 0, contentLength: 80_000, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'orphan', eventIndex: 0, messageId: 'm1' }),
     ];
-    // No turns supplied — the lookup misses.
-    const out = detectObservedBloat({ toolResultEvents: events, turns: [], pricing });
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'orphan', byteLen: 80_000, approxTokens: 20_000 }],
+      }),
+    ];
+    // No turns supplied — the tool name lookup misses.
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns: [], pricing });
     assert.equal(out.length, 1);
     assert.equal(out[0]!.toolName, '<unknown>');
     // Without a model we still emit the bucket but cost is 0.
@@ -368,7 +464,16 @@ describe('detectToolOutputBloat — orchestration', () => {
       { path: '/u/.claude/settings.json', settings: { env: { [BASH_MAX_OUTPUT_ENV_KEY]: '80000' } } },
     ];
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 80_000, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 80_000, approxTokens: 20_000 }],
+      }),
     ];
     const turns = [
       turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
@@ -376,6 +481,7 @@ describe('detectToolOutputBloat — orchestration', () => {
     const out = detectToolOutputBloat({
       settings,
       toolResultEvents: events,
+      userTurns,
       turns,
       pricing,
     });
@@ -397,12 +503,21 @@ describe('detectToolOutputBloat — orchestration', () => {
   it('runs only Signal B when no settings are supplied', async () => {
     const pricing = await loadBuiltinPricing();
     const events = [
-      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, contentLength: 80_000, messageId: 'm1' }),
+      evt({ sessionId: 's1', toolUseId: 'tu_a', eventIndex: 0, messageId: 'm1' }),
+    ];
+    const userTurns = [
+      userTurn({
+        sessionId: 's1',
+        userUuid: 'u1',
+        precedingMessageId: 'm1',
+        followingMessageId: 'm2',
+        blocks: [{ kind: 'tool_result', toolUseId: 'tu_a', byteLen: 80_000, approxTokens: 20_000 }],
+      }),
     ];
     const turns = [
       turn({ sessionId: 's1', messageId: 'm1', turnIndex: 0, toolCalls: [tc('tu_a', 'Bash')] }),
     ];
-    const out = detectToolOutputBloat({ toolResultEvents: events, turns, pricing });
+    const out = detectToolOutputBloat({ toolResultEvents: events, userTurns, turns, pricing });
     assert.equal(out.length, 1);
     assert.equal(out[0]!.kind, 'observed-bloat');
   });
@@ -489,8 +604,12 @@ describe('detectObservedBloat — cross-harness fixtures (#168 acceptance)', () 
     const pricing = await loadBuiltinPricing();
     const fixture = path.join(FIXTURES_ROOT, 'claude', 'oversized-bash-output.jsonl');
     const parsed = await parseClaudeSession(fixture);
+    // Old fixture doesn't have enriched user-turn blocks, so we pass empty userTurns
+    // and rely on the contentLength fallback. The unit tests above cover the
+    // enriched data path.
     const out = detectObservedBloat({
       toolResultEvents: parsed.toolResultEvents,
+      userTurns: [],
       turns: parsed.turns,
       pricing,
     });
@@ -504,8 +623,12 @@ describe('detectObservedBloat — cross-harness fixtures (#168 acceptance)', () 
     const pricing = await loadBuiltinPricing();
     const fixture = path.join(FIXTURES_ROOT, 'codex', 'oversized-shell-output.jsonl');
     const parsed = await parseCodexSession(fixture);
+    // Old fixture doesn't have enriched user-turn blocks, so we pass empty userTurns
+    // and rely on the contentLength fallback. The unit tests above cover the
+    // enriched data path.
     const out = detectObservedBloat({
       toolResultEvents: parsed.toolResultEvents,
+      userTurns: [],
       turns: parsed.turns,
       pricing,
     });
@@ -524,7 +647,7 @@ describe('detectObservedBloat — cross-harness fixtures (#168 acceptance)', () 
     // tests/fixtures/opencode/<scenario>/storage/...). Re-creating that for
     // the bloat case yields no extra detector coverage beyond what synthetic
     // ToolResultEventRecords already provide — the detector branches purely
-    // on `source` + `contentLength`. Synthesize the records inline and
+    // on `source` + `approxTokens`. Synthesize the records inline and
     // assert the same cross-harness contract the issue calls out.
     const pricing = await loadBuiltinPricing();
     const events: ToolResultEventRecord[] = [
@@ -533,8 +656,17 @@ describe('detectObservedBloat — cross-harness fixtures (#168 acceptance)', () 
         sessionId: 'ses_bloat',
         toolUseId: 'opc_bash_1',
         eventIndex: 0,
-        contentLength: 80_000,
         messageId: 'msg_bloat',
+      }),
+    ];
+    const userTurns: UserTurnRecord[] = [
+      userTurn({
+        source: 'opencode',
+        sessionId: 'ses_bloat',
+        userUuid: 'u_bloat',
+        precedingMessageId: 'msg_bloat',
+        followingMessageId: 'msg_bloat_next',
+        blocks: [{ kind: 'tool_result', toolUseId: 'opc_bash_1', byteLen: 80_000, approxTokens: 20_000 }],
       }),
     ];
     const turns: TurnRecord[] = [
@@ -546,7 +678,7 @@ describe('detectObservedBloat — cross-harness fixtures (#168 acceptance)', () 
         toolCalls: [tc('opc_bash_1', 'bash')],
       }),
     ];
-    const out = detectObservedBloat({ toolResultEvents: events, turns, pricing });
+    const out = detectObservedBloat({ toolResultEvents: events, userTurns, turns, pricing });
     assert.equal(out.length, 1);
     assert.equal(out[0]!.source, 'opencode');
     // OpenCode `bash` (lowercase) normalizes to canonical `Bash`.
