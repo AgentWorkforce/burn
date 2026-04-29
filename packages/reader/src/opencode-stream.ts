@@ -102,6 +102,7 @@ export interface OpencodeStreamCursorState {
   lastEventId?: string;
   emittedMessageIds?: string[];
   emittedToolEventIds?: string[];
+  nextToolEventIndexBySession?: Record<string, number>;
 }
 
 export interface OpencodeStreamIngestOptions {
@@ -129,6 +130,11 @@ interface NormalizedEvent {
   properties: Record<string, unknown>;
 }
 
+interface ToolResultEventCandidate {
+  key: string;
+  record: Omit<ToolResultEventRecord, 'eventIndex'>;
+}
+
 export async function createOpencodeStreamIngestor(
   options: OpencodeStreamIngestOptions = {},
 ): Promise<OpencodeStreamIngestor> {
@@ -145,6 +151,7 @@ class Ingestor implements OpencodeStreamIngestor {
   private readonly partsByMessage = new Map<string, Map<string, Part>>();
   private readonly emittedMessageIds: Set<string>;
   private readonly emittedToolEventIds: Set<string>;
+  private readonly nextToolEventIndexBySession = new Map<string, number>();
   private lastEventId: string | undefined;
 
   constructor(options: OpencodeStreamIngestOptions, tokenCounter: UserTurnTokenCounter) {
@@ -153,6 +160,21 @@ class Ingestor implements OpencodeStreamIngestor {
     this.emittedMessageIds = new Set(options.cursor?.emittedMessageIds ?? []);
     this.emittedToolEventIds = new Set(options.cursor?.emittedToolEventIds ?? []);
     this.lastEventId = options.cursor?.lastEventId;
+    for (const [sessionId, next] of Object.entries(
+      options.cursor?.nextToolEventIndexBySession ?? {},
+    )) {
+      if (Number.isFinite(next) && next >= 0) {
+        this.nextToolEventIndexBySession.set(sessionId, next);
+      }
+    }
+    if (options.cursor?.nextToolEventIndexBySession === undefined) {
+      for (const [sessionId, next] of deriveNextToolEventIndexBySession(
+        options.cursor?.emittedToolEventIds ?? [],
+      )) {
+        const current = this.nextToolEventIndexBySession.get(sessionId) ?? 0;
+        if (next > current) this.nextToolEventIndexBySession.set(sessionId, next);
+      }
+    }
   }
 
   async ingest(payload: unknown, eventId?: string): Promise<OpencodeStreamIngestResult> {
@@ -209,6 +231,11 @@ class Ingestor implements OpencodeStreamIngestor {
       emittedToolEventIds: [...this.emittedToolEventIds],
     };
     if (this.lastEventId !== undefined) cursor.lastEventId = this.lastEventId;
+    if (this.nextToolEventIndexBySession.size > 0) {
+      cursor.nextToolEventIndexBySession = Object.fromEntries(
+        this.nextToolEventIndexBySession.entries(),
+      );
+    }
     return cursor;
   }
 
@@ -263,8 +290,20 @@ class Ingestor implements OpencodeStreamIngestor {
   private dropSession(sessionId: string): void {
     this.sessions.delete(sessionId);
     this.streamOwnedSessions.delete(sessionId);
+    const deletedMessageIds = new Set<string>();
     for (const [id, message] of this.messages.entries()) {
-      if (message.sessionID === sessionId) this.messages.delete(id);
+      if (message.sessionID === sessionId) {
+        deletedMessageIds.add(id);
+        this.messages.delete(id);
+      }
+    }
+    for (const [messageId, bucket] of this.partsByMessage.entries()) {
+      if (
+        deletedMessageIds.has(messageId) ||
+        [...bucket.values()].some((part) => part.sessionID === sessionId)
+      ) {
+        this.partsByMessage.delete(messageId);
+      }
     }
   }
 
@@ -286,14 +325,26 @@ class Ingestor implements OpencodeStreamIngestor {
         .sort((a, b) => a.time.created - b.time.created);
       relationships.push(...buildRelationships(session, assistants));
 
-      const allToolEvents = collectToolResultEventsForSession(sessionId, assistants, (messageId) =>
-        this.partsFor(messageId),
+      const toolEventCandidates = collectToolResultEventCandidatesForSession(
+        sessionId,
+        assistants,
+        (messageId) => this.partsFor(messageId),
       );
-      for (const ev of allToolEvents) {
-        const key = toolEventKey(ev);
+      let nextToolEventIndex = this.nextToolEventIndexBySession.get(sessionId) ?? 0;
+      let emittedAnyToolEvent = false;
+      for (const candidate of toolEventCandidates) {
+        const key = candidate.key;
         if (this.emittedToolEventIds.has(key)) continue;
         this.emittedToolEventIds.add(key);
+        const ev: ToolResultEventRecord = {
+          ...candidate.record,
+          eventIndex: nextToolEventIndex++,
+        };
         toolResultEvents.push(ev);
+        emittedAnyToolEvent = true;
+      }
+      if (emittedAnyToolEvent) {
+        this.nextToolEventIndexBySession.set(sessionId, nextToolEventIndex);
       }
 
       for (let i = 0; i < assistants.length; i++) {
@@ -459,14 +510,13 @@ function buildRelationships(
   return out;
 }
 
-function collectToolResultEventsForSession(
+function collectToolResultEventCandidatesForSession(
   sessionId: string,
   assistants: AssistantMessage[],
   partsFor: (messageId: string) => Part[],
-): ToolResultEventRecord[] {
-  const out: ToolResultEventRecord[] = [];
+): ToolResultEventCandidate[] {
+  const out: ToolResultEventCandidate[] = [];
   const callIndexCounters = new Map<string, number>();
-  let eventIndex = 0;
   for (const m of assistants) {
     const parts = partsFor(m.id);
     if (!isFinalAssistant(m, parts)) continue;
@@ -485,14 +535,13 @@ function collectToolResultEventsForSession(
       const isError = isFailedTool(tp);
       const callIndex = callIndexCounters.get(tp.callID) ?? 0;
       callIndexCounters.set(tp.callID, callIndex + 1);
-      const record: ToolResultEventRecord = {
+      const record: Omit<ToolResultEventRecord, 'eventIndex'> = {
         v: 1,
         source: 'opencode',
         sessionId,
         messageId: m.id,
         toolUseId: tp.callID,
         callIndex,
-        eventIndex: eventIndex++,
         ts: new Date(m.time.created).toISOString(),
         status: isError ? 'errored' : 'completed',
         eventSource: 'tool_result',
@@ -505,14 +554,35 @@ function collectToolResultEventsForSession(
       const measured = measureToolOutput(state.output);
       if (measured.length !== undefined) record.contentLength = measured.length;
       if (measured.hash !== undefined) record.contentHash = measured.hash;
-      out.push(record);
+      out.push({ key: toolEventKey(sessionId, m.id, tp, callIndex), record });
     }
   }
   return out;
 }
 
-function toolEventKey(ev: ToolResultEventRecord): string {
-  return `${ev.sessionId}|${ev.toolUseId}|${ev.eventIndex}`;
+function toolEventKey(
+  sessionId: string,
+  messageId: string,
+  part: ToolPart & { callID: string },
+  callIndex: number,
+): string {
+  const partId = typeof part.id === 'string' && part.id.length > 0 ? part.id : undefined;
+  return `${sessionId}|${messageId}|${part.callID}|${partId ?? callIndex}`;
+}
+
+function deriveNextToolEventIndexBySession(keys: readonly string[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const key of keys) {
+    const first = key.indexOf('|');
+    const last = key.lastIndexOf('|');
+    if (first <= 0 || last <= first) continue;
+    const maybeIndex = Number.parseInt(key.slice(last + 1), 10);
+    if (!Number.isFinite(maybeIndex) || maybeIndex < 0) continue;
+    const sessionId = key.slice(0, first);
+    const current = out.get(sessionId) ?? 0;
+    if (maybeIndex + 1 > current) out.set(sessionId, maybeIndex + 1);
+  }
+  return out;
 }
 
 function buildTurnRecord(

@@ -173,6 +173,159 @@ describe('opencode stream ingestor', () => {
     assert.equal(result.turns.length, 0);
   });
 
+  it('does not duplicate tool events when an earlier assistant finalizes later', async () => {
+    const ingestor = await createOpencodeStreamIngestor({ tokenizer: 'heuristic' });
+    await ingestor.ingest({
+      type: 'session.created',
+      properties: { info: { id: 'ses_out_of_order', directory: '/tmp/project' } },
+    });
+    await ingestor.ingest({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_asst_1',
+          sessionID: 'ses_out_of_order',
+          role: 'assistant',
+          time: { created: 100 },
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+        },
+      },
+    });
+    await ingestor.ingest({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part_tool_1',
+          sessionID: 'ses_out_of_order',
+          messageID: 'msg_asst_1',
+          type: 'tool',
+          callID: 'tool_1',
+          tool: 'bash',
+          state: { input: { command: 'one' }, output: 'one\n' },
+        },
+      },
+    });
+    await ingestor.ingest({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_asst_2',
+          sessionID: 'ses_out_of_order',
+          role: 'assistant',
+          time: { created: 200 },
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+          tokens: { input: 2, output: 2 },
+        },
+      },
+    });
+    await ingestor.ingest({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part_tool_2',
+          sessionID: 'ses_out_of_order',
+          messageID: 'msg_asst_2',
+          type: 'tool',
+          callID: 'tool_2',
+          tool: 'bash',
+          state: { input: { command: 'two' }, output: 'two\n' },
+        },
+      },
+    });
+
+    const first = await ingestor.ingest({
+      type: 'session.idle',
+      properties: { sessionID: 'ses_out_of_order' },
+    });
+    assert.deepEqual(
+      first.toolResultEvents.map((e) => [e.toolUseId, e.eventIndex]),
+      [['tool_2', 0]],
+    );
+
+    await ingestor.ingest({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part_step_1',
+          sessionID: 'ses_out_of_order',
+          messageID: 'msg_asst_1',
+          type: 'step-finish',
+          reason: 'end_turn',
+          tokens: { input: 1, output: 1 },
+        },
+      },
+    });
+
+    const second = await ingestor.ingest({
+      type: 'session.idle',
+      properties: { sessionID: 'ses_out_of_order' },
+    });
+    assert.deepEqual(
+      second.toolResultEvents.map((e) => [e.toolUseId, e.eventIndex]),
+      [['tool_1', 1]],
+    );
+    assert.equal(
+      second.toolResultEvents.some((e) => e.toolUseId === 'tool_2'),
+      false,
+      'already emitted later assistant tool must not be re-emitted with a shifted eventIndex',
+    );
+    assert.equal(second.cursor.nextToolEventIndexBySession?.['ses_out_of_order'], 2);
+  });
+
+  it('drops buffered parts for deleted sessions', async () => {
+    const ingestor = await createOpencodeStreamIngestor({ tokenizer: 'heuristic' });
+    await ingestor.ingest({
+      type: 'session.created',
+      properties: { info: { id: 'ses_deleted', directory: '/tmp/project' } },
+    });
+    await ingestor.ingest({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part_old_tool',
+          sessionID: 'ses_deleted',
+          messageID: 'msg_reused',
+          type: 'tool',
+          callID: 'old_tool',
+          tool: 'bash',
+          state: { input: { command: 'old' }, output: 'old\n' },
+        },
+      },
+    });
+    await ingestor.ingest({
+      type: 'session.deleted',
+      properties: { sessionID: 'ses_deleted' },
+    });
+    await ingestor.ingest({
+      type: 'session.created',
+      properties: { info: { id: 'ses_deleted', directory: '/tmp/project' } },
+    });
+    await ingestor.ingest({
+      type: 'message.updated',
+      properties: {
+        info: {
+          id: 'msg_reused',
+          sessionID: 'ses_deleted',
+          role: 'assistant',
+          time: { created: 300 },
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet-4-5',
+          tokens: { input: 1, output: 1 },
+        },
+      },
+    });
+
+    const result = await ingestor.ingest({
+      type: 'session.idle',
+      properties: { sessionID: 'ses_deleted' },
+    });
+    assert.equal(result.turns.length, 1);
+    assert.equal(result.turns[0]!.toolCalls.length, 0);
+    assert.equal(result.toolResultEvents.length, 0);
+  });
+
   it('matches file-derived OpenCode records for the same completed session', async () => {
     const file = sessionFile('with-tool', 'ses_tool');
     const expected = await parseOpencodeSession(file, {
