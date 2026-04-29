@@ -120,9 +120,17 @@ export async function loadIndex(): Promise<{ ids: Set<string>; content: Set<stri
   return { ids, content };
 }
 
-export function __resetIndexCacheForTesting(): void {
+// Drop the in-memory dedup cache. Callers that wipe the on-disk index
+// (`burn state reset`, etc.) MUST call this after deletion so the next
+// loadIndex() re-reads from the empty files instead of returning hashes
+// loaded before the wipe — otherwise post-reset writes get silently
+// deduped against records that no longer exist.
+export function invalidateIndexCache(): void {
   cache = undefined;
 }
+
+// Test alias kept for back-compat with existing call sites.
+export const __resetIndexCacheForTesting = invalidateIndexCache;
 
 async function loadHashFile(p: string): Promise<Set<string>> {
   const lines = await loadHashFileAsArray(p);

@@ -547,6 +547,29 @@ describe('burn state CLI', () => {
       assert.equal(await exists(ledgerPath()), true);
     });
 
+    it('--force invalidates the in-memory dedup cache so post-reset writes land', async () => {
+      // Regression: after deleting ledger.idx the module-level cache in
+      // index-sidecar.ts still held the prior pass's hashes. The next
+      // appendTurns saw the seeded turn as a duplicate and silently
+      // skipped it, leaving the ledger empty even after a successful
+      // reingest. Reproduce by warming the cache, resetting, then
+      // re-appending the same turn — without the fix the file stays at
+      // zero bytes.
+      const turn = fakeTurn({ sessionId: 's-warm', messageId: 'm-warm' });
+      await appendTurns([turn]);
+      assert.ok((await stat(ledgerPath())).size > 0);
+
+      const out = await captureRun({ force: true }, ['reset']);
+      assert.equal(out.code, 0);
+      assert.equal(await exists(ledgerPath()), false);
+
+      await appendTurns([turn]);
+      assert.ok(
+        (await stat(ledgerPath())).size > 0,
+        'turn was deduped against a stale cache instead of being written',
+      );
+    });
+
     it('RELAYBURN_HOME override is respected', async () => {
       // Verify reset only operates on RELAYBURN_HOME, not on a sibling
       // directory that happens to share the parent.

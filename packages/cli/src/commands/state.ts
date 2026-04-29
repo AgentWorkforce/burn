@@ -10,6 +10,7 @@ import {
   cursorsPath,
   getArchiveStatus,
   hwmPath,
+  invalidateIndexCache,
   isTurnLine,
   isUserTurnLine,
   isValidSessionId,
@@ -573,40 +574,50 @@ async function runStateReset(args: ParsedArgs): Promise<number> {
   const reingest = args.flags['reingest'] === true;
   const json = args.flags['json'] === true;
 
-  return withLock('ledger', async () => {
-    const home = ledgerHome();
-    const targets = await collectResetTargets();
+  const home = ledgerHome();
+  const targets = await collectResetTargets();
 
-    if (!force) {
-      const summary = buildResetSummary({ home, targets, forced: false, reingestRequested: reingest, reingested: null });
-      if (reingest) {
-        process.stderr.write(
-          `burn state reset: --reingest requires --force; nothing was deleted.\n`,
-        );
-      }
-      writeResetSummary(summary, { json, dryRun: true });
-      return 0;
-    }
-
-    const applied: ResetTargetReport[] = [];
-    for (const t of targets) {
-      applied.push(await applyResetTarget(t, home));
-    }
-
-    let reingested: ResetSummary['reingested'] = null;
+  if (!force) {
+    // Dry run is read-only — no lock needed.
+    const summary = buildResetSummary({ home, targets, forced: false, reingestRequested: reingest, reingested: null });
     if (reingest) {
-      const r = await ingestAll();
-      reingested = {
-        scannedSessions: r.scannedSessions,
-        ingestedSessions: r.ingestedSessions,
-        appendedTurns: r.appendedTurns,
-      };
+      process.stderr.write(
+        `burn state reset: --reingest requires --force; nothing was deleted.\n`,
+      );
     }
-
-    const summary = buildResetSummary({ home, targets: applied, forced: true, reingestRequested: reingest, reingested });
-    writeResetSummary(summary, { json, dryRun: false });
+    writeResetSummary(summary, { json, dryRun: true });
     return 0;
+  }
+
+  // Hold the ledger lock only across the deletion. ingestAll() can run for
+  // far longer than STALE_MS (lock.ts), so keeping the lock open across it
+  // would let a concurrent burn process treat this lock as stale and unlink
+  // it mid-run, defeating the mutex. The reingest path takes the lock per
+  // append internally.
+  const applied = await withLock('ledger', async () => {
+    const out: ResetTargetReport[] = [];
+    for (const t of targets) out.push(await applyResetTarget(t, home));
+    // The on-disk index was just unlinked; drop the in-memory dedup cache
+    // so any subsequent appendTurns / appendContent re-derives from the
+    // empty files instead of skipping records as duplicates of hashes
+    // loaded before the wipe.
+    invalidateIndexCache();
+    return out;
   });
+
+  let reingested: ResetSummary['reingested'] = null;
+  if (reingest) {
+    const r = await ingestAll();
+    reingested = {
+      scannedSessions: r.scannedSessions,
+      ingestedSessions: r.ingestedSessions,
+      appendedTurns: r.appendedTurns,
+    };
+  }
+
+  const summary = buildResetSummary({ home, targets: applied, forced: true, reingestRequested: reingest, reingested });
+  writeResetSummary(summary, { json, dryRun: false });
+  return 0;
 }
 
 async function collectResetTargets(): Promise<ResetTargetReport[]> {

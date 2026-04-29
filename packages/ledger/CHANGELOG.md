@@ -4,6 +4,10 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+### Added
+
+- Exposed `invalidateIndexCache()` so callers that wipe the on-disk index can drop the in-memory dedup cache before the next write.
+
 ### Fixed
 
 - The index-sidecar cache is now keyed on `ledgerHome()`, so `RELAYBURN_HOME` swaps invalidate it instead of leaking dedup hashes from the prior home.
