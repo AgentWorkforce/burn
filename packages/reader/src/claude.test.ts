@@ -204,6 +204,26 @@ describe('parseClaudeSession', () => {
     assert.equal(innerSpawn!.agentId, 'u-sub2-user');
   });
 
+  it('emits system subagent notifications as ToolResultEventRecords', async () => {
+    const { events, toolResultEvents } = await parseClaudeSession(
+      path.join(FIXTURES, 'system-subagent-notification.jsonl'),
+    );
+    assert.equal(events.length, 0, 'subagent system notifications are not compaction events');
+    assert.equal(toolResultEvents.length, 1);
+    const ev = toolResultEvents[0]!;
+    assert.equal(ev.source, 'claude-code');
+    assert.equal(ev.sessionId, '22222222-2222-2222-2222-222222222222');
+    assert.equal(ev.toolUseId, 'toolu_system');
+    assert.equal(ev.eventSource, 'subagent_notification');
+    assert.equal(ev.status, 'completed');
+    assert.equal(ev.agentId, 'agent-system-1');
+    assert.equal(ev.subagentSessionId, 'session-system-child');
+    assert.equal(ev.callIndex, 0);
+    assert.equal(ev.eventIndex, 0);
+    assert.equal(typeof ev.contentLength, 'number');
+    assert.equal(typeof ev.contentHash, 'string');
+  });
+
   it('attaches per-turn fidelity metadata with full coverage on a normal turn', async () => {
     const { turns } = await parseClaudeSession(path.join(FIXTURES, 'simple-turn.jsonl'));
     const t = turns[0]!;
@@ -860,6 +880,63 @@ describe('parseClaudeSession fork / continuation relationships (#112)', () => {
     assert.equal(root!.sessionId, 'resume-marker');
     assert.equal(root!.sourceSessionId, '99999999-9999-9999-9999-999999999999');
     assert.equal(root!.sourceVersion, '2.1.97');
+  });
+
+  it('emits explicit line-level fork and continuation rows', async () => {
+    const file = path.join(FIXTURES, 'explicit-line-relationships.jsonl');
+    const { relationships, evidence } = await parseClaudeSession(file, { sessionPath: file });
+
+    const continuation = relationships.find((r) => r.relationshipType === 'continuation');
+    const fork = relationships.find((r) => r.relationshipType === 'fork');
+    assert.ok(continuation, 'continuedFromSessionId must produce a continuation row');
+    assert.ok(fork, 'forkSessionId must produce a fork row');
+
+    assert.equal(continuation!.sessionId, 'explicit-line-relationships');
+    assert.equal(continuation!.relatedSessionId, 'original-session');
+    assert.equal(continuation!.sourceSessionId, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb');
+    assert.equal(continuation!.sourceVersion, '2.1.98');
+    assert.equal(fork!.sessionId, 'explicit-line-relationships');
+    assert.equal(fork!.relatedSessionId, 'fork-source-session');
+    assert.equal(fork!.sourceSessionId, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb');
+    assert.equal(fork!.sourceVersion, '2.1.98');
+
+    assert.deepEqual(evidence.explicitContinuationTargetSessionIds, ['original-session']);
+    assert.deepEqual(evidence.explicitForkTargetSessionIds, ['fork-source-session']);
+  });
+
+  it('reconciliation skips a continuation edge already emitted from an explicit line field', async () => {
+    const originalFile = path.join(FIXTURES, 'original-session.jsonl');
+    const explicitFile = path.join(FIXTURES, 'explicit-line-relationships.jsonl');
+    const { evidence: originalEv } = await parseClaudeSession(originalFile, {
+      sessionPath: originalFile,
+    });
+    const { relationships, evidence: explicitEv } = await parseClaudeSession(explicitFile, {
+      sessionPath: explicitFile,
+    });
+    assert.ok(
+      relationships.some(
+        (r) =>
+          r.relationshipType === 'continuation' &&
+          r.sessionId === 'explicit-line-relationships' &&
+          r.relatedSessionId === 'original-session',
+      ),
+      'the local parser emitted the explicit continuation row',
+    );
+
+    const reconciled = reconcileClaudeSessionRelationships([
+      { evidence: originalEv },
+      { evidence: explicitEv },
+    ]);
+    assert.equal(
+      reconciled.some(
+        (r) =>
+          r.relationshipType === 'continuation' &&
+          r.sessionId === 'explicit-line-relationships' &&
+          r.relatedSessionId === 'original-session',
+      ),
+      false,
+      'cross-file parentUuid inference must not duplicate the explicit edge',
+    );
   });
 
   it('captures firstParentUuid from the first non-sidechain user line even when a sidechain user line precedes it', async () => {

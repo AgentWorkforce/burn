@@ -709,6 +709,30 @@ describe('parseCodexSession execution graph (#42 / #87)', () => {
     assert.equal(roots[0]!.sessionId, 'sess_simple_1');
     assert.equal(roots[0]!.relatedSessionId, undefined);
     assert.equal(roots[0]!.ts, '2026-04-20T00:00:00.000Z');
+    assert.equal(roots[0]!.sourceVersion, '0.121.0');
+  });
+
+  it('emits fork and continuation rows from session_meta payloads', async () => {
+    const { relationships } = await parseCodexSession(
+      path.join(FIXTURES, 'session-meta-relationships.jsonl'),
+    );
+    const root = relationships.find((r) => r.relationshipType === 'root');
+    const fork = relationships.find((r) => r.relationshipType === 'fork');
+    const continuation = relationships.find((r) => r.relationshipType === 'continuation');
+    assert.ok(root);
+    assert.ok(fork);
+    assert.ok(continuation);
+
+    for (const row of [root!, fork!, continuation!]) {
+      assert.equal(row.source, 'codex');
+      assert.equal(row.sessionId, 'sess_meta_child');
+      assert.equal(row.sourceSessionId, 'sess_original');
+      assert.equal(row.sourceVersion, '0.130.0');
+      assert.equal(row.ts, '2026-04-24T00:00:00.000Z');
+    }
+
+    assert.equal(fork!.relatedSessionId, 'sess_fork_base');
+    assert.equal(continuation!.relatedSessionId, 'sess_previous');
   });
 
   it('emits a ToolResultEventRecord per function_call_output / custom_tool_call_output', async () => {

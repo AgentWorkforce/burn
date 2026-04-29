@@ -18,6 +18,7 @@ import type {
   Subagent,
   ToolCall,
   ToolResultEventRecord,
+  ToolResultStatus,
   TurnRecord,
   Usage,
   UserTurnBlock,
@@ -186,6 +187,11 @@ export interface ClaudeRelationshipEvidence {
   // and parses as a non-empty token. Used as `relatedSessionId` on the
   // emitted continuation row.
   resumeTargetSessionId?: string;
+  // Explicit per-line relationship targets. These are emitted directly by the
+  // parser, but reconciliation also needs to know about them so it can avoid
+  // adding a duplicate edge from cross-file inference.
+  explicitContinuationTargetSessionIds?: string[];
+  explicitForkTargetSessionIds?: string[];
 }
 
 export interface ParseResult {
@@ -255,6 +261,7 @@ export async function parseClaudeSession(
   // sessionId; subagent rows are derived after working records are resolved.
   const relationships: SessionRelationshipRecord[] = [];
   const seenRootSessionIds = new Set<string>();
+  const seenExplicitRelationshipIds = new Set<string>();
   // Relationship-evidence collector (#112). Populated as lines are read and
   // surfaced in the parse result so a cross-file reconciliation pass can
   // upgrade `root` rows to `fork` / `continuation`.
@@ -299,6 +306,14 @@ export async function parseClaudeSession(
         if (typeof mid === 'string') lastAssistantMessageId = mid;
         if (typeof al.sessionId === 'string' && al.sessionId.length > 0) {
           recordRoot(relationships, seenRootSessionIds, al.sessionId, al.timestamp, fileSessionId);
+          collectExplicitClaudeRelationships(
+            rec,
+            evidence,
+            relationships,
+            seenExplicitRelationshipIds,
+            fileSessionId ?? al.sessionId,
+            al.timestamp,
+          );
         }
         recordEvidenceFromLine(evidence, al);
         ingestAssistant(al, working, order, nodesByUuid);
@@ -310,6 +325,14 @@ export async function parseClaudeSession(
         collectErroredToolUseIds(ul, erroredToolUseIds);
         if (typeof ul.sessionId === 'string' && ul.sessionId.length > 0) {
           recordRoot(relationships, seenRootSessionIds, ul.sessionId, ul.timestamp, fileSessionId);
+          collectExplicitClaudeRelationships(
+            rec,
+            evidence,
+            relationships,
+            seenExplicitRelationshipIds,
+            fileSessionId ?? ul.sessionId,
+            ul.timestamp,
+          );
         }
         recordEvidenceFromLine(evidence, ul);
         recordResumeMarker(evidence, ul);
@@ -327,19 +350,30 @@ export async function parseClaudeSession(
         if (captureContent) {
           for (const c of extractUserContent(ul)) userPending.push({ seq, record: c });
         }
-      } else if (rec.type === 'system' && rec['subtype'] === 'compact_boundary') {
-        const sl = rec as { sessionId?: string; timestamp?: string };
-        const sessionId = sl.sessionId ?? '';
-        const ts = sl.timestamp ?? '';
-        if (sessionId) {
-          const ev: CompactionEvent = {
-            v: 1,
-            source: 'claude-code',
-            sessionId,
-            ts,
-          };
-          if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
-          events.push(ev);
+      } else if (rec.type === 'system') {
+        if (rec['subtype'] === 'compact_boundary') {
+          const sl = rec as { sessionId?: string; timestamp?: string };
+          const sessionId = sl.sessionId ?? '';
+          const ts = sl.timestamp ?? '';
+          if (sessionId) {
+            const ev: CompactionEvent = {
+              v: 1,
+              source: 'claude-code',
+              sessionId,
+              ts,
+            };
+            if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
+            events.push(ev);
+          }
+        }
+        const systemEvent = buildClaudeSystemToolResultEvent(
+          rec,
+          toolResultCounters,
+          nextEventIndex,
+        );
+        if (systemEvent) {
+          toolResultEvents.push(systemEvent);
+          nextEventIndex++;
         }
       }
       seq++;
@@ -571,12 +605,14 @@ async function prescanNodes(
       const al = rec as unknown as AssistantLine;
       registerAssistantNode(al, nodesByUuid);
       recordEvidenceFromLine(evidence, al);
+      recordExplicitRelationshipEvidence(evidence, rec);
       const mid = al.message?.id;
       if (typeof mid === 'string') lastAssistantMessageId = mid;
     } else if (rec.type === 'user') {
       const ul = rec as unknown as UserLine;
       registerUserNode(ul, nodesByUuid);
       recordEvidenceFromLine(evidence, ul);
+      recordExplicitRelationshipEvidence(evidence, rec);
       recordResumeMarker(evidence, ul);
     }
   }
@@ -895,6 +931,247 @@ function recordRoot(
   out.push(row);
 }
 
+function collectExplicitClaudeRelationships(
+  line: Record<string, unknown>,
+  evidence: ClaudeRelationshipEvidence,
+  out: SessionRelationshipRecord[],
+  seen: Set<string>,
+  sessionId: string,
+  fallbackTs: string | undefined,
+): void {
+  recordExplicitRelationshipEvidence(evidence, line);
+  for (const row of buildExplicitClaudeRelationships(line, sessionId, fallbackTs)) {
+    const key = relationshipKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+}
+
+function collectExplicitClaudeRelationshipsIncremental(
+  line: Record<string, unknown>,
+  evidence: ClaudeRelationshipEvidence,
+  out: Array<{ offset: number; record: SessionRelationshipRecord }>,
+  seen: Set<string>,
+  sessionId: string,
+  fallbackTs: string | undefined,
+  offset: number,
+): void {
+  recordExplicitRelationshipEvidence(evidence, line);
+  for (const row of buildExplicitClaudeRelationships(line, sessionId, fallbackTs)) {
+    const key = relationshipKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ offset, record: row });
+  }
+}
+
+function buildExplicitClaudeRelationships(
+  line: Record<string, unknown>,
+  sessionId: string,
+  fallbackTs: string | undefined,
+): SessionRelationshipRecord[] {
+  const rows: SessionRelationshipRecord[] = [];
+  const forkSessionId = lineStringField(line, ['forkSessionId', 'fork_session_id']);
+  if (forkSessionId !== undefined && forkSessionId !== sessionId) {
+    rows.push(buildExplicitClaudeRelationship(line, sessionId, forkSessionId, 'fork', fallbackTs));
+  }
+  const continuedFromSessionId = lineStringField(line, [
+    'continuedFromSessionId',
+    'continued_from_session_id',
+  ]);
+  if (continuedFromSessionId !== undefined && continuedFromSessionId !== sessionId) {
+    rows.push(
+      buildExplicitClaudeRelationship(
+        line,
+        sessionId,
+        continuedFromSessionId,
+        'continuation',
+        fallbackTs,
+      ),
+    );
+  }
+  return rows;
+}
+
+function buildExplicitClaudeRelationship(
+  line: Record<string, unknown>,
+  sessionId: string,
+  relatedSessionId: string,
+  relationshipType: 'fork' | 'continuation',
+  fallbackTs: string | undefined,
+): SessionRelationshipRecord {
+  const row: SessionRelationshipRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    relatedSessionId,
+    relationshipType,
+  };
+  const ts = lineStringField(line, ['timestamp', 'ts']) ?? fallbackTs;
+  if (ts !== undefined) row.ts = ts;
+  const sourceSessionId = lineStringField(line, ['sourceSessionId', 'source_session_id']);
+  if (sourceSessionId !== undefined) row.sourceSessionId = sourceSessionId;
+  const sourceVersion = lineStringField(line, ['version', 'sourceVersion', 'source_version']);
+  if (sourceVersion !== undefined) row.sourceVersion = sourceVersion;
+  return row;
+}
+
+function recordExplicitRelationshipEvidence(
+  evidence: ClaudeRelationshipEvidence,
+  line: Record<string, unknown>,
+): void {
+  const continuation = lineStringField(line, ['continuedFromSessionId', 'continued_from_session_id']);
+  if (continuation !== undefined) {
+    evidence.explicitContinuationTargetSessionIds = appendUnique(
+      evidence.explicitContinuationTargetSessionIds,
+      continuation,
+    );
+  }
+  const fork = lineStringField(line, ['forkSessionId', 'fork_session_id']);
+  if (fork !== undefined) {
+    evidence.explicitForkTargetSessionIds = appendUnique(
+      evidence.explicitForkTargetSessionIds,
+      fork,
+    );
+  }
+}
+
+function appendUnique(values: string[] | undefined, value: string): string[] {
+  if (values === undefined) return [value];
+  if (!values.includes(value)) values.push(value);
+  return values;
+}
+
+function relationshipKey(row: SessionRelationshipRecord): string {
+  return [
+    row.source,
+    row.sessionId,
+    row.relationshipType,
+    row.relatedSessionId ?? '',
+    row.agentId ?? '',
+    row.parentToolUseId ?? '',
+  ].join('|');
+}
+
+function hasRelationship(rows: SessionRelationshipRecord[], row: SessionRelationshipRecord): boolean {
+  const key = relationshipKey(row);
+  return rows.some((existing) => relationshipKey(existing) === key);
+}
+
+function buildClaudeSystemToolResultEvent(
+  line: Record<string, unknown>,
+  counters: Map<string, number>,
+  eventIndex: number,
+): ToolResultEventRecord | undefined {
+  const sessionId = lineStringField(line, ['sessionId', 'session_id']);
+  const toolUseId = lineStringField(line, [
+    'parent_tool_use_id',
+    'parentToolUseId',
+    'parentToolUseID',
+    'tool_use_id',
+    'toolUseId',
+  ]);
+  const agentId = lineStringField(line, ['agent_id', 'agentId']);
+  const subagentSessionId = lineStringField(line, [
+    'subagent_session_id',
+    'subagentSessionId',
+  ]);
+  if (sessionId === undefined || toolUseId === undefined) return undefined;
+  if (agentId === undefined && subagentSessionId === undefined) return undefined;
+  const callIndex = counters.get(toolUseId) ?? 0;
+  counters.set(toolUseId, callIndex + 1);
+  const status = claudeSystemEventStatus(line);
+  const record: ToolResultEventRecord = {
+    v: 1,
+    source: 'claude-code',
+    sessionId,
+    toolUseId,
+    callIndex,
+    eventIndex,
+    status,
+    eventSource: 'subagent_notification',
+  };
+  const ts = lineStringField(line, ['timestamp', 'ts']);
+  if (ts !== undefined) record.ts = ts;
+  if (agentId !== undefined) record.agentId = agentId;
+  if (subagentSessionId !== undefined) record.subagentSessionId = subagentSessionId;
+  if (status === 'errored') record.isError = true;
+  const content = firstPresent(line, ['content', 'output', 'result', 'message']);
+  const measured = measureToolResult(content);
+  if (measured.length !== undefined) record.contentLength = measured.length;
+  if (measured.hash !== undefined) record.contentHash = measured.hash;
+  return record;
+}
+
+function claudeSystemEventStatus(line: Record<string, unknown>): ToolResultStatus {
+  if (line['is_error'] === true || line['isError'] === true) return 'errored';
+  const status = normalizeToolResultStatus(
+    lineStringField(line, ['status', 'state', 'result', 'terminal_status', 'terminalStatus']),
+  );
+  if (status !== undefined) return status;
+  if (line['success'] === true) return 'completed';
+  if (line['success'] === false) return 'errored';
+  return 'unknown';
+}
+
+function normalizeToolResultStatus(value: string | undefined): ToolResultStatus | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.toLowerCase().replace(/[-\s]/g, '_');
+  if (
+    normalized === 'completed' ||
+    normalized === 'complete' ||
+    normalized === 'success' ||
+    normalized === 'succeeded' ||
+    normalized === 'done'
+  ) {
+    return 'completed';
+  }
+  if (
+    normalized === 'error' ||
+    normalized === 'errored' ||
+    normalized === 'failed' ||
+    normalized === 'failure'
+  ) {
+    return 'errored';
+  }
+  if (
+    normalized === 'running' ||
+    normalized === 'in_progress' ||
+    normalized === 'queued' ||
+    normalized === 'pending' ||
+    normalized === 'started'
+  ) {
+    return 'running';
+  }
+  if (
+    normalized === 'cancelled' ||
+    normalized === 'canceled' ||
+    normalized === 'aborted'
+  ) {
+    return 'cancelled';
+  }
+  return undefined;
+}
+
+function firstPresent(obj: Record<string, unknown>, keys: ReadonlyArray<string>): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+  }
+  return undefined;
+}
+
+function lineStringField(
+  obj: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | undefined {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
 // Walk a user line's tool_result blocks and emit one ToolResultEventRecord
 // per block. Status follows from is_error: errored vs completed; `running` /
 // `cancelled` are reserved for future progress / queue events that Claude
@@ -1132,6 +1409,7 @@ function emitLocalContinuationFromResume(
   };
   if (ev.resumeTargetSessionId !== undefined) row.relatedSessionId = ev.resumeTargetSessionId;
   if (ev.firstTs !== undefined) row.ts = ev.firstTs;
+  if (hasRelationship(out, row)) return;
   applyEvidenceProvenance(row, ev);
   out.push(row);
 }
@@ -1224,6 +1502,7 @@ export function reconcileClaudeSessionRelationships(
     // at exactly this parent — avoids a duplicate hash collision at write
     // time (the dedup index would silently drop one anyway).
     if (ev.hasResumeMarker && ev.resumeTargetSessionId === parentSid) continue;
+    if (hasExplicitTarget(ev.explicitContinuationTargetSessionIds, parentSid)) continue;
     const row: SessionRelationshipRecord = {
       v: 1,
       source: 'claude-code',
@@ -1257,6 +1536,7 @@ export function reconcileClaudeSessionRelationships(
       // fork from the shared source — it's a linear successor.
       const parent = continuationOf.get(sid);
       if (parent !== undefined && group.some((g) => g.fileSessionId === parent)) continue;
+      if (hasExplicitTarget(ev.explicitForkTargetSessionIds, foreign)) continue;
       const row: SessionRelationshipRecord = {
         v: 1,
         source: 'claude-code',
@@ -1272,6 +1552,10 @@ export function reconcileClaudeSessionRelationships(
   }
 
   return out;
+}
+
+function hasExplicitTarget(targets: string[] | undefined, sessionId: string): boolean {
+  return targets?.includes(sessionId) === true;
 }
 
 // Mark tool_result events whose toolUseId resolved to a subagent invocation
@@ -1620,6 +1904,7 @@ export async function parseClaudeSessionIncremental(
     record: SessionRelationshipRecord;
   }> = [];
   const seenRootSessionIds = new Set<string>();
+  const seenExplicitRelationshipIds = new Set<string>();
   // Per-user-turn records tagged with their line offset so we can drop any
   // that fall past endOffset (avoiding double-emission on resume), mirroring
   // the content/event handling.
@@ -1678,6 +1963,15 @@ export async function parseClaudeSessionIncremental(
           lineStartOffset,
           fileSessionId,
         );
+        collectExplicitClaudeRelationshipsIncremental(
+          rec,
+          evidence,
+          pendingRelationships,
+          seenExplicitRelationshipIds,
+          fileSessionId ?? line.sessionId,
+          line.timestamp,
+          lineStartOffset,
+        );
       }
       recordEvidenceFromLine(evidence, line);
       ingestAssistant(line, working, order, nodesByUuid);
@@ -1695,6 +1989,15 @@ export async function parseClaudeSessionIncremental(
           ul.timestamp,
           lineStartOffset,
           fileSessionId,
+        );
+        collectExplicitClaudeRelationshipsIncremental(
+          rec,
+          evidence,
+          pendingRelationships,
+          seenExplicitRelationshipIds,
+          fileSessionId ?? ul.sessionId,
+          ul.timestamp,
+          lineStartOffset,
         );
       }
       recordEvidenceFromLine(evidence, ul);
@@ -1723,19 +2026,30 @@ export async function parseClaudeSessionIncremental(
           pendingUserContent.push({ offset: lineStartOffset, record: c });
         }
       }
-    } else if (rec.type === 'system' && rec['subtype'] === 'compact_boundary') {
-      const sl = rec as { sessionId?: string; timestamp?: string };
-      const sessionId = sl.sessionId ?? '';
-      const ts = sl.timestamp ?? '';
-      if (sessionId) {
-        const ev: CompactionEvent = {
-          v: 1,
-          source: 'claude-code',
-          sessionId,
-          ts,
-        };
-        if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
-        events.push({ offset: lineStartOffset, event: ev });
+    } else if (rec.type === 'system') {
+      if (rec['subtype'] === 'compact_boundary') {
+        const sl = rec as { sessionId?: string; timestamp?: string };
+        const sessionId = sl.sessionId ?? '';
+        const ts = sl.timestamp ?? '';
+        if (sessionId) {
+          const ev: CompactionEvent = {
+            v: 1,
+            source: 'claude-code',
+            sessionId,
+            ts,
+          };
+          if (lastAssistantMessageId) ev.precedingMessageId = lastAssistantMessageId;
+          events.push({ offset: lineStartOffset, event: ev });
+        }
+      }
+      const systemEvent = buildClaudeSystemToolResultEvent(
+        rec,
+        toolResultCounters,
+        nextEventIndex,
+      );
+      if (systemEvent) {
+        pendingToolResultEvents.push({ offset: lineStartOffset, record: systemEvent });
+        nextEventIndex++;
       }
     }
   }

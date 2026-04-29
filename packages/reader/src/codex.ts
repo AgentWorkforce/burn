@@ -93,6 +93,14 @@ interface SessionMetaPayload {
   id?: string;
   cwd?: string;
   timestamp?: string;
+  cli_version?: string;
+  version?: string;
+  sourceSessionId?: string;
+  source_session_id?: string;
+  forkSessionId?: string;
+  fork_session_id?: string;
+  continuedFromSessionId?: string;
+  continued_from_session_id?: string;
 }
 
 interface TurnContextPayload {
@@ -448,8 +456,13 @@ export async function parseCodexSessionIncremental(
         const ts = typeof sp.timestamp === 'string' ? sp.timestamp : rec.timestamp;
         pendingRelationships.push({
           offset: lineEndOffset,
-          record: buildRootRelationship(sessionId, ts),
+          record: buildRootRelationship(sessionId, ts, sp),
         });
+      }
+      if (typeof sessionId === 'string' && sessionId.length > 0) {
+        for (const row of buildSessionMetaRelationships(sessionId, sp, rec.timestamp)) {
+          pendingRelationships.push({ offset: lineEndOffset, record: row });
+        }
       }
       continue;
     }
@@ -1236,6 +1249,7 @@ function pickCustomToolTarget(name: string, input: string): string | undefined {
 function buildRootRelationship(
   sessionId: string,
   ts?: string,
+  meta?: SessionMetaPayload,
 ): SessionRelationshipRecord {
   const row: SessionRelationshipRecord = {
     v: 1,
@@ -1244,7 +1258,67 @@ function buildRootRelationship(
     relationshipType: 'root',
   };
   if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+  applyCodexSessionMetaProvenance(row, meta);
   return row;
+}
+
+function buildSessionMetaRelationships(
+  sessionId: string,
+  meta: SessionMetaPayload,
+  fallbackTs?: string,
+): SessionRelationshipRecord[] {
+  const rows: SessionRelationshipRecord[] = [];
+  const ts = stringField(meta, ['timestamp']) ?? fallbackTs;
+  const forkSessionId = stringField(meta, ['forkSessionId', 'fork_session_id']);
+  if (forkSessionId !== undefined && forkSessionId !== sessionId) {
+    const row: SessionRelationshipRecord = {
+      v: 1,
+      source: 'codex',
+      sessionId,
+      relatedSessionId: forkSessionId,
+      relationshipType: 'fork',
+    };
+    if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+    applyCodexSessionMetaProvenance(row, meta);
+    rows.push(row);
+  }
+  const continuedFromSessionId = stringField(meta, [
+    'continuedFromSessionId',
+    'continued_from_session_id',
+  ]);
+  if (continuedFromSessionId !== undefined && continuedFromSessionId !== sessionId) {
+    const row: SessionRelationshipRecord = {
+      v: 1,
+      source: 'codex',
+      sessionId,
+      relatedSessionId: continuedFromSessionId,
+      relationshipType: 'continuation',
+    };
+    if (typeof ts === 'string' && ts.length > 0) row.ts = ts;
+    applyCodexSessionMetaProvenance(row, meta);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function applyCodexSessionMetaProvenance(
+  row: SessionRelationshipRecord,
+  meta: SessionMetaPayload | undefined,
+): void {
+  if (!meta) return;
+  const sourceSessionId = stringField(meta, ['sourceSessionId', 'source_session_id']);
+  if (sourceSessionId !== undefined) row.sourceSessionId = sourceSessionId;
+  const sourceVersion = stringField(meta, ['cli_version', 'version']);
+  if (sourceVersion !== undefined) row.sourceVersion = sourceVersion;
+}
+
+function stringField(obj: object, keys: ReadonlyArray<string>): string | undefined {
+  const record = obj as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
 }
 
 // Build / refresh the SessionRelationshipRecord for a `spawn_agent` call once
