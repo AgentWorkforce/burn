@@ -27,5 +27,8 @@ describe('harness registry', () => {
     assert.equal(await lookupHarness('cursor'), undefined);
     assert.equal(await lookupHarness(''), undefined);
     assert.equal(await lookupHarness('claude '), undefined);
+    assert.equal(await lookupHarness('constructor'), undefined);
+    assert.equal(await lookupHarness('toString'), undefined);
+    assert.equal(await lookupHarness('__proto__'), undefined);
   });
 });

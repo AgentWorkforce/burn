@@ -11,7 +11,7 @@ const ADAPTERS: Record<string, AdapterLoader> = {
 };
 
 export async function lookupHarness(name: string): Promise<HarnessAdapter | undefined> {
-  const load = ADAPTERS[name];
+  const load = Object.hasOwn(ADAPTERS, name) ? ADAPTERS[name] : undefined;
   return load ? load() : undefined;
 }
 
