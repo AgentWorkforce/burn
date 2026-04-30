@@ -201,7 +201,10 @@ export async function runHotspots(args: ParsedArgs): Promise<number> {
   }
 
   await withProgress('ingesting latest sessions', (task) =>
-    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    ingestAll({
+      onProgress: (message) => task.update(`ingest: ${message}`),
+      onWarn: (body) => task.warn(body),
+    }),
   );
   const pricing = await withProgress('loading pricing snapshot', async (task) => {
     const loaded = await loadPricing();

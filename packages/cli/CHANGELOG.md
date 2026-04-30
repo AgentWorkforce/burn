@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Changed
+
+- Style the ingest content-capture gap warning as a `⚠` banner that flows through the active progress spinner (yellow `⚠` via `ora.warn`, multi-line with hang-indent), instead of a `[burn] warning: …` blob that printed mid-spinner.
+
 ## [1.3.1] - 2026-04-30
 
 ### Fixed

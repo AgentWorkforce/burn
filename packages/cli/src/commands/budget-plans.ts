@@ -342,7 +342,11 @@ async function statusForPlans(
   const progress = progressOptions(opts);
   await withProgress(
     'ingesting latest sessions',
-    (task) => ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    (task) =>
+      ingestAll({
+        onProgress: (message) => task.update(`ingest: ${message}`),
+        onWarn: (body) => task.warn(body),
+      }),
     progress,
   );
   const pricing = await withProgress('loading pricing snapshot', async (task) => {
