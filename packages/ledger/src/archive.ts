@@ -312,17 +312,7 @@ export interface BuildResult {
  * we delete and recreate, since the archive is by design rebuildable.
  */
 export async function openArchive(): Promise<DatabaseSync> {
-  if (!archiveEnabled()) {
-    const db = new DatabaseSync(':memory:');
-    db.exec('PRAGMA foreign_keys = ON');
-    db.exec(SCHEMA_SQL);
-    applyAdditiveMigrations(db);
-    db.prepare(
-      `INSERT INTO archive_state (id, ledger_offset_bytes, ledger_mtime_ms, archive_version)
-       VALUES (1, 0, 0, ?)`,
-    ).run(ARCHIVE_VERSION);
-    return db;
-  }
+  assertFileStorage();
 
   const dbPath = archivePath();
   await mkdir(path.dirname(dbPath), { recursive: true });
@@ -413,47 +403,13 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-function archiveEnabled(): boolean {
-  return getStorageAdapterKind() === 'file';
-}
-
-function emptyBuildResult(): BuildResult {
-  return {
-    scannedBytes: 0,
-    turnsApplied: 0,
-    sessionsTouched: 0,
-    stampsApplied: 0,
-    compactionsApplied: 0,
-    toolResultEventsApplied: 0,
-    rebuiltFromZero: false,
-  };
-}
-
-function emptyArchiveStatus(
-  archiveFilePath: string,
-  ledgerSizeBytes: number,
-  ledgerMtimeMsCurrent: number,
-): ArchiveStatus {
-  return {
-    archivePath: archiveFilePath,
-    exists: false,
-    archiveVersion: ARCHIVE_VERSION,
-    ledgerOffsetBytes: 0,
-    ledgerMtimeMs: 0,
-    ledgerSizeBytes,
-    ledgerMtimeMsCurrent,
-    upToDate: false,
-    lastBuiltAt: null,
-    lastRebuildAt: null,
-    rowCounts: {
-      sessions: 0,
-      turns: 0,
-      toolCalls: 0,
-      toolResultEvents: 0,
-      compactions: 0,
-    },
-    fidelityHistogram: {},
-  };
+function assertFileStorage(): void {
+  const kind = getStorageAdapterKind();
+  if (kind !== 'file') {
+    throw new Error(
+      `archive operations require RELAYBURN_STORAGE=file (got ${kind})`,
+    );
+  }
 }
 
 /**
@@ -465,7 +421,7 @@ function emptyArchiveStatus(
  * threw).
  */
 export async function rebuildArchive(): Promise<BuildResult> {
-  if (!archiveEnabled()) return emptyBuildResult();
+  assertFileStorage();
   return withLock('archive', async () => {
     const dbPath = archivePath();
     await unlink(dbPath).catch(() => undefined);
@@ -488,7 +444,7 @@ export async function rebuildArchive(): Promise<BuildResult> {
  * path.
  */
 export async function buildArchive(): Promise<BuildResult> {
-  if (!archiveEnabled()) return emptyBuildResult();
+  assertFileStorage();
   return withLock('archive', () => buildArchiveLocked());
 }
 
@@ -512,15 +468,7 @@ export async function buildArchive(): Promise<BuildResult> {
  * against an artificially small pre-vacuum number.
  */
 export async function vacuumArchive(): Promise<VacuumResult> {
-  if (!archiveEnabled()) {
-    return {
-      archivePath: archivePath(),
-      existed: false,
-      beforeBytes: 0,
-      afterBytes: 0,
-      reclaimedBytes: 0,
-    };
-  }
+  assertFileStorage();
   return withLock('archive', async () => {
     const dbPath = archivePath();
     if (!(await fileExists(dbPath))) {
@@ -1311,9 +1259,7 @@ async function* readJsonlFrom(filePath: string, startOffset: number): AsyncItera
  * consistent read view.
  */
 export async function getArchiveStatus(): Promise<ArchiveStatus> {
-  if (!archiveEnabled()) {
-    return emptyArchiveStatus(archivePath(), 0, 0);
-  }
+  assertFileStorage();
   const dbPath = archivePath();
   const exists = await fileExists(dbPath);
   const ledger = ledgerPath();

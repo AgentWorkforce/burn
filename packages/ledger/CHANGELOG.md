@@ -7,6 +7,7 @@ All notable changes to `@relayburn/ledger`.
 ### Changed
 
 - Ledger reads, writes, locks, and content sidecars now run through the file-backed storage adapter seam without changing the JSONL filesystem output.
+- Archive helpers (`openArchive`, `buildArchive`, `rebuildArchive`, `vacuumArchive`, `getArchiveStatus`) now throw when `RELAYBURN_STORAGE` is anything other than `file`, instead of silently returning an empty in-memory database — `burn summary` etc. would otherwise report zero turns to users on unsupported backends.
 
 ## [1.1.0] - 2026-04-29
 

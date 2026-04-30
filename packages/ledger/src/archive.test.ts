@@ -1326,4 +1326,22 @@ describe('archive', () => {
     const status = await getArchiveStatus();
     assert.equal(status.rowCounts.turns, 1);
   });
+
+  it('archive helpers throw when RELAYBURN_STORAGE is not file', async () => {
+    const originalStorage = process.env['RELAYBURN_STORAGE'];
+    process.env['RELAYBURN_STORAGE'] = 'sqlite';
+    try {
+      await assert.rejects(buildArchive(), /RELAYBURN_STORAGE=file/);
+      await assert.rejects(rebuildArchive(), /RELAYBURN_STORAGE=file/);
+      await assert.rejects(vacuumArchive(), /RELAYBURN_STORAGE=file/);
+      await assert.rejects(getArchiveStatus(), /RELAYBURN_STORAGE=file/);
+      await assert.rejects(openArchive(), /RELAYBURN_STORAGE=file/);
+    } finally {
+      if (originalStorage === undefined) {
+        delete process.env['RELAYBURN_STORAGE'];
+      } else {
+        process.env['RELAYBURN_STORAGE'] = originalStorage;
+      }
+    }
+  });
 });
