@@ -45,6 +45,7 @@ Examples:
   burn overhead --since 30d
   burn overhead --kind claude-md
   burn overhead trim --top 3
+  burn overhead trim --json
   burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 30d
   burn run claude   --tag workflow=refactor -- --resume
   burn run codex    --tag workflow=refactor

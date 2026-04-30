@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn overhead trim --json` now emits structured trim recommendations with section metadata, projected savings, and the unified diff for each recommendation.
+
 ## [1.2.0] - 2026-04-30
 
 ### Added
