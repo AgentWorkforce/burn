@@ -244,9 +244,19 @@ export async function runHotspots(args: ParsedArgs): Promise<number> {
 // Exposed for tests so they can drive the orchestration with fixture turns
 // and a mocked content/userTurns loader. Production callers go through
 // `runHotspots`, which fetches both via the ledger.
+//
+// Bulk-shaped (Set → Map) rather than per-session to keep the production
+// `queryUserTurns` path to a single ledger pass: the per-session form
+// `queryUserTurns({sessionId})` streams the entire ledger.jsonl on every
+// call, which on a 7-day slice with hundreds of sessions adds minutes of
+// silent disk I/O after `read N turns`.
 export interface HotspotsAttributionDeps {
-  loadContentForSession?: (sessionId: string) => Promise<ContentRecord[]>;
-  loadUserTurnsForSession?: (sessionId: string) => Promise<UserTurnRecord[]>;
+  loadContentBySession?: (
+    sessionIds: Set<string>,
+  ) => Promise<Map<string, ContentRecord[]>>;
+  loadUserTurnsBySession?: (
+    sessionIds: Set<string>,
+  ) => Promise<Map<string, UserTurnRecord[]>>;
 }
 
 export async function runHotspotsAttribution(
@@ -304,22 +314,12 @@ export async function runHotspotsAttribution(
     return 2;
   }
 
-  const loadContent =
-    deps.loadContentForSession ??
-    ((sessionId: string) => readContent({ sessionId }));
-  const loadUserTurns =
-    deps.loadUserTurnsForSession ??
-    ((sessionId: string) => queryUserTurns({ sessionId }));
+  const loadContent = deps.loadContentBySession ?? defaultLoadContentBySession;
+  const loadUserTurns = deps.loadUserTurnsBySession ?? defaultLoadUserTurnsBySession;
 
   const sessionIds = new Set(eligible.map((t) => t.sessionId));
-  const contentBySession = new Map<string, ContentRecord[]>();
-  const userTurnsBySession = new Map<string, UserTurnRecord[]>();
-  for (const sessionId of sessionIds) {
-    const records = await loadContent(sessionId);
-    if (records.length > 0) contentBySession.set(sessionId, records);
-    const userTurns = await loadUserTurns(sessionId);
-    if (userTurns.length > 0) userTurnsBySession.set(sessionId, userTurns);
-  }
+  const userTurnsBySession = await loadUserTurns(sessionIds);
+  const contentBySession = await loadContent(sessionIds);
 
   const result = attributeHotspots(eligible, {
     pricing,
@@ -763,7 +763,7 @@ export async function runPatternsMode(
     selected.has('opencode-system-prompt') || selected.has('tool-output-bloat');
   const userTurnsBySession = needUserTurns
     ? await withProgress('reading user turns for pattern detectors', async (task) => {
-        const rows = await loadUserTurnsBySession(perDetector);
+        const rows = await userTurnsForPatternDetectors(perDetector);
         task.succeed(`read user turns for ${formatInt(rows.size)} session${rows.size === 1 ? '' : 's'}`);
         return rows;
       })
@@ -778,7 +778,7 @@ export async function runPatternsMode(
   const needContent = enrichableDetectors.some((d) => selected.has(d));
   const contentBySession = needContent
     ? await withProgress('reading content for pattern detectors', async (task) => {
-        const rows = await loadContentBySession(perDetector, enrichableDetectors);
+        const rows = await contentForPatternDetectors(perDetector, enrichableDetectors);
         task.succeed(`read content for ${formatInt(rows.size)} session${rows.size === 1 ? '' : 's'}`);
         return rows;
       })
@@ -1436,19 +1436,71 @@ function renderEditHeavyTable(
   return table(rows);
 }
 
-async function loadUserTurnsBySession(
+// One ledger pass + in-memory bucket. The per-session form
+// `queryUserTurns({sessionId})` re-streams the entire ledger.jsonl on every
+// call, so issuing it once per session costs O(sessions × ledger-size). Used
+// by both the attribution loader and the patterns helper below.
+export async function bulkUserTurnsBySession(
+  sessionIds: Set<string>,
+): Promise<Map<string, UserTurnRecord[]>> {
+  const out = new Map<string, UserTurnRecord[]>();
+  if (sessionIds.size === 0) return out;
+  const all = await queryUserTurns();
+  for (const ut of all) {
+    if (!sessionIds.has(ut.sessionId)) continue;
+    const list = out.get(ut.sessionId);
+    if (list) list.push(ut);
+    else out.set(ut.sessionId, [ut]);
+  }
+  return out;
+}
+
+// Default loader for `runHotspotsAttribution`. Wraps the bulk helper in a
+// progress task so the user sees something between "read N turns" and the
+// final report.
+async function defaultLoadUserTurnsBySession(
+  sessionIds: Set<string>,
+): Promise<Map<string, UserTurnRecord[]>> {
+  return withProgress('reading user turns for attribution', async (task) => {
+    const out = await bulkUserTurnsBySession(sessionIds);
+    task.succeed(
+      `read user turns for ${formatInt(out.size)} session${out.size === 1 ? '' : 's'}`,
+    );
+    return out;
+  });
+}
+
+// Default loader for content sidecars. Each sidecar is its own file under
+// ~/.relayburn/content/, so this stays per-session — just wrapped in a
+// progress task with a periodic counter so a long loop doesn't look frozen.
+async function defaultLoadContentBySession(
+  sessionIds: Set<string>,
+): Promise<Map<string, ContentRecord[]>> {
+  return withProgress('reading content sidecars', async (task) => {
+    const out = new Map<string, ContentRecord[]>();
+    const total = sessionIds.size;
+    let i = 0;
+    for (const sessionId of sessionIds) {
+      i++;
+      task.update(`reading content sidecars (${formatInt(i)}/${formatInt(total)})`);
+      const records = await readContent({ sessionId });
+      if (records.length > 0) out.set(sessionId, records);
+    }
+    task.succeed(
+      `read content for ${formatInt(out.size)} session${out.size === 1 ? '' : 's'}`,
+    );
+    return out;
+  });
+}
+
+async function userTurnsForPatternDetectors(
   perDetector: Map<PatternKind, EnrichedTurn[]>,
 ): Promise<Map<string, UserTurnRecord[]>> {
   const sessionIds = new Set<string>();
   for (const turns of perDetector.values()) {
     for (const t of turns) sessionIds.add(t.sessionId);
   }
-  const out = new Map<string, UserTurnRecord[]>();
-  for (const sessionId of sessionIds) {
-    const userTurns = await queryUserTurns({ sessionId });
-    if (userTurns.length > 0) out.set(sessionId, userTurns);
-  }
-  return out;
+  return bulkUserTurnsBySession(sessionIds);
 }
 
 // Reads the per-session content sidecar for every session that lands in any
@@ -1457,7 +1509,7 @@ async function loadUserTurnsBySession(
 // `detectPatterns` keys enrichment off the map being non-empty per session,
 // so the absent entry yields the graceful-degradation behavior the
 // enrichment layer promises.
-async function loadContentBySession(
+async function contentForPatternDetectors(
   perDetector: Map<PatternKind, EnrichedTurn[]>,
   detectors: PatternKind[],
 ): Promise<Map<string, ContentRecord[]>> {
