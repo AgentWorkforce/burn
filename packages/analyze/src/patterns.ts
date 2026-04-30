@@ -179,7 +179,7 @@ export interface SystemPromptTax {
 // OpenCode `read`/`edit`/`write`, Codex `read_file`/`apply_patch`. Codex's
 // `apply_patch` may bundle multiple files per call, so the same threshold
 // flags Codex more conservatively than it would if we counted files — known
-// per-harness tunable, see #167.
+// per-harness tunable.
 export interface EditHeavySession {
   source: SourceKind;
   sessionId: string;
@@ -256,8 +256,7 @@ const SAMPLE_PREVIEW_MAX_CHARS = 200;
 // edits / reads above this and editCount ≥ MIN flags the session.
 // Threshold ported from codeburn (Claude-derived). Codex `apply_patch` bundles
 // multiple files per call, so this same threshold flags Codex more
-// conservatively than a file-level count would — documented in #167 as a
-// known per-harness tunable.
+// conservatively than a file-level count would — known per-harness tunable.
 const EDIT_HEAVY_RATIO = 4;
 const EDIT_HEAVY_MIN_EDITS = 5;
 

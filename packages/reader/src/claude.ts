@@ -154,11 +154,11 @@ export interface ParseOptions {
   // basename for Claude). When omitted but `sessionPath` is set, the parser
   // derives it from the basename. Used as the authoritative "file session id"
   // when comparing against in-log `sessionId` fields — a mismatch is the
-  // evidence channel for fork / continuation classification (#112).
+  // evidence channel for fork / continuation classification.
   fileSessionId?: string;
 }
 
-// Per-file relationship evidence (#112). Single-file parse passes can't see
+// Per-file relationship evidence. Single-file parse passes can't see
 // across session files, so they collect the signals that a subsequent
 // `reconcileClaudeSessionRelationships` call needs to upgrade `root` rows to
 // `fork` / `continuation` once it has visibility into the rest of the corpus.
@@ -207,20 +207,20 @@ export interface ParseResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   events: CompactionEvent[];
-  // Normalized execution-graph metadata (#42). `relationships` describes how
+  // Normalized execution-graph metadata. `relationships` describes how
   // sessions relate (`root` + one row per discovered subagent invocation +
   // `continuation` rows when the file carries a `/resume` marker). Cross-file
   // fork / continuation rows are produced by `reconcileClaudeSessionRelationships`
-  // (#112) given the per-file `evidence` from multiple parses.
+  // given the per-file `evidence` from multiple parses.
   // `toolResultEvents` is the chronological tool_result stream keyed by
   // `toolUseId`.
   relationships: SessionRelationshipRecord[];
   toolResultEvents: ToolResultEventRecord[];
-  // Per-user-turn block info between assistant turns (issue #2). Ordered by
-  // appearance in the session log; entries reference adjacent assistant turns
-  // by `precedingMessageId` / `followingMessageId`.
+  // Per-user-turn block info between assistant turns. Ordered by appearance
+  // in the session log; entries reference adjacent assistant turns by
+  // `precedingMessageId` / `followingMessageId`.
   userTurns: UserTurnRecord[];
-  // Per-file relationship evidence (#112). Carries the signals needed by
+  // Per-file relationship evidence. Carries the signals needed by
   // `reconcileClaudeSessionRelationships` to upgrade `root` rows to `fork` /
   // `continuation` once cross-file knowledge is available. Always populated;
   // a single-file caller can ignore it.
@@ -249,7 +249,7 @@ export async function parseClaudeSession(
   const events: CompactionEvent[] = [];
   // Per-user-turn block info between assistant turns. Captured in source order
   // so consumers can recover per-tool-call cost as a delta against the next
-  // assistant turn's input/cacheRead numbers (issue #2).
+  // assistant turn's input/cacheRead numbers.
   const userTurns: UserTurnRecord[] = [];
   // The user-turn record that hasn't yet been linked to its following
   // assistant turn — set when we read a user line, cleared when the next
@@ -260,7 +260,7 @@ export async function parseClaudeSession(
   let lastAssistantMessageId: string | undefined;
   let currentUserText = '';
   let seq = 0;
-  // Execution graph (#42). Tool-result chronology events are emitted as user
+  // Execution graph. Tool-result chronology events are emitted as user
   // lines carrying `tool_result` blocks are read so chronology matches log
   // order even within a single user line carrying multiple results. The
   // counter is shared across the whole file for this parse pass.
@@ -272,7 +272,7 @@ export async function parseClaudeSession(
   const relationships: SessionRelationshipRecord[] = [];
   const seenRootSessionIds = new Set<string>();
   const seenExplicitRelationshipIds = new Set<string>();
-  // Relationship-evidence collector (#112). Populated as lines are read and
+  // Relationship-evidence collector. Populated as lines are read and
   // surfaced in the parse result so a cross-file reconciliation pass can
   // upgrade `root` rows to `fork` / `continuation`.
   const fileSessionId = deriveFileSessionId(options);
@@ -574,7 +574,7 @@ function registerUserNode(
 // resolve parentUuid chains that reach back before the resume point. Returns
 // the messageId of the last assistant line seen so a resumed pass can anchor
 // `precedingMessageId` on user turns whose preceding assistant was already
-// ingested in a prior pass. Also populates `evidence` (#112) with the
+// ingested in a prior pass. Also populates `evidence` with the
 // relationship signals carried by the already-ingested prefix —
 // `firstParentUuid` and `inLogSessionIds` are file invariants, so a resumed
 // pass that reads only the tail must still see them.
@@ -938,7 +938,7 @@ function applyEditHashes(call: ToolCall, input: Record<string, unknown>): void {
 }
 
 // ---------------------------------------------------------------------------
-// Execution graph helpers (#42).
+// Execution graph helpers.
 // ---------------------------------------------------------------------------
 
 // Emit a `root` row for a session id. When the file's authoritative session
@@ -1314,7 +1314,7 @@ function collectSubagentRelationships(
 }
 
 // ---------------------------------------------------------------------------
-// Fork / continuation helpers (#112).
+// Fork / continuation helpers.
 //
 // Single-file parsers can't see across session files, so they collect evidence
 // (in-log session id, version, first parentUuid, /resume markers, all uuids
@@ -1483,7 +1483,7 @@ function pickForeignSessionId(ev: ClaudeRelationshipEvidence): string | undefine
 }
 
 // ---------------------------------------------------------------------------
-// Cross-file reconciliation (#112).
+// Cross-file reconciliation.
 // ---------------------------------------------------------------------------
 
 export interface ReconcileClaudeRelationshipsInput {
@@ -1837,7 +1837,7 @@ export interface ParseIncrementalResult {
   turns: TurnRecord[];
   content: ContentRecord[];
   events: CompactionEvent[];
-  // Execution graph (#42) — see ParseResult for shape. Both arrays follow
+  // Execution graph — see ParseResult for shape. Both arrays follow
   // the same endOffset dedup rule the rest of the incremental result uses:
   // any record whose source line lives at or past endOffset is deferred to
   // the next pass so we don't double-emit on resume.
@@ -1846,11 +1846,11 @@ export interface ParseIncrementalResult {
   endOffset: number;
   // Carry forward to the next incremental call; see `lastUserText` option.
   lastUserText: string;
-  // Per-user-turn block info between assistant turns (issue #2). Filtered by
+  // Per-user-turn block info between assistant turns. Filtered by
   // `endOffset` like content/events so the next incremental pass re-reads any
   // bytes past the cursor without double-emitting.
   userTurns: UserTurnRecord[];
-  // Per-file relationship evidence (#112). Reflects everything the parser saw
+  // Per-file relationship evidence. Reflects everything the parser saw
   // in *this* pass (including the prescanned prefix when resuming). Cumulative
   // — callers that drive multi-pass ingest can use the latest call's
   // `evidence` when feeding `reconcileClaudeSessionRelationships`.
@@ -1902,7 +1902,7 @@ export async function parseClaudeSessionIncremental(
   // Also captures the last assistant messageId before the resume point so
   // user turns landing in this pass can record `precedingMessageId` even
   // when their preceding assistant was already ingested previously.
-  // Per-file relationship evidence (#112). Seeded from the prescan when
+  // Per-file relationship evidence. Seeded from the prescan when
   // resuming so cross-file reconciliation sees a consistent view regardless
   // of whether the call started at offset 0 or partway through.
   const fileSessionId = deriveFileSessionId(options);
@@ -1935,7 +1935,7 @@ export async function parseClaudeSessionIncremental(
   // records past endOffset and (b) interleave them with assistant content by
   // source-order at emit time.
   const pendingUserContent: Array<{ offset: number; record: ContentRecord }> = [];
-  // Execution graph (#42) — same endOffset-deferred shape as content/events.
+  // Execution graph — same endOffset-deferred shape as content/events.
   // Tool-result events are tagged with the offset of the user line that
   // carried them so we can drop any past endOffset on this pass and re-emit
   // them when the next call resumes from there.
@@ -2184,7 +2184,7 @@ export async function parseClaudeSessionIncremental(
   }
   annotateCompactionEvents(emittedEvents, turns);
 
-  // Execution graph (#42). Mirror the same endOffset-defer rule so we don't
+  // Execution graph. Mirror the same endOffset-defer rule so we don't
   // double-emit on resume. We only annotate spawn agentIds onto events that
   // were actually emitted.
   const emittedRelationships: SessionRelationshipRecord[] = [];
@@ -2195,7 +2195,7 @@ export async function parseClaudeSessionIncremental(
   // they share an offset boundary with their parent assistant line, so the
   // turn-level endOffset filter already handled it.
   collectSubagentRelationships(turns, emittedRelationships);
-  // Local /resume continuation (#112). Only emit when the marker line was
+  // Local /resume continuation. Only emit when the marker line was
   // before endOffset so a resumed pass can't double-emit. The dedup index
   // would catch the duplicate at write time, but suppressing here keeps the
   // contract symmetric with how content / event rows are handled.

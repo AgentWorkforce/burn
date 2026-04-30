@@ -15,7 +15,7 @@ import { lockPath } from '../paths.js';
 // The previous tuning (RETRY_DELAY_MS=20, MAX_RETRIES=50, STALE_MS=30_000)
 // gave a 1s retry budget against a 30s stale threshold, leaving a 29s window
 // where any acquirer would hard-fail with "could not acquire lock after 50
-// attempts" even though the lock was already orphaned. See #62.
+// attempts" even though the lock was already orphaned.
 export const FAST_RETRY_DELAY_MS = 20;
 export const FAST_RETRIES = 50; // 1s: normal concurrent-writer contention
 export const SLOW_RETRY_DELAY_MS = 250;

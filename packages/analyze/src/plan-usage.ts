@@ -42,8 +42,7 @@ export interface PlanUsage {
   runwayDays: number | null;
   resetAt: string;
   // True when the cycle has fewer than this many days of observed data.
-  // Renderers should mark these projections as "limited data" per #39's
-  // acceptance criteria.
+  // Renderers should mark these projections as "limited data".
   limitedData: boolean;
   // Token-coverage confidence over the contributing turns this cycle. See
   // `PlanUsageFidelity`. When `confidence === 'low'`, `spentUsd` is a lower
@@ -131,8 +130,8 @@ export function computePlanUsage(
 
 // `confidence === 'high'` when every contributing turn carries per-turn
 // input + output token coverage — that is, `full` or `usage-only` with both
-// axes present. A turn with no `fidelity` field at all (older ledger writers,
-// pre-#41) is also treated as high; we have no signal to claim otherwise and
+// axes present. A turn with no `fidelity` field at all (older ledger writers)
+// is also treated as high; we have no signal to claim otherwise and
 // elsewhere the codebase treats unknown as best-effort full. Empty cycles
 // (no contributing turns) report high — there's nothing to be uncertain about.
 function deriveFidelity(
@@ -208,8 +207,7 @@ function matchesProvider(provider: Plan['provider'], turn: TurnRecord): boolean 
     case 'cursor':
       // Cursor spend is structurally unobservable from a local-first tool:
       // Cursor moved usage tracking server-side around 2026-01 and the
-      // `tokenCount` fields in their local SQLite went to zero. See #22 for
-      // the full investigation — the issue is closed wontfix. The cursor
+      // `tokenCount` fields in their local SQLite went to zero. The cursor
       // preset is kept so users on Cursor Pro can still register their
       // monthly budget and reset day, but `spentUsd` will always be 0
       // (and the projection therefore $0) until Cursor reverses course.

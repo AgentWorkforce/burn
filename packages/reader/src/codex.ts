@@ -49,9 +49,9 @@ export interface CodexResumeState {
   // user turns span the gap between two assistant turns, so the slot must
   // survive across resumed parses — tool outputs from the most recently
   // committed turn live here until the next task_started stamps `following`
-  // and the subsequent task_complete commits the record. Issue #81.
+  // and the subsequent task_complete commits the record.
   userTurnSlot?: PersistedUserTurnSlot;
-  // Execution-graph counters (#42 / #87). All committed-state — only advanced
+  // Execution-graph counters. All committed-state — only advanced
   // at task_complete boundaries. These survive across resumes so the next
   // pass produces session-monotonic `eventIndex` values without duplicating
   // any already-emitted (sessionId, toolUseId, eventIndex) tuple, and so the
@@ -88,7 +88,7 @@ export interface ParseCodexIncrementalResult {
   content: ContentRecord[];
   events: CompactionEvent[];
   userTurns: UserTurnRecord[];
-  // Execution graph (#42 / #87). `relationships` carries one `root` row per
+  // Execution graph. `relationships` carries one `root` row per
   // newly-seen session id and one `subagent` row per `spawn_agent` call.
   // `toolResultEvents` carries one row per `function_call_output` /
   // `custom_tool_call_output` (with status patched from
@@ -262,7 +262,7 @@ interface OpenTurn {
   // Set true once a `token_count` event with `total_token_usage` is observed
   // while this turn is open. Drives the per-turn usage `Coverage` flags so a
   // turn whose source omitted `total_token_usage` lands in `class: 'partial'`
-  // rather than silently reporting zeros as full-fidelity (#84).
+  // rather than silently reporting zeros as full-fidelity.
   usageObserved: boolean;
 }
 
@@ -306,7 +306,7 @@ export interface ParseCodexResult {
   content: ContentRecord[];
   events: CompactionEvent[];
   userTurns: UserTurnRecord[];
-  // Execution graph (#42 / #87). See `ParseCodexIncrementalResult` for the
+  // Execution graph. See `ParseCodexIncrementalResult` for the
   // shape; full parses always reflect the committed state at end-of-file.
   relationships: SessionRelationshipRecord[];
   toolResultEvents: ToolResultEventRecord[];
@@ -414,13 +414,12 @@ export async function parseCodexSessionIncremental(
   // task_complete; `followingMessageId` is stamped + the record is pushed to
   // `userTurns` at the next task_started; the record is committed (counted
   // toward `committedUserTurnsCount`) at the following turn's task_complete.
-  // See issue #81.
   let userTurnSlot: UserTurnSlot = options.resume?.userTurnSlot
     ? cloneSlot(options.resume.userTurnSlot)
     : { blocks: [], ts: '' };
   const userTurns: UserTurnRecord[] = [];
 
-  // Execution-graph (#42 / #87) state. All four are committed-state — they
+  // Execution-graph state. All four are committed-state — they
   // only count toward the final result once the enclosing turn's
   // task_complete fires. The counters and seen-set are seeded from the
   // resume blob so `eventIndex` stays session-monotonic across re-ingest
@@ -564,7 +563,7 @@ export async function parseCodexSessionIncremental(
           // Mark coverage on the open turn — usage flags are honest only when
           // a `total_token_usage` actually arrived between task_started and
           // task_complete. Without this, finalize would emit zero-deltas as
-          // `full` fidelity (#84).
+          // `full` fidelity.
           if (openTurn) openTurn.usageObserved = true;
         }
         continue;
@@ -765,7 +764,7 @@ export async function parseCodexSessionIncremental(
           if (openTurn) openTurn.userText = appendText(openTurn.userText, text);
           else pendingUserText = appendText(pendingUserText, text);
           // Capture the user prose as a UserTurnBlock for the slot bridging
-          // the previous and next assistant turn (issue #81).
+          // the previous and next assistant turn.
           userTurnSlot.blocks.push(makeTextBlock(text, tokenCounter));
           if (!userTurnSlot.ts && itemTs) userTurnSlot.ts = itemTs;
           if (captureContent) {
@@ -831,7 +830,7 @@ export async function parseCodexSessionIncremental(
           makeToolResultBlock(out.call_id, out.output, undefined, tokenCounter),
         );
         if (!userTurnSlot.ts && itemTs) userTurnSlot.ts = itemTs;
-        // Build the ToolResultEventRecord (#42 / #87). Status is derived from
+        // Build the ToolResultEventRecord. Status is derived from
         // `erroredCallIds` if exec_command_end / patch_apply_end already fired
         // for this call_id; otherwise we fall back to `unknown` and patch at
         // task_complete (status arrival is not ordered relative to output).
@@ -1030,7 +1029,7 @@ export async function parseCodexSessionIncremental(
     if (e.offset <= committedEndOffset) emittedEvents.push(e.event);
   }
 
-  // Execution graph (#42 / #87). Emit only records whose source line ended
+  // Execution graph. Emit only records whose source line ended
   // at-or-before the committed end offset — anything past it belongs to an
   // open / partial turn and will be re-emitted by the next incremental pass.
   const emittedRelationships: SessionRelationshipRecord[] = [];
@@ -1147,7 +1146,7 @@ function cloneSlot(s: UserTurnSlot | PersistedUserTurnSlot): UserTurnSlot {
 // doesn't carry a stable per-line uuid for tool outputs, but the
 // (preceding, following) pair is unique within a session and stable across
 // resumes. When preceding is unset (session-start slot), we substitute
-// "start". Issue #81.
+// "start".
 function buildCodexUserTurnRecord(
   slot: UserTurnSlot,
   sessionId: string,
@@ -1207,14 +1206,14 @@ function buildCodexFidelity(usageObserved: boolean): Fidelity {
   // `total_token_usage` arrived between `task_started` and `task_complete`.
   // When it didn't, the cumulative-delta arithmetic in `finalizeTurn` returns
   // 0 for each field — set the matching coverage flags to `false` so the
-  // resulting `class` is `partial` rather than a silent zero (#84).
+  // resulting `class` is `partial` rather than a silent zero.
   //
   // `hasCacheCreateTokens` is `false`: Codex rollouts have no ephemeral
   // cache-create concept (the `FULL_REQUIRED` matrix in fidelity.ts excludes
   // this field, so absence does not demote a turn from `full`).
   //
-  // `hasSessionRelationships` is `true` now that the Codex parser emits
-  // `root` / `subagent` SessionRelationshipRecords (#87) — capability, not
+  // `hasSessionRelationships` is `true` — the Codex parser emits `root` /
+  // `subagent` SessionRelationshipRecords as a capability, not a per-turn
   // presence, so tool-less turns still report `true`.
   const coverage: Coverage = {
     ...EMPTY_COVERAGE,
@@ -1308,7 +1307,7 @@ function pickCustomToolTarget(name: string, input: string): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Execution graph helpers (#42 / #87).
+// Execution graph helpers.
 // ---------------------------------------------------------------------------
 
 function buildRootRelationship(

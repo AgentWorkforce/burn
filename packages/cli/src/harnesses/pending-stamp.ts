@@ -38,8 +38,7 @@ export function createPendingStampAdapter(opts: PendingStampAdapterOptions): Har
     startWatcher(_ctx, onReport): WatchController {
       // The watch loop drains turns silently while the child runs; accumulate
       // its ticks so the final ingest report reflects everything appended
-      // during the session, not just the leftovers the post-exit pass picks up
-      // (#125 review).
+      // during the session, not just the leftovers the post-exit pass picks up.
       return startWatchLoop({ immediate: false, onReport });
     },
     async afterExit(): Promise<IngestReport> {

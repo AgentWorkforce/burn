@@ -86,7 +86,7 @@ function reasoningModeForSource(source: SourceKind): ReasoningMode | undefined {
   return undefined;
 }
 
-// Shared lookup: direct match → synthetic reattribution (issue #31, e.g.
+// Shared lookup: direct match → synthetic reattribution (e.g.
 // `hf:deepseek-ai/...`, `accounts/fireworks/models/...`) → generic
 // `provider/model` strip. Used by costForUsage here and by attributeHotspots /
 // attributeClaudeMd so synthetic-routed turns price consistently across views.

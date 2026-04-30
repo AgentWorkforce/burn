@@ -1,6 +1,6 @@
 import type { Enrichment } from '@relayburn/ledger';
 
-// Spawner-owned tagging contract (issue #63 strategy D). An orchestrator that
+// Spawner-owned tagging contract. An orchestrator that
 // invokes `burn run <harness>` can attach workflow/agent context via
 // either:
 //

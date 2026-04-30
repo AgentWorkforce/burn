@@ -392,9 +392,10 @@ function weightedOneShotRate(q: QualityResult): number | undefined {
 // Per-token-field coverage counters maintained alongside each aggregate row.
 // `known` is the number of contributing turns whose source actually reported
 // the field; `missing` counts turns whose source omitted it (the matching
-// `Coverage` flag was false). Records emitted before #41 (no `fidelity` at
-// all) are treated as best-effort full and counted as `known` — the same
-// backward-compat stance taken by `summarizeFidelity` / `hasMinimumFidelity`.
+// `Coverage` flag was false). Records emitted before fidelity metadata
+// existed (no `fidelity` at all) are treated as best-effort full and counted
+// as `known` — the same backward-compat stance taken by `summarizeFidelity`
+// / `hasMinimumFidelity`.
 const COVERAGE_FIELDS: ReadonlyArray<CoverageField> = [
   'input',
   'output',
@@ -1400,7 +1401,7 @@ function percentile(sorted: number[], p: number): number {
   return sorted[rank]!;
 }
 
-// A turn whose record predates #41 has no `coverage` map; the long-standing
+// A turn from before fidelity metadata existed has no `coverage` map; the long-standing
 // stance is to treat that as best-effort full fidelity. So if `coverage` is
 // undefined every field counts as `known`. When it is present, a field is
 // `missing` exactly when its flag is false — same predicate `summarizeFidelity`

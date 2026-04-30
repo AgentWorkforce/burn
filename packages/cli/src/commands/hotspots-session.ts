@@ -575,10 +575,10 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…';
 }
 
-// Aggregate per-adapter content-capture gap report (#79) plus relationship
-// attribution drift (#103). Walks the ledger and tells the user how many
-// sessions per adapter have ≥1 tool call but zero `tool_result` ContentRecords
-// — the symptom that motivated #58 / #59. Unlike the per-invocation ingest
+// Aggregate per-adapter content-capture gap report plus relationship
+// attribution drift. Walks the ledger and tells the user how many sessions
+// per adapter have ≥1 tool call but zero `tool_result` ContentRecords —
+// the symptom that motivated this report. Unlike the per-invocation ingest
 // warning (which fires once per `burn` run for a fresh affected session), this
 // is a permanent, queryable surface.
 type Adapter = 'claude' | 'codex' | 'opencode';
@@ -848,7 +848,7 @@ function sourceToAdapter(source: SourceKind): Adapter | null {
 }
 
 function formatPct(n: number): string {
-  // Match the precision that motivated this report (#58: a 99.7% reading was
+  // Match the precision that motivated this report (a 99.7% reading was
   // the original symptom). One decimal place keeps small differences visible.
   return `${n.toFixed(1)}%`;
 }

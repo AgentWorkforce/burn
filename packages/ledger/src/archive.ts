@@ -68,14 +68,14 @@ const STAMP_WILDCARD = '*';
  * kept declarative and idempotent (`CREATE TABLE IF NOT EXISTS`) so callers
  * can run them on every open without coordinating migrations.
  *
- * Schema reference: see issue #40 for the design discussion.
+ * Schema:
  *  - sessions: one row per (source, sessionId)
  *  - turns: one row per ingested TurnRecord, with stamps folded in
  *  - tool_calls: one row per ToolCall attached to a turn
  *  - tool_result_events: chronological tool-output / terminal-status events
- *    materialized from `ToolResultEventLine` ledger lines (#101 / #42 / #77).
+ *    materialized from `ToolResultEventLine` ledger lines.
  *    `content_length` / `content_hash` come straight from the canonical
- *    record; the content sidecar (#33) carries the raw bytes when callers
+ *    record; the content sidecar carries the raw bytes when callers
  *    need them.
  *  - stamps: indexed copy of stamp ledger lines, used by incremental builds
  *    to fold enrichment without rescanning the whole ledger.
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   min_fidelity        TEXT,
   -- 1 iff every known-fidelity turn in the session is class='full'. 0 iff
   -- any turn is below 'full'. NULL iff the session has zero turns with
-  -- fidelity metadata to assert against. See issue #110 / #40.
+  -- fidelity metadata to assert against.
   has_full_attribution INTEGER,
   PRIMARY KEY (source, session_id)
 );
@@ -145,11 +145,10 @@ CREATE TABLE IF NOT EXISTS turns (
   persona               TEXT,
   tier                  TEXT,
   enrichment_json       TEXT,
-  -- Coverage / fidelity columns (issue #110, upstream #41 / PR #76). Mirror
-  -- TurnRecord.fidelity so SQL consumers can filter / group by them without
-  -- re-deriving in memory. NULL on rows from older ledger lines that pre-date
-  -- the upstream fidelity work — interpret NULL as "unknown" rather than
-  -- guessing.
+  -- Coverage / fidelity columns. Mirror TurnRecord.fidelity so SQL consumers
+  -- can filter / group by them without re-deriving in memory. NULL on rows
+  -- from older ledger lines that pre-date the upstream fidelity work —
+  -- interpret NULL as "unknown" rather than guessing.
   --
   -- attribution_fidelity: FidelityClass string —
   --   full | usage-only | partial | aggregate-only | cost-only
@@ -171,7 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_turns_activity ON turns(activity);
 CREATE INDEX IF NOT EXISTS idx_turns_project_key ON turns(project_key);
 CREATE INDEX IF NOT EXISTS idx_turns_workflow ON turns(workflow_id);
 -- idx_turns_attribution_fidelity is created in applyAdditiveMigrations()
--- (which runs after the column is ensured) — see issue #110.
+-- (which runs after the column is ensured).
 
 CREATE TABLE IF NOT EXISTS tool_calls (
   source         TEXT NOT NULL,
@@ -189,10 +188,10 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_use_id ON tool_calls(tool_use_id);
 
--- Materialized from ToolResultEventLine (execution-graph #42 / #77) -- one
--- row per chronological tool_result / terminal-status / progress event keyed
--- on (source, session_id, message_id, tool_use_id, event_index). The content
--- sidecar (#33) holds the raw bytes; this table carries metadata only
+-- Materialized from ToolResultEventLine (execution-graph) — one row per
+-- chronological tool_result / terminal-status / progress event keyed on
+-- (source, session_id, message_id, tool_use_id, event_index). The content
+-- sidecar holds the raw bytes; this table carries metadata only
 -- (content_length, content_hash) so analyses can group / dedupe without
 -- loading sidecar JSONL.
 CREATE TABLE IF NOT EXISTS tool_result_events (
@@ -365,7 +364,7 @@ export async function openArchive(): Promise<DatabaseSync> {
  * additive, NULL-defaulted columns; anything else needs a `ARCHIVE_VERSION`
  * bump and a clean rebuild.
  *
- * Added in #110: fidelity columns on `turns` and `sessions`.
+ * Adds fidelity columns on `turns` and `sessions`.
  */
 function applyAdditiveMigrations(db: DatabaseSync): void {
   ensureColumn(db, 'turns', 'attribution_fidelity', 'TEXT');
@@ -855,7 +854,7 @@ async function applyLedgerRange(
       // message_id, tool_use_id, event_index). The execution-graph record
       // already carries `contentLength` and `contentHash`; if a future
       // record lacks them we still write null and a follow-up can enrich
-      // from the content sidecar (#33). The table allows NULL for both.
+      // from the content sidecar. The table allows NULL for both.
       const insertToolResultEvent = db.prepare(`
         INSERT OR REPLACE INTO tool_result_events (
           source, session_id, message_id, tool_use_id, call_index,
@@ -1026,7 +1025,7 @@ function writeTurn(
   enrichment: Enrichment,
 ): void {
   // Project the optional fidelity metadata onto the three persisted columns.
-  // Absence (older lines pre-#41 / pre-Codex/OpenCode #84/#89) → all NULL,
+  // Absence (older lines from before fidelity metadata landed) → all NULL,
   // which downstream queries should read as "unknown".
   let attributionFidelity: string | null = null;
   let tokensPresent: number | null = null;
@@ -1327,8 +1326,8 @@ export async function getArchiveStatus(): Promise<ArchiveStatus> {
     };
 
     // Fidelity histogram on `turns`. NULL bucket surfaces as `unknown` so
-    // JSON consumers can spot upstream gaps (Codex/OpenCode pre-#84/#89, or
-    // any older line that pre-dates `TurnRecord.fidelity`).
+    // JSON consumers can spot upstream gaps in older lines that pre-date
+    // `TurnRecord.fidelity`.
     const fidelityRows = db
       .prepare(
         `SELECT COALESCE(attribution_fidelity, 'unknown') AS k, COUNT(*) AS n

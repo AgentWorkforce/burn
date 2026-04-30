@@ -1,10 +1,10 @@
 import type { ContentRecord, TurnRecord } from '@relayburn/reader';
 
 // Quality signals for the "was this work good enough that a cheaper model
-// could have done it" question. Two orthogonal detectors, per the decision
-// in issue #6: outcome inference (agentsview) + one-shot rate (codeburn).
+// could have done it" question. Two orthogonal detectors: outcome inference
+// (agentsview) + one-shot rate (codeburn).
 //
-// Design choices that stuck from the issue discussion:
+// Design choices:
 // - No prompt storage required — both signals work from session metadata and
 //   tool-call patterns alone. Content (last assistant text) is used *only*
 //   to downgrade confidence; never required.

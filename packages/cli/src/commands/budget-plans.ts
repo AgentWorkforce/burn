@@ -34,7 +34,7 @@ Usage:
 
 Built-in presets:
 ${BUILTIN_PRESETS.map((p) => {
-  const note = p.plan.provider === 'cursor' ? ' — spend tracking unavailable (see #22)' : '';
+  const note = p.plan.provider === 'cursor' ? ' — spend tracking unavailable' : '';
   return `  ${p.preset.padEnd(14)} ${p.plan.name} ($${p.plan.budgetUsd}/mo, resets day ${p.plan.resetDay})${note}`;
 }).join('\n')}
 
@@ -227,7 +227,7 @@ async function runAdd(args: ParsedArgs): Promise<number> {
   process.stdout.write(`added ${plan.id}: ${plan.name} ($${plan.budgetUsd}/mo, resets day ${plan.resetDay})\n`);
   if (plan.provider === 'cursor') {
     process.stdout.write(
-      'note: Cursor moved usage tracking server-side in early 2026 (see #22), so this ' +
+      'note: Cursor moved usage tracking server-side in early 2026, so this ' +
         "plan's spend will report as $0 until Cursor exposes a local data source again.\n",
     );
   }
@@ -315,7 +315,7 @@ interface StatusForPlansOptions {
    * `queryAll()` + in-memory reduce path. Defaults to `false` so callers
    * have to opt in explicitly: `burn budget plans` wires this to `shouldUseArchive`
    * (the `--no-archive` flag + `RELAYBURN_ARCHIVE` env var); `burn budget`
-   * stays on the legacy path until it's migrated separately. See #91.
+   * stays on the legacy path until it's migrated separately.
    */
   useArchive?: boolean;
   quiet?: boolean;
@@ -398,8 +398,7 @@ function progressOptions(opts: { quiet?: boolean }): { quiet?: boolean } {
 
 /**
  * `--no-archive` flag (or `RELAYBURN_ARCHIVE=0`) opts back into the legacy
- * `queryAll()` reduce path. Kept while we shake out the archive migration —
- * see issue #91 / #78.
+ * `queryAll()` reduce path. Kept while we shake out the archive migration.
  */
 function shouldUseArchive(args: ParsedArgs): boolean {
   if (args.flags['no-archive'] === true) return false;

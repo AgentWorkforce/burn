@@ -66,7 +66,7 @@ type PatternKind = (typeof PATTERN_KINDS)[number];
 // When even-split sessions reach this fraction of the matched set, the
 // attribution caveat is promoted from a footer note to a top banner and
 // every dollar table heading is suffixed with "(approximate)". Below this
-// fraction the current footer note is preserved. (#60)
+// fraction the current footer note is preserved.
 const EVEN_SPLIT_DEGRADED_THRESHOLD = 0.5;
 
 export function isAttributionDegraded(
@@ -84,8 +84,8 @@ export function isAttributionDegraded(
 // matching aggregators. A turn missing either flag has no chronology we can
 // allocate cost against (no per-call records, or no result-side bytes to
 // allocate the next-turn input delta over). Records without `fidelity` (older
-// ledger writers, foreign sources) are treated as best-effort full per #41 —
-// they pass the gate.
+// ledger writers, foreign sources) are treated as best-effort full and pass
+// the gate.
 export const ATTRIBUTION_REQUIRED: ReadonlyArray<keyof Coverage> = [
   'hasToolCalls',
   'hasToolResultEvents',
@@ -93,7 +93,7 @@ export const ATTRIBUTION_REQUIRED: ReadonlyArray<keyof Coverage> = [
 
 // Returns `true` if the turn carries every coverage flag in `required`.
 // Records without `fidelity` (older ledger writers, foreign sources) are
-// treated as best-effort full per #41 — they pass regardless of `required`.
+// treated as best-effort full — they pass regardless of `required`.
 export function turnPassesCoverage(
   turn: Pick<EnrichedTurn, 'fidelity'>,
   required: ReadonlyArray<keyof Coverage>,
@@ -267,7 +267,7 @@ export async function runHotspotsAttribution(
 
   // Refusal: nothing to analyze. Exit non-zero with a message that names
   // both the missing prerequisites and the source kinds responsible. This
-  // mirrors the "hard-fail with a clear message" wording from #41.
+  // mirrors the "hard-fail with a clear message" wording.
   if (total > 0 && eligible.length === 0) {
     const breakdown = describeExcluded(excluded, ATTRIBUTION_REQUIRED);
     const sourcesClause = renderSourcesClause(breakdown);
@@ -580,7 +580,7 @@ export function resolvePatternSelection(flag: string | true): Set<PatternKind> {
 // the compaction sidecar is loaded directly from the ledger via
 // `queryCompactions` and is independent of `TurnRecord.fidelity`.
 // `tool-output-bloat` is also absent — it reads the tool-result-event ledger
-// stream directly (issue #168, #42 substrate) and merges Claude settings.json
+// stream directly (execution-graph substrate) and merges Claude settings.json
 // without consulting TurnRecord coverage flags.
 //
 // The revert detector needs editPreHash / editPostHash, which require
@@ -770,7 +770,7 @@ export async function runPatternsMode(
     : undefined;
 
   // Load content sidecars for the four detectors that surface content-derived
-  // enrichment fields (#57). Detectors fire identically without content; only
+  // enrichment fields. Detectors fire identically without content; only
   // the optional enrichment fields (errorSignature, errorSignatures, lostWork,
   // samplePreview) are absent. We only pay the I/O cost when one of these
   // detectors is selected.
@@ -1455,8 +1455,8 @@ async function loadUserTurnsBySession(
 // of the requested detector slices. Sessions whose sidecar is empty (content
 // store is hash-only / off, or content was pruned) are silently omitted —
 // `detectPatterns` keys enrichment off the map being non-empty per session,
-// so the absent entry yields the graceful-degradation behavior promised by
-// #57.
+// so the absent entry yields the graceful-degradation behavior the
+// enrichment layer promises.
 async function loadContentBySession(
   perDetector: Map<PatternKind, EnrichedTurn[]>,
   detectors: PatternKind[],
@@ -1589,7 +1589,7 @@ export function pickRepresentativeCacheReadRate(
   return rate.cacheRead / 1_000_000;
 }
 
-// #172: build a per-source, per-session map of user-turn text strings for
+// Build a per-source, per-session map of user-turn text strings for
 // the slash-command observation pass. We only load content for sessions
 // whose source has a slash-command notion (Claude commands, Codex prompts)
 // — the OpenCode adapter doesn't consume `userTurnTextBySession` so the I/O
@@ -1665,7 +1665,7 @@ function renderGhostSurfaceTable(ghosts: GhostSurfaceFinding[], limit: number): 
       formatInt(g.sizeTokens),
       formatInt(g.sessionCount),
       formatUsd(g.cost),
-      g.countedByCatalogBloat ? 'catalog (#54)' : '',
+      g.countedByCatalogBloat ? 'catalog' : '',
     ]);
   }
   return table(rows);

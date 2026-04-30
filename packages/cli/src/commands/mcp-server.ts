@@ -49,7 +49,7 @@ export async function runMcpServer(args: ParsedArgs): Promise<number> {
   // Apply any ledger tail not yet materialized into the archive so the first
   // tool call hits SQL on the hot path instead of re-walking the ledger.
   // Idempotent and incremental — a no-op when nothing has changed since the
-  // last build (issue #97).
+  // last build.
   try {
     await withProgress('mcp server archive warmup', async (task) => {
       const result = await buildArchive();

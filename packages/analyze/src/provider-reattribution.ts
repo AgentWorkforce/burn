@@ -12,16 +12,14 @@
 // This is the extension point for future aggregator detectors (OpenRouter,
 // etc.). Add a `ProviderRule` to `DEFAULT_RULES` and the resolver picks it up.
 //
-// Tracked in https://github.com/AgentWorkforce/burn/issues/31.
-//
 // Pattern coverage today (mirrors tokscale's `synthetic.rs`):
 //   - `hf:*`                       — HuggingFace-prefixed models routed via Synthetic
 //   - `accounts/fireworks/models/*` — Fireworks-prefixed Synthetic models
 //   - `synthetic/*`                — explicit Synthetic-prefixed
 //
-// Deferred (see issue #31):
-//   - Octofriend SQLite fallback — defer until Octofriend persists tokens.
-//   - OpenRouter / other aggregator prefixes — same scaffolding, future PR.
+// Not yet covered:
+//   - Octofriend SQLite fallback — blocked on Octofriend persisting tokens.
+//   - OpenRouter / other aggregator prefixes.
 
 export interface ProviderResolution {
   /** Resolved provider label (e.g. `'synthetic'`). `undefined` when the rule

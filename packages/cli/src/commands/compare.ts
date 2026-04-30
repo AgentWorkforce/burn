@@ -106,7 +106,7 @@ export async function runCompare(
     return 0;
   }
 
-  // `--models` was the old optional flag; #159 made the model list a required
+  // `--models` was the old optional flag; the model list is now a required
   // comma-separated positional. Reject the flag explicitly so users on the old
   // shape land on a clear error pointing them at the new form, not a silent
   // "needs at least 2 models" message.
@@ -210,11 +210,11 @@ export async function runCompare(
 
   const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample, models };
 
-  // Archive path is the default (#88), but it does not yet apply
+  // Archive path is the default, but it does not yet apply
   // `attribution_fidelity` filtering at the SQL layer. Fall back to the
   // in-memory `queryAll` + `buildCompareTable` path whenever fidelity
-  // filtering is in effect (i.e., minFidelity !== 'partial') so #95's
-  // gate is correctly applied. `--include-partial` / `--fidelity partial`
+  // filtering is in effect (i.e., minFidelity !== 'partial') so the
+  // fidelity gate is correctly applied. `--include-partial` / `--fidelity partial`
   // disables filtering and reuses the archive's grouped SQL.
   //
   // `--provider` likewise bypasses the archive: provider is derived per
@@ -282,7 +282,7 @@ export async function runCompare(
     // is what tells them why N turns were dropped.
     summary = summarizeFidelity(turns);
     // `--fidelity partial` (and its `--include-partial` shorthand) is the
-    // "let everything through" escape hatch per #41. The FidelityClass
+    // "let everything through" escape hatch. The FidelityClass
     // ordering used by `hasMinimumFidelity` puts `partial` strictly above
     // `aggregate-only` / `cost-only`, so the predicate would otherwise
     // still drop those two buckets. Bypass the gate entirely in that mode.

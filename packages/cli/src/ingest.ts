@@ -72,7 +72,7 @@ export interface IngestOptions {
 // Per-adapter content-capture gap aggregator. A "gap" is a session that the
 // parser emitted in `contentMode === 'full'` mode with at least one tool call
 // in a committed turn but zero `tool_result` ContentRecords — the load-bearing
-// kind for `burn hotspots`'s tool-call attribution. See #59 / #33.
+// kind for `burn hotspots`'s tool-call attribution.
 //
 // We accumulate per adapter across the ingest loop and emit a single warning
 // at the end. Suppression is per-process: once an adapter has warned, later
@@ -281,7 +281,7 @@ function emitGapWarning(
   state.write(
     `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
       `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
-      `adapter, so burn hotspots will use user-turn block sizes when available, then fall back to even-split attribution. See #33.\n`,
+      `adapter, so burn hotspots will use user-turn block sizes when available, then fall back to even-split attribution.\n`,
   );
 }
 
@@ -297,7 +297,7 @@ async function ingestClaudeInto(
   gap: GapStats,
 ): Promise<void> {
   const projects = await listDirs(claudeProjectsDir());
-  // Cross-file relationship reconciliation (#112). Collect per-file evidence
+  // Cross-file relationship reconciliation. Collect per-file evidence
   // from every successful parse this pass and run one reconciliation step at
   // the end so fork / continuation rows that need cross-file knowledge get
   // emitted alongside the per-file `root` / `subagent` / `/resume` rows.
@@ -396,7 +396,7 @@ async function ingestClaudeInto(
       }
     }
   }
-  // Cross-file reconciliation (#112). Emits `fork` / `continuation` rows
+  // Cross-file reconciliation. Emits `fork` / `continuation` rows
   // beyond what each file's own parse pass could surface. The append writer's
   // `relationshipIdHash` dedup handles re-runs with identical inputs.
   if (reconcileInputs.length > 0) {

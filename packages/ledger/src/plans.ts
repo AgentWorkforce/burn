@@ -30,7 +30,7 @@ export interface PlanPreset {
   plan: Plan;
 }
 
-// Built-in presets per issue #39. Cursor spend is not currently surfaced by
+// Built-in presets. Cursor spend is not currently surfaced by
 // any of the readers (see `SourceKind` in `@relayburn/reader`), so registering
 // the cursor preset is a UX nicety only — its spend will report as $0 until
 // a Cursor adapter lands.

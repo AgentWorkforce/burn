@@ -1,4 +1,4 @@
-// Structured envelope for waste-detector output. Closes #56.
+// Structured envelope for waste-detector output.
 //
 // Each per-detector struct in `patterns.ts` (`RetryLoop`, `FailureRun`,
 // `CompactionLoss`, `EditRevertCycle`, `EditHeavySession`, `SkillRecallDup`,
@@ -90,7 +90,7 @@ function fmtUsd(n: number): string {
 
 export function retryLoopToFinding(loop: RetryLoop): WasteFinding {
   const target = loop.target ? ` ${loop.target}` : '';
-  // Enrichment (#57): if the content sidecar surfaced an error signature,
+  // Enrichment: if the content sidecar surfaced an error signature,
   // append it to the title so the report is actionable at a glance ("4×
   // Bash retries" → "4× Bash retries: 'npm ERR! code ENOENT'").
   const titleSuffix = loop.errorSignature ? `: '${loop.errorSignature}'` : '';
@@ -111,7 +111,7 @@ export function retryLoopToFinding(loop: RetryLoop): WasteFinding {
 }
 
 export function failureRunToFinding(run: FailureRun): WasteFinding {
-  // Enrichment (#57): when content surfaced per-tool error signatures, fold
+  // Enrichment: when content surfaced per-tool error signatures, fold
   // them into the detail text so the user can diagnose the stuck state
   // without opening the session file.
   const sigDetail =
@@ -156,7 +156,7 @@ export function cancellationRunToFinding(run: CancellationRun): WasteFinding {
 export function compactionLossToFinding(loss: CompactionLoss): WasteFinding {
   const savings: EstimatedSavings = { usdPerSession: loss.cacheLostCost };
   if (loss.tokensBeforeCompact > 0) savings.tokensPerSession = loss.tokensBeforeCompact;
-  // Enrichment (#57): describe what was compacted instead of the bare token
+  // Enrichment: describe what was compacted instead of the bare token
   // count when the content sidecar is available.
   const work = loss.lostWork;
   const lostWorkDetail = work
@@ -185,7 +185,7 @@ export function compactionLossToFinding(loss: CompactionLoss): WasteFinding {
 }
 
 export function editRevertToFinding(cycle: EditRevertCycle): WasteFinding {
-  // Enrichment (#57): show the actual strings that were thrashed so users
+  // Enrichment: show the actual strings that were thrashed so users
   // don't need to grep the session file. Truncated by the detector to
   // ~200 chars per field.
   const preview = cycle.samplePreview;

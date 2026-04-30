@@ -41,7 +41,7 @@ export interface CompactionLine {
   record: CompactionEvent;
 }
 
-// Execution graph (#42). Two new ledger line kinds, both append-only and
+// Execution graph. Two ledger line kinds, both append-only and
 // keyed by (source, sessionId, …) the same way TurnLine is. Old readers
 // that don't know about these kinds simply skip them — the existing
 // `isTurnLine` / `isStampLine` / `isCompactionLine` guards already filter
@@ -58,7 +58,7 @@ export interface ToolResultEventLine {
   record: ToolResultEventRecord;
 }
 
-// Per-user-turn block info (#2 / #94). One line per user line in a session,
+// Per-user-turn block info. One line per user line in a session,
 // carrying the byte/approx-token size of each tool_result and free-text block
 // the user supplied. Append-only and dedup'd through the same ledger-id index
 // as turns/compactions via `userTurnIdHash` keyed on (source, sessionId,

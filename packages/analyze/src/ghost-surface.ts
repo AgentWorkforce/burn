@@ -1,4 +1,4 @@
-// Cross-harness ghost-user-installed-surface detector. Closes #166.
+// Cross-harness ghost-user-installed-surface detector.
 //
 // User-installed surface files (agents, skills, commands, prompts, rules,
 // memories) ride in every session's system prompt. When the user has
@@ -14,7 +14,7 @@
 // adapter on its own filesystem surface and folds the results into a single
 // `GhostFinding[]`.
 //
-// OpenCode dedup vs. #54: the OpenCode catalog-bloat detector
+// OpenCode dedup vs. catalog-bloat: the OpenCode catalog-bloat detector
 // (`SystemPromptTax` in `patterns.ts`) already attributes the cost of the
 // declared skill catalog as a per-session fixed tax. To avoid
 // double-counting, ghost candidates whose basenames appear in the OpenCode
@@ -22,7 +22,7 @@
 // but emitted with `cost: 0`. Project-level skills and custom commands not
 // in the declared catalog are costed normally.
 //
-// #172 follow-up — slash-command-style invocations (e.g. a user typing
+// Slash-command-style invocations (e.g. a user typing
 // `/openspec-archive` in the UI) are NOT recorded as tool calls and so
 // won't appear in `observedToolNamesBySource`. To close the gap without a
 // breaking change, each adapter optionally implements `observedNames(inputs)`:
@@ -70,7 +70,7 @@ export interface GhostSurfaceFinding {
   // Cumulative cost across the window: sizeTokens × sessionCountInWindow ×
   // dollar-per-token rate. Drives the CLI's ghost-surface table column. Zero
   // when the entry was already counted by the OpenCode catalog-bloat detector
-  // (#54) — see `countedByCatalogBloat`.
+  // — see `countedByCatalogBloat`.
   cost: number;
   // Per-session cost: sizeTokens × dollar-per-token rate. This is what feeds
   // severity classification and `estimatedSavings.usdPerSession` in the
@@ -105,11 +105,11 @@ export interface GhostSurfaceInputs {
   // ledger window for this source. The adapter compares file basenames
   // against the union of every set for its own source.
   //
-  // For Claude: union of `Subagent.subagentType`, slash-command names (when
-  //   #172 lands), and tool-call names of the surface kind (e.g. an Agent
-  //   tool call's `subagent_type`).
+  // For Claude: union of `Subagent.subagentType`, slash-command names mined
+  //   from user-turn text, and tool-call names of the surface kind (e.g. an
+  //   Agent tool call's `subagent_type`).
   // For Codex: same shape. Slash-command-style prompt invocations are not
-  //   recorded as tool calls — see #172.
+  //   recorded as tool calls — they're mined from user-turn text instead.
   // For OpenCode: skill names from `ToolCall.skillName` plus subagent
   //   names plus custom-command names (when surfaced).
   observedNamesBySource: Map<SourceKind, Set<string>>;
@@ -136,8 +136,8 @@ export interface GhostSurfaceInputs {
   // Per-source, per-session list of raw user-turn text strings observed in
   // the ledger window. The Claude and Codex adapters' optional
   // `observedNames` hook consumes its own source's inner map to mine
-  // slash-command-style invocations that don't surface as tool calls
-  // (#172). The CLI populates this from the per-session content sidecar
+  // slash-command-style invocations that don't surface as tool calls.
+  // The CLI populates this from the per-session content sidecar
   // when content store is `full`; sessions whose sidecar is empty (hash-only
   // / off / pruned) are simply absent from the inner map and the detector
   // falls back to v1 (tool-call only) behaviour for that source.
@@ -255,7 +255,7 @@ function isPlainTextSurface(name: string): boolean {
   return true;
 }
 
-// -- Slash-command observation (#172) ----------------------------------------
+// -- Slash-command observation ------------------------------------------------
 
 // Claude inlines slash-command expansion into the user message wrapped in a
 // `<command-name>...</command-name>` tag. The inner text is either `/foo`
@@ -382,7 +382,7 @@ function isWordCharCode(c: number): boolean {
 // the invocation name — an agent at `~/.claude/agents/foo.md` is invoked as
 // `subagent_type: 'foo'` in a Task tool call.
 //
-// NOTE (#172): slash-command-style invocations (e.g. the user typing `/foo`
+// Slash-command-style invocations (e.g. the user typing `/foo`
 // in the Claude UI) are NOT recorded as tool calls in the session log.
 // `observedNames` augments the observed-names set by mining
 // `userTurnTextBySession` for the `<command-name>...</command-name>`
@@ -427,7 +427,7 @@ export const claudeGhostAdapter: GhostSurfaceAdapter = {
 // Surfaces under `~/.codex/{prompts,skills,rules,memories}/`. Same
 // stem-as-invocation-name convention as Claude.
 //
-// NOTE (#172): Codex slash-commands expand inline before sending — the
+// Codex slash-commands expand inline before sending — the
 // prompt body is prepended verbatim to the user's input, with no
 // `<command-name>` marker. `observedNames` mines `userTurnTextBySession`
 // for literal `/<basename>` matches against the on-disk prompt stems.
@@ -477,7 +477,7 @@ export const codexGhostAdapter: GhostSurfaceAdapter = {
 // `opencodeProjects` is the list of project roots to scan. When the input is
 // undefined or empty, the adapter scans the current working directory.
 //
-// Catalog-bloat dedup (#54): every skill *declared in `opencode.json`* (i.e.
+// Catalog-bloat dedup: every skill *declared in `opencode.json`* (i.e.
 // part of the OpenCode skill catalog that ships in the system prompt on
 // every API call) is marked with `countedByCatalogBloat: true`. The
 // `SystemPromptTax` detector already attributes those tokens as part of the
@@ -637,7 +637,7 @@ export async function detectGhostSurface(
     // without forcing callers to pre-normalize their observed-names input.
     const observedLower = new Set<string>();
     for (const name of observedRaw) observedLower.add(name.toLowerCase());
-    // Adapter-local observation pass (#172). Slash-command invocations
+    // Adapter-local observation pass. Slash-command invocations
     // mined from `userTurnTextBySession` are unioned in here so they
     // de-ghost a basename without leaking into other adapters' observed
     // sets. Only invoked when this adapter's source has at least one

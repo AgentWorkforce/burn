@@ -19,8 +19,8 @@ export interface FidelitySummary {
   byClass: Record<FidelityClass, number>;
   byGranularity: Record<UsageGranularity, number>;
   missingCoverage: Record<keyof Coverage, number>;
-  // Records with no `fidelity` field at all — emitted by ledger writers from
-  // before issue #41. Counted separately so we don't pretend they're "full".
+  // Records with no `fidelity` field at all — emitted by older ledger
+  // writers. Counted separately so we don't pretend they're "full".
   unknown: number;
 }
 
@@ -85,10 +85,9 @@ export function summarizeFidelity(
 }
 
 // Convenience predicate for the "default exclude aggregate-only / cost-only"
-// filtering pattern flagged in #41 for `burn compare` and friends. Records
-// without fidelity are treated as best-effort full (older ledger writers
-// pre-#41) — a strict mode that drops unknown is a separate decision the
-// caller can layer on top.
+// filtering pattern used by `burn compare` and friends. Records without
+// fidelity are treated as best-effort full (older ledger writers) — a strict
+// mode that drops unknown is a separate decision the caller can layer on top.
 const FIDELITY_ORDER: ReadonlyArray<FidelityClass> = [
   'cost-only',
   'aggregate-only',

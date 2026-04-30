@@ -113,7 +113,6 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
     assert.match(msg, /1 session/);
     // 2 function_calls in the fixture (exec + patch).
     assert.match(msg, /2 tool calls/);
-    assert.match(msg, /See #33/);
     assert.match(msg, /even-split attribution/);
   });
 

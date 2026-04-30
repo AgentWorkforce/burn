@@ -149,8 +149,8 @@ export interface TurnRecord {
   retries?: number;
   hasEdits?: boolean;
   // Optional coverage / fidelity metadata. Absent on records emitted by older
-  // ledger writers (pre-issue #41); commands should treat absence as
-  // "unknown — best-effort full fidelity" rather than rejecting the record.
+  // ledger writers; commands should treat absence as "unknown — best-effort
+  // full fidelity" rather than rejecting the record.
   fidelity?: Fidelity;
 }
 
@@ -159,7 +159,7 @@ export interface TurnRecord {
 // `usage.input` / `cacheRead` numbers — the API never reports usage at the
 // `tool_use` granularity, but the size each `tool_result` contributed to
 // context is enough to allocate the input-side delta across the calls that
-// caused it. See issue #2.
+// caused it.
 //
 // One `UserTurnRecord` per user line; `blocks` lists the individual content
 // blocks that line carried (one entry per `tool_result` block plus any
@@ -204,11 +204,11 @@ export interface UserTurnRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Execution graph (#42).
+// Execution graph.
 //
 // Two normalized record types that sit beside `TurnRecord` and carry the
-// passive-reader substrate that subagent-tree (#8), waste-pattern (#11), and
-// future archive work all need:
+// passive-reader substrate that subagent-tree, waste-pattern, and archive
+// work all need:
 //
 //   - SessionRelationshipRecord: how sessions relate (root / continuation /
 //     fork / subagent), including the spawning tool_use id when known.
@@ -217,11 +217,8 @@ export interface UserTurnRecord {
 //     `contentLength` and `contentHash` so analyses can group / dedupe but
 //     we never store the raw bytes here.
 //
-// These are additive — existing TurnRecord consumers continue to work — and
-// the contract is intentionally cross-source so Codex / OpenCode / hook-path
-// ingest all populate the same shape over time. This file ships the shapes
-// + the Claude passive reader's first population pass; Codex / OpenCode
-// follow in a subsequent PR.
+// The contract is intentionally cross-source — Claude / Codex / OpenCode /
+// hook-path ingest all populate the same shape.
 // ---------------------------------------------------------------------------
 
 export type RelationshipType = 'root' | 'continuation' | 'fork' | 'subagent';

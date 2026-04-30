@@ -39,7 +39,7 @@ export function createSessionCostTool(deps: SessionCostDeps): ToolDefinition {
       // Hooks append new turns to the JSONL ledger throughout the session,
       // but the archive is only materialized when something explicitly calls
       // `buildArchive`. Run an incremental build before each query so the
-      // tool reflects fresh data (Devin review on #97). The build is
+      // tool reflects fresh data. The build is
       // idempotent + cursor-driven, so it's a no-op when nothing has changed
       // since the last call.
       try {

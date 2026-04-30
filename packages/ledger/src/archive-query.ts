@@ -37,7 +37,7 @@ import type { Enrichment } from './schema.js';
  * Fidelity is reconstructed from the persisted `attribution_fidelity` /
  * `tokens_present` / `cost_present` columns plus class-implied defaults for
  * the coverage shape — the archive intentionally does not store the full
- * `Fidelity` blob (#110 deferred that to keep the schema additive). NULL
+ * `Fidelity` blob to keep the schema additive. NULL
  * `attribution_fidelity` maps back to `fidelity = undefined` so
  * `summarizeFidelity` buckets such turns under `unknown`, matching the
  * pre-migration JSON contract.
@@ -71,7 +71,7 @@ export async function queryAllFromArchive(q: Query = {}): Promise<EnrichedTurn[]
 /**
  * Slimmer counterpart to `queryAllFromArchive`. Reads `EnrichedTurn[]`
  * directly from the materialized archive but skips the per-turn `fidelity`
- * synthesis — the only consumer (the MCP tool handlers in #97) doesn't read
+ * synthesis — the only consumer (the MCP tool handlers) doesn't read
  * fidelity, so we save the bookkeeping. Callers that need fidelity should
  * use `queryAllFromArchive`. The archive must already be built — see
  * `buildArchive()` — and any open / query failure throws so callers can
@@ -354,7 +354,7 @@ function parseEnrichment(json: string | null): Enrichment {
 /**
  * Reconstruct a `Fidelity` from the projected archive columns.
  *
- * We only persist `class`, `tokens_present`, and `cost_present` (#110); the
+ * We only persist `class`, `tokens_present`, and `cost_present`; the
  * full `coverage` and `granularity` shape isn't stored to keep the schema
  * additive. Synthesize a coverage object that matches the class semantics so
  * `summarizeFidelity` buckets the turn into the same `byClass` slot the

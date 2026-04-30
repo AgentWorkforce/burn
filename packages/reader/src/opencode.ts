@@ -107,12 +107,12 @@ interface UserMessage {
 export interface ParseOpencodeResult {
   turns: TurnRecord[];
   content: ContentRecord[];
-  // Compaction events (#148). One per user message that carries a
+  // Compaction events. One per user message that carries a
   // `type: "compaction"` part, anchored to the assistant turn that finalized
   // chronologically just before that user message.
   events: CompactionEvent[];
   userTurns: UserTurnRecord[];
-  // Execution-graph substrate (#42 / #93). One `root` row per session, plus a
+  // Execution-graph substrate. One `root` row per session, plus a
   // `subagent` row when the session payload carries a `parentID`. Always
   // present (possibly empty) so callers can pass directly to `appendRelationships`.
   relationships: SessionRelationshipRecord[];
@@ -190,7 +190,7 @@ export async function parseOpencodeSessionIncremental(
     if (seen.has(m.id)) continue;
     // Build the user turn that bridges the previous assistant message and
     // this one — tool outputs from the predecessor's parts plus any user
-    // text from the user message that precedes `m`. Issue #86.
+    // text from the user message that precedes `m`.
     // Emitted once per gap, on the pass when `m` is first processed; the
     // previous assistant may have been seen on an earlier pass, but its
     // parts are still on disk for re-reading.
@@ -219,9 +219,9 @@ export async function parseOpencodeSessionIncremental(
     const project = m.path?.cwd ?? session.directory;
     // Numeric usage is the assistant message's rolled-up totals — OpenCode
     // already pre-aggregates step-finish tokens onto `m.tokens`, so we don't
-    // re-sum or we'd double-count. Coverage *flags* fold both sources together
-    // (issue #89): a turn whose `m.tokens` lacks cache but whose step-finish
-    // parts carry cache.read still honestly reports `hasCacheReadTokens: true`.
+    // re-sum or we'd double-count. Coverage *flags* fold both sources together:
+    // a turn whose `m.tokens` lacks cache but whose step-finish parts carry
+    // cache.read still honestly reports `hasCacheReadTokens: true`.
     const usage = toUsage(m.tokens);
     let usageCoverage = coverageFromTokens(m.tokens);
     for (const sf of stepFinishTokens(parts)) {
@@ -271,7 +271,7 @@ export async function parseOpencodeSessionIncremental(
     turns.push(record);
     seen.add(m.id);
 
-    // Execution graph (#42 / #93). One ToolResultEventRecord per tool part
+    // Execution graph. One ToolResultEventRecord per tool part
     // with a resolved output, in part-id order. Status follows the same
     // failure rules as the existing erroredCallIds set: state.status='error'
     // OR a non-zero `metadata.exit` (bash-family tools).
@@ -309,7 +309,7 @@ export async function parseOpencodeSessionIncremental(
     }
   }
 
-  // Compaction events (#148). OpenCode stores a `type: "compaction"` part on
+  // Compaction events. OpenCode stores a `type: "compaction"` part on
   // a synthetic *user* message inserted just before the summary turn. We scan
   // user messages in chronological order and anchor each event to the
   // assistant turn whose `time.created` falls just before the compaction
@@ -496,7 +496,7 @@ function buildOpencodeRelationships(
 // response to the previous assistant's tool calls); free-text comes from the
 // user message preceding the following assistant. preceding is undef on the
 // first assistant of the session. Returns undefined if the gap has no
-// measurable blocks. Issue #86.
+// measurable blocks.
 async function buildOpencodeUserTurnRecord(
   storageRoot: string,
   sessionId: string,

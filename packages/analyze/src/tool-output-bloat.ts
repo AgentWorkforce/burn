@@ -1,4 +1,4 @@
-// Oversized tool-output bloat detector. Closes #168.
+// Oversized tool-output bloat detector.
 //
 // Two signal sources unified under one detector shape:
 //
@@ -19,10 +19,9 @@
 // single severity-ranked list. `cost` is the rough USD waste attributed to
 // carrying the oversized payload — Signal B uses per-call cl100k
 // `approxTokens` from user-turn `tool_result` blocks (content-sidecar
-// enrichment from #2/#86), with a `bytes/4` fallback when an event has no
-// matching enriched block (e.g. ledgers written before the enrichment
-// landed). Signal A continues to use `bytes/4` for the character-unit
-// config values.
+// enrichment), with a `bytes/4` fallback when an event has no matching
+// enriched block (e.g. ledgers written before the enrichment landed).
+// Signal A continues to use `bytes/4` for the character-unit config values.
 
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -248,9 +247,9 @@ export interface DetectObservedBloatOptions {
   // fallback otherwise. Events with neither are dropped.
   toolResultEvents: ToolResultEventRecord[];
   // User-turn records carrying per-call cl100k `approxTokens` on
-  // `tool_result` blocks (content-sidecar enrichment from #2/#86). Joined
-  // to carrier events by `(source|sessionId|toolUseId)`. Pass `[]` to
-  // force the `bytesToTokens(contentLength)` fallback (legacy ledgers).
+  // `tool_result` blocks (content-sidecar enrichment). Joined to carrier
+  // events by `(source|sessionId|toolUseId)`. Pass `[]` to force the
+  // `bytesToTokens(contentLength)` fallback (legacy ledgers).
   userTurns: UserTurnRecord[];
   // Turn records keyed alongside the events. Used to look up `toolName`
   // (joined by `tool_use_id`) and the model that consumed the next turn
@@ -345,8 +344,8 @@ function isCarrierEvent(e: ToolResultEventRecord): boolean {
 }
 
 // Per-event token size. Carrier events prefer the user-turn enrichment
-// (cl100k accuracy from #2/#86) and fall back to `bytesToTokens(contentLength)`
-// for legacy ledgers without enrichment. Non-carrier events always size by
+// (cl100k accuracy) and fall back to `bytesToTokens(contentLength)` for
+// legacy ledgers without enrichment. Non-carrier events always size by
 // their own `contentLength` so they don't inherit the carrier's payload.
 // Returns `undefined` when the event has no usable size (drop it).
 function sizeEventTokens(
@@ -505,7 +504,7 @@ export function detectToolOutputBloat(
 }
 
 // ---------------------------------------------------------------------------
-// WasteFinding adapter (#56 envelope)
+// WasteFinding adapter
 // ---------------------------------------------------------------------------
 
 function fmtUsd(n: number): string {

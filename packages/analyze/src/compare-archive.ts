@@ -24,7 +24,7 @@ export interface CompareFromArchiveResult {
  * instead of streaming the full ledger. Issued as a single grouped SQL
  * query over `turns` plus a tiny per-(model, activity) follow-up for the
  * median-retries quantile, and one top-level `COUNT(*)` for the
- * `analyzedTurns` header. See issue #88.
+ * `analyzedTurns` header.
  *
  * Behavior is byte-identical to `buildCompareTable(await queryAll(q), opts)`
  * for the fixtures the parity tests cover. Cost math is computed in JS over

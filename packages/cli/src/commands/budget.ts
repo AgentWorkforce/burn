@@ -328,7 +328,7 @@ function renderTty(opts: {
       }
       lines.push(`  ${parts.join(', ')}`);
     }
-    // Low-confidence notice (#105): when one or more contributing turns lack
+    // Low-confidence notice: when one or more contributing turns lack
     // per-turn token coverage the forecast number itself is unchanged — we
     // still sum what's there — but the user should know the per-turn shape is
     // fuzzy enough that the rate could be off. Full-fidelity windows print
@@ -595,7 +595,7 @@ async function loadForecastFromLedger(
   // every ~5s stays cheap on a steady-state ledger.
   await ingestAll();
   const since = new Date(windowStartMs).toISOString();
-  // Permissive filter (#105): unlike `burn compare`, `budget` consumes the
+  // Permissive filter: unlike `burn compare`, `budget` consumes the
   // entire windowed slice — partial / aggregate-only / cost-only turns still
   // contribute meaningful spend totals. We surface confidence separately
   // rather than refusing data.
@@ -623,8 +623,8 @@ async function loadForecastFromLedger(
 // Walk the windowed slice and decide whether the forecast deserves a "low
 // confidence" flag. A turn is forecast-trustworthy when its fidelity class is
 // `full`, or `usage-only` *and* both input and output token counts are
-// covered. Anything else — `partial`, `aggregate-only`, `cost-only`, or a
-// pre-#41 record with no fidelity at all — gets counted toward
+// covered. Anything else — `partial`, `aggregate-only`, `cost-only`, or an
+// older record with no fidelity at all — gets counted toward
 // `lowConfidenceTurns` and flips the overall flag to `low`.
 export function deriveForecastFidelity(
   turns: ReadonlyArray<Pick<TurnRecord, 'fidelity'>>,
