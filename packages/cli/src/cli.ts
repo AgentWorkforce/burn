@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from './args.js';
 import { listHarnessNames } from './harnesses/registry.js';
-import type { ParsedArgs } from './args.js';
 
 const HARNESS_LIST = listHarnessNames().join('|');
 
@@ -72,12 +71,6 @@ async function main(): Promise<number> {
     return 0;
   }
   const args = parseArgs(rest);
-  // Best-effort retention pruning should not run for help paths or before
-  // latency-sensitive harness startup.
-  if (shouldRunOpportunisticPrune(cmd, args)) {
-    const { opportunisticPrune } = await import('./commands/state.js');
-    await opportunisticPrune();
-  }
   switch (cmd) {
     case 'summary':
       return (await import('./commands/summary.js')).runSummary(args);
@@ -101,18 +94,6 @@ async function main(): Promise<number> {
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 1;
   }
-}
-
-function shouldRunOpportunisticPrune(cmd: string, args: ParsedArgs): boolean {
-  if (isHelpInvocation(args)) return false;
-  if (cmd === 'run' || cmd === 'mcp-server') return false;
-  if (cmd === 'state' && args.positional[0] === 'prune') return false;
-  return true;
-}
-
-function isHelpInvocation(args: ParsedArgs): boolean {
-  if (args.flags['help'] === true) return true;
-  return args.positional.some((arg) => arg === 'help' || arg === '--help' || arg === '-h');
 }
 
 main().then(

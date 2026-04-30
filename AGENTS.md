@@ -62,8 +62,8 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 ## Releases
 
 ```bash
-# from GitHub Actions: workflow_dispatch → "Publish Package"
-#   package: all | reader | ledger | analyze | mcp | cli | relayburn
+# from GitHub Actions: workflow_dispatch → "Publish Packages"
+#   always releases all packages in lockstep
 #   version: patch | minor | major | prepatch | … | none (re-publish current)
 #   custom_version: 0.3.1 (overrides version type)
 #   tag: latest | next | beta | alpha
