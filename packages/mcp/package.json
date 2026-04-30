@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP (Model Context Protocol) server exposing read-only relayburn ledger queries for in-session self-query",
   "type": "module",
   "main": "./dist/index.js",

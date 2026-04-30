@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-30
+
 ### Added
 
 - `burn` now reports interactive progress for ingest scans, harness startup/finalization, derived-state rebuilds, archive work, and analysis reads so long-running tasks no longer appear stalled.
