@@ -1,9 +1,10 @@
 name: Verify Publish
 
-# Manually triggered smoke test against the npm registry — run after a Publish
-# Package workflow completes. Installs the just-published package into a clean
-# environment and exercises it enough to catch "published but broken" failures
-# (bin missing +x, workspace:* deps not rewritten, missing exports, etc.).
+# Manually triggered smoke test against the npm registry — run after a
+# Publish Packages workflow completes. Installs the just-published package into
+# a clean environment and exercises it enough to catch "published but broken"
+# failures (bin missing +x, workspace:* deps not rewritten, missing exports,
+# etc.).
 
 on:
   workflow_dispatch:

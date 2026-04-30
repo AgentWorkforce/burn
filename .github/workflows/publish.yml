@@ -1,21 +1,8 @@
-name: Publish Package
+name: Publish Packages
 
 on:
   workflow_dispatch:
     inputs:
-      package:
-        description: 'Which package(s) to publish'
-        required: true
-        default: cli
-        type: choice
-        options:
-          - all
-          - reader
-          - ledger
-          - analyze
-          - mcp
-          - cli
-          - relayburn
       version:
         description: 'Version bump type (ignored if custom_version is set)'
         required: true
@@ -85,35 +72,22 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # Build + test everything regardless of which package is being released —
-      # cli depends on analyze/ledger/reader, analyze depends on ledger/reader,
-      # ledger depends on reader, all via workspace:*. `pnpm pack` rewrites
-      # those specs to concrete versions at pack time, and we want every
-      # package's dist/ to be fresh when that happens.
+      # Packages publish in lockstep. Build + test the whole workspace so every
+      # package's dist/ is fresh before `pnpm pack` rewrites workspace:* deps
+      # to concrete versions at pack time.
       - name: Build workspace
         run: pnpm -r run build
 
       - name: Run tests
         run: pnpm run test
 
-      - name: Resolve target packages (dep order)
+      - name: Resolve target packages
         id: targets
         run: |
-          case "${{ github.event.inputs.package }}" in
-            all)
-              # Dependency order: reader → ledger → analyze → mcp → cli → relayburn.
-              # `relayburn` is a thin wrapper that depends on `@relayburn/cli`,
-              # so cli must publish first.
-              echo "packages=reader ledger analyze mcp cli relayburn" >> "$GITHUB_OUTPUT"
-              ;;
-            reader|ledger|analyze|mcp|cli|relayburn)
-              echo "packages=${{ github.event.inputs.package }}" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "Unknown package: ${{ github.event.inputs.package }}" >&2
-              exit 1
-              ;;
-          esac
+          # Dependency order: reader → ledger → analyze → mcp → cli → relayburn.
+          # `relayburn` is a thin wrapper that depends on `@relayburn/cli`,
+          # so cli must publish first.
+          echo "packages=reader ledger analyze mcp cli relayburn" >> "$GITHUB_OUTPUT"
 
       # Catch the failure mode that bit us on 2026-04-23: a previous publish
       # run shipped @relayburn/*@0.3.0 to npm but failed at the Tag + push
