@@ -1,8 +1,19 @@
 #!/usr/bin/env node
+import { createRequire } from 'node:module';
 import { parseArgs } from './args.js';
 import { listHarnessNames } from './harnesses/registry.js';
 
 const HARNESS_LIST = listHarnessNames().join('|');
+
+function getVersion(): string {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require('../package.json') as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
@@ -66,6 +77,10 @@ reported as provider "synthetic" without rewriting ledger rows.
 
 async function main(): Promise<number> {
   const [, , cmd, ...rest] = process.argv;
+  if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
+    process.stdout.write(`${getVersion()}\n`);
+    return 0;
+  }
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     process.stdout.write(HELP);
     return 0;
