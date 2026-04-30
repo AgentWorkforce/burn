@@ -316,10 +316,9 @@ describe('loadConfig', () => {
     assert.equal(cfg.content.retentionDays, 'forever');
   });
 
-  it('treats empty RELAYBURN_CONTENT_TTL_DAYS as unset (does not wipe content)', async () => {
-    // Previously `Number('') === 0` made empty string mean "0 days" which
-    // would trigger opportunisticPrune to delete all content. It should now
-    // be treated as not-set, falling through to the default (90 days).
+  it('treats empty RELAYBURN_CONTENT_TTL_DAYS as unset (does not configure 0-day retention)', async () => {
+    // `Number('') === 0` would make an empty env var mean "0 days" — we
+    // treat it as not-set and fall through to the default (90 days).
     process.env['RELAYBURN_CONTENT_TTL_DAYS'] = '';
     const cfg = await loadConfig();
     assert.equal(cfg.content.retentionDays, 90);

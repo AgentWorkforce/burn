@@ -837,41 +837,12 @@ function writeResetSummary(
   process.stdout.write(lines.join('\n') + '\n');
 }
 
-export async function opportunisticPrune(): Promise<void> {
-  try {
-    const { loadConfig, pruneContent, retentionMs } = await import('@relayburn/ledger');
-    const cfg = await loadConfig();
-    if (cfg.content.store === 'off') return;
-    const ms = retentionMs(cfg.content.retentionDays);
-    if (ms === null) return;
-    // Opportunistic prune always applies the recoverable-source check.
-    // Reclaiming recoverable disk requires explicit `burn state prune --force`.
-    // The exception is RELAYBURN_PRUNE_FORCE=1 for unattended automation that
-    // genuinely wants the old behavior.
-    const opts: Parameters<LedgerModule['pruneContent']>[0] = { olderThanMs: ms };
-    if (!isForceEnv()) {
-      const sources = await loadSourceSessionIds();
-      opts.isRecoverable = (sessionId) => sources.has(sessionId);
-    }
-    await pruneContent(opts);
-  } catch (err) {
-    // Best-effort - never fail a CLI operation because of prune, but surface
-    // the reason on stderr so persistent failures are diagnosable.
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[burn] opportunistic content prune failed: ${msg}\n`);
-  }
-}
-
 // --- source index ----------------------------------------------------------
 //
 // Walk the same source roots that `ingest.ts` uses and build an in-memory
-// Set<sessionId>. Used to answer "is the upstream agent's session file still
-// on disk?" - if yes, the sidecar is recoverable via `burn state rebuild content`
-// and prune should skip it.
-//
-// Cost: one readdir pass per root; ~100ms even on large ledgers. Run
-// synchronously at prune time; callers cache the result for the duration of
-// a single prune call.
+// Set<sessionId>. Used by `burn state prune` to answer "is the upstream
+// agent's session file still on disk?" - if yes, the sidecar is recoverable
+// via `burn state rebuild content` and prune should skip it.
 
 const CLAUDE_PROJECTS = path.join(homedir(), '.claude', 'projects');
 const CODEX_SESSIONS = path.join(homedir(), '.codex', 'sessions');
@@ -883,7 +854,7 @@ const OPENCODE_SESSION_ROOT = path.join(OPENCODE_STORAGE, 'session');
 const CODEX_UUID_SUFFIX =
   /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
 
-export async function loadSourceSessionIds(): Promise<Set<string>> {
+async function loadSourceSessionIds(): Promise<Set<string>> {
   const out = new Set<string>();
   await Promise.all([
     collectClaudeSessionIds(out),
