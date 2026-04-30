@@ -10,7 +10,7 @@ All notable changes to `@relayburn/cli`.
 
 ### Fixed
 
-- `burn hotspots` no longer hangs silently after `read N turns`. The attribution path was issuing one `queryUserTurns({sessionId})` call per session, each of which streamed the entire ledger.jsonl from disk; on a 7-day / 190MB / 169-session ledger this stalled for minutes with no spinner. Replaced with a single ledger pass + in-memory bucket and added a progress task. The `--patterns` user-turn loader had the same shape and is fixed too.
+- `burn hotspots` no longer hangs silently after `read N turns`. The attribution path was issuing one `queryUserTurns({sessionId})` call per session, each of which streamed the entire ledger.jsonl from disk; on a 7-day / 190MB / 169-session ledger this stalled for minutes with no spinner. Replaced with a single ledger pass + in-memory bucket (narrowed by the active `--since` / `--source` so peak memory stays bounded on long historical ledgers) and added a progress task. The `--patterns` user-turn loader had the same shape and is fixed too.
 
 ## [1.2.2] - 2026-04-30
 

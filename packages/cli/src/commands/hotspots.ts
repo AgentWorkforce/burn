@@ -238,7 +238,18 @@ export async function runHotspots(args: ParsedArgs): Promise<number> {
     return runPatternsMode(args, turns, pricing, compactions, selected, { query: q });
   }
 
-  return runHotspotsAttribution(args, turns, pricing);
+  return runHotspotsAttribution(args, turns, pricing, {
+    // Bind `q` so the bulk user-turn pass narrows by `since`/`source` during
+    // streaming rather than buffering the entire historical ledger first.
+    loadUserTurnsBySession: (ids) =>
+      withProgress('reading user turns for attribution', async (task) => {
+        const out = await bulkUserTurnsBySession(ids, q);
+        task.succeed(
+          `read user turns for ${formatInt(out.size)} session${out.size === 1 ? '' : 's'}`,
+        );
+        return out;
+      }),
+  });
 }
 
 // Exposed for tests so they can drive the orchestration with fixture turns
@@ -763,7 +774,7 @@ export async function runPatternsMode(
     selected.has('opencode-system-prompt') || selected.has('tool-output-bloat');
   const userTurnsBySession = needUserTurns
     ? await withProgress('reading user turns for pattern detectors', async (task) => {
-        const rows = await userTurnsForPatternDetectors(perDetector);
+        const rows = await userTurnsForPatternDetectors(perDetector, deps.query);
         task.succeed(`read user turns for ${formatInt(rows.size)} session${rows.size === 1 ? '' : 's'}`);
         return rows;
       })
@@ -1440,12 +1451,27 @@ function renderEditHeavyTable(
 // `queryUserTurns({sessionId})` re-streams the entire ledger.jsonl on every
 // call, so issuing it once per session costs O(sessions × ledger-size). Used
 // by both the attribution loader and the patterns helper below.
+//
+// `q.since` / `q.source` are forwarded so the streaming filter narrows the
+// in-memory buffer to the same window the eligible turns live in. This is
+// safe because the user turn that carries tool_results for an eligible
+// assistant turn arrives immediately after it: `userTurn.ts >= turn.ts`,
+// so any user turn whose blocks join an eligible turn also passes the same
+// `since` cutoff. We deliberately do NOT pass `q.until` — a user turn may
+// lag a few seconds past a hard until cutoff while still carrying the
+// tool_results for the last eligible turn — and we do NOT pass `sessionId`
+// (defeats the bulk call) or `project` (per `userTurnPasses`, it does not
+// filter user turns).
 export async function bulkUserTurnsBySession(
   sessionIds: Set<string>,
+  q: Query = {},
 ): Promise<Map<string, UserTurnRecord[]>> {
   const out = new Map<string, UserTurnRecord[]>();
   if (sessionIds.size === 0) return out;
-  const all = await queryUserTurns();
+  const filter: Query = {};
+  if (q.since !== undefined) filter.since = q.since;
+  if (q.source !== undefined) filter.source = q.source;
+  const all = await queryUserTurns(filter);
   for (const ut of all) {
     if (!sessionIds.has(ut.sessionId)) continue;
     const list = out.get(ut.sessionId);
@@ -1455,19 +1481,19 @@ export async function bulkUserTurnsBySession(
   return out;
 }
 
-// Default loader for `runHotspotsAttribution`. Wraps the bulk helper in a
-// progress task so the user sees something between "read N turns" and the
-// final report.
+// Fallback for callers that don't supply a loader. Per-session form so peak
+// memory stays bounded on long historical ledgers; the production path
+// (`runHotspots`) overrides this with a q-bound bulk loader that issues a
+// single ledger pass narrowed to the current `since`/`source` window.
 async function defaultLoadUserTurnsBySession(
   sessionIds: Set<string>,
 ): Promise<Map<string, UserTurnRecord[]>> {
-  return withProgress('reading user turns for attribution', async (task) => {
-    const out = await bulkUserTurnsBySession(sessionIds);
-    task.succeed(
-      `read user turns for ${formatInt(out.size)} session${out.size === 1 ? '' : 's'}`,
-    );
-    return out;
-  });
+  const out = new Map<string, UserTurnRecord[]>();
+  for (const sessionId of sessionIds) {
+    const rows = await queryUserTurns({ sessionId });
+    if (rows.length > 0) out.set(sessionId, rows);
+  }
+  return out;
 }
 
 // Default loader for content sidecars. Each sidecar is its own file under
@@ -1495,12 +1521,13 @@ async function defaultLoadContentBySession(
 
 async function userTurnsForPatternDetectors(
   perDetector: Map<PatternKind, EnrichedTurn[]>,
+  q?: Query,
 ): Promise<Map<string, UserTurnRecord[]>> {
   const sessionIds = new Set<string>();
   for (const turns of perDetector.values()) {
     for (const t of turns) sessionIds.add(t.sessionId);
   }
-  return bulkUserTurnsBySession(sessionIds);
+  return bulkUserTurnsBySession(sessionIds, q);
 }
 
 // Reads the per-session content sidecar for every session that lands in any
