@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-30
+
 ### Added
 
 - `burn --version` (and `-v` / `burn version`) prints the installed CLI version.
