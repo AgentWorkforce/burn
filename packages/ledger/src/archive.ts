@@ -37,6 +37,7 @@ installSqliteWarningFilter();
 
 import type { TurnRecord } from '@relayburn/reader';
 
+import { getStorageAdapterKind } from './adapters/factory.js';
 import { withLock } from './lock.js';
 import { archivePath, ledgerPath } from './paths.js';
 import {
@@ -311,6 +312,8 @@ export interface BuildResult {
  * we delete and recreate, since the archive is by design rebuildable.
  */
 export async function openArchive(): Promise<DatabaseSync> {
+  assertFileStorage();
+
   const dbPath = archivePath();
   await mkdir(path.dirname(dbPath), { recursive: true });
 
@@ -400,6 +403,15 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
+function assertFileStorage(): void {
+  const kind = getStorageAdapterKind();
+  if (kind !== 'file') {
+    throw new Error(
+      `archive operations require RELAYBURN_STORAGE=file (got ${kind})`,
+    );
+  }
+}
+
 /**
  * Drop the archive entirely and rebuild from the ledger.
  *
@@ -409,6 +421,7 @@ async function fileExists(p: string): Promise<boolean> {
  * threw).
  */
 export async function rebuildArchive(): Promise<BuildResult> {
+  assertFileStorage();
   return withLock('archive', async () => {
     const dbPath = archivePath();
     await unlink(dbPath).catch(() => undefined);
@@ -431,6 +444,7 @@ export async function rebuildArchive(): Promise<BuildResult> {
  * path.
  */
 export async function buildArchive(): Promise<BuildResult> {
+  assertFileStorage();
   return withLock('archive', () => buildArchiveLocked());
 }
 
@@ -454,6 +468,7 @@ export async function buildArchive(): Promise<BuildResult> {
  * against an artificially small pre-vacuum number.
  */
 export async function vacuumArchive(): Promise<VacuumResult> {
+  assertFileStorage();
   return withLock('archive', async () => {
     const dbPath = archivePath();
     if (!(await fileExists(dbPath))) {
@@ -1244,6 +1259,7 @@ async function* readJsonlFrom(filePath: string, startOffset: number): AsyncItera
  * consistent read view.
  */
 export async function getArchiveStatus(): Promise<ArchiveStatus> {
+  assertFileStorage();
   const dbPath = archivePath();
   const exists = await fileExists(dbPath);
   const ledger = ledgerPath();

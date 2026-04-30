@@ -86,6 +86,12 @@ export type {
   OpencodeStreamCursor,
 } from './cursors.js';
 export { withLock } from './lock.js';
+export { getAdapter } from './adapters/factory.js';
+export type {
+  ContentLine,
+  StorageAdapter,
+  StorageAdapterKind,
+} from './adapters/adapter.js';
 export {
   invalidateIndexCache,
   rebuildIndex,
