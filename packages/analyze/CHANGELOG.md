@@ -4,6 +4,8 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-30
+
 ### Changed
 
 - `buildTrimRecommendations()` now includes each recommended section's token share so callers can rank recommendations without recomputing attribution.

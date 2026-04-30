@@ -4,6 +4,12 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-30
+
+### Changed
+
+- Remove issue refs and tidy comments
+
 ## [1.2.0] - 2026-04-30
 
 ### Changed

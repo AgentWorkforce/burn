@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-30
+
 ### Added
 
 - `burn overhead trim --json` now emits structured trim recommendations for programmatic review while preserving the existing unified diff text output.

@@ -4,6 +4,12 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-30
+
+### Changed
+
+- Remove issue refs and tidy comments
+
 ## [1.0.0] - 2026-04-29
 
 ### Added
