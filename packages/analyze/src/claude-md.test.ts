@@ -329,6 +329,7 @@ describe('buildTrimRecommendations + renderUnifiedDiffForRecommendation', () => 
     const recs = buildTrimRecommendations(attribution, 1);
     assert.equal(recs.length, 1);
     assert.equal(recs[0]!.section.heading, '## Big');
+    assert.ok(recs[0]!.tokenShare > 0);
     const diff = renderUnifiedDiffForRecommendation('/p/CLAUDE.md', text, recs[0]!);
     assert.ok(diff.includes('# TRIM: ## Big'));
     assert.ok(diff.includes('--- a/'));

@@ -343,6 +343,7 @@ export interface TrimRecommendation {
   section: MarkdownSection;
   projectedSavingsPerSession: number;
   projectedSavingsAcrossWindow: number;
+  tokenShare: number;
 }
 
 export function buildTrimRecommendations(
@@ -357,6 +358,7 @@ export function buildTrimRecommendations(
     section: s.section,
     projectedSavingsPerSession: s.costPerSession,
     projectedSavingsAcrossWindow: s.totalCost,
+    tokenShare: s.tokenShare,
   }));
 }
 

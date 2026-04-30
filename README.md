@@ -147,7 +147,7 @@ attributes cached prompt cost to files and headed sections.
 | `--since <range>` | Limit attribution to a time window. |
 | `--kind <k>` | Limit to `claude-md` or `agents-md`. |
 | `--top <n>` | In `trim` mode, recommendations per file. |
-| `--json` | Emit machine-readable attribution for report mode. |
+| `--json` | Emit machine-readable attribution for report mode or structured trim recommendations in `trim` mode. |
 
 | Example | Result |
 |---|---|
@@ -155,6 +155,7 @@ attributes cached prompt cost to files and headed sections.
 | `burn overhead --since 30d` | Overhead cost from the last 30 days. |
 | `burn overhead --kind claude-md` | Claude instruction files only. |
 | `burn overhead trim --top 3` | Top three trim recommendations per file. |
+| `burn overhead trim --json` | Structured trim recommendations with projected savings and unified diffs. |
 
 Harnesses pay for different files: Claude Code pays for `CLAUDE.md`; Codex and
 OpenCode pay for `AGENTS.md`.

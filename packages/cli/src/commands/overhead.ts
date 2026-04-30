@@ -17,7 +17,7 @@ import {
   type SectionCost,
 } from '@relayburn/analyze';
 import { queryAll, type Query } from '@relayburn/ledger';
-import { resolveProject } from '@relayburn/reader';
+import { resolveProject, type TurnRecord } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -28,7 +28,7 @@ const HELP = `burn overhead — cost attribution for agent overhead files (CLAUD
 
 Usage:
   burn overhead      [--project <path>] [--since 7d] [--kind <k>] [--json]
-  burn overhead trim [--project <path>] [--since 7d] [--kind <k>] [--top <n>]
+  burn overhead trim [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
 
 What it does:
   Discovers overhead files in the project (CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)
@@ -45,27 +45,67 @@ Examples:
   burn overhead --since 30d
   burn overhead --kind claude-md
   burn overhead trim --top 3
+  burn overhead trim --json | jq '.recommendations[] | select(.projectedSavings.perSessionUsd > 0.01)'
 `;
 
 const VALID_KINDS: OverheadFileKind[] = ['claude-md', 'agents-md'];
 
-export async function runOverhead(args: ParsedArgs): Promise<number> {
+export interface OverheadDeps {
+  ingestAll?: typeof ingestAll;
+  queryAll?: (q: Query) => Promise<TurnRecord[]>;
+  loadPricing?: typeof loadPricing;
+}
+
+interface TrimJsonRecommendation {
+  file: string;
+  kind: OverheadFileKind;
+  appliesTo: string[];
+  section: {
+    heading: string;
+    startLine: number;
+    endLine: number;
+    tokens: number;
+  };
+  projectedSavings: {
+    perSessionUsd: number;
+    acrossWindowUsd: number;
+    tokens: number;
+    tokenShare: number;
+  };
+  diff: string;
+}
+
+interface TrimJsonPayload {
+  project: string;
+  since: string;
+  recommendations: TrimJsonRecommendation[];
+  summary: {
+    filesAnalyzed: number;
+    filesWithRecommendations: number;
+    totalRecommendations: number;
+    totalProjectedSavingsPerSession: number;
+    totalProjectedSavingsAcrossWindow: number;
+  };
+}
+
+export async function runOverhead(args: ParsedArgs, deps: OverheadDeps = {}): Promise<number> {
   const sub = args.positional[0];
   if (args.flags['help'] === true || sub === 'help' || sub === '--help' || sub === '-h') {
     process.stdout.write(HELP);
     return 0;
   }
-  if (sub === 'trim') return runTrim(args);
+  if (sub === 'trim') return runTrim(args, deps);
   if (sub !== undefined && sub !== '') {
     process.stderr.write(`unknown overhead subcommand: ${sub}\n\n${HELP}`);
     return 1;
   }
-  return runReport(args);
+  return runReport(args, deps);
 }
 
 async function gatherAttribution(
   args: ParsedArgs,
   projectPath: string,
+  deps: OverheadDeps,
 ): Promise<{
   files: ParsedOverheadFile[];
   attribution: OverheadAttribution;
@@ -103,16 +143,19 @@ async function gatherAttribution(
   const q: Query = { project: resolved.projectKey ?? projectPath };
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
 
+  const ingest = deps.ingestAll ?? ingestAll;
   await withProgress('ingesting latest sessions', (task) =>
-    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    ingest({ onProgress: (message) => task.update(`ingest: ${message}`) }),
   );
+  const pricingLoader = deps.loadPricing ?? loadPricing;
   const pricing = await withProgress('loading pricing snapshot', async (task) => {
-    const loaded = await loadPricing();
+    const loaded = await pricingLoader();
     task.succeed('loaded pricing snapshot');
     return loaded;
   });
+  const turnQuery = deps.queryAll ?? queryAll;
   const turns = await withProgress('reading ledger turns', async (task) => {
-    const rows = await queryAll(q);
+    const rows = await turnQuery(q);
     task.succeed(`read ${formatInt(rows.length)} turn${rows.length === 1 ? '' : 's'}`);
     return rows;
   });
@@ -124,9 +167,9 @@ async function gatherAttribution(
   return { files, attribution };
 }
 
-async function runReport(args: ParsedArgs): Promise<number> {
+async function runReport(args: ParsedArgs, deps: OverheadDeps): Promise<number> {
   const projectPath = resolveProjectPath(args);
-  const data = await gatherAttribution(args, projectPath);
+  const data = await gatherAttribution(args, projectPath, deps);
   if (!data) return 1;
 
   if (args.flags['json'] === true) {
@@ -209,12 +252,19 @@ function renderFileBlock(
   out.push(indent(renderSectionTable(attribution.sectionCosts), '    '));
 }
 
-async function runTrim(args: ParsedArgs): Promise<number> {
+async function runTrim(args: ParsedArgs, deps: OverheadDeps): Promise<number> {
   const projectPath = resolveProjectPath(args);
-  const data = await gatherAttribution(args, projectPath);
+  const data = await gatherAttribution(args, projectPath, deps);
   if (!data) return 1;
 
   const topPerFile = parseTopN(args.flags['top']);
+  const json = args.flags['json'] === true;
+
+  if (json) {
+    const payload = await buildTrimJsonPayload(args, projectPath, data, topPerFile);
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+    return 0;
+  }
 
   const out: string[] = [];
   out.push('# burn overhead trim — projected savings if trimmed');
@@ -247,6 +297,70 @@ async function runTrim(args: ParsedArgs): Promise<number> {
   }
   process.stdout.write(out.join('\n'));
   return 0;
+}
+
+async function buildTrimJsonPayload(
+  args: ParsedArgs,
+  projectPath: string,
+  data: {
+    files: ParsedOverheadFile[];
+    attribution: OverheadAttribution;
+  },
+  topPerFile: number,
+): Promise<TrimJsonPayload> {
+  const textCache = new Map<string, string>();
+  const recommendations: TrimJsonRecommendation[] = [];
+  let filesWithRecommendations = 0;
+
+  for (const fileAttr of data.attribution.perFile) {
+    const recs = buildTrimRecommendations(fileAttr.attribution, topPerFile);
+    if (recs.length === 0) continue;
+    filesWithRecommendations++;
+    let text = textCache.get(fileAttr.file.path);
+    if (text === undefined) {
+      text = await readFile(fileAttr.file.path, 'utf8');
+      textCache.set(fileAttr.file.path, text);
+    }
+    for (const rec of recs) {
+      recommendations.push({
+        file: toProjectRelativePath(fileAttr.file.path, projectPath),
+        kind: fileAttr.file.kind,
+        appliesTo: fileAttr.file.appliesTo,
+        section: {
+          heading: rec.section.heading,
+          startLine: rec.section.startLine,
+          endLine: rec.section.endLine,
+          tokens: rec.section.tokens,
+        },
+        projectedSavings: {
+          perSessionUsd: rec.projectedSavingsPerSession,
+          acrossWindowUsd: rec.projectedSavingsAcrossWindow,
+          tokens: rec.section.tokens,
+          tokenShare: rec.tokenShare,
+        },
+        diff: renderUnifiedDiffForRecommendation(fileAttr.file.path, text, rec, projectPath),
+      });
+    }
+  }
+
+  return {
+    project: projectPath,
+    since: typeof args.flags['since'] === 'string' ? args.flags['since'] : 'all time',
+    recommendations,
+    summary: {
+      filesAnalyzed: data.files.length,
+      filesWithRecommendations,
+      totalRecommendations: recommendations.length,
+      totalProjectedSavingsPerSession: recommendations.reduce(
+        (sum, rec) => sum + rec.projectedSavings.perSessionUsd,
+        0,
+      ),
+      totalProjectedSavingsAcrossWindow: recommendations.reduce(
+        (sum, rec) => sum + rec.projectedSavings.acrossWindowUsd,
+        0,
+      ),
+    },
+  };
 }
 
 function renderSectionTable(rows: SectionCost[]): string {
@@ -285,6 +399,12 @@ function resolveProjectPath(args: ParsedArgs): string {
   const flag = args.flags['project'];
   if (typeof flag === 'string' && flag.length > 0) return path.resolve(flag);
   return process.cwd();
+}
+
+function toProjectRelativePath(filePath: string, projectPath: string): string {
+  const rel = path.relative(projectPath, filePath);
+  const display = rel && !rel.startsWith('..') ? rel : filePath;
+  return display.split(path.sep).join('/');
 }
 
 function parseTopN(v: unknown): number {
