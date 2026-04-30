@@ -105,6 +105,18 @@ describe('burn CLI state dispatch', () => {
     assert.match(out.stderr, /unknown subcommand/);
   });
 
+  it('burn --version prints the package version', () => {
+    const out = runCli(['--version']);
+    assert.equal(out.status, 0);
+    assert.match(out.stdout, /^\d+\.\d+\.\d+/);
+  });
+
+  it('burn -v prints the package version', () => {
+    const out = runCli(['-v']);
+    assert.equal(out.status, 0);
+    assert.match(out.stdout, /^\d+\.\d+\.\d+/);
+  });
+
   it('does not retain top-level rebuild or content dispatch aliases', () => {
     const rebuild = runCli(['rebuild', 'status']);
     const content = runCli(['content', 'prune']);
