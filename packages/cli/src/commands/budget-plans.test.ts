@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { after, beforeEach, describe, it } from 'node:test';
+import { after, beforeEach, describe, it, mock } from 'node:test';
 
 import { appendTurns, loadPlans, savePlans } from '@relayburn/ledger';
 import type { Plan } from '@relayburn/ledger';
@@ -10,7 +10,7 @@ import { EMPTY_COVERAGE, makeFidelity } from '@relayburn/reader';
 import type { Fidelity, TurnRecord } from '@relayburn/reader';
 
 import type { ParsedArgs } from '../args.js';
-import { runBudgetPlans } from './budget-plans.js';
+import { loadPlanStatuses, runBudgetPlans } from './budget-plans.js';
 
 function args(positional: string[] = [], flags: Record<string, string | true> = {}): ParsedArgs {
   return { positional, flags, tags: {}, passthrough: [] };
@@ -46,6 +46,7 @@ describe('burn budget plans CLI', () => {
   const originalRelay = process.env['RELAYBURN_HOME'];
   const originalHome = process.env['HOME'];
   const originalArchive = process.env['RELAYBURN_ARCHIVE'];
+  const originalProgress = process.env['RELAYBURN_PROGRESS'];
 
   beforeEach(async () => {
     tmp = await mkdtemp(path.join(tmpdir(), 'burn-plans-cli-'));
@@ -57,6 +58,7 @@ describe('burn budget plans CLI', () => {
     // test ledger and contaminate parity numbers.
     process.env['HOME'] = tmpHome;
     delete process.env['RELAYBURN_ARCHIVE'];
+    delete process.env['RELAYBURN_PROGRESS'];
   });
 
   after(async () => {
@@ -66,6 +68,8 @@ describe('burn budget plans CLI', () => {
     else delete process.env['HOME'];
     if (originalArchive !== undefined) process.env['RELAYBURN_ARCHIVE'] = originalArchive;
     else delete process.env['RELAYBURN_ARCHIVE'];
+    if (originalProgress !== undefined) process.env['RELAYBURN_PROGRESS'] = originalProgress;
+    else delete process.env['RELAYBURN_PROGRESS'];
     await rm(tmp, { recursive: true, force: true });
     await rm(tmpHome, { recursive: true, force: true });
   });
@@ -96,6 +100,26 @@ describe('burn budget plans CLI', () => {
     assert.equal(result, 0);
     const plans = await loadPlans();
     assert.equal(plans[0]!.resetDay, 15);
+  });
+
+  it('can silence nested plan-status progress output', async () => {
+    await savePlans([
+      {
+        id: 'claude-pro',
+        provider: 'claude',
+        name: 'Claude Pro',
+        budgetUsd: 20,
+        resetDay: 1,
+      },
+    ]);
+    process.env['RELAYBURN_PROGRESS'] = '1';
+
+    const { result, stderr } = await captureStdio(() =>
+      loadPlanStatuses(undefined, { quiet: true }),
+    );
+
+    assert.equal(result.length, 1);
+    assert.equal(stderr, '');
   });
 
   it('rejects --reset-day outside 1-31', async () => {
@@ -269,73 +293,89 @@ describe('burn budget plans CLI', () => {
   });
 
   it('--json output is byte-identical between archive and --no-archive paths', async () => {
-    const claudePro: Plan = {
-      id: 'claude-pro',
-      provider: 'claude',
-      name: 'Claude Pro',
-      budgetUsd: 20,
-      resetDay: 1,
-    };
-    const customWork: Plan = {
-      id: 'work-api',
-      provider: 'custom',
-      name: 'Work Anthropic API',
-      budgetUsd: 500,
-      resetDay: 1,
-    };
-    await seedPlansAndTurns([claudePro, customWork]);
+    // Freeze Date so both runs compute `projectedEndOfCycleUsd` against the
+    // same `fractionElapsed`; without this, each runBudgetPlans call's
+    // independent `new Date()` produces a sub-microsecond drift that
+    // breaks the byte-identity assertion under any timing noise.
+    mock.timers.enable({ apis: ['Date'], now: new Date('2026-04-15T12:00:00.000Z').getTime() });
+    try {
+      const claudePro: Plan = {
+        id: 'claude-pro',
+        provider: 'claude',
+        name: 'Claude Pro',
+        budgetUsd: 20,
+        resetDay: 1,
+      };
+      const customWork: Plan = {
+        id: 'work-api',
+        provider: 'custom',
+        name: 'Work Anthropic API',
+        budgetUsd: 500,
+        resetDay: 1,
+      };
+      await seedPlansAndTurns([claudePro, customWork]);
 
-    const archiveRun = await captureStdio(() => runBudgetPlans(args([], { json: true })));
-    const fallbackRun = await captureStdio(() =>
-      runBudgetPlans(args([], { json: true, 'no-archive': true })),
-    );
+      const archiveRun = await captureStdio(() => runBudgetPlans(args([], { json: true })));
+      const fallbackRun = await captureStdio(() =>
+        runBudgetPlans(args([], { json: true, 'no-archive': true })),
+      );
 
-    assert.equal(archiveRun.result, 0);
-    assert.equal(fallbackRun.result, 0);
+      assert.equal(archiveRun.result, 0);
+      assert.equal(fallbackRun.result, 0);
 
-    const archiveJson = JSON.parse(archiveRun.stdout);
-    const fallbackJson = JSON.parse(fallbackRun.stdout);
-    // Drop Date-typed fields that JSON.stringify renders as ISO strings —
-    // they round-trip identically anyway, but this is the level the issue
-    // calls out: "Output is byte-identical to the pre-migration
-    // implementation."
-    assert.deepEqual(archiveJson, fallbackJson);
-    // Spot-check that we exercised both plans, not just an empty list.
-    // JSON shape is `{ plans: [{ usage: { plan: {...}, spentUsd, ... } }] }`.
-    assert.equal(archiveJson.plans.length, 2);
-    assert.ok(
-      archiveJson.plans.find(
-        (p: { usage: { plan: { id: string } } }) => p.usage.plan.id === 'claude-pro',
-      ),
-    );
-    assert.ok(
-      archiveJson.plans.find(
-        (p: { usage: { plan: { id: string } } }) => p.usage.plan.id === 'work-api',
-      ),
-    );
+      const archiveJson = JSON.parse(archiveRun.stdout);
+      const fallbackJson = JSON.parse(fallbackRun.stdout);
+      // Drop Date-typed fields that JSON.stringify renders as ISO strings —
+      // they round-trip identically anyway, but this is the level the issue
+      // calls out: "Output is byte-identical to the pre-migration
+      // implementation."
+      assert.deepEqual(archiveJson, fallbackJson);
+      // Spot-check that we exercised both plans, not just an empty list.
+      // JSON shape is `{ plans: [{ usage: { plan: {...}, spentUsd, ... } }] }`.
+      assert.equal(archiveJson.plans.length, 2);
+      assert.ok(
+        archiveJson.plans.find(
+          (p: { usage: { plan: { id: string } } }) => p.usage.plan.id === 'claude-pro',
+        ),
+      );
+      assert.ok(
+        archiveJson.plans.find(
+          (p: { usage: { plan: { id: string } } }) => p.usage.plan.id === 'work-api',
+        ),
+      );
+    } finally {
+      mock.timers.reset();
+    }
   });
 
   it('RELAYBURN_ARCHIVE=0 env knob is honored as the queryAll fallback', async () => {
-    const claudePro: Plan = {
-      id: 'claude-pro',
-      provider: 'claude',
-      name: 'Claude Pro',
-      budgetUsd: 20,
-      resetDay: 1,
-    };
-    await seedPlansAndTurns([claudePro]);
+    // See note in the byte-identity test above — pin Date so both runs
+    // compute identical `projectedEndOfCycleUsd`.
+    mock.timers.enable({ apis: ['Date'], now: new Date('2026-04-15T12:00:00.000Z').getTime() });
+    try {
+      const claudePro: Plan = {
+        id: 'claude-pro',
+        provider: 'claude',
+        name: 'Claude Pro',
+        budgetUsd: 20,
+        resetDay: 1,
+      };
+      await seedPlansAndTurns([claudePro]);
 
-    // Run with the env knob set; compare to the explicit `--no-archive` run.
-    process.env['RELAYBURN_ARCHIVE'] = '0';
-    const envRun = await captureStdio(() => runBudgetPlans(args([], { json: true })));
-    delete process.env['RELAYBURN_ARCHIVE'];
-    const flagRun = await captureStdio(() =>
-      runBudgetPlans(args([], { json: true, 'no-archive': true })),
-    );
+      // Run with the env knob set; compare to the explicit `--no-archive` run.
+      process.env['RELAYBURN_ARCHIVE'] = '0';
+      const envRun = await captureStdio(() => runBudgetPlans(args([], { json: true })));
+      delete process.env['RELAYBURN_ARCHIVE'];
+      const flagRun = await captureStdio(() =>
+        runBudgetPlans(args([], { json: true, 'no-archive': true })),
+      );
 
-    assert.equal(envRun.result, 0);
-    assert.equal(flagRun.result, 0);
-    assert.deepEqual(JSON.parse(envRun.stdout), JSON.parse(flagRun.stdout));
+      assert.equal(envRun.result, 0);
+      assert.equal(flagRun.result, 0);
+      assert.deepEqual(JSON.parse(envRun.stdout), JSON.parse(flagRun.stdout));
+    } finally {
+      mock.timers.reset();
+    }
   });
 
   // Issue #108: list view honors per-cycle fidelity. The plan still renders

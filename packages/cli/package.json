@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/cli",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "burn CLI — spawn wrapper + summary/by-tool over the relayburn ledger",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,7 +25,8 @@
     "@relayburn/reader": "workspace:*",
     "@relayburn/ledger": "workspace:*",
     "@relayburn/analyze": "workspace:*",
-    "@relayburn/mcp": "workspace:*"
+    "@relayburn/mcp": "workspace:*",
+    "ora": "^9.4.0"
   },
   "repository": {
     "type": "git",

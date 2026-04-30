@@ -94,6 +94,43 @@ describe('burn CLI state dispatch', () => {
     await access(contentPath);
   });
 
+  it('burn state --help does not run opportunistic pruning', async () => {
+    const sessionId = '123e4567-e89b-12d3-a456-426614174001';
+    const contentPath = path.join(tmp, 'content', `${sessionId}.jsonl`);
+    await mkdir(path.dirname(contentPath), { recursive: true });
+    await writeFile(contentPath, '{}\n', 'utf8');
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await utimes(contentPath, longAgo, longAgo);
+
+    const out = runCli(['state', '--help'], {
+      RELAYBURN_CONTENT_STORE: 'full',
+      RELAYBURN_CONTENT_TTL_DAYS: '90',
+    });
+
+    assert.equal(out.status, 0);
+    assert.match(out.stdout, /burn state/);
+    assert.equal(out.stderr, '');
+    await access(contentPath);
+  });
+
+  it('burn run does not prune before harness dispatch', async () => {
+    const sessionId = '123e4567-e89b-12d3-a456-426614174002';
+    const contentPath = path.join(tmp, 'content', `${sessionId}.jsonl`);
+    await mkdir(path.dirname(contentPath), { recursive: true });
+    await writeFile(contentPath, '{}\n', 'utf8');
+    const longAgo = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+    await utimes(contentPath, longAgo, longAgo);
+
+    const out = runCli(['run', 'nope'], {
+      RELAYBURN_CONTENT_STORE: 'full',
+      RELAYBURN_CONTENT_TTL_DAYS: '90',
+    });
+
+    assert.equal(out.status, 2);
+    assert.match(out.stderr, /unknown harness/);
+    await access(contentPath);
+  });
+
   it('burn state rejects unknown subcommands', () => {
     const out = runCli(['state', 'nope']);
     assert.notEqual(out.status, 0);

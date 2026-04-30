@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from './args.js';
-import { runBudget } from './commands/budget.js';
-import { runCompare } from './commands/compare.js';
-import { runOverhead } from './commands/overhead.js';
-import { runIngest } from './commands/ingest.js';
-import { runMcpServer } from './commands/mcp-server.js';
-import { runWrapper } from './commands/run.js';
-import { runState, opportunisticPrune } from './commands/state.js';
-import { runSummary } from './commands/summary.js';
-import { runHotspots } from './commands/hotspots.js';
 import { listHarnessNames } from './harnesses/registry.js';
+import type { ParsedArgs } from './args.js';
 
 const HARNESS_LIST = listHarnessNames().join('|');
 
@@ -31,6 +23,7 @@ Usage:
   burn state         [status] [--json]
   burn state rebuild index | classify | content | archive [--full|--vacuum] | all
   burn state prune   [--days <n>] [--force]
+  burn state reset   [--force] [--reingest] [--json]
 
 Examples:
   burn summary --since 24h
@@ -78,34 +71,47 @@ async function main(): Promise<number> {
     return 0;
   }
   const args = parseArgs(rest);
-  // Opportunistic content-sidecar retention prune on every invocation.
-  // Best-effort; never fails the CLI.
-  if (!(cmd === 'state' && args.positional[0] === 'prune')) {
+  // Best-effort retention pruning should not run for help paths or before
+  // latency-sensitive harness startup.
+  if (shouldRunOpportunisticPrune(cmd, args)) {
+    const { opportunisticPrune } = await import('./commands/state.js');
     await opportunisticPrune();
   }
   switch (cmd) {
     case 'summary':
-      return runSummary(args);
+      return (await import('./commands/summary.js')).runSummary(args);
     case 'hotspots':
-      return runHotspots(args);
+      return (await import('./commands/hotspots.js')).runHotspots(args);
     case 'budget':
-      return runBudget(args);
+      return (await import('./commands/budget.js')).runBudget(args);
     case 'overhead':
-      return runOverhead(args);
+      return (await import('./commands/overhead.js')).runOverhead(args);
     case 'compare':
-      return runCompare(args);
+      return (await import('./commands/compare.js')).runCompare(args);
     case 'run':
-      return runWrapper(args);
+      return (await import('./commands/run.js')).runWrapper(args);
     case 'ingest':
-      return runIngest(args);
+      return (await import('./commands/ingest.js')).runIngest(args);
     case 'mcp-server':
-      return runMcpServer(args);
+      return (await import('./commands/mcp-server.js')).runMcpServer(args);
     case 'state':
-      return runState(args);
+      return (await import('./commands/state.js')).runState(args);
     default:
       process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
       return 1;
   }
+}
+
+function shouldRunOpportunisticPrune(cmd: string, args: ParsedArgs): boolean {
+  if (isHelpInvocation(args)) return false;
+  if (cmd === 'run' || cmd === 'mcp-server') return false;
+  if (cmd === 'state' && args.positional[0] === 'prune') return false;
+  return true;
+}
+
+function isHelpInvocation(args: ParsedArgs): boolean {
+  if (args.flags['help'] === true) return true;
+  return args.positional.some((arg) => arg === 'help' || arg === '--help' || arg === '-h');
 }
 
 main().then(

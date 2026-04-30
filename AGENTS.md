@@ -115,7 +115,13 @@ export const cursorAdapter: HarnessAdapter = {
 };
 ```
 
-Then add it to the registry array in `harnesses/registry.ts`. The CLI help block reads `listHarnessNames()` so it updates automatically.
+Then add it to the lazy registry object in `harnesses/registry.ts`:
+
+```ts
+cursor: async () => (await import('./cursor.js')).cursorAdapter,
+```
+
+The CLI help block reads `listHarnessNames()` so it updates automatically.
 
 The codex / opencode adapters share the pending-stamp + watch-loop shape; both are constructed via `createPendingStampAdapter` in `harnesses/pending-stamp.ts`. New harnesses with the same shape can reuse it.
 

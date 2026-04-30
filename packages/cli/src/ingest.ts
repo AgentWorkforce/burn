@@ -65,6 +65,10 @@ export interface IngestReport {
   appendedTurns: number;
 }
 
+export interface IngestOptions {
+  onProgress?: (message: string) => void;
+}
+
 // Per-adapter content-capture gap aggregator. A "gap" is a session that the
 // parser emitted in `contentMode === 'full'` mode with at least one tool call
 // in a committed turn but zero `tool_result` ContentRecords — the load-bearing
@@ -113,41 +117,56 @@ export function setIngestGapWriter(write: (msg: string) => void): (msg: string) 
   return prev;
 }
 
-export async function ingestClaudeProjects(): Promise<IngestReport> {
+export async function ingestClaudeProjects(opts: IngestOptions = {}): Promise<IngestReport> {
+  opts.onProgress?.('cleaning pending spawn stamps');
   await cleanupStalePendingStamps();
+  opts.onProgress?.('loading ingest cursors');
   const cursors = await loadCursors();
   const before = cloneCursors(cursors);
   const report = emptyReport();
+  opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  opts.onProgress?.('scanning Claude Code sessions');
   await ingestClaudeInto(cursors, report, contentMode, gap);
   emitGapWarning('claude', contentMode, gap, moduleGapState);
+  opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
 }
 
-export async function ingestCodexSessions(): Promise<IngestReport> {
+export async function ingestCodexSessions(opts: IngestOptions = {}): Promise<IngestReport> {
+  opts.onProgress?.('cleaning pending spawn stamps');
   await cleanupStalePendingStamps();
+  opts.onProgress?.('loading ingest cursors');
   const cursors = await loadCursors();
   const before = cloneCursors(cursors);
   const report = emptyReport();
+  opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  opts.onProgress?.('scanning Codex sessions');
   await ingestCodexInto(cursors, report, contentMode, gap);
   emitGapWarning('codex', contentMode, gap, moduleGapState);
+  opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
 }
 
-export async function ingestOpencodeSessions(): Promise<IngestReport> {
+export async function ingestOpencodeSessions(opts: IngestOptions = {}): Promise<IngestReport> {
+  opts.onProgress?.('cleaning pending spawn stamps');
   await cleanupStalePendingStamps();
+  opts.onProgress?.('loading ingest cursors');
   const cursors = await loadCursors();
   const before = cloneCursors(cursors);
   const report = emptyReport();
+  opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  opts.onProgress?.('scanning OpenCode sessions');
   await ingestOpencodeInto(cursors, report, contentMode, gap);
   emitGapWarning('opencode', contentMode, gap, moduleGapState);
+  opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
 }
@@ -196,21 +215,28 @@ export async function ingestClaudeSession(cwd: string, sessionId: string): Promi
   return { scannedSessions: 1, ingestedSessions: 1, appendedTurns: turns.length };
 }
 
-export async function ingestAll(): Promise<IngestReport> {
+export async function ingestAll(opts: IngestOptions = {}): Promise<IngestReport> {
+  opts.onProgress?.('cleaning pending spawn stamps');
   await cleanupStalePendingStamps();
+  opts.onProgress?.('loading ingest cursors');
   const cursors = await loadCursors();
   const before = cloneCursors(cursors);
   const report = emptyReport();
+  opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
   const claudeGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   const codexGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   const opencodeGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
+  opts.onProgress?.('scanning Claude Code sessions');
   await ingestClaudeInto(cursors, report, contentMode, claudeGap);
+  opts.onProgress?.('scanning Codex sessions');
   await ingestCodexInto(cursors, report, contentMode, codexGap);
+  opts.onProgress?.('scanning OpenCode sessions');
   await ingestOpencodeInto(cursors, report, contentMode, opencodeGap);
   emitGapWarning('claude', contentMode, claudeGap, moduleGapState);
   emitGapWarning('codex', contentMode, codexGap, moduleGapState);
   emitGapWarning('opencode', contentMode, opencodeGap, moduleGapState);
+  opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
 }
@@ -613,8 +639,12 @@ export interface ReingestContentReport {
 // user-turn rows. Used by `burn state rebuild content` to fix up historical
 // sessions ingested before those derived records were written (or where the
 // sidecar was pruned). Does NOT touch cursors, ledger turns, or compactions.
-export async function reingestMissingContent(): Promise<ReingestContentReport> {
+export async function reingestMissingContent(
+  opts: IngestOptions = {},
+): Promise<ReingestContentReport> {
+  opts.onProgress?.('loading existing content records');
   const existingContent = await listContentSessionIds();
+  opts.onProgress?.('loading existing user-turn records');
   const existingUserTurns = new Set(
     (await queryUserTurns()).map((userTurn) => userTurn.sessionId),
   );
@@ -626,8 +656,11 @@ export async function reingestMissingContent(): Promise<ReingestContentReport> {
     appendedUserTurns: 0,
     failed: 0,
   };
+  opts.onProgress?.('re-parsing Claude Code sessions for content');
   await reingestClaudeContent(existingContent, existingUserTurns, report);
+  opts.onProgress?.('re-parsing Codex sessions for content');
   await reingestCodexContent(existingContent, existingUserTurns, report);
+  opts.onProgress?.('re-parsing OpenCode sessions for content');
   await reingestOpencodeContent(existingContent, existingUserTurns, report);
   return report;
 }

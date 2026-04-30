@@ -4,6 +4,20 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn` now reports interactive progress for ingest scans, harness startup/finalization, derived-state rebuilds, archive work, and analysis reads so long-running tasks no longer appear stalled.
+
+### Fixed
+
+- `burn state --help`, `burn run`, and `burn mcp-server` now skip opportunistic content pruning so help output and latency-sensitive startup are not delayed by retention scans.
+
+## [1.1.0] - 2026-04-29
+
+### Added
+
+- `burn state reset` wipes all derived ledger state (ledger, indexes, cursors, archive, content sidecars) in one command, with `--force` to apply, `--reingest` to immediately re-parse source logs, and `--json` for scripted use; preserves config, plans, and pricing overrides.
+
 ## [1.0.0] - 2026-04-29
 
 ### Added

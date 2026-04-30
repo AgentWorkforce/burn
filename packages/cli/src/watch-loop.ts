@@ -1,4 +1,4 @@
-import { ingestAll, type IngestReport } from './ingest.js';
+import { ingestAll, type IngestOptions, type IngestReport } from './ingest.js';
 
 export interface WatchController {
   tick(): Promise<void>;
@@ -13,8 +13,8 @@ export interface StartWatchLoopOptions {
   onError?: (err: unknown) => void;
 }
 
-export async function runIngestTick(): Promise<IngestReport> {
-  return ingestAll();
+export async function runIngestTick(opts: IngestOptions = {}): Promise<IngestReport> {
+  return ingestAll(opts);
 }
 
 export function startWatchLoop(opts: StartWatchLoopOptions = {}): WatchController {

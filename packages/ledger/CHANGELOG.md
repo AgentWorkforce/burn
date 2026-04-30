@@ -8,6 +8,16 @@ All notable changes to `@relayburn/ledger`.
 
 - Ledger reads, writes, locks, and content sidecars now run through the file-backed storage adapter seam without changing the JSONL filesystem output.
 
+## [1.1.0] - 2026-04-29
+
+### Added
+
+- Exposed `invalidateIndexCache()` so callers that wipe the on-disk index can drop the in-memory dedup cache before the next write.
+
+### Fixed
+
+- The index-sidecar cache is now keyed on `ledgerHome()`, so `RELAYBURN_HOME` swaps invalidate it instead of leaking dedup hashes from the prior home.
+
 ## [1.0.0] - 2026-04-29
 
 ### Added

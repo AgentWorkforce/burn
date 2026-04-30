@@ -33,6 +33,7 @@ import {
   startWatchLoop,
   type WatchController,
 } from '../watch-loop.js';
+import { withProgress } from '../progress.js';
 
 export {
   runIngestTick,
@@ -118,7 +119,9 @@ async function runIngestHook(hook: string, quiet: boolean): Promise<number> {
 }
 
 async function runIngestOnce(): Promise<number> {
-  const report = await runIngestTick();
+  const report = await withProgress('ingesting session stores', (task) =>
+    runIngestTick({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+  );
   process.stdout.write(renderIngestReport(report));
   return 0;
 }

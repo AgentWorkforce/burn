@@ -8,6 +8,7 @@ import {
   readSpawnEnvTags,
   spawnTagEnvOverrides,
 } from '../spawn-tags.js';
+import { ProgressReporter, withProgress } from '../progress.js';
 
 import { listHarnessNames, lookupHarness } from '../harnesses/registry.js';
 import type { HarnessAdapter, HarnessRunContext } from '../harnesses/types.js';
@@ -44,7 +45,7 @@ export async function runWrapper(
     process.stdout.write(RUN_HELP);
     return (harnessName || args.flags['help'] === true) ? 0 : 2;
   }
-  const adapter = lookupHarness(harnessName);
+  const adapter = await lookupHarness(harnessName);
   if (!adapter) {
     process.stderr.write(
       `burn: unknown harness "${harnessName}". Known: ${listHarnessNames().join(', ')}\n`,
@@ -60,6 +61,7 @@ export async function runWithAdapter(
   opts: RunWrapperOptions = {},
 ): Promise<number> {
   const spawn = opts.spawn ?? nodeSpawn;
+  const progress = new ProgressReporter();
   const envTags = readSpawnEnvTags();
   const tags = mergeSpawnTags(envTags, args.tags);
   tags['harness'] = adapter.name;
@@ -74,8 +76,15 @@ export async function runWithAdapter(
     spawnStartTs,
   };
 
-  const plan = await adapter.plan(ctx);
-  await adapter.beforeSpawn(ctx, plan);
+  const plan = await withProgress(`preparing ${adapter.name} harness`, async (task) => {
+    const planned = await adapter.plan(ctx);
+    task.succeed(`prepared ${adapter.name}: ${planned.binary}`);
+    return planned;
+  });
+  await withProgress(`tagging ${adapter.name} session`, async (task) => {
+    await adapter.beforeSpawn(ctx, plan);
+    task.succeed(`tagged ${adapter.name} session`);
+  });
 
   let totalIngestedSessions = 0;
   let totalAppendedTurns = 0;
@@ -85,6 +94,8 @@ export async function runWithAdapter(
   };
 
   const watcher = adapter.startWatcher?.(ctx, onReport) ?? null;
+  if (watcher) progress.info(`${adapter.name}: ingest watcher ready`);
+  progress.info(`${adapter.name}: starting ${plan.binary}`);
 
   const child = spawn(plan.binary, plan.args, {
     stdio: 'inherit',
@@ -104,8 +115,22 @@ export async function runWithAdapter(
     });
   });
 
-  if (watcher) await watcher.stop();
-  const finalReport = await adapter.afterExit(ctx, plan);
+  let finalReport: IngestReport;
+  const finalTask = progress.start(`finalizing ${adapter.name} ingest`);
+  try {
+    if (watcher) {
+      finalTask.update(`stopping ${adapter.name} ingest watcher`);
+      await watcher.stop();
+    }
+    finalTask.update(`running final ${adapter.name} ingest pass`);
+    finalReport = await adapter.afterExit(ctx, plan);
+    finalTask.succeed(`finalized ${adapter.name} ingest`);
+  } catch (err) {
+    finalTask.fail(`final ${adapter.name} ingest failed`);
+    throw err;
+  } finally {
+    finalTask.stop();
+  }
   totalIngestedSessions += finalReport.ingestedSessions;
   totalAppendedTurns += finalReport.appendedTurns;
   process.stderr.write(
@@ -115,4 +140,3 @@ export async function runWithAdapter(
   );
   return code;
 }
-

@@ -93,15 +93,15 @@ export type {
   StorageAdapterKind,
 } from './adapters/adapter.js';
 export {
+  invalidateIndexCache,
   rebuildIndex,
   relationshipIdHash,
   toolResultEventIdHash,
   turnIdHash,
   turnContentFingerprint,
   userTurnIdHash,
-  // Exposed (underscore-prefixed) so cross-package tests that swap
-  // RELAYBURN_HOME between cases can drop the in-memory dedup cache. Not
-  // part of the supported runtime surface — see `index-sidecar.ts`.
+  // Test alias for `invalidateIndexCache`; kept so existing test call
+  // sites don't churn.
   __resetIndexCacheForTesting,
 } from './index-sidecar.js';
 export { reclassifyLedger } from './reclassify.js';
