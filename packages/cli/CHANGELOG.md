@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-04-30
+
 ### Removed
 
 - Removed implicit content-sidecar pruning from CLI startup; `burn state` and other commands now respond without first walking source-session directories. Run `burn state prune` to prune on demand.

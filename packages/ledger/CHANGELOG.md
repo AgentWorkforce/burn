@@ -4,6 +4,12 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-04-30
+
+### Changed
+
+- Remove implicit content-sidecar pruning from CLI startup
+
 ## [1.2.1] - 2026-04-30
 
 ### Changed

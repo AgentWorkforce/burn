@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-04-30
+
 ### Changed
 
 - Publish workflow now always targets all lockstep packages and no longer exposes per-package release choices.
