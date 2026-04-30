@@ -4,6 +4,16 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-04-30
+
+### Fixed
+
+- Fix burn hotspots silent hang on multi-session ledgers
+
+### Changed
+
+- Narrow bulk user-turn pass by q.since / q.source (#214)
+
 ## [1.3.0] - 2026-04-30
 
 ### Added
