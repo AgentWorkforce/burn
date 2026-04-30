@@ -313,8 +313,8 @@ async function captureStdio<T>(
 }
 
 const EMPTY_DEPS: HotspotsAttributionDeps = {
-  loadContentForSession: async () => [],
-  loadUserTurnsForSession: async () => [],
+  loadContentBySession: async () => new Map(),
+  loadUserTurnsBySession: async () => new Map(),
 };
 
 describe('turnPassesCoverage (#100)', () => {
@@ -627,6 +627,43 @@ describe('runHotspotsAttribution — partial exclusion (#100)', () => {
     assert.equal(payload.fidelity.summary.byClass.full, 1);
     assert.equal(payload.fidelity.summary.byClass.partial, 1);
     assert.equal(payload.turnsAnalyzed, 1);
+  });
+});
+
+describe('runHotspotsAttribution — bulk session loaders', () => {
+  it('invokes loadUserTurnsBySession and loadContentBySession once with the eligible session ids, not once per session', async () => {
+    const pricing = await loadBuiltinPricing();
+    const goodFidelity = fidelityWith('full', 'per-turn');
+    const badFidelity = fidelityWith('partial', 'per-turn', { hasToolResultEvents: false });
+    const turns: EnrichedTurn[] = [
+      makeTurn({ sessionId: 's-1', messageId: 'a', turnIndex: 0, source: 'claude-code', fidelity: goodFidelity }),
+      makeTurn({ sessionId: 's-2', messageId: 'b', turnIndex: 0, source: 'claude-code', fidelity: goodFidelity }),
+      makeTurn({ sessionId: 's-3', messageId: 'c', turnIndex: 0, source: 'claude-code', fidelity: goodFidelity }),
+      // Excluded — its sessionId must not appear in the eligible-only loader call.
+      makeTurn({ sessionId: 's-skip', messageId: 'x', turnIndex: 0, source: 'codex', fidelity: badFidelity }),
+    ];
+
+    const userCalls: Array<Set<string>> = [];
+    const contentCalls: Array<Set<string>> = [];
+    const deps: HotspotsAttributionDeps = {
+      loadUserTurnsBySession: async (ids) => {
+        userCalls.push(new Set(ids));
+        return new Map();
+      },
+      loadContentBySession: async (ids) => {
+        contentCalls.push(new Set(ids));
+        return new Map();
+      },
+    };
+
+    const { result } = await captureStdio(() =>
+      runHotspotsAttribution(args(), turns, pricing, deps),
+    );
+    assert.equal(result, 0);
+    assert.equal(userCalls.length, 1, 'user-turn loader must be called exactly once');
+    assert.equal(contentCalls.length, 1, 'content loader must be called exactly once');
+    assert.deepEqual([...userCalls[0]!].sort(), ['s-1', 's-2', 's-3']);
+    assert.deepEqual([...contentCalls[0]!].sort(), ['s-1', 's-2', 's-3']);
   });
 });
 
