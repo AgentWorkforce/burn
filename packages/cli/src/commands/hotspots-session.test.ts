@@ -695,6 +695,88 @@ describe('burn hotspots --session aggregate (#79)', () => {
     ]);
   });
 
+  it('adds Bash verb rollups to per-session JSON and human reports', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 'bash-session',
+        messageId: 'bash-session-1',
+        turnIndex: 0,
+        toolCalls: [
+          { id: 'bash-a', name: 'Bash', target: 'git diff src/a.ts', argsHash: 'git:diff:a' },
+        ],
+      }),
+      fakeTurn({
+        sessionId: 'bash-session',
+        messageId: 'bash-session-2',
+        turnIndex: 1,
+        usage: { input: 1000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+      fakeTurn({
+        sessionId: 'bash-session',
+        messageId: 'bash-session-3',
+        turnIndex: 2,
+        toolCalls: [
+          { id: 'bash-b', name: 'Bash', target: 'git diff src/b.ts', argsHash: 'git:diff:b' },
+        ],
+      }),
+      fakeTurn({
+        sessionId: 'bash-session',
+        messageId: 'bash-session-4',
+        turnIndex: 3,
+        usage: { input: 1000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ]);
+    await appendContent([
+      {
+        ...toolResultContent({
+          source: 'claude-code',
+          sessionId: 'bash-session',
+          messageId: 'bash-session-result-a',
+          toolUseId: 'bash-a',
+        }),
+        toolResult: { toolUseId: 'bash-a', content: 'a'.repeat(4000) },
+      },
+      {
+        ...toolResultContent({
+          source: 'claude-code',
+          sessionId: 'bash-session',
+          messageId: 'bash-session-result-b',
+          toolUseId: 'bash-b',
+        }),
+        toolResult: { toolUseId: 'bash-b', content: 'b'.repeat(4000) },
+      },
+    ]);
+
+    const json = await captureHotspots({
+      flags: { json: true },
+      tags: {},
+      positional: ['bash-session'],
+      passthrough: [],
+    });
+    assert.equal(json.code, 0);
+    const parsed = JSON.parse(json.stdout) as {
+      topBashVerbs: Array<{ verb: string; callCount: number; distinctCommands: number }>;
+      topBashes: unknown[];
+    };
+    assert.equal(parsed.topBashVerbs[0]!.verb, 'git diff');
+    assert.equal(parsed.topBashVerbs[0]!.callCount, 2);
+    assert.equal(parsed.topBashVerbs[0]!.distinctCommands, 2);
+    assert.equal(parsed.topBashes.length, 2);
+
+    const human = await captureHotspots({
+      flags: {},
+      tags: {},
+      positional: ['bash-session'],
+      passthrough: [],
+    });
+    assert.equal(human.code, 0);
+    const verbIndex = human.stdout.indexOf('Top Bash verbs by cost');
+    const exactIndex = human.stdout.indexOf('Top exact Bash commands by cost');
+    assert.ok(verbIndex >= 0, 'verb heading present');
+    assert.ok(exactIndex > verbIndex, 'exact-command heading follows verb heading');
+    assert.match(human.stdout, /git diff/);
+  });
+
   it('keeps the human per-session output unchanged when no graph rows exist', async () => {
     await appendTurns([
       fakeTurn({

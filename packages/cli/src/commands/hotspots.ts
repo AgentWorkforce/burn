@@ -1,5 +1,6 @@
 import {
   aggregateByBash,
+  aggregateByBashVerb,
   aggregateByFile,
   aggregateBySubagent,
   attributeHotspots,
@@ -24,6 +25,7 @@ import {
   toolOutputBloatToFinding,
   userClaudeSettingsPath,
   type BashAggregation,
+  type BashVerbAggregation,
   type FidelitySummary,
   type FileAggregation,
   type GhostSurfaceFinding,
@@ -51,6 +53,7 @@ import type {
   ToolResultEventRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
+import { parseBashCommand } from '@relayburn/reader';
 
 import { ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
@@ -309,6 +312,7 @@ export async function runHotspotsAttribution(
             attributionDegraded: false,
             sessions: [],
             files: [],
+            bashVerbs: [],
             bash: [],
             subagents: [],
             fidelity: {
@@ -341,6 +345,7 @@ export async function runHotspotsAttribution(
     userTurnsBySession,
   });
   const files = aggregateByFile(result.attributions);
+  const bashVerbs = aggregateByBashVerb(result.attributions, parseBashCommand);
   const bashes = aggregateByBash(result.attributions);
   const subagents = aggregateBySubagent(result.attributions);
   const degraded = isAttributionDegraded(result);
@@ -361,6 +366,7 @@ export async function runHotspotsAttribution(
           attributionDegraded: degraded,
           sessions: result.sessionTotals,
           files,
+          bashVerbs,
           bash: bashes,
           subagents,
           fidelity: {
@@ -384,6 +390,7 @@ export async function runHotspotsAttribution(
     turnsAnalyzed: eligible.length,
     result,
     files,
+    bashVerbs,
     bashes,
     subagents,
     limit,
@@ -426,6 +433,7 @@ interface FormatHotspotsReportInput {
   turnsAnalyzed: number;
   result: HotspotsResult;
   files: FileAggregation[];
+  bashVerbs?: BashVerbAggregation[];
   bashes: BashAggregation[];
   subagents: SubagentAggregation[];
   limit: number;
@@ -434,7 +442,7 @@ interface FormatHotspotsReportInput {
 }
 
 export function formatHotspotsReport(input: FormatHotspotsReportInput): string {
-  const { turnsAnalyzed, result, files, bashes, subagents, limit, degraded, coverageNotice } = input;
+  const { turnsAnalyzed, result, files, bashVerbs = [], bashes, subagents, limit, degraded, coverageNotice } = input;
   const evenSplitSessions = result.sessionTotals.filter(
     (s) => s.attributionMethod === 'even-split',
   );
@@ -500,7 +508,15 @@ export function formatHotspotsReport(input: FormatHotspotsReportInput): string {
   }
   out.push('');
 
-  out.push(`Top Bash commands by cost${approxSuffix}`);
+  out.push(`Top Bash verbs by cost${approxSuffix}`);
+  if (bashVerbs.length === 0) {
+    out.push('  (no Bash tool calls)');
+  } else {
+    out.push(renderBashVerbTable(bashVerbs, limit));
+  }
+  out.push('');
+
+  out.push(`Top exact Bash commands by cost${approxSuffix}`);
   if (bashes.length === 0) {
     out.push('  (no Bash tool calls)');
   } else {
@@ -534,6 +550,26 @@ function renderFileTable(files: FileAggregation[], limit: number, attributed: nu
       formatInt(f.ridingTurns),
       formatUsd(f.totalCost),
       `${pct.toFixed(1)}%`,
+    ]);
+  }
+  return table(rows);
+}
+
+function renderBashVerbTable(bashVerbs: BashVerbAggregation[], limit: number): string {
+  const rows: string[][] = [
+    ['verb', 'calls', 'commands', 'initial(tok)', 'persist(tok)', 'avgRide', 'cost', 'examples'],
+  ];
+  const slice = bashVerbs.slice(0, limit);
+  for (const b of slice) {
+    rows.push([
+      b.verb,
+      formatInt(b.callCount),
+      formatInt(b.distinctCommands),
+      formatInt(b.initialTokens),
+      formatInt(b.persistenceTokens),
+      b.avgPersistenceTurns.toFixed(1),
+      formatUsd(b.totalCost),
+      truncate(b.topExamples.map((example) => truncate(example, 40)).join('; '), 90),
     ]);
   }
   return table(rows);

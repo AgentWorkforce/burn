@@ -1,4 +1,4 @@
-import type { ContentRecord, TurnRecord, UserTurnRecord } from '@relayburn/reader';
+import type { BashParse, ContentRecord, TurnRecord, UserTurnRecord } from '@relayburn/reader';
 
 import { costForTurn, lookupModelRate } from './cost.js';
 import type { PricingTable } from './pricing.js';
@@ -378,6 +378,17 @@ export interface BashAggregation {
   persistenceTokens: number;
 }
 
+export interface BashVerbAggregation {
+  verb: string;
+  callCount: number;
+  distinctCommands: number;
+  totalCost: number;
+  initialTokens: number;
+  persistenceTokens: number;
+  avgPersistenceTurns: number;
+  topExamples: string[];
+}
+
 export interface SubagentAggregation {
   subagentType: string;
   callCount: number;
@@ -441,6 +452,76 @@ export function aggregateByBash(attributions: ToolAttribution[]): BashAggregatio
     row.persistenceTokens += a.persistenceTokens;
   }
   return [...byHash.values()].sort((a, b) => b.totalCost - a.totalCost);
+}
+
+interface BashVerbAccumulator {
+  verb: string;
+  callCount: number;
+  totalCost: number;
+  initialTokens: number;
+  persistenceTokens: number;
+  ridingTurns: number;
+  hashes: Set<string>;
+  examples: Map<string, { command: string; totalCost: number }>;
+}
+
+export function aggregateByBashVerb(
+  attributions: ToolAttribution[],
+  parse: (cmd: string) => BashParse | null,
+): BashVerbAggregation[] {
+  const byVerb = new Map<string, BashVerbAccumulator>();
+  for (const a of attributions) {
+    if (a.toolName !== 'Bash') continue;
+    const parsed = a.target ? parse(a.target) : null;
+    const verbKey = parsed?.normalized ?? '(unknown)';
+    let row = byVerb.get(verbKey);
+    if (!row) {
+      row = {
+        verb: verbKey,
+        callCount: 0,
+        totalCost: 0,
+        initialTokens: 0,
+        persistenceTokens: 0,
+        ridingTurns: 0,
+        hashes: new Set(),
+        examples: new Map(),
+      };
+      byVerb.set(verbKey, row);
+    }
+    row.callCount++;
+    row.totalCost += a.totalCost;
+    row.initialTokens += a.initialTokens;
+    row.persistenceTokens += a.persistenceTokens;
+    row.ridingTurns += a.ridingTurns;
+    row.hashes.add(a.argsHash);
+
+    const exampleKey = a.argsHash;
+    let example = row.examples.get(exampleKey);
+    if (!example) {
+      example = {
+        command: a.target ?? `(hash ${a.argsHash.slice(0, 8)})`,
+        totalCost: 0,
+      };
+      row.examples.set(exampleKey, example);
+    }
+    example.totalCost += a.totalCost;
+  }
+
+  return [...byVerb.values()]
+    .map((row) => ({
+      verb: row.verb,
+      callCount: row.callCount,
+      distinctCommands: row.hashes.size,
+      totalCost: row.totalCost,
+      initialTokens: row.initialTokens,
+      persistenceTokens: row.persistenceTokens,
+      avgPersistenceTurns: row.callCount > 0 ? row.ridingTurns / row.callCount : 0,
+      topExamples: [...row.examples.values()]
+        .sort((a, b) => b.totalCost - a.totalCost || a.command.localeCompare(b.command))
+        .slice(0, 3)
+        .map((example) => example.command),
+    }))
+    .sort((a, b) => b.totalCost - a.totalCost || a.verb.localeCompare(b.verb));
 }
 
 export function aggregateBySubagent(attributions: ToolAttribution[]): SubagentAggregation[] {

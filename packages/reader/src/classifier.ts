@@ -20,6 +20,12 @@ export interface ClassificationResult {
   hasEdits: boolean;
 }
 
+export interface BashParse {
+  binary: string;
+  subcommand?: string;
+  normalized: string;
+}
+
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 const DELEGATION_TOOLS = new Set(['Agent', 'Task']);
 const READ_ONLY_TOOLS = new Set([
@@ -62,6 +68,379 @@ const TOOL_ALIASES: Record<string, string> = {
 
 export function normalizeToolName(name: string): string {
   return TOOL_ALIASES[name] ?? name;
+}
+
+const MULTIWORD_BINARIES = new Set([
+  'git',
+  'gh',
+  'npm',
+  'pnpm',
+  'yarn',
+  'bun',
+  'pip',
+  'pip3',
+  'uv',
+  'poetry',
+  'cargo',
+  'make',
+  'docker',
+  'kubectl',
+  'helm',
+  'terraform',
+  'brew',
+  'apt',
+  'apt-get',
+  'gem',
+  'bundle',
+  'go',
+]);
+
+const PACKAGE_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const SHELL_BINARIES = new Set(['bash', 'sh', 'zsh']);
+const PYTHON_BINARIES = new Set(['python', 'python3']);
+const TWO_PART_SUBCOMMANDS: Record<string, Set<string>> = {
+  docker: new Set(['compose']),
+  gh: new Set(['pr', 'run', 'issue', 'repo', 'workflow', 'release']),
+  go: new Set(['mod']),
+  uv: new Set(['pip']),
+};
+const OPTION_TAKES_VALUE = new Set([
+  '-C',
+  '-c',
+  '-F',
+  '--config',
+  '--filter',
+  '--git-dir',
+  '--namespace',
+  '--prefix',
+  '--repo',
+  '--repository',
+  '--work-tree',
+]);
+
+export function parseBashCommand(command: string): BashParse | null {
+  return parseBashCommandInner(command, 0);
+}
+
+function parseBashCommandInner(command: string, depth: number): BashParse | null {
+  if (depth > 5) return shellParse();
+  let cmd = command.trim();
+  if (!cmd) return null;
+  if (hasHeredoc(cmd) || startsWithCompoundShellSyntax(cmd)) return shellParse();
+  if (!hasBalancedShellDelimiters(cmd)) return shellParse();
+
+  const unwrapped = unwrapSubshell(cmd);
+  if (unwrapped !== null) return parseBashCommandInner(unwrapped, depth + 1);
+
+  const withoutCd = stripLeadingCdPrefix(cmd);
+  if (withoutCd !== null) return parseBashCommandInner(withoutCd, depth + 1);
+
+  const first = firstTopLevelSegment(cmd);
+  if (first === null) return shellParse();
+  cmd = first.trim();
+  if (!cmd) return null;
+  if (hasHeredoc(cmd) || startsWithCompoundShellSyntax(cmd)) return shellParse();
+
+  const segmentUnwrapped = unwrapSubshell(cmd);
+  if (segmentUnwrapped !== null) {
+    return parseBashCommandInner(segmentUnwrapped, depth + 1);
+  }
+
+  const tokens = shellWords(cmd);
+  if (tokens === null) return shellParse();
+  let i = skipEnvAssignments(tokens, 0);
+  if (i >= tokens.length) return null;
+
+  const rawBinary = tokens[i]!;
+  const binary = normalizeBinary(rawBinary);
+
+  if (SHELL_BINARIES.has(binary)) {
+    const shellCommand = shellCommandArg(tokens, i + 1);
+    if (shellCommand !== null) return parseBashCommandInner(shellCommand, depth + 1);
+    return verb(binary);
+  }
+
+  if (binary === 'env') {
+    const envCommand = envCommandArgs(tokens, i + 1);
+    if (envCommand.length === 0) return null;
+    return parseBashCommandInner(envCommand.join(' '), depth + 1);
+  }
+
+  if (PYTHON_BINARIES.has(binary)) {
+    const parsed = parsePythonModule(tokens, i + 1);
+    if (parsed) return parsed;
+  }
+
+  if (binary === 'node' && tokens.slice(i + 1).includes('--test')) {
+    return verb(binary, '--test');
+  }
+
+  const subIndex = skipLeadingOptions(tokens, i + 1);
+  if (subIndex >= tokens.length || !MULTIWORD_BINARIES.has(binary)) {
+    return verb(binary);
+  }
+
+  let subcommand = tokens[subIndex]!;
+  if (PACKAGE_RUNNERS.has(binary) && subcommand === 'run' && subIndex + 1 < tokens.length) {
+    subcommand = tokens[subIndex + 1]!;
+  } else {
+    const nested = TWO_PART_SUBCOMMANDS[binary];
+    if (nested?.has(subcommand) && subIndex + 1 < tokens.length) {
+      subcommand = `${subcommand} ${tokens[subIndex + 1]!}`;
+    }
+  }
+
+  return verb(binary, subcommand);
+}
+
+function verb(binary: string, subcommand?: string): BashParse {
+  if (!subcommand) return { binary, normalized: binary };
+  return { binary, subcommand, normalized: `${binary} ${subcommand}` };
+}
+
+function shellParse(): BashParse {
+  return { binary: '(shell)', normalized: '(shell)' };
+}
+
+function hasHeredoc(cmd: string): boolean {
+  return /<<-?\s*\S+/.test(cmd);
+}
+
+function startsWithCompoundShellSyntax(cmd: string): boolean {
+  return /^(?:for|while|until|if|case|select|function)\b/.test(cmd) || /^\{\s/.test(cmd);
+}
+
+function hasBalancedShellDelimiters(cmd: string): boolean {
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  let depth = 0;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth < 0) return false;
+    }
+  }
+  return quote === null && depth === 0;
+}
+
+function unwrapSubshell(cmd: string): string | null {
+  if (!cmd.startsWith('(') || !cmd.endsWith(')')) return null;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  let depth = 0;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0 && i !== cmd.length - 1) return null;
+      if (depth < 0) return null;
+    }
+  }
+  if (quote || depth !== 0) return null;
+  return cmd.slice(1, -1).trim();
+}
+
+function stripLeadingCdPrefix(cmd: string): string | null {
+  const op = firstTopLevelOperator(cmd, ['&&', ';']);
+  if (!op) return null;
+  const before = cmd.slice(0, op.index).trim();
+  const words = shellWords(before);
+  if (words === null) return null;
+  const commandIndex = skipEnvAssignments(words, 0);
+  if (words[commandIndex] !== 'cd') return null;
+  return cmd.slice(op.index + op.operator.length).trim();
+}
+
+function firstTopLevelSegment(cmd: string): string | null {
+  const op = firstTopLevelOperator(cmd, ['&&', '||', ';', '|', '\n']);
+  if (!op) return cmd;
+  return cmd.slice(0, op.index);
+}
+
+function firstTopLevelOperator(
+  cmd: string,
+  operators: readonly string[],
+): { index: number; operator: string } | null {
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  let depth = 0;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') {
+      depth++;
+      continue;
+    }
+    if (ch === ')') {
+      depth--;
+      if (depth < 0) return null;
+      continue;
+    }
+    if (depth !== 0) continue;
+    for (const operator of operators) {
+      if (cmd.startsWith(operator, i)) return { index: i, operator };
+    }
+  }
+  if (quote || depth !== 0) return null;
+  return null;
+}
+
+function shellWords(segment: string): string[] | null {
+  const words: string[] = [];
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  let current = '';
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i]!;
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        words.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (escaped) current += '\\';
+  if (quote) return null;
+  if (current) words.push(current);
+  return words;
+}
+
+function skipEnvAssignments(tokens: string[], start: number): number {
+  let i = start;
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) i++;
+  return i;
+}
+
+function skipLeadingOptions(tokens: string[], start: number): number {
+  let i = start;
+  while (i < tokens.length) {
+    const token = tokens[i]!;
+    if (token === '--') return i + 1;
+    if (!token.startsWith('-')) return i;
+    const optionName = token.includes('=') ? token.slice(0, token.indexOf('=')) : token;
+    i++;
+    if (!token.includes('=') && OPTION_TAKES_VALUE.has(optionName) && i < tokens.length) i++;
+  }
+  return i;
+}
+
+function shellCommandArg(tokens: string[], start: number): string | null {
+  for (let i = start; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token === '-c' || (token.startsWith('-') && !token.startsWith('--') && token.includes('c'))) {
+      return tokens[i + 1] ?? null;
+    }
+  }
+  return null;
+}
+
+function envCommandArgs(tokens: string[], start: number): string[] {
+  let i = start;
+  while (i < tokens.length) {
+    const token = tokens[i]!;
+    if (token === '--') {
+      i++;
+      break;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      i++;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  return tokens.slice(i);
+}
+
+function parsePythonModule(tokens: string[], start: number): BashParse | null {
+  const moduleFlag = tokens.indexOf('-m', start);
+  if (moduleFlag === -1 || moduleFlag + 1 >= tokens.length) return null;
+  const module = normalizeBinary(tokens[moduleFlag + 1]!);
+  if (module === 'pytest') return verb('pytest');
+  if (module === 'pip' || module === 'pip3') {
+    const subIndex = skipLeadingOptions(tokens, moduleFlag + 2);
+    if (subIndex < tokens.length) return verb(module, tokens[subIndex]!);
+    return verb(module);
+  }
+  return verb(module);
+}
+
+function normalizeBinary(raw: string): string {
+  const parts = raw.split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? raw;
 }
 
 // Bash command heuristics. Match on the first non-env token after stripping
