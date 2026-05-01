@@ -74,26 +74,37 @@ export interface IngestOptions {
   onWarn?: (body: string) => void;
 }
 
-// Per-adapter content-capture gap aggregator. A "gap" is a session that the
-// parser emitted in `contentMode === 'full'` mode with at least one tool call
-// in a committed turn but zero `tool_result` ContentRecords — the load-bearing
-// kind for `burn hotspots`'s tool-call attribution.
+// Per-adapter content-capture gap tracker. A session is "affected" iff a parse
+// pass observed `tool_use` blocks for it in `contentMode === 'full'` mode
+// without any matching `tool_result` ContentRecord — the load-bearing kind
+// for `burn hotspots`'s tool-call attribution.
 //
-// We accumulate per adapter across the ingest loop and emit a single warning
-// at the end. Suppression is per-process: once an adapter has warned, later
-// `ingestAll()` calls in the same `burn` invocation stay silent unless the
-// adapter accumulates fresh affected sessions (which we re-check by
-// comparing against the prior emit's session count).
-interface GapStats {
-  affectedSessions: number;
-  orphanToolCalls: number;
-}
+// Tracking is per-process and per-session (not per-call counts), so the set
+// shrinks as later passes pick up the missing tool_result lines. The most
+// common cause of a gap is a session that was still running when ingest
+// observed the assistant tool_use line — the tool_result line gets flushed
+// shortly after and the next pass heals the session. Sessions that were
+// killed mid-call stay flagged permanently, which is the signal we want.
+//
+// Suppression: a warning fires only when the affected set has *grown* since
+// the last emission, so a steady-state or shrinking set stays silent. After
+// the set decays back to zero the suppression marker is cleared so a fresh
+// gap from a future regression triggers a new warning.
+type AdapterName = 'claude' | 'codex' | 'opencode';
 
 interface GapTrackerState {
-  // Adapters that have already emitted a warning at least once in this
-  // process. Used to keep a flooding `--watch` loop quiet after the first
-  // notice — if a second pass turns up *additional* affected sessions we
-  // still warn, but a steady state stays silent.
+  // Sessions currently flagged as missing tool_result content, per adapter.
+  affectedSessions: Map<AdapterName, Set<string>>;
+  // Cumulative orphan tool-call count for each flagged session. Removed
+  // alongside the session when it heals.
+  orphanCallsPerSession: Map<AdapterName, Map<string, number>>;
+  // Sessions known to have emitted ≥1 tool_result content record in this
+  // process. Once a session is here it can never be re-flagged (capture
+  // proved itself for that session at least once). Bounded by the number of
+  // distinct sessionIds the process has touched.
+  healedSessions: Map<AdapterName, Set<string>>;
+  // Last `affectedSessions[adapter].size` observed at warn-emit time. Used
+  // to suppress repeats unless the set has grown since then.
   warnedAffectedSessions: Map<AdapterName, number>;
   // Default sink for gap warnings when the caller has not provided an
   // `onWarn` (e.g. plain stderr contexts like `burn run` or watch loops).
@@ -104,16 +115,20 @@ interface GapTrackerState {
   write: (body: string) => void;
 }
 
-type AdapterName = 'claude' | 'codex' | 'opencode';
-
 const moduleGapState: GapTrackerState = {
+  affectedSessions: new Map(),
+  orphanCallsPerSession: new Map(),
+  healedSessions: new Map(),
   warnedAffectedSessions: new Map(),
   write: (body) => process.stderr.write(`⚠ ${body}\n`),
 };
 
-// Test-only: clear per-process suppression state. Safe to call from prod
-// code too (it's a no-op when nothing has been warned yet).
+// Test-only: clear per-process gap state. Safe to call from prod code too
+// (it's a no-op when nothing has been observed yet).
 export function resetIngestGapWarnings(): void {
+  moduleGapState.affectedSessions.clear();
+  moduleGapState.orphanCallsPerSession.clear();
+  moduleGapState.healedSessions.clear();
   moduleGapState.warnedAffectedSessions.clear();
 }
 
@@ -125,6 +140,60 @@ export function setIngestGapWriter(write: (msg: string) => void): (msg: string) 
   return prev;
 }
 
+function getOrInit<K, V>(map: Map<K, V>, key: K, init: () => V): V {
+  let v = map.get(key);
+  if (v === undefined) {
+    v = init();
+    map.set(key, v);
+  }
+  return v;
+}
+
+// Update the process-wide gap state for one parse pass on one session.
+// Called from each adapter's ingest loop after `parse*Incremental` returns,
+// regardless of whether the pass produced new turns — `content` arriving
+// without new turns is the heal case (tool_result line landed after its
+// assistant tool_use was already cursored past).
+function recordSessionGap(
+  adapter: AdapterName,
+  sessionId: string,
+  newToolCalls: number,
+  newToolResults: number,
+  state: GapTrackerState,
+): void {
+  if (!sessionId) return;
+  const affected = getOrInit(state.affectedSessions, adapter, () => new Set<string>());
+  const orphans = getOrInit(state.orphanCallsPerSession, adapter, () => new Map<string, number>());
+  const healed = getOrInit(state.healedSessions, adapter, () => new Set<string>());
+  if (newToolResults > 0) {
+    affected.delete(sessionId);
+    orphans.delete(sessionId);
+    healed.add(sessionId);
+    return;
+  }
+  if (newToolCalls === 0) return;
+  // Once a session has shown that capture works for it, don't re-flag on a
+  // later mid-flight observation; the tool_result will arrive on the next
+  // pass and we'd just be flapping.
+  if (healed.has(sessionId)) return;
+  affected.add(sessionId);
+  orphans.set(sessionId, (orphans.get(sessionId) ?? 0) + newToolCalls);
+}
+
+// Sum tool calls across the parsed turns of one batch.
+function countNewToolCalls(turns: readonly TurnRecord[]): number {
+  let n = 0;
+  for (const t of turns) n += t.toolCalls.length;
+  return n;
+}
+
+// Count `tool_result` ContentRecords in the parsed batch.
+function countNewToolResults(content: readonly ContentRecord[]): number {
+  let n = 0;
+  for (const c of content) if (c.kind === 'tool_result') n++;
+  return n;
+}
+
 export async function ingestClaudeProjects(opts: IngestOptions = {}): Promise<IngestReport> {
   opts.onProgress?.('cleaning pending spawn stamps');
   await cleanupStalePendingStamps();
@@ -134,10 +203,9 @@ export async function ingestClaudeProjects(opts: IngestOptions = {}): Promise<In
   const report = emptyReport();
   opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
-  const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   opts.onProgress?.('scanning Claude Code sessions');
-  await ingestClaudeInto(cursors, report, contentMode, gap);
-  emitGapWarning('claude', contentMode, gap, moduleGapState, opts.onWarn);
+  await ingestClaudeInto(cursors, report, contentMode);
+  emitGapWarning('claude', contentMode, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -152,10 +220,9 @@ export async function ingestCodexSessions(opts: IngestOptions = {}): Promise<Ing
   const report = emptyReport();
   opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
-  const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   opts.onProgress?.('scanning Codex sessions');
-  await ingestCodexInto(cursors, report, contentMode, gap);
-  emitGapWarning('codex', contentMode, gap, moduleGapState, opts.onWarn);
+  await ingestCodexInto(cursors, report, contentMode);
+  emitGapWarning('codex', contentMode, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -170,10 +237,9 @@ export async function ingestOpencodeSessions(opts: IngestOptions = {}): Promise<
   const report = emptyReport();
   opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
-  const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   opts.onProgress?.('scanning OpenCode sessions');
-  await ingestOpencodeInto(cursors, report, contentMode, gap);
-  emitGapWarning('opencode', contentMode, gap, moduleGapState, opts.onWarn);
+  await ingestOpencodeInto(cursors, report, contentMode);
+  emitGapWarning('opencode', contentMode, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -232,18 +298,15 @@ export async function ingestAll(opts: IngestOptions = {}): Promise<IngestReport>
   const report = emptyReport();
   opts.onProgress?.('loading content settings');
   const contentMode = await resolveContentMode();
-  const claudeGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
-  const codexGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
-  const opencodeGap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   opts.onProgress?.('scanning Claude Code sessions');
-  await ingestClaudeInto(cursors, report, contentMode, claudeGap);
+  await ingestClaudeInto(cursors, report, contentMode);
   opts.onProgress?.('scanning Codex sessions');
-  await ingestCodexInto(cursors, report, contentMode, codexGap);
+  await ingestCodexInto(cursors, report, contentMode);
   opts.onProgress?.('scanning OpenCode sessions');
-  await ingestOpencodeInto(cursors, report, contentMode, opencodeGap);
-  emitGapWarning('claude', contentMode, claudeGap, moduleGapState, opts.onWarn);
-  emitGapWarning('codex', contentMode, codexGap, moduleGapState, opts.onWarn);
-  emitGapWarning('opencode', contentMode, opencodeGap, moduleGapState, opts.onWarn);
+  await ingestOpencodeInto(cursors, report, contentMode);
+  emitGapWarning('claude', contentMode, moduleGapState, opts.onWarn);
+  emitGapWarning('codex', contentMode, moduleGapState, opts.onWarn);
+  emitGapWarning('opencode', contentMode, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -275,24 +338,34 @@ export function countToolCallGaps(
 function emitGapWarning(
   adapter: AdapterName,
   contentMode: ContentStoreMode,
-  stats: GapStats,
   state: GapTrackerState,
   onWarn: ((body: string) => void) | undefined,
 ): void {
   if (contentMode !== 'full') return;
-  if (stats.affectedSessions === 0) return;
-  // Suppress if we've already warned for this adapter and no *additional*
-  // affected sessions showed up since then. Without this, a `--watch` loop
-  // would re-print the warning on every poll.
-  const priorEmitted = state.warnedAffectedSessions.get(adapter);
-  if (priorEmitted !== undefined && stats.affectedSessions <= priorEmitted) return;
-  state.warnedAffectedSessions.set(adapter, stats.affectedSessions);
-  const sessions = `${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'}`;
-  const calls = `${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}`;
+  const affected = state.affectedSessions.get(adapter);
+  const count = affected?.size ?? 0;
+  if (count === 0) {
+    // Set decayed back to empty — clear the suppression marker so a fresh
+    // gap from a future regression triggers a new warning.
+    state.warnedAffectedSessions.delete(adapter);
+    return;
+  }
+  const prior = state.warnedAffectedSessions.get(adapter);
+  // Always update the marker so the next emission's delta check is honest:
+  // a count that decayed from 10 to 5 silently won't pretend the prior was
+  // still 10 next time.
+  state.warnedAffectedSessions.set(adapter, count);
+  if (prior !== undefined && count <= prior) return;
+  let totalCalls = 0;
+  const orphans = state.orphanCallsPerSession.get(adapter);
+  if (orphans) for (const n of orphans.values()) totalCalls += n;
+  const sessions = `${count} session${count === 1 ? '' : 's'}`;
+  const calls = `${totalCalls} tool call${totalCalls === 1 ? '' : 's'}`;
   const body =
-    `${adapter} parser produced 0 tool_result records for ${sessions} (${calls}).\n` +
-    `  Content capture may not be implemented for this adapter; burn hotspots will use\n` +
-    `  user-turn block sizes when available, then fall back to even-split attribution.`;
+    `${adapter}: ${sessions} logged tool calls without matching tool_result content (${calls}).\n` +
+    `  Likely cause: still running (result line not yet flushed) or killed mid-call.\n` +
+    `  Counts decay as later ingest passes pick up the result lines; sized hotspots\n` +
+    `  attribution falls back to user-turn block sizes (or even-split) until they heal.`;
   if (onWarn) onWarn(body);
   else state.write(body);
 }
@@ -306,7 +379,6 @@ async function ingestClaudeInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
   contentMode: ContentStoreMode,
-  gap: GapStats,
 ): Promise<void> {
   const projects = await listDirs(claudeProjectsDir());
   // Cross-file relationship reconciliation. Collect per-file evidence
@@ -364,13 +436,16 @@ async function ingestClaudeInto(
           await appendTurns(turns);
           report.appendedTurns += turns.length;
           report.ingestedSessions++;
-          if (contentMode === 'full') {
-            const { sessionAffected, orphanToolCalls } = countToolCallGaps(turns, content);
-            if (sessionAffected) {
-              gap.affectedSessions++;
-              gap.orphanToolCalls += orphanToolCalls;
-            }
-          }
+        }
+        if (contentMode === 'full') {
+          const sessionId = turns[0]?.sessionId ?? content[0]?.sessionId ?? '';
+          recordSessionGap(
+            'claude',
+            sessionId,
+            countNewToolCalls(turns),
+            countNewToolResults(content),
+            moduleGapState,
+          );
         }
         if (content.length > 0) {
           await appendContent(content);
@@ -421,7 +496,6 @@ async function ingestCodexInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
   contentMode: ContentStoreMode,
-  gap: GapStats,
 ): Promise<void> {
   for (const file of await walkJsonl(codexSessionsDir())) {
     report.scannedSessions++;
@@ -474,12 +548,14 @@ async function ingestCodexInto(
         endOffset,
         resume: nextResume,
       } = await parseCodexSessionIncremental(file, opts);
+      let codexSessionId: string | null | undefined =
+        nextResume.sessionId || turns[0]?.sessionId || content[0]?.sessionId;
       if (turns.length > 0) {
-        const sessionId = nextResume.sessionId || turns[0]!.sessionId || (await deriveCodexSessionId(file));
-        if (sessionId) {
+        if (!codexSessionId) codexSessionId = await deriveCodexSessionId(file);
+        if (codexSessionId) {
           const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
             harness: 'codex',
-            sessionId,
+            sessionId: codexSessionId,
             sessionPath: file,
             sessionMtimeMs: st.mtimeMs,
           };
@@ -490,13 +566,15 @@ async function ingestCodexInto(
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
-        if (contentMode === 'full') {
-          const { sessionAffected, orphanToolCalls } = countToolCallGaps(turns, content);
-          if (sessionAffected) {
-            gap.affectedSessions++;
-            gap.orphanToolCalls += orphanToolCalls;
-          }
-        }
+      }
+      if (contentMode === 'full') {
+        recordSessionGap(
+          'codex',
+          codexSessionId ?? '',
+          countNewToolCalls(turns),
+          countNewToolResults(content),
+          moduleGapState,
+        );
       }
       if (content.length > 0) {
         await appendContent(content);
@@ -544,7 +622,6 @@ async function ingestOpencodeInto(
   cursors: Record<string, FileCursor>,
   report: IngestReport,
   contentMode: ContentStoreMode,
-  gap: GapStats,
 ): Promise<void> {
   for (const file of await walkOpencodeSessions(opencodeSessionRoot())) {
     report.scannedSessions++;
@@ -593,13 +670,15 @@ async function ingestOpencodeInto(
         await appendTurns(turns);
         report.appendedTurns += turns.length;
         report.ingestedSessions++;
-        if (contentMode === 'full') {
-          const { sessionAffected, orphanToolCalls } = countToolCallGaps(turns, content);
-          if (sessionAffected) {
-            gap.affectedSessions++;
-            gap.orphanToolCalls += orphanToolCalls;
-          }
-        }
+      }
+      if (contentMode === 'full') {
+        recordSessionGap(
+          'opencode',
+          sessionId,
+          countNewToolCalls(turns),
+          countNewToolResults(content),
+          moduleGapState,
+        );
       }
       if (content.length > 0) {
         await appendContent(content);

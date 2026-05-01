@@ -109,11 +109,12 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
 
     assert.equal(captured.length, 1, 'one warning emitted');
     const msg = captured[0]!;
-    assert.match(msg, /codex parser produced 0 tool_result records/);
-    assert.match(msg, /1 session/);
+    assert.match(msg, /^codex: 1 session logged tool calls/);
     // 2 function_calls in the fixture (exec + patch).
-    assert.match(msg, /2 tool calls/);
-    assert.match(msg, /even-split attribution/);
+    assert.match(msg, /\(2 tool calls\)/);
+    // Adapter-agnostic copy: pinpoint the cause and decay disclaimer.
+    assert.match(msg, /still running .* or killed mid-call/);
+    assert.match(msg, /Counts decay/);
   });
 
   it('does not warn when contentMode is hash-only', async () => {
@@ -176,6 +177,43 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
       setIngestGapWriter(restore);
     }
     assert.equal(captured.length, 1, 'second/third ingest stays silent');
+  });
+
+  it('decays the affected count when a later ingest pass parses tool_result content', async () => {
+    // Pass 1: write the gap fixture with tool_use but no function_call_output.
+    const file = await writeCodexSession(
+      tmpHome,
+      'rollout-heal',
+      codexSessionWithToolCallNoOutput(),
+    );
+    const captured: string[] = [];
+    const restore = setIngestGapWriter((msg) => {
+      captured.push(msg);
+    });
+    try {
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'gap warning emitted after first pass');
+
+      // Pass 2: append bytes that include a function_call_output, healing the
+      // session. The session id (sess_gap_1) is reused so the heal updates the
+      // existing flag rather than landing on a new entry.
+      await appendFile(file, codexHealChunkForSessGap1(), 'utf8');
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'no new warning after heal');
+
+      // Pass 3: a brand-new gap session re-ignites the warning, proving the
+      // suppression marker decayed back to zero (not stuck at 1).
+      await writeCodexSession(
+        tmpHome,
+        'rollout-fresh-gap',
+        codexSessionWithFreshGap('sess_gap_2'),
+      );
+      await ingestCodexSessions();
+      assert.equal(captured.length, 2, 'fresh gap re-emits after decay');
+      assert.match(captured[1]!, /1 session/);
+    } finally {
+      setIngestGapWriter(restore);
+    }
   });
 
   it('persists Codex parser user-turn records during passive ingest', async () => {
@@ -790,6 +828,112 @@ async function listPendingFiles(): Promise<string[]> {
 // function_call_output. The parser's contentMode='full' path produces zero
 // `tool_result` ContentRecords for this shape — exactly the silent-gap shape
 // #59 is meant to surface.
+// A minimal heal chunk for `sess_gap_1`: opens turn_gap_2 and emits a
+// function_call_output for one of the orphaned call_ids. Appending this to the
+// rollout file lets the codex parser pick up a tool_result ContentRecord on
+// the next ingest pass, which the gap tracker treats as a heal signal for
+// sess_gap_1.
+function codexHealChunkForSessGap1(): string {
+  const lines = [
+    {
+      timestamp: '2026-04-20T01:01:00.000Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_gap_2', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:01:00.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_gap_2' },
+    },
+    {
+      timestamp: '2026-04-20T01:01:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_exec_1',
+        output: 'on branch main',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:01:01.100Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 50,
+            cached_input_tokens: 0,
+            output_tokens: 5,
+            reasoning_output_tokens: 0,
+            total_tokens: 55,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:01:01.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_gap_2' },
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+// A fresh gap session shaped like `codexSessionWithToolCallNoOutput` but with a
+// caller-provided session id, so the decay test can introduce a brand-new
+// flagged session after an earlier one has healed.
+function codexSessionWithFreshGap(sessionId: string): string {
+  const lines = [
+    {
+      timestamp: '2026-04-20T02:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: sessionId, cwd: '/tmp/project', timestamp: '2026-04-20T02:00:00.000Z' },
+    },
+    {
+      timestamp: '2026-04-20T02:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: `${sessionId}_turn_1`, cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T02:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: `${sessionId}_turn_1` },
+    },
+    {
+      timestamp: '2026-04-20T02:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: '{"cmd":"git status"}',
+        call_id: `${sessionId}_call_1`,
+      },
+    },
+    {
+      timestamp: '2026-04-20T02:00:04.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 100,
+            cached_input_tokens: 0,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            total_tokens: 110,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T02:00:04.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: `${sessionId}_turn_1` },
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
 function codexSessionWithToolCallNoOutput(): string {
   const lines = [
     {
