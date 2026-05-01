@@ -4,6 +4,8 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-01
+
 ### Added
 
 - Added `aggregateByBashVerb()` to group Bash hotspot attribution by normalized command verb with persistence and example drill-downs.

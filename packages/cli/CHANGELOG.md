@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-01
+
 ### Added
 
 - `burn hotspots` now reports Bash spend by normalized verb before exact-command rows, with JSON `bashVerbs` / `topBashVerbs` fields for drill-downs.

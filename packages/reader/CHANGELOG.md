@@ -4,6 +4,8 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-01
+
 ### Added
 
 - Added `parseBashCommand()` for normalized Bash verb extraction from shell command strings.
