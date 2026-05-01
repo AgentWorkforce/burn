@@ -87,6 +87,15 @@ export type {
   LoadedClaudeSettings,
   ToolOutputBloat,
 } from './tool-output-bloat.js';
+export {
+  detectToolReplacementEligible,
+  toolReplacementEligibleToFinding,
+} from './tool-replacement-eligible.js';
+export type {
+  DetectToolReplacementEligibleOptions,
+  ToolReplacementCategory,
+  ToolReplacementEligibleFinding,
+} from './tool-replacement-eligible.js';
 export { computeQuality, computeOneShotRate, inferOutcome } from './quality.js';
 export type {
   ComputeQualityOptions,

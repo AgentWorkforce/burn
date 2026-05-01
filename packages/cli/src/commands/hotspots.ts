@@ -9,6 +9,7 @@ import {
   detectGhostSurface,
   detectPatterns,
   detectToolOutputBloat,
+  detectToolReplacementEligible,
   editHeavyToFinding,
   editRevertToFinding,
   failureRunToFinding,
@@ -23,6 +24,7 @@ import {
   summarizeFidelity,
   systemPromptTaxToFinding,
   toolOutputBloatToFinding,
+  toolReplacementEligibleToFinding,
   userClaudeSettingsPath,
   type BashAggregation,
   type BashVerbAggregation,
@@ -34,6 +36,7 @@ import {
   type PatternsResult,
   type SubagentAggregation,
   type ToolOutputBloat,
+  type ToolReplacementEligibleFinding,
   type WasteFinding,
   type HotspotsResult,
 } from '@relayburn/analyze';
@@ -63,7 +66,7 @@ import { withProgress } from '../progress.js';
 import { runHotspotsSession } from './hotspots-session.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat', 'tool-replacement-eligible'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -650,6 +653,8 @@ export const PATTERN_REQUIRED: Record<
   'opencode-skill-recall': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-skill-pruning': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-system-prompt': ['hasToolCalls', 'hasToolResultEvents'],
+  // Reads only `TurnRecord.toolCalls` (tool names + Bash targets).
+  'tool-replacement-eligible': ['hasToolCalls'],
 };
 // `ghost-surface` is filesystem-bound and only needs `hasToolCalls` to
 // derive observed-names. We treat it as a soft prerequisite — turns missing
@@ -770,6 +775,7 @@ export async function runPatternsMode(
             skillPruningProtection: [],
             systemPromptTaxes: [],
             toolOutputBloats: [],
+            toolReplacementEligible: [],
             ghostSurface: [],
             sessionSummaries: [],
             findings: [],
@@ -802,6 +808,7 @@ export async function runPatternsMode(
   let systemPromptTaxes: PatternsResult['systemPromptTaxes'] = [];
   let editHeavySessions: PatternsResult['editHeavySessions'] = [];
   let toolOutputBloats: ToolOutputBloat[] = [];
+  let toolReplacementEligible: ToolReplacementEligibleFinding[] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
   // Load user turns when any detector that consumes them is selected:
@@ -957,6 +964,10 @@ export async function runPatternsMode(
     });
   }
 
+  if (selected.has('tool-replacement-eligible')) {
+    toolReplacementEligible = detectToolReplacementEligible(perDetector.get('tool-replacement-eligible')!, { pricing });
+  }
+
   // Ghost-surface runs against the on-disk user-installed surface and
   // cross-references basenames against observed names mined from the turn
   // stream. Filesystem-bound and harness-aware: each adapter pulls its own
@@ -1016,6 +1027,7 @@ export async function runPatternsMode(
     ...systemPromptTaxes.map(systemPromptTaxToFinding),
     ...ghostFindings.map((g) => ghostSurfaceToFinding(g)),
     ...toolOutputBloats.map(toolOutputBloatToFinding),
+    ...toolReplacementEligible.map(toolReplacementEligibleToFinding),
   ]);
 
   if (args.flags['json'] === true) {
@@ -1033,6 +1045,7 @@ export async function runPatternsMode(
           systemPromptTaxes,
           editHeavySessions,
           toolOutputBloats,
+          toolReplacementEligible,
           ghostSurface: ghostFindings,
           sessionSummaries,
           findings,
@@ -1126,6 +1139,11 @@ export async function runPatternsMode(
   if (selected.has('tool-output-bloat')) {
     out.push('Oversized tool output bloat (BASH_MAX_OUTPUT_LENGTH config + cross-harness >15k tok tool_results)');
     out.push(renderToolOutputBloatTable(toolOutputBloats, limit));
+    out.push('');
+  }
+  if (selected.has('tool-replacement-eligible')) {
+    out.push('Tool-replacement eligible (vanilla call patterns that would benefit from relaywash)');
+    out.push(renderToolReplacementEligibleTable(toolReplacementEligible, limit));
     out.push('');
   }
 
@@ -1606,6 +1624,28 @@ async function loadToolResultEventsForTurns(
   for (const t of turns) sessionIds.add(t.sessionId);
   const events = await queryToolResultEvents(q);
   return events.filter((e) => sessionIds.has(e.sessionId));
+}
+
+function renderToolReplacementEligibleTable(
+  findings: ToolReplacementEligibleFinding[],
+  limit: number,
+): string {
+  if (findings.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'category', 'replacement', 'count', 'tokensSaved', 'usdSaved'],
+  ];
+  const slice = [...findings].sort((a, b) => b.estimatedUsdSaved - a.estimatedUsdSaved).slice(0, limit);
+  for (const f of slice) {
+    rows.push([
+      f.sessionId.slice(0, 8),
+      f.category,
+      f.replacementTool,
+      String(f.occurrenceCount),
+      formatInt(f.estimatedTokensSaved),
+      formatUsd(f.estimatedUsdSaved),
+    ]);
+  }
+  return table(rows);
 }
 
 function renderToolOutputBloatTable(bloats: ToolOutputBloat[], limit: number): string {

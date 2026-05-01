@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn hotspots --patterns=tool-replacement-eligible` runs a new detector that flags vanilla call patterns mapping to a [relaywash](https://github.com/AgentWorkforce/wash) replacement tool, including a renderer for the per-detector table and inclusion in the `--findings` and `--json` outputs.
+
 ## [1.4.0] - 2026-05-01
 
 ### Added
