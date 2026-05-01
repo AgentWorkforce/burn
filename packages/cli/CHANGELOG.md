@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn summary` and `burn summary --by-tool` now surface estimated tokens saved by replacement tools (e.g. relaywash) when sessions carry `_meta.replaces` / `_meta.collapsedCalls` annotations: a top-line "estimated savings from replacement tools" notice in the default view, a `savedTokens` column in the by-tool table, and a `replacementSavings` block (with per-tool breakdown) in JSON output.
+
 ## [1.4.0] - 2026-05-01
 
 ### Added

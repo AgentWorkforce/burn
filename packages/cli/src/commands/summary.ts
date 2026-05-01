@@ -5,7 +5,9 @@ import {
   computeQuality,
   loadPricing,
   summarizeFidelity,
+  summarizeReplacementSavings,
 } from '@relayburn/analyze';
+import type { ReplacementSavingsSummary } from '@relayburn/analyze';
 import { costForTurn, sumCosts } from '@relayburn/analyze';
 import type {
   CoverageField,
@@ -158,6 +160,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     : aggregateByModel(turns, pricing);
   const totalCost = sumCosts(rows.map((r) => r.cost));
   const fidelity = summarizeFidelity(turns);
+  const replacementSavings = summarizeReplacementSavings(turns);
 
   if (args.flags['json'] === true) {
     // JSON contract: numeric usage fields are always numbers, but the
@@ -192,6 +195,9 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
             })),
           }),
       fidelity: { summary: fidelity, perCell },
+      ...(replacementSavings.calls > 0
+        ? { replacementSavings: replacementSavingsToJson(replacementSavings) }
+        : {}),
     };
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return 0;
@@ -244,6 +250,11 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     `  input ${formatUsd(totalCost.input)} / output ${formatUsd(totalCost.output)} / reasoning ${formatUsd(totalCost.reasoning)} / cacheRead ${formatUsd(totalCost.cacheRead)} / cacheCreate ${formatUsd(totalCost.cacheCreate)}`,
   );
   lines.push('');
+
+  if (replacementSavings.calls > 0) {
+    lines.push(formatReplacementSavingsLine(replacementSavings));
+    lines.push('');
+  }
 
   // Footer marker explainer: only print when at least one cell carries `*`
   // — the all-full case is the common one and we don't want to train people
@@ -548,6 +559,7 @@ async function renderByToolMode(
     return result;
   });
   const fidelity = summarizeFidelity(turns);
+  const replacementSavings = summarizeReplacementSavings(turns);
   const sorted = [...byTool.entries()].sort((a, b) => b[1].cost - a[1].cost);
 
   if (args.flags['json'] === true) {
@@ -557,14 +569,28 @@ async function renderByToolMode(
         appendedTurns: ingestReport.appendedTurns,
       },
       turns: turns.length,
-      byTool: sorted.map(([tool, agg]) => ({
-        tool,
-        calls: agg.calls,
-        attributedCost: agg.cost,
-        attributionMethod: toolAttributionMethod(agg),
-      })),
+      byTool: sorted.map(([tool, agg]) => {
+        const savings = replacementSavings.byTool.get(tool);
+        const row: Record<string, unknown> = {
+          tool,
+          calls: agg.calls,
+          attributedCost: agg.cost,
+          attributionMethod: toolAttributionMethod(agg),
+        };
+        if (savings) {
+          row.savings = {
+            calls: savings.calls,
+            collapsedCalls: savings.collapsedCalls,
+            estimatedTokensSaved: savings.estimatedTokensSaved,
+          };
+        }
+        return row;
+      }),
       unattributed,
       fidelity: { summary: fidelity },
+      ...(replacementSavings.calls > 0
+        ? { replacementSavings: replacementSavingsToJson(replacementSavings) }
+        : {}),
     };
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return 0;
@@ -579,9 +605,18 @@ async function renderByToolMode(
     process.stdout.write(out.join('\n') + '\n');
     return 0;
   }
-  const rows: string[][] = [['tool', 'calls', 'attributedCost']];
+  const hasSavings = replacementSavings.calls > 0;
+  const header = hasSavings
+    ? ['tool', 'calls', 'attributedCost', 'savedTokens']
+    : ['tool', 'calls', 'attributedCost'];
+  const rows: string[][] = [header];
   for (const [tool, { calls, cost }] of sorted) {
-    rows.push([tool, formatInt(calls), formatUsd(cost)]);
+    const row = [tool, formatInt(calls), formatUsd(cost)];
+    if (hasSavings) {
+      const s = replacementSavings.byTool.get(tool);
+      row.push(s ? formatInt(s.estimatedTokensSaved) : '-');
+    }
+    rows.push(row);
   }
   out.push(table(rows));
   out.push('');
@@ -595,6 +630,9 @@ async function renderByToolMode(
   out.push(
     `unattributed cost (no prior tool call or non-tool user text): ${formatUsd(unattributed)}`,
   );
+  if (hasSavings) {
+    out.push(formatReplacementSavingsLine(replacementSavings));
+  }
   out.push('');
   process.stdout.write(out.join('\n'));
   return 0;
@@ -1069,6 +1107,37 @@ function renderFidelityNotice(f: FidelitySummary): string | undefined {
   if (f.byClass.partial > 0) parts.push(`${f.byClass.partial} partial`);
   if (f.unknown > 0) parts.push(`${f.unknown} unknown`);
   return `fidelity: ${parts.join(' / ')} (use --json for per-field coverage)`;
+}
+
+function formatReplacementSavingsLine(savings: ReplacementSavingsSummary): string {
+  const callWord = savings.calls === 1 ? 'call' : 'calls';
+  return `estimated savings from replacement tools: ~${formatInt(savings.estimatedTokensSaved)} tokens across ${formatInt(savings.calls)} ${callWord} (${formatInt(savings.collapsedCalls)} collapsed vanilla calls)`;
+}
+
+function replacementSavingsToJson(savings: ReplacementSavingsSummary): {
+  calls: number;
+  collapsedCalls: number;
+  estimatedTokensSaved: number;
+  byTool: Array<{
+    tool: string;
+    calls: number;
+    collapsedCalls: number;
+    estimatedTokensSaved: number;
+  }>;
+} {
+  return {
+    calls: savings.calls,
+    collapsedCalls: savings.collapsedCalls,
+    estimatedTokensSaved: savings.estimatedTokensSaved,
+    byTool: [...savings.byTool.entries()]
+      .sort((a, b) => b[1].estimatedTokensSaved - a[1].estimatedTokensSaved)
+      .map(([tool, agg]) => ({
+        tool,
+        calls: agg.calls,
+        collapsedCalls: agg.collapsedCalls,
+        estimatedTokensSaved: agg.estimatedTokensSaved,
+      })),
+  };
 }
 
 function renderNoRelationships(args: ParsedArgs): number {

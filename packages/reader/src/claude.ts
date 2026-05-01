@@ -246,6 +246,7 @@ export async function parseClaudeSession(
   const firstSeq = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
+  const replacementMetaByToolUseId = new Map<string, ReplacementMeta>();
   const events: CompactionEvent[] = [];
   // Per-user-turn block info between assistant turns. Captured in source order
   // so consumers can recover per-tool-call cost as a delta against the next
@@ -333,6 +334,7 @@ export async function parseClaudeSession(
         const prompt = extractPlainUserText(ul);
         if (prompt) currentUserText = prompt;
         collectErroredToolUseIds(ul, erroredToolUseIds);
+        collectReplacementMeta(ul, replacementMetaByToolUseId);
         if (typeof ul.sessionId === 'string' && ul.sessionId.length > 0) {
           recordRoot(relationships, seenRootSessionIds, ul.sessionId, ul.timestamp, fileSessionId);
           collectExplicitClaudeRelationships(
@@ -398,7 +400,7 @@ export async function parseClaudeSession(
     const id = order[i]!;
     const w = working.get(id);
     if (!w) continue;
-    const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
+    const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds, replacementMetaByToolUseId);
     const filesTouched = extractFilesTouched(toolCalls);
     const subagent = resolveSubagent(w, nodesByUuid, invocationCache);
 
@@ -901,6 +903,7 @@ function buildClaudeFidelity(
 function extractToolCalls(
   blocks: ContentBlock[],
   erroredToolUseIds: Set<string>,
+  replacementMetaByToolUseId?: Map<string, ReplacementMeta>,
 ): ToolCall[] {
   const out: ToolCall[] = [];
   const seen = new Set<string>();
@@ -920,6 +923,15 @@ function extractToolCalls(
     if (target !== undefined) call.target = target;
     if (erroredToolUseIds.has(tu.id)) call.isError = true;
     applyEditHashes(call, input);
+    const meta = replacementMetaByToolUseId?.get(tu.id);
+    if (meta) {
+      if (meta.replacedTools && meta.replacedTools.length > 0) {
+        call.replacedTools = meta.replacedTools.slice();
+      }
+      if (typeof meta.collapsedCalls === 'number' && meta.collapsedCalls > 0) {
+        call.collapsedCalls = meta.collapsedCalls;
+      }
+    }
     out.push(call);
   }
   return out;
@@ -1252,6 +1264,15 @@ function collectToolResultEvents(
     const measured = measureToolResult(tr.content);
     if (measured.length !== undefined) record.contentLength = measured.length;
     if (measured.hash !== undefined) record.contentHash = measured.hash;
+    const meta = extractReplacementMetaFromToolResult(block);
+    if (meta) {
+      if (meta.replacedTools && meta.replacedTools.length > 0) {
+        record.replacedTools = meta.replacedTools.slice();
+      }
+      if (typeof meta.collapsedCalls === 'number' && meta.collapsedCalls > 0) {
+        record.collapsedCalls = meta.collapsedCalls;
+      }
+    }
     out.push(record);
   }
   return nextIndex;
@@ -1791,6 +1812,67 @@ function collectErroredToolUseIds(line: UserLine, into: Set<string>): void {
   }
 }
 
+export interface ReplacementMeta {
+  replacedTools?: string[];
+  collapsedCalls?: number;
+}
+
+// Extract `_meta.replaces` / `_meta.collapsedCalls` from a tool_result block.
+// Replacement tools (e.g. relaywash) ship these annotations on the tool_result
+// `_meta` field, and on Anthropic's API the `_meta` is also surfaced as
+// nested fields on the structured `content` array entries. We accept either
+// shape: top-level `_meta` on the block, or a `_meta` nested anywhere inside
+// `content` when content is structured.
+function extractReplacementMetaFromToolResult(block: unknown): ReplacementMeta | undefined {
+  if (!block || typeof block !== 'object') return undefined;
+  const meta =
+    pickReplacementMeta((block as Record<string, unknown>)['_meta']) ??
+    findNestedReplacementMeta((block as Record<string, unknown>)['content']);
+  return meta;
+}
+
+function pickReplacementMeta(raw: unknown): ReplacementMeta | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  const out: ReplacementMeta = {};
+  const replaces = obj['replaces'];
+  if (Array.isArray(replaces)) {
+    const names = replaces.filter((v): v is string => typeof v === 'string' && v.length > 0);
+    if (names.length > 0) out.replacedTools = names;
+  }
+  const collapsed = obj['collapsedCalls'];
+  if (typeof collapsed === 'number' && Number.isFinite(collapsed) && collapsed > 0) {
+    out.collapsedCalls = Math.floor(collapsed);
+  }
+  if (out.replacedTools === undefined && out.collapsedCalls === undefined) return undefined;
+  return out;
+}
+
+function findNestedReplacementMeta(content: unknown): ReplacementMeta | undefined {
+  if (!Array.isArray(content)) return undefined;
+  for (const entry of content) {
+    if (!entry || typeof entry !== 'object') continue;
+    const meta = pickReplacementMeta((entry as Record<string, unknown>)['_meta']);
+    if (meta) return meta;
+  }
+  return undefined;
+}
+
+function collectReplacementMeta(
+  line: UserLine,
+  into: Map<string, ReplacementMeta>,
+): void {
+  const body = line.message?.content;
+  if (!Array.isArray(body)) return;
+  for (const block of body) {
+    if (!block || typeof block !== 'object' || (block as { type?: string }).type !== 'tool_result') continue;
+    const tr = block as { tool_use_id?: string };
+    if (typeof tr.tool_use_id !== 'string' || tr.tool_use_id.length === 0) continue;
+    const meta = extractReplacementMetaFromToolResult(block);
+    if (meta) into.set(tr.tool_use_id, meta);
+  }
+}
+
 function applyClassification(
   record: TurnRecord,
   w: WorkingRecord,
@@ -1924,6 +2006,7 @@ export async function parseClaudeSessionIncremental(
   const messageIdFirstOffset = new Map<string, number>();
   const userTextByMessageId = new Map<string, string>();
   const erroredToolUseIds = new Set<string>();
+  const replacementMetaByToolUseId = new Map<string, ReplacementMeta>();
   const events: Array<{ offset: number; event: CompactionEvent }> = [];
   // Seeded from the prescan so user turns whose preceding assistant turn
   // lives before `startOffset` still get a `precedingMessageId`.
@@ -2025,6 +2108,7 @@ export async function parseClaudeSessionIncremental(
       const prompt = extractPlainUserText(ul);
       if (prompt) currentUserText = prompt;
       collectErroredToolUseIds(ul, erroredToolUseIds);
+      collectReplacementMeta(ul, replacementMetaByToolUseId);
       if (typeof ul.sessionId === 'string' && ul.sessionId.length > 0) {
         recordRootIncremental(
           pendingRelationships,
@@ -2122,7 +2206,7 @@ export async function parseClaudeSessionIncremental(
     const w = working.get(id);
     if (!w) continue;
     if (w.stopReason === undefined) continue; // defer in-progress messages
-    const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds);
+    const toolCalls = extractToolCalls(w.blocks, erroredToolUseIds, replacementMetaByToolUseId);
     const filesTouched = extractFilesTouched(toolCalls);
     const subagent = resolveSubagent(w, nodesByUuid, invocationCache);
     const record: TurnRecord = {

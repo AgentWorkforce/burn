@@ -127,6 +127,27 @@ describe('parseClaudeSession', () => {
     }
   });
 
+  it('back-populates ToolCall.replacedTools and ToolCall.collapsedCalls from tool_result _meta', async () => {
+    const { turns, toolResultEvents } = await parseClaudeSession(
+      path.join(FIXTURES, 'replacement-meta.jsonl'),
+    );
+    const all = turns.flatMap((t) => t.toolCalls);
+    const search = all.find((tc) => tc.name === 'relaywash__Search');
+    const read = all.find((tc) => tc.name === 'Read');
+    assert.ok(search);
+    assert.ok(read);
+    assert.deepEqual(search!.replacedTools, ['Glob', 'Grep', 'Read']);
+    assert.equal(search!.collapsedCalls, 9);
+    // Calls without _meta carry no annotation.
+    assert.equal(read!.replacedTools, undefined);
+    assert.equal(read!.collapsedCalls, undefined);
+    // The same annotations land on the corresponding ToolResultEventRecord.
+    const searchEvent = toolResultEvents.find((e) => e.toolUseId === 'tu_search_1');
+    assert.ok(searchEvent);
+    assert.deepEqual(searchEvent!.replacedTools, ['Glob', 'Grep', 'Read']);
+    assert.equal(searchEvent!.collapsedCalls, 9);
+  });
+
   it('extracts editPreHash and editPostHash from Edit tool calls', async () => {
     const { turns } = await parseClaudeSession(path.join(FIXTURES, 'edit-revert.jsonl'));
     const edits = turns
