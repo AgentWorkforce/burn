@@ -12,6 +12,11 @@ export interface ProgressOptions {
 export interface ProgressTask {
   update(text: string): void;
   info(text: string): void;
+  // Print a multi-line warning above the spinner without ending the task.
+  // The body should be the text after the symbol; the implementation prepends
+  // the warning glyph and resumes the spinner so subsequent progress ticks
+  // continue cleanly.
+  warn(text: string): void;
   succeed(text?: string): void;
   fail(text?: string): void;
   stop(): void;
@@ -110,6 +115,17 @@ class OraProgressTask implements ProgressTask {
     this.done = true;
   }
 
+  warn(text: string): void {
+    if (this.done) return;
+    // ora's `warn` is implemented via `stopAndPersist`, which stops the
+    // spinner. Capture the active frame text first so we can restart the
+    // spinner after the persisted warn line lands above it.
+    const wasSpinning = this.spinner.isSpinning;
+    const prevText = this.spinner.text;
+    this.spinner.warn(text);
+    if (wasSpinning) this.spinner.start(prevText);
+  }
+
   succeed(text?: string): void {
     if (this.done) return;
     this.spinner.succeed(text);
@@ -148,6 +164,11 @@ class LogProgressTask implements ProgressTask {
     this.done = true;
   }
 
+  warn(text: string): void {
+    if (this.done) return;
+    this.stream.write(`⚠ ${text}\n`);
+  }
+
   succeed(text?: string): void {
     if (this.done) return;
     this.stream.write(`[burn] ${text ?? this.current}\n`);
@@ -168,6 +189,7 @@ class LogProgressTask implements ProgressTask {
 const silentTask: ProgressTask = {
   update() {},
   info() {},
+  warn() {},
   succeed() {},
   fail() {},
   stop() {},

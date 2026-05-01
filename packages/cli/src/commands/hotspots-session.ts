@@ -39,7 +39,10 @@ export async function runHotspotsSession(
   }
 
   await withProgress('ingesting latest sessions', (task) =>
-    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    ingestAll({
+      onProgress: (message) => task.update(`ingest: ${message}`),
+      onWarn: (body) => task.warn(body),
+    }),
   );
   const pricing = await withProgress('loading pricing snapshot', async (task) => {
     const loaded = await loadPricing();
@@ -609,7 +612,10 @@ interface RelationshipDriftReport {
 
 async function runHotspotsGapReport(args: ParsedArgs): Promise<number> {
   await withProgress('ingesting latest sessions', (task) =>
-    ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+    ingestAll({
+      onProgress: (message) => task.update(`ingest: ${message}`),
+      onWarn: (body) => task.warn(body),
+    }),
   );
   const config = await withProgress('loading burn configuration', async (task) => {
     const loaded = await loadConfig();

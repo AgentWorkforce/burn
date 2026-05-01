@@ -67,6 +67,11 @@ export interface IngestReport {
 
 export interface IngestOptions {
   onProgress?: (message: string) => void;
+  // Receives the body of a gap warning (no leading symbol, no trailing
+  // newline). Pass `task.warn` here to route the warning through an active
+  // ora spinner so it lands as a yellow ⚠ banner that pauses and resumes
+  // the spinner instead of tearing it.
+  onWarn?: (body: string) => void;
 }
 
 // Per-adapter content-capture gap aggregator. A "gap" is a session that the
@@ -90,17 +95,20 @@ interface GapTrackerState {
   // notice — if a second pass turns up *additional* affected sessions we
   // still warn, but a steady state stays silent.
   warnedAffectedSessions: Map<AdapterName, number>;
-  // Override the writer used for warnings. Tests inject a buffer-backed sink
-  // so they can assert on the formatted message without scribbling on
-  // stderr.
-  write: (msg: string) => void;
+  // Default sink for gap warnings when the caller has not provided an
+  // `onWarn` (e.g. plain stderr contexts like `burn run` or watch loops).
+  // Receives the warning body and is responsible for whatever framing the
+  // sink wants — the default prepends the ⚠ glyph and a trailing newline.
+  // Tests inject a buffer-backed sink so they can assert on the body
+  // without scribbling on stderr.
+  write: (body: string) => void;
 }
 
 type AdapterName = 'claude' | 'codex' | 'opencode';
 
 const moduleGapState: GapTrackerState = {
   warnedAffectedSessions: new Map(),
-  write: (msg) => process.stderr.write(msg),
+  write: (body) => process.stderr.write(`⚠ ${body}\n`),
 };
 
 // Test-only: clear per-process suppression state. Safe to call from prod
@@ -129,7 +137,7 @@ export async function ingestClaudeProjects(opts: IngestOptions = {}): Promise<In
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   opts.onProgress?.('scanning Claude Code sessions');
   await ingestClaudeInto(cursors, report, contentMode, gap);
-  emitGapWarning('claude', contentMode, gap, moduleGapState);
+  emitGapWarning('claude', contentMode, gap, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -147,7 +155,7 @@ export async function ingestCodexSessions(opts: IngestOptions = {}): Promise<Ing
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   opts.onProgress?.('scanning Codex sessions');
   await ingestCodexInto(cursors, report, contentMode, gap);
-  emitGapWarning('codex', contentMode, gap, moduleGapState);
+  emitGapWarning('codex', contentMode, gap, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -165,7 +173,7 @@ export async function ingestOpencodeSessions(opts: IngestOptions = {}): Promise<
   const gap: GapStats = { affectedSessions: 0, orphanToolCalls: 0 };
   opts.onProgress?.('scanning OpenCode sessions');
   await ingestOpencodeInto(cursors, report, contentMode, gap);
-  emitGapWarning('opencode', contentMode, gap, moduleGapState);
+  emitGapWarning('opencode', contentMode, gap, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -233,9 +241,9 @@ export async function ingestAll(opts: IngestOptions = {}): Promise<IngestReport>
   await ingestCodexInto(cursors, report, contentMode, codexGap);
   opts.onProgress?.('scanning OpenCode sessions');
   await ingestOpencodeInto(cursors, report, contentMode, opencodeGap);
-  emitGapWarning('claude', contentMode, claudeGap, moduleGapState);
-  emitGapWarning('codex', contentMode, codexGap, moduleGapState);
-  emitGapWarning('opencode', contentMode, opencodeGap, moduleGapState);
+  emitGapWarning('claude', contentMode, claudeGap, moduleGapState, opts.onWarn);
+  emitGapWarning('codex', contentMode, codexGap, moduleGapState, opts.onWarn);
+  emitGapWarning('opencode', contentMode, opencodeGap, moduleGapState, opts.onWarn);
   opts.onProgress?.('saving ingest cursors');
   await saveCursorChanges(before, cursors);
   return report;
@@ -269,6 +277,7 @@ function emitGapWarning(
   contentMode: ContentStoreMode,
   stats: GapStats,
   state: GapTrackerState,
+  onWarn: ((body: string) => void) | undefined,
 ): void {
   if (contentMode !== 'full') return;
   if (stats.affectedSessions === 0) return;
@@ -278,11 +287,14 @@ function emitGapWarning(
   const priorEmitted = state.warnedAffectedSessions.get(adapter);
   if (priorEmitted !== undefined && stats.affectedSessions <= priorEmitted) return;
   state.warnedAffectedSessions.set(adapter, stats.affectedSessions);
-  state.write(
-    `[burn] warning: ${adapter} parser produced 0 tool_result records for ${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'} ` +
-      `with ${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}. Content capture may not be implemented for this ` +
-      `adapter, so burn hotspots will use user-turn block sizes when available, then fall back to even-split attribution.\n`,
-  );
+  const sessions = `${stats.affectedSessions} session${stats.affectedSessions === 1 ? '' : 's'}`;
+  const calls = `${stats.orphanToolCalls} tool call${stats.orphanToolCalls === 1 ? '' : 's'}`;
+  const body =
+    `${adapter} parser produced 0 tool_result records for ${sessions} (${calls}).\n` +
+    `  Content capture may not be implemented for this adapter; burn hotspots will use\n` +
+    `  user-turn block sizes when available, then fall back to even-split attribution.`;
+  if (onWarn) onWarn(body);
+  else state.write(body);
 }
 
 async function resolveContentMode(): Promise<ContentStoreMode> {

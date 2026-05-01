@@ -199,7 +199,10 @@ export async function runCompare(
     });
   } else {
     await withProgress('ingesting latest sessions', (task) =>
-      ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+      ingestAll({
+        onProgress: (message) => task.update(`ingest: ${message}`),
+        onWarn: (body) => task.warn(body),
+      }),
     );
   }
   const pricing = await withProgress('loading pricing snapshot', async (task) => {

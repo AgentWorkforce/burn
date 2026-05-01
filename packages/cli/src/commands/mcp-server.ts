@@ -36,7 +36,10 @@ export async function runMcpServer(args: ParsedArgs): Promise<number> {
   // a steady-state ledger thanks to the cursor index.
   try {
     await withProgress('mcp server initial ingest', (task) =>
-      ingestAll({ onProgress: (message) => task.update(`ingest: ${message}`) }),
+      ingestAll({
+        onProgress: (message) => task.update(`ingest: ${message}`),
+        onWarn: (body) => task.warn(body),
+      }),
     );
   } catch (err) {
     // Don't fail server startup on a partial ingest — let the tools handle
