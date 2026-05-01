@@ -197,6 +197,16 @@ describe('detectToolReplacementEligible — bash sub-verb matches', () => {
     assert.equal(gh!.replacementTool, 'relaywash__GhPR');
   });
 
+  it('does not match gh project / gh prerelease (avoid pr-prefix false positives)', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: TurnRecord[] = [
+      turn({ sessionId: 's', messageId: 'm0', turnIndex: 0, toolCalls: [tc('a', 'Bash', 'gh project list')] }),
+      turn({ sessionId: 's', messageId: 'm1', turnIndex: 1, toolCalls: [tc('b', 'Bash', 'gh project view 5')] }),
+    ];
+    const out = detectToolReplacementEligible(turns, { pricing });
+    assert.equal(out.find((f) => f.category === 'bash-gh-pr'), undefined);
+  });
+
   it('does not match unrelated bash commands', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: TurnRecord[] = [

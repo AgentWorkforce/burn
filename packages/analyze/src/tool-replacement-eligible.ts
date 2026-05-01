@@ -357,7 +357,13 @@ function matchesGhPr(parsed: { binary: string; subcommand?: string }): boolean {
   if (!parsed.subcommand) return false;
   // TWO_PART_SUBCOMMANDS folds `pr <verb>` into a single subcommand, so
   // `gh pr view` parses to subcommand="pr view". `gh api` is single-part.
-  return parsed.subcommand === 'api' || parsed.subcommand.startsWith('pr');
+  // Match `pr` exactly or with a trailing space — a `startsWith('pr')` would
+  // false-positive on `project`, `prerelease`, etc.
+  return (
+    parsed.subcommand === 'api' ||
+    parsed.subcommand === 'pr' ||
+    parsed.subcommand.startsWith('pr ')
+  );
 }
 
 // Pick a representative input rate (USD per token) for the session. The
