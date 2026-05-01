@@ -109,11 +109,12 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
 
     assert.equal(captured.length, 1, 'one warning emitted');
     const msg = captured[0]!;
-    assert.match(msg, /codex parser produced 0 tool_result records/);
-    assert.match(msg, /1 session/);
+    assert.match(msg, /^codex: 1 session logged tool calls without any observed tool_result content/);
     // 2 function_calls in the fixture (exec + patch).
-    assert.match(msg, /2 tool calls/);
-    assert.match(msg, /even-split attribution/);
+    assert.match(msg, /\(2 tool calls\)/);
+    // Adapter-agnostic copy: pinpoint the cause and decay disclaimer.
+    assert.match(msg, /still running .* or killed mid-call/);
+    assert.match(msg, /Counts decay/);
   });
 
   it('does not warn when contentMode is hash-only', async () => {
@@ -160,6 +161,23 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
     assert.equal(captured.length, 0, 'no warning when there are no tool calls');
   });
 
+  it('emits a warning from the opencode ingest wiring', async () => {
+    await writeOpencodeGapSession(tmpHome, 'ses_gap_opencode');
+    const captured: string[] = [];
+    const restore = setIngestGapWriter((msg) => {
+      captured.push(msg);
+    });
+    try {
+      await ingestOpencodeSessions();
+    } finally {
+      setIngestGapWriter(restore);
+    }
+
+    assert.equal(captured.length, 1, 'one opencode warning emitted');
+    assert.match(captured[0]!, /^opencode: 1 session logged tool calls/);
+    assert.match(captured[0]!, /\(1 tool call\)/);
+  });
+
   it('suppresses repeat warnings on subsequent ingest calls in the same process', async () => {
     await writeCodexSession(tmpHome, 'rollout-suppress', codexSessionWithToolCallNoOutput());
     const captured: string[] = [];
@@ -176,6 +194,82 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
       setIngestGapWriter(restore);
     }
     assert.equal(captured.length, 1, 'second/third ingest stays silent');
+  });
+
+  it('decays the affected count when a later ingest pass parses tool_result content', async () => {
+    // Pass 1: write the gap fixture with tool_use but no function_call_output.
+    const file = await writeCodexSession(
+      tmpHome,
+      'rollout-heal',
+      codexSessionWithToolCallNoOutput(),
+    );
+    const captured: string[] = [];
+    const restore = setIngestGapWriter((msg) => {
+      captured.push(msg);
+    });
+    try {
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'gap warning emitted after first pass');
+
+      // Pass 2: append bytes that include a function_call_output, healing the
+      // session. The session id (sess_gap_1) is reused so the heal updates the
+      // existing flag rather than landing on a new entry.
+      await appendFile(file, codexHealChunkForSessGap1(), 'utf8');
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'no new warning after heal');
+
+      // Pass 3: a brand-new gap session re-ignites the warning, proving the
+      // suppression marker decayed back to zero (not stuck at 1).
+      await writeCodexSession(
+        tmpHome,
+        'rollout-fresh-gap',
+        codexSessionWithFreshGap('sess_gap_2'),
+      );
+      await ingestCodexSessions();
+      assert.equal(captured.length, 2, 'fresh gap re-emits after decay');
+      assert.match(captured[1]!, /1 session/);
+    } finally {
+      setIngestGapWriter(restore);
+    }
+  });
+
+  it('re-warns when affected session churn keeps the count flat', async () => {
+    const first = await writeCodexSession(
+      tmpHome,
+      'rollout-churn-gap-1',
+      codexSessionWithToolCallNoOutput(),
+    );
+    await writeCodexSession(
+      tmpHome,
+      'rollout-churn-gap-2',
+      codexSessionWithFreshGap('sess_gap_2'),
+    );
+    const captured: string[] = [];
+    const restore = setIngestGapWriter((msg) => {
+      captured.push(msg);
+    });
+    try {
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'initial warning emitted for two affected sessions');
+      assert.match(captured[0]!, /2 sessions/);
+      assert.match(captured[0]!, /\(3 tool calls\)/);
+
+      await appendFile(first, codexHealChunkForSessGap1(), 'utf8');
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'shrinking set stays silent');
+
+      await writeCodexSession(
+        tmpHome,
+        'rollout-churn-gap-3',
+        codexSessionWithFreshGap('sess_gap_3'),
+      );
+      await ingestCodexSessions();
+      assert.equal(captured.length, 2, 'fresh affected session re-emits even at same count');
+      assert.match(captured[1]!, /2 sessions/);
+      assert.match(captured[1]!, /\(2 tool calls\)/);
+    } finally {
+      setIngestGapWriter(restore);
+    }
   });
 
   it('persists Codex parser user-turn records during passive ingest', async () => {
@@ -777,6 +871,71 @@ async function writeCodexSession(home: string, name: string, body: string): Prom
   return file;
 }
 
+async function writeOpencodeGapSession(home: string, sessionId: string): Promise<void> {
+  const storage = path.join(home, '.local', 'share', 'opencode', 'storage');
+  const sessionDir = path.join(storage, 'session', 'global');
+  const messageDir = path.join(storage, 'message', sessionId);
+  const userPartsDir = path.join(storage, 'part', `${sessionId}_user`);
+  const assistantPartsDir = path.join(storage, 'part', `${sessionId}_asst`);
+  await mkdir(sessionDir, { recursive: true });
+  await mkdir(messageDir, { recursive: true });
+  await mkdir(userPartsDir, { recursive: true });
+  await mkdir(assistantPartsDir, { recursive: true });
+
+  await writeJson(path.join(sessionDir, `${sessionId}.json`), {
+    id: sessionId,
+    directory: '/tmp/project',
+  });
+  await writeJson(path.join(messageDir, `${sessionId}_user.json`), {
+    id: `${sessionId}_user`,
+    sessionID: sessionId,
+    role: 'user',
+    time: { created: 1_776_988_000_000 },
+  });
+  await writeJson(path.join(userPartsDir, `${sessionId}_user_text.json`), {
+    id: `${sessionId}_user_text`,
+    sessionID: sessionId,
+    messageID: `${sessionId}_user`,
+    type: 'text',
+    text: 'run the check',
+  });
+  await writeJson(path.join(messageDir, `${sessionId}_asst.json`), {
+    id: `${sessionId}_asst`,
+    sessionID: sessionId,
+    role: 'assistant',
+    time: { created: 1_776_988_001_000 },
+    parentID: `${sessionId}_user`,
+    providerID: 'anthropic',
+    modelID: 'claude-sonnet-4-5',
+    path: { cwd: '/tmp/project' },
+    tokens: { input: 10, output: 5, cache: { read: 0, write: 0 } },
+  });
+  await writeJson(path.join(assistantPartsDir, `${sessionId}_tool.json`), {
+    id: `${sessionId}_tool`,
+    sessionID: sessionId,
+    messageID: `${sessionId}_asst`,
+    type: 'tool',
+    callID: `${sessionId}_call`,
+    tool: 'bash',
+    state: {
+      status: 'running',
+      input: { command: 'npm test' },
+    },
+  });
+  await writeJson(path.join(assistantPartsDir, `${sessionId}_finish.json`), {
+    id: `${sessionId}_finish`,
+    sessionID: sessionId,
+    messageID: `${sessionId}_asst`,
+    type: 'step-finish',
+    reason: 'tool-calls',
+    tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+  });
+}
+
+async function writeJson(file: string, value: unknown): Promise<void> {
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
 async function listPendingFiles(): Promise<string[]> {
   try {
     return await readdir(pendingStampsDir());
@@ -790,6 +949,112 @@ async function listPendingFiles(): Promise<string[]> {
 // function_call_output. The parser's contentMode='full' path produces zero
 // `tool_result` ContentRecords for this shape — exactly the silent-gap shape
 // #59 is meant to surface.
+// A minimal heal chunk for `sess_gap_1`: opens turn_gap_2 and emits a
+// function_call_output for one of the orphaned call_ids. Appending this to the
+// rollout file lets the codex parser pick up a tool_result ContentRecord on
+// the next ingest pass, which the gap tracker treats as a heal signal for
+// sess_gap_1.
+function codexHealChunkForSessGap1(): string {
+  const lines = [
+    {
+      timestamp: '2026-04-20T01:01:00.000Z',
+      type: 'turn_context',
+      payload: { turn_id: 'turn_gap_2', cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T01:01:00.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: 'turn_gap_2' },
+    },
+    {
+      timestamp: '2026-04-20T01:01:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_exec_1',
+        output: 'on branch main',
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:01:01.100Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 50,
+            cached_input_tokens: 0,
+            output_tokens: 5,
+            reasoning_output_tokens: 0,
+            total_tokens: 55,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T01:01:01.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn_gap_2' },
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+// A fresh gap session shaped like `codexSessionWithToolCallNoOutput` but with a
+// caller-provided session id, so the decay test can introduce a brand-new
+// flagged session after an earlier one has healed.
+function codexSessionWithFreshGap(sessionId: string): string {
+  const lines = [
+    {
+      timestamp: '2026-04-20T02:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: sessionId, cwd: '/tmp/project', timestamp: '2026-04-20T02:00:00.000Z' },
+    },
+    {
+      timestamp: '2026-04-20T02:00:00.100Z',
+      type: 'turn_context',
+      payload: { turn_id: `${sessionId}_turn_1`, cwd: '/tmp/project', model: 'gpt-5.3-codex' },
+    },
+    {
+      timestamp: '2026-04-20T02:00:00.200Z',
+      type: 'event_msg',
+      payload: { type: 'task_started', turn_id: `${sessionId}_turn_1` },
+    },
+    {
+      timestamp: '2026-04-20T02:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'exec_command',
+        arguments: '{"cmd":"git status"}',
+        call_id: `${sessionId}_call_1`,
+      },
+    },
+    {
+      timestamp: '2026-04-20T02:00:04.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 100,
+            cached_input_tokens: 0,
+            output_tokens: 10,
+            reasoning_output_tokens: 0,
+            total_tokens: 110,
+          },
+        },
+      },
+    },
+    {
+      timestamp: '2026-04-20T02:00:04.100Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: `${sessionId}_turn_1` },
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
 function codexSessionWithToolCallNoOutput(): string {
   const lines = [
     {
