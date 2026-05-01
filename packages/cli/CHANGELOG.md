@@ -7,7 +7,7 @@ All notable changes to `@relayburn/cli`.
 ### Changed
 
 - Style the ingest content-capture gap warning as a `⚠` banner that flows through the active progress spinner (yellow `⚠` via `ora.warn`, multi-line with hang-indent), instead of a `[burn] warning: …` blob that printed mid-spinner.
-- Rewrite the ingest gap warning to track flagged sessions per-process and decay the count as later passes pick up tool_result lines. Drops the inaccurate "may not be implemented for this adapter" framing (all three adapters do capture tool_result) in favor of an honest "still running or killed mid-call" diagnosis. Sessions that heal no longer stay flagged across the rest of the process; once the affected set decays back to zero a fresh regression triggers a new warning.
+- Ingest gap warning now decays as later passes pick up missing `tool_result` lines, and points at the real cause (still running / killed mid-call) instead of the inaccurate "may not be implemented for this adapter" framing.
 
 ## [1.3.1] - 2026-04-30
 

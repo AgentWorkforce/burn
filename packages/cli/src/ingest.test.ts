@@ -235,6 +235,7 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
       await ingestCodexSessions();
       assert.equal(captured.length, 1, 'initial warning emitted for two affected sessions');
       assert.match(captured[0]!, /2 sessions/);
+      assert.match(captured[0]!, /\(3 tool calls\)/);
 
       await appendFile(first, codexHealChunkForSessGap1(), 'utf8');
       await ingestCodexSessions();
@@ -248,6 +249,7 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
       await ingestCodexSessions();
       assert.equal(captured.length, 2, 'fresh affected session re-emits even at same count');
       assert.match(captured[1]!, /2 sessions/);
+      assert.match(captured[1]!, /\(2 tool calls\)/);
     } finally {
       setIngestGapWriter(restore);
     }

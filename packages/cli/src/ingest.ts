@@ -168,6 +168,9 @@ function recordSessionGap(
   const orphans = getOrInit(state.orphanCallsPerSession, adapter, () => new Map<string, number>());
   const healed = getOrInit(state.healedSessions, adapter, () => new Set<string>());
   if (newToolResults > 0) {
+    // Any tool_result on this session proves capture works for it. Drop
+    // orphan detail and immunize against future re-flags in this process,
+    // trading per-call precision for stable warning behavior.
     affected.delete(sessionId);
     orphans.delete(sessionId);
     healed.add(sessionId);
@@ -446,6 +449,8 @@ async function ingestClaudeInto(
           report.ingestedSessions++;
         }
         if (contentMode === 'full') {
+          // Claude session files are 1:1 with sessionId, so the first
+          // parsed record's id covers the whole incremental batch.
           const sessionId = turns[0]?.sessionId ?? content[0]?.sessionId ?? '';
           recordSessionGap(
             'claude',
@@ -556,10 +561,15 @@ async function ingestCodexInto(
         endOffset,
         resume: nextResume,
       } = await parseCodexSessionIncremental(file, opts);
-      let codexSessionId: string | null | undefined =
+      let codexSessionId: string | undefined =
         nextResume.sessionId || turns[0]?.sessionId || content[0]?.sessionId;
+      if (
+        !codexSessionId &&
+        (turns.length > 0 || (contentMode === 'full' && content.length > 0))
+      ) {
+        codexSessionId = (await deriveCodexSessionId(file)) ?? undefined;
+      }
       if (turns.length > 0) {
-        if (!codexSessionId) codexSessionId = await deriveCodexSessionId(file);
         if (codexSessionId) {
           const candidate: Parameters<typeof resolvePendingStampsForSession>[0] = {
             harness: 'codex',
