@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { classifyActivity, countRetries, normalizeToolName } from './classifier.js';
+import { classifyActivity, countRetries, normalizeToolName, parseBashCommand } from './classifier.js';
 import type { ToolCall } from './types.js';
 
 const tc = (name: string, target?: string, id = name): ToolCall => {
@@ -81,6 +81,109 @@ describe('classifyActivity — tool-pattern classification', () => {
   it('classifies read-only tool turns as exploration', () => {
     const r = classifyActivity({ toolCalls: [tc('Read', '/a.ts'), tc('Grep', 'foo')] });
     assert.equal(r.activity, 'exploration');
+  });
+});
+
+describe('parseBashCommand', () => {
+  const normalized = (cmd: string): string => {
+    const parsed = parseBashCommand(cmd);
+    assert.ok(parsed, `expected parse for ${cmd}`);
+    return parsed.normalized;
+  };
+
+  it('normalizes representative classifier Bash pattern examples', () => {
+    const cases: Array<[string, string]> = [
+      ['pytest', 'pytest'],
+      ['python -m pytest -q', 'pytest'],
+      ['python -I -X dev -m pytest -q', 'pytest'],
+      ['vitest run', 'vitest'],
+      ['bun test', 'bun test'],
+      ['npm test', 'npm test'],
+      ['pnpm run test', 'pnpm test'],
+      ['go test ./...', 'go test'],
+      ['cargo test', 'cargo test'],
+      ['node --test', 'node --test'],
+      ['make test', 'make test'],
+      ['git status', 'git status'],
+      ['git -C repo diff --stat', 'git diff'],
+      ['git show HEAD~1', 'git show'],
+      ['gh pr diff 123', 'gh pr diff'],
+      ['gh pr view 123', 'gh pr view'],
+      ['gh run view 99', 'gh run view'],
+      ['git push origin main', 'git push'],
+      ['git commit -m "x"', 'git commit'],
+      ['npm install', 'npm install'],
+      ['pip3 uninstall foo', 'pip3 uninstall'],
+      ['python -m pip install black', 'pip install'],
+      ['uv pip install ruff', 'uv pip install'],
+      ['go mod tidy', 'go mod tidy'],
+      ['brew update', 'brew update'],
+      ['apt-get install jq', 'apt-get install'],
+      ['prettier --check .', 'prettier'],
+      ['eslint . --fix', 'eslint'],
+      ['cargo fmt --check', 'cargo fmt'],
+      ['tsc --noEmit', 'tsc'],
+      ['./node_modules/.bin/eslint .', 'eslint'],
+      ['docker compose build api', 'docker compose build'],
+      ['docker build .', 'docker build'],
+      ['kubectl apply -f k8s/', 'kubectl apply'],
+      ['terraform plan', 'terraform plan'],
+      ['make build', 'make build'],
+    ];
+
+    for (const [cmd, expected] of cases) {
+      assert.equal(normalized(cmd), expected, cmd);
+    }
+  });
+
+  it('only treats Python -m as a module flag before script execution starts', () => {
+    const cases: Array<[string, string]> = [
+      ['python tool.py -m pytest', 'python'],
+      ['python ./scripts/tool.py -m pytest', 'python'],
+      ['python -c "print(1)" -m pytest', 'python'],
+      ['python -- tool.py -m pytest', 'python'],
+      ['python -m pytest tool.py', 'pytest'],
+    ];
+
+    for (const [cmd, expected] of cases) {
+      assert.equal(normalized(cmd), expected, cmd);
+    }
+  });
+
+  it('handles env, cd, subshell, shell-c, and first-segment wrappers', () => {
+    const cases: Array<[string, string]> = [
+      ['CI=1 NODE_ENV=test pytest -q', 'pytest'],
+      ['cd /tmp && git status', 'git status'],
+      ['cd /tmp; git status', 'git status'],
+      ['(git status)', 'git status'],
+      ['bash -c "git status"', 'git status'],
+      ['bash -lc "git status"', 'git status'],
+      ['bash --norc -c "git status"', 'git status'],
+      ['sh -c "pnpm run test"', 'pnpm test'],
+      ['git status | cat', 'git status'],
+      ['git status && git diff', 'git status'],
+      ['git status; git diff', 'git status'],
+    ];
+
+    for (const [cmd, expected] of cases) {
+      assert.equal(normalized(cmd), expected, cmd);
+    }
+  });
+
+  it('returns shell buckets for compound shell forms and null for empty input', () => {
+    assert.equal(parseBashCommand('   '), null);
+    assert.deepEqual(parseBashCommand('for f in *; do echo "$f"; done'), {
+      binary: '(shell)',
+      normalized: '(shell)',
+    });
+    assert.deepEqual(parseBashCommand('if true; then git status; fi'), {
+      binary: '(shell)',
+      normalized: '(shell)',
+    });
+    assert.deepEqual(parseBashCommand('cat <<EOF\nhello\nEOF'), {
+      binary: '(shell)',
+      normalized: '(shell)',
+    });
   });
 });
 

@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn hotspots` now reports Bash spend by normalized verb before exact-command rows, with JSON `bashVerbs` / `topBashVerbs` fields for drill-downs.
+
 ### Changed
 
 - Style the ingest content-capture gap warning as a `⚠` banner that flows through the active progress spinner (yellow `⚠` via `ora.warn`, multi-line with hang-indent), instead of a `[burn] warning: …` blob that printed mid-spinner.

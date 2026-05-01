@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { loadBuiltinPricing } from '@relayburn/analyze';
 import type {
   BashAggregation,
+  BashVerbAggregation,
   FileAggregation,
   SessionTotals,
   SubagentAggregation,
@@ -125,7 +126,8 @@ describe('formatHotspotsReport', () => {
     assert.doesNotMatch(out, /\(approximate\)/);
     // Headings render plain.
     assert.match(out, /Top files by cumulative cost\n/);
-    assert.match(out, /Top Bash commands by cost\n/);
+    assert.match(out, /Top Bash verbs by cost\n/);
+    assert.match(out, /Top exact Bash commands by cost\n/);
     assert.match(out, /Top subagent calls by cost\n/);
     // Original combined attributed/unattributed line.
     assert.match(out, /attributed to tool calls: \$25\.00/);
@@ -183,9 +185,10 @@ describe('formatHotspotsReport', () => {
       out,
       /unattributed \$75\.00\s+\(output, system overhead, untracked\)/,
     );
-    // All three table headings are suffixed with "(approximate)".
+    // All attribution table headings are suffixed with "(approximate)".
     assert.match(out, /Top files by cumulative cost \(approximate\)/);
-    assert.match(out, /Top Bash commands by cost \(approximate\)/);
+    assert.match(out, /Top Bash verbs by cost \(approximate\)/);
+    assert.match(out, /Top exact Bash commands by cost \(approximate\)/);
     assert.match(out, /Top subagent calls by cost \(approximate\)/);
     // Old footer note must NOT appear when banner is shown.
     assert.doesNotMatch(out, /^note: \d+\/\d+ sessions used even-split/m);
@@ -210,6 +213,50 @@ describe('formatHotspotsReport', () => {
       out,
       /⚠ attribution is degraded: 39,486 of 39,587 sessions \(99\.7%\)/,
     );
+  });
+
+  it('renders the Bash verb rollup before the exact-command rollup', () => {
+    const result = makeResult([session('a', 'sized')]);
+    const bashVerbs: BashVerbAggregation[] = [
+      {
+        verb: 'git diff',
+        callCount: 5,
+        distinctCommands: 2,
+        totalCost: 31,
+        initialTokens: 500,
+        persistenceTokens: 80,
+        avgPersistenceTurns: 1.6,
+        topExamples: ['git diff src/b.ts', 'git diff src/a.ts'],
+      },
+    ];
+    const bashes: BashAggregation[] = [
+      {
+        argsHash: 'git:diff:b',
+        command: 'git diff src/b.ts',
+        callCount: 3,
+        totalCost: 21,
+        initialTokens: 300,
+        persistenceTokens: 60,
+      },
+    ];
+    const out = formatHotspotsReport({
+      turnsAnalyzed: 100,
+      result,
+      files: NO_FILES,
+      bashVerbs,
+      bashes,
+      subagents: NO_SUBAGENTS,
+      limit: 10,
+      degraded: false,
+    });
+
+    const verbIndex = out.indexOf('Top Bash verbs by cost');
+    const exactIndex = out.indexOf('Top exact Bash commands by cost');
+    assert.ok(verbIndex >= 0, 'verb heading present');
+    assert.ok(exactIndex > verbIndex, 'exact-command heading follows verb heading');
+    assert.match(out, /verb\s+calls\s+commands\s+initial\(tok\)\s+persist\(tok\)/);
+    assert.match(out, /git diff\s+5\s+2\s+500\s+80\s+1\.6\s+\$31\.00/);
+    assert.match(out, /git diff src\/b\.ts; git diff src\/a\.ts/);
   });
 });
 
@@ -627,6 +674,59 @@ describe('runHotspotsAttribution — partial exclusion (#100)', () => {
     assert.equal(payload.fidelity.summary.byClass.full, 1);
     assert.equal(payload.fidelity.summary.byClass.partial, 1);
     assert.equal(payload.turnsAnalyzed, 1);
+  });
+
+  it('JSON mode includes bashVerbs next to exact Bash commands', async () => {
+    const pricing = await loadBuiltinPricing();
+    const turns: EnrichedTurn[] = [
+      makeTurn({
+        sessionId: 'bash-json',
+        messageId: 'm0',
+        turnIndex: 0,
+        source: 'claude-code',
+        fidelity: fidelityWith('full', 'per-turn'),
+        toolCalls: [
+          { id: 'bash-a', name: 'Bash', target: 'git diff src/a.ts', argsHash: 'git:diff:a' },
+        ],
+      }),
+      makeTurn({
+        sessionId: 'bash-json',
+        messageId: 'm1',
+        turnIndex: 1,
+        source: 'claude-code',
+        fidelity: fidelityWith('full', 'per-turn'),
+        usage: { input: 1000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+      makeTurn({
+        sessionId: 'bash-json',
+        messageId: 'm2',
+        turnIndex: 2,
+        source: 'claude-code',
+        fidelity: fidelityWith('full', 'per-turn'),
+        toolCalls: [
+          { id: 'bash-b', name: 'Bash', target: 'git diff src/b.ts', argsHash: 'git:diff:b' },
+        ],
+      }),
+      makeTurn({
+        sessionId: 'bash-json',
+        messageId: 'm3',
+        turnIndex: 3,
+        source: 'claude-code',
+        fidelity: fidelityWith('full', 'per-turn'),
+        usage: { input: 1000, output: 5, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+      }),
+    ];
+
+    const { result, stdout } = await captureStdio(() =>
+      runHotspotsAttribution(args({ json: true }), turns, pricing, EMPTY_DEPS),
+    );
+    assert.equal(result, 0);
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.bashVerbs[0].verb, 'git diff');
+    assert.equal(payload.bashVerbs[0].callCount, 2);
+    assert.equal(payload.bashVerbs[0].distinctCommands, 2);
+    assert.deepEqual(payload.bashVerbs[0].topExamples, ['git diff src/a.ts', 'git diff src/b.ts']);
+    assert.equal(payload.bash.length, 2);
   });
 });
 

@@ -7,13 +7,16 @@ import type {
   TurnRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
+import { parseBashCommand } from '@relayburn/reader';
 
 import { loadBuiltinPricing } from './pricing.js';
 import {
   aggregateByBash,
+  aggregateByBashVerb,
   aggregateByFile,
   aggregateBySubagent,
   attributeHotspots,
+  type ToolAttribution,
 } from './hotspots.js';
 
 function tc(id: string, name: string, target?: string): ToolCall {
@@ -64,6 +67,37 @@ function userTurn(
     precedingMessageId: 'msg-0',
     followingMessageId: 'msg-1',
     blocks,
+  };
+}
+
+function bashAttribution(
+  command: string,
+  argsHash: string,
+  totalCost: number,
+  initialTokens: number,
+  persistenceTokens: number,
+  ridingTurns: number,
+): ToolAttribution {
+  return {
+    toolUseId: `tu-${argsHash}`,
+    toolName: 'Bash',
+    target: command,
+    argsHash,
+    sessionId: 's-bash-verb',
+    emitTurnIndex: 0,
+    emitTs: '2026-04-20T00:00:00.000Z',
+    model: 'claude-sonnet-4-6',
+    project: undefined,
+    projectKey: undefined,
+    subagentType: undefined,
+    resultTokens: 0,
+    resultBytesEstimated: true,
+    initialCost: totalCost,
+    initialTokens,
+    persistenceCost: 0,
+    persistenceTokens,
+    ridingTurns,
+    totalCost,
   };
 }
 
@@ -214,6 +248,35 @@ describe('attributeHotspots', () => {
     const bash = aggregateByBash(result.attributions);
     assert.equal(bash.length, 1);
     assert.equal(bash[0]!.callCount, 3);
+  });
+
+  it('aggregates Bash cost by normalized verb with distinct-command and example drill-downs', () => {
+    const attrs: ToolAttribution[] = [
+      bashAttribution('git status', 'git:status', 2, 20, 5, 0),
+      bashAttribution('git status', 'git:status', 2, 20, 5, 0),
+      bashAttribution('git status', 'git:status', 2, 20, 5, 0),
+      bashAttribution('git diff src/a.ts', 'git:diff:a', 5, 100, 10, 1),
+      bashAttribution('git diff src/a.ts', 'git:diff:a', 5, 100, 10, 1),
+      bashAttribution('git diff src/b.ts', 'git:diff:b', 7, 100, 20, 2),
+      bashAttribution('git diff src/b.ts', 'git:diff:b', 7, 100, 20, 2),
+      bashAttribution('git diff src/b.ts', 'git:diff:b', 7, 100, 20, 2),
+      bashAttribution('pnpm run test', 'pnpm:test', 4, 40, 8, 1),
+    ];
+
+    const verbs = aggregateByBashVerb(attrs, parseBashCommand);
+    assert.equal(verbs[0]!.verb, 'git diff');
+    assert.equal(verbs[0]!.callCount, 5);
+    assert.equal(verbs[0]!.distinctCommands, 2);
+    assert.equal(verbs[0]!.totalCost, 31);
+    assert.equal(verbs[0]!.initialTokens, 500);
+    assert.equal(verbs[0]!.persistenceTokens, 80);
+    assert.equal(verbs[0]!.avgPersistenceTurns, 1.6);
+    assert.deepEqual(verbs[0]!.topExamples, ['git diff src/b.ts', 'git diff src/a.ts']);
+
+    assert.equal(verbs[1]!.verb, 'git status');
+    assert.equal(verbs[1]!.callCount, 3);
+    assert.equal(verbs[1]!.distinctCommands, 1);
+    assert.equal(verbs[2]!.verb, 'pnpm test');
   });
 
   it('aggregates subagent calls by subagent_type', async () => {

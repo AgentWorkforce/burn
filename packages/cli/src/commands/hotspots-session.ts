@@ -1,5 +1,6 @@
 import {
   aggregateByBash,
+  aggregateByBashVerb,
   aggregateByFile,
   aggregateBySubagent,
   attributeHotspots,
@@ -24,6 +25,7 @@ import type {
   TurnRecord,
   UserTurnRecord,
 } from '@relayburn/reader';
+import { parseBashCommand } from '@relayburn/reader';
 
 import { countToolCallGaps, ingestAll } from '../ingest.js';
 import { formatInt, formatUsd, table } from '../format.js';
@@ -121,6 +123,7 @@ export async function runHotspotsSession(
     return result;
   });
   const files = aggregateByFile(attribution.attributions).slice(0, 5);
+  const bashVerbs = aggregateByBashVerb(attribution.attributions, parseBashCommand).slice(0, 5);
   const bashes = aggregateByBash(attribution.attributions).slice(0, 5);
   const subagents = aggregateBySubagent(attribution.attributions).slice(0, 5);
 
@@ -133,6 +136,7 @@ export async function runHotspotsSession(
           totals: attribution.sessionTotals[0] ?? null,
           patterns,
           topFiles: files,
+          topBashVerbs: bashVerbs,
           topBashes: bashes,
           topSubagents: subagents,
           relationships,
@@ -223,7 +227,26 @@ export async function runHotspotsSession(
   }
   out.push('');
 
-  out.push('Top Bash commands by cost');
+  out.push('Top Bash verbs by cost');
+  if (bashVerbs.length === 0) out.push('  (none)');
+  else {
+    out.push(
+      table([
+        ['verb', 'calls', 'commands', 'persist(tok)', 'cost', 'examples'],
+        ...bashVerbs.map((b) => [
+          truncate(b.verb, 32),
+          String(b.callCount),
+          String(b.distinctCommands),
+          formatInt(b.persistenceTokens),
+          formatUsd(b.totalCost),
+          truncate(b.topExamples.map((example) => truncate(example, 28)).join('; '), 60),
+        ]),
+      ]),
+    );
+  }
+  out.push('');
+
+  out.push('Top exact Bash commands by cost');
   if (bashes.length === 0) out.push('  (none)');
   else {
     out.push(

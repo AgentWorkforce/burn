@@ -26,8 +26,8 @@ export type {
   UsageGranularity,
 } from './types.js';
 export { classifyFidelity, makeFidelity, EMPTY_COVERAGE } from './fidelity.js';
-export { classifyActivity, countRetries, normalizeToolName } from './classifier.js';
-export type { ClassificationInput, ClassificationResult } from './classifier.js';
+export { classifyActivity, countRetries, normalizeToolName, parseBashCommand } from './classifier.js';
+export type { BashParse, ClassificationInput, ClassificationResult } from './classifier.js';
 export type { UserTurnTokenizer } from './userTurn.js';
 export {
   parseClaudeSession,

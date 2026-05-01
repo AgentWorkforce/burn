@@ -10,12 +10,14 @@ export {
   attributeHotspots,
   aggregateByFile,
   aggregateByBash,
+  aggregateByBashVerb,
   aggregateBySubagent,
 } from './hotspots.js';
 export type {
   AttributionMethod,
   HotspotsOptions,
   BashAggregation,
+  BashVerbAggregation,
   FileAggregation,
   SessionTotals,
   SubagentAggregation,
