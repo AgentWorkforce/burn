@@ -161,6 +161,23 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
     assert.equal(captured.length, 0, 'no warning when there are no tool calls');
   });
 
+  it('emits a warning from the opencode ingest wiring', async () => {
+    await writeOpencodeGapSession(tmpHome, 'ses_gap_opencode');
+    const captured: string[] = [];
+    const restore = setIngestGapWriter((msg) => {
+      captured.push(msg);
+    });
+    try {
+      await ingestOpencodeSessions();
+    } finally {
+      setIngestGapWriter(restore);
+    }
+
+    assert.equal(captured.length, 1, 'one opencode warning emitted');
+    assert.match(captured[0]!, /^opencode: 1 session logged tool calls/);
+    assert.match(captured[0]!, /\(1 tool call\)/);
+  });
+
   it('suppresses repeat warnings on subsequent ingest calls in the same process', async () => {
     await writeCodexSession(tmpHome, 'rollout-suppress', codexSessionWithToolCallNoOutput());
     const captured: string[] = [];
@@ -852,6 +869,71 @@ async function writeCodexSession(home: string, name: string, body: string): Prom
   const file = path.join(dir, `${name}.jsonl`);
   await writeFile(file, body, 'utf8');
   return file;
+}
+
+async function writeOpencodeGapSession(home: string, sessionId: string): Promise<void> {
+  const storage = path.join(home, '.local', 'share', 'opencode', 'storage');
+  const sessionDir = path.join(storage, 'session', 'global');
+  const messageDir = path.join(storage, 'message', sessionId);
+  const userPartsDir = path.join(storage, 'part', `${sessionId}_user`);
+  const assistantPartsDir = path.join(storage, 'part', `${sessionId}_asst`);
+  await mkdir(sessionDir, { recursive: true });
+  await mkdir(messageDir, { recursive: true });
+  await mkdir(userPartsDir, { recursive: true });
+  await mkdir(assistantPartsDir, { recursive: true });
+
+  await writeJson(path.join(sessionDir, `${sessionId}.json`), {
+    id: sessionId,
+    directory: '/tmp/project',
+  });
+  await writeJson(path.join(messageDir, `${sessionId}_user.json`), {
+    id: `${sessionId}_user`,
+    sessionID: sessionId,
+    role: 'user',
+    time: { created: 1_776_988_000_000 },
+  });
+  await writeJson(path.join(userPartsDir, `${sessionId}_user_text.json`), {
+    id: `${sessionId}_user_text`,
+    sessionID: sessionId,
+    messageID: `${sessionId}_user`,
+    type: 'text',
+    text: 'run the check',
+  });
+  await writeJson(path.join(messageDir, `${sessionId}_asst.json`), {
+    id: `${sessionId}_asst`,
+    sessionID: sessionId,
+    role: 'assistant',
+    time: { created: 1_776_988_001_000 },
+    parentID: `${sessionId}_user`,
+    providerID: 'anthropic',
+    modelID: 'claude-sonnet-4-5',
+    path: { cwd: '/tmp/project' },
+    tokens: { input: 10, output: 5, cache: { read: 0, write: 0 } },
+  });
+  await writeJson(path.join(assistantPartsDir, `${sessionId}_tool.json`), {
+    id: `${sessionId}_tool`,
+    sessionID: sessionId,
+    messageID: `${sessionId}_asst`,
+    type: 'tool',
+    callID: `${sessionId}_call`,
+    tool: 'bash',
+    state: {
+      status: 'running',
+      input: { command: 'npm test' },
+    },
+  });
+  await writeJson(path.join(assistantPartsDir, `${sessionId}_finish.json`), {
+    id: `${sessionId}_finish`,
+    sessionID: sessionId,
+    messageID: `${sessionId}_asst`,
+    type: 'step-finish',
+    reason: 'tool-calls',
+    tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+  });
+}
+
+async function writeJson(file: string, value: unknown): Promise<void> {
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 async function listPendingFiles(): Promise<string[]> {
