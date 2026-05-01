@@ -14,6 +14,7 @@ import type {
 } from '@relayburn/reader';
 
 import {
+  CONTENT_WINDOW,
   compactionIdHash,
   relationshipIdHash,
   toolResultEventIdHash,
@@ -320,6 +321,9 @@ export class SqliteAdapter implements StorageAdapter {
   async appendTurns(turns: TurnRecord[]): Promise<void> {
     if (turns.length === 0) return;
     const db = await this.ensureInit();
+    const recentContent = db.prepare(
+      `SELECT content_fp FROM turns ORDER BY rowid DESC LIMIT ?`,
+    );
     const insert = db.prepare(`
       INSERT OR IGNORE INTO turns (
         id_hash, content_fp, source, session_id, message_id, turn_index,
@@ -328,10 +332,18 @@ export class SqliteAdapter implements StorageAdapter {
     `);
     db.exec('BEGIN IMMEDIATE');
     try {
+      const historicalContent = new Set(
+        Array.from(
+          recentContent.iterate(CONTENT_WINDOW) as IterableIterator<{ content_fp: string }>,
+          (row) => row.content_fp,
+        ),
+      );
       for (const t of turns) {
+        const contentFp = turnContentFingerprint(t);
+        if (historicalContent.has(contentFp)) continue;
         insert.run(
           turnIdHash(t),
-          turnContentFingerprint(t),
+          contentFp,
           t.source,
           t.sessionId,
           t.messageId,

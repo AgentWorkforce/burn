@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS locks (
 
 CREATE TABLE IF NOT EXISTS turns (
   id_hash      TEXT PRIMARY KEY,
-  content_fp   TEXT NOT NULL UNIQUE,
+  content_fp   TEXT NOT NULL,
   source       TEXT NOT NULL,
   session_id   TEXT NOT NULL,
   message_id   TEXT NOT NULL,

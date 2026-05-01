@@ -20,7 +20,7 @@ import type {
   UserTurnRecord,
 } from '@relayburn/reader';
 
-import { __resetIndexCacheForTesting } from '../index-sidecar.js';
+import { CONTENT_WINDOW, __resetIndexCacheForTesting } from '../index-sidecar.js';
 import type { PruneOptions } from '../content.js';
 import type { StampLine } from '../schema.js';
 import type { StorageAdapter } from './adapter.js';
@@ -189,6 +189,17 @@ function runAdapterSuite(name: string, makeAdapter: MakeAdapter): void {
       await ctx.adapter.appendTurns([fakeTurn()]);
       const got = await collect(ctx.adapter.queryTurns({}));
       assert.equal(got.length, 1);
+    });
+
+    it('keeps same-batch turns with matching content fingerprints', async () => {
+      await ctx.adapter.appendTurns([
+        fakeTurn({ messageId: 'fp-a', turnIndex: 0 }),
+        fakeTurn({ messageId: 'fp-b', turnIndex: 1 }),
+      ]);
+      const got = await collect(ctx.adapter.queryTurns({}));
+      assert.equal(got.length, 2);
+      const ids = got.map((t) => t.messageId).sort();
+      assert.deepEqual(ids, ['fp-a', 'fp-b']);
     });
 
     it('dedupes compactions / relationships / tool result events / user turns', async () => {
@@ -411,6 +422,35 @@ describe('SqliteAdapter concurrent writers', () => {
     } finally {
       await a.close();
       await b.close();
+    }
+  });
+
+  it('does not enforce content fingerprint uniqueness beyond the rolling window', async () => {
+    const dbPath = path.join(tmpDir, 'burn.sqlite');
+    const adapter = new SqliteAdapter({ dbPath, staleMs: 200 });
+    await adapter.init();
+    try {
+      const first = fakeTurn({ messageId: 'first', turnIndex: 0 });
+      await adapter.appendTurns([first]);
+      await adapter.appendTurns(
+        Array.from({ length: CONTENT_WINDOW }, (_, i) =>
+          fakeTurn({
+            messageId: `filler-${i}`,
+            turnIndex: i + 1,
+            ts: new Date(1745625600000 + i * 1000).toISOString(),
+          }),
+        ),
+      );
+      await adapter.appendTurns([
+        fakeTurn({ messageId: 'same-fingerprint-late', turnIndex: CONTENT_WINDOW + 1 }),
+      ]);
+
+      const got = await collect(adapter.queryTurns({}));
+      assert.equal(got.length, CONTENT_WINDOW + 2);
+      assert(got.some((t) => t.messageId === 'first'));
+      assert(got.some((t) => t.messageId === 'same-fingerprint-late'));
+    } finally {
+      await adapter.close();
     }
   });
 });
