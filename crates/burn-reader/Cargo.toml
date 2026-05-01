@@ -1,0 +1,15 @@
+[package]
+name = "burn-reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Pure parsers for Claude Code / Codex / OpenCode session logs into TurnRecord."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+phf = { workspace = true }

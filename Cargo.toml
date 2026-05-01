@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/burn-reader",
+    "crates/burn-ledger",
+    "crates/burn-analyze",
+    "crates/burn-mcp",
+    "crates/burn-cli",
+    "crates/burn-sdk",
+    "crates/burn-sdk-node",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/AgentWorkforce/burn"
+rust-version = "1.75"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util", "process", "sync", "time"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+fs2 = "0.4"
+notify = "6"
+phf = { version = "0.11", features = ["macros"] }
+
+burn-reader = { path = "crates/burn-reader", version = "0.1.0" }
+burn-ledger = { path = "crates/burn-ledger", version = "0.1.0" }
+burn-analyze = { path = "crates/burn-analyze", version = "0.1.0" }
+burn-mcp = { path = "crates/burn-mcp", version = "0.1.0" }
+burn-sdk = { path = "crates/burn-sdk", version = "0.1.0" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

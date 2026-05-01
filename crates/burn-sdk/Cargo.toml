@@ -1,0 +1,18 @@
+[package]
+name = "burn-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Public Rust SDK for relayburn — open ledgers, ingest sessions, query attribution."
+
+[dependencies]
+burn-reader = { workspace = true }
+burn-ledger = { workspace = true }
+burn-analyze = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
