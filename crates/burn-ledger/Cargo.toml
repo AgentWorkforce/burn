@@ -1,0 +1,19 @@
+[package]
+name = "burn-ledger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Append-only JSONL ledger + content sidecar + SQLite archive for relayburn."
+
+[dependencies]
+burn-reader = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+fs2 = { workspace = true }
+notify = { workspace = true }

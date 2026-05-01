@@ -1,0 +1,22 @@
+[package]
+name = "burn-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The `burn` CLI binary."
+
+[[bin]]
+name = "burn"
+path = "src/main.rs"
+
+[dependencies]
+burn-sdk = { workspace = true }
+burn-mcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }

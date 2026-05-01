@@ -1,0 +1,22 @@
+[package]
+name = "burn-sdk-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "napi-rs bindings exposing burn-sdk to Node.js as @relayburn/sdk on npm."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+burn-sdk = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# napi = { version = "2", default-features = false, features = ["napi8", "tokio_rt"] }
+# napi-derive = "2"
+
+# [build-dependencies]
+# napi-build = "2"

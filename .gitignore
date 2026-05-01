@@ -4,3 +4,7 @@ dist/
 .npm-cache/
 .DS_Store
 *.log
+
+# Rust workspace
+target/
+**/*.rs.bk
