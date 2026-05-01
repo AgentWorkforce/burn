@@ -95,6 +95,7 @@ describe('parseBashCommand', () => {
     const cases: Array<[string, string]> = [
       ['pytest', 'pytest'],
       ['python -m pytest -q', 'pytest'],
+      ['python -I -X dev -m pytest -q', 'pytest'],
       ['vitest run', 'vitest'],
       ['bun test', 'bun test'],
       ['npm test', 'npm test'],
@@ -128,6 +129,20 @@ describe('parseBashCommand', () => {
       ['kubectl apply -f k8s/', 'kubectl apply'],
       ['terraform plan', 'terraform plan'],
       ['make build', 'make build'],
+    ];
+
+    for (const [cmd, expected] of cases) {
+      assert.equal(normalized(cmd), expected, cmd);
+    }
+  });
+
+  it('only treats Python -m as a module flag before script execution starts', () => {
+    const cases: Array<[string, string]> = [
+      ['python tool.py -m pytest', 'python'],
+      ['python ./scripts/tool.py -m pytest', 'python'],
+      ['python -c "print(1)" -m pytest', 'python'],
+      ['python -- tool.py -m pytest', 'python'],
+      ['python -m pytest tool.py', 'pytest'],
     ];
 
     for (const [cmd, expected] of cases) {

@@ -117,6 +117,13 @@ const OPTION_TAKES_VALUE = new Set([
   '--repository',
   '--work-tree',
 ]);
+const PYTHON_OPTION_TAKES_VALUE = new Set([
+  '-c',
+  '-m',
+  '-W',
+  '-X',
+  '--check-hash-based-pycs',
+]);
 
 export function parseBashCommand(command: string): BashParse | null {
   return parseBashCommandInner(command, 0);
@@ -426,8 +433,8 @@ function envCommandArgs(tokens: string[], start: number): string[] {
 }
 
 function parsePythonModule(tokens: string[], start: number): BashParse | null {
-  const moduleFlag = tokens.indexOf('-m', start);
-  if (moduleFlag === -1 || moduleFlag + 1 >= tokens.length) return null;
+  const moduleFlag = findPythonModuleFlag(tokens, start);
+  if (moduleFlag === null || moduleFlag + 1 >= tokens.length) return null;
   const module = normalizeBinary(tokens[moduleFlag + 1]!);
   if (module === 'pytest') return verb('pytest');
   if (module === 'pip' || module === 'pip3') {
@@ -436,6 +443,20 @@ function parsePythonModule(tokens: string[], start: number): BashParse | null {
     return verb(module);
   }
   return verb(module);
+}
+
+function findPythonModuleFlag(tokens: string[], start: number): number | null {
+  for (let i = start; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token === '--') return null;
+    if (token === '-m') return i;
+    if (token === '-c') return null;
+    if (!token.startsWith('-') || token === '-') return null;
+
+    const optionName = token.includes('=') ? token.slice(0, token.indexOf('=')) : token;
+    if (!token.includes('=') && PYTHON_OPTION_TAKES_VALUE.has(optionName)) i++;
+  }
+  return null;
 }
 
 function normalizeBinary(raw: string): string {
