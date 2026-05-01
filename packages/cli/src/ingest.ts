@@ -76,7 +76,7 @@ export interface IngestOptions {
 
 // Per-adapter content-capture gap tracker. A session is "affected" iff a parse
 // pass observed `tool_use` blocks for it in `contentMode === 'full'` mode
-// without any matching `tool_result` ContentRecord — the load-bearing kind
+// without any observed `tool_result` ContentRecord — the load-bearing kind
 // for `burn hotspots`'s tool-call attribution.
 //
 // Tracking is per-process and per-session (not per-call counts), so the set
@@ -86,10 +86,12 @@ export interface IngestOptions {
 // shortly after and the next pass heals the session. Sessions that were
 // killed mid-call stay flagged permanently, which is the signal we want.
 //
-// Suppression: a warning fires only when the affected set has *grown* since
-// the last emission, so a steady-state or shrinking set stays silent. After
-// the set decays back to zero the suppression marker is cleared so a fresh
-// gap from a future regression triggers a new warning.
+// Suppression: a warning fires only when the current affected set includes a
+// session that was not present in the last emitted warning. Steady-state or
+// shrinking sets stay silent, but churn that introduces a fresh affected
+// session still re-warns even if the net count stays flat. After the set
+// decays back to zero the suppression marker is cleared so a fresh gap from a
+// future regression triggers a new warning.
 type AdapterName = 'claude' | 'codex' | 'opencode';
 
 interface GapTrackerState {
@@ -103,9 +105,9 @@ interface GapTrackerState {
   // proved itself for that session at least once). Bounded by the number of
   // distinct sessionIds the process has touched.
   healedSessions: Map<AdapterName, Set<string>>;
-  // Last `affectedSessions[adapter].size` observed at warn-emit time. Used
-  // to suppress repeats unless the set has grown since then.
-  warnedAffectedSessions: Map<AdapterName, number>;
+  // Sessions included in the most recent emitted warning, per adapter. Used
+  // to suppress repeats unless a newly affected session appears.
+  warnedAffectedSessions: Map<AdapterName, Set<string>>;
   // Default sink for gap warnings when the caller has not provided an
   // `onWarn` (e.g. plain stderr contexts like `burn run` or watch loops).
   // Receives the warning body and is responsible for whatever framing the
@@ -312,10 +314,10 @@ export async function ingestAll(opts: IngestOptions = {}): Promise<IngestReport>
   return report;
 }
 
-// Count tool calls in committed turns that lack a corresponding tool_result
-// ContentRecord. Returns { sessionAffected, orphanCount } — a session is
-// "affected" iff (a) it produced ≥1 turn with ≥1 tool call and (b) no
-// tool_result records were captured for it. Per the issue, we ignore the
+// Count tool calls in committed turns while no tool_result ContentRecord was
+// captured for the session. Returns { sessionAffected, orphanCount } — a
+// session is "affected" iff (a) it produced ≥1 turn with ≥1 tool call and (b)
+// no tool_result records were captured for it. Per the issue, we ignore the
 // `text`/`thinking`/`tool_use` content kinds because their absence is not
 // load-bearing for `burn hotspots` attribution.
 export function countToolCallGaps(
@@ -343,26 +345,32 @@ function emitGapWarning(
 ): void {
   if (contentMode !== 'full') return;
   const affected = state.affectedSessions.get(adapter);
-  const count = affected?.size ?? 0;
-  if (count === 0) {
+  if (affected === undefined || affected.size === 0) {
     // Set decayed back to empty — clear the suppression marker so a fresh
     // gap from a future regression triggers a new warning.
     state.warnedAffectedSessions.delete(adapter);
     return;
   }
   const prior = state.warnedAffectedSessions.get(adapter);
-  // Always update the marker so the next emission's delta check is honest:
-  // a count that decayed from 10 to 5 silently won't pretend the prior was
-  // still 10 next time.
-  state.warnedAffectedSessions.set(adapter, count);
-  if (prior !== undefined && count <= prior) return;
+  let hasFreshAffectedSession = prior === undefined;
+  if (prior !== undefined) {
+    for (const sessionId of affected) {
+      if (!prior.has(sessionId)) {
+        hasFreshAffectedSession = true;
+        break;
+      }
+    }
+  }
+  if (!hasFreshAffectedSession) return;
+  state.warnedAffectedSessions.set(adapter, new Set(affected));
   let totalCalls = 0;
   const orphans = state.orphanCallsPerSession.get(adapter);
   if (orphans) for (const n of orphans.values()) totalCalls += n;
+  const count = affected.size;
   const sessions = `${count} session${count === 1 ? '' : 's'}`;
   const calls = `${totalCalls} tool call${totalCalls === 1 ? '' : 's'}`;
   const body =
-    `${adapter}: ${sessions} logged tool calls without matching tool_result content (${calls}).\n` +
+    `${adapter}: ${sessions} logged tool calls without any observed tool_result content (${calls}).\n` +
     `  Likely cause: still running (result line not yet flushed) or killed mid-call.\n` +
     `  Counts decay as later ingest passes pick up the result lines; sized hotspots\n` +
     `  attribution falls back to user-turn block sizes (or even-split) until they heal.`;

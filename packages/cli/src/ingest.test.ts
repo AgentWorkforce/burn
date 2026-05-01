@@ -109,7 +109,7 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
 
     assert.equal(captured.length, 1, 'one warning emitted');
     const msg = captured[0]!;
-    assert.match(msg, /^codex: 1 session logged tool calls/);
+    assert.match(msg, /^codex: 1 session logged tool calls without any observed tool_result content/);
     // 2 function_calls in the fixture (exec + patch).
     assert.match(msg, /\(2 tool calls\)/);
     // Adapter-agnostic copy: pinpoint the cause and decay disclaimer.
@@ -211,6 +211,43 @@ describe('ingest gap warning (codex parser-gap scenario)', () => {
       await ingestCodexSessions();
       assert.equal(captured.length, 2, 'fresh gap re-emits after decay');
       assert.match(captured[1]!, /1 session/);
+    } finally {
+      setIngestGapWriter(restore);
+    }
+  });
+
+  it('re-warns when affected session churn keeps the count flat', async () => {
+    const first = await writeCodexSession(
+      tmpHome,
+      'rollout-churn-gap-1',
+      codexSessionWithToolCallNoOutput(),
+    );
+    await writeCodexSession(
+      tmpHome,
+      'rollout-churn-gap-2',
+      codexSessionWithFreshGap('sess_gap_2'),
+    );
+    const captured: string[] = [];
+    const restore = setIngestGapWriter((msg) => {
+      captured.push(msg);
+    });
+    try {
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'initial warning emitted for two affected sessions');
+      assert.match(captured[0]!, /2 sessions/);
+
+      await appendFile(first, codexHealChunkForSessGap1(), 'utf8');
+      await ingestCodexSessions();
+      assert.equal(captured.length, 1, 'shrinking set stays silent');
+
+      await writeCodexSession(
+        tmpHome,
+        'rollout-churn-gap-3',
+        codexSessionWithFreshGap('sess_gap_3'),
+      );
+      await ingestCodexSessions();
+      assert.equal(captured.length, 2, 'fresh affected session re-emits even at same count');
+      assert.match(captured[1]!, /2 sessions/);
     } finally {
       setIngestGapWriter(restore);
     }
