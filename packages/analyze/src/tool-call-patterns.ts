@@ -318,7 +318,7 @@ function detectEditClusters(turns: TurnRecord[]): EditCluster[] {
       const start = turnIndexes[i]!;
       const window: number[] = [];
       for (let j = i; j < turnIndexes.length; j++) {
-        if (turnIndexes[j]! - start > EDIT_CLUSTER_TURN_WINDOW) break;
+        if (turnIndexes[j]! - start >= EDIT_CLUSTER_TURN_WINDOW) break;
         window.push(turnIndexes[j]!);
       }
       if (window.length > bestCount) {

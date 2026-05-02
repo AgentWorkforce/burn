@@ -125,6 +125,23 @@ describe('detectToolCallPatterns — edit clusters', () => {
     assert.equal(out.find((f) => f.category === 'edit-cluster'), undefined);
   });
 
+  it('caps the window at exactly 5 consecutive turn indexes (boundary)', async () => {
+    const pricing = await loadBuiltinPricing();
+    // Three edits inside the 5-turn window (indices 0, 1, 4) plus one
+    // at index 5 — outside the window. The detector should pick the
+    // 3-edit cluster and ignore the straggler.
+    const turns: TurnRecord[] = [
+      turn({ sessionId: 's', messageId: 'm0', turnIndex: 0, toolCalls: [tc('e0', 'Edit', '/f.ts')] }),
+      turn({ sessionId: 's', messageId: 'm1', turnIndex: 1, toolCalls: [tc('e1', 'Edit', '/f.ts')] }),
+      turn({ sessionId: 's', messageId: 'm4', turnIndex: 4, toolCalls: [tc('e4', 'Edit', '/f.ts')] }),
+      turn({ sessionId: 's', messageId: 'm5', turnIndex: 5, toolCalls: [tc('e5', 'Edit', '/f.ts')] }),
+    ];
+    const out = detectToolCallPatterns(turns, { pricing });
+    const cluster = out.find((f) => f.category === 'edit-cluster');
+    assert.ok(cluster);
+    assert.equal(cluster!.occurrenceCount, 3);
+  });
+
   it('treats each file independently', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: TurnRecord[] = [];
