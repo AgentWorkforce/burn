@@ -42,7 +42,7 @@ Curate `[Unreleased]` in the relevant per-package `packages/*/CHANGELOG.md` as y
 
 Changelog entries should be concise and impact-first. Prefer one short bullet per user-visible change: name the command/API/schema touched and the practical effect. Drop issue/PR links, internal review notes, implementation backstory, and "foundation for..." phrasing unless that text clearly explains the shipped impact. Less detail is better when the detail belongs in the PR, commit, or code.
 
-The root `CHANGELOG.md` is the cross-package narrative. Packages release in lockstep, so each release in the root file is a single `## [x.y.z] - YYYY-MM-DD` header that applies to all six packages — no `**Versions:** ...` lines, no per-bullet `[reader, cli]` tags. Update `[Unreleased]` only when the work spans packages or warrants a top-level summary; single-package work belongs only in that package's CHANGELOG.
+The root `CHANGELOG.md` is the cross-package narrative. Packages release in lockstep, so each release in the root file is a single `## [x.y.z] - YYYY-MM-DD` header that applies to all eight packages — no `**Versions:** ...` lines, no per-bullet `[reader, cli]` tags. Update `[Unreleased]` only when the work spans packages or warrants a top-level summary; single-package work belongs only in that package's CHANGELOG.
 
 The publish workflow promotes the root `[Unreleased]` block the same way it does per-package files: at release time it stamps `## [x.y.z] - DATE` (using `max` of the versions bumped in the run) and resets `[Unreleased]` to empty. **No git-log fallback for the root file** — an empty `[Unreleased]` at release time means "no narrative-worthy changes this release" and the file is left alone. So if you want the root to record a release, write the bullet under `[Unreleased]` *before* the publish run.
 
@@ -74,7 +74,7 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 
 The workflow:
 1. Builds + tests the whole workspace.
-2. Bumps `package.json` versions in dep order (reader → ledger → analyze → mcp → cli → relayburn).
+2. Bumps `package.json` versions in dep order (reader → ledger → analyze → ingest → mcp → cli → sdk → relayburn).
 3. Generates changelog entries from `git log <pkg>-v<last>..HEAD -- packages/<pkg>`.
 4. Publishes via `pnpm pack` + `npm publish` using OIDC trusted-publisher auth (no `NPM_TOKEN`).
 5. Tags `<pkg>-v<version>` and creates a GitHub Release with the changelog body.
