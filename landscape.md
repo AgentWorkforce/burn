@@ -2,7 +2,7 @@
 
 Reference notes from surveying ten token-usage tools in the Claude Code / multi-agent space. The goal was to decide what burn should port, what it should deliberately skip, and what unique territory it owns.
 
-**Burn's meta-goal** (repeated here because it shapes every evaluation below): answer "would the same work cost less on a different model, harness, or tool — in dollars or quota consumption?" Everything in this doc is graded against that question, not against "is this tool well-built."
+**Burn's meta-goal** (repeated here because it shapes every evaluation below): answer "would the same work cost less on a different model, harness, or tool — in dollars or token usage?" Everything in this doc is graded against that question, not against "is this tool well-built."
 
 Burn keeps derived local state deliberately disposable: dedup indexes, content sidecars, activity labels, and the SQLite archive are inspected and refreshed through `burn state` rather than separate maintenance verbs.
 
@@ -46,7 +46,6 @@ Burn keeps derived local state deliberately disposable: dedup indexes, content s
 
 **Burn issues from this survey:**
 - #4 (incremental cursors + git canonicalization + dedup index)
-- #5 (`burn budget` quota-window tracking — endpoint list cribbed directly)
 
 **Explicitly not adopted:** 30-minute UTC bucket-at-ingest (wrong for per-tool-call attribution), SessionEnd hook installer (burn's spawner-controlled `--settings` path is strictly better), native macOS app (out of scope), optional cloud leaderboard (off-mission).
 
@@ -182,12 +181,11 @@ projectedBlockTotal = actualSoFar + projectedAdditionalTokens
 Requires per-turn usage within the current 5-hour window (from ledger). No network dependency.
 
 **MCP server as closed-loop architecture:**
-Spawner registers `@relayburn/mcp` on every agent. Agent mid-session queries `burn__currentBlock()` or `burn__sessionCost()` to self-check. Relay's routing logic can ask *"you're at 80% of your window — downgrade to Haiku for the rest?"* and let the model decide. None of the surveyed tools do this.
+Spawner registers `@relayburn/mcp` on every agent. Agent mid-session queries `burn__sessionCost()` to self-check session spend before choosing whether to continue, pause, or switch tactics.
 
 **Amp's distinctive log shape:** `usageLedger.events[]` carries per-event tool-call granularity with `operationType`, `fromMessageId`, `toMessageId`, `credits`, `tokens`. Uses **credits, not USD** — Sourcegraph's credit-to-dollar conversion is external.
 
 **Burn issues from this survey:**
-- Comment on #5 adding local-derived block forecasting alongside the OAuth endpoint
 - #25 Amp collector
 - #26 `@relayburn/mcp` server
 
@@ -290,14 +288,13 @@ Spawner registers `@relayburn/mcp` on every agent. Agent mid-session queries `bu
 
 Plus **structured fix actions** (`WasteAction = { type: 'paste' | 'command' | 'file-content' }`) — better output shape than free-text recommendations. Direct upgrade for #11.
 
-**Plan tracking** (`plan-usage.ts`, `plans.ts`) covers **monthly quota** — now surfaced with the 5-hour window under `burn budget`. Both matter for Pro/Max users.
+**Plan tracking** (`plan-usage.ts`, `plans.ts`) covers monthly quota in codeburn. Burn deliberately removed its equivalent budget surface to stay focused on local attribution.
 
 **Cursor support: unresolved.** Claims to work via the local `cursorDiskKV` SQLite table. Code has no schema validation — silently returns empty on post-Cursor-migration installs. Either Cursor reversed course or codeburn's parser is broken but unreported (3247 stars and April 2026 push doesn't prove the parser works for current Cursor). Empirical verification needed before reopening #22.
 
 **Burn issues from this survey:**
 - #37 rule-based activity classifier (the foundational primitive)
 - #38 `burn compare` model comparison by activity category (the meta-goal query)
-- #39 plan-based monthly quota tracking (complement to #5)
 - Comment on #6 proposing one-shot rate as a second primary quality signal
 - Comment on #10 proposing `burn context-budget` as a static-cost sibling command
 - Comment on #11 adding three detectors + upgrading fix-action shape
@@ -344,7 +341,7 @@ For each filed issue, the project(s) it drew from:
 | #2 | Preserve user-turn block sizes | lazyagent (fallback when hooks unavailable) |
 | #3 | `burn hotspots` per-tool-call attribution | Original concept |
 | #4 | Incremental cursors + git-canonical project keys | TokenTracker (cursors, git); tokscale (fingerprint dedup, added later) |
-| #5 | `burn budget` quota-window tracking | TokenTracker (endpoints); ccusage (forecasting, added later) |
+| #5 | Removed quota-window tracking | TokenTracker (endpoints); ccusage (forecasting, added later) |
 | #6 | Outcome/quality signal design | Original concept; prism adherence rejected as primary |
 | #7 | Hook-based Claude ingest via `--settings` | lazyagent |
 | #8 | Subagent tree as first-class | lazyagent |

@@ -2,7 +2,7 @@
 
 Understand how you're spending tokens in agent CLIs. Burn ingests Claude Code,
 Codex, and OpenCode session logs into a local ledger, then shows cost by model,
-provider, tool, file, workflow, agent, session, overhead file, and quota window.
+provider, tool, file, workflow, agent, session, and overhead file.
 
 ## Quick Start
 
@@ -21,7 +21,6 @@ different location.
 |---|---|
 | [`burn summary`](#burn-summary) | See total usage and cost by model, provider, tool, subagent, relationship, or session tree. |
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, subagents, retries, failures, compactions, and other waste patterns. |
-| [`burn budget`](#burn-budget) | Track Claude quota windows, monthly plan spend, and local burn-rate forecasts. |
 | [`burn overhead`](#burn-overhead) | Attribute cached prompt cost to `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. |
 | [`burn compare`](#burn-compare) | Compare observed model performance by activity: cost per turn, one-shot rate, and sample size. |
 | [`burn run`](#burn-run) | Spawn Claude, Codex, or OpenCode with attribution tags and automatic ingest. |
@@ -95,44 +94,6 @@ Pattern names: `retries`, `failures`, `cancellations`, `compaction`,
 | `burn hotspots --patterns --since 7d` | All waste-pattern detectors over the week. |
 | `burn hotspots --patterns=retries,failures --findings` | Retry and failure findings only. |
 | `burn hotspots --session <session-id> --explain-drift` | Deep dive on one session. |
-
-## `burn budget`
-
-Use `burn budget` while working, or at the start of the day, to see Claude quota
-windows, configured monthly plans, and the local 5-hour burn-rate forecast.
-
-| Option | What it does |
-|---|---|
-| `--watch` | Refresh until interrupted. |
-| `--interval <seconds>` | Set watch refresh interval, for example `10s`. |
-| `--json` | Emit machine-readable status. |
-| `--no-api` | Skip Claude OAuth quota lookup. |
-| `--no-forecast` | Skip local ledger forecast. |
-| `plans` | Manage monthly plan tracking. |
-
-### `burn budget plans`
-
-| Subcommand or option | What it does |
-|---|---|
-| `burn budget plans` | List configured plans and spend status. |
-| `add --provider <p> --preset <name>` | Add a built-in plan preset. Providers: `claude`, `cursor`, `custom`. |
-| `add --id <id> --provider custom --name <label> --budget <usd>` | Add a custom monthly budget. |
-| `--reset-day <1-31>` | Set cycle reset day when adding a plan. |
-| `remove <id>` | Delete a configured plan. |
-| `set-reset-day <id> <day>` | Change an existing plan's reset day. |
-| `--json` | Emit machine-readable plan status. |
-| `--no-archive` | Bypass `archive.sqlite` for plan spend calculation. |
-
-| Example | Result |
-|---|---|
-| `burn budget` | Current Claude quota, plan spend, and forecast. |
-| `burn budget --watch --interval 10s` | Live quota and forecast view. |
-| `burn budget --no-api` | Local plan and forecast view without calling Claude OAuth. |
-| `burn budget plans add --provider claude --preset max` | Track the built-in Claude Max plan. |
-| `burn budget plans set-reset-day claude-max 15` | Move that plan's reset day to the 15th. |
-
-`burn budget` reads `CLAUDE_CODE_OAUTH_TOKEN` or the Claude Code OAuth token.
-Use `--no-api` for local-only output.
 
 ## `burn overhead`
 
@@ -261,7 +222,6 @@ MCP. The server is stdio-only and read-only.
 | Tool | What it returns |
 |---|---|
 | `burn__sessionCost` | Total USD, tokens, turns, and models for a session. |
-| `burn__currentBlock` | Claude 5-hour OAuth window percentage plus local burn-rate forecast. |
 
 | Example | Result |
 |---|---|
@@ -287,7 +247,7 @@ content sidecars, activity labels, and `archive.sqlite` are rebuildable.
 | `rebuild all [--force]` | Run content, index, classify, then archive. |
 | `prune [--days <n>]` | Delete expired content sidecars. Use `forever` to disable. |
 | `prune --force` | Delete recoverable sidecars even if source session files still exist. |
-| `reset [--force] [--reingest] [--json]` | Wipe all derived state (ledger, indexes, cursors, archive, content sidecars). Dry-run without `--force`; preserves config, plans, pricing overrides, and source harness logs. |
+| `reset [--force] [--reingest] [--json]` | Wipe all derived state (ledger, indexes, cursors, archive, content sidecars). Dry-run without `--force`; preserves config, pricing overrides, and source harness logs. |
 
 | Example | Result |
 |---|---|
@@ -308,8 +268,7 @@ content sidecars, activity labels, and `archive.sqlite` are rebuildable.
 | `RELAYBURN_CONTENT_STORE=full|hash-only|off` | Control content sidecar storage. Default: `full`. |
 | `RELAYBURN_CONTENT_TTL_DAYS=<n>` | Sidecar retention. Default: `90`. |
 
-Normal reports read local data. `burn budget` may call Claude's OAuth usage API
-unless you pass `--no-api`.
+Reports read local data from the ledger and derived sidecars.
 
 ## Packages
 
@@ -317,7 +276,7 @@ unless you pass `--no-api`.
 |---|---|
 | `@relayburn/reader` | Pure parsers: session logs to `TurnRecord`. |
 | `@relayburn/ledger` | JSONL ledger, stamps, indexes, content sidecars, archive. |
-| `@relayburn/analyze` | Pricing, attribution, comparisons, overhead, quality, and budgets. |
+| `@relayburn/analyze` | Pricing, attribution, comparisons, overhead, and quality. |
 | `@relayburn/mcp` | Read-only MCP tools for in-session self-query. |
 | `@relayburn/cli` | The `burn` binary. |
 | `relayburn` | Thin install wrapper so `npm i -g relayburn` exposes `burn`. |
@@ -355,7 +314,7 @@ workflow step drove the cost. Burn makes that question answerable.
 The deeper question burn is built around is:
 
 > **Would the same work cost less with a different model, harness, or tool
-> choice - in dollars or quota consumption?**
+> choice - in dollars or token usage?**
 
 You cannot answer that from aggregate spend. It requires attribution at the
 level of the actual work: this Read cost $0.47 because it added 8,200 tokens to

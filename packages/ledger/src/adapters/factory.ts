@@ -1,5 +1,6 @@
 import type { StorageAdapter, StorageAdapterKind } from './adapter.js';
 import { FileAdapter } from './file-adapter.js';
+import { SqliteAdapter } from './sqlite-adapter.js';
 
 let adapter: StorageAdapter | undefined;
 
@@ -11,6 +12,8 @@ export function getAdapter(): StorageAdapter {
       adapter = new FileAdapter();
       return adapter;
     case 'sqlite':
+      adapter = new SqliteAdapter();
+      return adapter;
     case 'postgres':
     case 'http':
       throw new Error(`RELAYBURN_STORAGE=${kind} is not supported in this build`);

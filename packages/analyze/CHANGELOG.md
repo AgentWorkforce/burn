@@ -4,6 +4,10 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the plan-usage APIs (`computePlanUsage`, `cycleBounds`, and `planUsageFromArchive`) that powered the retired budget command.
+
 ## [1.4.0] - 2026-05-01
 
 ### Added

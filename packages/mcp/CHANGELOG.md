@@ -4,6 +4,10 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the `burn__currentBlock` quota forecast tool; MCP now exposes session cost lookup only.
+
 ## [1.2.1] - 2026-04-30
 
 ### Changed

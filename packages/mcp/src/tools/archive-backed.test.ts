@@ -12,12 +12,11 @@ import {
 } from '@relayburn/ledger';
 import type { TurnRecord } from '@relayburn/reader';
 
-import { createCurrentBlockTool, type CurrentBlockResult } from './current-block.js';
 import { createSessionCostTool, type SessionCostResult } from './session-cost.js';
 
 // Verifies the archive-backed default `queryTurns` path that issue #97 wires
-// onto both MCP tool handlers — including the transparent fallback to
-// `queryAll` when the archive cannot be opened or queried.
+// onto MCP tool handlers — including the transparent fallback to `queryAll`
+// when the archive cannot be opened or queried.
 
 function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -168,83 +167,6 @@ describe('MCP tool handlers backed by archive (issue #97)', () => {
       assert.equal(result.totalUSD, 3);
       assert.ok(
         logs.some((m) => /sessionCost: archive query failed/.test(m)),
-        `expected an archive-fallback log line, got: ${JSON.stringify(logs)}`,
-      );
-    });
-  });
-
-  describe('burn__currentBlock', () => {
-    it('reads ledger-derived burn rate from the materialized archive on the hot path', async () => {
-      // 60k input tokens, treated as having accrued in the 2h elapsed of a
-      // 5h window starting at 10:00. This mirrors the existing unit test for
-      // the same calculation but exercises the real archive-backed code
-      // path instead of an injected `queryTurns`.
-      await appendTurns([
-        fakeTurn({
-          sessionId: 's-block',
-          messageId: 'mb-1',
-          ts: '2026-04-24T10:30:00.000Z',
-          usage: {
-            input: 60_000,
-            output: 0,
-            reasoning: 0,
-            cacheRead: 0,
-            cacheCreate5m: 0,
-            cacheCreate1h: 0,
-          },
-        }),
-      ]);
-      await buildArchive();
-
-      const NOW = new Date('2026-04-24T12:00:00.000Z');
-      const RESET_AT = '2026-04-24T15:00:00.000Z';
-
-      const tool = createCurrentBlockTool({
-        now: () => NOW,
-        loadOauthToken: async () => 'tok',
-        fetchUsage: async () => ({ five_hour: { percent_used: 20, reset_at: RESET_AT } }),
-      });
-      const result = (await tool.handler({})) as CurrentBlockResult;
-      assert.equal(result.percentUsed, 20);
-      // 60k tokens / 120 minutes = 500 tok/min.
-      assert.equal(result.burnRateTokensPerMin, 500);
-      assert.equal(result.projectedBlockTotal, 150_000);
-    });
-
-    it('falls back to queryAll and logs when the archive query throws', async () => {
-      await appendTurns([
-        fakeTurn({
-          sessionId: 's-block',
-          messageId: 'mb-1',
-          ts: '2026-04-24T10:30:00.000Z',
-          usage: {
-            input: 60_000,
-            output: 0,
-            reasoning: 0,
-            cacheRead: 0,
-            cacheCreate5m: 0,
-            cacheCreate1h: 0,
-          },
-        }),
-      ]);
-      // Corrupt archive file → openArchive throws; tool should fall through
-      // to queryAll and still produce the same forecast.
-      await writeFile(archivePath(), 'not a sqlite db', 'utf8');
-
-      const NOW = new Date('2026-04-24T12:00:00.000Z');
-      const RESET_AT = '2026-04-24T15:00:00.000Z';
-
-      const logs: string[] = [];
-      const tool = createCurrentBlockTool({
-        now: () => NOW,
-        loadOauthToken: async () => 'tok',
-        fetchUsage: async () => ({ five_hour: { percent_used: 20, reset_at: RESET_AT } }),
-        onLog: (m) => logs.push(m),
-      });
-      const result = (await tool.handler({})) as CurrentBlockResult;
-      assert.equal(result.burnRateTokensPerMin, 500);
-      assert.ok(
-        logs.some((m) => /currentBlock: archive query failed/.test(m)),
         `expected an archive-fallback log line, got: ${JSON.stringify(logs)}`,
       );
     });
