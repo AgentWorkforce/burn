@@ -1,8 +1,16 @@
-import { queryAll, queryUserTurns, queryToolResultEvents } from '@relayburn/ledger';
+import {
+  buildArchive,
+  queryAll,
+  queryAllFromArchive,
+  queryTurnsFromArchive,
+  queryUserTurns,
+  queryToolResultEvents,
+} from '@relayburn/ledger';
 import {
   buildGhostSurfaceInputs,
   loadPricing,
   costForTurn,
+  sumCosts,
   attributeHotspots,
   detectPatterns,
   findingsFromPatterns,
@@ -29,6 +37,34 @@ function withHome(home, fn) {
   });
 }
 
+// Bring the SQLite archive current and query against it, falling back to a
+// full ledger walk if the archive can't be built or read. Mirrors the strategy
+// the CLI's loadTurns() uses so SDK consumers (and the MCP server, which now
+// calls through here) get the same hot-path performance without re-implementing
+// the fallback logic in every caller. `onLog` lets callers surface the
+// fallback reason; defaults to a no-op so library use stays quiet.
+async function loadTurnsViaArchive(q, onLog) {
+  try {
+    await buildArchive();
+    return await queryAllFromArchive(q);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    onLog?.(`archive query failed, falling back to ledger walk: ${msg}`);
+    return queryAll(q);
+  }
+}
+
+async function loadSessionTurnsViaArchive(sessionId, onLog) {
+  try {
+    await buildArchive();
+    return await queryTurnsFromArchive({ sessionId });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    onLog?.(`archive query failed, falling back to ledger walk: ${msg}`);
+    return queryAll({ sessionId });
+  }
+}
+
 export class Ledger {
   static async open(opts = {}) {
     return new Ledger(opts.home);
@@ -46,7 +82,7 @@ export async function ingest(opts = {}) {
 export async function summary(opts = {}) {
   return withHome(opts.ledgerHome, async () => {
     const q = { sessionId: opts.session, project: opts.project, since: opts.since };
-    const turns = await queryAll(q);
+    const turns = await loadTurnsViaArchive(q, opts.onLog);
     const pricing = await loadPricing();
     const byTool = new Map();
     const byModel = new Map();
@@ -79,7 +115,71 @@ export async function summary(opts = {}) {
       }
     }
 
-    return { totalTokens, totalCost, byTool: [...byTool.values()], byModel: [...byModel.values()] };
+    return {
+      totalTokens,
+      totalCost,
+      turnCount: turns.length,
+      byTool: [...byTool.values()],
+      byModel: [...byModel.values()],
+    };
+  });
+}
+
+// Compact session-scoped cost summary. Same numbers as `summary({ session })`
+// but shaped for callers that just want the headline: totalUSD, totalTokens,
+// turnCount, distinct models. The MCP `burn__sessionCost` tool wraps this
+// directly so the cost shape lives in one place. `note` is set when the
+// session is empty or when no session id was provided so MCP clients can
+// surface a human-readable reason without re-deriving it.
+export async function sessionCost(opts = {}) {
+  return withHome(opts.ledgerHome, async () => {
+    const sessionId = opts.session;
+    if (!sessionId) {
+      return {
+        sessionId: null,
+        totalUSD: 0,
+        totalTokens: 0,
+        turnCount: 0,
+        models: [],
+        note: 'no session id provided',
+      };
+    }
+    const turns = await loadSessionTurnsViaArchive(sessionId, opts.onLog);
+    if (turns.length === 0) {
+      return {
+        sessionId,
+        totalUSD: 0,
+        totalTokens: 0,
+        turnCount: 0,
+        models: [],
+        note: 'no turns recorded for this session yet',
+      };
+    }
+    const pricing = await loadPricing();
+    const models = new Set();
+    let totalTokens = 0;
+    const costs = [];
+    for (const t of turns) {
+      models.add(t.model);
+      const u = t.usage;
+      totalTokens +=
+        (u.input ?? 0) +
+        (u.output ?? 0) +
+        (u.reasoning ?? 0) +
+        (u.cacheRead ?? 0) +
+        (u.cacheCreate5m ?? 0) +
+        (u.cacheCreate1h ?? 0);
+      const c = costForTurn(t, pricing);
+      if (c) costs.push(c);
+    }
+    const total = sumCosts(costs);
+    return {
+      sessionId,
+      totalUSD: Math.round(total.total * 1_000_000) / 1_000_000,
+      totalTokens,
+      turnCount: turns.length,
+      models: [...models].sort(),
+    };
   });
 }
 

@@ -4,6 +4,11 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+### Changed
+
+- `burn__sessionCost` is now a thin wrapper over `@relayburn/sdk`'s new `sessionCost()` function. The wire shape is unchanged (`sessionId`, `totalUSD`, `totalTokens`, `turnCount`, `models`, `note?`); the cost computation, archive-with-fallback strategy, and pricing snapshot all live in the SDK now, eliminating the duplicate query path that previously lived inside the MCP tool.
+- `@relayburn/mcp` now depends on `@relayburn/sdk`. The package's role going forward is "MCP-shaped wrapper over the SDK's query surface" — new tools should call SDK functions rather than re-implementing computation against `@relayburn/analyze` / `@relayburn/ledger`.
+
 ## [1.6.2] - 2026-05-02
 
 ### Changed

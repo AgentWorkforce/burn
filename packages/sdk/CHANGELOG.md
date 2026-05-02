@@ -4,6 +4,12 @@ All notable changes to `@relayburn/sdk`.
 
 ## [Unreleased]
 
+### Added
+
+- `sessionCost({ session })` returns the compact per-session cost shape (`totalUSD`, `totalTokens`, `turnCount`, `models`) the MCP `burn__sessionCost` tool now wraps directly.
+- `summary()` result now includes `turnCount`.
+- `summary()` and `sessionCost()` read through the SQLite archive by default with transparent fallback to the JSONL ledger walk on archive failure. Pass `onLog` to capture the fallback reason.
+
 ## [1.7.0] - 2026-05-02
 
 ### Added

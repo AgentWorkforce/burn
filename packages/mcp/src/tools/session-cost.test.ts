@@ -1,67 +1,42 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 
-import type { PricingTable } from '@relayburn/analyze';
-import type { EnrichedTurn } from '@relayburn/ledger';
-
 import { createSessionCostTool, type SessionCostResult } from './session-cost.js';
 
-const PRICING: PricingTable = {
-  'claude-sonnet-4-5': {
-    input: 3,
-    output: 15,
-    cacheRead: 0.3,
-    cacheWrite: 3.75,
-    reasoningMode: 'same_as_output',
-  },
-};
-
-function turn(overrides: Partial<EnrichedTurn> = {}): EnrichedTurn {
-  return {
-    v: 1,
-    source: 'claude-code',
-    sessionId: 's1',
-    messageId: 'm1',
-    turnIndex: 0,
-    ts: '2026-04-24T10:00:00.000Z',
-    model: 'claude-sonnet-4-5',
-    usage: {
-      input: 1000,
-      output: 500,
-      reasoning: 0,
-      cacheRead: 0,
-      cacheCreate5m: 0,
-      cacheCreate1h: 0,
-    },
-    toolCalls: [],
-    enrichment: {},
-    ...overrides,
-  };
-}
-
 describe('createSessionCostTool', () => {
-  it('returns zero totals when defaultSessionId is missing and no override given', async () => {
+  it('returns the SDK no-session shape with the MCP-specific note when no id is registered', async () => {
     const tool = createSessionCostTool({
       defaultSessionId: undefined,
-      queryTurns: async () => [],
-      loadPricing: async () => PRICING,
+      sessionCost: async () => ({
+        sessionId: null,
+        totalUSD: 0,
+        totalTokens: 0,
+        turnCount: 0,
+        models: [],
+        note: 'no session id provided',
+      }),
     });
     const result = (await tool.handler({})) as SessionCostResult;
     assert.equal(result.sessionId, null);
     assert.equal(result.totalUSD, 0);
     assert.equal(result.turnCount, 0);
-    assert.match(result.note ?? '', /no session id/);
+    assert.match(result.note ?? '', /no session id provided and server was not registered/);
   });
 
   it('uses the override sessionId when provided', async () => {
     let queriedFor: string | undefined;
     const tool = createSessionCostTool({
       defaultSessionId: 'default-id',
-      queryTurns: async (id) => {
-        queriedFor = id;
-        return [turn({ sessionId: id })];
+      sessionCost: async (opts) => {
+        queriedFor = opts.session;
+        return {
+          sessionId: opts.session ?? null,
+          totalUSD: 0,
+          totalTokens: 0,
+          turnCount: 1,
+          models: ['claude-sonnet-4-5'],
+        };
       },
-      loadPricing: async () => PRICING,
     });
     await tool.handler({ sessionId: 'override-id' });
     assert.equal(queriedFor, 'override-id');
@@ -71,63 +46,60 @@ describe('createSessionCostTool', () => {
     let queriedFor: string | undefined;
     const tool = createSessionCostTool({
       defaultSessionId: 'baked-id',
-      queryTurns: async (id) => {
-        queriedFor = id;
-        return [];
+      sessionCost: async (opts) => {
+        queriedFor = opts.session;
+        return {
+          sessionId: opts.session ?? null,
+          totalUSD: 0,
+          totalTokens: 0,
+          turnCount: 0,
+          models: [],
+        };
       },
-      loadPricing: async () => PRICING,
     });
     await tool.handler({});
     assert.equal(queriedFor, 'baked-id');
   });
 
-  it('aggregates usage and cost across turns', async () => {
-    const turns: EnrichedTurn[] = [
-      turn({
-        usage: {
-          input: 1_000_000,
-          output: 0,
-          reasoning: 0,
-          cacheRead: 0,
-          cacheCreate5m: 0,
-          cacheCreate1h: 0,
-        },
-      }),
-      turn({
-        messageId: 'm2',
-        turnIndex: 1,
-        usage: {
-          input: 0,
-          output: 1_000_000,
-          reasoning: 0,
-          cacheRead: 0,
-          cacheCreate5m: 0,
-          cacheCreate1h: 0,
-        },
-      }),
-    ];
+  it('returns the SDK result verbatim when a session id is present', async () => {
     const tool = createSessionCostTool({
       defaultSessionId: 's1',
-      queryTurns: async () => turns,
-      loadPricing: async () => PRICING,
+      sessionCost: async (opts) => ({
+        sessionId: opts.session ?? null,
+        totalUSD: 18,
+        totalTokens: 2_000_000,
+        turnCount: 2,
+        models: ['claude-sonnet-4-5'],
+      }),
     });
     const result = (await tool.handler({})) as SessionCostResult;
+    assert.equal(result.sessionId, 's1');
     assert.equal(result.turnCount, 2);
     assert.equal(result.totalTokens, 2_000_000);
-    // 1M input @ $3/M + 1M output @ $15/M = $18.
     assert.equal(result.totalUSD, 18);
     assert.deepEqual(result.models, ['claude-sonnet-4-5']);
+    assert.equal(result.note, undefined);
   });
 
-  it('records a note when the session has no turns yet', async () => {
+  it('passes the host onLog through to the SDK so archive-fallback messages surface', async () => {
+    let captured: ((msg: string) => void) | undefined;
     const tool = createSessionCostTool({
       defaultSessionId: 's1',
-      queryTurns: async () => [],
-      loadPricing: async () => PRICING,
+      onLog: () => {},
+      sessionCost: async (opts) => {
+        captured = opts.onLog;
+        return {
+          sessionId: opts.session ?? null,
+          totalUSD: 0,
+          totalTokens: 0,
+          turnCount: 0,
+          models: [],
+          note: 'no turns recorded for this session yet',
+        };
+      },
     });
-    const result = (await tool.handler({})) as SessionCostResult;
-    assert.equal(result.turnCount, 0);
-    assert.match(result.note ?? '', /no turns recorded/);
+    await tool.handler({});
+    assert.equal(typeof captured, 'function');
   });
 
   it('declares its tool surface (name, description, schema)', () => {

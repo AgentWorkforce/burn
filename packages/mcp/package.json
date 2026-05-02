@@ -25,7 +25,8 @@
   "dependencies": {
     "@relayburn/reader": "workspace:*",
     "@relayburn/ledger": "workspace:*",
-    "@relayburn/analyze": "workspace:*"
+    "@relayburn/analyze": "workspace:*",
+    "@relayburn/sdk": "workspace:*"
   },
   "repository": {
     "type": "git",
