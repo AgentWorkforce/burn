@@ -88,14 +88,14 @@ export type {
   ToolOutputBloat,
 } from './tool-output-bloat.js';
 export {
-  detectToolReplacementEligible,
-  toolReplacementEligibleToFinding,
-} from './tool-replacement-eligible.js';
+  detectToolCallPatterns,
+  toolCallPatternToFinding,
+} from './tool-call-patterns.js';
 export type {
-  DetectToolReplacementEligibleOptions,
-  ToolReplacementCategory,
-  ToolReplacementEligibleFinding,
-} from './tool-replacement-eligible.js';
+  DetectToolCallPatternsOptions,
+  ToolCallPatternCategory,
+  ToolCallPatternFinding,
+} from './tool-call-patterns.js';
 export { computeQuality, computeOneShotRate, inferOutcome } from './quality.js';
 export type {
   ComputeQualityOptions,

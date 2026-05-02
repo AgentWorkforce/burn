@@ -5,9 +5,9 @@ import type { ToolCall, TurnRecord } from '@relayburn/reader';
 
 import { loadBuiltinPricing } from './pricing.js';
 import {
-  detectToolReplacementEligible,
-  toolReplacementEligibleToFinding,
-} from './tool-replacement-eligible.js';
+  detectToolCallPatterns,
+  toolCallPatternToFinding,
+} from './tool-call-patterns.js';
 
 function tc(id: string, name: string, target?: string, opts: Partial<ToolCall> = {}): ToolCall {
   return {
@@ -31,7 +31,7 @@ function turn(o: Partial<TurnRecord> & { sessionId: string; messageId: string; t
   };
 }
 
-describe('detectToolReplacementEligible — search sequences', () => {
+describe('detectToolCallPatterns — search sequences', () => {
   it('flags ≥3 Glob → Grep → Read sequences in a session', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: TurnRecord[] = [];
@@ -47,11 +47,10 @@ describe('detectToolReplacementEligible — search sequences', () => {
         ],
       }));
     }
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const search = out.find((f) => f.category === 'search-sequence');
     assert.ok(search, 'search-sequence finding should fire');
     assert.equal(search!.occurrenceCount, 4);
-    assert.equal(search!.replacementTool, 'relaywash__Search');
     assert.ok(search!.estimatedTokensSaved > 0);
     assert.ok(search!.estimatedUsdSaved > 0);
   });
@@ -72,7 +71,7 @@ describe('detectToolReplacementEligible — search sequences', () => {
         toolCalls: [tc('d', 'Glob', '*.ts'), tc('e', 'Grep', 'bar'), tc('f', 'Read', '/y.ts')],
       }),
     ];
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     assert.equal(out.find((f) => f.category === 'search-sequence'), undefined);
   });
 
@@ -91,12 +90,12 @@ describe('detectToolReplacementEligible — search sequences', () => {
         ],
       }));
     }
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     assert.equal(out.find((f) => f.category === 'search-sequence'), undefined);
   });
 });
 
-describe('detectToolReplacementEligible — edit clusters', () => {
+describe('detectToolCallPatterns — edit clusters', () => {
   it('flags ≥3 edits to the same file within 5 turns', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: TurnRecord[] = [];
@@ -108,11 +107,10 @@ describe('detectToolReplacementEligible — edit clusters', () => {
         toolCalls: [tc(`e${i}`, 'Edit', '/src/foo.ts')],
       }));
     }
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const cluster = out.find((f) => f.category === 'edit-cluster');
     assert.ok(cluster, 'edit-cluster finding should fire');
     assert.equal(cluster!.occurrenceCount, 4);
-    assert.equal(cluster!.replacementTool, 'relaywash__Edit');
     assert.deepEqual(cluster!.evidence, ['/src/foo.ts']);
   });
 
@@ -123,7 +121,7 @@ describe('detectToolReplacementEligible — edit clusters', () => {
       turn({ sessionId: 's', messageId: 'm10', turnIndex: 10, toolCalls: [tc('e1', 'Edit', '/f.ts')] }),
       turn({ sessionId: 's', messageId: 'm20', turnIndex: 20, toolCalls: [tc('e2', 'Edit', '/f.ts')] }),
     ];
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     assert.equal(out.find((f) => f.category === 'edit-cluster'), undefined);
   });
 
@@ -144,7 +142,7 @@ describe('detectToolReplacementEligible — edit clusters', () => {
         toolCalls: [tc(`b${i}`, 'Edit', '/b.ts')],
       }));
     }
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const clusters = out.filter((f) => f.category === 'edit-cluster');
     assert.equal(clusters.length, 2);
     const files = clusters.map((c) => c.evidence[0]).sort();
@@ -152,7 +150,7 @@ describe('detectToolReplacementEligible — edit clusters', () => {
   });
 });
 
-describe('detectToolReplacementEligible — bash sub-verb matches', () => {
+describe('detectToolCallPatterns — bash sub-verb matches', () => {
   it('flags git status / git diff / git log calls', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: TurnRecord[] = [
@@ -160,11 +158,10 @@ describe('detectToolReplacementEligible — bash sub-verb matches', () => {
       turn({ sessionId: 's', messageId: 'm1', turnIndex: 1, toolCalls: [tc('b', 'Bash', 'git diff HEAD~1')] }),
       turn({ sessionId: 's', messageId: 'm2', turnIndex: 2, toolCalls: [tc('c', 'Bash', 'git log --oneline -n 5')] }),
     ];
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const git = out.find((f) => f.category === 'bash-git-state');
     assert.ok(git);
     assert.equal(git!.occurrenceCount, 3);
-    assert.equal(git!.replacementTool, 'relaywash__GitState');
     assert.ok(git!.evidence.includes('git status'));
     assert.ok(git!.evidence.includes('git diff'));
     assert.ok(git!.evidence.includes('git log'));
@@ -177,11 +174,10 @@ describe('detectToolReplacementEligible — bash sub-verb matches', () => {
       turn({ sessionId: 's', messageId: 'm1', turnIndex: 1, toolCalls: [tc('b', 'Bash', 'pytest -k foo')] }),
       turn({ sessionId: 's', messageId: 'm2', turnIndex: 2, toolCalls: [tc('c', 'Bash', 'jest --watch')] }),
     ];
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const test = out.find((f) => f.category === 'bash-test-run');
     assert.ok(test);
     assert.equal(test!.occurrenceCount, 3);
-    assert.equal(test!.replacementTool, 'relaywash__TestRun');
   });
 
   it('flags gh pr view / gh api calls', async () => {
@@ -190,11 +186,10 @@ describe('detectToolReplacementEligible — bash sub-verb matches', () => {
       turn({ sessionId: 's', messageId: 'm0', turnIndex: 0, toolCalls: [tc('a', 'Bash', 'gh pr view 123')] }),
       turn({ sessionId: 's', messageId: 'm1', turnIndex: 1, toolCalls: [tc('b', 'Bash', 'gh api repos/foo/bar/pulls/1/comments')] }),
     ];
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const gh = out.find((f) => f.category === 'bash-gh-pr');
     assert.ok(gh);
     assert.equal(gh!.occurrenceCount, 2);
-    assert.equal(gh!.replacementTool, 'relaywash__GhPR');
   });
 
   it('does not match gh project / gh prerelease (avoid pr-prefix false positives)', async () => {
@@ -203,7 +198,7 @@ describe('detectToolReplacementEligible — bash sub-verb matches', () => {
       turn({ sessionId: 's', messageId: 'm0', turnIndex: 0, toolCalls: [tc('a', 'Bash', 'gh project list')] }),
       turn({ sessionId: 's', messageId: 'm1', turnIndex: 1, toolCalls: [tc('b', 'Bash', 'gh project view 5')] }),
     ];
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     assert.equal(out.find((f) => f.category === 'bash-gh-pr'), undefined);
   });
 
@@ -213,12 +208,12 @@ describe('detectToolReplacementEligible — bash sub-verb matches', () => {
       turn({ sessionId: 's', messageId: 'm0', turnIndex: 0, toolCalls: [tc('a', 'Bash', 'ls -la')] }),
       turn({ sessionId: 's', messageId: 'm1', turnIndex: 1, toolCalls: [tc('b', 'Bash', 'cat README.md')] }),
     ];
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     assert.equal(out.length, 0);
   });
 });
 
-describe('detectToolReplacementEligible — cross-harness', () => {
+describe('detectToolCallPatterns — cross-harness', () => {
   it('normalizes OpenCode lowercase tool names for the search sequence', async () => {
     const pricing = await loadBuiltinPricing();
     const turns: TurnRecord[] = [];
@@ -235,7 +230,7 @@ describe('detectToolReplacementEligible — cross-harness', () => {
         ],
       }));
     }
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const search = out.find((f) => f.category === 'search-sequence');
     assert.ok(search, 'opencode lowercase tools should still trigger search-sequence');
     assert.equal(search!.source, 'opencode');
@@ -253,34 +248,37 @@ describe('detectToolReplacementEligible — cross-harness', () => {
         toolCalls: [tc(`e${i}`, 'apply_patch', '/src/x.ts')],
       }));
     }
-    const out = detectToolReplacementEligible(turns, { pricing });
+    const out = detectToolCallPatterns(turns, { pricing });
     const cluster = out.find((f) => f.category === 'edit-cluster');
     assert.ok(cluster);
     assert.equal(cluster!.source, 'codex');
   });
 });
 
-describe('toolReplacementEligibleToFinding', () => {
-  it('emits a WasteFinding with kind=tool-replacement-eligible and a relaywash-pointing action', () => {
-    const finding = toolReplacementEligibleToFinding({
+describe('toolCallPatternToFinding', () => {
+  it('emits a vendor-neutral WasteFinding with kind=tool-call-pattern', () => {
+    const finding = toolCallPatternToFinding({
       source: 'claude-code',
       sessionId: 's-abcd1234',
       category: 'search-sequence',
-      replacementTool: 'relaywash__Search',
       occurrenceCount: 5,
       estimatedTokensSaved: 12500,
       estimatedUsdSaved: 0.075,
       sampleTurnIndexes: [0, 1, 2, 3, 4],
       evidence: [],
     });
-    assert.equal(finding.kind, 'tool-replacement-eligible');
+    assert.equal(finding.kind, 'tool-call-pattern');
     assert.equal(finding.sessionId, 's-abcd1234');
     assert.equal(finding.severity, 'warn');
-    assert.match(finding.title, /relaywash__Search/);
-    assert.match(finding.detail, /github\.com\/AgentWorkforce\/wash/);
+    assert.match(finding.title, /Glob → Grep → Read/);
     assert.equal(finding.estimatedSavings.tokensPerSession, 12500);
     assert.ok(Math.abs((finding.estimatedSavings.usdPerSession ?? 0) - 0.075) < 1e-9);
     assert.equal(finding.actions.length, 1);
-    assert.match(finding.actions[0]!.label, /relaywash/);
+    assert.equal(finding.actions[0]!.type, 'command');
+    assert.match(finding.actions[0]!.label, /Inspect this session/);
+    // No vendor-specific naming should leak into the user-facing finding.
+    assert.doesNotMatch(finding.title, /relaywash/i);
+    assert.doesNotMatch(finding.detail, /relaywash/i);
+    assert.doesNotMatch(finding.detail, /github\.com\/AgentWorkforce\/wash/);
   });
 });

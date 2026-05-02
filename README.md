@@ -86,13 +86,13 @@ surface problems.
 Pattern names: `retries`, `failures`, `cancellations`, `compaction`,
 `reverts`, `edit-heavy`, `opencode-skill-recall`,
 `opencode-skill-pruning`, `opencode-system-prompt`, `ghost-surface`,
-`tool-output-bloat`, `tool-replacement-eligible`.
+`tool-output-bloat`, `tool-call-pattern`.
 
-`tool-replacement-eligible` flags vanilla call sequences that map to a
-[relaywash](https://github.com/AgentWorkforce/wash) replacement tool:
-Glob → Grep → Read sequences, single-file edit clusters, and bash calls for
-git state, test runs, and `gh pr` / `gh api`. Each finding reports
-estimated tokens saved and points at the matching `relaywash__*` tool.
+`tool-call-pattern` flags vanilla call sequences with consolidatable
+overhead: Glob → Grep → Read sequences, single-file edit clusters, and bash
+calls for git state, test runs, and `gh pr` / `gh api`. Each finding reports
+estimated tokens of overhead and the per-occurrence count, so downstream
+tools (or you) can map patterns to a specific consolidation.
 
 | Example | Result |
 |---|---|

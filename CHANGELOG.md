@@ -6,7 +6,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Added
 
-- `burn hotspots --patterns=tool-replacement-eligible` flags vanilla call patterns (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls) that map to a [relaywash](https://github.com/AgentWorkforce/wash) replacement tool, with per-finding token-savings estimates.
+- `burn hotspots --patterns=tool-call-pattern` flags vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), with per-occurrence counts and token-overhead estimates. Vendor-neutral — downstream tools map patterns to specific consolidations.
 
 ## [1.2.2] - 2026-04-30
 

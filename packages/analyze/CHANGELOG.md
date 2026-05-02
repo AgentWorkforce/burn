@@ -6,7 +6,7 @@ All notable changes to `@relayburn/analyze`.
 
 ### Added
 
-- `detectToolReplacementEligible` finds vanilla call patterns (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls) that map to a [relaywash](https://github.com/AgentWorkforce/wash) replacement tool, plus a `toolReplacementEligibleToFinding` adapter into `WasteFinding`.
+- `detectToolCallPatterns` finds vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), plus a `toolCallPatternToFinding` adapter into `WasteFinding`. Vendor-neutral output — downstream tools map categories to specific consolidations.
 
 ## [1.4.0] - 2026-05-01
 

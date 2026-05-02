@@ -8,8 +8,8 @@ import {
   compactionLossToFinding,
   detectGhostSurface,
   detectPatterns,
+  detectToolCallPatterns,
   detectToolOutputBloat,
-  detectToolReplacementEligible,
   editHeavyToFinding,
   editRevertToFinding,
   failureRunToFinding,
@@ -23,8 +23,8 @@ import {
   sortFindings,
   summarizeFidelity,
   systemPromptTaxToFinding,
+  toolCallPatternToFinding,
   toolOutputBloatToFinding,
-  toolReplacementEligibleToFinding,
   userClaudeSettingsPath,
   type BashAggregation,
   type BashVerbAggregation,
@@ -35,8 +35,8 @@ import {
   type LoadedClaudeSettings,
   type PatternsResult,
   type SubagentAggregation,
+  type ToolCallPatternFinding,
   type ToolOutputBloat,
-  type ToolReplacementEligibleFinding,
   type WasteFinding,
   type HotspotsResult,
 } from '@relayburn/analyze';
@@ -66,7 +66,7 @@ import { withProgress } from '../progress.js';
 import { runHotspotsSession } from './hotspots-session.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat', 'tool-replacement-eligible'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat', 'tool-call-pattern'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -654,7 +654,7 @@ export const PATTERN_REQUIRED: Record<
   'opencode-skill-pruning': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-system-prompt': ['hasToolCalls', 'hasToolResultEvents'],
   // Reads only `TurnRecord.toolCalls` (tool names + Bash targets).
-  'tool-replacement-eligible': ['hasToolCalls'],
+  'tool-call-pattern': ['hasToolCalls'],
 };
 // `ghost-surface` is filesystem-bound and only needs `hasToolCalls` to
 // derive observed-names. We treat it as a soft prerequisite — turns missing
@@ -775,7 +775,7 @@ export async function runPatternsMode(
             skillPruningProtection: [],
             systemPromptTaxes: [],
             toolOutputBloats: [],
-            toolReplacementEligible: [],
+            toolCallPatterns: [],
             ghostSurface: [],
             sessionSummaries: [],
             findings: [],
@@ -808,7 +808,7 @@ export async function runPatternsMode(
   let systemPromptTaxes: PatternsResult['systemPromptTaxes'] = [];
   let editHeavySessions: PatternsResult['editHeavySessions'] = [];
   let toolOutputBloats: ToolOutputBloat[] = [];
-  let toolReplacementEligible: ToolReplacementEligibleFinding[] = [];
+  let toolCallPatterns: ToolCallPatternFinding[] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
   // Load user turns when any detector that consumes them is selected:
@@ -964,8 +964,8 @@ export async function runPatternsMode(
     });
   }
 
-  if (selected.has('tool-replacement-eligible')) {
-    toolReplacementEligible = detectToolReplacementEligible(perDetector.get('tool-replacement-eligible')!, { pricing });
+  if (selected.has('tool-call-pattern')) {
+    toolCallPatterns = detectToolCallPatterns(perDetector.get('tool-call-pattern')!, { pricing });
   }
 
   // Ghost-surface runs against the on-disk user-installed surface and
@@ -1027,7 +1027,7 @@ export async function runPatternsMode(
     ...systemPromptTaxes.map(systemPromptTaxToFinding),
     ...ghostFindings.map((g) => ghostSurfaceToFinding(g)),
     ...toolOutputBloats.map(toolOutputBloatToFinding),
-    ...toolReplacementEligible.map(toolReplacementEligibleToFinding),
+    ...toolCallPatterns.map(toolCallPatternToFinding),
   ]);
 
   if (args.flags['json'] === true) {
@@ -1045,7 +1045,7 @@ export async function runPatternsMode(
           systemPromptTaxes,
           editHeavySessions,
           toolOutputBloats,
-          toolReplacementEligible,
+          toolCallPatterns,
           ghostSurface: ghostFindings,
           sessionSummaries,
           findings,
@@ -1141,9 +1141,9 @@ export async function runPatternsMode(
     out.push(renderToolOutputBloatTable(toolOutputBloats, limit));
     out.push('');
   }
-  if (selected.has('tool-replacement-eligible')) {
-    out.push('Tool-replacement eligible (vanilla call patterns that would benefit from relaywash)');
-    out.push(renderToolReplacementEligibleTable(toolReplacementEligible, limit));
+  if (selected.has('tool-call-pattern')) {
+    out.push('Tool-call patterns (vanilla call sequences with consolidatable overhead)');
+    out.push(renderToolCallPatternsTable(toolCallPatterns, limit));
     out.push('');
   }
 
@@ -1626,20 +1626,19 @@ async function loadToolResultEventsForTurns(
   return events.filter((e) => sessionIds.has(e.sessionId));
 }
 
-function renderToolReplacementEligibleTable(
-  findings: ToolReplacementEligibleFinding[],
+function renderToolCallPatternsTable(
+  findings: ToolCallPatternFinding[],
   limit: number,
 ): string {
   if (findings.length === 0) return '  (none)';
   const rows: string[][] = [
-    ['session', 'category', 'replacement', 'count', 'tokensSaved', 'usdSaved'],
+    ['session', 'category', 'count', 'tokensSaved', 'usdSaved'],
   ];
   const slice = [...findings].sort((a, b) => b.estimatedUsdSaved - a.estimatedUsdSaved).slice(0, limit);
   for (const f of slice) {
     rows.push([
       f.sessionId.slice(0, 8),
       f.category,
-      f.replacementTool,
       String(f.occurrenceCount),
       formatInt(f.estimatedTokensSaved),
       formatUsd(f.estimatedUsdSaved),

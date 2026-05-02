@@ -1,38 +1,44 @@
-// Tool-replacement-eligible detector.
+// Tool-call-pattern detector.
 //
-// Find vanilla call sequences in the session log that map to a known
-// relaywash (https://github.com/AgentWorkforce/wash) replacement tool. Each
-// finding answers "you'd save N tokens by installing relaywash" with a
-// concrete, attributable estimate.
+// Surfaces vanilla tool-call sequences that materialize a lot of intermediate
+// output an agent could have collapsed by consolidating calls or by reaching
+// for a higher-level tool. The detector is vendor-neutral: it reports the
+// pattern + the tokens-of-overhead estimate, and downstream consumers
+// (third-party tool packages, agent harness configs, in-house playbooks) map
+// patterns to whatever consolidation they offer.
 //
-// The detector reads only `TurnRecord.toolCalls` (no content sidecar, no
-// tool-result events) so it runs on any slice with `hasToolCalls` coverage.
-// Token-saving estimates are conservative per-occurrence flat rates — the
-// real numbers will land via `_meta.replaces` on the relaywash side once
-// that annotation is wired in (issue #219). Until then, the flat rates are
-// rough-but-defensible: they'd be off by 2× either direction at worst.
+// Reads only `TurnRecord.toolCalls` (no content sidecar, no tool-result
+// events) so it runs on any slice with `hasToolCalls` coverage. Token-overhead
+// estimates are conservative per-occurrence flat rates — the real numbers
+// require either a content-sidecar join or a tool-author annotation. Until
+// then, the flat rates are rough-but-defensible: they'd be off by 2× either
+// direction at worst.
 //
 // Detected patterns (highest-confidence first):
 //
 //   - search-sequence: Glob → Grep → Read (in that order) within one turn.
-//     Replacement: `relaywash__Search` collapses three round-trips into one
-//     condensed result. Flagged when ≥3 such sequences appear in a session.
+//     Discovery + filtering + reading three separate tools across three
+//     round-trips lands a lot of intermediate output in context.
+//     Flagged when ≥3 such sequences appear in a session.
 //
 //   - edit-cluster: ≥3 single-edit calls to the same file within 5
-//     consecutive turns. Replacement: `relaywash__Edit` (batched) folds
-//     N point edits into one call. Each "extra" edit beyond the first is
-//     counted as savings.
+//     consecutive turns. Each "extra" edit beyond the first is counted as
+//     overhead (the surrounding-context echo + tool-result confirmation
+//     repeats per call). Complementary to `edit-heavy`, which scores the
+//     session-wide edit/read ratio; this detector localizes the burst to a
+//     single file and a tight turn window.
 //
 //   - bash-git-state: `git status`, `git diff`, `git log` invocations.
-//     Replacement: `relaywash__GitState` returns a structured summary
-//     instead of raw text.
+//     These commands dump unbounded raw text; a structured-summary tool
+//     would return only the bytes the agent uses.
 //
 //   - bash-test-run: `pnpm test`, `npm test`, `pytest`, `jest`, etc.
-//     Replacement: `relaywash__TestRun` returns just pass/fail counts plus
-//     the first failure detail, instead of full test output.
+//     Test runners dump full per-suite output. A structured-summary tool
+//     would return just pass/fail counts plus the first failure detail.
 //
 //   - bash-gh-pr: `gh pr <verb>` and `gh api`.
-//     Replacement: `relaywash__GhPR` returns a structured PR summary.
+//     These return raw JSON blobs; a structured-summary tool would return
+//     only the PR fields the agent reads.
 
 import {
   normalizeToolName,
@@ -46,25 +52,25 @@ import { lookupModelRate } from './cost.js';
 import type { WasteAction, WasteFinding, WasteSeverity } from './findings.js';
 import type { PricingTable } from './pricing.js';
 
-export type ToolReplacementCategory =
+export type ToolCallPatternCategory =
   | 'search-sequence'
   | 'edit-cluster'
   | 'bash-git-state'
   | 'bash-test-run'
   | 'bash-gh-pr';
 
-export interface ToolReplacementEligibleFinding {
+export interface ToolCallPatternFinding {
   source: SourceKind;
   sessionId: string;
-  category: ToolReplacementCategory;
-  // The relaywash tool name that would have applied (e.g. `relaywash__Search`).
-  replacementTool: string;
+  category: ToolCallPatternCategory;
   // Number of vanilla calls (or sequences, for search-sequence) observed.
   occurrenceCount: number;
-  // Estimated tokens that would be saved per session if the replacement
-  // were installed. Flat per-occurrence rates until issue #219 lands.
+  // Estimated tokens of overhead the pattern materialized — i.e. the savings
+  // a consolidated tool would yield. Flat per-occurrence rates; downstream
+  // consumers can re-price with their own per-tool numbers using
+  // `occurrenceCount`.
   estimatedTokensSaved: number;
-  // USD savings, priced at the session's dominant model's input rate.
+  // USD overhead, priced at the session's dominant model's input rate.
   // Zero when no priced model is available.
   estimatedUsdSaved: number;
   // First few turn indexes where the pattern fired. Bounded so the JSON
@@ -75,35 +81,34 @@ export interface ToolReplacementEligibleFinding {
   evidence: string[];
 }
 
-export interface DetectToolReplacementEligibleOptions {
+export interface DetectToolCallPatternsOptions {
   pricing: PricingTable;
 }
 
-// Per-occurrence token-savings estimates. Conservative ballparks until
-// `_meta.replaces` annotations from relaywash supply real numbers (issue
-// #219). The detector emits these alongside the actual occurrence counts so
-// downstream consumers can re-price with their own rates if needed.
+// Per-occurrence token-overhead estimates. Conservative ballparks; the
+// detector emits these alongside the actual occurrence counts so downstream
+// consumers can re-price with their own per-tool numbers if they want.
 
 // A search sequence (Glob + Grep + Read) typically materializes ~3000 tokens
-// of intermediate output across three round-trips. `relaywash__Search`
-// returns a single condensed block of ~500 tokens.
+// of intermediate output across three round-trips; a consolidated discovery
+// tool returns a single condensed block of ~500 tokens.
 const SAVINGS_PER_SEARCH_SEQUENCE = 2500;
 
 // Each "extra" edit in a cluster carries its own input echo (the surrounding
-// file context) and tool_result confirmation. Batched relaywash edits collapse
+// file context) and tool_result confirmation. A batched edit tool collapses
 // N edits into one call; we count savings as (N-1) × per-edit overhead.
 const SAVINGS_PER_EXTRA_EDIT_IN_CLUSTER = 400;
 
-// `git status` / `git diff` / `git log` outputs vary widely. The relaywash
-// replacement returns a structured summary instead of full text.
+// `git status` / `git diff` / `git log` outputs vary widely; a structured-
+// summary replacement returns only what the agent uses.
 const SAVINGS_PER_GIT_STATE_CALL = 800;
 
-// `pnpm test` / `pytest` / `jest` outputs full test summaries. The
-// relaywash replacement returns just pass/fail counts + first failure detail.
+// `pnpm test` / `pytest` / `jest` outputs full test summaries; a structured-
+// summary replacement returns just pass/fail counts + first failure detail.
 const SAVINGS_PER_TEST_RUN_CALL = 1200;
 
-// `gh pr view` / `gh api` typically return JSON blobs. relaywash returns
-// a structured summary of the pieces an agent actually uses.
+// `gh pr view` / `gh api` typically return JSON blobs; a structured-summary
+// replacement returns only the PR fields the agent reads.
 const SAVINGS_PER_GH_PR_CALL = 600;
 
 // Minimum search sequences before we surface a finding. One or two might
@@ -125,19 +130,17 @@ function severityFromUsd(usd: number): WasteSeverity {
   return 'info';
 }
 
-const RELAYWASH_REPO_URL = 'https://github.com/AgentWorkforce/wash';
-
 // Cross-harness tool-name buckets. Glob/Grep/Read/Edit use `normalizeToolName`
 // to fold Codex (`read_file`, `apply_patch`) and OpenCode (lowercase)
 // variants. Bash detection keys off the raw name so we don't mis-route
 // `parseBashCommand` to non-Bash tools.
 const BASH_RAW_NAMES = new Set(['Bash', 'bash', 'exec_command', 'shell']);
 
-export function detectToolReplacementEligible(
+export function detectToolCallPatterns(
   turns: TurnRecord[],
-  opts: DetectToolReplacementEligibleOptions,
-): ToolReplacementEligibleFinding[] {
-  const out: ToolReplacementEligibleFinding[] = [];
+  opts: DetectToolCallPatternsOptions,
+): ToolCallPatternFinding[] {
+  const out: ToolCallPatternFinding[] = [];
   const bySession = new Map<string, TurnRecord[]>();
   for (const t of turns) {
     let list = bySession.get(t.sessionId);
@@ -159,11 +162,11 @@ function detectForSession(
   sessionId: string,
   turns: TurnRecord[],
   pricing: PricingTable,
-): ToolReplacementEligibleFinding[] {
+): ToolCallPatternFinding[] {
   if (turns.length === 0) return [];
   const source = turns[0]!.source;
   const inputRate = pickInputRate(turns, pricing);
-  const out: ToolReplacementEligibleFinding[] = [];
+  const out: ToolCallPatternFinding[] = [];
 
   // Search sequences.
   const searchSequenceTurns: number[] = [];
@@ -176,7 +179,6 @@ function detectForSession(
       source,
       sessionId,
       category: 'search-sequence',
-      replacementTool: 'relaywash__Search',
       occurrenceCount: searchSequenceTurns.length,
       estimatedTokensSaved: tokens,
       estimatedUsdSaved: priceTokens(tokens, inputRate),
@@ -193,7 +195,6 @@ function detectForSession(
       source,
       sessionId,
       category: 'edit-cluster',
-      replacementTool: 'relaywash__Edit',
       occurrenceCount: cluster.editCount,
       estimatedTokensSaved: tokens,
       estimatedUsdSaved: priceTokens(tokens, inputRate),
@@ -221,13 +222,13 @@ function detectForSession(
     }
   }
   if (gitState.length > 0) {
-    out.push(buildBashFinding(source, sessionId, 'bash-git-state', 'relaywash__GitState', gitState, SAVINGS_PER_GIT_STATE_CALL, inputRate));
+    out.push(buildBashFinding(source, sessionId, 'bash-git-state', gitState, SAVINGS_PER_GIT_STATE_CALL, inputRate));
   }
   if (testRun.length > 0) {
-    out.push(buildBashFinding(source, sessionId, 'bash-test-run', 'relaywash__TestRun', testRun, SAVINGS_PER_TEST_RUN_CALL, inputRate));
+    out.push(buildBashFinding(source, sessionId, 'bash-test-run', testRun, SAVINGS_PER_TEST_RUN_CALL, inputRate));
   }
   if (ghPr.length > 0) {
-    out.push(buildBashFinding(source, sessionId, 'bash-gh-pr', 'relaywash__GhPR', ghPr, SAVINGS_PER_GH_PR_CALL, inputRate));
+    out.push(buildBashFinding(source, sessionId, 'bash-gh-pr', ghPr, SAVINGS_PER_GH_PR_CALL, inputRate));
   }
 
   return out;
@@ -241,18 +242,16 @@ interface BashHit {
 function buildBashFinding(
   source: SourceKind,
   sessionId: string,
-  category: ToolReplacementCategory,
-  replacementTool: string,
+  category: ToolCallPatternCategory,
   hits: BashHit[],
   savingsPerCall: number,
   inputRate: number,
-): ToolReplacementEligibleFinding {
+): ToolCallPatternFinding {
   const tokens = hits.length * savingsPerCall;
   return {
     source,
     sessionId,
     category,
-    replacementTool,
     occurrenceCount: hits.length,
     estimatedTokensSaved: tokens,
     estimatedUsdSaved: priceTokens(tokens, inputRate),
@@ -262,10 +261,9 @@ function buildBashFinding(
 }
 
 // True iff the turn's tool calls contain Glob → Grep → Read in that order
-// (with arbitrary other calls allowed in between). The relaywash replacement
-// pattern matches any session where the agent stitches discovery + filtering +
-// reading by hand, so a strict "back-to-back" requirement would miss the
-// real case where a Glob is followed by a Bash echo before the Grep lands.
+// (with arbitrary other calls allowed in between). A strict back-to-back
+// requirement would miss the real case where a Glob is followed by a Bash
+// echo before the Grep lands.
 function turnHasSearchSequence(calls: ToolCall[]): boolean {
   let stage: 'glob' | 'grep' | 'read' = 'glob';
   for (const call of calls) {
@@ -299,9 +297,9 @@ function detectEditClusters(turns: TurnRecord[]): EditCluster[] {
       const name = normalizeToolName(call.name);
       if (name !== 'Edit' && name !== 'Write' && name !== 'NotebookEdit') continue;
       if (!call.target) continue;
-      // Failed edits are still candidates — relaywash's batched replacement
-      // would have applied identically. We do not de-dup the same turn
-      // emitting two edits to the same file; both contribute to the cluster.
+      // Failed edits are still candidates — a batched edit replacement would
+      // have applied identically. We do not de-dup the same turn emitting
+      // two edits to the same file; both contribute to the cluster.
       let list = byFile.get(call.target);
       if (!list) {
         list = [];
@@ -421,7 +419,7 @@ function fmtUsd(n: number): string {
   return `$${n.toFixed(4)}`;
 }
 
-const CATEGORY_TITLES: Record<ToolReplacementCategory, string> = {
+const CATEGORY_TITLES: Record<ToolCallPatternCategory, string> = {
   'search-sequence': 'Glob → Grep → Read sequence',
   'edit-cluster': 'Edit cluster on a single file',
   'bash-git-state': 'Vanilla git state via Bash',
@@ -429,50 +427,53 @@ const CATEGORY_TITLES: Record<ToolReplacementCategory, string> = {
   'bash-gh-pr': 'Vanilla gh pr / gh api via Bash',
 };
 
-const CATEGORY_REASONS: Record<ToolReplacementCategory, string> = {
+const CATEGORY_REASONS: Record<ToolCallPatternCategory, string> = {
   'search-sequence':
     'Discovery + filtering + reading three separate tools in one turn lands a lot of intermediate ' +
-    'output in context. relaywash__Search collapses the round-trip into a single condensed result.',
+    'output in context. A consolidated discovery tool would collapse the round-trip into a single ' +
+    'condensed result.',
   'edit-cluster':
     'A burst of single edits on one file echoes the surrounding context on every call. ' +
-    'relaywash__Edit batches N point edits into one round-trip.',
+    'A batched edit tool would fold N point edits into one round-trip.',
   'bash-git-state':
-    'git status / diff / log dump unbounded raw text. relaywash__GitState returns a structured ' +
-    'summary tailored to what the agent actually uses.',
+    'git status / diff / log dump unbounded raw text. A structured-summary replacement would ' +
+    'return only the bytes the agent actually uses.',
   'bash-test-run':
-    'Test runners dump full per-suite output. relaywash__TestRun returns just pass/fail counts ' +
-    'plus the first failure detail.',
+    'Test runners dump full per-suite output. A structured-summary replacement would return ' +
+    'just pass/fail counts plus the first failure detail.',
   'bash-gh-pr':
-    'gh pr view / gh api return raw JSON blobs. relaywash__GhPR returns a structured PR summary.',
+    'gh pr view / gh api return raw JSON blobs. A structured-summary replacement would return ' +
+    'only the PR fields the agent reads.',
 };
 
-export function toolReplacementEligibleToFinding(
-  finding: ToolReplacementEligibleFinding,
+function hotspotsAction(sessionId: string): WasteAction {
+  return {
+    type: 'command',
+    label: 'Inspect this session',
+    text: `burn hotspots --session ${sessionId}`,
+  };
+}
+
+export function toolCallPatternToFinding(
+  finding: ToolCallPatternFinding,
 ): WasteFinding {
   const evidence = finding.evidence.length > 0
     ? ` Evidence: ${finding.evidence.slice(0, 3).join(', ')}${finding.evidence.length > 3 ? `, +${finding.evidence.length - 3} more` : ''}.`
     : '';
-  const action: WasteAction = {
-    type: 'command',
-    label: `Install relaywash to enable ${finding.replacementTool}`,
-    text: `# See ${RELAYWASH_REPO_URL} for installation. Replacement: ${finding.replacementTool}`,
-  };
   return {
-    kind: 'tool-replacement-eligible',
+    kind: 'tool-call-pattern',
     severity: severityFromUsd(finding.estimatedUsdSaved),
     sessionId: finding.sessionId,
-    title:
-      `${CATEGORY_TITLES[finding.category]}: ${finding.occurrenceCount}× — replace with ${finding.replacementTool}`,
+    title: `${CATEGORY_TITLES[finding.category]}: ${finding.occurrenceCount}×`,
     detail:
       `${CATEGORY_REASONS[finding.category]} ` +
       `Observed ${finding.occurrenceCount} occurrence(s) in this ${finding.source} session. ` +
-      `Estimated savings: ${finding.estimatedTokensSaved.toLocaleString()} tokens ` +
-      `(${fmtUsd(finding.estimatedUsdSaved)} at this session's input rate).${evidence} ` +
-      `See ${RELAYWASH_REPO_URL}.`,
+      `Estimated overhead: ${finding.estimatedTokensSaved.toLocaleString()} tokens ` +
+      `(${fmtUsd(finding.estimatedUsdSaved)} at this session's input rate).${evidence}`,
     estimatedSavings: {
       tokensPerSession: finding.estimatedTokensSaved,
       usdPerSession: finding.estimatedUsdSaved,
     },
-    actions: [action],
+    actions: [hotspotsAction(finding.sessionId)],
   };
 }
