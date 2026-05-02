@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-05-02
+
 ### Added
 
 - `RELAYBURN_STORAGE=sqlite` selects a new single-file SQLite backend (default path `~/.relayburn/burn.sqlite`, override via `RELAYBURN_SQLITE_PATH`). Replaces JSONL ledger + sidecars + `.idx` files with one DB; ingest paths use native `INSERT OR IGNORE` on content-addressed dedup hashes so multi-writer setups converge without external indexes.

@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-05-02
+
 ### Removed
 
 - Removed `burn budget` and nested `burn budget plans`; Burn now focuses on local usage attribution and no longer calls Claude OAuth usage APIs.
