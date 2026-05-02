@@ -84,10 +84,10 @@ jobs:
       - name: Resolve target packages
         id: targets
         run: |
-          # Dependency order: reader → ledger → analyze → mcp → cli → relayburn.
-          # `relayburn` is a thin wrapper that depends on `@relayburn/cli`,
-          # so cli must publish first.
-          echo "packages=reader ledger analyze mcp cli relayburn" >> "$GITHUB_OUTPUT"
+          # Dependency order: reader → ledger → analyze → mcp → cli → sdk → relayburn.
+          # `sdk` depends on cli/ledger/analyze; `relayburn` is a thin wrapper
+          # that depends on `@relayburn/cli`, so cli must publish before both.
+          echo "packages=reader ledger analyze mcp cli sdk relayburn" >> "$GITHUB_OUTPUT"
 
       # Catch the failure mode that bit us on 2026-04-23: a previous publish
       # run shipped @relayburn/*@0.3.0 to npm but failed at the Tag + push
@@ -646,7 +646,7 @@ jobs:
           const canonicalPkg = process.env.CANONICAL_PKG;
           const canonicalVersion = process.env.CANONICAL_VERSION;
 
-          const packageOrder = ['reader', 'ledger', 'analyze', 'mcp', 'cli', 'relayburn'];
+          const packageOrder = ['reader', 'ledger', 'analyze', 'mcp', 'cli', 'sdk', 'relayburn'];
           const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((entry) => {
             const idx = entry.indexOf(':');
             return { pkg: entry.slice(0, idx), ver: entry.slice(idx + 1) };

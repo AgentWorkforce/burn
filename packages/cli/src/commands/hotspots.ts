@@ -1790,7 +1790,7 @@ async function loadUserTurnTextBySession(
   return out;
 }
 
-async function buildGhostSurfaceInputs(
+export async function buildGhostSurfaceInputs(
   turns: ReadonlyArray<EnrichedTurn>,
   pricing: Awaited<ReturnType<typeof loadPricing>>,
 ): Promise<GhostSurfaceInputs> {

@@ -4,6 +4,12 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-05-02
+
+### Changed
+
+- Bump package versions to 1.6.1
+
 ## [1.4.0] - 2026-05-01
 
 ### Added

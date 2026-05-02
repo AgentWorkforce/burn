@@ -8,6 +8,18 @@ All notable changes to `@relayburn/cli`.
 
 - `burn hotspots --patterns=tool-call-pattern` runs a new detector that flags vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), with per-detector table, JSON `toolCallPatterns` field, and inclusion in `--findings`. Vendor-neutral.
 
+## [1.6.2] - 2026-05-02
+
+### Changed
+
+- Bump package versions to 1.6.1
+
+## [1.5.0] - 2026-05-02
+
+### Removed
+
+- Removed `burn budget` and nested `burn budget plans`; Burn now focuses on local usage attribution and no longer calls Claude OAuth usage APIs.
+
 ## [1.4.0] - 2026-05-01
 
 ### Added

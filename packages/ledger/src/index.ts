@@ -25,8 +25,8 @@ export {
   lockPath,
   pricingOverridePath,
   configPath,
-  plansPath,
   archivePath,
+  sqlitePath,
   contentDir,
   contentFilePath,
   isValidSessionId,
@@ -92,6 +92,9 @@ export type {
   StorageAdapter,
   StorageAdapterKind,
 } from './adapters/adapter.js';
+export { SqliteAdapter } from './adapters/sqlite-adapter.js';
+export type { SqliteAdapterOptions } from './adapters/sqlite-adapter.js';
+export { FileAdapter } from './adapters/file-adapter.js';
 export {
   invalidateIndexCache,
   rebuildIndex,
@@ -111,11 +114,3 @@ export type {
   BuildClaudeHookSettingsOptions,
   ClaudeHookSettingsResult,
 } from './hook-settings.js';
-export {
-  BUILTIN_PRESETS,
-  findPreset,
-  loadPlans,
-  normalizePlan,
-  savePlans,
-} from './plans.js';
-export type { Plan, PlanPreset, PlanProvider, PlansFile } from './plans.js';

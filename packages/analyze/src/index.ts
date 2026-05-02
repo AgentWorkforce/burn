@@ -128,13 +128,6 @@ export {
   findOverheadFiles,
   loadOverheadFile,
 } from './overhead.js';
-export { computePlanUsage, cycleBounds, planUsageFromArchive } from './plan-usage.js';
-export type {
-  ComputePlanUsageFromArchiveOptions,
-  ComputePlanUsageOptions,
-  PlanUsage,
-  PlanUsageFidelity,
-} from './plan-usage.js';
 export {
   emptyFidelitySummary,
   hasMinimumFidelity,
