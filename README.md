@@ -283,8 +283,10 @@ Reports read local data from the ledger and derived sidecars.
 | `@relayburn/reader` | Pure parsers: session logs to `TurnRecord`. |
 | `@relayburn/ledger` | JSONL ledger, stamps, indexes, content sidecars, archive. |
 | `@relayburn/analyze` | Pricing, attribution, comparisons, overhead, and quality. |
+| `@relayburn/ingest` | Session-store discovery, parse-and-append orchestration, pending stamps, watch loop. |
 | `@relayburn/mcp` | Read-only MCP tools for in-session self-query. |
 | `@relayburn/cli` | The `burn` binary. |
+| `@relayburn/sdk` | Embeddable Node API: `ingest`, `summary`, `hotspots`. |
 | `relayburn` | Thin install wrapper so `npm i -g relayburn` exposes `burn`. |
 
 ## Development

@@ -1,8 +1,11 @@
 import * as path from 'node:path';
 
-import type { IngestReport } from '../ingest.js';
-import { writePendingStamp } from '../pending-stamps.js';
-import { startWatchLoop, type WatchController } from '../watch-loop.js';
+import {
+  startWatchLoop,
+  writePendingStamp,
+  type IngestReport,
+  type WatchController,
+} from '@relayburn/ingest';
 
 import type { HarnessAdapter, HarnessRunContext, HarnessSpawnPlan } from './types.js';
 

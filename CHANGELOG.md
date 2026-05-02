@@ -16,6 +16,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - `burn hotspots --patterns=tool-call-pattern` flags vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), with per-occurrence counts and token-overhead estimates. Vendor-neutral — downstream tools map patterns to specific consolidations.
 - `@relayburn/sdk` `hotspots()` now also surfaces `tool-output-bloat`, `ghost-surface`, and `tool-call-pattern` findings (previously only the core `detectPatterns` set).
+- New `@relayburn/ingest` package owns session-store discovery, parse-and-append orchestration, pending-stamp resolution, and watch-loop primitives extracted from `@relayburn/cli`. CLI commands and harness adapters now consume ingest from `@relayburn/ingest`; `@relayburn/sdk` drops its `@relayburn/cli` dependency and imports `ingest()` from the new package and `buildGhostSurfaceInputs` from `@relayburn/analyze`.
 
 ## [1.5.0] - 2026-05-02
 

@@ -3,9 +3,8 @@ import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 
 import type { ParsedArgs } from '../args.js';
-import type { IngestReport } from '../ingest.js';
+import type { IngestReport, WatchController } from '@relayburn/ingest';
 import type { HarnessAdapter } from '../harnesses/types.js';
-import type { WatchController } from '../watch-loop.js';
 
 import { runWithAdapter } from './run.js';
 

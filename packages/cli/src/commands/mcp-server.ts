@@ -4,7 +4,7 @@ import {
   startStdioServer,
 } from '@relayburn/mcp';
 
-import { ingestAll } from '../ingest.js';
+import { ingestAll } from '@relayburn/ingest';
 import type { ParsedArgs } from '../args.js';
 import { withProgress } from '../progress.js';
 

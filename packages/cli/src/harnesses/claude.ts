@@ -4,8 +4,7 @@ import * as path from 'node:path';
 
 import { stamp } from '@relayburn/ledger';
 
-import { ingestClaudeSession } from '../ingest.js';
-import type { IngestReport } from '../ingest.js';
+import { ingestClaudeSession, type IngestReport } from '@relayburn/ingest';
 
 import type { HarnessAdapter, HarnessRunContext, HarnessSpawnPlan } from './types.js';
 

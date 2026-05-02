@@ -1,5 +1,6 @@
 import { queryAll, queryUserTurns, queryToolResultEvents } from '@relayburn/ledger';
 import {
+  buildGhostSurfaceInputs,
   loadPricing,
   costForTurn,
   attributeHotspots,
@@ -15,7 +16,7 @@ import {
   userClaudeSettingsPath,
   projectClaudeSettingsPath,
 } from '@relayburn/analyze';
-import { ingestAll, buildGhostSurfaceInputs } from '@relayburn/cli';
+import { ingestAll } from '@relayburn/ingest';
 
 function withHome(home, fn) {
   const prev = process.env.RELAYBURN_HOME;

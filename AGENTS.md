@@ -5,19 +5,20 @@ Pairs with [`README.md`](./README.md) — README is what burn does, this file is
 
 ## Layout
 
-pnpm workspace, seven published packages in dependency order:
+pnpm workspace, eight published packages in dependency order:
 
 ```
 @relayburn/reader   — pure parsers (Claude Code / Codex / OpenCode session logs → TurnRecord)
 @relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
+@relayburn/ingest   — session-store discovery + parse-and-append orchestration + pending stamps + watch loop
 @relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
 @relayburn/cli      — `burn` binary (summary, hotspots, overhead, compare, `burn run <harness>` wrapper, mcp-server, …)
 @relayburn/sdk      — embeddable Node API (`ingest`, `summary`, `hotspots`) for in-process use
 relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
 ```
 
-`reader → ledger → analyze → mcp → cli → sdk → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
+`reader → ledger → analyze → ingest → mcp → cli → sdk → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
 
 ## Common commands
 
@@ -41,7 +42,7 @@ Curate `[Unreleased]` in the relevant per-package `packages/*/CHANGELOG.md` as y
 
 Changelog entries should be concise and impact-first. Prefer one short bullet per user-visible change: name the command/API/schema touched and the practical effect. Drop issue/PR links, internal review notes, implementation backstory, and "foundation for..." phrasing unless that text clearly explains the shipped impact. Less detail is better when the detail belongs in the PR, commit, or code.
 
-The root `CHANGELOG.md` is the cross-package narrative. Packages release in lockstep, so each release in the root file is a single `## [x.y.z] - YYYY-MM-DD` header that applies to all six packages — no `**Versions:** ...` lines, no per-bullet `[reader, cli]` tags. Update `[Unreleased]` only when the work spans packages or warrants a top-level summary; single-package work belongs only in that package's CHANGELOG.
+The root `CHANGELOG.md` is the cross-package narrative. Packages release in lockstep, so each release in the root file is a single `## [x.y.z] - YYYY-MM-DD` header that applies to all eight packages — no `**Versions:** ...` lines, no per-bullet `[reader, cli]` tags. Update `[Unreleased]` only when the work spans packages or warrants a top-level summary; single-package work belongs only in that package's CHANGELOG.
 
 The publish workflow promotes the root `[Unreleased]` block the same way it does per-package files: at release time it stamps `## [x.y.z] - DATE` (using `max` of the versions bumped in the run) and resets `[Unreleased]` to empty. **No git-log fallback for the root file** — an empty `[Unreleased]` at release time means "no narrative-worthy changes this release" and the file is left alone. So if you want the root to record a release, write the bullet under `[Unreleased]` *before* the publish run.
 
@@ -73,7 +74,7 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 
 The workflow:
 1. Builds + tests the whole workspace.
-2. Bumps `package.json` versions in dep order (reader → ledger → analyze → mcp → cli → relayburn).
+2. Bumps `package.json` versions in dep order (reader → ledger → analyze → ingest → mcp → cli → sdk → relayburn).
 3. Generates changelog entries from `git log <pkg>-v<last>..HEAD -- packages/<pkg>`.
 4. Publishes via `pnpm pack` + `npm publish` using OIDC trusted-publisher auth (no `NPM_TOKEN`).
 5. Tags `<pkg>-v<version>` and creates a GitHub Release with the changelog body.
@@ -126,7 +127,7 @@ The CLI help block reads `listHarnessNames()` so it updates automatically.
 
 The codex / opencode adapters share the pending-stamp + watch-loop shape; both are constructed via `createPendingStampAdapter` in `harnesses/pending-stamp.ts`. New harnesses with the same shape can reuse it.
 
-`burn ingest` owns passive ingest modes: no flags scans all session stores once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven Claude hook path. The reusable polling controller lives in `packages/cli/src/watch-loop.ts`; import `startWatchLoop` from there for adapters.
+`burn ingest` owns passive ingest modes: no flags scans all session stores once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven Claude hook path. The reusable polling controller lives in `packages/ingest/src/watch-loop.ts`; import `startWatchLoop` from `@relayburn/ingest` for adapters.
 
 ## When in doubt
 

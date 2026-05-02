@@ -183,6 +183,12 @@ export {
   ghostSurfaceToFinding,
   opencodeGhostAdapter,
 } from './ghost-surface.js';
+export {
+  buildGhostSurfaceInputs,
+  buildObservedNamesBySource,
+  buildSessionCountBySource,
+  pickRepresentativeCacheReadRate,
+} from './ghost-surface-inputs.js';
 export type {
   DetectGhostSurfaceOptions,
   GhostCandidate,

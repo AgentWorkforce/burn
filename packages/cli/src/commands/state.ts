@@ -265,7 +265,7 @@ async function rebuildClassify(lines: string[], force: boolean): Promise<void> {
 }
 
 async function rebuildContent(lines: string[]): Promise<void> {
-  const { reingestMissingContent } = await import('../ingest.js');
+  const { reingestMissingContent } = await import('@relayburn/ingest');
   const r = await withProgress('rebuilding content sidecars', async (task) => {
     const report = await reingestMissingContent({
       onProgress: (message) => task.update(`content rebuild: ${message}`),
@@ -637,7 +637,7 @@ async function runStateReset(args: ParsedArgs): Promise<number> {
 
   let reingested: ResetSummary['reingested'] = null;
   if (reingest) {
-    const { ingestAll } = await import('../ingest.js');
+    const { ingestAll } = await import('@relayburn/ingest');
     const r = await ingestAll();
     reingested = {
       scannedSessions: r.scannedSessions,
@@ -892,7 +892,7 @@ async function collectClaudeSessionIds(out: Set<string>): Promise<void> {
 async function collectCodexSessionIds(out: Set<string>): Promise<void> {
   let files: string[];
   try {
-    const { walkJsonl } = await import('../walk.js');
+    const { walkJsonl } = await import('@relayburn/ingest');
     files = await walkJsonl(CODEX_SESSIONS);
   } catch {
     return;
@@ -907,7 +907,7 @@ async function collectCodexSessionIds(out: Set<string>): Promise<void> {
 async function collectOpencodeSessionIds(out: Set<string>): Promise<void> {
   let files: string[];
   try {
-    const { walkOpencodeSessions } = await import('../walk.js');
+    const { walkOpencodeSessions } = await import('@relayburn/ingest');
     files = await walkOpencodeSessions(OPENCODE_SESSION_ROOT);
   } catch {
     return;
