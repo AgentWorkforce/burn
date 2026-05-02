@@ -41,16 +41,6 @@ function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   };
 }
 
-const PRICING_LOADER = async () => ({
-  'claude-sonnet-4-5': {
-    input: 3,
-    output: 15,
-    cacheRead: 0.3,
-    cacheWrite: 3.75,
-    reasoningMode: 'same_as_output' as const,
-  },
-});
-
 describe('MCP tool handlers backed by archive (issue #97)', () => {
   let tmpDir: string;
   const originalHome = process.env['RELAYBURN_HOME'];
@@ -98,7 +88,6 @@ describe('MCP tool handlers backed by archive (issue #97)', () => {
 
       const tool = createSessionCostTool({
         defaultSessionId: 's-cost',
-        loadPricing: PRICING_LOADER,
       });
       const result = (await tool.handler({})) as SessionCostResult;
       assert.equal(result.sessionId, 's-cost');
@@ -137,7 +126,6 @@ describe('MCP tool handlers backed by archive (issue #97)', () => {
 
       const tool = createSessionCostTool({
         defaultSessionId: 's-cost',
-        loadPricing: PRICING_LOADER,
       });
       const result = (await tool.handler({})) as SessionCostResult;
       assert.equal(result.turnCount, 2);
@@ -157,7 +145,6 @@ describe('MCP tool handlers backed by archive (issue #97)', () => {
       const logs: string[] = [];
       const tool = createSessionCostTool({
         defaultSessionId: 's-cost',
-        loadPricing: PRICING_LOADER,
         onLog: (m) => logs.push(m),
       });
       const result = (await tool.handler({})) as SessionCostResult;
@@ -166,7 +153,7 @@ describe('MCP tool handlers backed by archive (issue #97)', () => {
       // 1M input @ $3/M = $3.
       assert.equal(result.totalUSD, 3);
       assert.ok(
-        logs.some((m) => /sessionCost: archive query failed/.test(m)),
+        logs.some((m) => /archive query failed/.test(m)),
         `expected an archive-fallback log line, got: ${JSON.stringify(logs)}`,
       );
     });

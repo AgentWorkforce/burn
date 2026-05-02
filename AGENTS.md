@@ -12,13 +12,15 @@ pnpm workspace, eight published packages in dependency order:
 @relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
 @relayburn/ingest   — session-store discovery + parse-and-append orchestration + pending stamps + watch loop
-@relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
+@relayburn/sdk      — embeddable Node API (`ingest`, `summary`, `sessionCost`, `hotspots`); source of truth for the in-process query surface
+@relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query (thin wrappers over `@relayburn/sdk`)
 @relayburn/cli      — `burn` binary (summary, hotspots, overhead, compare, `burn run <harness>` wrapper, mcp-server, …)
-@relayburn/sdk      — embeddable Node API (`ingest`, `summary`, `hotspots`) for in-process use
 relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
 ```
 
-`reader → ledger → analyze → ingest → mcp → cli → sdk → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
+`reader → ledger → analyze → ingest → sdk → mcp → cli → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
+
+`@relayburn/sdk` owns the canonical query/compute surface — every new read verb should land there first as a pure function. `@relayburn/mcp` and `@relayburn/cli` are presenters: MCP wraps SDK calls in tool definitions, CLI wraps them in flag parsing + table rendering. Don't duplicate query logic across CLI/MCP — extract it into SDK.
 
 ## Common commands
 
@@ -74,7 +76,7 @@ Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to
 
 The workflow:
 1. Builds + tests the whole workspace.
-2. Bumps `package.json` versions in dep order (reader → ledger → analyze → ingest → mcp → cli → sdk → relayburn).
+2. Bumps `package.json` versions in dep order (reader → ledger → analyze → ingest → sdk → mcp → cli → relayburn).
 3. Generates changelog entries from `git log <pkg>-v<last>..HEAD -- packages/<pkg>`.
 4. Publishes via `pnpm pack` + `npm publish` using OIDC trusted-publisher auth (no `NPM_TOKEN`).
 5. Tags `<pkg>-v<version>` and creates a GitHub Release with the changelog body.
