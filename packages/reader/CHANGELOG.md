@@ -4,6 +4,8 @@ All notable changes to `@relayburn/reader`.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-05-02
+
 ### Added
 
 - Claude reader now back-populates `_meta.replaces` / `_meta.collapsedCalls` annotations from `tool_result` blocks onto the matching `ToolCall.replacedTools` / `ToolCall.collapsedCalls` and the corresponding `ToolResultEventRecord`, so replacement tools (e.g. relaywash) carry counterfactual attribution through to analyze.

@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-05-02
+
 ### Added
 
 - Recognise `_meta.replaces` / `_meta.collapsedCalls` annotations on Claude `tool_result` blocks across reader → analyze → CLI, so replacement tools (e.g. relaywash) get attributed estimated tokens saved in `burn summary` and `burn summary --by-tool`.
