@@ -20,6 +20,7 @@ on:
           - '@relayburn/reader'
           - '@relayburn/ledger'
           - '@relayburn/analyze'
+          - '@relayburn/sdk'
       version:
         description: 'Version to verify (defaults to the "latest" dist-tag)'
         required: false
