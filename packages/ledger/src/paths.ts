@@ -47,6 +47,17 @@ export function archivePath(): string {
   return path.join(ledgerHome(), 'archive.sqlite');
 }
 
+// Default location for the consolidated SQLite store used by SqliteAdapter
+// (selected via `RELAYBURN_STORAGE=sqlite`). Overridable via
+// `RELAYBURN_SQLITE_PATH` for callers that want the DB on a separate volume
+// from the rest of `RELAYBURN_HOME` (e.g. a durable mount in a sandbox where
+// the home directory is ephemeral).
+export function sqlitePath(): string {
+  const env = process.env['RELAYBURN_SQLITE_PATH'];
+  if (env && env.length > 0) return env;
+  return path.join(ledgerHome(), 'burn.sqlite');
+}
+
 export function contentDir(): string {
   return path.join(ledgerHome(), 'content');
 }

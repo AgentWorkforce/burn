@@ -4,6 +4,12 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+### Added
+
+- `SqliteAdapter` — single-file SQLite store enabled via `RELAYBURN_STORAGE=sqlite`, with DB path overridable via `RELAYBURN_SQLITE_PATH` (defaults to `~/.relayburn/burn.sqlite`). Replaces `ledger.jsonl`, per-session content sidecars, and the `.idx` dedup files for users who opt in.
+- New `sqlitePath()` export in `@relayburn/ledger`.
+- Parameterized adapter contract test suite (`adapter-suite.test.ts`) runs append/dedup/query/lock/content scenarios against both `file` and `sqlite` adapters.
+
 ## [1.2.2] - 2026-04-30
 
 ### Changed
