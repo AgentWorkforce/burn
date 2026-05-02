@@ -8,6 +8,24 @@ All notable changes to `@relayburn/ledger`.
 
 - SQLite archive `tool_calls` table now persists `replaced_tools` (JSON) and `collapsed_calls` via additive migration, and `queryAllFromArchive()` rehydrates `ToolCall.replacedTools` / `ToolCall.collapsedCalls` so the default archive code path preserves the counterfactual annotations introduced in #219.
 
+## [1.6.2] - 2026-05-02
+
+### Changed
+
+- Bump package versions to 1.6.1
+
+## [1.5.0] - 2026-05-02
+
+### Added
+
+- `SqliteAdapter` — single-file SQLite store enabled via `RELAYBURN_STORAGE=sqlite`, with DB path overridable via `RELAYBURN_SQLITE_PATH` (defaults to `~/.relayburn/burn.sqlite`). Replaces `ledger.jsonl`, per-session content sidecars, and the `.idx` dedup files for users who opt in.
+- New `sqlitePath()` export in `@relayburn/ledger`.
+- Parameterized adapter contract test suite (`adapter-suite.test.ts`) runs append/dedup/query/lock/content scenarios against both `file` and `sqlite` adapters.
+
+### Removed
+
+- Removed monthly plan config helpers and presets (`plansPath`, `loadPlans`, `savePlans`, `findPreset`) after retiring budget tracking.
+
 ## [1.2.2] - 2026-04-30
 
 ### Changed

@@ -8,6 +8,23 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - Recognise `_meta.replaces` / `_meta.collapsedCalls` annotations on Claude `tool_result` blocks across reader → analyze → CLI, so replacement tools (e.g. relaywash) get attributed estimated tokens saved in `burn summary` and `burn summary --by-tool`.
 
+## [1.7.0] - 2026-05-02
+
+### Added
+
+- `burn hotspots --patterns=tool-call-pattern` flags vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), with per-occurrence counts and token-overhead estimates. Vendor-neutral — downstream tools map patterns to specific consolidations.
+- `@relayburn/sdk` `hotspots()` now also surfaces `tool-output-bloat`, `ghost-surface`, and `tool-call-pattern` findings (previously only the core `detectPatterns` set).
+
+## [1.5.0] - 2026-05-02
+
+### Added
+
+- `RELAYBURN_STORAGE=sqlite` selects a new single-file SQLite backend (default path `~/.relayburn/burn.sqlite`, override via `RELAYBURN_SQLITE_PATH`). Replaces JSONL ledger + sidecars + `.idx` files with one DB; ingest paths use native `INSERT OR IGNORE` on content-addressed dedup hashes so multi-writer setups converge without external indexes.
+
+### Removed
+
+- Removed Burn's budget and quota tracking surfaces: `burn budget`, monthly plan config APIs, and the MCP `burn__currentBlock` tool are no longer shipped.
+
 ## [1.2.2] - 2026-04-30
 
 ### Changed

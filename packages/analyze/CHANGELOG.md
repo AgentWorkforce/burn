@@ -8,6 +8,24 @@ All notable changes to `@relayburn/analyze`.
 
 - Added `summarizeReplacementSavings()` and `estimateSavingsForToolCall()` to estimate tokens saved by replacement tools (e.g. relaywash) against the vanilla calls they collapse, using a static per-tool cost table (`DEFAULT_REPLACED_TOOL_TOKEN_COST`).
 
+## [1.7.0] - 2026-05-02
+
+### Added
+
+- `detectToolCallPatterns` finds vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), plus a `toolCallPatternToFinding` adapter into `WasteFinding`. Vendor-neutral output — downstream tools map categories to specific consolidations.
+
+## [1.6.2] - 2026-05-02
+
+### Changed
+
+- Bump package versions to 1.6.1
+
+## [1.5.0] - 2026-05-02
+
+### Removed
+
+- Removed the plan-usage APIs (`computePlanUsage`, `cycleBounds`, and `planUsageFromArchive`) that powered the retired budget command.
+
 ## [1.4.0] - 2026-05-01
 
 ### Added

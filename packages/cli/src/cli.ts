@@ -24,7 +24,6 @@ Usage:
   burn hotspots      [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--session [id]] [--explain-drift]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
-  burn budget        [--watch [--interval 5s]] [--json] [--no-api] [--no-forecast] [plans ...]
   burn overhead      [trim] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
   burn run <${HARNESS_LIST}>  [--tag k=v ...] [-- <harness args>]
@@ -46,12 +45,6 @@ Examples:
   burn hotspots --patterns --since 7d
   burn hotspots --session --explain-drift
   burn hotspots --session <session-id>
-  burn budget
-  burn budget --watch
-  burn budget --no-api
-  burn budget plans
-  burn budget plans add --provider claude --preset max
-  burn budget plans set-reset-day claude-max 15
   burn overhead --since 30d
   burn overhead --kind claude-md
   burn overhead trim --top 3
@@ -91,8 +84,6 @@ async function main(): Promise<number> {
       return (await import('./commands/summary.js')).runSummary(args);
     case 'hotspots':
       return (await import('./commands/hotspots.js')).runHotspots(args);
-    case 'budget':
-      return (await import('./commands/budget.js')).runBudget(args);
     case 'overhead':
       return (await import('./commands/overhead.js')).runOverhead(args);
     case 'compare':

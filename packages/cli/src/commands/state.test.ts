@@ -16,7 +16,6 @@ import {
   ledgerContentIndexPath,
   ledgerIndexPath,
   ledgerPath,
-  plansPath,
   pricingOverridePath,
   stamp,
 } from '@relayburn/ledger';
@@ -454,7 +453,6 @@ describe('burn state CLI', () => {
     async function seedPreservedFiles(): Promise<void> {
       await mkdir(tmp, { recursive: true });
       await writeFile(configPath(), JSON.stringify({ keep: 'config' }));
-      await writeFile(plansPath(), JSON.stringify({ keep: 'plans' }));
       await writeFile(pricingOverridePath(), JSON.stringify({ keep: 'pricing' }));
     }
 
@@ -473,11 +471,10 @@ describe('burn state CLI', () => {
       assert.equal(await exists(contentDir()), true);
       // Preserved files still on disk.
       assert.equal(await exists(configPath()), true);
-      assert.equal(await exists(plansPath()), true);
       assert.equal(await exists(pricingOverridePath()), true);
     });
 
-    it('--force deletes derived state and preserves config/plans/pricing', async () => {
+    it('--force deletes derived state and preserves config/pricing', async () => {
       await seedDerivedState();
       await seedPreservedFiles();
 
@@ -495,7 +492,6 @@ describe('burn state CLI', () => {
       assert.equal(await exists(contentDir()), false);
 
       assert.equal(await exists(configPath()), true);
-      assert.equal(await exists(plansPath()), true);
       assert.equal(await exists(pricingOverridePath()), true);
       assert.equal(
         JSON.parse(await readFile(configPath(), 'utf8')).keep,

@@ -1,9 +1,7 @@
 export { runSummary } from './commands/summary.js';
-export { runHotspots } from './commands/hotspots.js';
+export { runHotspots, buildGhostSurfaceInputs } from './commands/hotspots.js';
 export { runOverhead } from './commands/overhead.js';
 export { runIngest } from './commands/ingest.js';
-export { runBudget } from './commands/budget.js';
-export { runBudgetPlans } from './commands/budget-plans.js';
 export { runIngestTick, startWatchLoop } from './commands/ingest.js';
 export type { StartWatchLoopOptions, WatchController } from './commands/ingest.js';
 export { runWrapper, runWithAdapter } from './commands/run.js';

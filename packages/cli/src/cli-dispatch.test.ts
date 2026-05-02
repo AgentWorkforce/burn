@@ -33,7 +33,7 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv): Promise<CliResult
   });
 }
 
-describe('CLI budget dispatch', () => {
+describe('CLI command dispatch', () => {
   let tmp: string;
   let tmpHome: string;
   let env: NodeJS.ProcessEnv;
@@ -53,37 +53,18 @@ describe('CLI budget dispatch', () => {
     await rm(tmpHome, { recursive: true, force: true });
   });
 
-  it('top-level help advertises budget only', async () => {
+  it('top-level help does not advertise removed budget verbs', async () => {
     const result = await runCli(['--help'], env);
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /burn budget/);
+    assert.doesNotMatch(result.stdout, /burn budget/);
     assert.doesNotMatch(result.stdout, /burn limits/);
     assert.doesNotMatch(result.stdout, /^  burn plans/m);
   });
 
-  it('dispatches budget help and nested plans help', async () => {
+  it('rejects removed budget and legacy top-level verbs', async () => {
     const budget = await runCli(['budget', '--help'], env);
-    assert.equal(budget.code, 0);
-    assert.match(budget.stdout, /burn budget/);
-    assert.match(budget.stdout, /--no-forecast/);
-
-    const plans = await runCli(['budget', 'plans', '--help'], env);
-    assert.equal(plans.code, 0);
-    assert.match(plans.stdout, /burn budget plans/);
-    assert.match(plans.stdout, /set-reset-day/);
-  });
-
-  it('dispatches nested plan subcommands and rejects old top-level verbs', async () => {
-    const add = await runCli(
-      ['budget', 'plans', 'add', '--provider', 'claude', '--preset', 'pro'],
-      env,
-    );
-    assert.equal(add.code, 0);
-    assert.match(add.stdout, /added claude-pro/);
-
-    const list = await runCli(['budget', 'plans', '--json', '--no-archive'], env);
-    assert.equal(list.code, 0);
-    assert.equal(JSON.parse(list.stdout).plans[0].usage.plan.id, 'claude-pro');
+    assert.equal(budget.code, 1);
+    assert.match(budget.stderr, /unknown command: budget/);
 
     const oldLimits = await runCli(['limits', '--help'], env);
     assert.equal(oldLimits.code, 1);
