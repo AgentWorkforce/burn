@@ -373,6 +373,12 @@ function applyAdditiveMigrations(db: DatabaseSync): void {
   ensureColumn(db, 'turns', 'subagent_description', 'TEXT');
   ensureColumn(db, 'sessions', 'min_fidelity', 'TEXT');
   ensureColumn(db, 'sessions', 'has_full_attribution', 'INTEGER');
+  // Counterfactual annotations from replacement tools (e.g. relaywash) —
+  // see ToolCall.replacedTools / collapsedCalls. JSON-encoded list for
+  // replaced_tools so the column count stays bounded; collapsed_calls is a
+  // plain integer.
+  ensureColumn(db, 'tool_calls', 'replaced_tools', 'TEXT');
+  ensureColumn(db, 'tool_calls', 'collapsed_calls', 'INTEGER');
   // Index on the fidelity column — `CREATE INDEX IF NOT EXISTS` is already
   // idempotent so we can just rerun the SCHEMA_SQL one. But because the column
   // may have just been added on this open, we need to (re)create the index
@@ -771,8 +777,9 @@ async function applyLedgerRange(
     const insertToolCall = db.prepare(`
       INSERT INTO tool_calls (
         source, session_id, message_id, call_index,
-        tool_use_id, tool_name, target, args_hash, is_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        tool_use_id, tool_name, target, args_hash, is_error,
+        replaced_tools, collapsed_calls
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const tl of turnLines) {
@@ -792,6 +799,12 @@ async function applyLedgerRange(
           tc.target ?? null,
           tc.argsHash ?? null,
           tc.isError === undefined ? null : tc.isError ? 1 : 0,
+          tc.replacedTools && tc.replacedTools.length > 0
+            ? JSON.stringify(tc.replacedTools)
+            : null,
+          typeof tc.collapsedCalls === 'number' && tc.collapsedCalls > 0
+            ? tc.collapsedCalls
+            : null,
         );
       }
     }

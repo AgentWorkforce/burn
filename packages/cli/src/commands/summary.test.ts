@@ -1275,6 +1275,39 @@ describe('burn summary replacement-tool savings (#219)', () => {
     assert.equal(parsed.replacementSavings, undefined);
   });
 
+  it('default archive path also surfaces the replacementSavings block (#219 round-trip)', async () => {
+    // Override the suite-wide RELAYBURN_ARCHIVE=0 so loadTurns uses the
+    // SQLite archive, which is the production code path for `burn summary`.
+    delete process.env['RELAYBURN_ARCHIVE'];
+    try {
+      await appendTurns([
+        fakeTurn({
+          sessionId: 's-rs-arch',
+          messageId: 'rsa-1',
+          toolCalls: [
+            {
+              id: 'tu-arch-1',
+              name: 'relaywash__Search',
+              argsHash: 'h',
+              replacedTools: ['Glob', 'Grep', 'Read'],
+              collapsedCalls: 9,
+            },
+          ],
+        }),
+      ]);
+      const out = await captureSummary({ json: true });
+      assert.equal(out.code, 0);
+      const parsed = JSON.parse(out.stdout) as {
+        replacementSavings?: { collapsedCalls: number; estimatedTokensSaved: number };
+      };
+      assert.ok(parsed.replacementSavings, 'archive path emits replacementSavings');
+      assert.equal(parsed.replacementSavings!.collapsedCalls, 9);
+      assert.ok(parsed.replacementSavings!.estimatedTokensSaved > 0);
+    } finally {
+      process.env['RELAYBURN_ARCHIVE'] = '0';
+    }
+  });
+
   it('--by-tool --json attaches a savings field to rows that carry annotations', async () => {
     await appendTurns([
       fakeTurn({

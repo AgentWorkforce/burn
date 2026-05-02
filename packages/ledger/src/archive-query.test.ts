@@ -182,6 +182,39 @@ describe('archive-query', () => {
     }
   });
 
+  it('round-trips ToolCall.replacedTools and ToolCall.collapsedCalls through the archive (#219)', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-RS',
+        messageId: 'mrs-1',
+        toolCalls: [
+          {
+            id: 'tu-rs-1',
+            name: 'relaywash__Search',
+            argsHash: 'rs1',
+            replacedTools: ['Glob', 'Grep', 'Read'],
+            collapsedCalls: 9,
+          },
+          // Vanilla call without annotations — both fields should survive as
+          // undefined on the read side.
+          { id: 'tu-rs-2', name: 'Bash', argsHash: 'rs2' },
+        ],
+      }),
+    ]);
+    await buildArchive();
+    const archive = await queryAllFromArchive({ sessionId: 's-RS' });
+    assert.equal(archive.length, 1);
+    const calls = archive[0]!.toolCalls;
+    const search = calls.find((c) => c.name === 'relaywash__Search');
+    const bash = calls.find((c) => c.name === 'Bash');
+    assert.ok(search);
+    assert.ok(bash);
+    assert.deepEqual(search!.replacedTools, ['Glob', 'Grep', 'Read']);
+    assert.equal(search!.collapsedCalls, 9);
+    assert.equal(bash!.replacedTools, undefined);
+    assert.equal(bash!.collapsedCalls, undefined);
+  });
+
   it('honors since/until window filters the same way queryAll does', async () => {
     await appendTurns([
       fakeTurn({
