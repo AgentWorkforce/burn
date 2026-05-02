@@ -87,6 +87,15 @@ export type {
   LoadedClaudeSettings,
   ToolOutputBloat,
 } from './tool-output-bloat.js';
+export {
+  detectToolCallPatterns,
+  toolCallPatternToFinding,
+} from './tool-call-patterns.js';
+export type {
+  DetectToolCallPatternsOptions,
+  ToolCallPatternCategory,
+  ToolCallPatternFinding,
+} from './tool-call-patterns.js';
 export { computeQuality, computeOneShotRate, inferOutcome } from './quality.js';
 export type {
   ComputeQualityOptions,

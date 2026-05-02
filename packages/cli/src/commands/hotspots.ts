@@ -8,6 +8,7 @@ import {
   compactionLossToFinding,
   detectGhostSurface,
   detectPatterns,
+  detectToolCallPatterns,
   detectToolOutputBloat,
   editHeavyToFinding,
   editRevertToFinding,
@@ -22,6 +23,7 @@ import {
   sortFindings,
   summarizeFidelity,
   systemPromptTaxToFinding,
+  toolCallPatternToFinding,
   toolOutputBloatToFinding,
   userClaudeSettingsPath,
   type BashAggregation,
@@ -33,6 +35,7 @@ import {
   type LoadedClaudeSettings,
   type PatternsResult,
   type SubagentAggregation,
+  type ToolCallPatternFinding,
   type ToolOutputBloat,
   type WasteFinding,
   type HotspotsResult,
@@ -63,7 +66,7 @@ import { withProgress } from '../progress.js';
 import { runHotspotsSession } from './hotspots-session.js';
 
 const DEFAULT_TOP_N = 10;
-const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat'] as const;
+const PATTERN_KINDS = ['retries', 'failures', 'cancellations', 'compaction', 'reverts', 'edit-heavy', 'opencode-skill-recall', 'opencode-skill-pruning', 'opencode-system-prompt', 'ghost-surface', 'tool-output-bloat', 'tool-call-pattern'] as const;
 type PatternKind = (typeof PATTERN_KINDS)[number];
 
 // When even-split sessions reach this fraction of the matched set, the
@@ -650,6 +653,8 @@ export const PATTERN_REQUIRED: Record<
   'opencode-skill-recall': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-skill-pruning': ['hasToolCalls', 'hasToolResultEvents'],
   'opencode-system-prompt': ['hasToolCalls', 'hasToolResultEvents'],
+  // Reads only `TurnRecord.toolCalls` (tool names + Bash targets).
+  'tool-call-pattern': ['hasToolCalls'],
 };
 // `ghost-surface` is filesystem-bound and only needs `hasToolCalls` to
 // derive observed-names. We treat it as a soft prerequisite — turns missing
@@ -770,6 +775,7 @@ export async function runPatternsMode(
             skillPruningProtection: [],
             systemPromptTaxes: [],
             toolOutputBloats: [],
+            toolCallPatterns: [],
             ghostSurface: [],
             sessionSummaries: [],
             findings: [],
@@ -802,6 +808,7 @@ export async function runPatternsMode(
   let systemPromptTaxes: PatternsResult['systemPromptTaxes'] = [];
   let editHeavySessions: PatternsResult['editHeavySessions'] = [];
   let toolOutputBloats: ToolOutputBloat[] = [];
+  let toolCallPatterns: ToolCallPatternFinding[] = [];
   let sessionSummaries: PatternsResult['sessionSummaries'] = [];
 
   // Load user turns when any detector that consumes them is selected:
@@ -957,6 +964,10 @@ export async function runPatternsMode(
     });
   }
 
+  if (selected.has('tool-call-pattern')) {
+    toolCallPatterns = detectToolCallPatterns(perDetector.get('tool-call-pattern')!, { pricing });
+  }
+
   // Ghost-surface runs against the on-disk user-installed surface and
   // cross-references basenames against observed names mined from the turn
   // stream. Filesystem-bound and harness-aware: each adapter pulls its own
@@ -1016,6 +1027,7 @@ export async function runPatternsMode(
     ...systemPromptTaxes.map(systemPromptTaxToFinding),
     ...ghostFindings.map((g) => ghostSurfaceToFinding(g)),
     ...toolOutputBloats.map(toolOutputBloatToFinding),
+    ...toolCallPatterns.map(toolCallPatternToFinding),
   ]);
 
   if (args.flags['json'] === true) {
@@ -1033,6 +1045,7 @@ export async function runPatternsMode(
           systemPromptTaxes,
           editHeavySessions,
           toolOutputBloats,
+          toolCallPatterns,
           ghostSurface: ghostFindings,
           sessionSummaries,
           findings,
@@ -1126,6 +1139,11 @@ export async function runPatternsMode(
   if (selected.has('tool-output-bloat')) {
     out.push('Oversized tool output bloat (BASH_MAX_OUTPUT_LENGTH config + cross-harness >15k tok tool_results)');
     out.push(renderToolOutputBloatTable(toolOutputBloats, limit));
+    out.push('');
+  }
+  if (selected.has('tool-call-pattern')) {
+    out.push('Tool-call patterns (vanilla call sequences with consolidatable overhead)');
+    out.push(renderToolCallPatternsTable(toolCallPatterns, limit));
     out.push('');
   }
 
@@ -1608,6 +1626,27 @@ async function loadToolResultEventsForTurns(
   return events.filter((e) => sessionIds.has(e.sessionId));
 }
 
+function renderToolCallPatternsTable(
+  findings: ToolCallPatternFinding[],
+  limit: number,
+): string {
+  if (findings.length === 0) return '  (none)';
+  const rows: string[][] = [
+    ['session', 'category', 'count', 'tokensSaved', 'usdSaved'],
+  ];
+  const slice = [...findings].sort((a, b) => b.estimatedUsdSaved - a.estimatedUsdSaved).slice(0, limit);
+  for (const f of slice) {
+    rows.push([
+      f.sessionId.slice(0, 8),
+      f.category,
+      String(f.occurrenceCount),
+      formatInt(f.estimatedTokensSaved),
+      formatUsd(f.estimatedUsdSaved),
+    ]);
+  }
+  return table(rows);
+}
+
 function renderToolOutputBloatTable(bloats: ToolOutputBloat[], limit: number): string {
   if (bloats.length === 0) return '  (none)';
   const rows: string[][] = [
@@ -1751,7 +1790,7 @@ async function loadUserTurnTextBySession(
   return out;
 }
 
-async function buildGhostSurfaceInputs(
+export async function buildGhostSurfaceInputs(
   turns: ReadonlyArray<EnrichedTurn>,
   pricing: Awaited<ReturnType<typeof loadPricing>>,
 ): Promise<GhostSurfaceInputs> {

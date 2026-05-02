@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn hotspots --patterns=tool-call-pattern` runs a new detector that flags vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), with per-detector table, JSON `toolCallPatterns` field, and inclusion in `--findings`. Vendor-neutral.
+
 ## [1.6.2] - 2026-05-02
 
 ### Changed

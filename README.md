@@ -85,7 +85,13 @@ surface problems.
 Pattern names: `retries`, `failures`, `cancellations`, `compaction`,
 `reverts`, `edit-heavy`, `opencode-skill-recall`,
 `opencode-skill-pruning`, `opencode-system-prompt`, `ghost-surface`,
-`tool-output-bloat`.
+`tool-output-bloat`, `tool-call-pattern`.
+
+`tool-call-pattern` flags vanilla call sequences with consolidatable
+overhead: Glob → Grep → Read sequences, single-file edit clusters, and bash
+calls for git state, test runs, and `gh pr` / `gh api`. Each finding reports
+estimated tokens of overhead and the per-occurrence count, so downstream
+tools (or you) can map patterns to a specific consolidation.
 
 | Example | Result |
 |---|---|

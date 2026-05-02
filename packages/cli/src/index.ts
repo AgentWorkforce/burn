@@ -1,5 +1,5 @@
 export { runSummary } from './commands/summary.js';
-export { runHotspots } from './commands/hotspots.js';
+export { runHotspots, buildGhostSurfaceInputs } from './commands/hotspots.js';
 export { runOverhead } from './commands/overhead.js';
 export { runIngest } from './commands/ingest.js';
 export { runIngestTick, startWatchLoop } from './commands/ingest.js';
