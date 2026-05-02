@@ -72,6 +72,18 @@ importers:
         specifier: workspace:*
         version: link:../cli
 
+  packages/sdk:
+    dependencies:
+      '@relayburn/analyze':
+        specifier: workspace:*
+        version: link:../analyze
+      '@relayburn/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@relayburn/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+
 packages:
 
   '@dqbd/tiktoken@1.0.22':
