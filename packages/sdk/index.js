@@ -86,7 +86,9 @@ export async function hotspots(opts = {}) {
   return withHome(opts.ledgerHome, async () => {
     const turns = await queryAll({ sessionId: opts.session });
     const userTurns = await queryUserTurns({ sessionId: opts.session });
-    const attribution = attributeHotspots({ turns, userTurns });
+    const pricing = await loadPricing();
+    const userTurnsBySession = bucketBySession(userTurns);
+    const attribution = attributeHotspots(turns, { pricing, userTurnsBySession });
 
     if (!opts.patterns || opts.patterns.length === 0) return attribution;
 
@@ -95,14 +97,13 @@ export async function hotspots(opts = {}) {
 
     // Core patterns (retries, failures, edit-heavy, etc.) flow through
     // detectPatterns + findingsFromPatterns; non-matching kinds are filtered.
-    const detected = detectPatterns({ turns, userTurns, hotspots: attribution });
+    const detected = detectPatterns(turns, { pricing, userTurnsBySession });
     for (const f of findingsFromPatterns(detected)) {
       if (wanted.has(f.kind)) findings.push(f);
     }
 
     // Side-channel detectors live outside detectPatterns. Each one reads its
     // own slice of state, so we run them lazily based on `wanted`.
-    const pricing = await loadPricing();
 
     if (wanted.has('tool-output-bloat')) {
       const settings = [];
@@ -134,4 +135,14 @@ export async function hotspots(opts = {}) {
 
     return findings;
   });
+}
+
+function bucketBySession(userTurns) {
+  const out = new Map();
+  for (const ut of userTurns) {
+    const list = out.get(ut.sessionId);
+    if (list) list.push(ut);
+    else out.set(ut.sessionId, [ut]);
+  }
+  return out;
 }
