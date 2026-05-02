@@ -1,6 +1,5 @@
 import { buildArchive } from '@relayburn/ledger';
 import {
-  createCurrentBlockTool,
   createSessionCostTool,
   startStdioServer,
 } from '@relayburn/mcp';
@@ -20,7 +19,6 @@ this server attached via Claude Code's --mcp-config (see buildMcpConfig in
 
 Tools:
   burn__sessionCost   { sessionId? } → total USD / tokens / turns / models
-  burn__currentBlock  { sessionId? } → 5-hour OAuth window % + local burn rate forecast
 `;
 
 export async function runMcpServer(args: ParsedArgs): Promise<number> {
@@ -75,7 +73,6 @@ export async function runMcpServer(args: ParsedArgs): Promise<number> {
 
   const tools = [
     createSessionCostTool({ defaultSessionId, onLog: log }),
-    createCurrentBlockTool({ onLog: log }),
   ];
 
   const server = startStdioServer({

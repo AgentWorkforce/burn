@@ -4,6 +4,10 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+### Changed
+
+- README examples now point to `burn hotspots` instead of the removed `burn budget` command.
+
 ## [1.0.0] - 2026-04-29
 
 ### Fixed

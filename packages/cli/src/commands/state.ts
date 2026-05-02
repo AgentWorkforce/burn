@@ -66,9 +66,9 @@ Deletes (under \$RELAYBURN_HOME or ~/.relayburn):
   archive.sqlite (+ -wal/-shm sidecars), and the content/ directory.
 
 Preserves:
-  config.json, plans.json, models.dev.json, *.lock files. Source harness
-  logs at ~/.claude/projects, ~/.codex/sessions, and the OpenCode storage
-  dir are never touched.
+  config.json, models.dev.json, *.lock files. Source harness logs at
+  ~/.claude/projects, ~/.codex/sessions, and the OpenCode storage dir are
+  never touched.
 
 Examples:
   burn state reset                 # dry-run; prints what would be deleted

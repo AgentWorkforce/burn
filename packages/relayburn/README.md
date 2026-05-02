@@ -11,7 +11,7 @@ This is a thin wrapper that depends on [`@relayburn/cli`](https://www.npmjs.com/
 ```sh
 burn --help
 burn summary --since 7d
-burn budget --watch
+burn hotspots --since 7d
 ```
 
 See the project [README](https://github.com/AgentWorkforce/burn#readme) for full documentation.

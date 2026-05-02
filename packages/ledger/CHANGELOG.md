@@ -10,6 +10,10 @@ All notable changes to `@relayburn/ledger`.
 - New `sqlitePath()` export in `@relayburn/ledger`.
 - Parameterized adapter contract test suite (`adapter-suite.test.ts`) runs append/dedup/query/lock/content scenarios against both `file` and `sqlite` adapters.
 
+### Removed
+
+- Removed monthly plan config helpers and presets (`plansPath`, `loadPlans`, `savePlans`, `findPreset`) after retiring budget tracking.
+
 ## [1.2.2] - 2026-04-30
 
 ### Changed
