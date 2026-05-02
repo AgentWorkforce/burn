@@ -163,7 +163,7 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     // JSON contract: numeric usage fields are always numbers, but the
     // companion `fidelity` block is the only honest answer to "are these
     // zeros real?". Programmatic consumers should consult `summary` (the
-    // slice-wide rollup, same shape compare/hotspots/budget emit) and
+    // slice-wide rollup, same shape compare/hotspots emit) and
     // `perCell` (per-(model|provider) per-field known/missing counts) before
     // trusting any aggregate.
     const perCell = buildPerCellFidelity(rows, byProvider ? 'provider' : 'model');

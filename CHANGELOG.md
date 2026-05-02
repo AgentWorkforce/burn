@@ -8,6 +8,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - `RELAYBURN_STORAGE=sqlite` selects a new single-file SQLite backend (default path `~/.relayburn/burn.sqlite`, override via `RELAYBURN_SQLITE_PATH`). Replaces JSONL ledger + sidecars + `.idx` files with one DB; ingest paths use native `INSERT OR IGNORE` on content-addressed dedup hashes so multi-writer setups converge without external indexes.
 
+### Removed
+
+- Removed Burn's budget and quota tracking surfaces: `burn budget`, monthly plan config APIs, and the MCP `burn__currentBlock` tool are no longer shipped.
+
 ## [1.2.2] - 2026-04-30
 
 ### Changed
