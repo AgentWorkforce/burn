@@ -29,7 +29,7 @@ export async function ingest(opts = {}) {
 
 export async function summary(opts = {}) {
   return withHome(opts.ledgerHome, async () => {
-    const q = { sessionId: opts.session, project: opts.project, since: opts.since ? new Date(opts.since) : undefined };
+    const q = { sessionId: opts.session, project: opts.project, since: opts.since };
     const turns = await queryAll(q);
     const pricing = await loadPricing();
     const byTool = new Map();
@@ -38,8 +38,14 @@ export async function summary(opts = {}) {
     let totalCost = 0;
 
     for (const t of turns) {
-      const c = costForTurn(t, pricing).total;
-      const usage = t.usage.input + t.usage.output + t.usage.reasoning + t.usage.cacheRead + t.usage.cacheCreate;
+      const c = costForTurn(t, pricing)?.total ?? 0;
+      const usage =
+        t.usage.input +
+        t.usage.output +
+        t.usage.reasoning +
+        t.usage.cacheRead +
+        t.usage.cacheCreate5m +
+        t.usage.cacheCreate1h;
       totalTokens += usage;
       totalCost += c;
 
@@ -49,11 +55,11 @@ export async function summary(opts = {}) {
       byModel.set(t.model, model);
 
       for (const call of t.toolCalls) {
-        const tool = byTool.get(call.tool) ?? { tool: call.tool, tokens: 0, cost: 0, count: 0 };
+        const tool = byTool.get(call.name) ?? { tool: call.name, tokens: 0, cost: 0, count: 0 };
         tool.tokens += usage;
         tool.cost += c;
         tool.count += 1;
-        byTool.set(call.tool, tool);
+        byTool.set(call.name, tool);
       }
     }
 
