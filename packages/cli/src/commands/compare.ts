@@ -12,7 +12,7 @@ import {
 import { buildArchive, queryAll, type EnrichedTurn, type Query } from '@relayburn/ledger';
 import type { FidelityClass } from '@relayburn/reader';
 
-import { ingestAll } from '../ingest.js';
+import { ingestAll } from '@relayburn/ingest';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 import { filterTurnsByProvider, parseProviderFilter } from '../provider.js';

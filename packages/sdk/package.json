@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@relayburn/analyze": "workspace:*",
-    "@relayburn/cli": "workspace:*",
+    "@relayburn/ingest": "workspace:*",
     "@relayburn/ledger": "workspace:*"
   },
   "repository": {

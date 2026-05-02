@@ -2,7 +2,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 
 import type { ParsedArgs } from '../args.js';
-import type { IngestReport } from '../ingest.js';
+import type { IngestReport } from '@relayburn/ingest';
 import {
   mergeSpawnTags,
   readSpawnEnvTags,

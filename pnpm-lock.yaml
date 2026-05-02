@@ -29,6 +29,9 @@ importers:
       '@relayburn/analyze':
         specifier: workspace:*
         version: link:../analyze
+      '@relayburn/ingest':
+        specifier: workspace:*
+        version: link:../ingest
       '@relayburn/ledger':
         specifier: workspace:*
         version: link:../ledger
@@ -41,6 +44,15 @@ importers:
       ora:
         specifier: ^9.4.0
         version: 9.4.0
+
+  packages/ingest:
+    dependencies:
+      '@relayburn/ledger':
+        specifier: workspace:*
+        version: link:../ledger
+      '@relayburn/reader':
+        specifier: workspace:*
+        version: link:../reader
 
   packages/ledger:
     dependencies:
@@ -77,9 +89,9 @@ importers:
       '@relayburn/analyze':
         specifier: workspace:*
         version: link:../analyze
-      '@relayburn/cli':
+      '@relayburn/ingest':
         specifier: workspace:*
-        version: link:../cli
+        version: link:../ingest
       '@relayburn/ledger':
         specifier: workspace:*
         version: link:../ledger

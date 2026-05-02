@@ -5,19 +5,20 @@ Pairs with [`README.md`](./README.md) — README is what burn does, this file is
 
 ## Layout
 
-pnpm workspace, seven published packages in dependency order:
+pnpm workspace, eight published packages in dependency order:
 
 ```
 @relayburn/reader   — pure parsers (Claude Code / Codex / OpenCode session logs → TurnRecord)
 @relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
 @relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
+@relayburn/ingest   — session-store discovery + parse-and-append orchestration + pending stamps + watch loop
 @relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query
 @relayburn/cli      — `burn` binary (summary, hotspots, overhead, compare, `burn run <harness>` wrapper, mcp-server, …)
 @relayburn/sdk      — embeddable Node API (`ingest`, `summary`, `hotspots`) for in-process use
 relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
 ```
 
-`reader → ledger → analyze → mcp → cli → sdk → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
+`reader → ledger → analyze → ingest → mcp → cli → sdk → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
 
 ## Common commands
 
@@ -126,7 +127,7 @@ The CLI help block reads `listHarnessNames()` so it updates automatically.
 
 The codex / opencode adapters share the pending-stamp + watch-loop shape; both are constructed via `createPendingStampAdapter` in `harnesses/pending-stamp.ts`. New harnesses with the same shape can reuse it.
 
-`burn ingest` owns passive ingest modes: no flags scans all session stores once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven Claude hook path. The reusable polling controller lives in `packages/cli/src/watch-loop.ts`; import `startWatchLoop` from there for adapters.
+`burn ingest` owns passive ingest modes: no flags scans all session stores once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven Claude hook path. The reusable polling controller lives in `packages/ingest/src/watch-loop.ts`; import `startWatchLoop` from `@relayburn/ingest` for adapters.
 
 ## When in doubt
 

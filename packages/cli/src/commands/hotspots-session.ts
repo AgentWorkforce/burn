@@ -27,7 +27,7 @@ import type {
 } from '@relayburn/reader';
 import { parseBashCommand } from '@relayburn/reader';
 
-import { countToolCallGaps, ingestAll } from '../ingest.js';
+import { countToolCallGaps, ingestAll } from '@relayburn/ingest';
 import { formatInt, formatUsd, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 import { withProgress } from '../progress.js';

@@ -4,6 +4,7 @@
     { "path": "./packages/reader" },
     { "path": "./packages/ledger" },
     { "path": "./packages/analyze" },
+    { "path": "./packages/ingest" },
     { "path": "./packages/mcp" },
     { "path": "./packages/cli" }
   ]

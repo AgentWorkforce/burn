@@ -35,7 +35,7 @@ import type {
   UserTurnRecord,
 } from '@relayburn/reader';
 
-import { ingestAll } from '../ingest.js';
+import { ingestAll } from '@relayburn/ingest';
 import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 import { withProgress } from '../progress.js';

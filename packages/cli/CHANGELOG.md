@@ -8,6 +8,10 @@ All notable changes to `@relayburn/cli`.
 
 - `burn hotspots --patterns=tool-call-pattern` runs a new detector that flags vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), with per-detector table, JSON `toolCallPatterns` field, and inclusion in `--findings`. Vendor-neutral.
 
+### Changed
+
+- Ingest orchestration (`ingestAll`, `ingestClaudeProjects`, `ingestCodexSessions`, `ingestOpencodeSessions`, `ingestClaudeSession`, `reingestMissingContent`, pending-stamp resolution, the polling watch loop, and the `walkJsonl` / `walkOpencodeSessions` helpers) moved to a new `@relayburn/ingest` package. CLI commands and harness adapters now import from `@relayburn/ingest`; the existing CLI re-exports are preserved so embedders relying on `@relayburn/cli` exports keep working.
+
 ## [1.6.2] - 2026-05-02
 
 ### Changed

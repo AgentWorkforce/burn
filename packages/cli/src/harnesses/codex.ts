@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
-import { ingestCodexSessions } from '../ingest.js';
+import { ingestCodexSessions } from '@relayburn/ingest';
 
 import { createPendingStampAdapter } from './pending-stamp.js';
 

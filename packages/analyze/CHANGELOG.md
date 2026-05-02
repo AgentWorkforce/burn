@@ -7,6 +7,7 @@ All notable changes to `@relayburn/analyze`.
 ### Added
 
 - `detectToolCallPatterns` finds vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), plus a `toolCallPatternToFinding` adapter into `WasteFinding`. Vendor-neutral output — downstream tools map categories to specific consolidations.
+- `buildGhostSurfaceInputs`, `buildObservedNamesBySource`, `buildSessionCountBySource`, and `pickRepresentativeCacheReadRate` moved here from `@relayburn/cli`. CLI and SDK now share the same ghost-surface input pipeline so the SDK no longer needs to import CLI internals.
 
 ## [1.6.2] - 2026-05-02
 

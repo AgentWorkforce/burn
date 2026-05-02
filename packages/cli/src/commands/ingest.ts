@@ -27,12 +27,12 @@ import type { ClaudeCursor, OpencodeStreamCursor } from '@relayburn/ledger';
 import type { ParsedArgs } from '../args.js';
 import { formatInt } from '../format.js';
 import { startOpencodeEventStream } from '../opencode-stream.js';
-import { resolvePendingStampsForSession } from '../pending-stamps.js';
 import {
+  resolvePendingStampsForSession,
   runIngestTick,
   startWatchLoop,
   type WatchController,
-} from '../watch-loop.js';
+} from '@relayburn/ingest';
 import { withProgress } from '../progress.js';
 
 export {
@@ -40,7 +40,7 @@ export {
   startWatchLoop,
   type StartWatchLoopOptions,
   type WatchController,
-} from '../watch-loop.js';
+} from '@relayburn/ingest';
 
 const INGEST_HELP = `burn ingest — incremental ingest from agent session stores
 
