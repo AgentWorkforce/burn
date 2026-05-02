@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/reader",
-  "version": "1.5.0",
+  "version": "1.6.1",
   "description": "Pure parsers for agent CLI session logs → TurnRecord[]",
   "type": "module",
   "main": "./dist/index.js",
