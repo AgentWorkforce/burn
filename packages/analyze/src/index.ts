@@ -163,6 +163,18 @@ export type {
   ParsedOverheadFile,
 } from './overhead.js';
 export {
+  DEFAULT_FALLBACK_TOKEN_COST,
+  DEFAULT_REPLACED_TOOL_TOKEN_COST,
+  estimateSavingsForToolCall,
+  summarizeReplacementSavings,
+} from './replacement-savings.js';
+export type {
+  ReplacementSavingsOptions,
+  ReplacementSavingsSummary,
+  ToolCallSavings,
+  ToolSavingsAggregate,
+} from './replacement-savings.js';
+export {
   claudeGhostAdapter,
   codexGhostAdapter,
   DEFAULT_GHOST_ADAPTERS,

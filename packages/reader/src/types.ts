@@ -40,6 +40,13 @@ export interface ToolCall {
   // input. Populated by the OpenCode reader so the analyze package can
   // detect skill-recall duplication without re-parsing args.
   skillName?: string;
+  // Counterfactual annotations carried on the tool_result's `_meta` field by
+  // replacement tools (e.g. relaywash). `replacedTools` lists the built-in
+  // tools the call substituted for; `collapsedCalls` is the estimated count
+  // of vanilla tool calls this single call replaced. Populated by
+  // back-propagation from the next user line's tool_result block.
+  replacedTools?: string[];
+  collapsedCalls?: number;
 }
 
 export interface Subagent {
@@ -314,6 +321,12 @@ export interface ToolResultEventRecord {
   // Stable per-invocation id of the subagent the spawning tool call resolved
   // to. Mirrors `Subagent.agentId` so the two record types can be joined.
   agentId?: string;
+
+  // Counterfactual annotations carried on the tool_result's `_meta` field by
+  // replacement tools (e.g. relaywash). Mirrored on `ToolCall` so consumers
+  // can join either way. See ToolCall.replacedTools / ToolCall.collapsedCalls.
+  replacedTools?: string[];
+  collapsedCalls?: number;
 }
 
 // Emitted by session parsers when the agent harness performs context

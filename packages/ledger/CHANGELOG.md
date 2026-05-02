@@ -4,6 +4,10 @@ All notable changes to `@relayburn/ledger`.
 
 ## [Unreleased]
 
+### Added
+
+- SQLite archive `tool_calls` table now persists `replaced_tools` (JSON) and `collapsed_calls` via additive migration, and `queryAllFromArchive()` rehydrates `ToolCall.replacedTools` / `ToolCall.collapsedCalls` so the default archive code path preserves the counterfactual annotations introduced in #219.
+
 ## [1.6.2] - 2026-05-02
 
 ### Changed

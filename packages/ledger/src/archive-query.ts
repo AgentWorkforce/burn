@@ -149,6 +149,8 @@ interface ToolCallRow {
   target: string | null;
   args_hash: string | null;
   is_error: number | bigint | null;
+  replaced_tools: string | null;
+  collapsed_calls: number | bigint | null;
 }
 
 function buildSelect(q: Query): { sql: string; params: SQLInputValue[] } {
@@ -245,7 +247,8 @@ async function loadToolCallsForKeys(
     }
     const sql = `
       SELECT source, session_id, message_id, call_index, tool_use_id,
-             tool_name, target, args_hash, is_error
+             tool_name, target, args_hash, is_error,
+             replaced_tools, collapsed_calls
       FROM tool_calls
       WHERE (source, session_id, message_id) IN (${placeholders})
       ORDER BY source, session_id, message_id, call_index
@@ -268,6 +271,24 @@ async function loadToolCallsForKeys(
       };
       if (row.target !== null) tc.target = row.target;
       if (row.is_error !== null) tc.isError = Number(row.is_error) === 1;
+      if (row.replaced_tools !== null) {
+        try {
+          const parsed = JSON.parse(row.replaced_tools) as unknown;
+          if (Array.isArray(parsed)) {
+            const names = parsed.filter(
+              (v): v is string => typeof v === 'string' && v.length > 0,
+            );
+            if (names.length > 0) tc.replacedTools = names;
+          }
+        } catch {
+          // Malformed JSON in an additive column — drop silently rather than
+          // failing the whole archive read.
+        }
+      }
+      if (row.collapsed_calls !== null) {
+        const collapsed = Number(row.collapsed_calls);
+        if (Number.isFinite(collapsed) && collapsed > 0) tc.collapsedCalls = collapsed;
+      }
       list.push(tc);
     }
   }

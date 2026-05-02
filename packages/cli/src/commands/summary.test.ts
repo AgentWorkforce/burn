@@ -1203,3 +1203,150 @@ describe('burn summary per-cell fidelity (#136)', () => {
     assert.match(out.stdout, /partial coverage: 4 of 6 turns/);
   });
 });
+
+describe('burn summary replacement-tool savings (#219)', () => {
+  let tmpHome: string;
+  let tmpRelay: string;
+  const originalHome = process.env['HOME'];
+  const originalRelay = process.env['RELAYBURN_HOME'];
+  const originalArchive = process.env['RELAYBURN_ARCHIVE'];
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-summary-savings-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-summary-savings-relay-'));
+    process.env['HOME'] = tmpHome;
+    process.env['RELAYBURN_HOME'] = tmpRelay;
+    process.env['RELAYBURN_ARCHIVE'] = '0';
+    __resetIndexCacheForTesting();
+  });
+
+  afterEach(async () => {
+    await rm(tmpHome, { recursive: true, force: true });
+    await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  after(async () => {
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
+    else delete process.env['RELAYBURN_HOME'];
+    if (originalArchive !== undefined) process.env['RELAYBURN_ARCHIVE'] = originalArchive;
+    else delete process.env['RELAYBURN_ARCHIVE'];
+  });
+
+  it('default JSON exposes a replacementSavings block when annotations are present', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-rs',
+        messageId: 'rs-1',
+        toolCalls: [
+          {
+            id: 'tu-1',
+            name: 'relaywash__Search',
+            argsHash: 'h',
+            replacedTools: ['Glob', 'Grep', 'Read'],
+            collapsedCalls: 9,
+          },
+        ],
+      }),
+    ]);
+    const out = await captureSummary({ json: true });
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      replacementSavings?: {
+        calls: number;
+        collapsedCalls: number;
+        estimatedTokensSaved: number;
+        byTool: Array<{ tool: string; calls: number }>;
+      };
+    };
+    assert.ok(parsed.replacementSavings, 'replacementSavings block emitted');
+    assert.equal(parsed.replacementSavings!.calls, 1);
+    assert.equal(parsed.replacementSavings!.collapsedCalls, 9);
+    assert.ok(parsed.replacementSavings!.estimatedTokensSaved > 0);
+    assert.equal(parsed.replacementSavings!.byTool[0]!.tool, 'relaywash__Search');
+  });
+
+  it('omits the replacementSavings block when no turn carries annotations', async () => {
+    await appendTurns([fakeTurn({ sessionId: 's-no-rs', messageId: 'no-rs-1' })]);
+    const out = await captureSummary({ json: true });
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as { replacementSavings?: unknown };
+    assert.equal(parsed.replacementSavings, undefined);
+  });
+
+  it('default archive path also surfaces the replacementSavings block (#219 round-trip)', async () => {
+    // Override the suite-wide RELAYBURN_ARCHIVE=0 so loadTurns uses the
+    // SQLite archive, which is the production code path for `burn summary`.
+    delete process.env['RELAYBURN_ARCHIVE'];
+    try {
+      await appendTurns([
+        fakeTurn({
+          sessionId: 's-rs-arch',
+          messageId: 'rsa-1',
+          toolCalls: [
+            {
+              id: 'tu-arch-1',
+              name: 'relaywash__Search',
+              argsHash: 'h',
+              replacedTools: ['Glob', 'Grep', 'Read'],
+              collapsedCalls: 9,
+            },
+          ],
+        }),
+      ]);
+      const out = await captureSummary({ json: true });
+      assert.equal(out.code, 0);
+      const parsed = JSON.parse(out.stdout) as {
+        replacementSavings?: { collapsedCalls: number; estimatedTokensSaved: number };
+      };
+      assert.ok(parsed.replacementSavings, 'archive path emits replacementSavings');
+      assert.equal(parsed.replacementSavings!.collapsedCalls, 9);
+      assert.ok(parsed.replacementSavings!.estimatedTokensSaved > 0);
+    } finally {
+      process.env['RELAYBURN_ARCHIVE'] = '0';
+    }
+  });
+
+  it('--by-tool --json attaches a savings field to rows that carry annotations', async () => {
+    await appendTurns([
+      fakeTurn({
+        sessionId: 's-bt',
+        messageId: 'bt-1',
+        toolCalls: [
+          {
+            id: 'tu-bt-1',
+            name: 'relaywash__Search',
+            argsHash: 'h',
+            replacedTools: ['Read'],
+            collapsedCalls: 4,
+          },
+          { id: 'tu-bt-2', name: 'Bash', argsHash: 'h2' },
+        ],
+      }),
+      fakeTurn({
+        sessionId: 's-bt',
+        messageId: 'bt-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+    ]);
+    const out = await captureSummary({ json: true, 'by-tool': true });
+    assert.equal(out.code, 0);
+    const parsed = JSON.parse(out.stdout) as {
+      byTool: Array<{
+        tool: string;
+        savings?: { calls: number; collapsedCalls: number; estimatedTokensSaved: number };
+      }>;
+      replacementSavings?: { estimatedTokensSaved: number };
+    };
+    const search = parsed.byTool.find((r) => r.tool === 'relaywash__Search');
+    const bash = parsed.byTool.find((r) => r.tool === 'Bash');
+    assert.ok(search);
+    assert.ok(bash);
+    assert.ok(search!.savings, 'savings present on annotated tool row');
+    assert.equal(search!.savings!.collapsedCalls, 4);
+    assert.equal(bash!.savings, undefined);
+    assert.ok(parsed.replacementSavings!.estimatedTokensSaved > 0);
+  });
+});

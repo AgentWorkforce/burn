@@ -4,6 +4,10 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+### Added
+
+- Added `summarizeReplacementSavings()` and `estimateSavingsForToolCall()` to estimate tokens saved by replacement tools (e.g. relaywash) against the vanilla calls they collapse, using a static per-tool cost table (`DEFAULT_REPLACED_TOOL_TOKEN_COST`).
+
 ## [1.7.0] - 2026-05-02
 
 ### Added
