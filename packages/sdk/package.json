@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/sdk",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Embeddable Relayburn SDK for in-process ingest, summary, and hotspots queries",
   "type": "module",
   "main": "./index.js",
