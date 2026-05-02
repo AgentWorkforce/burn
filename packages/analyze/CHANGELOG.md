@@ -4,6 +4,8 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-02
+
 ### Added
 
 - `detectToolCallPatterns` finds vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), plus a `toolCallPatternToFinding` adapter into `WasteFinding`. Vendor-neutral output — downstream tools map categories to specific consolidations.

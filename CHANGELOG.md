@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-02
+
 ### Added
 
 - `burn hotspots --patterns=tool-call-pattern` flags vanilla call patterns with consolidatable overhead (Glob → Grep → Read sequences, single-file edit clusters, `git status` / `pnpm test` / `gh pr` Bash calls), with per-occurrence counts and token-overhead estimates. Vendor-neutral — downstream tools map patterns to specific consolidations.
