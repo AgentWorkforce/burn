@@ -140,8 +140,19 @@ export interface OverheadTrimResult {
 /** Trim recommendations for high-cost overhead-file sections. Powers `burn overhead trim`. */
 export declare function overheadTrim(opts?: OverheadTrimOptions): Promise<OverheadTrimResult>
 
+export type HotspotsGroupBy = 'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent';
+
 export interface HotspotsOptions {
   session?: string;
+  project?: string;
+  /** ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range (`24h`, `7d`, `4w`, `2m`). */
+  since?: string;
+  /**
+   * Narrow the attribution result to a single aggregation axis. When omitted
+   * (or `'attribution'`), the full attribution shape is returned. Ignored
+   * when `patterns` is set — patterns always returns the `findings` shape.
+   */
+  groupBy?: HotspotsGroupBy;
   /**
    * Pattern kinds to detect. Supported kinds:
    *   - core (via `detectPatterns`): `retry-loop`, `failure-run`,
@@ -149,13 +160,126 @@ export interface HotspotsOptions {
    *     `skill-recall-dup`, `skill-pruning-protection`, `system-prompt-tax`
    *   - side-channel: `tool-output-bloat`, `ghost-surface`, `tool-call-pattern`
    *
-   * When omitted or empty, returns the attribution result instead of a
-   * findings array.
+   * When omitted or empty, returns the attribution result instead of the
+   * findings shape.
    */
   patterns?: string[];
   ledgerHome?: string;
+  /** Optional logger invoked when the SQLite archive read fails and the SDK falls back to a full ledger walk. */
+  onLog?: (msg: string) => void;
 }
-export declare function hotspots(opts?: HotspotsOptions): Promise<unknown>
+
+/** Per-axis aggregation row (file). */
+export interface HotspotsFileRow {
+  path: string;
+  firstEmitTurnIndex: number;
+  initialTokens: number;
+  persistenceTokens: number;
+  ridingTurns: number;
+  totalCost: number;
+}
+
+/** Per-axis aggregation row (bash, exact command). */
+export interface HotspotsBashRow {
+  command: string | undefined;
+  argsHash: string;
+  callCount: number;
+  initialTokens: number;
+  persistenceTokens: number;
+  totalCost: number;
+}
+
+/** Per-axis aggregation row (bash, by leading verb). */
+export interface HotspotsBashVerbRow {
+  verb: string;
+  callCount: number;
+  distinctCommands: number;
+  initialTokens: number;
+  persistenceTokens: number;
+  avgPersistenceTurns: number;
+  totalCost: number;
+  topExamples: string[];
+}
+
+/** Per-axis aggregation row (subagent / Agent / Task). */
+export interface HotspotsSubagentRow {
+  subagentType: string;
+  callCount: number;
+  initialTokens: number;
+  persistenceTokens: number;
+  totalCost: number;
+}
+
+export interface HotspotsSessionTotal {
+  sessionId: string;
+  grandCost: number;
+  attributedCost: number;
+  unattributedCost: number;
+  attributionMethod: 'sized' | 'even-split';
+}
+
+export interface HotspotsFidelityBlock {
+  analyzed: number;
+  excluded: number;
+  /** Aggregate fidelity summary for the matched-window turns (analyzed + excluded). */
+  summary: unknown;
+  refused: boolean;
+}
+
+/** Full attribution shape — mirrors the CLI's `burn hotspots --json`. */
+export interface HotspotsAttributionResult {
+  kind: 'attribution';
+  turnsAnalyzed: number;
+  grandTotal: number;
+  attributedTotal: number;
+  unattributedTotal: number;
+  attributionDegraded: boolean;
+  sessions: HotspotsSessionTotal[];
+  files: HotspotsFileRow[];
+  bashVerbs: HotspotsBashVerbRow[];
+  bash: HotspotsBashRow[];
+  subagents: HotspotsSubagentRow[];
+  fidelity: HotspotsFidelityBlock;
+  /** Set when every matched turn lacked the coverage attribution needs. */
+  refused?: boolean;
+  refusalReason?: string;
+}
+
+/** Narrowed shapes — one aggregation axis only. */
+export interface HotspotsBashResult { kind: 'bash'; rows: HotspotsBashRow[]; refused?: boolean; refusalReason?: string }
+export interface HotspotsBashVerbResult { kind: 'bash-verb'; rows: HotspotsBashVerbRow[]; refused?: boolean; refusalReason?: string }
+export interface HotspotsFileResult { kind: 'file'; rows: HotspotsFileRow[]; refused?: boolean; refusalReason?: string }
+export interface HotspotsSubagentResult { kind: 'subagent'; rows: HotspotsSubagentRow[]; refused?: boolean; refusalReason?: string }
+
+export interface HotspotsFinding {
+  kind: string;
+  severity: string;
+  sessionId: string;
+  title: string;
+  estimatedSavings: { usdPerSession?: number; [k: string]: unknown };
+  [k: string]: unknown;
+}
+
+export interface HotspotsFindingsResult {
+  kind: 'findings';
+  findings: HotspotsFinding[];
+  /** Aggregate fidelity summary for the matched-window turns. */
+  summary: unknown;
+}
+
+export type HotspotsResult =
+  | HotspotsAttributionResult
+  | HotspotsBashResult
+  | HotspotsBashVerbResult
+  | HotspotsFileResult
+  | HotspotsSubagentResult
+  | HotspotsFindingsResult;
+
+/**
+ * Per-axis hotspot attribution + pattern-finding queries. Returns a
+ * discriminated union — see `HotspotsResult`.
+ */
+export declare function hotspots(opts?: HotspotsOptions): Promise<HotspotsResult>
 
 export type FidelityClass = 'full' | 'usage-only' | 'aggregate-only' | 'cost-only' | 'partial';
 

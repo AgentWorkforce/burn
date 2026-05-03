@@ -11,6 +11,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - **Architecture: `@relayburn/sdk` is now the canonical in-process query surface.** Dependency order moves from `… → mcp → cli → sdk → relayburn` to `… → sdk → mcp → cli → relayburn`; `@relayburn/mcp` now depends on `@relayburn/sdk` and rewrites `burn__sessionCost` as a thin wrapper over the SDK's new `sessionCost()` function. New read verbs should land in the SDK first; MCP and CLI become presenters (tool definitions / table rendering) over the same SDK calls so query logic stops drifting between them.
 - `burn compare` joins `summary` / `sessionCost` / `overhead` / `overheadTrim` as a thin presenter over `@relayburn/sdk`'s new `compare()` function. The archive-vs-ledger branching and fidelity-gate logic move into the SDK so a future `burn__compare` MCP tool (and embedders) can wrap the same call without re-implementing them.
 
+### Breaking Changes
+
+- `@relayburn/sdk` `hotspots()` now returns a discriminated union (`{ kind: 'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent' | 'findings' }`) instead of either a raw attribution blob or a flat findings array. CLI / MCP / embedded callers must branch on `kind`. Mirrors the shape `burn hotspots --json` emits and adds four narrow `groupBy` views for single-axis consumers.
+
 ## [1.8.0] - 2026-05-02
 
 ### Added

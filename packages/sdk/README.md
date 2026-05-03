@@ -35,9 +35,16 @@ const cmp = await compare({
 const oh = await overhead({ project: '/path/to/repo', since: '30d' });
 const trim = await overheadTrim({ project: '/path/to/repo', top: 3 });
 
+// Per-axis hotspot attribution + pattern findings. Returns a discriminated
+// union — branch on `kind`:
+//   { kind: 'attribution', files, bashVerbs, bash, subagents, sessions, … }
+//   { kind: 'bash' | 'bash-verb' | 'file' | 'subagent', rows: [...] }
+//   { kind: 'findings', findings: WasteFinding[], summary }
+const attribution = await hotspots({ session: 'session-id' });
+const fileRows = await hotspots({ session: 'session-id', groupBy: 'file' });
 const findings = await hotspots({ session: 'session-id', patterns: ['retry-loop'] });
 ```
 
-`summary`, `sessionCost`, `compare`, `overhead`, and `overheadTrim` read through the SQLite archive when available, transparently falling back to the JSONL ledger walk if the archive can't be opened. Pass `onLog` to surface fallback messages in your host's log channel.
+`summary`, `sessionCost`, `compare`, `overhead`, `overheadTrim`, and `hotspots` read through the SQLite archive when available, transparently falling back to the JSONL ledger walk if the archive can't be opened. Pass `onLog` to surface fallback messages in your host's log channel.
 
 `overheadTrim` includes a unified-diff string per recommendation by default (matches `burn overhead trim --json`); pass `includeDiff: false` to skip the per-file disk reads when you only need the recommendation rows.

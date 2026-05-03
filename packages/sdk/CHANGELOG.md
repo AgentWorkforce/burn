@@ -4,6 +4,17 @@ All notable changes to `@relayburn/sdk`.
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `hotspots()` now returns a discriminated union (`{ kind: 'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent' | 'findings' }`) instead of either an attribution blob or a raw findings array. Callers must branch on `kind`. The default (no `groupBy`, no `patterns`) returns the `attribution` shape that mirrors `burn hotspots --json`. Pass `patterns` to get `findings`. Pass `groupBy` to narrow attribution to one axis (`bash` / `bash-verb` / `file` / `subagent`). Warrants the SDK major bump.
+
+### Added
+
+- `hotspots({ groupBy })` narrows attribution to one aggregation axis: `bash`, `bash-verb`, `file`, or `subagent`. Useful for MCP tools and embedders that only want a single per-axis cut.
+- `hotspots({ project, since })` accept the same forwarded options the other SDK queries do (project filter + ISO/relative `since` window normalization).
+- `hotspots()` reads through the SQLite archive by default with transparent fallback to the JSONL ledger walk on archive failure. Pass `onLog` to capture the fallback reason.
+- `hotspots()` surfaces a coverage-refusal shape (`refused: true` + `refusalReason`) when every matched turn lacks the tool-call/tool-result coverage `attributeHotspots` needs, so presenters can map it to the user-facing exit-2 + stderr message.
+
 ## [1.9.0] - 2026-05-03
 
 ### Added
