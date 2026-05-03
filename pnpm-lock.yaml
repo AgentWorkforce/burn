@@ -41,6 +41,9 @@ importers:
       '@relayburn/reader':
         specifier: workspace:*
         version: link:../reader
+      '@relayburn/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       ora:
         specifier: ^9.4.0
         version: 9.4.0
@@ -98,6 +101,9 @@ importers:
       '@relayburn/ledger':
         specifier: workspace:*
         version: link:../ledger
+      '@relayburn/reader':
+        specifier: workspace:*
+        version: link:../reader
 
 packages:
 

@@ -26,6 +26,7 @@
     "@relayburn/ledger": "workspace:*",
     "@relayburn/analyze": "workspace:*",
     "@relayburn/ingest": "workspace:*",
+    "@relayburn/sdk": "workspace:*",
     "@relayburn/mcp": "workspace:*",
     "ora": "^9.4.0"
   },
