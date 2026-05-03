@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 pub type Enrichment = BTreeMap<String, String>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageIdRange {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub from_message_id: Option<String>,
@@ -413,6 +414,32 @@ mod tests {
         };
         let turn = json!({"sessionId": "x", "messageId": "y", "ts": "t"});
         assert!(!stamp_matches(&stamp, &turn));
+    }
+
+    #[test]
+    fn message_id_range_uses_camel_case() {
+        // Regression: Rust struct fields are snake_case but the wire format
+        // is camelCase (TS uses fromTs/toTs/fromMessageId/toMessageId).
+        // Without rename_all the range round-trip silently drops every
+        // field, breaking stamp-range filtering against TS-written stamps.
+        let range = MessageIdRange {
+            from_message_id: Some("m1".into()),
+            to_message_id: Some("m9".into()),
+            from_ts: Some("2026-01-01T00:00:00Z".into()),
+            to_ts: Some("2026-01-02T00:00:00Z".into()),
+        };
+        let json = serde_json::to_string(&range).unwrap();
+        assert!(json.contains("fromMessageId"));
+        assert!(json.contains("fromTs"));
+        assert!(!json.contains("from_ts"));
+
+        // Decoding TS-shaped input round-trips into the right fields.
+        let ts_payload = r#"{"fromTs":"a","toTs":"b","fromMessageId":"x","toMessageId":"y"}"#;
+        let parsed: MessageIdRange = serde_json::from_str(ts_payload).unwrap();
+        assert_eq!(parsed.from_ts.as_deref(), Some("a"));
+        assert_eq!(parsed.to_ts.as_deref(), Some("b"));
+        assert_eq!(parsed.from_message_id.as_deref(), Some("x"));
+        assert_eq!(parsed.to_message_id.as_deref(), Some("y"));
     }
 
     #[test]

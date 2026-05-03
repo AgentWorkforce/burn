@@ -107,6 +107,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   target         TEXT,
   args_hash      TEXT,
   is_error       INTEGER,
+  replaced_tools TEXT,
+  collapsed_calls INTEGER,
   PRIMARY KEY (source, session_id, message_id, call_index)
 );
 
@@ -247,6 +249,12 @@ fn apply_additive_migrations(conn: &Connection) -> Result<()> {
     ensure_column(conn, "turns", "subagent_description", "TEXT")?;
     ensure_column(conn, "sessions", "min_fidelity", "TEXT")?;
     ensure_column(conn, "sessions", "has_full_attribution", "INTEGER")?;
+    // Counterfactual annotations from replacement tools (e.g. relaywash).
+    // JSON-encoded list for `replaced_tools` so the column count stays
+    // bounded; `collapsed_calls` is a plain integer. Mirrors
+    // packages/ledger/src/archive.ts:380-381.
+    ensure_column(conn, "tool_calls", "replaced_tools", "TEXT")?;
+    ensure_column(conn, "tool_calls", "collapsed_calls", "INTEGER")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_turns_attribution_fidelity ON turns(attribution_fidelity);",
     )?;
