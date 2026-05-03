@@ -1,0 +1,9 @@
+[package]
+name = "relayburn-analyze"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pricing, cost derivation, hotspots, and overhead computation (Rust port)."
+publish = false

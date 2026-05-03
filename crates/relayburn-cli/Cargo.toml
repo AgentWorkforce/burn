@@ -1,0 +1,12 @@
+[package]
+name = "relayburn-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The `burn` CLI — published to crates.io. Crate name is relayburn-cli because `burn` is taken on crates.io; the binary keeps the `burn` invocation."
+
+[[bin]]
+name = "burn"
+path = "src/main.rs"

@@ -46,3 +46,43 @@ jobs:
 
       - name: Run tests
         run: pnpm run test
+
+  cargo-build-and-test:
+    # Sibling job to build-and-test: as the Rust port (#240) lands crate by
+    # crate, the Cargo workspace lives alongside the TS workspace. Run this
+    # job in parallel with the TS job so neither tree blocks the other.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        # rust-toolchain.toml at the repo root pins the channel + components.
+        # Run `rustup toolchain install` unconditionally so a stale preinstalled
+        # `stable` on the runner image is upgraded to whatever the pinned
+        # channel currently resolves to — otherwise a runner with an older
+        # stable can silently violate the workspace `rust-version`.
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Include Cargo.lock in the cache key so `cargo update` (or a
+          # transitive yank+replace) busts the cache even when no Cargo.toml
+          # changed; otherwise restored target/ artifacts can reference stale
+          # dependency code.
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Build workspace
+        run: cargo build --workspace --all-targets
+
+      - name: Run tests
+        run: cargo test --workspace

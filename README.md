@@ -301,6 +301,24 @@ pnpm dev:cli summary --since 24h
 Tests run against built `dist/` output. Use `pnpm run test:ts` to build and test
 in one command.
 
+### Rust port (in flight)
+
+Burn is being rewritten in Rust under epic [#240](https://github.com/AgentWorkforce/burn/issues/240).
+The repo currently carries both trees on `main`:
+
+- `packages/` — TypeScript workspace, source of truth today.
+- `crates/` — Cargo workspace skeleton ([#241](https://github.com/AgentWorkforce/burn/issues/241));
+  individual crates fill in over the course of the epic. Crate names are
+  prefixed `relayburn-*` (because `burn` is taken on crates.io) but the
+  produced binary is still invoked as `burn`.
+
+CI builds and tests both trees. Build the Rust workspace with:
+
+```bash
+cargo build --workspace
+cargo test --workspace
+```
+
 ## Pricing
 
 Burn ships with a vendored [models.dev](https://models.dev) pricing snapshot.
