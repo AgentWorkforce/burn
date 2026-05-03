@@ -9,6 +9,8 @@ All notable changes to `@relayburn/sdk`.
 - `sessionCost({ session })` returns the compact per-session cost shape (`totalUSD`, `totalTokens`, `turnCount`, `models`) the MCP `burn__sessionCost` tool now wraps directly.
 - `summary()` result now includes `turnCount`.
 - `summary()` and `sessionCost()` read through the SQLite archive by default with transparent fallback to the JSONL ledger walk on archive failure. Pass `onLog` to capture the fallback reason.
+- `overhead({ project, since?, kind? })` returns per-file + per-section overhead cost attribution (the JSON shape `burn overhead --json` now consumes).
+- `overheadTrim({ project, since?, kind?, top?, includeDiff? })` returns trim recommendations with projected savings and (by default) embedded unified diffs (the JSON shape `burn overhead trim --json` now consumes). Pass `includeDiff: false` to skip the per-file disk reads.
 
 ## [1.7.0] - 2026-05-02
 

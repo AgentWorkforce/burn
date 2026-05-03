@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Changed
+
+- `burn overhead` and `burn overhead trim` are now thin presenters over `@relayburn/sdk`'s new `overhead()` / `overheadTrim()` functions. Wire shape (TTY + `--json`) is unchanged; the discovery + ingest + attribution pipeline now lives in one place so future MCP tools can call it directly.
+
 ## [1.8.0] - 2026-05-02
 
 ### Added

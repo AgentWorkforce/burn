@@ -7,24 +7,32 @@ import {
   queryToolResultEvents,
 } from '@relayburn/ledger';
 import {
+  attributeOverhead,
   buildGhostSurfaceInputs,
-  loadPricing,
+  buildTrimRecommendations,
   costForTurn,
+  detectGhostSurface,
+  detectPatterns,
+  detectToolCallPatterns,
+  detectToolOutputBloat,
+  findingsFromPatterns,
+  findOverheadFiles,
+  ghostSurfaceToFinding,
+  loadClaudeSettings,
+  loadOverheadFile,
+  loadPricing,
+  projectClaudeSettingsPath,
+  renderUnifiedDiffForRecommendation,
   sumCosts,
   attributeHotspots,
-  detectPatterns,
-  findingsFromPatterns,
-  detectToolOutputBloat,
-  toolOutputBloatToFinding,
-  detectGhostSurface,
-  ghostSurfaceToFinding,
-  detectToolCallPatterns,
   toolCallPatternToFinding,
-  loadClaudeSettings,
+  toolOutputBloatToFinding,
   userClaudeSettingsPath,
-  projectClaudeSettingsPath,
 } from '@relayburn/analyze';
 import { ingestAll } from '@relayburn/ingest';
+import { resolveProject } from '@relayburn/reader';
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
 
 function withHome(home, fn) {
   const prev = process.env.RELAYBURN_HOME;
@@ -246,4 +254,175 @@ function bucketBySession(userTurns) {
     else out.set(ut.sessionId, [ut]);
   }
   return out;
+}
+
+const VALID_OVERHEAD_KINDS = ['claude-md', 'agents-md'];
+
+// Discover and parse overhead files for a project, returning the parsed files
+// alongside the cost attribution (per-file and per-section). Shared by
+// `overhead()` (report mode) and `overheadTrim()` (recommendations mode) so the
+// discovery + ingest + query + attribution pipeline lives in one place.
+async function gatherOverhead(opts = {}) {
+  const projectPath = opts.project ? path.resolve(opts.project) : process.cwd();
+  const kind = opts.kind;
+  if (kind !== undefined && !VALID_OVERHEAD_KINDS.includes(kind)) {
+    throw new Error(
+      `invalid overhead kind: ${JSON.stringify(kind)} (expected one of: ${VALID_OVERHEAD_KINDS.join(', ')})`,
+    );
+  }
+
+  let found = await findOverheadFiles(projectPath);
+  if (kind) found = found.filter((f) => f.kind === kind);
+  if (found.length === 0) {
+    return { projectPath, files: [], attribution: null };
+  }
+
+  const files = [];
+  for (const f of found) files.push(await loadOverheadFile(f));
+
+  const resolved = resolveProject(projectPath);
+  const q = { project: resolved.projectKey ?? projectPath };
+  if (opts.since) q.since = opts.since;
+
+  const turns = await loadTurnsViaArchive(q, opts.onLog);
+  const pricing = await loadPricing();
+  const attribution = attributeOverhead({ files, turns, pricing });
+  return { projectPath, files, attribution };
+}
+
+export async function overhead(opts = {}) {
+  return withHome(opts.ledgerHome, async () => {
+    const data = await gatherOverhead(opts);
+    if (!data.attribution) {
+      return { project: data.projectPath, files: [], perFile: [], grandTotal: 0 };
+    }
+    return {
+      project: data.projectPath,
+      files: data.files.map(({ file, parsed }) => ({
+        kind: file.kind,
+        path: file.path,
+        appliesTo: file.appliesTo,
+        totalLines: parsed.totalLines,
+        bytes: parsed.bytes,
+        tokens: parsed.tokens,
+        sections: parsed.sections,
+        groupingLevel: parsed.groupingLevel,
+      })),
+      perFile: data.attribution.perFile.map((p) => ({
+        path: p.file.path,
+        kind: p.file.kind,
+        appliesTo: p.file.appliesTo,
+        attribution: p.attribution,
+      })),
+      grandTotal: data.attribution.grandTotal,
+    };
+  });
+}
+
+export async function overheadTrim(opts = {}) {
+  return withHome(opts.ledgerHome, async () => {
+    const data = await gatherOverhead(opts);
+    const topPerFile = parseTopN(opts.top);
+    // The `since` label in the result is for human display ("Cost over 30d");
+    // callers can pass `sinceLabel` to keep the user-friendly form (e.g. "30d")
+    // even when `since` is an ISO timestamp. Falls back to the raw `since`
+    // value if no label is provided, then "all time" if nothing was passed.
+    const sinceLabel = opts.sinceLabel ?? opts.since ?? 'all time';
+    if (!data.attribution) {
+      return {
+        project: data.projectPath,
+        since: sinceLabel,
+        recommendations: [],
+        summary: {
+          filesAnalyzed: 0,
+          filesWithRecommendations: 0,
+          totalRecommendations: 0,
+          totalProjectedSavingsPerSession: 0,
+          totalProjectedSavingsAcrossWindow: 0,
+        },
+      };
+    }
+
+    // The diff field is the unified-diff text the trim recommendation would
+    // produce — heavy enough to opt out of but useful enough that the CLI's
+    // --json mode always emits it. Keep that default; allow opts.includeDiff
+    // === false to skip the file reads when a caller (e.g. a future MCP tool)
+    // only wants the recommendation rows.
+    const includeDiff = opts.includeDiff !== false;
+    const textCache = new Map();
+    const recommendations = [];
+    let filesWithRecommendations = 0;
+
+    for (const fileAttr of data.attribution.perFile) {
+      const recs = buildTrimRecommendations(fileAttr.attribution, topPerFile);
+      if (recs.length === 0) continue;
+      filesWithRecommendations++;
+      let text;
+      if (includeDiff) {
+        text = textCache.get(fileAttr.file.path);
+        if (text === undefined) {
+          text = await readFile(fileAttr.file.path, 'utf8');
+          textCache.set(fileAttr.file.path, text);
+        }
+      }
+      for (const rec of recs) {
+        const entry = {
+          file: toProjectRelativePath(fileAttr.file.path, data.projectPath),
+          kind: fileAttr.file.kind,
+          appliesTo: fileAttr.file.appliesTo,
+          section: {
+            heading: rec.section.heading,
+            startLine: rec.section.startLine,
+            endLine: rec.section.endLine,
+            tokens: rec.section.tokens,
+          },
+          projectedSavings: {
+            perSessionUsd: rec.projectedSavingsPerSession,
+            acrossWindowUsd: rec.projectedSavingsAcrossWindow,
+            tokens: rec.section.tokens,
+            tokenShare: rec.tokenShare,
+          },
+        };
+        if (includeDiff) {
+          entry.diff = renderUnifiedDiffForRecommendation(
+            fileAttr.file.path,
+            text,
+            rec,
+            data.projectPath,
+          );
+        }
+        recommendations.push(entry);
+      }
+    }
+
+    return {
+      project: data.projectPath,
+      since: sinceLabel,
+      recommendations,
+      summary: {
+        filesAnalyzed: data.files.length,
+        filesWithRecommendations,
+        totalRecommendations: recommendations.length,
+        totalProjectedSavingsPerSession: recommendations.reduce(
+          (sum, r) => sum + r.projectedSavings.perSessionUsd,
+          0,
+        ),
+        totalProjectedSavingsAcrossWindow: recommendations.reduce(
+          (sum, r) => sum + r.projectedSavings.acrossWindowUsd,
+          0,
+        ),
+      },
+    };
+  });
+}
+
+function parseTopN(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return 3;
+  return Math.floor(v);
+}
+
+function toProjectRelativePath(filePath, projectPath) {
+  const rel = path.relative(projectPath, filePath);
+  const display = rel && !rel.startsWith('..') ? rel : filePath;
+  return display.split(path.sep).join('/');
 }

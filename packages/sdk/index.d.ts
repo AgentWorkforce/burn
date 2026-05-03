@@ -37,6 +37,110 @@ export interface SessionCostResult {
 /** Compact session-scoped cost shape; powers the MCP `burn__sessionCost` tool. */
 export declare function sessionCost(opts?: SessionCostOptions): Promise<SessionCostResult>
 
+export type OverheadFileKind = 'claude-md' | 'agents-md';
+export type OverheadHarness = 'claude-code' | 'codex' | 'opencode';
+
+export interface OverheadOptions {
+  /** Project path to inspect; defaults to process.cwd(). */
+  project?: string;
+  /** Relative range like `7d` or ISO timestamp; passed to ledger query as `since`. */
+  since?: string;
+  /** Narrow to a single overhead file kind. */
+  kind?: OverheadFileKind;
+  ledgerHome?: string;
+  onLog?: (msg: string) => void;
+}
+
+export interface OverheadSection {
+  heading: string;
+  startLine: number;
+  endLine: number;
+  tokens: number;
+}
+
+export interface OverheadSectionCost {
+  filePath: string;
+  section: OverheadSection;
+  tokenShare: number;
+  costPerSession: number;
+  totalCost: number;
+}
+
+export interface OverheadAttributionDetail {
+  sessionCount: number;
+  perSessionAvg: number;
+  perSessionP95: number;
+  totalCost: number;
+  sectionCosts: OverheadSectionCost[];
+}
+
+export interface OverheadFileSummary {
+  kind: OverheadFileKind;
+  path: string;
+  appliesTo: OverheadHarness[];
+  totalLines: number;
+  bytes: number;
+  tokens: number;
+  sections: OverheadSection[];
+  groupingLevel: number;
+}
+
+export interface OverheadPerFileEntry {
+  path: string;
+  kind: OverheadFileKind;
+  appliesTo: OverheadHarness[];
+  attribution: OverheadAttributionDetail;
+}
+
+export interface OverheadResult {
+  project: string;
+  files: OverheadFileSummary[];
+  perFile: OverheadPerFileEntry[];
+  grandTotal: number;
+}
+
+/** Per-file + per-section overhead cost attribution. Powers `burn overhead`. */
+export declare function overhead(opts?: OverheadOptions): Promise<OverheadResult>
+
+export interface OverheadTrimOptions extends OverheadOptions {
+  /** Recommendations per file. Default 3. */
+  top?: number;
+  /** Skip the unified-diff text (saves a file read per recommended file). Default true. */
+  includeDiff?: boolean;
+  /** Display label echoed back as `since` in the result (e.g. "30d"). Defaults to `since`. */
+  sinceLabel?: string;
+}
+
+export interface OverheadTrimRecommendation {
+  file: string;
+  kind: OverheadFileKind;
+  appliesTo: OverheadHarness[];
+  section: { heading: string; startLine: number; endLine: number; tokens: number };
+  projectedSavings: {
+    perSessionUsd: number;
+    acrossWindowUsd: number;
+    tokens: number;
+    tokenShare: number;
+  };
+  diff?: string;
+}
+
+export interface OverheadTrimResult {
+  project: string;
+  since: string;
+  recommendations: OverheadTrimRecommendation[];
+  summary: {
+    filesAnalyzed: number;
+    filesWithRecommendations: number;
+    totalRecommendations: number;
+    totalProjectedSavingsPerSession: number;
+    totalProjectedSavingsAcrossWindow: number;
+  };
+}
+
+/** Trim recommendations for high-cost overhead-file sections. Powers `burn overhead trim`. */
+export declare function overheadTrim(opts?: OverheadTrimOptions): Promise<OverheadTrimResult>
+
 export interface HotspotsOptions {
   session?: string;
   /**

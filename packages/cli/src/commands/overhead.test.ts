@@ -2,13 +2,20 @@ import { strict as assert } from 'node:assert';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { loadBuiltinPricing } from '@relayburn/analyze';
+import { __resetIndexCacheForTesting, appendTurns } from '@relayburn/ledger';
 import type { TurnRecord } from '@relayburn/reader';
 
 import { runOverhead, type OverheadDeps } from './overhead.js';
 import type { ParsedArgs } from '../args.js';
+
+// Stop runOverhead from triggering a real `ingestAll()` against the user's
+// session stores during tests — that read can take minutes and pollutes the
+// isolated tmp ledger with unrelated data.
+const NOOP_DEPS: OverheadDeps = {
+  ingestAll: async () => ({ scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 }),
+};
 
 interface CapturedOutput {
   stdout: string;
@@ -17,8 +24,20 @@ interface CapturedOutput {
 }
 
 const tmpPaths: string[] = [];
+let ledgerHome: string;
+const originalHome = process.env['RELAYBURN_HOME'];
+
+beforeEach(async () => {
+  ledgerHome = await mkdtemp(path.join(tmpdir(), 'burn-overhead-ledger-'));
+  process.env['RELAYBURN_HOME'] = ledgerHome;
+  __resetIndexCacheForTesting();
+});
 
 afterEach(async () => {
+  if (originalHome !== undefined) process.env['RELAYBURN_HOME'] = originalHome;
+  else delete process.env['RELAYBURN_HOME'];
+  __resetIndexCacheForTesting();
+  await rm(ledgerHome, { recursive: true, force: true });
   await Promise.all(tmpPaths.splice(0).map((p) => rm(p, { recursive: true, force: true })));
 });
 
@@ -29,10 +48,7 @@ function args(
   return { flags, tags: {}, positional, passthrough: [] };
 }
 
-async function captureOverhead(
-  parsed: ParsedArgs,
-  deps: OverheadDeps,
-): Promise<CapturedOutput> {
+async function captureOverhead(parsed: ParsedArgs): Promise<CapturedOutput> {
   const origStdout = process.stdout.write.bind(process.stdout);
   const origStderr = process.stderr.write.bind(process.stderr);
   let stdout = '';
@@ -46,7 +62,7 @@ async function captureOverhead(
     return true;
   }) as typeof process.stderr.write;
   try {
-    const code = await runOverhead(parsed, deps);
+    const code = await runOverhead(parsed, NOOP_DEPS);
     return { stdout, stderr, code };
   } finally {
     process.stdout.write = origStdout;
@@ -77,15 +93,6 @@ function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
   };
 }
 
-async function makeDeps(turns: TurnRecord[]): Promise<OverheadDeps> {
-  const pricing = await loadBuiltinPricing();
-  return {
-    ingestAll: async () => ({ scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 }),
-    loadPricing: async () => pricing,
-    queryAll: async () => turns,
-  };
-}
-
 async function makeProject(fileText: string): Promise<string> {
   const projectPath = await mkdtemp(path.join(tmpdir(), 'burn-overhead-json-'));
   tmpPaths.push(projectPath);
@@ -105,11 +112,10 @@ describe('burn overhead trim --json', () => {
         'short section',
       ].join('\n'),
     );
-    const deps = await makeDeps([fakeTurn({ project: projectPath })]);
+    await appendTurns([fakeTurn({ project: projectPath })]);
 
     const out = await captureOverhead(
       args(['trim'], { project: projectPath, since: '30d', top: '1', json: true }),
-      deps,
     );
 
     assert.equal(out.code, 0);
@@ -147,11 +153,10 @@ describe('burn overhead trim --json', () => {
 
   it('emits an empty recommendations array when files have no headed trim candidates', async () => {
     const projectPath = await makeProject('plain instructions\nwithout headings\n');
-    const deps = await makeDeps([fakeTurn({ project: projectPath })]);
+    await appendTurns([fakeTurn({ project: projectPath })]);
 
     const out = await captureOverhead(
       args(['trim'], { project: projectPath, json: true }),
-      deps,
     );
 
     assert.equal(out.code, 0);
