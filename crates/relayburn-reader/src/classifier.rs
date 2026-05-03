@@ -670,7 +670,11 @@ fn first_top_level_operator(cmd: &str, operators: &[&'static str]) -> Option<OpH
         }
         if depth == 0 {
             for op in operators {
-                if cmd[i..].starts_with(op) {
+                // Compare against the byte slice rather than `cmd[i..]` —
+                // operators are all ASCII, and `i` may sit inside a multi-byte
+                // UTF-8 sequence (e.g. when `cmd` contains a path like
+                // `café.txt`), where `&str` slicing would panic.
+                if bytes[i..].starts_with(op.as_bytes()) {
                     return Some(OpHit {
                         index: i,
                         operator: op,
@@ -1263,6 +1267,17 @@ mod tests {
     fn parse_bash_strips_leading_cd() {
         let parsed = parse_bash_command("cd /tmp && pytest -q").expect("parse");
         assert_eq!(parsed.normalized, "pytest");
+    }
+
+    #[test]
+    fn parse_bash_handles_multibyte_utf8_arguments() {
+        // Regression: the operator scanner used to slice `cmd[i..]` at byte
+        // offsets, which panics when `i` lands inside a multi-byte sequence
+        // (e.g. an `é` in a path). Verify the parser stays alive.
+        let parsed = parse_bash_command("cat café.txt && pytest -q").expect("parse");
+        assert_eq!(parsed.normalized, "cat");
+        let parsed = parse_bash_command("git commit -m \"日本語\"").expect("parse");
+        assert_eq!(parsed.normalized, "git commit");
     }
 
     #[test]
