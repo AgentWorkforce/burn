@@ -262,7 +262,15 @@ const VALID_HOTSPOTS_GROUP_BY = ['attribution', 'bash', 'bash-verb', 'file', 'su
 // a settings.json read.
 export async function hotspots(opts = {}) {
   return withHome(opts.ledgerHome, async () => {
+    const usingPatterns = opts.patterns && opts.patterns.length > 0;
+
+    // Only validate `groupBy` when it actually steers the result. Per the
+    // documented mutual-exclusivity, passing `patterns` always returns
+    // findings and `groupBy` is ignored — including when its value is
+    // unknown — so callers that pass through a stale `groupBy` alongside
+    // `patterns` keep working.
     if (
+      !usingPatterns &&
       opts.groupBy !== undefined &&
       !VALID_HOTSPOTS_GROUP_BY.includes(opts.groupBy)
     ) {
@@ -272,17 +280,12 @@ export async function hotspots(opts = {}) {
       );
     }
 
-    const q = {};
-    if (opts.session) q.sessionId = opts.session;
-    if (opts.project) q.project = opts.project;
-    const since = normalizeSince(opts.since);
-    if (since) q.since = since;
-
+    const q = q_(opts);
     const turns = await loadTurnsViaArchive(q, opts.onLog);
     const pricing = await loadPricing();
 
-    if (opts.patterns && opts.patterns.length > 0) {
-      return runHotspotsFindings(turns, pricing, opts);
+    if (usingPatterns) {
+      return runHotspotsFindings(turns, pricing, opts, q);
     }
 
     return runHotspotsAttribution(turns, pricing, opts);
@@ -384,10 +387,19 @@ async function runHotspotsAttribution(turns, pricing, opts) {
   };
 }
 
-async function runHotspotsFindings(turns, pricing, opts) {
+async function runHotspotsFindings(turns, pricing, opts, q = {}) {
   const wanted = new Set(opts.patterns);
   const findings = [];
-  const userTurns = await queryUserTurns({ sessionId: opts.session });
+  // Forward `since` (and `sessionId`) so the user-turn + tool-result-event
+  // streams stay inside the same matched window the turn slice uses.
+  // Without this, detectors that read user-turn or tool-result-event state
+  // (system-prompt-tax, tool-output-bloat, retry/failure/cancellation graph
+  // walks) would mix older pre-window events into windowed analysis and
+  // surface false findings on long-lived sessions.
+  const sideQuery = {};
+  if (q.sessionId !== undefined) sideQuery.sessionId = q.sessionId;
+  if (q.since !== undefined) sideQuery.since = q.since;
+  const userTurns = await queryUserTurns(sideQuery);
   const userTurnsBySession = bucketBySession(userTurns);
 
   // Core patterns (retries, failures, edit-heavy, etc.) flow through
@@ -406,7 +418,7 @@ async function runHotspotsFindings(turns, pricing, opts) {
     if (userLoaded) settings.push(userLoaded);
     const projectLoaded = await loadClaudeSettings(projectClaudeSettingsPath());
     if (projectLoaded) settings.push(projectLoaded);
-    const toolResultEvents = await queryToolResultEvents({ sessionId: opts.session });
+    const toolResultEvents = await queryToolResultEvents(sideQuery);
     const bloats = detectToolOutputBloat({
       settings,
       toolResultEvents,

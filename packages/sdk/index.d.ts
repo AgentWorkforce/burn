@@ -181,7 +181,7 @@ export interface HotspotsFileRow {
 
 /** Per-axis aggregation row (bash, exact command). */
 export interface HotspotsBashRow {
-  command: string | null;
+  command: string | undefined;
   argsHash: string;
   callCount: number;
   initialTokens: number;
