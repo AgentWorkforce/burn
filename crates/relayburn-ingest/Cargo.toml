@@ -1,0 +1,9 @@
+[package]
+name = "relayburn-ingest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Session-store discovery, parse-and-append orchestration, pending stamps, and watch loop (Rust port)."
+publish = false

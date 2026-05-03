@@ -5,6 +5,15 @@ Pairs with [`README.md`](./README.md) — README is what burn does, this file is
 
 ## Layout
 
+The repo is a **dual tree** while the Rust port (epic #240) is in flight:
+
+- `packages/` — pnpm workspace, the eight published TS packages. Source of truth today.
+- `crates/` — Cargo workspace, the Rust port that will become the source of truth at the 2.0 cutover. Empty stubs until each crate's port issue lands (#242–#248).
+
+Both trees coexist on `main` until the cutover; CI builds and tests both. Don't edit one tree as a substitute for the other — each has its own port issue.
+
+### TS packages (`packages/`)
+
 pnpm workspace, eight published packages in dependency order:
 
 ```
@@ -20,6 +29,22 @@ relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the
 
 `reader → ledger → analyze → ingest → sdk → mcp → cli → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
 
+### Rust crates (`crates/`)
+
+Cargo workspace mirroring the TS dependency graph. Crate names are prefixed `relayburn-*` because `burn` is taken on crates.io; the binary keeps the `burn` invocation via `[[bin]] name = "burn"` in `relayburn-cli`.
+
+```
+relayburn-reader      — parsers + classifier (port of @relayburn/reader; #242)
+relayburn-ledger      — JSONL append + content sidecar + lock + sqlite archive (#243)
+relayburn-analyze     — pricing, cost derivation, hotspots, overhead (#244)
+relayburn-ingest      — session discovery + parse-and-append + pending stamps + watch loop (#245)
+relayburn-sdk         — PUBLISHED to crates.io; embedding API mirroring @relayburn/sdk (#246)
+relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary via [[bin]] rename (#248)
+relayburn-sdk-node    — napi-rs bindings; built in CI to produce @relayburn/sdk@2.0 .node artifacts (#247)
+```
+
+Build order matches TS: `relayburn-reader → -ledger → -analyze → -ingest → -sdk → -cli`, with `relayburn-sdk-node` depending on `relayburn-sdk`. Toolchain pinned in `rust-toolchain.toml` at the repo root.
+
 `@relayburn/sdk` owns the canonical query/compute surface — every new read verb should land there first as a pure function. `@relayburn/mcp` and `@relayburn/cli` are presenters: MCP wraps SDK calls in tool definitions, CLI wraps them in flag parsing + table rendering. Don't duplicate query logic across CLI/MCP — extract it into SDK.
 
 ## Common commands
@@ -32,6 +57,9 @@ pnpm run test:ts          # build + test in one shot
 pnpm dev:cli <args>       # run the local CLI against a built dist/
 
 pnpm run pricing:update   # refresh the vendored models.dev snapshot
+
+cargo build --workspace   # Rust port skeleton (no runtime code yet; #242–#248 fill it in)
+cargo test --workspace    # Rust port tests
 ```
 
 Tests run from `dist/` so a stale build will lie. If a test fails unexpectedly, rebuild before debugging.

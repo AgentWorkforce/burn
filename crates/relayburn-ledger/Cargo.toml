@@ -1,0 +1,9 @@
+[package]
+name = "relayburn-ledger"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Append-only JSONL ledger, content sidecar, lock protocol, and SQLite archive (Rust port)."
+publish = false

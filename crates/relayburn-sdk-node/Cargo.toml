@@ -1,0 +1,9 @@
+[package]
+name = "relayburn-sdk-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "napi-rs bindings over relayburn-sdk — built in CI to produce the @relayburn/sdk npm artifacts. Not published to crates.io."
+publish = false
