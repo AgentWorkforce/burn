@@ -58,8 +58,12 @@ jobs:
 
       - name: Setup Rust toolchain
         # rust-toolchain.toml at the repo root pins the channel + components.
+        # Run `rustup toolchain install` unconditionally so a stale preinstalled
+        # `stable` on the runner image is upgraded to whatever the pinned
+        # channel currently resolves to — otherwise a runner with an older
+        # stable can silently violate the workspace `rust-version`.
         run: |
-          rustup show active-toolchain || rustup toolchain install
+          rustup toolchain install
           rustup component add rustfmt clippy
 
       - name: Cache cargo registry + target
@@ -69,7 +73,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          # Include Cargo.lock in the cache key so `cargo update` (or a
+          # transitive yank+replace) busts the cache even when no Cargo.toml
+          # changed; otherwise restored target/ artifacts can reference stale
+          # dependency code.
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
             cargo-${{ runner.os }}-
 
