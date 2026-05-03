@@ -11,6 +11,7 @@ All notable changes to `@relayburn/sdk`.
 - `summary()` and `sessionCost()` read through the SQLite archive by default with transparent fallback to the JSONL ledger walk on archive failure. Pass `onLog` to capture the fallback reason.
 - `overhead({ project, since?, kind? })` returns per-file + per-section overhead cost attribution (the JSON shape `burn overhead --json` now consumes).
 - `overheadTrim({ project, since?, kind?, top?, includeDiff? })` returns trim recommendations with projected savings and (by default) embedded unified diffs (the JSON shape `burn overhead trim --json` now consumes). Pass `includeDiff: false` to skip the per-file disk reads.
+- `summary({ since })` and `overhead({ since })` / `overheadTrim({ since })` now accept either an ISO timestamp or a relative range (`24h`, `7d`, `4w`, `2m`); the SDK normalizes both forms before querying the ledger so direct SDK callers get the same forgiving input shape CLI users have. Previously a raw relative string would silently filter out every turn.
 
 ## [1.7.0] - 2026-05-02
 

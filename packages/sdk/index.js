@@ -73,6 +73,37 @@ async function loadSessionTurnsViaArchive(sessionId, onLog) {
   }
 }
 
+// Accept either a CLI-style relative range (`24h`, `7d`, `4w`, `2m`) or an
+// ISO timestamp and return an ISO string the ledger query can compare. The
+// ledger filter does lexical string comparison on `turn.ts`, so passing a raw
+// `7d` would silently filter every turn out (since `'7'` > `'2'` lexically).
+// Lifted from `packages/cli/src/format.ts` so direct SDK callers (and future
+// MCP tools) get the same forgiving input shape the CLI users see, without
+// the silent-drop trap.
+function normalizeSince(since) {
+  if (since === undefined) return undefined;
+  if (typeof since !== 'string' || since.length === 0) return undefined;
+  const m = /^(\d+)([hdwm])$/.exec(since);
+  if (!m) {
+    const d = new Date(since);
+    if (Number.isNaN(d.getTime())) {
+      throw new Error(`invalid since: ${since} (expected ISO timestamp or relative range like 7d)`);
+    }
+    return d.toISOString();
+  }
+  const n = parseInt(m[1], 10);
+  const unit = m[2];
+  const ms =
+    unit === 'h'
+      ? n * 3600_000
+      : unit === 'd'
+        ? n * 86400_000
+        : unit === 'w'
+          ? n * 7 * 86400_000
+          : /* m */ n * 30 * 86400_000;
+  return new Date(Date.now() - ms).toISOString();
+}
+
 export class Ledger {
   static async open(opts = {}) {
     return new Ledger(opts.home);
@@ -89,7 +120,7 @@ export async function ingest(opts = {}) {
 
 export async function summary(opts = {}) {
   return withHome(opts.ledgerHome, async () => {
-    const q = { sessionId: opts.session, project: opts.project, since: opts.since };
+    const q = { sessionId: opts.session, project: opts.project, since: normalizeSince(opts.since) };
     const turns = await loadTurnsViaArchive(q, opts.onLog);
     const pricing = await loadPricing();
     const byTool = new Map();
@@ -282,7 +313,8 @@ async function gatherOverhead(opts = {}) {
 
   const resolved = resolveProject(projectPath);
   const q = { project: resolved.projectKey ?? projectPath };
-  if (opts.since) q.since = opts.since;
+  const normalizedSince = normalizeSince(opts.since);
+  if (normalizedSince) q.since = normalizedSince;
 
   const turns = await loadTurnsViaArchive(q, opts.onLog);
   const pricing = await loadPricing();
@@ -323,11 +355,7 @@ export async function overheadTrim(opts = {}) {
   return withHome(opts.ledgerHome, async () => {
     const data = await gatherOverhead(opts);
     const topPerFile = parseTopN(opts.top);
-    // The `since` label in the result is for human display ("Cost over 30d");
-    // callers can pass `sinceLabel` to keep the user-friendly form (e.g. "30d")
-    // even when `since` is an ISO timestamp. Falls back to the raw `since`
-    // value if no label is provided, then "all time" if nothing was passed.
-    const sinceLabel = opts.sinceLabel ?? opts.since ?? 'all time';
+    const sinceLabel = opts.since ?? 'all time';
     if (!data.attribution) {
       return {
         project: data.projectPath,

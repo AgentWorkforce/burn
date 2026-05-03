@@ -13,7 +13,7 @@ import {
   type OverheadTrimResult,
 } from '@relayburn/sdk';
 
-import { formatInt, formatUsd, parseSinceArg, table } from '../format.js';
+import { formatInt, formatUsd, table } from '../format.js';
 import type { ParsedArgs } from '../args.js';
 import { withProgress } from '../progress.js';
 
@@ -67,10 +67,7 @@ export async function runOverhead(args: ParsedArgs, deps: OverheadDeps = {}): Pr
 
 interface CommonFlags {
   projectPath: string;
-  /** Original user-facing `--since` string, retained for the "Cost over <since>" render label. */
-  sinceLabel: string | undefined;
-  /** ISO timestamp form passed to the SDK / ledger query. */
-  sinceIso: string | undefined;
+  since: string | undefined;
   kind: OverheadFileKind | undefined;
 }
 
@@ -82,8 +79,7 @@ function parseCommonFlags(args: ParsedArgs): CommonFlags | { error: string } {
       : process.cwd();
 
   const sinceFlag = args.flags['since'];
-  const sinceLabel = typeof sinceFlag === 'string' ? sinceFlag : undefined;
-  const sinceIso = sinceLabel !== undefined ? parseSinceArg(sinceLabel) : undefined;
+  const since = typeof sinceFlag === 'string' ? sinceFlag : undefined;
 
   const kindFlag = args.flags['kind'];
   let kind: OverheadFileKind | undefined;
@@ -96,7 +92,7 @@ function parseCommonFlags(args: ParsedArgs): CommonFlags | { error: string } {
     kind = kindFlag as OverheadFileKind;
   }
 
-  return { projectPath, sinceLabel, sinceIso, kind };
+  return { projectPath, since, kind };
 }
 
 async function runReport(args: ParsedArgs, deps: OverheadDeps): Promise<number> {
@@ -118,7 +114,7 @@ async function runReport(args: ParsedArgs, deps: OverheadDeps): Promise<number> 
     const opts: { project: string; since?: string; kind?: OverheadFileKind } = {
       project: parsed.projectPath,
     };
-    if (parsed.sinceIso !== undefined) opts.since = parsed.sinceIso;
+    if (parsed.since !== undefined) opts.since = parsed.since;
     if (parsed.kind !== undefined) opts.kind = parsed.kind;
     const r = await sdkOverhead(opts);
     task.succeed(`attributed overhead cost across ${formatInt(r.files.length)} file${r.files.length === 1 ? '' : 's'}`);
@@ -146,7 +142,7 @@ async function runReport(args: ParsedArgs, deps: OverheadDeps): Promise<number> 
   out.push(`Overhead files in ${result.project}:`);
   out.push('');
 
-  const sinceLabel = parsed.sinceLabel ?? 'all time';
+  const sinceLabel = parsed.since ?? 'all time';
 
   // Pair each per-file attribution row with the parsed-file metadata (lines /
   // tokens) the renderer needs for the header line. SDK keeps them as separate
@@ -220,8 +216,7 @@ async function runTrim(args: ParsedArgs, deps: OverheadDeps): Promise<number> {
 
   const result = await withProgress('building trim recommendations', async (task) => {
     const opts: OverheadTrimOptions = { project: parsed.projectPath, top };
-    if (parsed.sinceIso !== undefined) opts.since = parsed.sinceIso;
-    if (parsed.sinceLabel !== undefined) opts.sinceLabel = parsed.sinceLabel;
+    if (parsed.since !== undefined) opts.since = parsed.since;
     if (parsed.kind !== undefined) opts.kind = parsed.kind;
     const r = await sdkOverheadTrim(opts);
     task.succeed(

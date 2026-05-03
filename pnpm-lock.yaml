@@ -101,6 +101,9 @@ importers:
       '@relayburn/ledger':
         specifier: workspace:*
         version: link:../ledger
+      '@relayburn/reader':
+        specifier: workspace:*
+        version: link:../reader
 
 packages:
 

@@ -7,6 +7,7 @@ export declare function ingest(opts?: IngestOptions): Promise<unknown>
 export interface SummaryOptions {
   session?: string;
   project?: string;
+  /** ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range (`24h`, `7d`, `4w`, `2m`). */
   since?: string;
   ledgerHome?: string;
   /** Optional logger invoked when the SQLite archive read fails and the SDK falls back to a full ledger walk. */
@@ -43,7 +44,7 @@ export type OverheadHarness = 'claude-code' | 'codex' | 'opencode';
 export interface OverheadOptions {
   /** Project path to inspect; defaults to process.cwd(). */
   project?: string;
-  /** Relative range like `7d` or ISO timestamp; passed to ledger query as `since`. */
+  /** ISO timestamp or relative range (`24h`, `7d`, `4w`, `2m`); the SDK normalizes both forms before querying. */
   since?: string;
   /** Narrow to a single overhead file kind. */
   kind?: OverheadFileKind;
@@ -105,10 +106,8 @@ export declare function overhead(opts?: OverheadOptions): Promise<OverheadResult
 export interface OverheadTrimOptions extends OverheadOptions {
   /** Recommendations per file. Default 3. */
   top?: number;
-  /** Skip the unified-diff text (saves a file read per recommended file). Default true. */
+  /** Include the unified-diff text per recommendation (requires a file read per recommended file). Default true; pass false to skip. */
   includeDiff?: boolean;
-  /** Display label echoed back as `since` in the result (e.g. "30d"). Defaults to `since`. */
-  sinceLabel?: string;
 }
 
 export interface OverheadTrimRecommendation {
