@@ -91,57 +91,96 @@ jobs:
           # `@relayburn/cli`, so cli must publish before relayburn.
           echo "packages=reader ledger analyze ingest sdk mcp cli relayburn" >> "$GITHUB_OUTPUT"
 
-      # Catch the failure mode that bit us on 2026-04-23: a previous publish
-      # run shipped @relayburn/*@0.3.0 to npm but failed at the Tag + push
-      # step, so neither the *-v0.3.0 tag nor the chore(release) commit
-      # landed. The next run cloned at 0.2.0, bumped to 0.3.0 again, and
-      # got "cannot publish over previously published versions: 0.3.0".
-      # If the highest stable version on npm is greater than what
-      # package.json says, abort here with a clear remediation message
-      # rather than letting the bump produce a doomed version downstream.
-      - name: Verify local versions are in sync with npm
+      # Lockstep baseline heal. The workspace publishes every package at the
+      # same version, so if any package's local version lags either its own
+      # npm `latest` or another workspace package, pull it up to the highest
+      # stable version across the whole set before the bump step runs. This
+      # absorbs two failure modes:
+      #
+      #   1. A previous publish run shipped @relayburn/*@X to npm but failed
+      #      at the Tag + push step (the original 2026-04-23 incident).
+      #   2. A new package was extracted into the workspace (e.g. ingest @ 1.6.2
+      #      between v1.7.0 and v1.8.0) and is starting below the lockstep
+      #      version.
+      #
+      # The downstream "Verify new versions are not yet published" step still
+      # catches the case where the post-bump version collides with an existing
+      # npm version, so a stray manual publish at a wildly higher version will
+      # surface as a publish-time error after the heal rather than silently
+      # promoting the whole workspace into it.
+      - name: Heal local versions to lockstep baseline
         run: |
           set -euo pipefail
-          for pkg in ${{ steps.targets.outputs.packages }}; do
-            LOCAL=$(node -p "require('./packages/$pkg/package.json').version")
-            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
-            REMOTE=$(npm view "$NPM_NAME" versions --json 2>/dev/null \
-              | node -e '
-                const raw = require("fs").readFileSync(0, "utf8").trim() || "[]";
-                const parsed = JSON.parse(raw);
-                const arr = Array.isArray(parsed) ? parsed : [parsed];
-                const stable = arr.filter((v) => typeof v === "string" && !v.includes("-"));
-                stable.sort((a, b) => {
-                  const pa = a.split(".").map(Number);
-                  const pb = b.split(".").map(Number);
-                  for (let i = 0; i < 3; i++) {
-                    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
-                  }
-                  return 0;
-                });
-                process.stdout.write(stable.length ? stable[stable.length - 1] : "");
-              ' || echo "")
-            if [ -z "$REMOTE" ]; then
-              echo "$NPM_NAME: no stable releases on npm yet — OK"
-              continue
-            fi
-            CMP=$(node -e '
-              const [a, b] = process.argv.slice(1);
-              const pa = a.split(".").map(Number);
-              const pb = b.split(".").map(Number);
-              for (let i = 0; i < 3; i++) {
-                const da = pa[i] || 0;
-                const db = pb[i] || 0;
-                if (da !== db) { console.log(da < db ? -1 : 1); process.exit(0); }
-              }
-              console.log(0);
-            ' "$LOCAL" "$REMOTE")
-            if [ "$CMP" = "-1" ]; then
-              echo "::error title=npm/git version drift::$NPM_NAME: package.json is at $LOCAL but npm has $REMOTE published. A previous publish run likely succeeded on npm but failed before tagging. Bump packages/$pkg/package.json to >= $REMOTE on a branch, push, then re-run this workflow. (You may also want to tag the prior release commit as $pkg-v$REMOTE so the changelog generator picks the right baseline.)"
-              exit 1
-            fi
-            echo "$NPM_NAME: local=$LOCAL, npm=$REMOTE — OK"
-          done
+          cat > /tmp/lockstep-heal.mjs << 'HEALEOF'
+          import { execSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+
+          const packages = process.argv.slice(2);
+          const cmp = (a, b) => {
+            const pa = a.split('.').map(Number);
+            const pb = b.split('.').map(Number);
+            for (let i = 0; i < 3; i++) {
+              const da = pa[i] || 0;
+              const db = pb[i] || 0;
+              if (da !== db) return da - db;
+            }
+            return 0;
+          };
+          const isStable = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
+
+          const info = packages.map((pkg) => {
+            const json = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf8'));
+            let npmHighest = null;
+            try {
+              const raw = execSync(`npm view ${json.name} versions --json`, {
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'ignore'],
+              }).trim() || '[]';
+              const parsed = JSON.parse(raw);
+              const arr = Array.isArray(parsed) ? parsed : [parsed];
+              const stable = arr.filter(isStable).sort(cmp);
+              if (stable.length) npmHighest = stable[stable.length - 1];
+            } catch {
+              // unpublished package: leave npmHighest null
+            }
+            return { pkg, name: json.name, local: json.version, npmHighest };
+          });
+
+          const candidates = info.flatMap((e) => [e.local, e.npmHighest]).filter(isStable);
+          if (candidates.length === 0) {
+            console.log('Lockstep baseline: (no stable versions yet, skipping heal)');
+            process.exit(0);
+          }
+          candidates.sort(cmp);
+          const baseline = candidates[candidates.length - 1];
+          console.log(`Lockstep baseline: ${baseline}`);
+
+          const heals = [];
+          for (const e of info) {
+            const remote = e.npmHighest ?? 'unpublished';
+            if (isStable(e.local) && cmp(e.local, baseline) < 0) {
+              heals.push(e);
+              console.log(`  ${e.name}: local=${e.local} npm=${remote} — healing to ${baseline}`);
+            } else {
+              console.log(`  ${e.name}: local=${e.local} npm=${remote} — OK`);
+            }
+          }
+
+          for (const e of heals) {
+            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version`, {
+              cwd: `packages/${e.pkg}`,
+              stdio: 'inherit',
+            });
+          }
+
+          if (heals.length === 0) {
+            console.log('All packages at baseline — no heal needed.');
+          } else {
+            console.log(`Healed ${heals.length} package(s) up to ${baseline}.`);
+          }
+          HEALEOF
+
+          node /tmp/lockstep-heal.mjs ${{ steps.targets.outputs.packages }}
 
       - name: Bump versions
         id: bump
