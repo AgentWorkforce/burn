@@ -4,6 +4,12 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-05-03
+
+### Changed
+
+- Expand @relayburn/sdk hotspots() to a discriminated union (closes #234) (#234)
+
 ## [1.9.0] - 2026-05-03
 
 ### Changed

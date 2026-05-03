@@ -4,6 +4,8 @@ All notable changes to `@relayburn/sdk`.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-05-03
+
 ### Breaking Changes
 
 - `hotspots()` now returns a discriminated union (`{ kind: 'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent' | 'findings' }`) instead of either an attribution blob or a raw findings array. Callers must branch on `kind`. The default (no `groupBy`, no `patterns`) returns the `attribution` shape that mirrors `burn hotspots --json`. Pass `patterns` to get `findings`. Pass `groupBy` to narrow attribution to one axis (`bash` / `bash-verb` / `file` / `subagent`). Warrants the SDK major bump.
