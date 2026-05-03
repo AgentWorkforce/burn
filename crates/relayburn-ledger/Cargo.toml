@@ -7,3 +7,16 @@ license.workspace = true
 repository.workspace = true
 description = "Append-only JSONL ledger, content sidecar, lock protocol, and SQLite archive (Rust port)."
 publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rusqlite = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+tokio = { workspace = true, features = ["sync", "rt", "macros", "fs", "io-util", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
