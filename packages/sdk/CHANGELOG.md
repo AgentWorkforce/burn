@@ -4,6 +4,8 @@ All notable changes to `@relayburn/sdk`.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-05-03
+
 ### Added
 
 - `compare({ models, … })` returns the per-(model, activity) `CompareResult` shape (`analyzedTurns`, `models`, `categories`, `totals`, flat `cells[]`, `fidelity { minimum, excluded, summary }`) — the JSON object `burn compare --json` now emits. Mirrors the CLI's archive-vs-ledger branching: archive when `minFidelity === 'partial'` and no provider filter, ledger walk otherwise. Falls back transparently to the ledger walk when the archive read fails.

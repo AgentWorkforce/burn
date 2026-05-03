@@ -4,6 +4,12 @@ All notable changes to `@relayburn/analyze`.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-05-03
+
+### Changed
+
+- Extract ingest orchestration into @relayburn/ingest (#230)
+
 ## [1.8.0] - 2026-05-02
 
 ### Added

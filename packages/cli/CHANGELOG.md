@@ -4,6 +4,8 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-05-03
+
 ### Changed
 
 - `burn compare` is now a thin presenter over `@relayburn/sdk`'s new `compare()` function. Flag parsing, ingest, and TTY/JSON/CSV rendering stay in the CLI; the archive-vs-ledger branching, fidelity gate, and result shaping live in the SDK. Wire shape (TTY + `--json` + `--csv`) is unchanged.

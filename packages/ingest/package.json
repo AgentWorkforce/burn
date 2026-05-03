@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/ingest",
-  "version": "1.6.2",
+  "version": "1.9.0",
   "description": "Session-store discovery, parse-and-append orchestration, and watch-loop primitives for relayburn",
   "type": "module",
   "main": "./dist/index.js",
