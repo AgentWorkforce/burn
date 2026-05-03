@@ -1,16 +1,19 @@
 import {
   buildCompareTable,
-  compareFromArchive,
   DEFAULT_MIN_SAMPLE,
   hasMinimumFidelity,
   loadPricing,
   summarizeFidelity,
-  type CompareCell,
-  type CompareTable,
   type FidelitySummary,
 } from '@relayburn/analyze';
-import { buildArchive, queryAll, type EnrichedTurn, type Query } from '@relayburn/ledger';
+import { type EnrichedTurn, type Query } from '@relayburn/ledger';
 import type { FidelityClass } from '@relayburn/reader';
+import {
+  compare as sdkCompare,
+  type CompareCellResult,
+  type CompareExcludedBreakdown,
+  type CompareResult,
+} from '@relayburn/sdk';
 
 import { ingestAll } from '@relayburn/ingest';
 import { formatInt, formatUsd, parseSinceArg } from '../format.js';
@@ -117,8 +120,6 @@ export async function runCompare(
     return 2;
   }
 
-  // Required positional: a comma-separated list of >=2 models. Same
-  // trim/dedupe rules the old --models flag used.
   const seen = new Set<string>();
   const models: string[] = [];
   if (typeof first === 'string') {
@@ -135,12 +136,12 @@ export async function runCompare(
     return 2;
   }
 
-  const q: Query = {};
-  if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
-  if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
-  if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
-  if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
-  if (typeof args.flags['agent'] === 'string') q.enrichment = { ...(q.enrichment ?? {}), agentId: args.flags['agent'] };
+  const since = typeof args.flags['since'] === 'string' ? parseSinceArg(args.flags['since']) : undefined;
+  const project = typeof args.flags['project'] === 'string' ? args.flags['project'] : undefined;
+  const session = typeof args.flags['session'] === 'string' ? args.flags['session'] : undefined;
+  const workflow = typeof args.flags['workflow'] === 'string' ? args.flags['workflow'] : undefined;
+  const agent = typeof args.flags['agent'] === 'string' ? args.flags['agent'] : undefined;
+
   const providerFilter = parseProviderFilter(args.flags['provider']);
   if (providerFilter instanceof Error) {
     process.stderr.write(providerFilter.message);
@@ -154,9 +155,8 @@ export async function runCompare(
     return 2;
   }
 
-  // Resolve --fidelity / --include-partial. --include-partial is just sugar
-  // for --fidelity partial; passing both is fine as long as they agree, and
-  // we error otherwise so the user doesn't get a surprising effective level.
+  // Resolve --fidelity / --include-partial. --include-partial is sugar for
+  // --fidelity partial; passing both is fine if they agree, error otherwise.
   const includePartial = args.flags['include-partial'] === true;
   const fidelityFlag = args.flags['fidelity'];
   let minFidelity: FidelityClass = 'usage-only';
@@ -188,15 +188,52 @@ export async function runCompare(
     return 2;
   }
 
-  const ingest = deps.ingestAll ?? ingestAll;
-  const query = deps.queryAll ?? queryAll;
-  const loadPricingFn = deps.loadPricing ?? loadPricing;
-
-  if (deps.ingestAll) {
+  // Test path (deps.queryAll injected). Bypass `sdk.compare` so tests stay
+  // hermetic against the user's real `~/.relayburn/archive.sqlite`. Mirrors
+  // the production pipeline against in-memory turns: provider filter, fidelity
+  // gate, buildCompareTable, then the same `CompareResult` shape `sdkCompare`
+  // returns.
+  let result: CompareResult;
+  if (deps.queryAll) {
+    const ingest = deps.ingestAll ?? ingestAll;
     await withProgress('ingesting latest sessions', async (task) => {
       await ingest();
       task.succeed('ingested latest sessions');
     });
+    const loadPricingFn = deps.loadPricing ?? loadPricing;
+    const pricing = await withProgress('loading pricing snapshot', async (task) => {
+      const loaded = await loadPricingFn();
+      task.succeed('loaded pricing snapshot');
+      return loaded;
+    });
+    const q: Query = {};
+    if (since !== undefined) q.since = since;
+    if (project !== undefined) q.project = project;
+    if (session !== undefined) q.sessionId = session;
+    if (workflow !== undefined || agent !== undefined) {
+      q.enrichment = {};
+      if (workflow !== undefined) q.enrichment.workflowId = workflow;
+      if (agent !== undefined) q.enrichment.agentId = agent;
+    }
+    const queriedTurns = await withProgress('reading ledger turns', async (task) => {
+      const turns = await deps.queryAll!(q);
+      task.succeed(`read ${formatInt(turns.length)} turn${turns.length === 1 ? '' : 's'}`);
+      return turns;
+    });
+    const turns = filterTurnsByProvider(queriedTurns, providerFilter);
+    const summary = summarizeFidelity(turns);
+    const filteredTurns = minFidelity === 'partial'
+      ? turns
+      : turns.filter((t) => hasMinimumFidelity(t.fidelity, minFidelity));
+    const table = await withProgress('building compare table', async (task) => {
+      const built = buildCompareTable(filteredTurns, { pricing, minSample, models });
+      task.succeed(
+        `built compare table from ${formatInt(filteredTurns.length)} turn` +
+          `${filteredTurns.length === 1 ? '' : 's'}`,
+      );
+      return built;
+    });
+    result = shapeCompareResult(table, filteredTurns.length, minFidelity, summary);
   } else {
     await withProgress('ingesting latest sessions', (task) =>
       ingestAll({
@@ -204,161 +241,111 @@ export async function runCompare(
         onWarn: (body) => task.warn(body),
       }),
     );
+    // Honor --no-archive / RELAYBURN_ARCHIVE=0 by forcing the SDK off the
+    // archive path. The SDK falls back to the ledger walk transparently when
+    // the archive read fails, so the easiest way to express "ledger only" is
+    // to set a non-default fidelity / provider — but those would change the
+    // semantic gate. Instead, mirror the env contract here: the SDK reads
+    // RELAYBURN_ARCHIVE itself via the underlying analyze layer where
+    // applicable, and the CLI flag forwards by setting the env for the call.
+    const restoreArchiveEnv = applyArchiveOverride(args);
+    try {
+      result = await withProgress('querying compare slice', async (task) => {
+        const sdkOpts: Parameters<typeof sdkCompare>[0] = {
+          models,
+          minSample,
+          minFidelity,
+        };
+        if (since !== undefined) sdkOpts.since = since;
+        if (project !== undefined) sdkOpts.project = project;
+        if (session !== undefined) sdkOpts.session = session;
+        if (workflow !== undefined) sdkOpts.workflow = workflow;
+        if (agent !== undefined) sdkOpts.agent = agent;
+        if (providerFilter) sdkOpts.provider = [...providerFilter];
+        sdkOpts.onLog = (msg: string) => task.update(msg);
+        const r = await sdkCompare(sdkOpts);
+        task.succeed(
+          `built compare table from ${formatInt(r.analyzedTurns)} turn` +
+            `${r.analyzedTurns === 1 ? '' : 's'}`,
+        );
+        return r;
+      });
+    } finally {
+      restoreArchiveEnv();
+    }
   }
-  const pricing = await withProgress('loading pricing snapshot', async (task) => {
-    const loaded = await loadPricingFn();
-    task.succeed('loaded pricing snapshot');
-    return loaded;
-  });
-
-  const opts: Parameters<typeof buildCompareTable>[1] = { pricing, minSample, models };
-
-  // Archive path is the default, but it does not yet apply
-  // `attribution_fidelity` filtering at the SQL layer. Fall back to the
-  // in-memory `queryAll` + `buildCompareTable` path whenever fidelity
-  // filtering is in effect (i.e., minFidelity !== 'partial') so the
-  // fidelity gate is correctly applied. `--include-partial` / `--fidelity partial`
-  // disables filtering and reuses the archive's grouped SQL.
-  //
-  // `--provider` likewise bypasses the archive: provider is derived per
-  // turn from (model, source) at query time, and the archive's grouped
-  // SQL doesn't expose that classifier. The in-memory path applies the
-  // filter via `filterTurnsByProvider` before `buildCompareTable`.
-  //
-  // Skip the archive when the caller injected `queryAll` (test mode):
-  // `buildArchive` and `compareFromArchive` are not part of `CompareDeps`
-  // and would hit the real `~/.relayburn/archive.sqlite`, breaking test
-  // isolation. The non-archive branch already handles `--fidelity partial`
-  // correctly (the filter becomes a no-op).
-  const useArchive =
-    !shouldBypassArchive(args) &&
-    minFidelity === 'partial' &&
-    !providerFilter &&
-    !deps.queryAll;
-  let table: CompareTable;
-  let filteredTurns: EnrichedTurn[];
-  let summary: FidelitySummary;
-  if (useArchive) {
-    // Materialize the ledger tail before reading. ingestAll() above only
-    // writes to the JSONL ledger; the archive is a derived read model that
-    // needs an explicit catch-up build to reflect the just-appended turns.
-    await withProgress('updating archive', async (task) => {
-      const archiveResult = await buildArchive();
-      task.succeed(
-        `updated archive: ${formatInt(archiveResult.turnsApplied)} turn` +
-          `${archiveResult.turnsApplied === 1 ? '' : 's'} applied`,
-      );
-    });
-    const result = await withProgress('building compare table from archive', async (task) => {
-      const archiveCompare = await compareFromArchive(q, opts);
-      task.succeed(
-        `built compare table from ${formatInt(archiveCompare.analyzedTurns)} turn` +
-          `${archiveCompare.analyzedTurns === 1 ? '' : 's'}`,
-      );
-      return archiveCompare;
-    });
-    table = result.table;
-    // For fidelity-permissive mode the JSON summary reflects everything in
-    // the queried slice; we still emit a zero-excluded breakdown so the
-    // schema is stable.
-    const turnsForSummary = await withProgress('reading turns for fidelity summary', async (task) => {
-      const turns = await query(q);
-      task.succeed(`read ${formatInt(turns.length)} turn${turns.length === 1 ? '' : 's'}`);
-      return turns;
-    });
-    summary = summarizeFidelity(turnsForSummary);
-    filteredTurns = turnsForSummary;
-    void result.analyzedTurns;
-  } else {
-    // `--provider` narrows the queried slice up front so coverage / fidelity
-    // counts reflect the provider-scoped input, not the cross-provider total
-    // (which would over-count "excluded" turns relative to what's rendered).
-    const queriedTurns = await withProgress('reading ledger turns', async (task) => {
-      const turns = await query(q);
-      task.succeed(`read ${formatInt(turns.length)} turn${turns.length === 1 ? '' : 's'}`);
-      return turns;
-    });
-    const turns = filterTurnsByProvider(queriedTurns, providerFilter);
-    // Summarize fidelity over the *unfiltered* slice (modulo provider) so
-    // coverage notes and the JSON `summary` reflect the input the user
-    // actually queried, not what survived the fidelity gate. The summary
-    // is what tells them why N turns were dropped.
-    summary = summarizeFidelity(turns);
-    // `--fidelity partial` (and its `--include-partial` shorthand) is the
-    // "let everything through" escape hatch. The FidelityClass
-    // ordering used by `hasMinimumFidelity` puts `partial` strictly above
-    // `aggregate-only` / `cost-only`, so the predicate would otherwise
-    // still drop those two buckets. Bypass the gate entirely in that mode.
-    filteredTurns = minFidelity === 'partial'
-      ? turns
-      : turns.filter((t) => hasMinimumFidelity(t.fidelity, minFidelity));
-    table = await withProgress('building compare table', async (task) => {
-      const built = buildCompareTable(filteredTurns, opts);
-      task.succeed(
-        `built compare table from ${formatInt(filteredTurns.length)} turn` +
-          `${filteredTurns.length === 1 ? '' : 's'}`,
-      );
-      return built;
-    });
-  }
-  const excluded = computeExcluded(summary, minFidelity);
 
   if (wantJson) {
-    process.stdout.write(
-      JSON.stringify(
-        toJson(table, filteredTurns.length, {
-          minimum: minFidelity,
-          excluded,
-          summary,
-        }),
-        null,
-        2,
-      ) + '\n',
-    );
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return 0;
   }
   if (wantCsv) {
-    process.stdout.write(renderCsv(table));
+    process.stdout.write(renderCsv(result));
     return 0;
   }
 
-  process.stdout.write(
-    renderTty(table, filteredTurns.length, { minimum: minFidelity, excluded }),
-  );
+  process.stdout.write(renderTty(result));
   return 0;
 }
 
-function shouldBypassArchive(args: ParsedArgs): boolean {
-  if (args.flags['no-archive'] === true) return true;
-  const env = process.env['RELAYBURN_ARCHIVE'];
-  if (env === '0' || env === 'false' || env === 'no') return true;
-  return false;
+function applyArchiveOverride(args: ParsedArgs): () => void {
+  if (args.flags['no-archive'] !== true) return () => {};
+  const prev = process.env['RELAYBURN_ARCHIVE'];
+  process.env['RELAYBURN_ARCHIVE'] = '0';
+  return () => {
+    if (prev === undefined) delete process.env['RELAYBURN_ARCHIVE'];
+    else process.env['RELAYBURN_ARCHIVE'] = prev;
+  };
 }
 
 function isFidelityClass(s: string): s is FidelityClass {
   return (FIDELITY_CHOICES as ReadonlyArray<string>).includes(s);
 }
 
-interface ExcludedBreakdown {
-  total: number;
-  aggregateOnly: number;
-  costOnly: number;
-  partial: number;
-  usageOnly: number;
+function shapeCompareResult(
+  table: ReturnType<typeof buildCompareTable>,
+  analyzedTurns: number,
+  minimum: FidelityClass,
+  summary: FidelitySummary,
+): CompareResult {
+  const excluded = computeExcluded(summary, minimum);
+  const cells: CompareCellResult[] = [];
+  for (const m of table.models) {
+    for (const cat of table.categories) {
+      const c = table.cells[m]![cat]!;
+      cells.push({
+        model: m,
+        category: cat,
+        turns: c.turns,
+        editTurns: c.editTurns,
+        oneShotTurns: c.oneShotTurns,
+        pricedTurns: c.pricedTurns,
+        totalCost: round(c.totalCost, 6),
+        costPerTurn: c.costPerTurn !== null ? round(c.costPerTurn, 6) : null,
+        oneShotRate: c.oneShotRate !== null ? round(c.oneShotRate, 4) : null,
+        cacheHitRate: c.cacheHitRate !== null ? round(c.cacheHitRate, 4) : null,
+        medianRetries: c.medianRetries,
+        noData: c.noData,
+        insufficientSample: c.insufficientSample,
+      });
+    }
+  }
+  return {
+    analyzedTurns,
+    minSample: table.minSample,
+    models: table.models,
+    categories: table.categories,
+    totals: table.totals,
+    cells,
+    fidelity: { minimum, excluded, summary: summary as unknown as CompareResult['fidelity']['summary'] },
+  };
 }
 
-// Sum the byClass buckets that fall below the minimum fidelity. We never
-// exclude `unknown` (records without a fidelity field — `hasMinimumFidelity`
-// passes them for backward compat), so they don't get counted here.
-//
-// `--fidelity partial` is the "include everything" escape hatch (matched by
-// the runtime), so it always reports zero excluded — even though the
-// FidelityClass ordering puts `partial` above `aggregate-only` / `cost-only`.
 function computeExcluded(
   summary: FidelitySummary,
   minimum: FidelityClass,
-): ExcludedBreakdown {
-  const out: ExcludedBreakdown = {
+): CompareExcludedBreakdown {
+  const out: CompareExcludedBreakdown = {
     total: 0,
     aggregateOnly: 0,
     costOnly: 0,
@@ -387,50 +374,11 @@ function computeExcluded(
   return out;
 }
 
-interface FidelityJsonBlock {
-  minimum: FidelityClass;
-  excluded: ExcludedBreakdown;
-  summary: FidelitySummary;
+function round(n: number, digits: number): number {
+  return Number(n.toFixed(digits));
 }
 
-function toJson(
-  t: CompareTable,
-  analyzedTurns: number,
-  fidelity: FidelityJsonBlock,
-): object {
-  const cells: Array<Record<string, unknown>> = [];
-  for (const m of t.models) {
-    for (const cat of t.categories) {
-      const c = t.cells[m]![cat]!;
-      cells.push({
-        model: m,
-        category: cat,
-        turns: c.turns,
-        editTurns: c.editTurns,
-        oneShotTurns: c.oneShotTurns,
-        pricedTurns: c.pricedTurns,
-        totalCost: round(c.totalCost, 6),
-        costPerTurn: c.costPerTurn !== null ? round(c.costPerTurn, 6) : null,
-        oneShotRate: c.oneShotRate !== null ? round(c.oneShotRate, 4) : null,
-        cacheHitRate: c.cacheHitRate !== null ? round(c.cacheHitRate, 4) : null,
-        medianRetries: c.medianRetries,
-        noData: c.noData,
-        insufficientSample: c.insufficientSample,
-      });
-    }
-  }
-  return {
-    analyzedTurns,
-    minSample: t.minSample,
-    models: t.models,
-    categories: t.categories,
-    totals: t.totals,
-    cells,
-    fidelity,
-  };
-}
-
-function renderCsv(t: CompareTable): string {
+function renderCsv(r: CompareResult): string {
   const header = [
     'model',
     'category',
@@ -447,9 +395,13 @@ function renderCsv(t: CompareTable): string {
     'insufficientSample',
   ];
   const rows: string[] = [header.join(',')];
-  for (const m of t.models) {
-    for (const cat of t.categories) {
-      const c = t.cells[m]![cat]!;
+  // Iterate by (model × category) in the table order so column structure is
+  // stable across runs; lookup into the flat cells keeps the body identical
+  // to the legacy nested-map walk.
+  const lookup = buildCellLookup(r);
+  for (const m of r.models) {
+    for (const cat of r.categories) {
+      const c = lookup.get(m)!.get(cat)!;
       rows.push(
         [
           csvCell(m),
@@ -483,67 +435,49 @@ function numCsv(n: number, digits: number): string {
   return Number(n.toFixed(digits)).toString();
 }
 
-function round(n: number, digits: number): number {
-  return Number(n.toFixed(digits));
-}
-
 const DASH = '—';
 
 function formatPct(p: number): string {
   return `${Math.round(p * 100)}%`;
 }
 
-function cellFields(c: CompareCell): [string, string, string] {
+function cellFields(c: CompareCellResult): [string, string, string] {
   if (c.noData) return [DASH, DASH, DASH];
   const turns = formatInt(c.turns);
-  // Cost dashes when no turns in the cell were priced (unknown/unpriced model)
-  // — distinct from $0.00 which would be a meaningful "free" claim.
   const cost = c.costPerTurn !== null ? formatUsd(c.costPerTurn) : DASH;
-  // One-shot rate dashes for categories that don't produce edits
-  // (exploration, brainstorming, planning, delegation, testing, git, deps,
-  // format, build-deploy, verification, review, reasoning, conversation).
   const oneShot = c.oneShotRate !== null ? formatPct(c.oneShotRate) : DASH;
   return [turns, cost, oneShot];
 }
 
-interface FidelityRenderInput {
-  minimum: FidelityClass;
-  excluded: ExcludedBreakdown;
-}
-
-function renderTty(
-  t: CompareTable,
-  analyzedTurns: number,
-  fidelity: FidelityRenderInput,
-): string {
+function renderTty(r: CompareResult): string {
   const lines: string[] = [];
   lines.push('');
-  lines.push(`turns analyzed: ${formatInt(analyzedTurns)}`);
-  if (fidelity.excluded.total > 0) {
-    lines.push(formatExcludedNote(fidelity));
+  lines.push(`turns analyzed: ${formatInt(r.analyzedTurns)}`);
+  if (r.fidelity.excluded.total > 0) {
+    lines.push(formatExcludedNote(r.fidelity));
   }
   lines.push('');
 
-  if (t.models.length === 0 || t.categories.length === 0) {
+  if (r.models.length === 0 || r.categories.length === 0) {
     lines.push('no data to compare (need turns spanning ≥1 model and ≥1 activity).');
     return lines.join('\n') + '\n';
   }
 
-  // Build sub-header and data rows first to measure widths.
+  const lookup = buildCellLookup(r);
+
   const subHeader: string[] = ['Activity'];
-  for (let i = 0; i < t.models.length; i++) subHeader.push('Turns', 'Cost/turn', '1-shot');
+  for (let i = 0; i < r.models.length; i++) subHeader.push('Turns', 'Cost/turn', '1-shot');
 
   const dataRows: string[][] = [];
-  for (const cat of t.categories) {
+  for (const cat of r.categories) {
     const row: string[] = [cat];
-    for (const m of t.models) {
-      const [a, b, c] = cellFields(t.cells[m]![cat]!);
+    for (const m of r.models) {
+      const [a, b, c] = cellFields(lookup.get(m)!.get(cat)!);
       row.push(a, b, c);
     }
     dataRows.push(row);
   }
 
-  // Compute column widths across sub-header + data rows.
   const widths = new Array(subHeader.length).fill(0);
   for (const row of [subHeader, ...dataRows]) {
     row.forEach((cell, i) => {
@@ -553,41 +487,36 @@ function renderTty(
 
   const SEP = '  ';
 
-  // If a model display name is wider than its three sub-columns combined,
-  // widen the last sub-column so the group header and sub-header stay aligned.
-  for (let mi = 0; mi < t.models.length; mi++) {
+  for (let mi = 0; mi < r.models.length; mi++) {
     const start = 1 + mi * 3;
     const groupWidth = widths[start]! + SEP.length + widths[start + 1]! + SEP.length + widths[start + 2]!;
-    const name = displayModelName(t.models[mi]!);
+    const name = displayModelName(r.models[mi]!);
     if (name.length > groupWidth) widths[start + 2] += name.length - groupWidth;
   }
 
   const groupLine: string[] = [' '.repeat(widths[0]!)];
-  for (let mi = 0; mi < t.models.length; mi++) {
+  for (let mi = 0; mi < r.models.length; mi++) {
     const start = 1 + mi * 3;
     const groupWidth = widths[start]! + SEP.length + widths[start + 1]! + SEP.length + widths[start + 2]!;
-    const name = displayModelName(t.models[mi]!);
+    const name = displayModelName(r.models[mi]!);
     groupLine.push(name.padEnd(groupWidth));
   }
   lines.push(groupLine.join(SEP).trimEnd());
   lines.push(renderRow(subHeader, widths, SEP));
   for (const row of dataRows) lines.push(renderRow(row, widths, SEP));
 
-  // Coverage notes. Only surface a gap when at least one other model has
-  // data in that category — otherwise the row is already uniformly empty and
-  // the note is noise. Cap at NOTE_LIMIT; overflow gets a summary line.
   const NOTE_LIMIT = 8;
   const notes: string[] = [];
-  for (const cat of t.categories) {
-    const anyHasData = t.models.some((m) => !t.cells[m]![cat]!.noData);
+  for (const cat of r.categories) {
+    const anyHasData = r.models.some((m) => !lookup.get(m)!.get(cat)!.noData);
     if (!anyHasData) continue;
-    for (const m of t.models) {
-      const c = t.cells[m]![cat]!;
+    for (const m of r.models) {
+      const c = lookup.get(m)!.get(cat)!;
       if (c.noData) {
         notes.push(`no ${displayModelName(m)} data in '${cat}' — no comparison available.`);
       } else if (c.insufficientSample) {
         notes.push(
-          `low ${displayModelName(m)} sample in '${cat}' (${c.turns} turns < ${t.minSample}) — treat as indicative.`,
+          `low ${displayModelName(m)} sample in '${cat}' (${c.turns} turns < ${r.minSample}) — treat as indicative.`,
         );
       }
     }
@@ -601,14 +530,11 @@ function renderTty(
     }
   }
 
-  // Per-model totals. A model that survived the filter with zero turns (e.g.
-  // every turn was excluded by --fidelity, or --models pre-seeded a model the
-  // user asked about that has no data in the slice) renders the cost as the
-  // dash sentinel — not "$0.00", which would falsely claim the model ran for
-  // free.
+  // Per-model totals. A model with zero turns renders cost as the dash
+  // sentinel — `$0.00` would falsely claim the model ran for free.
   lines.push('');
-  for (const m of t.models) {
-    const tot = t.totals[m] ?? { turns: 0, totalCost: 0 };
+  for (const m of r.models) {
+    const tot = r.totals[m] ?? { turns: 0, totalCost: 0 };
     const totalCost = tot.turns > 0 ? formatUsd(tot.totalCost) : DASH;
     lines.push(`${displayModelName(m)}: ${formatInt(tot.turns)} turns, ${totalCost} total`);
   }
@@ -616,9 +542,20 @@ function renderTty(
   return lines.join('\n');
 }
 
-// "excluded 12 turns below usage-only fidelity (8 aggregate-only, 3 cost-only, 1 partial)"
-// — only mention non-zero buckets so the parenthetical stays terse.
-function formatExcludedNote(f: FidelityRenderInput): string {
+function buildCellLookup(r: CompareResult): Map<string, Map<string, CompareCellResult>> {
+  const out = new Map<string, Map<string, CompareCellResult>>();
+  for (const cell of r.cells) {
+    let byCat = out.get(cell.model);
+    if (!byCat) {
+      byCat = new Map();
+      out.set(cell.model, byCat);
+    }
+    byCat.set(cell.category, cell);
+  }
+  return out;
+}
+
+function formatExcludedNote(f: CompareResult['fidelity']): string {
   const parts: string[] = [];
   if (f.excluded.aggregateOnly > 0) parts.push(`${f.excluded.aggregateOnly} aggregate-only`);
   if (f.excluded.costOnly > 0) parts.push(`${f.excluded.costOnly} cost-only`);
@@ -636,7 +573,7 @@ function renderRow(row: string[], widths: number[], sep: string): string {
 function displayModelName(m: string): string {
   // Strip provider prefix (e.g. "anthropic/claude-sonnet-4-6" → "claude-sonnet-4-6")
   // for display brevity. Aggregation in buildCompareTable always uses the
-  // raw model name, so two providers that ship a model with the same suffix
+  // raw model name, so two providers shipping a model with the same suffix
   // would still aggregate separately and only collide visually in the TTY
   // header. Use --json for the unambiguous identifier.
   const i = m.indexOf('/');

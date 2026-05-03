@@ -1,13 +1,18 @@
 import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { loadBuiltinPricing } from '@relayburn/analyze';
-import type { EnrichedTurn } from '@relayburn/ledger';
+import { __resetIndexCacheForTesting, appendTurns, type EnrichedTurn } from '@relayburn/ledger';
 import {
   EMPTY_COVERAGE,
   makeFidelity,
 } from '@relayburn/reader';
-import type { ActivityCategory, Fidelity } from '@relayburn/reader';
+import type { ActivityCategory, Fidelity, TurnRecord } from '@relayburn/reader';
+
+import { compare as sdkCompare } from '@relayburn/sdk';
 
 import { runCompare, type CompareDeps } from './compare.js';
 import type { ParsedArgs } from '../args.js';
@@ -570,5 +575,179 @@ describe('burn compare — required positional models (#159)', () => {
     assert.equal(result, 0);
     const parsed = JSON.parse(stdout);
     assert.deepEqual(parsed.models, ['claude-sonnet-4-6', 'claude-haiku-4-5']);
+  });
+});
+
+// SDK integration tests for `compare()`. These exercise the production path
+// (no `deps.queryAll`) by writing fixtures to an isolated tmp ledger and
+// calling `sdkCompare` directly. The CLI's runCompare wraps this with flag
+// parsing + rendering; this suite covers the SDK contract those presenters
+// rely on.
+describe('@relayburn/sdk compare() — ledger integration', () => {
+  let tmpHome: string;
+  let tmpRelay: string;
+  const originalHome = process.env['HOME'];
+  const originalRelay = process.env['RELAYBURN_HOME'];
+  const originalArchive = process.env['RELAYBURN_ARCHIVE'];
+
+  beforeEach(async () => {
+    tmpHome = await mkdtemp(path.join(tmpdir(), 'burn-compare-home-'));
+    tmpRelay = await mkdtemp(path.join(tmpdir(), 'burn-compare-relay-'));
+    process.env['HOME'] = tmpHome;
+    process.env['RELAYBURN_HOME'] = tmpRelay;
+    delete process.env['RELAYBURN_ARCHIVE'];
+    __resetIndexCacheForTesting();
+  });
+
+  afterEach(async () => {
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalRelay !== undefined) process.env['RELAYBURN_HOME'] = originalRelay;
+    else delete process.env['RELAYBURN_HOME'];
+    if (originalArchive !== undefined) process.env['RELAYBURN_ARCHIVE'] = originalArchive;
+    else delete process.env['RELAYBURN_ARCHIVE'];
+    await rm(tmpHome, { recursive: true, force: true });
+    await rm(tmpRelay, { recursive: true, force: true });
+  });
+
+  function fakeLedgerTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
+    return {
+      v: 1,
+      source: 'claude-code',
+      sessionId: 's-cmp',
+      messageId: `m-${Math.random().toString(36).slice(2, 10)}`,
+      turnIndex: 0,
+      ts: '2026-04-20T00:00:00.000Z',
+      model: 'claude-sonnet-4-6',
+      activity: 'coding',
+      hasEdits: true,
+      retries: 0,
+      usage: {
+        input: 1000,
+        output: 500,
+        reasoning: 0,
+        cacheRead: 0,
+        cacheCreate5m: 0,
+        cacheCreate1h: 0,
+      },
+      toolCalls: [],
+      fidelity: makeFidelity('per-turn', {
+        ...EMPTY_COVERAGE,
+        hasInputTokens: true,
+        hasOutputTokens: true,
+        hasCacheReadTokens: true,
+        hasToolCalls: true,
+        hasToolResultEvents: true,
+        hasSessionRelationships: true,
+      }),
+      ...overrides,
+    };
+  }
+
+  it('rejects fewer than 2 models', async () => {
+    await assert.rejects(
+      () => sdkCompare({ models: ['claude-sonnet-4-6'] }),
+      /needs at least 2 models/,
+    );
+  });
+
+  it('rejects an invalid minFidelity value', async () => {
+    await assert.rejects(
+      () =>
+        sdkCompare({
+          models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+          minFidelity: 'bogus' as never,
+        }),
+      /invalid minFidelity/,
+    );
+  });
+
+  it('returns the JSON-shaped CompareResult against an isolated ledger', async () => {
+    await appendTurns([
+      fakeLedgerTurn({ messageId: 'm-1' }),
+      fakeLedgerTurn({ messageId: 'm-2', turnIndex: 1, ts: '2026-04-20T00:01:00.000Z' }),
+      fakeLedgerTurn({
+        messageId: 'm-3',
+        turnIndex: 2,
+        ts: '2026-04-20T00:02:00.000Z',
+        model: 'claude-haiku-4-5',
+      }),
+    ]);
+
+    const result = await sdkCompare({
+      models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+    });
+    assert.equal(result.analyzedTurns, 3);
+    assert.deepEqual([...result.models].sort(), ['claude-haiku-4-5', 'claude-sonnet-4-6']);
+    assert.equal(result.fidelity.minimum, 'usage-only');
+    assert.equal(result.fidelity.excluded.total, 0);
+    // cells is a flat array, not the nested CompareTable shape.
+    assert.ok(Array.isArray(result.cells));
+    const sonnet = result.cells.find(
+      (c) => c.model === 'claude-sonnet-4-6' && c.category === 'coding',
+    );
+    assert.ok(sonnet);
+    assert.equal(sonnet.turns, 2);
+  });
+
+  it('RELAYBURN_ARCHIVE=0 forces the ledger walk (no archive build)', async () => {
+    // Regression for #238 review: the SDK previously called
+    // `loadTurnsViaArchive` unconditionally, which builds + reads the
+    // archive even when `RELAYBURN_ARCHIVE=0` (the env var the CLI sets
+    // when `--no-archive` is passed). After the fix, the archive must
+    // stay un-built when the env disables it.
+    const { archivePath } = await import('@relayburn/ledger');
+    const { stat } = await import('node:fs/promises');
+    await appendTurns([
+      fakeLedgerTurn({ messageId: 'na-1' }),
+      fakeLedgerTurn({
+        messageId: 'na-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+        model: 'claude-haiku-4-5',
+      }),
+    ]);
+    await assert.rejects(stat(archivePath()), /ENOENT/);
+
+    process.env['RELAYBURN_ARCHIVE'] = '0';
+    try {
+      const result = await sdkCompare({
+        models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+        minFidelity: 'partial',
+      });
+      assert.equal(result.analyzedTurns, 2);
+    } finally {
+      delete process.env['RELAYBURN_ARCHIVE'];
+    }
+    // Same fallback behavior as `burn summary --no-archive`: archive stays
+    // un-materialized.
+    await assert.rejects(stat(archivePath()), /ENOENT/);
+  });
+
+  it('archive path (partial fidelity, no provider) returns the same shape as the ledger walk', async () => {
+    await appendTurns([
+      fakeLedgerTurn({ messageId: 'p-1' }),
+      fakeLedgerTurn({
+        messageId: 'p-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+        model: 'claude-haiku-4-5',
+      }),
+    ]);
+
+    const archive = await sdkCompare({
+      models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+      minFidelity: 'partial',
+    });
+    process.env['RELAYBURN_ARCHIVE'] = '0';
+    const ledger = await sdkCompare({
+      models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+      minFidelity: 'partial',
+    });
+    delete process.env['RELAYBURN_ARCHIVE'];
+
+    assert.equal(archive.analyzedTurns, ledger.analyzedTurns);
+    assert.deepEqual(archive.totals, ledger.totals);
+    assert.equal(archive.cells.length, ledger.cells.length);
   });
 });

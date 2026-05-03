@@ -14,6 +14,12 @@ All notable changes to `@relayburn/sdk`.
 - `hotspots({ project, since })` accept the same forwarded options the other SDK queries do (project filter + ISO/relative `since` window normalization).
 - `hotspots()` reads through the SQLite archive by default with transparent fallback to the JSONL ledger walk on archive failure. Pass `onLog` to capture the fallback reason.
 - `hotspots()` surfaces a coverage-refusal shape (`refused: true` + `refusalReason`) when every matched turn lacks the tool-call/tool-result coverage `attributeHotspots` needs, so presenters can map it to the user-facing exit-2 + stderr message.
+
+## [1.9.0] - 2026-05-03
+
+### Added
+
+- `compare({ models, … })` returns the per-(model, activity) `CompareResult` shape (`analyzedTurns`, `models`, `categories`, `totals`, flat `cells[]`, `fidelity { minimum, excluded, summary }`) — the JSON object `burn compare --json` now emits. Mirrors the CLI's archive-vs-ledger branching: archive when `minFidelity === 'partial'` and no provider filter, ledger walk otherwise. Falls back transparently to the ledger walk when the archive read fails.
 - `sessionCost({ session })` returns the compact per-session cost shape (`totalUSD`, `totalTokens`, `turnCount`, `models`) the MCP `burn__sessionCost` tool now wraps directly.
 - `summary()` result now includes `turnCount`.
 - `summary()` and `sessionCost()` read through the SQLite archive by default with transparent fallback to the JSONL ledger walk on archive failure. Pass `onLog` to capture the fallback reason.
