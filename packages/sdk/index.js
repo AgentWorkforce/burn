@@ -288,11 +288,11 @@ export async function hotspots(opts = {}) {
       return runHotspotsFindings(turns, pricing, opts, q);
     }
 
-    return runHotspotsAttribution(turns, pricing, opts);
+    return runHotspotsAttribution(turns, pricing, opts, q);
   });
 }
 
-async function runHotspotsAttribution(turns, pricing, opts) {
+async function runHotspotsAttribution(turns, pricing, opts, q = {}) {
   const eligible = [];
   const excluded = [];
   for (const t of turns) {
@@ -335,7 +335,11 @@ async function runHotspotsAttribution(turns, pricing, opts) {
   }
 
   const sessionIds = new Set(eligible.map((t) => t.sessionId));
-  const userTurnsBySession = await bulkUserTurnsBySession(sessionIds, q_(opts));
+  // Reuse the precomputed `q` from the caller — `normalizeSince()` calls
+  // `Date.now()` for relative ranges, so re-deriving here would cut the
+  // user-turn window at a slightly later boundary than the turn slice and
+  // drop borderline records.
+  const userTurnsBySession = await bulkUserTurnsBySession(sessionIds, q);
   const result = attributeHotspots(eligible, { pricing, userTurnsBySession });
 
   const groupBy = opts.groupBy ?? 'attribution';
