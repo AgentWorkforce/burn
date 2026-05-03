@@ -8,21 +8,27 @@ import {
 } from '@relayburn/ledger';
 import {
   attributeOverhead,
+  buildCompareTable,
   buildGhostSurfaceInputs,
   buildTrimRecommendations,
+  compareFromArchive,
   costForTurn,
+  DEFAULT_MIN_SAMPLE,
   detectGhostSurface,
   detectPatterns,
   detectToolCallPatterns,
   detectToolOutputBloat,
+  filterTurnsByProvider,
   findingsFromPatterns,
   findOverheadFiles,
   ghostSurfaceToFinding,
+  hasMinimumFidelity,
   loadClaudeSettings,
   loadOverheadFile,
   loadPricing,
   projectClaudeSettingsPath,
   renderUnifiedDiffForRecommendation,
+  summarizeFidelity,
   sumCosts,
   attributeHotspots,
   toolCallPatternToFinding,
@@ -453,4 +459,172 @@ function toProjectRelativePath(filePath, projectPath) {
   const rel = path.relative(projectPath, filePath);
   const display = rel && !rel.startsWith('..') ? rel : filePath;
   return display.split(path.sep).join('/');
+}
+
+const FIDELITY_CHOICES = ['full', 'usage-only', 'aggregate-only', 'cost-only', 'partial'];
+
+// Per-(model, activity) comparison shape. Mirrors the archive-vs-ledger
+// branching `runCompare` ships in the CLI: archive when nothing forces a
+// per-turn walk (no fidelity gate, no provider filter), ledger walk
+// otherwise. Returns the same JSON object the CLI's `--json` mode emits so
+// the CLI becomes a thin presenter and a future `burn__compare` MCP tool
+// can wrap this directly.
+export async function compare(opts) {
+  if (!opts || !Array.isArray(opts.models) || opts.models.length < 2) {
+    throw new Error('compare: needs at least 2 models');
+  }
+  if (opts.minFidelity !== undefined && !FIDELITY_CHOICES.includes(opts.minFidelity)) {
+    throw new Error(
+      `compare: invalid minFidelity: ${opts.minFidelity} (expected one of ${FIDELITY_CHOICES.join(', ')})`,
+    );
+  }
+  return withHome(opts.ledgerHome, async () => {
+    const minFidelity = opts.minFidelity ?? 'usage-only';
+    const minSample = opts.minSample ?? DEFAULT_MIN_SAMPLE;
+    const providerFilter = normalizeProviderFilter(opts.provider);
+
+    const q = {};
+    const since = normalizeSince(opts.since);
+    if (since !== undefined) q.since = since;
+    if (opts.session !== undefined) q.sessionId = opts.session;
+    if (opts.project !== undefined) q.project = opts.project;
+    if (opts.workflow !== undefined || opts.agent !== undefined) {
+      q.enrichment = {};
+      if (opts.workflow !== undefined) q.enrichment.workflowId = opts.workflow;
+      if (opts.agent !== undefined) q.enrichment.agentId = opts.agent;
+    }
+
+    const pricing = await loadPricing();
+    const tableOpts = { pricing, minSample, models: opts.models };
+
+    // `RELAYBURN_ARCHIVE=0` (also `false`/`no`) is the documented escape
+    // hatch from the archive path — used by `burn compare --no-archive` for
+    // parity/debug workflows. Honor it before deciding whether to query the
+    // archive at all so the CLI flag actually forces the ledger walk even
+    // when the archive on disk is healthy.
+    const archiveEnabled = !envDisablesArchive();
+
+    // Archive path is additionally restricted to slices where nothing forces
+    // a per-turn walk: no fidelity gate (`partial` lets everything through)
+    // and no provider filter (provider is derived per turn from (model,
+    // source) at query time and the archive's grouped SQL doesn't expose
+    // that classifier).
+    const useArchive = archiveEnabled && minFidelity === 'partial' && !providerFilter;
+
+    let table;
+    let analyzedTurns;
+    let summary;
+    if (useArchive) {
+      try {
+        await buildArchive();
+        const archived = await compareFromArchive(q, tableOpts);
+        table = archived.table;
+        // For the fidelity-permissive mode we still emit a zero-excluded
+        // summary so the JSON schema stays stable. summarizeFidelity needs
+        // turn rows; pull them via the same archive-aware loader.
+        const turnsForSummary = await loadTurnsViaArchive(q, opts.onLog);
+        summary = summarizeFidelity(turnsForSummary);
+        analyzedTurns = turnsForSummary.length;
+        return shapeCompareResult(table, analyzedTurns, minFidelity, summary);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        opts.onLog?.(`archive compare failed, falling back to ledger walk: ${msg}`);
+        // Fall through to ledger path.
+      }
+    }
+
+    // Ledger-walk path. When the archive is disabled we go straight to
+    // `queryAll` (no `buildArchive` side effect); otherwise the
+    // archive-aware loader still wins on the hot path even when the gate
+    // forces post-load filtering.
+    const queriedTurns = archiveEnabled
+      ? await loadTurnsViaArchive(q, opts.onLog)
+      : await queryAll(q);
+    const turns = providerFilter ? filterTurnsByProvider(queriedTurns, providerFilter) : queriedTurns;
+    summary = summarizeFidelity(turns);
+    const filteredTurns = minFidelity === 'partial'
+      ? turns
+      : turns.filter((t) => hasMinimumFidelity(t.fidelity, minFidelity));
+    table = buildCompareTable(filteredTurns, tableOpts);
+    analyzedTurns = filteredTurns.length;
+    return shapeCompareResult(table, analyzedTurns, minFidelity, summary);
+  });
+}
+
+function envDisablesArchive() {
+  const v = process.env.RELAYBURN_ARCHIVE;
+  return v === '0' || v === 'false' || v === 'no';
+}
+
+function normalizeProviderFilter(provider) {
+  if (!provider) return undefined;
+  if (!Array.isArray(provider)) {
+    throw new Error('compare: provider must be an array of strings');
+  }
+  const normalized = provider
+    .map((p) => (typeof p === 'string' ? p.trim().toLowerCase() : ''))
+    .filter(Boolean);
+  if (normalized.length === 0) return undefined;
+  return new Set(normalized);
+}
+
+// Sum the byClass buckets that fall below the minimum fidelity. We never
+// exclude `unknown` (records without a fidelity field — `hasMinimumFidelity`
+// passes them for backward compat), so they don't get counted here.
+// `partial` is the "include everything" escape hatch; it always reports zero
+// excluded.
+export function computeCompareExcluded(summary, minimum) {
+  const out = { total: 0, aggregateOnly: 0, costOnly: 0, partial: 0, usageOnly: 0 };
+  if (minimum === 'partial') return out;
+  const order = ['cost-only', 'aggregate-only', 'partial', 'usage-only', 'full'];
+  const need = order.indexOf(minimum);
+  for (const cls of order) {
+    if (order.indexOf(cls) >= need) continue;
+    const n = summary.byClass[cls];
+    if (!n) continue;
+    out.total += n;
+    if (cls === 'aggregate-only') out.aggregateOnly += n;
+    else if (cls === 'cost-only') out.costOnly += n;
+    else if (cls === 'partial') out.partial += n;
+    else if (cls === 'usage-only') out.usageOnly += n;
+  }
+  return out;
+}
+
+function shapeCompareResult(table, analyzedTurns, minimum, summary) {
+  const excluded = computeCompareExcluded(summary, minimum);
+  const cells = [];
+  for (const m of table.models) {
+    for (const cat of table.categories) {
+      const c = table.cells[m][cat];
+      cells.push({
+        model: m,
+        category: cat,
+        turns: c.turns,
+        editTurns: c.editTurns,
+        oneShotTurns: c.oneShotTurns,
+        pricedTurns: c.pricedTurns,
+        totalCost: round(c.totalCost, 6),
+        costPerTurn: c.costPerTurn !== null ? round(c.costPerTurn, 6) : null,
+        oneShotRate: c.oneShotRate !== null ? round(c.oneShotRate, 4) : null,
+        cacheHitRate: c.cacheHitRate !== null ? round(c.cacheHitRate, 4) : null,
+        medianRetries: c.medianRetries,
+        noData: c.noData,
+        insufficientSample: c.insufficientSample,
+      });
+    }
+  }
+  return {
+    analyzedTurns,
+    minSample: table.minSample,
+    models: table.models,
+    categories: table.categories,
+    totals: table.totals,
+    cells,
+    fidelity: { minimum, excluded, summary },
+  };
+}
+
+function round(n, digits) {
+  return Number(n.toFixed(digits));
 }

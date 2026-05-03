@@ -6,6 +6,7 @@ All notable changes to `@relayburn/cli`.
 
 ### Changed
 
+- `burn compare` is now a thin presenter over `@relayburn/sdk`'s new `compare()` function. Flag parsing, ingest, and TTY/JSON/CSV rendering stay in the CLI; the archive-vs-ledger branching, fidelity gate, and result shaping live in the SDK. Wire shape (TTY + `--json` + `--csv`) is unchanged.
 - `burn overhead` and `burn overhead trim` are now thin presenters over `@relayburn/sdk`'s new `overhead()` / `overheadTrim()` functions. Wire shape (TTY + `--json`) is unchanged; the discovery + ingest + attribution pipeline now lives in one place so future MCP tools can call it directly.
 
 ## [1.8.0] - 2026-05-02

@@ -156,3 +156,79 @@ export interface HotspotsOptions {
   ledgerHome?: string;
 }
 export declare function hotspots(opts?: HotspotsOptions): Promise<unknown>
+
+export type FidelityClass = 'full' | 'usage-only' | 'aggregate-only' | 'cost-only' | 'partial';
+
+export interface FidelitySummaryShape {
+  total: number;
+  byClass: Record<FidelityClass, number>;
+  unknown: number;
+  missingCoverage: Record<string, number>;
+}
+
+export interface CompareExcludedBreakdown {
+  total: number;
+  aggregateOnly: number;
+  costOnly: number;
+  partial: number;
+  usageOnly: number;
+}
+
+export interface CompareCellResult {
+  model: string;
+  category: string;
+  turns: number;
+  editTurns: number;
+  oneShotTurns: number;
+  pricedTurns: number;
+  totalCost: number;
+  costPerTurn: number | null;
+  oneShotRate: number | null;
+  cacheHitRate: number | null;
+  medianRetries: number | null;
+  noData: boolean;
+  insufficientSample: boolean;
+}
+
+export interface CompareOptions {
+  /** Required: ≥2 model names to compare. */
+  models: string[];
+  session?: string;
+  project?: string;
+  /** ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range (`24h`, `7d`, `4w`, `2m`). */
+  since?: string;
+  workflow?: string;
+  agent?: string;
+  /** Resolved provider filter (e.g. `['anthropic', 'synthetic']`). */
+  provider?: string[];
+  /** Insufficient-sample threshold; cells below this get flagged. Default 5. */
+  minSample?: number;
+  /** Minimum fidelity class to include in the aggregate. Default `'usage-only'`. */
+  minFidelity?: FidelityClass;
+  ledgerHome?: string;
+  onLog?: (msg: string) => void;
+}
+
+export interface CompareResult {
+  analyzedTurns: number;
+  minSample: number;
+  models: string[];
+  categories: string[];
+  totals: Record<string, { turns: number; totalCost: number }>;
+  cells: CompareCellResult[];
+  fidelity: {
+    minimum: FidelityClass;
+    excluded: CompareExcludedBreakdown;
+    summary: FidelitySummaryShape;
+  };
+}
+
+/**
+ * Per-(model, activity) comparison shape. Powers `burn compare` and the
+ * future `burn__compare` MCP tool. Reads through the SQLite archive when
+ * `minFidelity === 'partial'` and no provider filter is set; otherwise
+ * walks the ledger so the fidelity gate / provider filter can be applied
+ * per-turn. Falls back transparently to the ledger walk when the archive
+ * read fails.
+ */
+export declare function compare(opts: CompareOptions): Promise<CompareResult>
