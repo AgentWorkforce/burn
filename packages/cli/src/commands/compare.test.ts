@@ -690,6 +690,40 @@ describe('@relayburn/sdk compare() — ledger integration', () => {
     assert.equal(sonnet.turns, 2);
   });
 
+  it('RELAYBURN_ARCHIVE=0 forces the ledger walk (no archive build)', async () => {
+    // Regression for #238 review: the SDK previously called
+    // `loadTurnsViaArchive` unconditionally, which builds + reads the
+    // archive even when `RELAYBURN_ARCHIVE=0` (the env var the CLI sets
+    // when `--no-archive` is passed). After the fix, the archive must
+    // stay un-built when the env disables it.
+    const { archivePath } = await import('@relayburn/ledger');
+    const { stat } = await import('node:fs/promises');
+    await appendTurns([
+      fakeLedgerTurn({ messageId: 'na-1' }),
+      fakeLedgerTurn({
+        messageId: 'na-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+        model: 'claude-haiku-4-5',
+      }),
+    ]);
+    await assert.rejects(stat(archivePath()), /ENOENT/);
+
+    process.env['RELAYBURN_ARCHIVE'] = '0';
+    try {
+      const result = await sdkCompare({
+        models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
+        minFidelity: 'partial',
+      });
+      assert.equal(result.analyzedTurns, 2);
+    } finally {
+      delete process.env['RELAYBURN_ARCHIVE'];
+    }
+    // Same fallback behavior as `burn summary --no-archive`: archive stays
+    // un-materialized.
+    await assert.rejects(stat(archivePath()), /ENOENT/);
+  });
+
   it('archive path (partial fidelity, no provider) returns the same shape as the ledger walk', async () => {
     await appendTurns([
       fakeLedgerTurn({ messageId: 'p-1' }),

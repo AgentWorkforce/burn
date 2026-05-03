@@ -497,11 +497,19 @@ export async function compare(opts) {
     const pricing = await loadPricing();
     const tableOpts = { pricing, minSample, models: opts.models };
 
-    // Archive path is allowed only when nothing forces a per-turn walk: no
-    // fidelity gate (`partial` lets everything through) and no provider
-    // filter (provider is derived per turn from (model, source) at query
-    // time and the archive's grouped SQL doesn't expose that classifier).
-    const useArchive = minFidelity === 'partial' && !providerFilter;
+    // `RELAYBURN_ARCHIVE=0` (also `false`/`no`) is the documented escape
+    // hatch from the archive path — used by `burn compare --no-archive` for
+    // parity/debug workflows. Honor it before deciding whether to query the
+    // archive at all so the CLI flag actually forces the ledger walk even
+    // when the archive on disk is healthy.
+    const archiveEnabled = !envDisablesArchive();
+
+    // Archive path is additionally restricted to slices where nothing forces
+    // a per-turn walk: no fidelity gate (`partial` lets everything through)
+    // and no provider filter (provider is derived per turn from (model,
+    // source) at query time and the archive's grouped SQL doesn't expose
+    // that classifier).
+    const useArchive = archiveEnabled && minFidelity === 'partial' && !providerFilter;
 
     let table;
     let analyzedTurns;
@@ -525,7 +533,13 @@ export async function compare(opts) {
       }
     }
 
-    const queriedTurns = await loadTurnsViaArchive(q, opts.onLog);
+    // Ledger-walk path. When the archive is disabled we go straight to
+    // `queryAll` (no `buildArchive` side effect); otherwise the
+    // archive-aware loader still wins on the hot path even when the gate
+    // forces post-load filtering.
+    const queriedTurns = archiveEnabled
+      ? await loadTurnsViaArchive(q, opts.onLog)
+      : await queryAll(q);
     const turns = providerFilter ? filterTurnsByProvider(queriedTurns, providerFilter) : queriedTurns;
     summary = summarizeFidelity(turns);
     const filteredTurns = minFidelity === 'partial'
@@ -535,6 +549,11 @@ export async function compare(opts) {
     analyzedTurns = filteredTurns.length;
     return shapeCompareResult(table, analyzedTurns, minFidelity, summary);
   });
+}
+
+function envDisablesArchive() {
+  const v = process.env.RELAYBURN_ARCHIVE;
+  return v === '0' || v === 'false' || v === 'no';
 }
 
 function normalizeProviderFilter(provider) {
