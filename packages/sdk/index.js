@@ -7,6 +7,10 @@ import {
   queryToolResultEvents,
 } from '@relayburn/ledger';
 import {
+  aggregateByBash,
+  aggregateByBashVerb,
+  aggregateByFile,
+  aggregateBySubagent,
   attributeOverhead,
   buildGhostSurfaceInputs,
   buildTrimRecommendations,
@@ -23,6 +27,7 @@ import {
   loadPricing,
   projectClaudeSettingsPath,
   renderUnifiedDiffForRecommendation,
+  summarizeFidelity,
   sumCosts,
   attributeHotspots,
   toolCallPatternToFinding,
@@ -30,7 +35,7 @@ import {
   userClaudeSettingsPath,
 } from '@relayburn/analyze';
 import { ingestAll } from '@relayburn/ingest';
-import { resolveProject } from '@relayburn/reader';
+import { parseBashCommand, resolveProject } from '@relayburn/reader';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -222,59 +227,245 @@ export async function sessionCost(opts = {}) {
   });
 }
 
+// Coverage flags `attributeHotspots` and the matching aggregators need.
+// Records without `fidelity` (older ledger writers, foreign sources) are
+// treated as best-effort full and pass the gate. Mirrors
+// `ATTRIBUTION_REQUIRED` + `turnPassesCoverage` in the CLI.
+const HOTSPOTS_ATTRIBUTION_REQUIRED = ['hasToolCalls', 'hasToolResultEvents'];
+
+function turnPassesCoverage(turn, required) {
+  const f = turn.fidelity;
+  if (!f) return true;
+  for (const key of required) {
+    if (!f.coverage[key]) return false;
+  }
+  return true;
+}
+
+const VALID_HOTSPOTS_GROUP_BY = ['attribution', 'bash', 'bash-verb', 'file', 'subagent'];
+
+// Expanded hotspots(): returns a discriminated union covering every shape the
+// CLI's `burn hotspots --json` (and a few narrower programmatic cuts) need.
+//
+//   { kind: 'attribution' }                       — full per-axis aggregations
+//   { kind: 'bash' | 'bash-verb' | 'file' |
+//          'subagent' }                           — narrow to one aggregation
+//   { kind: 'findings' }                          — pattern findings (when
+//                                                   `patterns` is set)
+//
+// `groupBy` and `patterns` are mutually exclusive: passing `patterns` always
+// returns the findings shape and `groupBy` is ignored.
+//
+// Pattern detectors that need extra data (Claude settings, tool-result events,
+// on-disk ghost surface) are loaded lazily based on the requested patterns,
+// the same way the CLI does — so passing only `['retry-loop']` won't pay for
+// a settings.json read.
 export async function hotspots(opts = {}) {
   return withHome(opts.ledgerHome, async () => {
-    const turns = await queryAll({ sessionId: opts.session });
-    const userTurns = await queryUserTurns({ sessionId: opts.session });
+    if (
+      opts.groupBy !== undefined &&
+      !VALID_HOTSPOTS_GROUP_BY.includes(opts.groupBy)
+    ) {
+      throw new Error(
+        `invalid hotspots groupBy: ${JSON.stringify(opts.groupBy)} ` +
+          `(expected one of: ${VALID_HOTSPOTS_GROUP_BY.join(', ')})`,
+      );
+    }
+
+    const q = {};
+    if (opts.session) q.sessionId = opts.session;
+    if (opts.project) q.project = opts.project;
+    const since = normalizeSince(opts.since);
+    if (since) q.since = since;
+
+    const turns = await loadTurnsViaArchive(q, opts.onLog);
     const pricing = await loadPricing();
-    const userTurnsBySession = bucketBySession(userTurns);
-    const attribution = attributeHotspots(turns, { pricing, userTurnsBySession });
 
-    if (!opts.patterns || opts.patterns.length === 0) return attribution;
-
-    const wanted = new Set(opts.patterns);
-    const findings = [];
-
-    // Core patterns (retries, failures, edit-heavy, etc.) flow through
-    // detectPatterns + findingsFromPatterns; non-matching kinds are filtered.
-    const detected = detectPatterns(turns, { pricing, userTurnsBySession });
-    for (const f of findingsFromPatterns(detected)) {
-      if (wanted.has(f.kind)) findings.push(f);
+    if (opts.patterns && opts.patterns.length > 0) {
+      return runHotspotsFindings(turns, pricing, opts);
     }
 
-    // Side-channel detectors live outside detectPatterns. Each one reads its
-    // own slice of state, so we run them lazily based on `wanted`.
-
-    if (wanted.has('tool-output-bloat')) {
-      const settings = [];
-      const userLoaded = await loadClaudeSettings(userClaudeSettingsPath());
-      if (userLoaded) settings.push(userLoaded);
-      const projectLoaded = await loadClaudeSettings(projectClaudeSettingsPath());
-      if (projectLoaded) settings.push(projectLoaded);
-      const toolResultEvents = await queryToolResultEvents({ sessionId: opts.session });
-      const bloats = detectToolOutputBloat({
-        settings,
-        toolResultEvents,
-        userTurns,
-        turns,
-        pricing,
-      });
-      for (const b of bloats) findings.push(toolOutputBloatToFinding(b));
-    }
-
-    if (wanted.has('ghost-surface')) {
-      const ghostInputs = await buildGhostSurfaceInputs(turns, pricing);
-      const ghosts = await detectGhostSurface(ghostInputs);
-      for (const g of ghosts) findings.push(ghostSurfaceToFinding(g));
-    }
-
-    if (wanted.has('tool-call-pattern')) {
-      const patterns = detectToolCallPatterns(turns, { pricing });
-      for (const p of patterns) findings.push(toolCallPatternToFinding(p));
-    }
-
-    return findings;
+    return runHotspotsAttribution(turns, pricing, opts);
   });
+}
+
+async function runHotspotsAttribution(turns, pricing, opts) {
+  const eligible = [];
+  const excluded = [];
+  for (const t of turns) {
+    if (turnPassesCoverage(t, HOTSPOTS_ATTRIBUTION_REQUIRED)) eligible.push(t);
+    else excluded.push(t);
+  }
+
+  const fidelitySummary = summarizeFidelity(turns);
+
+  // Refusal: nothing to attribute. Mirror the CLI's refused-shape so callers
+  // can branch on `refused` without re-deriving the reason.
+  if (turns.length > 0 && eligible.length === 0) {
+    const refusalReason =
+      `${turns.length}/${turns.length} turns lack tool-call/tool-result coverage required for hotspots attribution`;
+    const groupBy = opts.groupBy ?? 'attribution';
+    if (groupBy !== 'attribution') {
+      return { kind: groupBy, rows: [], refused: true, refusalReason };
+    }
+    return {
+      kind: 'attribution',
+      turnsAnalyzed: 0,
+      grandTotal: 0,
+      attributedTotal: 0,
+      unattributedTotal: 0,
+      attributionDegraded: false,
+      sessions: [],
+      files: [],
+      bashVerbs: [],
+      bash: [],
+      subagents: [],
+      fidelity: {
+        analyzed: 0,
+        excluded: turns.length,
+        summary: fidelitySummary,
+        refused: true,
+      },
+      refused: true,
+      refusalReason,
+    };
+  }
+
+  const sessionIds = new Set(eligible.map((t) => t.sessionId));
+  const userTurnsBySession = await bulkUserTurnsBySession(sessionIds, q_(opts));
+  const result = attributeHotspots(eligible, { pricing, userTurnsBySession });
+
+  const groupBy = opts.groupBy ?? 'attribution';
+  if (groupBy === 'bash') {
+    return { kind: 'bash', rows: aggregateByBash(result.attributions) };
+  }
+  if (groupBy === 'bash-verb') {
+    return {
+      kind: 'bash-verb',
+      rows: aggregateByBashVerb(result.attributions, parseBashCommand),
+    };
+  }
+  if (groupBy === 'file') {
+    return { kind: 'file', rows: aggregateByFile(result.attributions) };
+  }
+  if (groupBy === 'subagent') {
+    return { kind: 'subagent', rows: aggregateBySubagent(result.attributions) };
+  }
+
+  const files = aggregateByFile(result.attributions);
+  const bashVerbs = aggregateByBashVerb(result.attributions, parseBashCommand);
+  const bash = aggregateByBash(result.attributions);
+  const subagents = aggregateBySubagent(result.attributions);
+  const evenSplit = result.sessionTotals.filter(
+    (s) => s.attributionMethod === 'even-split',
+  ).length;
+  const attributionDegraded =
+    result.sessionTotals.length > 0 &&
+    evenSplit / result.sessionTotals.length >= 0.5;
+
+  return {
+    kind: 'attribution',
+    turnsAnalyzed: eligible.length,
+    grandTotal: result.grandTotal,
+    attributedTotal: result.attributedTotal,
+    unattributedTotal: result.unattributedTotal,
+    attributionDegraded,
+    sessions: result.sessionTotals,
+    files,
+    bashVerbs,
+    bash,
+    subagents,
+    fidelity: {
+      analyzed: eligible.length,
+      excluded: excluded.length,
+      summary: fidelitySummary,
+      refused: false,
+    },
+  };
+}
+
+async function runHotspotsFindings(turns, pricing, opts) {
+  const wanted = new Set(opts.patterns);
+  const findings = [];
+  const userTurns = await queryUserTurns({ sessionId: opts.session });
+  const userTurnsBySession = bucketBySession(userTurns);
+
+  // Core patterns (retries, failures, edit-heavy, etc.) flow through
+  // detectPatterns + findingsFromPatterns; non-matching kinds are filtered.
+  const detected = detectPatterns(turns, { pricing, userTurnsBySession });
+  for (const f of findingsFromPatterns(detected)) {
+    if (wanted.has(f.kind)) findings.push(f);
+  }
+
+  // Side-channel detectors live outside detectPatterns. Each one reads its
+  // own slice of state, so we run them lazily based on `wanted`.
+
+  if (wanted.has('tool-output-bloat')) {
+    const settings = [];
+    const userLoaded = await loadClaudeSettings(userClaudeSettingsPath());
+    if (userLoaded) settings.push(userLoaded);
+    const projectLoaded = await loadClaudeSettings(projectClaudeSettingsPath());
+    if (projectLoaded) settings.push(projectLoaded);
+    const toolResultEvents = await queryToolResultEvents({ sessionId: opts.session });
+    const bloats = detectToolOutputBloat({
+      settings,
+      toolResultEvents,
+      userTurns,
+      turns,
+      pricing,
+    });
+    for (const b of bloats) findings.push(toolOutputBloatToFinding(b));
+  }
+
+  if (wanted.has('ghost-surface')) {
+    const ghostInputs = await buildGhostSurfaceInputs(turns, pricing);
+    const ghosts = await detectGhostSurface(ghostInputs);
+    for (const g of ghosts) findings.push(ghostSurfaceToFinding(g));
+  }
+
+  if (wanted.has('tool-call-pattern')) {
+    const patterns = detectToolCallPatterns(turns, { pricing });
+    for (const p of patterns) findings.push(toolCallPatternToFinding(p));
+  }
+
+  return {
+    kind: 'findings',
+    findings,
+    summary: summarizeFidelity(turns),
+  };
+}
+
+// Build the ledger Query from SDK opts. Used by the bulk user-turn loader so
+// it narrows by `since`/`source` during streaming rather than buffering the
+// entire historical ledger. Mirrors the CLI's same trick.
+function q_(opts) {
+  const q = {};
+  if (opts.session) q.sessionId = opts.session;
+  if (opts.project) q.project = opts.project;
+  const since = normalizeSince(opts.since);
+  if (since) q.since = since;
+  return q;
+}
+
+// One ledger pass + in-memory bucket. Mirrors the CLI's `bulkUserTurnsBySession`:
+// the per-session form `queryUserTurns({sessionId})` re-streams the entire
+// ledger.jsonl on every call, so we issue a single bulk pass here and bucket
+// by sessionId. `since`/`source` are forwarded so the streaming filter narrows
+// the in-memory buffer to the same window the eligible turns live in.
+async function bulkUserTurnsBySession(sessionIds, q = {}) {
+  const out = new Map();
+  if (sessionIds.size === 0) return out;
+  const filter = {};
+  if (q.since !== undefined) filter.since = q.since;
+  if (q.source !== undefined) filter.source = q.source;
+  const all = await queryUserTurns(filter);
+  for (const ut of all) {
+    if (!sessionIds.has(ut.sessionId)) continue;
+    const list = out.get(ut.sessionId);
+    if (list) list.push(ut);
+    else out.set(ut.sessionId, [ut]);
+  }
+  return out;
 }
 
 function bucketBySession(userTurns) {
