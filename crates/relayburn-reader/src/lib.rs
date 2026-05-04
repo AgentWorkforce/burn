@@ -2,10 +2,10 @@
 //!
 //! This crate is a work-in-progress port of the TS reader package. Foundational
 //! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
-//! ported with native conformance tests; the `codex` parser is now ported
-//! (#256). The remaining per-harness parsers (`claude`, `opencode`,
-//! `opencode_stream`) are scaffolded but not yet implemented — see #255 / #257
-//! / #258.
+//! ported with native conformance tests; the `codex` (#256) and `opencode`
+//! (#257) parsers are now ported. The remaining per-harness parsers (`claude`,
+//! `opencode_stream`) are scaffolded but not yet implemented — see #255 /
+//! #258.
 
 pub mod classifier;
 pub mod fidelity;
@@ -25,6 +25,10 @@ pub use codex::{
     ParseCodexIncrementalOptions, ParseCodexIncrementalResult, ParseCodexOptions, ParseCodexResult,
     PersistedUserTurnSlot,
 };
+pub use opencode::{
+    parse_opencode_session, parse_opencode_session_incremental, ParseOpencodeIncrementalOptions,
+    ParseOpencodeIncrementalResult, ParseOpencodeOptions, ParseOpencodeResult,
+};
 
 pub use classifier::{
     classify_activity, count_retries, normalize_tool_name, parse_bash_command, BashParse,
@@ -40,7 +44,7 @@ pub use types::{
     ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass, Harness,
     RelationshipSourceKind, RelationshipType, SessionRelationshipRecord, SourceKind, Subagent,
     ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord, Usage,
-    UsageGranularity, UserTurnBlock, UserTurnRecord,
+    UsageAttribution, UsageGranularity, UserTurnBlock, UserTurnRecord,
 };
 pub use user_turn::{
     bytes_to_approx_tokens, measure_content_bytes, stringify_measured_content, HeuristicCounter,
