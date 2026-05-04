@@ -1212,8 +1212,13 @@ fn build_user_turn_record<C: TokenCounter + ?Sized>(
     preceding_message_id: Option<&str>,
     counter: &C,
 ) -> Option<UserTurnRecord> {
-    let session_id = string_field(line, "sessionId")?;
-    let user_uuid = string_field(line, "uuid")?;
+    // Match TS `if (!sessionId || !userUuid) return undefined;` — JS
+    // truthiness rejects both `undefined` and the empty string, so the Rust
+    // port must reject blank IDs too. Without this, a malformed line carrying
+    // `"sessionId": ""` would emit an unanchored UserTurnRecord and could
+    // shadow the next assistant turn's `following_message_id` linkage.
+    let session_id = first_nonempty_string(line, "sessionId")?;
+    let user_uuid = first_nonempty_string(line, "uuid")?;
     let blocks = extract_user_turn_blocks(line, counter);
     if blocks.is_empty() {
         return None;
@@ -2228,7 +2233,12 @@ fn has_explicit_target(targets: &Option<Vec<String>>, session_id: &str) -> bool 
 // Misc helpers.
 // ---------------------------------------------------------------------------
 
-fn derive_file_session_id(options: &ParseOptions, path: &Path) -> Option<String> {
+fn derive_file_session_id(options: &ParseOptions, _path: &Path) -> Option<String> {
+    // Mirrors the TS `deriveFileSessionId`: only honor explicit caller signals
+    // (`fileSessionId` then `sessionPath` basename). Do NOT fall back to the
+    // on-disk path the parser opened — that would canonicalize relationship
+    // rows to the input filename for default-options callers, breaking joins
+    // against the real in-log `sessionId` UUIDs.
     if let Some(ref s) = options.file_session_id {
         if !s.is_empty() {
             return Some(s.clone());
@@ -2239,9 +2249,7 @@ fn derive_file_session_id(options: &ParseOptions, path: &Path) -> Option<String>
             return basename_without_ext(sp, "jsonl");
         }
     }
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .and_then(|n| basename_without_ext(n, "jsonl"))
+    None
 }
 
 fn basename_without_ext(path: &str, ext: &str) -> Option<String> {
@@ -2268,6 +2276,13 @@ fn new_evidence(file_session_id: Option<String>) -> ClaudeRelationshipEvidence {
 
 fn string_field(obj: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
     obj.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn first_nonempty_string(obj: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    obj.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn first_string_field(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
