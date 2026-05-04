@@ -11,6 +11,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 /// How a model's reasoning tokens should be priced.
@@ -69,11 +70,17 @@ struct ModelsDevCost {
 
 #[derive(Debug, Default, Deserialize)]
 struct ModelsDevProvider {
+    // `IndexMap` preserves JSON insertion order so iteration over the model
+    // map matches the TS `Object.entries` walk; this is what makes
+    // duplicate-id resolution deterministic (last entry in file order wins).
     #[serde(default)]
-    models: Option<HashMap<String, ModelsDevModel>>,
+    models: Option<IndexMap<String, ModelsDevModel>>,
 }
 
-type ModelsDevRoot = HashMap<String, ModelsDevProvider>;
+// Same reason as `ModelsDevProvider::models`: providers iterate in file
+// order so a duplicate model id encountered under a later provider block
+// overwrites the earlier one, matching the TS `Object.values(root)` walk.
+type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
 
 /// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`.
 const BUILTIN_PRICING_JSON: &str =
@@ -221,6 +228,27 @@ mod tests {
         assert_eq!(entry.reasoning, None);
         // cache_write falls back to input when omitted.
         assert_eq!(entry.cache_write, 1.0);
+    }
+
+    #[test]
+    fn flatten_resolves_duplicate_model_ids_with_last_wins_file_order() {
+        // `models.dev.json` lists ~1900 model IDs that appear under multiple
+        // providers (e.g. `claude-sonnet-4-6` under both `anthropic` and
+        // `nano-gpt`). The TS path iterates `Object.values(root)` /
+        // `Object.entries(models)` in insertion order and lets the last
+        // assignment to `out[id]` win. We must do the same so duplicate-id
+        // pricing is deterministic across runs.
+        let raw = r#"{
+            "first":  { "models": { "shared": { "cost": { "input": 1, "output": 2 } } } },
+            "second": { "models": { "shared": { "cost": { "input": 9, "output": 8 } } } }
+        }"#;
+        // Run repeatedly; each run must surface the second-provider entry.
+        for _ in 0..10 {
+            let table = parse_pricing(raw).unwrap();
+            let entry = table.get("shared").unwrap();
+            assert_eq!(entry.input, 9.0);
+            assert_eq!(entry.output, 8.0);
+        }
     }
 
     #[test]
