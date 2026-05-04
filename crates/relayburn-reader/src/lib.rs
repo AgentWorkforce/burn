@@ -3,11 +3,10 @@
 //! This crate is a work-in-progress port of the TS reader package. Foundational
 //! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
 //! ported with native conformance tests; the `codex` (#256) and `opencode`
-//! (#257) parsers are ported. The Claude Code parser (`claude`) is in
-//! progress under #255 — synchronous `parse_claude_session` and the
-//! cross-file reconciler are landed, the incremental entry point is not yet
-//! ported. The OpenCode streaming ingestor (`opencode_stream`) is scaffolded
-//! but not yet implemented — see #258.
+//! (#257) parsers are ported; the Claude Code parser (`claude`) covers the
+//! synchronous, incremental, and cross-file reconciliation surface (#255).
+//! The OpenCode streaming ingestor (`opencode_stream`) is scaffolded but not
+//! yet implemented — see #258.
 
 pub mod classifier;
 pub mod fidelity;
@@ -53,7 +52,10 @@ pub use user_turn::{
     TokenCounter, UserTurnTokenizer,
 };
 pub use claude::{
-    parse_claude_session, parse_claude_session_with_counter, reconcile_claude_session_relationships,
-    ClaudeRelationshipEvidence, ParseOptions as ClaudeParseOptions,
+    parse_claude_session, parse_claude_session_incremental,
+    parse_claude_session_incremental_with_counter, parse_claude_session_with_counter,
+    reconcile_claude_session_relationships, ClaudeRelationshipEvidence,
+    ParseIncrementalOptions as ClaudeParseIncrementalOptions,
+    ParseIncrementalResult as ClaudeParseIncrementalResult, ParseOptions as ClaudeParseOptions,
     ParseResult as ClaudeParseResult, ReconcileClaudeRelationshipsInput,
 };
