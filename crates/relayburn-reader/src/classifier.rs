@@ -1,12 +1,15 @@
 //! Activity classifier — Rust port of `packages/reader/src/classifier.ts`.
 //!
-//! The classifier is rule-based and deterministic. The rule tables
-//! (`EDIT_TOOLS`, `TOOL_ALIASES`, regex pattern lists) are kept flat so adding
-//! a new harness is a one-file change.
+//! The classifier is rule-based and deterministic. The lookup tables live as
+//! `phf` static maps (perfect-hash, zero allocation, zero startup cost) and
+//! the bash heuristics are expressed as [`BashRule`] data — pattern + optional
+//! `forbid` clause that emulates the TS negative-lookahead idioms — instead of
+//! a stringly-typed post-filter. Adding a new harness is still a single-file
+//! change: drop entries into the relevant table.
 
-use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
-use once_cell::sync::Lazy;
+use phf::{phf_map, phf_set};
 use regex::Regex;
 
 use crate::types::{ActivityCategory, ToolCall};
@@ -34,165 +37,155 @@ pub struct BashParse {
 }
 
 // ---------------------------------------------------------------------------
-// Static rule tables.
+// Static tool-name tables (phf — compile-time perfect hashing).
 // ---------------------------------------------------------------------------
 
-static EDIT_TOOLS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    ["Edit", "Write", "NotebookEdit", "MultiEdit"]
-        .into_iter()
-        .collect()
-});
+static EDIT_TOOLS: phf::Set<&'static str> = phf_set! {
+    "Edit", "Write", "NotebookEdit", "MultiEdit",
+};
 
-static DELEGATION_TOOLS: Lazy<HashSet<&'static str>> =
-    Lazy::new(|| ["Agent", "Task"].into_iter().collect());
+static DELEGATION_TOOLS: phf::Set<&'static str> = phf_set! { "Agent", "Task" };
 
 // READ_ONLY_TOOLS lived in the TS classifier as commentary on the priority-6
 // branch, but both arms of that branch return `exploration` (see
-// `pick_category` priority 6 below), so the set is unreferenced. Keeping it
-// out of the Rust port avoids a dead-code warning while preserving identical
-// behavior.
+// `pick_category` priority 6 below), so the set is unreferenced. Tracked in
+// AgentWorkforce/burn#254 — keeping it out of the Rust port avoids a dead-code
+// warning while preserving identical behavior.
 
-static TOOL_ALIASES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
-    [
-        // Codex
-        ("apply_patch", "Edit"),
-        ("exec_command", "Bash"),
-        ("shell", "Bash"),
-        ("read_file", "Read"),
-        ("write_file", "Write"),
-        ("update_plan", "ExitPlanMode"),
-        ("spawn_agent", "Agent"),
-        ("send_input", "Task"),
-        ("wait_agent", "Task"),
-        ("close_agent", "Task"),
-        ("resume_agent", "Task"),
-        ("view_image", "Read"),
-        ("read_mcp_resource", "Read"),
-        // OpenCode (lowercase names)
-        ("read", "Read"),
-        ("write", "Write"),
-        ("edit", "Edit"),
-        ("bash", "Bash"),
-        ("grep", "Grep"),
-        ("glob", "Glob"),
-        ("webfetch", "WebFetch"),
-        ("task", "Task"),
-    ]
-    .into_iter()
-    .collect()
-});
+/// Harness-specific tool names mapped to the canonical (Claude Code) names the
+/// rule tables are written against. Adding a new harness is a one-line change
+/// here.
+static TOOL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
+    // Codex
+    "apply_patch"       => "Edit",
+    "exec_command"      => "Bash",
+    "shell"             => "Bash",
+    "read_file"         => "Read",
+    "write_file"        => "Write",
+    "update_plan"       => "ExitPlanMode",
+    "spawn_agent"       => "Agent",
+    "send_input"        => "Task",
+    "wait_agent"        => "Task",
+    "close_agent"       => "Task",
+    "resume_agent"      => "Task",
+    "view_image"        => "Read",
+    "read_mcp_resource" => "Read",
+    // OpenCode (lowercase names)
+    "read"     => "Read",
+    "write"    => "Write",
+    "edit"     => "Edit",
+    "bash"     => "Bash",
+    "grep"     => "Grep",
+    "glob"     => "Glob",
+    "webfetch" => "WebFetch",
+    "task"     => "Task",
+};
 
-pub fn normalize_tool_name(name: &str) -> String {
-    TOOL_ALIASES.get(name).copied().unwrap_or(name).to_string()
+pub fn normalize_tool_name(name: &str) -> &str {
+    TOOL_ALIASES.get(name).copied().unwrap_or(name)
 }
 
-static MULTIWORD_BINARIES: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    [
-        "git",
-        "gh",
-        "npm",
-        "pnpm",
-        "yarn",
-        "bun",
-        "pip",
-        "pip3",
-        "uv",
-        "poetry",
-        "cargo",
-        "make",
-        "docker",
-        "kubectl",
-        "helm",
-        "terraform",
-        "brew",
-        "apt",
-        "apt-get",
-        "gem",
-        "bundle",
-        "go",
-    ]
-    .into_iter()
-    .collect()
-});
+// ---------------------------------------------------------------------------
+// Bash binary tables.
+// ---------------------------------------------------------------------------
 
-static PACKAGE_RUNNERS: Lazy<HashSet<&'static str>> =
-    Lazy::new(|| ["npm", "pnpm", "yarn", "bun"].into_iter().collect());
-static SHELL_BINARIES: Lazy<HashSet<&'static str>> =
-    Lazy::new(|| ["bash", "sh", "zsh"].into_iter().collect());
-static PYTHON_BINARIES: Lazy<HashSet<&'static str>> =
-    Lazy::new(|| ["python", "python3"].into_iter().collect());
+static MULTIWORD_BINARIES: phf::Set<&'static str> = phf_set! {
+    "git", "gh", "npm", "pnpm", "yarn", "bun", "pip", "pip3", "uv", "poetry",
+    "cargo", "make", "docker", "kubectl", "helm", "terraform", "brew", "apt",
+    "apt-get", "gem", "bundle", "go",
+};
 
-static TWO_PART_SUBCOMMANDS: Lazy<HashMap<&'static str, HashSet<&'static str>>> = Lazy::new(|| {
-    let mut m: HashMap<&'static str, HashSet<&'static str>> = HashMap::new();
-    m.insert("docker", ["compose"].into_iter().collect());
-    m.insert(
-        "gh",
-        ["pr", "run", "issue", "repo", "workflow", "release"]
-            .into_iter()
-            .collect(),
-    );
-    m.insert("go", ["mod"].into_iter().collect());
-    m.insert("uv", ["pip"].into_iter().collect());
-    m
-});
+static PACKAGE_RUNNERS: phf::Set<&'static str> = phf_set! { "npm", "pnpm", "yarn", "bun" };
+static SHELL_BINARIES: phf::Set<&'static str> = phf_set! { "bash", "sh", "zsh" };
+static PYTHON_BINARIES: phf::Set<&'static str> = phf_set! { "python", "python3" };
 
-static OPTION_TAKES_VALUE: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    [
-        "-C",
-        "-c",
-        "-F",
-        "--config",
-        "--filter",
-        "--git-dir",
-        "--namespace",
-        "--prefix",
-        "--repo",
-        "--repository",
-        "--work-tree",
-    ]
-    .into_iter()
-    .collect()
-});
+// `binary -> nested first-token subcommands`. Slices instead of a nested set
+// because counts are tiny (1–6 entries) and linear scan is faster than a hash
+// probe at that size.
+static TWO_PART_SUBCOMMANDS: phf::Map<&'static str, &'static [&'static str]> = phf_map! {
+    "docker" => &["compose"],
+    "gh"     => &["pr", "run", "issue", "repo", "workflow", "release"],
+    "go"     => &["mod"],
+    "uv"     => &["pip"],
+};
 
-static PYTHON_OPTION_TAKES_VALUE: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    ["-c", "-m", "-W", "-X", "--check-hash-based-pycs"]
-        .into_iter()
-        .collect()
-});
+static OPTION_TAKES_VALUE: phf::Set<&'static str> = phf_set! {
+    "-C", "-c", "-F", "--config", "--filter", "--git-dir", "--namespace",
+    "--prefix", "--repo", "--repository", "--work-tree",
+};
 
-// Activity-keyword regexes. Word-boundary `\b` and case-insensitive flags match
-// the TS regex literals.
-static DEBUG_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+static PYTHON_OPTION_TAKES_VALUE: phf::Set<&'static str> = phf_set! {
+    "-c", "-m", "-W", "-X", "--check-hash-based-pycs",
+};
+
+// ---------------------------------------------------------------------------
+// Activity-keyword regexes (case-insensitive, word-boundary).
+// ---------------------------------------------------------------------------
+
+fn build_re(s: &str) -> Regex {
+    Regex::new(s).expect("classifier regex failed to compile")
+}
+
+static DEBUG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    build_re(
         r"(?i)\b(bug|error|crash|traceback|stack\s*trace|failure|failing|broken|fix\s+the|not\s+working|throws?)\b",
     )
-    .unwrap()
 });
-static REVIEW_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(review|audit|inspect|look\s+over|code\s+review|pr\s+review)\b").unwrap()
+static REVIEW_RE: LazyLock<Regex> = LazyLock::new(|| {
+    build_re(r"(?i)\b(review|audit|inspect|look\s+over|code\s+review|pr\s+review)\b")
 });
-static REFACTOR_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+static REFACTOR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    build_re(
         r"(?i)\b(refactor|refactoring|cleanup|clean\s+up|rename|extract|restructure|move\s+this|reorganize)\b",
     )
-    .unwrap()
 });
-static FEATURE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b(add|create|implement|new\s+feature|build\s+the|introduce|support\s+for)\b")
-        .unwrap()
+static FEATURE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    build_re(r"(?i)\b(add|create|implement|new\s+feature|build\s+the|introduce|support\s+for)\b")
 });
-static BRAINSTORM_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+static BRAINSTORM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    build_re(
         r"(?i)\b(brainstorm|what\s+if|think\s+through|explore(?:\s+ideas)?|design|should\s+we|approach(?:es)?)\b",
     )
-    .unwrap()
 });
-static PLANNING_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\b(plan(?:ning)?|outline|roadmap|strategy)\b").unwrap());
+static PLANNING_RE: LazyLock<Regex> =
+    LazyLock::new(|| build_re(r"(?i)\b(plan(?:ning)?|outline|roadmap|strategy)\b"));
+
+// ---------------------------------------------------------------------------
+// BashRule — pattern plus optional `forbid` clause that emulates the TS
+// negative-lookahead idioms (e.g. `(?!.*--check\b)`). Encodes intent as data
+// instead of as a stringly-typed post-filter.
+// ---------------------------------------------------------------------------
+
+struct BashRule {
+    pattern: Regex,
+    forbid: Option<Regex>,
+}
+
+impl BashRule {
+    fn pattern(p: &str) -> Self {
+        Self {
+            pattern: build_re(p),
+            forbid: None,
+        }
+    }
+
+    fn forbidding(mut self, forbid: &str) -> Self {
+        self.forbid = Some(build_re(forbid));
+        self
+    }
+
+    fn matches(&self, cmd: &str) -> bool {
+        self.pattern.is_match(cmd) && !self.forbid.as_ref().is_some_and(|r| r.is_match(cmd))
+    }
+}
+
+fn any_match(rules: &[BashRule], cmd: &str) -> bool {
+    rules.iter().any(|r| r.matches(cmd))
+}
 
 // Bash heuristics — match on the first non-env token after stripping leading
 // `FOO=bar` assignments (e.g. `CI=1 pytest` -> `pytest`).
-static TEST_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static TEST_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
     [
         r"\bpytest\b",
         r"\bpython\s+-m\s+pytest\b",
@@ -213,11 +206,11 @@ static TEST_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         r"\bpuppeteer\b",
     ]
     .into_iter()
-    .map(|p| Regex::new(p).unwrap())
+    .map(BashRule::pattern)
     .collect()
 });
 
-static REVIEW_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static REVIEW_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
     [
         r"\bgit\s+status\b",
         r"\bgit\s+diff\b",
@@ -228,18 +221,17 @@ static REVIEW_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         r"\bgh\s+run\s+view\b",
     ]
     .into_iter()
-    .map(|p| Regex::new(p).unwrap())
+    .map(BashRule::pattern)
     .collect()
 });
 
-static GIT_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    [r"\bgit\s+(?:push|pull|fetch|commit|merge|rebase|checkout|cherry-pick|reset|revert|switch|tag|stash)\b"]
-        .into_iter()
-        .map(|p| Regex::new(p).unwrap())
-        .collect()
+static GIT_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
+    vec![BashRule::pattern(
+        r"\bgit\s+(?:push|pull|fetch|commit|merge|rebase|checkout|cherry-pick|reset|revert|switch|tag|stash)\b",
+    )]
 });
 
-static DEPS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static DEPS_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
     [
         r"\b(?:npm|yarn|pnpm|bun)\s+(?:install|add|remove|uninstall|update|upgrade|ci)\b",
         r"\bpip\s+(?:install|uninstall)\b",
@@ -255,101 +247,54 @@ static DEPS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         r"\bapt(?:-get)?\s+(?:install|remove)\b",
     ]
     .into_iter()
-    .map(|p| Regex::new(p).unwrap())
+    .map(BashRule::pattern)
     .collect()
 });
 
-static FORMAT_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    [
-        r"\bprettier\b.*(?:--write|-w)(?:\s|$)",
-        r"\beslint\b.*--fix\b",
-        r"\bbiome\s+format\b",
-        r"\bbiome\s+check\b.*--apply\b",
-        // Negative lookaheads aren't supported in the regex crate; emulate
-        // `\bblack\b(?!.*--check\b)` by checking the absence of `--check` at
-        // call sites for the matching patterns. We keep the simple positive
-        // form here and gate via post-filter below.
-        r"\bblack\b",
-        r"\bruff\s+format\b",
-        r"\bisort\b",
-        r"\brustfmt\b",
-        r"\bcargo\s+fmt\b",
-        r"\bgofmt\b",
-        r"\bgoimports\b",
-        r"\bdprint\s+fmt\b",
+// `forbidding(r"--check\b")` encodes the TS `(?!.*--check\b)` negative
+// lookahead — `--check` means "verify, don't mutate" so it should never be
+// classified as `format`.
+static FORMAT_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
+    vec![
+        BashRule::pattern(r"\bprettier\b.*(?:--write|-w)(?:\s|$)"),
+        BashRule::pattern(r"\beslint\b.*--fix\b"),
+        BashRule::pattern(r"\bbiome\s+format\b"),
+        BashRule::pattern(r"\bbiome\s+check\b.*--apply\b"),
+        BashRule::pattern(r"\bblack\b").forbidding(r"--check\b"),
+        BashRule::pattern(r"\bruff\s+format\b"),
+        BashRule::pattern(r"\bisort\b"),
+        BashRule::pattern(r"\brustfmt\b"),
+        BashRule::pattern(r"\bcargo\s+fmt\b").forbidding(r"--check\b"),
+        BashRule::pattern(r"\bgofmt\b"),
+        BashRule::pattern(r"\bgoimports\b"),
+        BashRule::pattern(r"\bdprint\s+fmt\b"),
     ]
-    .into_iter()
-    .map(|p| Regex::new(p).unwrap())
-    .collect()
 });
 
-// Companion gates: when a format candidate matches, reject it if `--check` is
-// present (TS uses negative lookaheads; we encode the same intent without).
-fn format_reject(cmd: &str) -> bool {
-    static HAS_CHECK: Lazy<Regex> = Lazy::new(|| Regex::new(r"--check\b").unwrap());
-    HAS_CHECK.is_match(cmd)
-        // Only the black/cargo-fmt patterns in the TS list use a negative
-        // lookahead, but applying the exclusion uniformly across format
-        // candidates is conservative — `--check` always means "verify, don't
-        // mutate" so it shouldn't classify as `format`.
-        && (cmd.contains("black") || cmd.contains("cargo fmt"))
-}
-
-static VERIFICATION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-    [
-        r"\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?lint\b",
-        r"\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?typecheck\b",
-        r"\bprettier\b.*--check\b",
-        // `\beslint\b(?!.*--fix\b)` — emulated below in `verification_match`.
-        r"\beslint\b",
-        // `\bbiome\s+check\b(?!.*--apply\b)` — emulated below.
-        r"\bbiome\s+check\b",
-        r"\bblack\b.*--check\b",
-        r"\bruff\s+check\b",
-        r"\bflake8\b",
-        r"\bmypy\b",
-        r"\bpyright\b",
-        // `\btsc\b(?!\s+--build\b)` — emulated below.
-        r"\btsc\b",
-        r"\bcargo\s+check\b",
-        r"\bcargo\s+fmt\b.*--check\b",
-        r"\bgolangci-lint\b",
-        r"\bshellcheck\b",
-        r"\bhadolint\b",
-        r"\bterraform\s+validate\b",
-        r"\bmake\s+(?:lint|check|typecheck|verify)\b",
+static VERIFICATION_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
+    vec![
+        BashRule::pattern(r"\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?lint\b"),
+        BashRule::pattern(r"\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?typecheck\b"),
+        BashRule::pattern(r"\bprettier\b.*--check\b"),
+        BashRule::pattern(r"\beslint\b").forbidding(r"--fix\b"),
+        BashRule::pattern(r"\bbiome\s+check\b").forbidding(r"--apply\b"),
+        BashRule::pattern(r"\bblack\b.*--check\b"),
+        BashRule::pattern(r"\bruff\s+check\b"),
+        BashRule::pattern(r"\bflake8\b"),
+        BashRule::pattern(r"\bmypy\b"),
+        BashRule::pattern(r"\bpyright\b"),
+        BashRule::pattern(r"\btsc\b").forbidding(r"\btsc\s+--build\b"),
+        BashRule::pattern(r"\bcargo\s+check\b"),
+        BashRule::pattern(r"\bcargo\s+fmt\b.*--check\b"),
+        BashRule::pattern(r"\bgolangci-lint\b"),
+        BashRule::pattern(r"\bshellcheck\b"),
+        BashRule::pattern(r"\bhadolint\b"),
+        BashRule::pattern(r"\bterraform\s+validate\b"),
+        BashRule::pattern(r"\bmake\s+(?:lint|check|typecheck|verify)\b"),
     ]
-    .into_iter()
-    .map(|p| Regex::new(p).unwrap())
-    .collect()
 });
 
-fn verification_match(cmd: &str) -> bool {
-    static FIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"--fix\b").unwrap());
-    static APPLY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"--apply\b").unwrap());
-    static TSC_BUILD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\btsc\s+--build\b").unwrap());
-
-    for re in VERIFICATION_PATTERNS.iter() {
-        if !re.is_match(cmd) {
-            continue;
-        }
-        // eslint without --fix; biome check without --apply; tsc without --build.
-        let s = re.as_str();
-        if s == r"\beslint\b" && FIX_RE.is_match(cmd) {
-            continue;
-        }
-        if s == r"\bbiome\s+check\b" && APPLY_RE.is_match(cmd) {
-            continue;
-        }
-        if s == r"\btsc\b" && TSC_BUILD_RE.is_match(cmd) {
-            continue;
-        }
-        return true;
-    }
-    false
-}
-
-static BUILD_DEPLOY_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static BUILD_DEPLOY_RULES: LazyLock<Vec<BashRule>> = LazyLock::new(|| {
     [
         r"\bdocker\s+(?:build|compose\s+build|push)\b",
         r"\bcargo\s+build\b",
@@ -367,11 +312,11 @@ static BUILD_DEPLOY_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         r"\b(?:vercel|netlify|flyctl|railway|sst)\s+(?:deploy|up)\b",
     ]
     .into_iter()
-    .map(|p| Regex::new(p).unwrap())
+    .map(BashRule::pattern)
     .collect()
 });
 
-static DOC_FILE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+static DOC_FILE_RULES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         r"(?i)\.md$",
         r"(?i)\.mdx$",
@@ -383,7 +328,7 @@ static DOC_FILE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         r"(?:^|/)docs/",
     ]
     .into_iter()
-    .map(|p| Regex::new(p).unwrap())
+    .map(build_re)
     .collect()
 });
 
@@ -399,37 +344,37 @@ fn parse_bash_command_inner(command: &str, depth: u32) -> Option<BashParse> {
     if depth > 5 {
         return Some(shell_parse());
     }
-    let cmd = command.trim().to_string();
+    let cmd = command.trim();
     if cmd.is_empty() {
         return None;
     }
-    if has_heredoc(&cmd) || starts_with_compound_shell_syntax(&cmd) {
+    if has_heredoc(cmd) || starts_with_compound_shell_syntax(cmd) {
         return Some(shell_parse());
     }
-    if !has_balanced_shell_delimiters(&cmd) {
+    if !has_balanced_shell_delimiters(cmd) {
         return Some(shell_parse());
     }
 
-    if let Some(unwrapped) = unwrap_subshell(&cmd) {
+    if let Some(unwrapped) = unwrap_subshell(cmd) {
         return parse_bash_command_inner(&unwrapped, depth + 1);
     }
-    if let Some(rest) = strip_leading_cd_prefix(&cmd) {
+    if let Some(rest) = strip_leading_cd_prefix(cmd) {
         return parse_bash_command_inner(&rest, depth + 1);
     }
 
-    let first = first_top_level_segment(&cmd)?;
-    let cmd = first.trim().to_string();
+    let first = first_top_level_segment(cmd)?;
+    let cmd = first.trim();
     if cmd.is_empty() {
         return None;
     }
-    if has_heredoc(&cmd) || starts_with_compound_shell_syntax(&cmd) {
+    if has_heredoc(cmd) || starts_with_compound_shell_syntax(cmd) {
         return Some(shell_parse());
     }
-    if let Some(unwrapped) = unwrap_subshell(&cmd) {
+    if let Some(unwrapped) = unwrap_subshell(cmd) {
         return parse_bash_command_inner(&unwrapped, depth + 1);
     }
 
-    let tokens = match shell_words(&cmd) {
+    let tokens = match shell_words(cmd) {
         Some(t) => t,
         None => return Some(shell_parse()),
     };
@@ -478,7 +423,7 @@ fn parse_bash_command_inner(command: &str, depth: u32) -> Option<BashParse> {
     {
         subcommand = tokens[sub_index + 1].clone();
     } else if let Some(nested) = TWO_PART_SUBCOMMANDS.get(binary.as_str()) {
-        if nested.contains(subcommand.as_str()) && sub_index + 1 < tokens.len() {
+        if nested.contains(&subcommand.as_str()) && sub_index + 1 < tokens.len() {
             subcommand = format!("{} {}", subcommand, tokens[sub_index + 1]);
         }
     }
@@ -496,7 +441,7 @@ fn verb(binary: &str, subcommand: Option<&str>) -> BashParse {
         Some(sub) => BashParse {
             binary: binary.to_string(),
             subcommand: Some(sub.to_string()),
-            normalized: format!("{} {}", binary, sub),
+            normalized: format!("{binary} {sub}"),
         },
     }
 }
@@ -510,23 +455,22 @@ fn shell_parse() -> BashParse {
 }
 
 fn has_heredoc(cmd: &str) -> bool {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<<-?\s*\S+").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"<<-?\s*\S+"));
     RE.is_match(cmd)
 }
 
 fn starts_with_compound_shell_syntax(cmd: &str) -> bool {
-    static RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^(?:for|while|until|if|case|select|function)\b").unwrap());
-    static BRACE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\{\s").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| build_re(r"^(?:for|while|until|if|case|select|function)\b"));
+    static BRACE_RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"^\{\s"));
     RE.is_match(cmd) || BRACE_RE.is_match(cmd)
 }
 
 fn has_balanced_shell_delimiters(cmd: &str) -> bool {
-    let bytes = cmd.as_bytes();
     let mut quote: Option<u8> = None;
     let mut escaped = false;
     let mut depth: i32 = 0;
-    for &b in bytes {
+    for &b in cmd.as_bytes() {
         if escaped {
             escaped = false;
             continue;
@@ -604,8 +548,7 @@ fn unwrap_subshell(cmd: &str) -> Option<String> {
 
 fn strip_leading_cd_prefix(cmd: &str) -> Option<String> {
     let op = first_top_level_operator(cmd, &["&&", ";"])?;
-    let before = cmd[..op.index].trim();
-    let words = shell_words(before)?;
+    let words = shell_words(cmd[..op.index].trim())?;
     let cmd_idx = skip_env_assignments(&words, 0);
     if words.get(cmd_idx).map(String::as_str) != Some("cd") {
         return None;
@@ -735,7 +678,7 @@ fn shell_words(segment: &str) -> Option<Vec<String>> {
 }
 
 fn skip_env_assignments(tokens: &[String], start: usize) -> usize {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"^[A-Za-z_][A-Za-z0-9_]*="));
     let mut i = start;
     while i < tokens.len() && RE.is_match(&tokens[i]) {
         i += 1;
@@ -780,7 +723,7 @@ fn shell_command_arg(tokens: &[String], start: usize) -> Option<String> {
 }
 
 fn env_command_args(tokens: &[String], start: usize) -> Vec<String> {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"^[A-Za-z_][A-Za-z0-9_]*="));
     let mut i = start;
     while i < tokens.len() {
         let token = &tokens[i];
@@ -858,14 +801,14 @@ fn normalize_binary(raw: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// classifyActivity priority ladder.
+// classify_activity priority ladder.
 // ---------------------------------------------------------------------------
 
 pub fn classify_activity(input: ClassificationInput<'_>) -> ClassificationResult {
     let has_edits = input
         .tool_calls
         .iter()
-        .any(|t| EDIT_TOOLS.contains(normalize_tool_name(&t.name).as_str()));
+        .any(|t| EDIT_TOOLS.contains(normalize_tool_name(&t.name)));
     let retries = count_retries(input.tool_calls);
     let activity = pick_category(PickInput {
         tool_calls: input.tool_calls,
@@ -895,7 +838,7 @@ fn pick_category(p: PickInput<'_>) -> ActivityCategory {
     // Priority 1: delegation
     if p.tool_calls
         .iter()
-        .any(|t| DELEGATION_TOOLS.contains(normalize_tool_name(&t.name).as_str()))
+        .any(|t| DELEGATION_TOOLS.contains(normalize_tool_name(&t.name)))
     {
         return ActivityCategory::Delegation;
     }
@@ -927,36 +870,34 @@ fn pick_category(p: PickInput<'_>) -> ActivityCategory {
         return ActivityCategory::Debugging;
     }
     // Priority 5: bash heuristics
-    let bash_calls: Vec<&ToolCall> = p
+    for tc in p
         .tool_calls
         .iter()
         .filter(|t| normalize_tool_name(&t.name) == "Bash")
-        .collect();
-    for call in &bash_calls {
-        let raw = call.target.as_deref().unwrap_or("");
-        let cmd = strip_env(raw);
+    {
+        let cmd = strip_env(tc.target.as_deref().unwrap_or(""));
         if cmd.is_empty() {
             continue;
         }
-        if TEST_PATTERNS.iter().any(|re| re.is_match(&cmd)) {
+        if any_match(&TEST_RULES, &cmd) {
             return ActivityCategory::Testing;
         }
-        if REVIEW_PATTERNS.iter().any(|re| re.is_match(&cmd)) {
+        if any_match(&REVIEW_RULES, &cmd) {
             return ActivityCategory::Review;
         }
-        if GIT_PATTERNS.iter().any(|re| re.is_match(&cmd)) {
+        if any_match(&GIT_RULES, &cmd) {
             return ActivityCategory::Git;
         }
-        if DEPS_PATTERNS.iter().any(|re| re.is_match(&cmd)) {
+        if any_match(&DEPS_RULES, &cmd) {
             return ActivityCategory::Deps;
         }
-        if FORMAT_PATTERNS.iter().any(|re| re.is_match(&cmd)) && !format_reject(&cmd) {
+        if any_match(&FORMAT_RULES, &cmd) {
             return ActivityCategory::Format;
         }
-        if verification_match(&cmd) {
+        if any_match(&VERIFICATION_RULES, &cmd) {
             return ActivityCategory::Verification;
         }
-        if BUILD_DEPLOY_PATTERNS.iter().any(|re| re.is_match(&cmd)) {
+        if any_match(&BUILD_DEPLOY_RULES, &cmd) {
             return ActivityCategory::BuildDeploy;
         }
     }
@@ -987,19 +928,20 @@ fn pick_category(p: PickInput<'_>) -> ActivityCategory {
 }
 
 fn all_edits_are_docs(tool_calls: &[ToolCall]) -> bool {
-    let edits: Vec<&ToolCall> = tool_calls
+    let mut saw_edit = false;
+    for tc in tool_calls
         .iter()
-        .filter(|t| EDIT_TOOLS.contains(normalize_tool_name(&t.name).as_str()))
-        .collect();
-    if edits.is_empty() {
-        return false;
-    }
-    edits.iter().all(|t| match &t.target {
-        Some(target) if !target.is_empty() => {
-            DOC_FILE_PATTERNS.iter().any(|re| re.is_match(target))
+        .filter(|t| EDIT_TOOLS.contains(normalize_tool_name(&t.name)))
+    {
+        saw_edit = true;
+        let Some(target) = tc.target.as_deref() else {
+            return false;
+        };
+        if target.is_empty() || !DOC_FILE_RULES.iter().any(|re| re.is_match(target)) {
+            return false;
         }
-        _ => false,
-    })
+    }
+    saw_edit
 }
 
 fn refine_edit_by_keywords(text: &str) -> Option<ActivityCategory> {
@@ -1038,7 +980,7 @@ fn refine_intent_by_keywords(text: &str) -> Option<ActivityCategory> {
 }
 
 fn strip_env(cmd: &str) -> String {
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(?:\s*[A-Z_][A-Z0-9_]*=\S+\s+)+").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"^(?:\s*[A-Z_][A-Z0-9_]*=\S+\s+)+"));
     RE.replace(cmd, "").into_owned()
 }
 
@@ -1048,7 +990,7 @@ pub fn count_retries(tool_calls: &[ToolCall]) -> u64 {
     let mut seen_bash_after_edit = false;
     for tc in tool_calls {
         let name = normalize_tool_name(&tc.name);
-        if EDIT_TOOLS.contains(name.as_str()) {
+        if EDIT_TOOLS.contains(name) {
             if seen_edit && seen_bash_after_edit {
                 retries += 1;
                 seen_bash_after_edit = false;
@@ -1324,5 +1266,13 @@ mod tests {
     fn empty_input_is_conversation() {
         let r = classify(&[]);
         assert_eq!(r.activity, ActivityCategory::Conversation);
+    }
+
+    #[test]
+    fn bash_rule_forbid_clause_excludes_match() {
+        // BashRule's `forbid` clause emulates the TS negative-lookahead idiom.
+        let rule = BashRule::pattern(r"\bblack\b").forbidding(r"--check\b");
+        assert!(rule.matches("black ."));
+        assert!(!rule.matches("black --check ."));
     }
 }

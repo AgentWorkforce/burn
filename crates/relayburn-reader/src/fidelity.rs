@@ -1,50 +1,49 @@
 //! Coverage / fidelity helpers — Rust port of `packages/reader/src/fidelity.ts`.
 //!
-//! Same policy as the TS helper: parsers default every coverage flag to `false`
-//! and explicitly opt fields into `true`. `classify_fidelity` derives the
-//! higher-level summary from `granularity` + `coverage`.
+//! Construction lives on the types: `Coverage::EMPTY` / `Coverage::is_full()`
+//! ([`crate::types`]) and [`Fidelity::new`] here. `classify_fidelity` is
+//! exposed as a free function and as [`Fidelity::classify`] — same logic,
+//! pick the form that reads better at the call site.
 
 use crate::types::{Coverage, Fidelity, FidelityClass, UsageGranularity};
 
-/// Coverage value with every flag defaulted to `false`. Parsers should clone
-/// this and flip the flags they actually populate.
-pub const fn empty_coverage() -> Coverage {
-    Coverage {
-        has_input_tokens: false,
-        has_output_tokens: false,
-        has_reasoning_tokens: false,
-        has_cache_read_tokens: false,
-        has_cache_create_tokens: false,
-        has_tool_calls: false,
-        has_tool_result_events: false,
-        has_session_relationships: false,
-        has_raw_content: false,
+impl Fidelity {
+    /// Build a `Fidelity` from a granularity + coverage pair. Equivalent to
+    /// the TS `makeFidelity`; the derived `class` field is filled in via
+    /// [`classify_fidelity`].
+    pub fn new(granularity: UsageGranularity, coverage: Coverage) -> Self {
+        let class = classify_fidelity(granularity, &coverage);
+        Self {
+            granularity,
+            coverage,
+            class,
+        }
+    }
+
+    /// Pure derivation of `FidelityClass` from a granularity + coverage pair.
+    /// Method form of [`classify_fidelity`].
+    pub fn classify(granularity: UsageGranularity, coverage: &Coverage) -> FidelityClass {
+        classify_fidelity(granularity, coverage)
     }
 }
 
-fn full_required(c: &Coverage) -> bool {
-    c.has_input_tokens
-        && c.has_output_tokens
-        && c.has_cache_read_tokens
-        && c.has_tool_calls
-        && c.has_tool_result_events
-        && c.has_session_relationships
-}
-
-fn usage_required(c: &Coverage) -> bool {
-    c.has_input_tokens && c.has_output_tokens
-}
-
 /// Pure derivation of `FidelityClass` from a `granularity` + `coverage` pair.
-/// No I/O, no allocation; safe to call from any layer.
+/// No I/O, no allocation; safe to call from any layer (reader during
+/// construction, analyze for re-derivation, CLI for post-hoc filters).
+///
+///   - `cost-only`        → granularity says we only have a price, not tokens
+///   - `aggregate-only`   → per-session totals; per-turn fields are estimates
+///   - `usage-only`       → per-turn input/output but no tool-result chronology
+///   - `full`             → meets `Coverage::is_full`
+///   - `partial`          → has *something* useful but less than usage-only
 pub fn classify_fidelity(granularity: UsageGranularity, coverage: &Coverage) -> FidelityClass {
     match granularity {
         UsageGranularity::CostOnly => FidelityClass::CostOnly,
         UsageGranularity::PerSessionAggregate => FidelityClass::AggregateOnly,
         UsageGranularity::PerTurn | UsageGranularity::PerMessage => {
-            if full_required(coverage) {
+            if coverage.is_full() {
                 FidelityClass::Full
-            } else if usage_required(coverage) {
+            } else if coverage.has_per_turn_usage() {
                 FidelityClass::UsageOnly
             } else {
                 FidelityClass::Partial
@@ -53,23 +52,12 @@ pub fn classify_fidelity(granularity: UsageGranularity, coverage: &Coverage) -> 
     }
 }
 
-/// Convenience constructor — parsers build a `Coverage`, declare their
-/// granularity, and get a fully-populated `Fidelity` with the derived class.
-pub fn make_fidelity(granularity: UsageGranularity, coverage: Coverage) -> Fidelity {
-    let class = classify_fidelity(granularity, &coverage);
-    Fidelity {
-        granularity,
-        coverage,
-        class,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn with_flags(set: impl FnOnce(&mut Coverage)) -> Coverage {
-        let mut c = empty_coverage();
+        let mut c = Coverage::EMPTY;
         set(&mut c);
         c
     }
@@ -85,12 +73,12 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            classify_fidelity(UsageGranularity::CostOnly, &all_on),
-            FidelityClass::CostOnly
+            Fidelity::classify(UsageGranularity::CostOnly, &all_on),
+            FidelityClass::CostOnly,
         );
         assert_eq!(
-            classify_fidelity(UsageGranularity::CostOnly, &empty_coverage()),
-            FidelityClass::CostOnly
+            Fidelity::classify(UsageGranularity::CostOnly, &Coverage::EMPTY),
+            FidelityClass::CostOnly,
         );
     }
 
@@ -101,8 +89,8 @@ mod tests {
             c.has_output_tokens = true;
         });
         assert_eq!(
-            classify_fidelity(UsageGranularity::PerSessionAggregate, &cov),
-            FidelityClass::AggregateOnly
+            Fidelity::classify(UsageGranularity::PerSessionAggregate, &cov),
+            FidelityClass::AggregateOnly,
         );
     }
 
@@ -117,8 +105,8 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            classify_fidelity(UsageGranularity::PerTurn, &cov),
-            FidelityClass::Full
+            Fidelity::classify(UsageGranularity::PerTurn, &cov),
+            FidelityClass::Full,
         );
     }
 
@@ -131,8 +119,8 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            classify_fidelity(UsageGranularity::PerTurn, &cov),
-            FidelityClass::UsageOnly
+            Fidelity::classify(UsageGranularity::PerTurn, &cov),
+            FidelityClass::UsageOnly,
         );
     }
 
@@ -146,8 +134,8 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            classify_fidelity(UsageGranularity::PerTurn, &cov),
-            FidelityClass::Partial
+            Fidelity::classify(UsageGranularity::PerTurn, &cov),
+            FidelityClass::Partial,
         );
     }
 
@@ -162,18 +150,18 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            classify_fidelity(UsageGranularity::PerMessage, &cov),
-            FidelityClass::Full
+            Fidelity::classify(UsageGranularity::PerMessage, &cov),
+            FidelityClass::Full,
         );
     }
 
     #[test]
-    fn make_fidelity_packs_class() {
+    fn fidelity_new_packs_class() {
         let cov = with_flags(|c| {
             c.has_input_tokens = true;
             c.has_output_tokens = true;
         });
-        let f = make_fidelity(UsageGranularity::PerTurn, cov.clone());
+        let f = Fidelity::new(UsageGranularity::PerTurn, cov.clone());
         assert_eq!(f.granularity, UsageGranularity::PerTurn);
         assert_eq!(f.coverage, cov);
         assert_eq!(f.class, FidelityClass::UsageOnly);

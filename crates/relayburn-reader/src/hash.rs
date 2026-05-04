@@ -1,21 +1,24 @@
 //! Stable JSON serialization + sha256 hashing helpers — Rust port of
 //! `packages/reader/src/hash.ts`.
 //!
-//! `stable_stringify` matches `JSON.stringify` byte-for-byte under the same
-//! sorted-keys policy the TS helper uses: arrays preserve order, object keys
-//! are sorted lexicographically, primitives serialize the same way `serde_json`
-//! emits them. The 16-character truncation on `args_hash` / `content_hash`
-//! mirrors the TS slice so detector output stays visually consistent.
+//! The TS helper takes any value (`unknown`) and reduces it to a canonical
+//! string before hashing. The Rust API mirrors that flexibility by being
+//! generic over `Serialize`: any record type or `serde_json::Value` works
+//! without callers having to convert first. The 16-character truncation on
+//! [`args_hash`] / [`content_hash`] mirrors the TS slice so detector output
+//! stays visually consistent.
 
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// Stable JSON stringification: object keys are sorted, arrays keep order,
 /// primitives serialize the way `serde_json` does. Mirrors the TS
-/// `stableStringify` so hash inputs are identical across the two ports.
-pub fn stable_stringify(value: &Value) -> String {
+/// `stableStringify` so hash inputs are byte-identical across the two ports.
+pub fn stable_stringify<T: Serialize + ?Sized>(value: &T) -> String {
+    let v = serde_json::to_value(value).unwrap_or(Value::Null);
     let mut out = String::new();
-    write_stable(value, &mut out);
+    write_stable(&v, &mut out);
     out
 }
 
@@ -52,25 +55,22 @@ fn write_stable(value: &Value, out: &mut String) {
     }
 }
 
-/// Short hash of an arbitrary JSON-serializable value. Mirrors TS `argsHash`
-/// (sha256 over `stable_stringify`, hex-encoded, sliced to 16 chars).
-pub fn args_hash(input: &Value) -> String {
-    let canonical = stable_stringify(input);
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.as_bytes());
-    let digest = hasher.finalize();
-    let mut hex = hex::encode(digest);
-    hex.truncate(16);
-    hex
+/// Short hash of any serializable value. Mirrors TS `argsHash`: sha256 over
+/// [`stable_stringify`], hex-encoded, truncated to 16 chars.
+pub fn args_hash<T: Serialize + ?Sized>(input: &T) -> String {
+    short_sha256(stable_stringify(input).as_bytes())
 }
 
-/// Short hash of a raw string (Edit pre/post, Write content). Same 16-char
-/// truncation as `args_hash`.
-pub fn content_hash(s: &str) -> String {
+/// Short hash of a raw byte sequence (Edit pre/post, Write content). Same
+/// 16-char truncation as [`args_hash`].
+pub fn content_hash(s: impl AsRef<[u8]>) -> String {
+    short_sha256(s.as_ref())
+}
+
+fn short_sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(s.as_bytes());
-    let digest = hasher.finalize();
-    let mut hex = hex::encode(digest);
+    hasher.update(bytes);
+    let mut hex = hex::encode(hasher.finalize());
     hex.truncate(16);
     hex
 }
@@ -99,8 +99,20 @@ mod tests {
 
     #[test]
     fn stable_stringify_preserves_array_order() {
-        let v = json!([3, 1, 2]);
-        assert_eq!(stable_stringify(&v), "[3,1,2]");
+        assert_eq!(stable_stringify(&json!([3, 1, 2])), "[3,1,2]");
+    }
+
+    #[test]
+    fn stable_stringify_accepts_typed_records() {
+        // Generic over `Serialize`: typed records work without an explicit
+        // `to_value` round-trip.
+        #[derive(serde::Serialize)]
+        struct Args {
+            a: u32,
+            b: &'static str,
+        }
+        let s = stable_stringify(&Args { a: 1, b: "two" });
+        assert_eq!(s, r#"{"a":1,"b":"two"}"#);
     }
 
     #[test]
@@ -112,14 +124,15 @@ mod tests {
 
     #[test]
     fn args_hash_is_stable_under_key_reordering() {
-        let a = args_hash(&json!({ "a": 1, "b": 2 }));
-        let b = args_hash(&json!({ "b": 2, "a": 1 }));
-        assert_eq!(a, b);
+        assert_eq!(
+            args_hash(&json!({ "a": 1, "b": 2 })),
+            args_hash(&json!({ "b": 2, "a": 1 })),
+        );
     }
 
     #[test]
     fn content_hash_of_empty_string_is_well_known() {
-        // sha256("") = e3b0c44298fc1c14...; first 16 chars must match.
         assert_eq!(content_hash(""), "e3b0c44298fc1c14");
+        assert_eq!(content_hash(b"" as &[u8]), "e3b0c44298fc1c14");
     }
 }

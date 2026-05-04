@@ -1,10 +1,11 @@
 //! Ledger / record types — Rust port of `packages/reader/src/types.ts`.
 //!
-//! Records are designed to round-trip with the TypeScript schemas: optional
-//! fields use `Option<T>` with `#[serde(skip_serializing_if = "Option::is_none")]`
-//! so that absent fields stay absent on the wire (TS treats `undefined` and
-//! "missing" identically and the ledger is JSONL — preserving missingness is
-//! how Rust output stays byte-identical to TS output).
+//! Each record uses `#[serde(rename_all = "camelCase")]` so the on-wire JSONL
+//! shape stays aligned with the TypeScript schemas without per-field
+//! `rename` attributes. Optional fields use `Option<T>` plus
+//! `skip_serializing_if = "Option::is_none"` so missing-vs-null on the wire
+//! continues to mean "absent" rather than "explicit null" — the ledger is
+//! append-only JSONL and we want byte-identical output to the TS writer.
 
 use std::collections::BTreeMap;
 
@@ -48,79 +49,49 @@ pub enum Harness {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub input: u64,
     pub output: u64,
     pub reasoning: u64,
-    #[serde(rename = "cacheRead")]
     pub cache_read: u64,
-    #[serde(rename = "cacheCreate5m")]
     pub cache_create_5m: u64,
-    #[serde(rename = "cacheCreate1h")]
     pub cache_create_1h: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
-    #[serde(rename = "argsHash")]
     pub args_hash: String,
-    #[serde(default, rename = "isError", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
-    #[serde(
-        default,
-        rename = "editPreHash",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_pre_hash: Option<String>,
-    #[serde(
-        default,
-        rename = "editPostHash",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_post_hash: Option<String>,
-    #[serde(default, rename = "skillName", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_name: Option<String>,
-    #[serde(
-        default,
-        rename = "replacedTools",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_tools: Option<Vec<String>>,
-    #[serde(
-        default,
-        rename = "collapsedCalls",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collapsed_calls: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Subagent {
-    #[serde(rename = "isSidechain")]
     pub is_sidechain: bool,
-    #[serde(
-        default,
-        rename = "parentToolUseId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_tool_use_id: Option<String>,
-    #[serde(default, rename = "agentId", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
-    #[serde(
-        default,
-        rename = "parentAgentId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<String>,
-    #[serde(
-        default,
-        rename = "subagentType",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -136,25 +107,56 @@ pub enum UsageGranularity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Coverage {
-    #[serde(rename = "hasInputTokens")]
     pub has_input_tokens: bool,
-    #[serde(rename = "hasOutputTokens")]
     pub has_output_tokens: bool,
-    #[serde(rename = "hasReasoningTokens")]
     pub has_reasoning_tokens: bool,
-    #[serde(rename = "hasCacheReadTokens")]
     pub has_cache_read_tokens: bool,
-    #[serde(rename = "hasCacheCreateTokens")]
     pub has_cache_create_tokens: bool,
-    #[serde(rename = "hasToolCalls")]
     pub has_tool_calls: bool,
-    #[serde(rename = "hasToolResultEvents")]
     pub has_tool_result_events: bool,
-    #[serde(rename = "hasSessionRelationships")]
     pub has_session_relationships: bool,
-    #[serde(rename = "hasRawContent")]
     pub has_raw_content: bool,
+}
+
+impl Coverage {
+    /// All-false coverage. Parsers should clone this and flip the flags they
+    /// actually populate — defaulting to `false` keeps "do we know X?" honest.
+    pub const EMPTY: Self = Self {
+        has_input_tokens: false,
+        has_output_tokens: false,
+        has_reasoning_tokens: false,
+        has_cache_read_tokens: false,
+        has_cache_create_tokens: false,
+        has_tool_calls: false,
+        has_tool_result_events: false,
+        has_session_relationships: false,
+        has_raw_content: false,
+    };
+
+    /// True iff every field required for command-level "full" fidelity is
+    /// populated. See `FidelityClass::Full` for what this gates.
+    pub fn is_full(&self) -> bool {
+        self.has_input_tokens
+            && self.has_output_tokens
+            && self.has_cache_read_tokens
+            && self.has_tool_calls
+            && self.has_tool_result_events
+            && self.has_session_relationships
+    }
+
+    /// True iff per-turn input/output tokens are reported. Coarser bar than
+    /// `is_full` — usable for usage-only commands like `summary`.
+    pub fn has_per_turn_usage(&self) -> bool {
+        self.has_input_tokens && self.has_output_tokens
+    }
+}
+
+impl Default for Coverage {
+    fn default() -> Self {
+        Self::EMPTY
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -168,6 +170,7 @@ pub enum FidelityClass {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Fidelity {
     pub granularity: UsageGranularity,
     pub coverage: Coverage,
@@ -198,53 +201,34 @@ pub enum ActivityCategory {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnRecord {
-    pub v: u32, // schema version (always 1 today)
+    pub v: u32,
     pub source: SourceKind,
-    #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(
-        default,
-        rename = "sessionPath",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_path: Option<String>,
-    #[serde(rename = "messageId")]
     pub message_id: String,
-    #[serde(rename = "turnIndex")]
     pub turn_index: u64,
     pub ts: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    #[serde(
-        default,
-        rename = "projectKey",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_key: Option<String>,
     pub usage: Usage,
-    #[serde(rename = "toolCalls")]
     pub tool_calls: Vec<ToolCall>,
-    #[serde(
-        default,
-        rename = "filesTouched",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_touched: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<Subagent>,
-    #[serde(
-        default,
-        rename = "stopReason",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<ActivityCategory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retries: Option<u64>,
-    #[serde(default, rename = "hasEdits", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub has_edits: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<Fidelity>,
@@ -258,38 +242,28 @@ pub enum UserTurnBlockKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserTurnBlock {
     pub kind: UserTurnBlockKind,
-    #[serde(default, rename = "toolUseId", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
-    #[serde(rename = "byteLen")]
     pub byte_len: u64,
-    #[serde(rename = "approxTokens")]
     pub approx_tokens: u64,
-    #[serde(default, rename = "isError", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserTurnRecord {
     pub v: u32,
     pub source: SourceKind,
-    #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(rename = "userUuid")]
     pub user_uuid: String,
     pub ts: String,
-    #[serde(
-        default,
-        rename = "precedingMessageId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preceding_message_id: Option<String>,
-    #[serde(
-        default,
-        rename = "followingMessageId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub following_message_id: Option<String>,
     pub blocks: Vec<UserTurnBlock>,
 }
@@ -304,46 +278,25 @@ pub enum RelationshipType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionRelationshipRecord {
     pub v: u32,
     pub source: RelationshipSourceKind,
-    #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(
-        default,
-        rename = "relatedSessionId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_session_id: Option<String>,
-    #[serde(rename = "relationshipType")]
     pub relationship_type: RelationshipType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ts: Option<String>,
-    #[serde(
-        default,
-        rename = "sourceSessionId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<String>,
-    #[serde(
-        default,
-        rename = "sourceVersion",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_version: Option<String>,
-    #[serde(
-        default,
-        rename = "parentToolUseId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_tool_use_id: Option<String>,
-    #[serde(default, rename = "agentId", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
-    #[serde(
-        default,
-        rename = "subagentType",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -377,86 +330,51 @@ pub enum UsageAttribution {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolResultEventRecord {
     pub v: u32,
     pub source: SourceKind,
-    #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(default, rename = "messageId", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
-    #[serde(rename = "toolUseId")]
     pub tool_use_id: String,
-    #[serde(default, rename = "callIndex", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_index: Option<u64>,
-    #[serde(rename = "eventIndex")]
     pub event_index: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ts: Option<String>,
     pub status: ToolResultStatus,
-    #[serde(rename = "eventSource")]
     pub event_source: ToolResultEventSource,
-    #[serde(
-        default,
-        rename = "contentLength",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_length: Option<u64>,
-    #[serde(
-        default,
-        rename = "contentHash",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
-    #[serde(default, rename = "isError", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
-    #[serde(
-        default,
-        rename = "usageAttribution",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_attribution: Option<UsageAttribution>,
-    #[serde(
-        default,
-        rename = "subagentSessionId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_session_id: Option<String>,
-    #[serde(default, rename = "agentId", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
-    #[serde(
-        default,
-        rename = "replacedTools",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_tools: Option<Vec<String>>,
-    #[serde(
-        default,
-        rename = "collapsedCalls",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collapsed_calls: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompactionEvent {
     pub v: u32,
     pub source: SourceKind,
-    #[serde(rename = "sessionId")]
     pub session_id: String,
     pub ts: String,
-    #[serde(
-        default,
-        rename = "precedingMessageId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preceding_message_id: Option<String>,
-    #[serde(
-        default,
-        rename = "tokensBeforeCompact",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_before_compact: Option<u64>,
 }
 
@@ -485,34 +403,29 @@ pub struct ContentToolUse {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContentToolResult {
-    #[serde(rename = "toolUseId")]
     pub tool_use_id: String,
     pub content: Value,
-    #[serde(default, rename = "isError", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContentRecord {
     pub v: u32,
     pub source: SourceKind,
-    #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(rename = "messageId")]
     pub message_id: String,
     pub ts: String,
     pub role: ContentRole,
     pub kind: ContentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default, rename = "toolUse", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use: Option<ContentToolUse>,
-    #[serde(
-        default,
-        rename = "toolResult",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<ContentToolResult>,
 }
 
@@ -532,14 +445,34 @@ mod tests {
     fn source_kind_round_trips_kebab_case() {
         let s = serde_json::to_string(&SourceKind::ClaudeCode).unwrap();
         assert_eq!(s, "\"claude-code\"");
-        let back: SourceKind = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, SourceKind::ClaudeCode);
+        assert_eq!(
+            serde_json::from_str::<SourceKind>(&s).unwrap(),
+            SourceKind::ClaudeCode
+        );
     }
 
     #[test]
     fn activity_category_serializes_kebab_case() {
-        let s = serde_json::to_string(&ActivityCategory::BuildDeploy).unwrap();
-        assert_eq!(s, "\"build-deploy\"");
+        assert_eq!(
+            serde_json::to_string(&ActivityCategory::BuildDeploy).unwrap(),
+            "\"build-deploy\"",
+        );
+    }
+
+    #[test]
+    fn usage_field_names_are_camel_case() {
+        let u = Usage {
+            input: 1,
+            output: 2,
+            reasoning: 3,
+            cache_read: 4,
+            cache_create_5m: 5,
+            cache_create_1h: 6,
+        };
+        let s = serde_json::to_string(&u).unwrap();
+        assert!(s.contains("\"cacheRead\":4"), "got {s}");
+        assert!(s.contains("\"cacheCreate5m\":5"), "got {s}");
+        assert!(s.contains("\"cacheCreate1h\":6"), "got {s}");
     }
 
     #[test]
@@ -566,28 +499,48 @@ mod tests {
             fidelity: None,
         };
         let s = serde_json::to_string(&rec).unwrap();
-        // Match TS shape: optional fields are omitted, not emitted as null.
         assert!(!s.contains("null"));
         assert!(!s.contains("sessionPath"));
         assert!(!s.contains("subagent"));
         assert!(s.contains("\"toolCalls\":[]"));
+        assert!(s.contains("\"sessionId\":\"abc\""));
+        assert!(s.contains("\"messageId\":\"m1\""));
+        assert!(s.contains("\"turnIndex\":0"));
     }
 
     #[test]
-    fn coverage_all_off_round_trips() {
-        let cov = Coverage {
-            has_input_tokens: false,
-            has_output_tokens: false,
-            has_reasoning_tokens: false,
-            has_cache_read_tokens: false,
-            has_cache_create_tokens: false,
-            has_tool_calls: false,
-            has_tool_result_events: false,
-            has_session_relationships: false,
-            has_raw_content: false,
+    fn coverage_default_is_empty_const() {
+        assert_eq!(Coverage::default(), Coverage::EMPTY);
+    }
+
+    #[test]
+    fn coverage_methods_match_field_logic() {
+        let mut c = Coverage::EMPTY;
+        assert!(!c.is_full());
+        assert!(!c.has_per_turn_usage());
+        c.has_input_tokens = true;
+        c.has_output_tokens = true;
+        assert!(!c.is_full());
+        assert!(c.has_per_turn_usage());
+        c.has_cache_read_tokens = true;
+        c.has_tool_calls = true;
+        c.has_tool_result_events = true;
+        c.has_session_relationships = true;
+        assert!(c.is_full());
+    }
+
+    #[test]
+    fn coverage_round_trips_camel_case() {
+        let c = Coverage {
+            has_input_tokens: true,
+            has_output_tokens: true,
+            has_cache_create_tokens: true,
+            ..Coverage::EMPTY
         };
-        let s = serde_json::to_string(&cov).unwrap();
+        let s = serde_json::to_string(&c).unwrap();
+        assert!(s.contains("\"hasInputTokens\":true"));
+        assert!(s.contains("\"hasCacheCreateTokens\":true"));
         let back: Coverage = serde_json::from_str(&s).unwrap();
-        assert_eq!(cov, back);
+        assert_eq!(back, c);
     }
 }
