@@ -58,6 +58,69 @@ async fn watch_loop_drains_pending_work_within_two_ticks() {
     );
 }
 
+/// Regression test for the periodic-runner / manual-tick join bug.
+///
+/// `WatchController::tick()` documents itself as a completion barrier, so a
+/// caller that arrives while the *periodic* loop is mid-flight must still
+/// wake when the periodic run completes. Earlier the periodic path held
+/// `in_flight` and never notified `tick_done`, so a `tick().await` issued
+/// during a slow periodic tick would hang until the next manual run woke
+/// the notifier. We now notify from `run_locked`, so any path that owns
+/// the lock signals completion.
+#[tokio::test]
+async fn manual_tick_joins_periodic_run() {
+    use std::sync::atomic::AtomicUsize;
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
+
+    let in_flight_for_ingest = in_flight.clone();
+    let completed_for_ingest = completed.clone();
+    let ingest: IngestFn = Arc::new(move || {
+        let in_flight = in_flight_for_ingest.clone();
+        let completed = completed_for_ingest.clone();
+        Box::pin(async move {
+            in_flight.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            completed.fetch_add(1, Ordering::SeqCst);
+            Ok(IngestReport::default())
+        })
+    });
+
+    // Immediate tick + a long interval so we can be confident the only
+    // run mid-flight when we call `tick()` is the periodic one (not the
+    // public `tick()` itself).
+    let opts = StartWatchLoopOptions::new(ingest)
+        .with_immediate(true)
+        .with_interval(Duration::from_secs(60));
+    let ctrl = start_watch_loop(opts);
+
+    // Wait for the periodic immediate tick to actually start.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        in_flight.load(Ordering::SeqCst),
+        1,
+        "periodic immediate tick should be in flight"
+    );
+    assert_eq!(completed.load(Ordering::SeqCst), 0);
+
+    // The manual `tick()` arrives while the periodic runner holds the
+    // lock. With the bug, this would await `tick_done` forever because
+    // the periodic path never notifies; with the fix, `run_locked`
+    // notifies on completion regardless of which path acquired the lock.
+    let tick_result = tokio::time::timeout(Duration::from_secs(2), ctrl.tick()).await;
+    assert!(
+        tick_result.is_ok(),
+        "manual tick().await hung waiting on periodic run to notify tick_done"
+    );
+    assert!(
+        completed.load(Ordering::SeqCst) >= 1,
+        "manual tick returned before the periodic run completed"
+    );
+
+    ctrl.stop().await;
+}
+
 #[tokio::test]
 async fn stop_awaits_in_flight_tick() {
     use std::sync::Mutex;

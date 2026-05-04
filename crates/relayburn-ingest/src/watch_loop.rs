@@ -109,6 +109,10 @@ impl WatchInner {
     /// produce zero-gap back-to-back runs after a slow tick — exactly the
     /// CPU/IO spike the `MissedTickBehavior::Delay` setting also defends
     /// against — so the periodic driver is the wrong place to join.
+    ///
+    /// The runner — whichever path holds the `in_flight` lock — owns the
+    /// `tick_done` notify so a public `tick().await` parked via
+    /// `run_tick_or_join` wakes regardless of which path drove the run.
     async fn run_tick_skip_if_busy(self: &Arc<Self>) {
         let Ok(_guard) = self.in_flight.try_lock() else {
             return;
@@ -133,12 +137,16 @@ impl WatchInner {
 
         if let Ok(_guard) = self.in_flight.try_lock() {
             self.run_locked().await;
-            self.tick_done.notify_waiters();
         } else {
             notified.await;
         }
     }
 
+    /// Drive one ingest pass under the `in_flight` lock and broadcast
+    /// completion. Both `run_tick_skip_if_busy` (periodic loop) and
+    /// `run_tick_or_join` (public `tick`) funnel through here so any
+    /// caller parked on `tick_done` wakes when the run finishes —
+    /// regardless of which path the runner came from.
     async fn run_locked(self: &Arc<Self>) {
         let result = (self.ingest)().await;
         match result {
@@ -155,6 +163,7 @@ impl WatchInner {
                 }
             }
         }
+        self.tick_done.notify_waiters();
     }
 }
 
