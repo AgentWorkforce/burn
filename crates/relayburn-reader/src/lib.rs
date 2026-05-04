@@ -2,11 +2,10 @@
 //!
 //! This crate is a work-in-progress port of the TS reader package. Foundational
 //! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
-//! ported with native conformance tests; the `codex` (#256) and `opencode`
-//! (#257) parsers are ported; the Claude Code parser (`claude`) covers the
-//! synchronous, incremental, and cross-file reconciliation surface (#255).
-//! The OpenCode streaming ingestor (`opencode_stream`) is scaffolded but not
-//! yet implemented — see #258.
+//! ported with native conformance tests; the `codex` (#256), `opencode`
+//! (#257), and `opencode_stream` (#258) parsers are ported; the Claude Code
+//! parser (`claude`) covers the synchronous, incremental, and cross-file
+//! reconciliation surface (#255).
 
 pub mod classifier;
 pub mod fidelity;
@@ -29,6 +28,11 @@ pub use codex::{
 pub use opencode::{
     parse_opencode_session, parse_opencode_session_incremental, ParseOpencodeIncrementalOptions,
     ParseOpencodeIncrementalResult, ParseOpencodeOptions, ParseOpencodeResult,
+};
+
+pub use opencode_stream::{
+    create_opencode_stream_ingestor, OpencodeStreamCursorState, OpencodeStreamIngestOptions,
+    OpencodeStreamIngestResult, OpencodeStreamIngestor,
 };
 
 pub use classifier::{
