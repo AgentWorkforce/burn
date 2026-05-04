@@ -619,6 +619,29 @@ fn empty_user_turns_for_sessions_without_user_blocks() {
     assert!(r.user_turns.is_empty());
 }
 
+#[test]
+fn cl100k_tokenizer_is_rejected_until_implemented() {
+    let err = parse_codex_session(
+        fixture("simple-turn.jsonl"),
+        &ParseCodexOptions {
+            tokenizer: Some(UserTurnTokenizer::Cl100k),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("cl100k"), "error mentions cl100k: {msg}");
+    let err = parse_codex_session_incremental(
+        fixture("simple-turn.jsonl"),
+        &ParseCodexIncrementalOptions {
+            tokenizer: Some(UserTurnTokenizer::Cl100k),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("cl100k"));
+}
+
 // ---------------------------------------------------------------------------
 // Execution graph (#42 / #87)
 // ---------------------------------------------------------------------------

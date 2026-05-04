@@ -167,6 +167,11 @@ pub fn parse_codex_session_incremental(
     file_path: impl AsRef<Path>,
     options: &ParseCodexIncrementalOptions,
 ) -> std::io::Result<ParseCodexIncrementalResult> {
+    // The TS parser defaults to cl100k; the Rust port only ships
+    // `HeuristicCounter` until a tiktoken-equivalent lands (#246). Honor the
+    // option by accepting `None` / `Some(Heuristic)` and rejecting
+    // `Some(Cl100k)` with a clear error rather than silently falling back.
+    resolve_token_counter(options.tokenizer)?;
     let start_offset = options.start_offset.unwrap_or(0);
     let mut file = File::open(file_path.as_ref())?;
     let size = file.metadata()?.len();
@@ -332,7 +337,8 @@ fn parse_codex_buffer(
     project_resolver: &ProjectResolver,
 ) -> ParseCodexIncrementalResult {
     let capture_content = matches!(options.content_mode, Some(ContentStoreMode::Full));
-    let counter = HeuristicCounter; // see TODO above re: cl100k
+    // Validated by `resolve_token_counter` at the public entry point.
+    let counter = HeuristicCounter;
 
     let resume = options.resume.as_ref();
     let mut session_id = resume.map(|r| r.session_id.clone()).unwrap_or_default();
@@ -1205,6 +1211,22 @@ fn parse_codex_buffer(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Resolves the requested tokenizer to a concrete counter. `None` and
+/// `Some(Heuristic)` map to [`HeuristicCounter`]; `Some(Cl100k)` is rejected
+/// with an explicit error until the cl100k counter is wired up (see #246) so
+/// callers don't silently get bytes/4 sizing when they asked for cl100k.
+fn resolve_token_counter(
+    tokenizer: Option<UserTurnTokenizer>,
+) -> std::io::Result<HeuristicCounter> {
+    match tokenizer {
+        None | Some(UserTurnTokenizer::Heuristic) => Ok(HeuristicCounter),
+        Some(UserTurnTokenizer::Cl100k) => Err(std::io::Error::other(
+            "cl100k tokenizer is not yet available in the Rust port; \
+             omit `tokenizer` or pass `Some(Heuristic)` (see AgentWorkforce/burn#246)",
+        )),
+    }
+}
 
 fn memchr_newline(buf: &[u8]) -> Option<usize> {
     buf.iter().position(|&b| b == b'\n')
