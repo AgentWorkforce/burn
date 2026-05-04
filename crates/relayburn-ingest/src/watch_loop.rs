@@ -93,19 +93,53 @@ struct WatchInner {
     stopped: AtomicBool,
     in_flight: Mutex<()>,
     stop_signal: Notify,
+    /// Notified when an in-flight tick finishes. Public `tick()` callers
+    /// arriving while a tick is mid-flight register on this so their
+    /// `await` is a real completion barrier (matching the TS adapter,
+    /// where overlapping `tick()` calls share the in-flight promise).
+    tick_done: Notify,
     ingest: IngestFn,
     on_report: Option<ReportSink>,
     on_error: Option<ErrorSink>,
 }
 
 impl WatchInner {
-    async fn run_tick(self: &Arc<Self>) {
-        // `try_lock` skips the tick if one is already in flight, matching the
-        // TS adapter's `if (running) return running;` guard. We don't queue
-        // — the next interval tick will retry.
+    /// Skip-if-busy variant used by the periodic loop: if a tick is already
+    /// running, return immediately rather than queue. Queuing here would
+    /// produce zero-gap back-to-back runs after a slow tick — exactly the
+    /// CPU/IO spike the `MissedTickBehavior::Delay` setting also defends
+    /// against — so the periodic driver is the wrong place to join.
+    async fn run_tick_skip_if_busy(self: &Arc<Self>) {
         let Ok(_guard) = self.in_flight.try_lock() else {
             return;
         };
+        self.run_locked().await;
+    }
+
+    /// Run-or-join variant used by the public `tick()`: if a tick is
+    /// already running, await its completion via `tick_done` instead of
+    /// silently skipping. Mirrors the TS `if (running) return running;`
+    /// branch where overlapping callers share the in-flight promise — a
+    /// `tick().await` is a real completion barrier rather than a no-op.
+    async fn run_tick_or_join(self: &Arc<Self>) {
+        // Register interest BEFORE the try_lock peek. `Notified::enable`
+        // (added in tokio 1.13) latches the waker on creation so a runner
+        // that finishes between our peek and the await still wakes us;
+        // without it, a fast in-flight tick could complete and notify
+        // before we register, and we'd block until the next `tick_done`.
+        let notified = self.tick_done.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        if let Ok(_guard) = self.in_flight.try_lock() {
+            self.run_locked().await;
+            self.tick_done.notify_waiters();
+        } else {
+            notified.await;
+        }
+    }
+
+    async fn run_locked(self: &Arc<Self>) {
         let result = (self.ingest)().await;
         match result {
             Ok(report) => {
@@ -125,9 +159,11 @@ impl WatchInner {
 }
 
 impl WatchController {
-    /// Run a single tick on demand. Skips if one is already in flight.
+    /// Run a single tick on demand. If a tick is already in flight, await
+    /// it and return when it completes — `tick().await` is a true
+    /// completion barrier, matching the TS adapter's shared-promise shape.
     pub async fn tick(&self) {
-        self.inner.run_tick().await;
+        self.inner.run_tick_or_join().await;
     }
 
     /// Stop the periodic task and await any in-flight tick. Idempotent.
@@ -165,6 +201,7 @@ pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
         stopped: AtomicBool::new(false),
         in_flight: Mutex::new(()),
         stop_signal: Notify::new(),
+        tick_done: Notify::new(),
         ingest: opts.ingest,
         on_report: opts.on_report,
         on_error: opts.on_error,
@@ -174,9 +211,16 @@ pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
     let ticker = inner.clone();
     let handle = tokio::spawn(async move {
         if immediate {
-            ticker.run_tick().await;
+            ticker.run_tick_skip_if_busy().await;
         }
         let mut iv = tokio::time::interval(interval);
+        // Default `MissedTickBehavior::Burst` would fire catch-up ticks
+        // back-to-back after a slow ingest pass, which can spike CPU/IO
+        // exactly when the system is already under load. `Delay` schedules
+        // the next tick `interval` after the previous fires, preserving
+        // stable polling cadence — closer to TS `setInterval` pacing under
+        // a single-threaded runner.
+        iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // First tick of `tokio::time::interval` fires immediately; skip it
         // because we already ran one above (or because the caller asked us
         // not to run an immediate tick at all).
@@ -192,7 +236,7 @@ pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
             if ticker.stopped.load(Ordering::SeqCst) {
                 break;
             }
-            ticker.run_tick().await;
+            ticker.run_tick_skip_if_busy().await;
         }
     });
     WatchController {
@@ -273,6 +317,69 @@ mod tests {
         ctrl.tick().await;
         assert_eq!(counter.load(Ordering::SeqCst), 2);
         ctrl.stop().await;
+    }
+
+    /// Concurrent `tick()` calls must share the in-flight pass: a caller
+    /// that arrives while a tick is running awaits its completion rather
+    /// than no-opping. Without this barrier, code that pumps `tick()` in
+    /// response to "new work" can race the runner and proceed before the
+    /// new work was actually scanned.
+    #[tokio::test]
+    async fn concurrent_ticks_join_in_flight_run() {
+        let in_flight_count = Arc::new(AtomicUsize::new(0));
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
+
+        let in_flight_for_ingest = in_flight_count.clone();
+        let max_for_ingest = max_concurrent.clone();
+        let completed_for_ingest = completed.clone();
+        let ingest: IngestFn = Arc::new(move || {
+            let in_flight = in_flight_for_ingest.clone();
+            let max = max_for_ingest.clone();
+            let completed = completed_for_ingest.clone();
+            Box::pin(async move {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                let mut prev = max.load(Ordering::SeqCst);
+                while now > prev {
+                    match max.compare_exchange(prev, now, Ordering::SeqCst, Ordering::SeqCst) {
+                        Ok(_) => break,
+                        Err(actual) => prev = actual,
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                completed.fetch_add(1, Ordering::SeqCst);
+                Ok(IngestReport::default())
+            })
+        });
+
+        let opts = StartWatchLoopOptions::new(ingest)
+            .with_immediate(false)
+            .with_interval(Duration::from_secs(60));
+        let ctrl = Arc::new(start_watch_loop(opts));
+
+        // Fire three ticks concurrently. With the join semantics, only one
+        // ingest body runs; the other two callers await the same in-flight
+        // run and observe its completion before returning.
+        let c1 = ctrl.clone();
+        let c2 = ctrl.clone();
+        let c3 = ctrl.clone();
+        let h1 = tokio::spawn(async move { c1.tick().await });
+        let h2 = tokio::spawn(async move { c2.tick().await });
+        let h3 = tokio::spawn(async move { c3.tick().await });
+        let _ = tokio::join!(h1, h2, h3);
+
+        ctrl.stop().await;
+
+        // The runner ran exactly one ingest body — overlapping callers
+        // joined rather than queuing.
+        assert_eq!(
+            completed.load(Ordering::SeqCst),
+            1,
+            "concurrent tick() calls should share one in-flight run"
+        );
+        // And no two ingest bodies ever ran simultaneously.
+        assert_eq!(max_concurrent.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
