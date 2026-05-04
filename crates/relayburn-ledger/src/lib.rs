@@ -242,6 +242,24 @@ impl Ledger {
                 .burn
                 .execute(&format!("DELETE FROM {table}"), [])?;
         }
+        // Replay stamp-synthesized relationships. `relationships` is a
+        // derivable table (the upstream session log is the source of
+        // truth) and was dropped above, but stamp-synthesized rows
+        // live and die with the stamp itself — `append_stamp` produced
+        // them by reading the stamp's `parentAgentId` enrichment, and
+        // since stamps are first-party data that survives rebuild we
+        // need to re-emit those edges here. Without this replay,
+        // subagent parent/child queries would see incomplete graphs
+        // until callers happened to re-write each stamp.
+        let stamps = reader::list_stamps(&self.conns.burn)?;
+        let synthesized: Vec<_> = stamps
+            .iter()
+            .filter_map(writer::synthesize_relationship)
+            .collect();
+        if !synthesized.is_empty() {
+            writer::append_relationships(&mut self.conns.burn, &synthesized)?;
+        }
+
         let now = writer::debug_now();
         self.conns.burn.execute(
             "UPDATE archive_state SET last_rebuild_at = ? WHERE id = 1",

@@ -383,6 +383,96 @@ fn stamp_synthesizes_spawn_env_relationship() {
 }
 
 #[test]
+fn rebuild_replays_stamp_synthesized_relationships() {
+    // P1 review feedback (#260): `relationships` is in
+    // DERIVABLE_TABLES, but stamp-synthesized spawn-env edges are not
+    // recoverable from upstream session files — they live and die
+    // with the stamp. Rebuild must re-emit them so subagent
+    // parent/child queries don't go silently incomplete.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let mut enrichment = BTreeMap::new();
+    enrichment.insert("parentAgentId".into(), "parent-1".into());
+    enrichment.insert("agentId".into(), "child-1".into());
+    let stamp = Stamp::new(
+        "2025-01-01T00:00:00Z",
+        StampSelector {
+            session_id: Some("child-session".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+    l.append_stamp(&stamp).unwrap();
+    assert_eq!(l.count_table("relationships").unwrap(), 1);
+
+    l.rebuild_derivable().unwrap();
+
+    let rels = l.query_relationships(&Query::default()).unwrap();
+    assert_eq!(rels.len(), 1, "stamp-synthesized edge should survive");
+    assert_eq!(rels[0].source, RelationshipSourceKind::SpawnEnv);
+    assert_eq!(rels[0].related_session_id.as_deref(), Some("parent-1"));
+}
+
+#[test]
+fn relationship_query_filters_by_source() {
+    // P2 review feedback (#260): `q.source` must filter relationship
+    // rows. Since `RelationshipSourceKind` is a superset of
+    // `SourceKind`, comparison is by serialized kebab-case, matching
+    // the TS adapter — `source = "claude-code"` matches the
+    // claude-code variant on either enum but not `spawn-env`.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let claude_rel = SessionRelationshipRecord {
+        v: 1,
+        source: RelationshipSourceKind::ClaudeCode,
+        session_id: "child".into(),
+        related_session_id: Some("parent".into()),
+        relationship_type: RelationshipType::Continuation,
+        ts: Some("2025-01-01T00:00:00Z".into()),
+        source_session_id: None,
+        source_version: None,
+        parent_tool_use_id: None,
+        agent_id: None,
+        subagent_type: None,
+        description: None,
+    };
+    l.append_relationships(&[claude_rel]).unwrap();
+
+    // Stamp-synthesized spawn-env edge for the same session.
+    let mut enrichment = BTreeMap::new();
+    enrichment.insert("parentAgentId".into(), "parent-1".into());
+    let stamp = Stamp::new(
+        "2025-01-01T00:00:00Z",
+        StampSelector {
+            session_id: Some("child".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+    l.append_stamp(&stamp).unwrap();
+
+    let all = l.query_relationships(&Query::default()).unwrap();
+    assert_eq!(all.len(), 2, "no filter ⇒ both rows");
+
+    let claude_only = l
+        .query_relationships(&Query {
+            source: Some(SourceKind::ClaudeCode),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(claude_only.len(), 1);
+    assert_eq!(
+        claude_only[0].source,
+        RelationshipSourceKind::ClaudeCode,
+        "spawn-env edge must be excluded"
+    );
+}
+
+#[test]
 fn export_ledger_round_trips_to_jsonl() {
     // Acceptance: `burn export ledger --format jsonl` round-trips a
     // populated DB to JSONL byte-equivalent to the events ingested.

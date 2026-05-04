@@ -319,7 +319,7 @@ pub(crate) fn append_content(
 /// If `stamp` carries a `parentAgentId` enrichment, synthesize the
 /// implied subagent relationship row. Returns `None` for stamps that
 /// don't target a session or don't carry the enrichment key.
-fn synthesize_relationship(stamp: &Stamp) -> Option<SessionRelationshipRecord> {
+pub(crate) fn synthesize_relationship(stamp: &Stamp) -> Option<SessionRelationshipRecord> {
     use relayburn_reader::{RelationshipSourceKind, RelationshipType};
     let session_id = stamp.selector.session_id.clone()?;
     if session_id.is_empty() {
