@@ -725,16 +725,13 @@ fn collect_opencode_tool_result_events(
         .filter_map(as_tool_part)
         .filter(is_terminal_tool)
         .collect();
-    let usage_share = if !terminals.is_empty() {
-        Some(divide_usage(turn_usage, terminals.len() as u64))
-    } else {
-        None
-    };
+    let n = terminals.len() as u64;
     let usage_attribution = match terminals.len() {
         1 => Some(UsageAttribution::SingleToolTurn),
-        n if n > 1 => Some(UsageAttribution::EvenSplitTurn),
+        x if x > 1 => Some(UsageAttribution::EvenSplitTurn),
         _ => None,
     };
+    let mut terminal_idx: u64 = 0;
     for p in parts {
         let Some(tp) = as_tool_part(p) else { continue };
         if !is_terminal_tool(&tp) {
@@ -772,29 +769,46 @@ fn collect_opencode_tool_result_events(
             collapsed_calls: None,
         };
         next_index += 1;
-        if let Some(share) = usage_share.as_ref() {
-            record.usage = Some(share.clone());
+        if n >= 1 {
+            record.usage = Some(per_tool_usage_share(turn_usage, n, terminal_idx));
             record.usage_attribution = usage_attribution;
         }
         out.push(record);
+        terminal_idx += 1;
     }
     next_index
 }
 
-fn divide_usage(usage: &Usage, divisor: u64) -> Usage {
-    if divisor <= 1 {
-        return usage.clone();
-    }
-    // Note: TS uses floating-point division here. Rust's `Usage` is u64, so
-    // fractional shares get truncated. Sums across an even-split turn will be
-    // ≤ the original total when the divisor doesn't evenly divide each field.
+/// Per-tool slice of an even-split usage. The TS port uses floating-point
+/// division, which preserves the sum at the cost of fractional usage values;
+/// `Usage` is `u64` here, so we instead distribute the integer remainder one
+/// extra unit at a time to the first `total % n` tools. The sum of shares
+/// across the turn equals the original total exactly, which keeps downstream
+/// aggregations (cost, summary) honest when the totals don't divide evenly.
+fn per_tool_usage_share(total: &Usage, n: u64, idx: u64) -> Usage {
     Usage {
-        input: usage.input / divisor,
-        output: usage.output / divisor,
-        reasoning: usage.reasoning / divisor,
-        cache_read: usage.cache_read / divisor,
-        cache_create_5m: usage.cache_create_5m / divisor,
-        cache_create_1h: usage.cache_create_1h / divisor,
+        input: split_field(total.input, n, idx),
+        output: split_field(total.output, n, idx),
+        reasoning: split_field(total.reasoning, n, idx),
+        cache_read: split_field(total.cache_read, n, idx),
+        cache_create_5m: split_field(total.cache_create_5m, n, idx),
+        cache_create_1h: split_field(total.cache_create_1h, n, idx),
+    }
+}
+
+fn split_field(total: u64, n: u64, idx: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    if n == 1 {
+        return total;
+    }
+    let base = total / n;
+    let remainder = total % n;
+    if idx < remainder {
+        base + 1
+    } else {
+        base
     }
 }
 

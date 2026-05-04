@@ -839,8 +839,16 @@ fn tool_result_events_per_resolved_part_with_size_and_hash() {
         ok.usage_attribution,
         Some(UsageAttribution::EvenSplitTurn)
     ));
-    // Three terminal tools, input usage = 5 → 5 / 3 = 1 (truncated to u64).
-    assert_eq!(ok.usage.as_ref().unwrap().input, 1);
+    // Three terminal tools, input usage = 5. Floor share = 1; the first
+    // `5 % 3 = 2` tools get one extra so per-tool slices sum back to 5
+    // (`call_read` is the first terminal in part-id order: 2 + 2 + 1 = 5).
+    assert_eq!(ok.usage.as_ref().unwrap().input, 2);
+    let input_sum: u64 = r
+        .tool_result_events
+        .iter()
+        .filter_map(|e| e.usage.as_ref().map(|u| u.input))
+        .sum();
+    assert_eq!(input_sum, 5, "per-tool usage shares sum to the turn total");
 
     let err_status = r
         .tool_result_events
