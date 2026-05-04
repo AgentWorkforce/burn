@@ -820,10 +820,10 @@ fn collect_tool_result_event_candidates_for_session(
         }
         let terminal: Vec<&Value> = parts.iter().filter(|p| is_terminal_tool_part(p)).collect();
         let turn_usage = to_usage(m.tokens.as_ref());
-        let usage_share = if !terminal.is_empty() {
-            Some(divide_usage(&turn_usage, terminal.len() as u64))
+        let usage_shares: Vec<Usage> = if terminal.is_empty() {
+            Vec::new()
         } else {
-            None
+            distribute_usage(&turn_usage, terminal.len() as u64)
         };
         let usage_attribution = if terminal.len() == 1 {
             Some(UsageAttribution::SingleToolTurn)
@@ -832,7 +832,7 @@ fn collect_tool_result_event_candidates_for_session(
         } else {
             None
         };
-        for tp in terminal {
+        for (i, tp) in terminal.iter().enumerate() {
             let call_id = tp
                 .get("callID")
                 .and_then(|v| v.as_str())
@@ -842,7 +842,8 @@ fn collect_tool_result_event_candidates_for_session(
             let call_index = *call_index_counters.get(&call_id).unwrap_or(&0);
             call_index_counters.insert(call_id.clone(), call_index + 1);
             let measured = measure_tool_output(tp.get("state").and_then(|s| s.get("output")));
-            let mut record = ToolResultEventRecord {
+            let usage_share = usage_shares.get(i).cloned();
+            let record = ToolResultEventRecord {
                 v: 1,
                 source: SourceKind::Opencode,
                 session_id: session_id.to_string(),
@@ -871,10 +872,6 @@ fn collect_tool_result_event_candidates_for_session(
                 replaced_tools: None,
                 collapsed_calls: None,
             };
-            if usage_share.is_none() {
-                record.usage = None;
-                record.usage_attribution = None;
-            }
             let part_id = tp
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -912,10 +909,14 @@ fn derive_next_tool_event_index_by_session(keys: &[String]) -> BTreeMap<String, 
             Some(idx) if idx > first => idx,
             _ => continue,
         };
-        let suffix = &key[last + 1..];
-        let idx: u64 = match suffix.parse() {
-            Ok(v) => v,
-            Err(_) => continue,
+        // Mirror TS `Number.parseInt(suffix, 10)`: accept a leading
+        // numeric prefix (e.g. "1abc" → 1) rather than requiring the whole
+        // suffix to parse. Keys with a partID suffix always fail this
+        // check; only the call-index fallback path produces purely-numeric
+        // suffixes that should bump the per-session counter.
+        let idx = match parse_int_prefix(&key[last + 1..]) {
+            Some(v) => v,
+            None => continue,
         };
         let session_id = key[..first].to_string();
         let cur = out.get(&session_id).copied().unwrap_or(0);
@@ -924,6 +925,26 @@ fn derive_next_tool_event_index_by_session(keys: &[String]) -> BTreeMap<String, 
         }
     }
     out
+}
+
+/// JavaScript `Number.parseInt(s, 10)` for non-negative integers: trim
+/// leading whitespace, then collect leading ASCII digits and parse those.
+/// Returns `None` if there's no digit prefix (TS would yield `NaN`, which
+/// the original `Number.isFinite` check already filters out).
+fn parse_int_prefix(s: &str) -> Option<u64> {
+    let trimmed = s.trim_start();
+    let mut end = 0usize;
+    for (i, c) in trimmed.char_indices() {
+        if c.is_ascii_digit() {
+            end = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        return None;
+    }
+    trimmed[..end].parse().ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1409,18 +1430,38 @@ fn to_usage(t: Option<&MessageTokens>) -> Usage {
     }
 }
 
-fn divide_usage(u: &Usage, divisor: u64) -> Usage {
-    if divisor <= 1 {
-        return u.clone();
+/// Split a turn's usage across `n` tool-result events while preserving
+/// per-field sums. The TS port emits floating-point shares
+/// (`usage.input / divisor`); the Rust port keeps `Usage` as `u64`, so we
+/// distribute the integer-division remainder across the leading events
+/// (`base + 1` for the first `total % n` events, `base` after) instead of
+/// truncating every share. This trades the TS "every event identical share"
+/// invariant for the stronger "sum of event shares == turn usage" invariant
+/// — important because downstream consumers aggregate tool-event usage to
+/// recompute per-turn cost.
+fn distribute_usage(u: &Usage, n: u64) -> Vec<Usage> {
+    if n == 0 {
+        return Vec::new();
     }
-    Usage {
-        input: u.input / divisor,
-        output: u.output / divisor,
-        reasoning: u.reasoning / divisor,
-        cache_read: u.cache_read / divisor,
-        cache_create_5m: u.cache_create_5m / divisor,
-        cache_create_1h: u.cache_create_1h / divisor,
+    if n == 1 {
+        return vec![u.clone()];
     }
+    (0..n)
+        .map(|i| Usage {
+            input: split_field(u.input, n, i),
+            output: split_field(u.output, n, i),
+            reasoning: split_field(u.reasoning, n, i),
+            cache_read: split_field(u.cache_read, n, i),
+            cache_create_5m: split_field(u.cache_create_5m, n, i),
+            cache_create_1h: split_field(u.cache_create_1h, n, i),
+        })
+        .collect()
+}
+
+fn split_field(total: u64, n: u64, i: u64) -> u64 {
+    let base = total / n;
+    let rem = total % n;
+    base + if i < rem { 1 } else { 0 }
 }
 
 #[derive(Default, Clone)]

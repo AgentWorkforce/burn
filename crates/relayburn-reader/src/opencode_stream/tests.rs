@@ -493,6 +493,57 @@ fn rejects_cl100k_tokenizer_until_implemented() {
 }
 
 #[test]
+fn distribute_usage_preserves_per_field_totals_under_uneven_split() {
+    let turn = Usage {
+        input: 11,
+        output: 10,
+        reasoning: 7,
+        cache_read: 0,
+        cache_create_5m: 1,
+        cache_create_1h: 0,
+    };
+    let shares = super::distribute_usage(&turn, 3);
+    assert_eq!(shares.len(), 3);
+    let sum_field = |f: fn(&Usage) -> u64| -> u64 { shares.iter().map(f).sum() };
+    assert_eq!(sum_field(|u| u.input), turn.input, "input must be preserved");
+    assert_eq!(sum_field(|u| u.output), turn.output, "output must be preserved");
+    assert_eq!(sum_field(|u| u.reasoning), turn.reasoning);
+    assert_eq!(sum_field(|u| u.cache_read), turn.cache_read);
+    assert_eq!(sum_field(|u| u.cache_create_5m), turn.cache_create_5m);
+    assert_eq!(sum_field(|u| u.cache_create_1h), turn.cache_create_1h);
+    // n == 1 returns the input verbatim.
+    assert_eq!(super::distribute_usage(&turn, 1), vec![turn.clone()]);
+    // n == 0 returns an empty vec.
+    assert!(super::distribute_usage(&turn, 0).is_empty());
+}
+
+#[test]
+fn cursor_derive_accepts_parse_int_style_numeric_prefix() {
+    // TS `Number.parseInt("1abc", 10) === 1`. Cursor with that suffix
+    // should still bump the per-session counter (max prefix + 1 = 2).
+    let cursor_json = json!({
+        "emittedToolEventIds": ["ses_a|msg|tool|0", "ses_a|msg|tool|1abc"],
+    });
+    let cursor: OpencodeStreamCursorState =
+        serde_json::from_value(cursor_json).expect("deserialize");
+    let ing = create_opencode_stream_ingestor(OpencodeStreamIngestOptions {
+        content_mode: None,
+        tokenizer: None,
+        cursor: Some(cursor),
+    })
+    .expect("ingestor");
+    let snapshot = ing.snapshot_cursor();
+    assert_eq!(
+        snapshot
+            .next_tool_event_index_by_session
+            .as_ref()
+            .and_then(|m| m.get("ses_a"))
+            .copied(),
+        Some(2),
+    );
+}
+
+#[test]
 fn iso_timestamp_matches_js_date_to_iso_string() {
     // Cross-checked against `new Date(ms).toISOString()`.
     assert_eq!(unix_ms_to_iso(1_777_000_001_000), "2026-04-24T03:06:41.000Z");
