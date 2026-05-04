@@ -7,3 +7,14 @@ license.workspace = true
 repository.workspace = true
 description = "Pricing, cost derivation, hotspots, and overhead computation (Rust port)."
 publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `IndexMap` preserves JSON insertion order so duplicate model IDs in
+# `models.dev.json` (e.g. `claude-sonnet-4-6` under both `anthropic` and
+# `nano-gpt`) resolve deterministically — last entry in file order wins,
+# matching the TS `Object.values` / `Object.entries` iteration semantics.
+indexmap = { version = "2", features = ["serde"] }
+regex = "1"
+relayburn-reader = { path = "../relayburn-reader" }
