@@ -2,11 +2,12 @@
 //!
 //! This crate is a work-in-progress port of the TS reader package. Foundational
 //! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
-//! ported with native conformance tests; the Claude Code parser (`claude`)
-//! is in progress under #255 — synchronous `parse_claude_session` and the
-//! cross-file reconciler are landed; the incremental entry point is not yet
-//! ported. The other per-harness parsers (`codex`, `opencode`,
-//! `opencode_stream`) remain scaffolded only — see #256–#258.
+//! ported with native conformance tests; the `codex` parser is ported (#256);
+//! the Claude Code parser (`claude`) is in progress under #255 — synchronous
+//! `parse_claude_session` and the cross-file reconciler are landed, the
+//! incremental entry point is not yet ported. The remaining per-harness
+//! parsers (`opencode`, `opencode_stream`) are scaffolded but not yet
+//! implemented — see #257 / #258.
 
 pub mod classifier;
 pub mod fidelity;
@@ -19,6 +20,13 @@ pub mod claude;
 pub mod codex;
 pub mod opencode;
 pub mod opencode_stream;
+
+pub use codex::{
+    parse_codex_session, parse_codex_session_incremental, read_codex_session_id_hint,
+    CodexLastCompletedTurn, CodexResumeState, CodexTurnContext, CumulativeUsage,
+    ParseCodexIncrementalOptions, ParseCodexIncrementalResult, ParseCodexOptions, ParseCodexResult,
+    PersistedUserTurnSlot,
+};
 
 pub use classifier::{
     classify_activity, count_retries, normalize_tool_name, parse_bash_command, BashParse,
