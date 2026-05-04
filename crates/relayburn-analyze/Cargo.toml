@@ -7,3 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Pricing, cost derivation, hotspots, and overhead computation (Rust port)."
 publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1"
+relayburn-reader = { path = "../relayburn-reader" }
