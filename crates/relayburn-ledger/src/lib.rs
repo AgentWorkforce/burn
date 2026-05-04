@@ -266,15 +266,25 @@ impl Ledger {
             params![now],
         )?;
 
-        // Wipe content + the FTS index. DELETE on `content` triggers
-        // `content_fts_ad` per row; for a full wipe we instead bypass
-        // the trigger with a direct delete on `content_fts` so we don't
-        // pay O(rows) tokenization just to re-empty the index.
+        // Wipe content + the FTS index. The straightforward
+        // `DELETE FROM content` would fire `content_fts_ad` once per
+        // row and pay tokenization-heavy work for an index we're about
+        // to rebuild anyway, so we drop the sync triggers, bulk-delete,
+        // recreate the triggers, then issue a single FTS5 `rebuild`.
         let content_count = content::count_content(&self.conns.content)?;
-        self.conns.content.execute("DELETE FROM content", [])?;
-        self.conns
-            .content
-            .execute("INSERT INTO content_fts(content_fts) VALUES('rebuild')", [])?;
+        self.conns.content.execute_batch(
+            "DROP TRIGGER IF EXISTS content_fts_ad;
+             DROP TRIGGER IF EXISTS content_fts_au;
+             DELETE FROM content;
+             CREATE TRIGGER content_fts_ad AFTER DELETE ON content BEGIN
+                 INSERT INTO content_fts(content_fts, rowid, body) VALUES('delete', old.rowid, old.body);
+             END;
+             CREATE TRIGGER content_fts_au AFTER UPDATE ON content BEGIN
+                 INSERT INTO content_fts(content_fts, rowid, body) VALUES('delete', old.rowid, old.body);
+                 INSERT INTO content_fts(rowid, body) VALUES (new.rowid, new.body);
+             END;
+             INSERT INTO content_fts(content_fts) VALUES('rebuild');",
+        )?;
 
         Ok(RebuildSummary {
             rows_dropped: rows_dropped as usize,

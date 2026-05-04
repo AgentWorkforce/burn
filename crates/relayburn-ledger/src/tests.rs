@@ -383,6 +383,23 @@ fn stamp_synthesizes_spawn_env_relationship() {
 }
 
 #[test]
+fn count_table_rejects_arbitrary_sql() {
+    // Devin review (#260): public `count_table(&str)` interpolated the
+    // table name straight into SQL. Validate against an allowlist so
+    // downstream callers can't smuggle a subquery.
+    let tmp = TempDir::new().unwrap();
+    let l = open_in(&tmp);
+    assert!(l.count_table("turns").is_ok());
+    let injected =
+        l.count_table("turns WHERE 1=0 UNION SELECT upstream_cursors_json FROM archive_state");
+    match injected {
+        Err(LedgerError::Other(msg)) => assert!(msg.contains("unknown ledger table")),
+        Err(other) => panic!("expected Other, got {other:?}"),
+        Ok(_) => panic!("injection accepted; allowlist not enforced"),
+    }
+}
+
+#[test]
 fn rebuild_replays_stamp_synthesized_relationships() {
     // P1 review feedback (#260): `relationships` is in
     // DERIVABLE_TABLES, but stamp-synthesized spawn-env edges are not

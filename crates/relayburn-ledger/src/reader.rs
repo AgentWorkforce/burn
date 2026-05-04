@@ -300,13 +300,40 @@ fn user_turn_passes(r: &UserTurnRecord, q: &Query) -> bool {
     true
 }
 
+/// Tables `count_table` and `raw_record_jsons` are allowed to address.
+/// Both interpolate the table name directly into SQL (rusqlite doesn't
+/// take identifiers as bound parameters), so this list is the
+/// security boundary against subquery-injection by downstream callers.
+const QUERYABLE_TABLES: &[&str] = &[
+    "turns",
+    "compactions",
+    "relationships",
+    "tool_result_events",
+    "user_turns",
+    "sessions",
+    "stamps",
+    "archive_state",
+];
+
+fn validate_table(table: &str) -> Result<()> {
+    if QUERYABLE_TABLES.contains(&table) {
+        Ok(())
+    } else {
+        Err(crate::error::LedgerError::Other(format!(
+            "unknown ledger table: {table}"
+        )))
+    }
+}
+
 pub(crate) fn count_table(conn: &Connection, table: &str) -> Result<i64> {
+    validate_table(table)?;
     let sql = format!("SELECT COUNT(*) FROM {table}");
     let count: i64 = conn.query_row(&sql, [], |r| r.get(0))?;
     Ok(count)
 }
 
 pub(crate) fn raw_record_jsons(conn: &Connection, table: &str) -> Result<Vec<String>> {
+    validate_table(table)?;
     let sql = format!("SELECT record_json FROM {table} ORDER BY rowid");
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
