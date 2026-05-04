@@ -2,12 +2,10 @@
 //!
 //! This crate is a work-in-progress port of the TS reader package. Foundational
 //! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
-//! ported with native conformance tests; the `codex` parser (#256) and the
-//! `opencode_stream` ingestor (#258) are ported; the Claude Code parser
-//! (`claude`) is in progress under #255 — synchronous `parse_claude_session`
-//! and the cross-file reconciler are landed, the incremental entry point is
-//! not yet ported. The remaining per-harness parser (`opencode`) is
-//! scaffolded but not yet implemented — see #257.
+//! ported with native conformance tests; the `codex` (#256), `opencode`
+//! (#257), and `opencode_stream` (#258) parsers are ported; the Claude Code
+//! parser (`claude`) covers the synchronous, incremental, and cross-file
+//! reconciliation surface (#255).
 
 pub mod classifier;
 pub mod fidelity;
@@ -26,6 +24,10 @@ pub use codex::{
     CodexLastCompletedTurn, CodexResumeState, CodexTurnContext, CumulativeUsage,
     ParseCodexIncrementalOptions, ParseCodexIncrementalResult, ParseCodexOptions, ParseCodexResult,
     PersistedUserTurnSlot,
+};
+pub use opencode::{
+    parse_opencode_session, parse_opencode_session_incremental, ParseOpencodeIncrementalOptions,
+    ParseOpencodeIncrementalResult, ParseOpencodeOptions, ParseOpencodeResult,
 };
 
 pub use opencode_stream::{
@@ -47,14 +49,17 @@ pub use types::{
     ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass, Harness,
     RelationshipSourceKind, RelationshipType, SessionRelationshipRecord, SourceKind, Subagent,
     ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord, Usage,
-    UsageGranularity, UserTurnBlock, UserTurnRecord,
+    UsageAttribution, UsageGranularity, UserTurnBlock, UserTurnRecord,
 };
 pub use user_turn::{
     bytes_to_approx_tokens, measure_content_bytes, stringify_measured_content, HeuristicCounter,
     TokenCounter, UserTurnTokenizer,
 };
 pub use claude::{
-    parse_claude_session, parse_claude_session_with_counter, reconcile_claude_session_relationships,
-    ClaudeRelationshipEvidence, ParseOptions as ClaudeParseOptions,
+    parse_claude_session, parse_claude_session_incremental,
+    parse_claude_session_incremental_with_counter, parse_claude_session_with_counter,
+    reconcile_claude_session_relationships, ClaudeRelationshipEvidence,
+    ParseIncrementalOptions as ClaudeParseIncrementalOptions,
+    ParseIncrementalResult as ClaudeParseIncrementalResult, ParseOptions as ClaudeParseOptions,
     ParseResult as ClaudeParseResult, ReconcileClaudeRelationshipsInput,
 };
