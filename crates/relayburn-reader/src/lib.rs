@@ -2,10 +2,10 @@
 //!
 //! This crate is a work-in-progress port of the TS reader package. Foundational
 //! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
-//! ported with native conformance tests; the `codex` parser is now ported
-//! (#256). The remaining per-harness parsers (`claude`, `opencode`,
-//! `opencode_stream`) are scaffolded but not yet implemented — see #255 / #257
-//! / #258.
+//! ported with native conformance tests; the `codex` parser (#256) and
+//! `opencode_stream` ingestor (#258) are ported. The remaining per-harness
+//! parsers (`claude`, `opencode`) are scaffolded but not yet implemented —
+//! see #255 / #257.
 
 pub mod classifier;
 pub mod fidelity;
@@ -24,6 +24,11 @@ pub use codex::{
     CodexLastCompletedTurn, CodexResumeState, CodexTurnContext, CumulativeUsage,
     ParseCodexIncrementalOptions, ParseCodexIncrementalResult, ParseCodexOptions, ParseCodexResult,
     PersistedUserTurnSlot,
+};
+
+pub use opencode_stream::{
+    create_opencode_stream_ingestor, OpencodeStreamCursorState, OpencodeStreamIngestOptions,
+    OpencodeStreamIngestResult, OpencodeStreamIngestor,
 };
 
 pub use classifier::{
