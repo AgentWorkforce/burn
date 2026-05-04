@@ -2,10 +2,12 @@
 //!
 //! This crate is a work-in-progress port of the TS reader package. Foundational
 //! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
-//! ported with native conformance tests; the `codex` parser (#256) and
-//! `opencode_stream` ingestor (#258) are ported. The remaining per-harness
-//! parsers (`claude`, `opencode`) are scaffolded but not yet implemented —
-//! see #255 / #257.
+//! ported with native conformance tests; the `codex` parser (#256) and the
+//! `opencode_stream` ingestor (#258) are ported; the Claude Code parser
+//! (`claude`) is in progress under #255 — synchronous `parse_claude_session`
+//! and the cross-file reconciler are landed, the incremental entry point is
+//! not yet ported. The remaining per-harness parser (`opencode`) is
+//! scaffolded but not yet implemented — see #257.
 
 pub mod classifier;
 pub mod fidelity;
@@ -50,4 +52,9 @@ pub use types::{
 pub use user_turn::{
     bytes_to_approx_tokens, measure_content_bytes, stringify_measured_content, HeuristicCounter,
     TokenCounter, UserTurnTokenizer,
+};
+pub use claude::{
+    parse_claude_session, parse_claude_session_with_counter, reconcile_claude_session_relationships,
+    ClaudeRelationshipEvidence, ParseOptions as ClaudeParseOptions,
+    ParseResult as ClaudeParseResult, ReconcileClaudeRelationshipsInput,
 };
