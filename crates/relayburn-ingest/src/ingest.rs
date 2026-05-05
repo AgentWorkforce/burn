@@ -7,20 +7,17 @@
 //! ## Status
 //!
 //! The standalone modules of this crate (`pending_stamps`, `walk`,
-//! `watch_loop`) are fully ported and tested. Per-harness ingest loops in
-//! this module rely on a few `@relayburn/ledger` APIs that don't yet exist
-//! on the Rust side after the SQLite redesign (`loadConfig`,
-//! `listContentSessionIds`, plus the typed cursor save lock). Specifically:
+//! `watch_loop`, `gap`, `reingest`) are fully ported and tested. The
+//! gap-warning state machine (`gap`) and `reingest_missing_content`
+//! (`reingest`) landed in #278 and depend on the freshly-ported
+//! `Ledger::list_content_session_ids` / `Ledger::list_user_turn_session_ids`
+//! plus `relayburn_ledger::load_config` from #279.
 //!
-//! * `loadConfig().content.store` decides full-vs-summary content capture;
-//!   we default to `Full` here pending a Rust port of the config layer.
-//! * `listContentSessionIds()` powers `reingest_missing_content`'s skip
-//!   filter; until it lands, the function returns an empty report rather
-//!   than risk re-running a heavy parse pass.
-//!
-//! The verbs are wired and the report types are stable; the per-adapter
-//! parse-and-append code is staged so follow-up PRs can fill in the body
-//! of each ingest helper without changing the public surface.
+//! The per-harness orchestration helpers below
+//! (`ingest_claude_into`, `ingest_codex_into`, `ingest_opencode_into`,
+//! and the `ingest_claude_session` fast path) are scaffolded — wiring
+//! the parser surface into them lands in #277. Until then they return
+//! empty reports rather than half-implementing the parse+append loop.
 
 use std::path::PathBuf;
 
@@ -30,20 +27,6 @@ use relayburn_ledger::Ledger;
 
 use crate::cursors::{load_cursors, save_cursor_changes};
 use crate::pending_stamps::cleanup_stale_pending_stamps;
-
-/// Content-capture mode. Mirrors the TS `ContentStoreMode` from
-/// `@relayburn/reader`. The Rust reader exposes the same modes via parser
-/// options; we duplicate the enum here so the ingest crate doesn't need a
-/// circular re-export.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ContentStoreMode {
-    Off,
-    Summary,
-    /// Matches the TS `DEFAULT_CONFIG`: content capture is on by default.
-    #[default]
-    Full,
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,17 +76,6 @@ pub struct IngestRoots {
     pub claude_projects_dir: Option<PathBuf>,
     pub codex_sessions_dir: Option<PathBuf>,
     pub opencode_storage_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReingestContentReport {
-    pub scanned_files: usize,
-    pub skipped_existing: usize,
-    pub reingested_sessions: usize,
-    pub appended_content: usize,
-    pub appended_user_turns: usize,
-    pub failed: usize,
 }
 
 fn home_dir() -> PathBuf {
@@ -248,18 +220,6 @@ pub async fn ingest_claude_session(
         ingested_sessions: 0,
         appended_turns: 0,
     })
-}
-
-/// Re-parse source session files to populate missing content sidecars and
-/// user-turn rows. Used by `burn state rebuild content`. Depends on a
-/// `Ledger::list_content_session_ids` API that's still pending; until that
-/// lands the function returns an empty report rather than risk a no-op
-/// re-ingest pass that would re-append every session's content.
-pub async fn reingest_missing_content(
-    _ledger: &mut Ledger,
-    _opts: &IngestOptions,
-) -> anyhow::Result<ReingestContentReport> {
-    Ok(ReingestContentReport::default())
 }
 
 // --- per-harness orchestration -----------------------------------------

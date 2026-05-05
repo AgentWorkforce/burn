@@ -182,6 +182,15 @@ impl Ledger {
         content::list_session_ids(&self.conns.content)
     }
 
+    /// Distinct session ids that have at least one user-turn row in
+    /// `burn.sqlite`. Sibling of [`Self::list_content_session_ids`];
+    /// `relayburn-ingest::reingest_missing_content` AND-combines the two
+    /// to decide whether a session is fully covered or still needs a
+    /// re-parse.
+    pub fn list_user_turn_session_ids(&self) -> Result<HashSet<String>> {
+        reader::list_user_turn_session_ids(&self.conns.burn)
+    }
+
     // --- content + FTS5 ----------------------------------------------
 
     pub fn search_content(&self, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {

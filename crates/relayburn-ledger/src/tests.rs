@@ -9,7 +9,8 @@ use std::thread;
 
 use relayburn_reader::{
     ContentKind, ContentRecord, ContentRole, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, ToolCall, TurnRecord, Usage,
+    SessionRelationshipRecord, SourceKind, ToolCall, TurnRecord, Usage, UserTurnBlock,
+    UserTurnBlockKind, UserTurnRecord,
 };
 use tempfile::TempDir;
 
@@ -719,6 +720,50 @@ fn list_content_session_ids_returns_distinct_set() {
     assert!(ids.contains("ses_a"));
     assert!(ids.contains("ses_b"));
     assert!(ids.contains("ses_c"));
+}
+
+#[test]
+fn list_user_turn_session_ids_returns_distinct_set() {
+    // #278: ingest's `reingest_missing_content` AND-combines content +
+    // user-turn coverage. Mirrors the `list_content_session_ids` test
+    // shape so a regression in either side surfaces the same way.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+    // Empty user_turns ⇒ empty set.
+    assert!(l.list_user_turn_session_ids().unwrap().is_empty());
+
+    l.append_user_turns(&[
+        make_user_turn("ses_a", "u1", "2025-01-01T00:00:00Z"),
+        make_user_turn("ses_a", "u2", "2025-01-01T00:00:01Z"),
+        make_user_turn("ses_b", "u1", "2025-01-01T00:00:02Z"),
+        make_user_turn("ses_c", "u1", "2025-01-01T00:00:03Z"),
+    ])
+    .unwrap();
+
+    let ids = l.list_user_turn_session_ids().unwrap();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.contains("ses_a"));
+    assert!(ids.contains("ses_b"));
+    assert!(ids.contains("ses_c"));
+}
+
+fn make_user_turn(session: &str, user_uuid: &str, ts: &str) -> UserTurnRecord {
+    UserTurnRecord {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: session.into(),
+        user_uuid: user_uuid.into(),
+        ts: ts.into(),
+        preceding_message_id: None,
+        following_message_id: None,
+        blocks: vec![UserTurnBlock {
+            kind: UserTurnBlockKind::Text,
+            tool_use_id: None,
+            byte_len: 4,
+            approx_tokens: 1,
+            is_error: None,
+        }],
+    }
 }
 
 #[test]
