@@ -15,6 +15,7 @@
 //! 1e-9 USD precision contract that the future `overhead` sub-issue gates
 //! against.
 
+pub mod claude_md;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
@@ -22,7 +23,14 @@ pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
+pub mod subagent_tree;
 
+pub use claude_md::{
+    attribute_claude_md, build_trim_recommendations, find_claude_md_files, load_claude_md_file,
+    parse_claude_md, render_unified_diff_for_recommendation, AttributeClaudeMdInput,
+    ClaudeMdAttributionResult, MarkdownSection, ParsedClaudeMd, SectionCost, SessionClaudeMdCost,
+    TrimRecommendation,
+};
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
 };
@@ -57,4 +65,8 @@ pub use provider_reattribution::{
 pub use quality::{
     compute_one_shot_rate, compute_quality, infer_outcome, ComputeQualityOptions, OneShotMetrics,
     OutcomeConfidence, OutcomeLabel, OutcomeReason, QualityResult, SessionOutcome,
+};
+pub use subagent_tree::{
+    aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions, SubagentTreeNode,
+    SubagentTypeStats,
 };
