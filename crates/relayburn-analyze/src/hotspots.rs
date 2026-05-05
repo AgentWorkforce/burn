@@ -23,13 +23,31 @@ use crate::pricing::PricingTable;
 const PER_MILLION: f64 = 1_000_000.0;
 const CHARS_PER_TOKEN: u64 = 4;
 
+/// How a session's attribution loop allocated cost across tool calls.
+///
+/// `Sized` runs when at least one tool result has a known token size (from
+/// user-turn `tool_result` blocks or content-sidecar estimation), so initial
+/// and persistence costs flow proportionally by result size. `EvenSplit` is
+/// the fallback when no per-result sizes are available — the next turn's
+/// new-content cost is divided evenly across the prior emit's tool calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AttributionMethod {
+    /// At least one tool result had a known token size; cost was allocated
+    /// proportionally by per-result token count.
     Sized,
+    /// No per-result sizes were available; the paying turn's new-content cost
+    /// was split evenly across the prior emit's tool calls.
     EvenSplit,
 }
 
+/// One row of attributed cost for a single tool call.
+///
+/// Each row captures the tool call's identity (id, name, target, args hash),
+/// the session and turn it was emitted in, and the cost split between the
+/// initial pay (charged on the next turn at *that* turn's model rate) and
+/// the persistence cost accrued while the result rode along in subsequent
+/// turns' `cacheRead`. `total_cost` is `initial_cost + persistence_cost`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolAttribution {
@@ -58,6 +76,13 @@ pub struct ToolAttribution {
     pub total_cost: f64,
 }
 
+/// Per-session cost decomposition: how much of the session's grand total was
+/// successfully attributed to tool calls, and what was left unattributed.
+///
+/// `grand_cost` routes through `cost_for_turn` so source-specific reasoning
+/// billing semantics (e.g. Codex `included_in_output`) flow through. The
+/// invariant `attributed_cost + unattributed_cost == grand_cost` holds within
+/// the 1e-9 USD precision contract.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionTotals {
@@ -68,6 +93,12 @@ pub struct SessionTotals {
     pub attribution_method: AttributionMethod,
 }
 
+/// Top-level output of [`attribute_hotspots`]: the flat list of per-tool
+/// attribution rows plus the per-session and cross-session cost totals.
+///
+/// Aggregations (file, bash, bash-verb, subagent) are derived from
+/// `attributions` via [`aggregate_by_file`], [`aggregate_by_bash`],
+/// [`aggregate_by_bash_verb`], and [`aggregate_by_subagent`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotspotsResult {
@@ -91,6 +122,10 @@ pub struct HotspotsOptions<'a> {
     pub user_turns_by_session: Option<&'a HashMap<String, Vec<UserTurnRecord>>>,
 }
 
+/// File rollup: per-target totals across `Read | Edit | Write | NotebookEdit`
+/// tool calls. Sorted by `total_cost` descending. `first_emit_ts` /
+/// `first_emit_turn_index` track the earliest occurrence so callers can render
+/// "first seen" timestamps.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileAggregation {
@@ -104,6 +139,10 @@ pub struct FileAggregation {
     pub first_emit_turn_index: u64,
 }
 
+/// Bash rollup: collapses repeated invocations by `args_hash` so identical
+/// commands (same canonicalized argv) are folded into a single row. The
+/// representative `command` is the first-seen literal for that hash. Sorted
+/// by `total_cost` descending.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BashAggregation {
@@ -116,6 +155,12 @@ pub struct BashAggregation {
     pub persistence_tokens: f64,
 }
 
+/// Bash-verb rollup: groups bash invocations by their parsed verb (e.g.
+/// `git`, `cargo test`). `distinct_commands` counts unique `args_hash` values
+/// folded into the verb; `top_examples` carries the three highest-cost
+/// representative commands (cost desc, then command asc as tiebreaker).
+/// `avg_persistence_turns = riding_turns / call_count` (0 when no calls).
+/// Verbs are sorted by `total_cost` desc, then `verb` asc.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BashVerbAggregation {
@@ -129,6 +174,9 @@ pub struct BashVerbAggregation {
     pub top_examples: Vec<String>,
 }
 
+/// Subagent rollup: groups `Agent` / `Task` spawns by their `subagent_type`
+/// (resolved by the reader from the spawn's input payload). Calls without a
+/// known type bucket under `"(unknown)"`. Sorted by `total_cost` descending.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentAggregation {
@@ -143,6 +191,20 @@ static FILE_TOOLS: phf::Set<&'static str> = phf_set! {
     "Read", "Edit", "Write", "NotebookEdit",
 };
 
+/// Attribute per-tool cost across `turns`, returning the flat attribution
+/// list and per-session totals.
+///
+/// Sessions are processed in first-seen order; turns within each session are
+/// stable-sorted by `turn_index`. The session's attribution method (`Sized`
+/// vs `EvenSplit`) is selected by whether any tool result has a known token
+/// size — see [`AttributionMethod`]. Initial cost is charged at the *paying*
+/// turn's model rate using its `(input + cacheCreate)` mix; persistence cost
+/// is allocated proportionally by result size against subsequent turns'
+/// `cacheRead`, with a single result's size acting as the eviction threshold.
+///
+/// `grand_total` and per-session `grand_cost` route through `cost_for_turn`,
+/// so anything outside the attributable surface (system prompts, reasoning
+/// charged via Codex `included_in_output`, etc.) lands in `unattributed_*`.
 pub fn attribute_hotspots(turns: &[TurnRecord], opts: &HotspotsOptions<'_>) -> HotspotsResult {
     // First-seen session ordering matches the TS `Map` iteration semantics.
     let mut by_session: IndexMap<String, Vec<TurnRecord>> = IndexMap::new();
@@ -497,6 +559,9 @@ fn estimate_tokens(text: &str) -> u64 {
     utf16_len.div_ceil(CHARS_PER_TOKEN)
 }
 
+/// Roll up file-touching tool attributions (`Read | Edit | Write |
+/// NotebookEdit`) by their target path. Rows missing or with an empty target
+/// are skipped. Output is sorted by `total_cost` descending.
 pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregation> {
     let mut by_path: IndexMap<String, FileAggregation> = IndexMap::new();
     for a in attributions {
@@ -538,6 +603,10 @@ pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregatio
     out
 }
 
+/// Roll up `Bash` tool attributions by `args_hash`, collapsing repeated
+/// invocations of the same canonicalized command into a single row. The
+/// representative `command` is the first-seen literal target. Output is
+/// sorted by `total_cost` descending.
 pub fn aggregate_by_bash(attributions: &[ToolAttribution]) -> Vec<BashAggregation> {
     let mut by_hash: IndexMap<String, BashAggregation> = IndexMap::new();
     for a in attributions {
@@ -589,6 +658,16 @@ struct BashVerbExample {
     total_cost: f64,
 }
 
+/// Roll up `Bash` tool attributions by their parsed verb (e.g. `git`,
+/// `cargo test`).
+///
+/// `parse` is the verb-extraction callback (typically the reader's bash
+/// parser) — it receives the raw command string and returns the normalized
+/// verb when one is recognized. Calls whose target the parser declines fall
+/// into the `"(unknown)"` bucket. The per-verb `top_examples` field carries
+/// up to three highest-cost representative commands (cost desc, then command
+/// asc as tiebreaker). Output is sorted by `total_cost` desc, then `verb`
+/// asc.
 pub fn aggregate_by_bash_verb<F>(
     attributions: &[ToolAttribution],
     parse: F,
@@ -678,6 +757,9 @@ where
     out
 }
 
+/// Roll up `Agent` / `Task` spawn attributions by `subagent_type`. Spawns
+/// without a resolved type bucket under `"(unknown)"`. Output is sorted by
+/// `total_cost` descending.
 pub fn aggregate_by_subagent(attributions: &[ToolAttribution]) -> Vec<SubagentAggregation> {
     let mut by_type: IndexMap<String, SubagentAggregation> = IndexMap::new();
     for a in attributions {
