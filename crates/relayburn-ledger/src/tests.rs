@@ -677,6 +677,30 @@ fn concurrent_writers_serialize_via_wal() {
 }
 
 #[test]
+fn list_content_session_ids_returns_distinct_set() {
+    // #279: ingest's `reingest_missing_content` needs the set of session
+    // ids already covered in `content.sqlite` so it can skip them.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+    // Empty content store ⇒ empty set.
+    assert!(l.list_content_session_ids().unwrap().is_empty());
+
+    l.append_content(&[
+        make_content("ses_a", "m1", "alpha"),
+        make_content("ses_a", "m2", "beta"),
+        make_content("ses_b", "m1", "gamma"),
+        make_content("ses_c", "m1", "delta"),
+    ])
+    .unwrap();
+
+    let ids = l.list_content_session_ids().unwrap();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.contains("ses_a"));
+    assert!(ids.contains("ses_b"));
+    assert!(ids.contains("ses_c"));
+}
+
+#[test]
 fn pruning_content_does_not_lock_events_db() {
     // Acceptance: pruning content (TTL or explicit) does not lock the
     // events DB; analytic queries on burn.sqlite keep running.
