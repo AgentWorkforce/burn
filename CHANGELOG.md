@@ -5,6 +5,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `relayburn-ingest` (Rust): port the standalone primitives — `pending_stamps` (binary-compatible with the TS `@relayburn/ingest` wire format), `walk` (`walk_jsonl` / `walk_opencode_sessions`), `watch_loop` (`tokio::time::interval`-driven `WatchController` with graceful stop), and the typed `cursors` module layered on the SQLite ledger's cursor blob. Public verb surface (`ingest_all`, per-harness verbs, `reingest_missing_content`) is wired; per-harness orchestration follow-ups deferred to dedicated sub-issues. (#245)
+- `relayburn-analyze` (Rust): port the `compare` aggregator — `build_compare_table` for the in-memory `(model, activity)` rollup with per-cell turn / edit / one-shot / priced / cost / cache-hit / median-retries metrics, plus `compare_from_archive` sourced from the SQLite ledger via `Ledger::query_turns`. Public surface: `CompareCell`, `CompareTable`, `CompareTotals`, `CompareOptions`, `CompareCategory`, `DEFAULT_MIN_SAMPLE`, `compare_from_archive`, `CompareFromArchiveResult`. (#269)
+- `relayburn-analyze` (Rust): port `subagent_tree` and `claude_md` modules. `build_subagent_tree` / `aggregate_subagent_type_stats` walk per-session subagent invocations (relationship-row substrate with legacy `subagent` fallback) and roll up self/cumulative cost. `parse_claude_md` / `attribute_claude_md` / `build_trim_recommendations` / `render_unified_diff_for_recommendation` produce CLAUDE.md section attribution and trim diffs whose unified-diff format stays byte-aligned with the TS implementation. (#272)
 
 ## [1.9.0] - 2026-05-03
 

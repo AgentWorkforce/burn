@@ -134,7 +134,7 @@ pub fn attribute_overhead(input: AttributeOverheadInput<'_>) -> OverheadAttribut
             .filter(|t| pf.file.applies_to.contains(&t.source))
             .cloned()
             .collect();
-        let attribution = attribute_claude_md(AttributeClaudeMdInput {
+        let attribution = attribute_claude_md(&AttributeClaudeMdInput {
             files: std::slice::from_ref(&pf.parsed),
             turns: &filtered,
             pricing: input.pricing,
