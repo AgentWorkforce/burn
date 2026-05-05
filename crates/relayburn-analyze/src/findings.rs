@@ -297,6 +297,12 @@ pub struct WasteFinding {
 const SEVERITY_HIGH_USD: f64 = 0.5;
 const SEVERITY_WARN_USD: f64 = 0.05;
 
+/// Re-exported under a stable name for sibling modules (e.g.
+/// `tool_call_patterns`) so the severity tier table stays in one place.
+pub fn severity_from_usd_pub(usd: f64) -> WasteSeverity {
+    severity_from_usd(usd)
+}
+
 fn severity_from_usd(usd: f64) -> WasteSeverity {
     if usd >= SEVERITY_HIGH_USD {
         WasteSeverity::High

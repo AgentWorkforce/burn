@@ -345,7 +345,7 @@ function matchesTestRun(parsed: { binary: string; subcommand?: string }): boolea
   if ((parsed.binary === 'pnpm' || parsed.binary === 'npm' || parsed.binary === 'yarn' || parsed.binary === 'bun') && parsed.subcommand) {
     // `pnpm test`, `pnpm test:ts`, `pnpm run test`, etc. PACKAGE_RUNNERS
     // unwrap `run` already, so we see the script name in `subcommand`.
-    return parsed.subcommand === 'test' || parsed.subcommand.startsWith('test:') || parsed.subcommand.startsWith('test ');
+    return parsed.subcommand === 'test' || parsed.subcommand.startsWith('test:');
   }
   return false;
 }

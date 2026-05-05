@@ -28,7 +28,9 @@ pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
+pub mod replacement_savings;
 pub mod subagent_tree;
+pub mod tool_call_patterns;
 pub mod tool_output_bloat;
 
 pub use claude_md::{
@@ -93,9 +95,18 @@ pub use quality::{
     compute_one_shot_rate, compute_quality, infer_outcome, ComputeQualityOptions, OneShotMetrics,
     OutcomeConfidence, OutcomeLabel, OutcomeReason, QualityResult, SessionOutcome,
 };
+pub use replacement_savings::{
+    estimate_savings_for_tool_call, summarize_replacement_savings, ReplacementSavingsOptions,
+    ReplacementSavingsSummary, ToolCallSavings, ToolSavingsAggregate,
+    DEFAULT_FALLBACK_TOKEN_COST, DEFAULT_REPLACED_TOOL_TOKEN_COST,
+};
 pub use subagent_tree::{
     aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions, SubagentTreeNode,
     SubagentTypeStats,
+};
+pub use tool_call_patterns::{
+    detect_tool_call_patterns, tool_call_pattern_to_finding, DetectToolCallPatternsOptions,
+    ToolCallPatternCategory, ToolCallPatternFinding,
 };
 pub use tool_output_bloat::{
     detect_observed_bloat, detect_static_config_bloat, detect_tool_output_bloat,
