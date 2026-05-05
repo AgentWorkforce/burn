@@ -475,6 +475,18 @@ dependencies = [
 [[package]]
 name = "relayburn-sdk"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "relayburn-analyze",
+ "relayburn-ingest",
+ "relayburn-ledger",
+ "relayburn-reader",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "relayburn-sdk-node"
