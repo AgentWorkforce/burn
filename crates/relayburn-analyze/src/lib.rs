@@ -18,7 +18,8 @@
 pub mod cost;
 pub mod fidelity;
 pub mod pricing;
-mod provider_reattribution;
+pub mod provider;
+pub mod provider_reattribution;
 
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
@@ -29,4 +30,15 @@ pub use fidelity::{
 };
 pub use pricing::{
     flatten_value, load_builtin_pricing, load_pricing, ModelCost, PricingTable, ReasoningMode,
+};
+pub use provider::{
+    aggregate_by_provider, filter_turns_by_provider, filter_turns_by_provider_with_rules,
+    provider_for, provider_for_model, provider_for_model_with_rules, provider_for_turn,
+    provider_for_with_rules, resolve_turn_provider, AggregateByProviderOptions, AsTurnLike,
+    CoverageField, FieldCoverage, ProviderAggregateRow, ProviderFilter, RowCoverage, TurnProvider,
+    UsageCostAggregateRow,
+};
+pub use provider_reattribution::{
+    default_rules, extend_default_rules, resolve_provider, resolve_provider_with_rules,
+    ProviderPattern, ProviderResolution, ProviderRule,
 };
