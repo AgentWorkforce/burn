@@ -36,6 +36,24 @@
 
 use std::path::PathBuf;
 
+// Verb modules — each is populated by a separate follow-up PR. They share
+// the `LedgerHandle` and `LedgerOpenOptions` types defined here, plus the
+// re-exports below. Keeping them in their own files lets the three
+// implementation PRs land in parallel without touching `lib.rs`.
+#[allow(unused_imports)]
+mod export_verbs;
+#[allow(unused_imports)]
+mod ingest_verb;
+#[allow(unused_imports)]
+mod query_verbs;
+
+#[allow(unused_imports)]
+pub use export_verbs::*;
+#[allow(unused_imports)]
+pub use ingest_verb::*;
+#[allow(unused_imports)]
+pub use query_verbs::*;
+
 // --- Re-exports ------------------------------------------------------------
 //
 // We expose every type a caller might need to construct an option struct or
