@@ -383,6 +383,19 @@ fn parse_iso8601_ms(s: &str) -> Option<i64> {
     }
     let second: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
 
+    // Reject out-of-range components — `Date.parse` returns NaN for these in
+    // the TS reference implementation. Day-of-month bounds are validated
+    // loosely (1..=31) here; the proleptic-Gregorian conversion below would
+    // otherwise silently roll an invalid date forward.
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+
     let mut idx = 19;
     let mut millis: u32 = 0;
     if idx < bytes.len() && bytes[idx] == b'.' {
@@ -1011,5 +1024,18 @@ mod tests {
         assert_eq!(plus_hour - ms, 3_600_000);
         let plus_day = parse_iso8601_ms("2026-04-21T00:00:00.000Z").unwrap();
         assert_eq!(plus_day - ms, 86_400_000);
+    }
+
+    #[test]
+    fn parse_iso_rejects_out_of_range_components() {
+        // Mirror `Date.parse` behavior: out-of-range minute / second / hour /
+        // month / day all return NaN in JS, so the parser returns None here.
+        assert!(parse_iso8601_ms("2026-04-20T23:60:00Z").is_none());
+        assert!(parse_iso8601_ms("2026-04-20T23:59:60Z").is_none());
+        assert!(parse_iso8601_ms("2026-04-20T24:00:00Z").is_none());
+        assert!(parse_iso8601_ms("2026-13-20T00:00:00Z").is_none());
+        assert!(parse_iso8601_ms("2026-04-32T00:00:00Z").is_none());
+        assert!(parse_iso8601_ms("2026-00-20T00:00:00Z").is_none());
+        assert!(parse_iso8601_ms("2026-04-00T00:00:00Z").is_none());
     }
 }
