@@ -16,6 +16,8 @@
 //! against.
 
 pub mod claude_md;
+pub mod compare;
+pub mod compare_archive;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
@@ -31,6 +33,11 @@ pub use claude_md::{
     ClaudeMdAttributionResult, MarkdownSection, ParsedClaudeMd, SectionCost, SessionClaudeMdCost,
     TrimRecommendation,
 };
+pub use compare::{
+    build_compare_table, CompareCategory, CompareCell, CompareOptions, CompareTable, CompareTotals,
+    DEFAULT_MIN_SAMPLE,
+};
+pub use compare_archive::{compare_from_archive, CompareFromArchiveResult};
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
 };
