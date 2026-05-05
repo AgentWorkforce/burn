@@ -18,3 +18,7 @@ serde_json = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
 regex = "1"
 relayburn-reader = { path = "../relayburn-reader" }
+relayburn-ledger = { path = "../relayburn-ledger" }
+
+[dev-dependencies]
+tempfile = "3"
