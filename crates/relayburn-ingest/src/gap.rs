@@ -38,7 +38,7 @@
 //! the behaviour byte-equivalent to TS without burdening callers.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use relayburn_reader::{ContentKind, ContentRecord, ContentStoreMode, TurnRecord};
 
@@ -61,7 +61,7 @@ impl AdapterName {
     }
 }
 
-type WriterFn = Box<dyn Fn(&str) + Send + Sync>;
+type WriterFn = Arc<dyn Fn(&str) + Send + Sync>;
 
 struct GapState {
     /// Sessions currently flagged as missing tool_result content, per
@@ -93,7 +93,7 @@ impl GapState {
             orphan_calls_per_session: HashMap::new(),
             healed_sessions: HashMap::new(),
             warned_affected_sessions: HashMap::new(),
-            write: Box::new(default_writer),
+            write: Arc::new(default_writer),
         }
     }
 
@@ -140,7 +140,7 @@ where
     F: Fn(&str) + Send + Sync + 'static,
 {
     let mut state = state_lock();
-    std::mem::replace(&mut state.write, Box::new(write))
+    std::mem::replace(&mut state.write, Arc::new(write))
 }
 
 /// Restore a previously captured sink. Convenience for the
@@ -291,8 +291,9 @@ pub fn emit_gap_warning(
     }
     // Snapshot the data we need into owned values before we drop the
     // lock — the warning sink is user-supplied and must not be invoked
-    // while we hold the global mutex (a re-entrant call would deadlock).
-    let body = {
+    // while we hold the global mutex (a re-entrant call into any gap
+    // API would deadlock on `std::sync::Mutex`).
+    let snapshot = {
         let mut state = state_lock();
         let affected_empty = state
             .affected_sessions
@@ -325,15 +326,18 @@ pub fn emit_gap_warning(
             .get(&adapter)
             .map(|m| m.values().copied().sum())
             .unwrap_or(0);
-        format_warning_body(adapter, affected.len() as u64, total_calls)
+        let body = format_warning_body(adapter, affected.len() as u64, total_calls);
+        // Clone the writer Arc out of the guard so we can call it after
+        // the lock drops. The default writer is just as user-supplied as
+        // `on_warn` once `set_ingest_gap_writer` has been called.
+        let writer = on_warn.is_none().then(|| Arc::clone(&state.write));
+        (body, writer)
     };
+    let (body, writer) = snapshot;
     if let Some(cb) = on_warn {
         cb(&body);
-    } else {
-        // Re-take the lock to invoke the configured default writer; it's
-        // user-supplied too but at least it's the one already wired up.
-        let state = state_lock();
-        (state.write)(&body);
+    } else if let Some(writer) = writer {
+        writer(&body);
     }
 }
 
@@ -689,6 +693,32 @@ mod tests {
         );
         assert_eq!(cb_captured.lock().unwrap().len(), 1);
         assert!(sink_captured.lock().unwrap().is_empty());
+
+        restore_ingest_gap_writer(prev);
+        reset_ingest_gap_warnings();
+    }
+
+    #[test]
+    fn default_writer_can_re_enter_gap_api_without_deadlock() {
+        // Regression: previously the default-sink branch invoked
+        // `state.write` while still holding the global mutex, so a sink
+        // that touched any gap API would deadlock on the non-reentrant
+        // `std::sync::Mutex`. The fix clones the writer Arc out of the
+        // guard before invoking it.
+        let _g = test_lock();
+        reset_ingest_gap_warnings();
+        let captured: std::sync::Arc<Mutex<Vec<String>>> =
+            std::sync::Arc::new(Mutex::new(Vec::new()));
+        let captured_clone = captured.clone();
+        let prev = set_ingest_gap_writer(move |body| {
+            // Re-enter — this would deadlock under the old code.
+            record_session_gap(AdapterName::Claude, "sess_reentrant", 1, 0);
+            captured_clone.lock().unwrap().push(body.to_string());
+        });
+
+        record_session_gap(AdapterName::Codex, "sess_dl", 1, 0);
+        emit_gap_warning(AdapterName::Codex, ContentStoreMode::Full, None);
+        assert_eq!(captured.lock().unwrap().len(), 1);
 
         restore_ingest_gap_writer(prev);
         reset_ingest_gap_warnings();

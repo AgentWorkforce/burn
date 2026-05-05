@@ -38,8 +38,9 @@ pub use gap::{
 };
 pub use ingest::{
     ingest_all, ingest_claude_projects, ingest_claude_session, ingest_codex_sessions,
-    ingest_opencode_sessions, ContentStoreMode, IngestOptions, IngestReport, IngestRoots,
+    ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
 };
+pub use relayburn_reader::ContentStoreMode;
 pub use reingest::{derive_codex_session_id, reingest_missing_content, ReingestContentReport};
 pub use pending_stamps::{
     cleanup_stale_pending_stamps, cleanup_stale_pending_stamps_at, pending_stamps_dir,

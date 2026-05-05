@@ -28,20 +28,6 @@ use relayburn_ledger::Ledger;
 use crate::cursors::{load_cursors, save_cursor_changes};
 use crate::pending_stamps::cleanup_stale_pending_stamps;
 
-/// Content-capture mode. Mirrors the TS `ContentStoreMode` from
-/// `@relayburn/reader`. The Rust reader exposes the same modes via parser
-/// options; we duplicate the enum here so the ingest crate doesn't need a
-/// circular re-export.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ContentStoreMode {
-    Off,
-    Summary,
-    /// Matches the TS `DEFAULT_CONFIG`: content capture is on by default.
-    #[default]
-    Full,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestReport {
