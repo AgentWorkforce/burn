@@ -5,6 +5,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `relayburn-ingest` (Rust): port the standalone primitives — `pending_stamps` (binary-compatible with the TS `@relayburn/ingest` wire format), `walk` (`walk_jsonl` / `walk_opencode_sessions`), `watch_loop` (`tokio::time::interval`-driven `WatchController` with graceful stop), and the typed `cursors` module layered on the SQLite ledger's cursor blob. Public verb surface (`ingest_all`, per-harness verbs, `reingest_missing_content`) is wired; per-harness orchestration follow-ups deferred to dedicated sub-issues. (#245)
+- `relayburn-analyze` (Rust): port the ghost-surface detector — `ghost_surface` and `ghost_surface_inputs` modules with Claude / Codex / OpenCode adapters, slash-command miners, the per-source-scoped orchestrator, and the `WasteFinding` envelope adapter. Findings sort deterministically by `(cost desc, sizeTokens desc, path)` and dedup against the OpenCode catalog-bloat detector via `countedByCatalogBloat`. (#273)
 
 ## [1.9.0] - 2026-05-03
 

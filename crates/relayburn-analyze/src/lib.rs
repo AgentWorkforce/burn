@@ -18,6 +18,8 @@
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
+pub mod ghost_surface;
+pub mod ghost_surface_inputs;
 pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
@@ -39,6 +41,17 @@ pub use findings::{
     FailureRun, FailureRunErrorSignature, PatternEventSource, PatternsResult, RetryLoop,
     SessionPatternSummary, SkillPruningProtection, SkillRecallDup, SystemPromptTax, WasteAction,
     WasteFinding, WasteSeverity,
+};
+pub use ghost_surface::{
+    default_ghost_adapters, detect_ghost_surface, detect_ghost_surface_with_adapters,
+    ghost_findings_to_waste_findings, ghost_surface_to_finding, mine_claude_command_names,
+    mine_codex_slash_invocations, ClaudeGhostAdapter, CodexGhostAdapter, DetectGhostSurfaceOptions,
+    GhostCandidate, GhostFindingKind, GhostSurfaceAdapter, GhostSurfaceFinding,
+    GhostSurfaceFindingOptions, GhostSurfaceInputs, OpenCodeGhostAdapter,
+};
+pub use ghost_surface_inputs::{
+    build_ghost_surface_inputs, build_observed_names_by_source, build_session_count_by_source,
+    pick_representative_cache_read_rate,
 };
 pub use pricing::{
     flatten_value, load_builtin_pricing, load_pricing, ModelCost, PricingTable, ReasoningMode,
