@@ -7,13 +7,14 @@
 //! ## Status
 //!
 //! The standalone modules of this crate (`pending_stamps`, `walk`,
-//! `watch_loop`, `cursors`) are fully ported. The per-harness orchestration
-//! helpers below are filled in (#277): `ingest_claude_into`,
-//! `ingest_codex_into`, `ingest_opencode_into`, plus the
-//! `ingest_claude_session` fast-path. The gap-warning state machine and
-//! `reingest_missing_content` body are deliberately deferred to #278 — those
-//! call sites are present but no-op so this crate never warns or re-ingests
-//! until that PR lands.
+//! `watch_loop`, `cursors`, `gap`, `reingest`) are fully ported and tested.
+//! The per-harness orchestration helpers below are filled in (#277):
+//! `ingest_claude_into`, `ingest_codex_into`, `ingest_opencode_into`, plus
+//! the `ingest_claude_session` fast-path. The gap-warning state machine
+//! (`gap`) and `reingest_missing_content` (`reingest`) landed in #278 and
+//! depend on the freshly-ported `Ledger::list_content_session_ids` /
+//! `Ledger::list_user_turn_session_ids` plus `relayburn_ledger::load_config`
+//! from #279.
 
 use std::collections::HashMap;
 use std::fs;
@@ -26,11 +27,11 @@ use serde_json::Value;
 use relayburn_ledger::{load_config, Ledger};
 use relayburn_reader::{
     parse_claude_session, parse_claude_session_incremental, parse_codex_session_incremental,
-    parse_opencode_session_incremental, read_codex_session_id_hint,
-    reconcile_claude_session_relationships, ClaudeParseIncrementalOptions, ClaudeParseOptions,
-    CodexLastCompletedTurn, CodexResumeState, CodexTurnContext,
-    CumulativeUsage as ReaderCumulativeUsage, ParseCodexIncrementalOptions,
-    ParseOpencodeIncrementalOptions, PersistedUserTurnSlot, ReconcileClaudeRelationshipsInput,
+    parse_opencode_session_incremental, reconcile_claude_session_relationships,
+    ClaudeParseIncrementalOptions, ClaudeParseOptions, CodexLastCompletedTurn, CodexResumeState,
+    CodexTurnContext, ContentStoreMode, CumulativeUsage as ReaderCumulativeUsage,
+    ParseCodexIncrementalOptions, ParseOpencodeIncrementalOptions, PersistedUserTurnSlot,
+    ReconcileClaudeRelationshipsInput,
 };
 
 use crate::cursors::{
@@ -41,11 +42,8 @@ use crate::pending_stamps::{
     cleanup_stale_pending_stamps, resolve_pending_stamps_for_session, PendingStampHarness,
     PendingStampSessionCandidate,
 };
+use crate::reingest::derive_codex_session_id;
 use crate::walk::{walk_jsonl, walk_opencode_sessions};
-
-// Re-export the reader's content-store mode so callers don't need to depend
-// on `relayburn-reader` just to construct an [`IngestOptions`].
-pub use relayburn_reader::ContentStoreMode;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,17 +93,6 @@ pub struct IngestRoots {
     pub claude_projects_dir: Option<PathBuf>,
     pub codex_sessions_dir: Option<PathBuf>,
     pub opencode_storage_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReingestContentReport {
-    pub scanned_files: usize,
-    pub skipped_existing: usize,
-    pub reingested_sessions: usize,
-    pub appended_content: usize,
-    pub appended_user_turns: usize,
-    pub failed: usize,
 }
 
 fn home_dir() -> PathBuf {
@@ -311,18 +298,6 @@ pub async fn ingest_claude_session(
         ingested_sessions: 1,
         appended_turns,
     })
-}
-
-/// Re-parse source session files to populate missing content sidecars and
-/// user-turn rows. Used by `burn state rebuild content`. Body deferred to
-/// #278 — until that lands the function returns an empty report rather
-/// than risk a no-op re-ingest pass that would re-append every session's
-/// content.
-pub async fn reingest_missing_content(
-    _ledger: &mut Ledger,
-    _opts: &IngestOptions,
-) -> anyhow::Result<ReingestContentReport> {
-    Ok(ReingestContentReport::default())
 }
 
 // --- per-harness orchestration -----------------------------------------
@@ -875,58 +850,6 @@ fn last_completed_turn_to_value(t: &CodexLastCompletedTurn) -> Value {
     Value::Object(m)
 }
 
-// --- session-id derivation ----------------------------------------------
-
-/// Codex filenames are `rollout-<timestamp>-<uuid>.jsonl` where the UUID is
-/// the session id. Mirrors TS `deriveCodexSessionId`. Falls back to peeking
-/// at the first-line `session_meta.payload.id` hint when the filename
-/// pattern doesn't match.
-///
-/// Public so #278's `reingest_missing_content` can reuse it for the codex
-/// skip-existing filter.
-pub fn derive_codex_session_id(file: &Path) -> Option<String> {
-    let stem = file.file_stem().and_then(|s| s.to_str())?;
-    if let Some(id) = match_uuid_suffix(stem) {
-        return Some(id);
-    }
-    read_codex_session_id_hint(file)
-}
-
-fn match_uuid_suffix(s: &str) -> Option<String> {
-    // 8-4-4-4-12 hex pattern, anchored to the end of the string.
-    if s.len() < 36 {
-        return None;
-    }
-    let candidate = &s[s.len() - 36..];
-    if !is_uuid(candidate) {
-        return None;
-    }
-    Some(candidate.to_string())
-}
-
-fn is_uuid(s: &str) -> bool {
-    let groups = [8usize, 4, 4, 4, 12];
-    let expected_dashes = [8usize, 13, 18, 23];
-    if s.len() != groups.iter().sum::<usize>() + (groups.len() - 1) {
-        return false;
-    }
-    let bytes = s.as_bytes();
-    for &dash_at in &expected_dashes {
-        if bytes[dash_at] != b'-' {
-            return false;
-        }
-    }
-    for (i, b) in bytes.iter().enumerate() {
-        if expected_dashes.contains(&i) {
-            continue;
-        }
-        if !b.is_ascii_hexdigit() {
-            return false;
-        }
-    }
-    true
-}
-
 // --- filesystem helpers --------------------------------------------------
 
 fn list_dirs(parent: &Path) -> Vec<PathBuf> {
@@ -1037,27 +960,4 @@ mod tests {
         assert_eq!(opencode_storage_dir(&roots), PathBuf::from("/x/oc"));
     }
 
-    #[test]
-    fn derive_codex_session_id_from_filename() {
-        let p = PathBuf::from(
-            "/tmp/codex/rollout-2026-04-20-12345678-9abc-4def-1234-1234567890ab.jsonl",
-        );
-        assert_eq!(
-            derive_codex_session_id(&p).as_deref(),
-            Some("12345678-9abc-4def-1234-1234567890ab")
-        );
-    }
-
-    #[test]
-    fn derive_codex_session_id_returns_none_when_no_match() {
-        let p = PathBuf::from("/tmp/no-uuid.jsonl");
-        assert_eq!(derive_codex_session_id(&p), None);
-    }
-
-    #[test]
-    fn is_uuid_validates_canonical_form() {
-        assert!(is_uuid("12345678-9abc-4def-1234-1234567890ab"));
-        assert!(!is_uuid("12345678-9abc-4def-1234-1234567890a"));
-        assert!(!is_uuid("not-a-uuid-at-all-not-a-real-string"));
-    }
 }

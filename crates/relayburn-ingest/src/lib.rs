@@ -20,8 +20,10 @@
 //! ```
 
 pub mod cursors;
+pub mod gap;
 pub mod ingest;
 pub mod pending_stamps;
+pub mod reingest;
 pub mod walk;
 pub mod watch_loop;
 
@@ -29,11 +31,17 @@ pub use cursors::{
     load_cursors, save_cursor_changes, save_cursors, ClaudeCursor, CodexCumulative, CodexCursor,
     Cursors, FileCursor, OpencodeCursor, OpencodeStreamCursor,
 };
-pub use ingest::{
-    derive_codex_session_id, ingest_all, ingest_claude_projects, ingest_claude_session,
-    ingest_codex_sessions, ingest_opencode_sessions, reingest_missing_content, ContentStoreMode,
-    IngestOptions, IngestReport, IngestRoots, ReingestContentReport,
+pub use gap::{
+    count_new_tool_calls, count_new_tool_results, count_tool_call_gaps, emit_gap_warning,
+    record_session_gap, reset_ingest_gap_warnings, restore_ingest_gap_writer,
+    set_ingest_gap_writer, AdapterName, ToolCallGapCounts,
 };
+pub use ingest::{
+    ingest_all, ingest_claude_projects, ingest_claude_session, ingest_codex_sessions,
+    ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
+};
+pub use relayburn_reader::ContentStoreMode;
+pub use reingest::{derive_codex_session_id, reingest_missing_content, ReingestContentReport};
 pub use pending_stamps::{
     cleanup_stale_pending_stamps, cleanup_stale_pending_stamps_at, pending_stamps_dir,
     resolve_pending_stamps_for_session, write_pending_stamp, PendingStamp,

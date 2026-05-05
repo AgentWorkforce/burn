@@ -6,7 +6,7 @@
 //! so downstream consumers comparing two adapters byte-for-byte stay
 //! happy.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,7 @@ use relayburn_reader::{
 };
 
 use crate::error::Result;
+use crate::paths::is_valid_session_id;
 use crate::query::Query;
 use crate::stamp::{stamp_matches, Enrichment, Stamp, StampSelector};
 
@@ -89,6 +90,32 @@ pub(crate) fn query_user_turns(
 
 pub(crate) fn list_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
     collect_stamps(conn)
+}
+
+/// Distinct `session_id` values present in the `user_turns` table. Powers
+/// the "skip sessions whose user-turn rows I already have" filter in
+/// `relayburn-ingest::reingest_missing_content` (#278). Mirrors the TS
+/// `(await queryUserTurns()).map((u) => u.sessionId)` extraction without
+/// having to materialize every row.
+///
+/// Filters out malformed ids defensively (mirrors
+/// `content::list_session_ids`); a corrupted row should not poison the
+/// caller's skip set. The `user_turns` table is STRICT, so a non-TEXT
+/// session_id should never reach us, but the extra guard keeps the
+/// surface symmetric.
+pub(crate) fn list_user_turn_session_ids(conn: &Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT session_id FROM user_turns")?;
+    let mut rows = stmt.query([])?;
+    let mut out = HashSet::new();
+    while let Some(row) = rows.next()? {
+        let Ok(session_id) = row.get::<_, String>(0) else {
+            continue;
+        };
+        if is_valid_session_id(&session_id) {
+            out.insert(session_id);
+        }
+    }
+    Ok(out)
 }
 
 fn select_records<T, F>(conn: &Connection, table: &str, mut filter: F) -> Result<Vec<T>>
