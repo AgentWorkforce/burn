@@ -238,14 +238,14 @@ pub async fn ingest_claude_session(
     let file = claude_projects_dir(&opts.roots)
         .join(&encoded)
         .join(format!("{session_id}.jsonl"));
-    let meta = match fs::metadata(&file) {
-        Ok(m) if m.is_file() => m,
+    match fs::metadata(&file) {
+        Ok(m) if m.is_file() => {}
         Ok(_) => return Ok(IngestReport::empty()),
         Err(_) => {
             eprintln!("[burn] no session file found at {}", file.display());
             return Ok(IngestReport::empty());
         }
-    };
+    }
 
     let content_mode = resolve_content_mode();
     let parse_opts = ClaudeParseOptions {
@@ -280,7 +280,12 @@ pub async fn ingest_claude_session(
         ledger.append_user_turns(&result.user_turns)?;
     }
 
-    // Persist a cursor at EOF so a later `ingest_all` sweep skips this file.
+    // Re-stat after parsing so the cursor reflects the byte position the
+    // parser actually read to. `parse_claude_session` uses BufReader::lines()
+    // and keeps reading past the pre-parse `len()` if the file grew during
+    // parse; using the pre-parse size would cause a follow-up `ingest_all`
+    // to replay those bytes and emit duplicate turns.
+    let meta = fs::metadata(&file)?;
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
     let cursor = ClaudeCursor {
