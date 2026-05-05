@@ -30,9 +30,9 @@ pub use cursors::{
     Cursors, FileCursor, OpencodeCursor, OpencodeStreamCursor,
 };
 pub use ingest::{
-    ingest_all, ingest_claude_projects, ingest_claude_session, ingest_codex_sessions,
-    ingest_opencode_sessions, reingest_missing_content, ContentStoreMode, IngestOptions,
-    IngestReport, IngestRoots, ReingestContentReport,
+    derive_codex_session_id, ingest_all, ingest_claude_projects, ingest_claude_session,
+    ingest_codex_sessions, ingest_opencode_sessions, reingest_missing_content, ContentStoreMode,
+    IngestOptions, IngestReport, IngestRoots, ReingestContentReport,
 };
 pub use pending_stamps::{
     cleanup_stale_pending_stamps, cleanup_stale_pending_stamps_at, pending_stamps_dir,
