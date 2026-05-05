@@ -11,8 +11,8 @@
 //! USD costs are represented as `f64` to match the TS `number` type used in
 //! `@relayburn/analyze`. The per-record math in `cost::cost_for_usage`
 //! preserves the same accumulation order as the TS implementation so output
-//! stays bit-for-bit equivalent on the cost-test fixture corpus, with the
-//! 1e-9 USD precision contract that the future `overhead` sub-issue gates
+//! stays bit-for-bit equivalent on the cost-test fixture corpus, holding to
+//! the 1e-9 USD precision contract that `overhead` and `hotspots` gate
 //! against.
 
 pub mod claude_md;
@@ -23,6 +23,7 @@ pub mod fidelity;
 pub mod findings;
 pub mod ghost_surface;
 pub mod ghost_surface_inputs;
+pub mod hotspots;
 pub mod overhead;
 pub mod pricing;
 pub mod provider;
@@ -76,6 +77,11 @@ pub use ghost_surface::{
 pub use ghost_surface_inputs::{
     build_ghost_surface_inputs, build_observed_names_by_source, build_session_count_by_source,
     pick_representative_cache_read_rate,
+};
+pub use hotspots::{
+    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent,
+    attribute_hotspots, AttributionMethod, BashAggregation, BashVerbAggregation, FileAggregation,
+    HotspotsOptions, HotspotsResult, SessionTotals, SubagentAggregation, ToolAttribution,
 };
 pub use pricing::{
     flatten_value, load_builtin_pricing, load_pricing, ModelCost, PricingTable, ReasoningMode,

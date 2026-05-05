@@ -49,7 +49,7 @@ pub use types::{
     ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass, Harness,
     RelationshipSourceKind, RelationshipType, SessionRelationshipRecord, SourceKind, Subagent,
     ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord, Usage,
-    UsageAttribution, UsageGranularity, UserTurnBlock, UserTurnRecord,
+    UsageAttribution, UsageGranularity, UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
 };
 pub use user_turn::{
     bytes_to_approx_tokens, measure_content_bytes, stringify_measured_content, HeuristicCounter,
