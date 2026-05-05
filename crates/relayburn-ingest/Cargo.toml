@@ -6,11 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Session-store discovery, parse-and-append orchestration, pending stamps, and watch loop (Rust port)."
-publish = false
 
 [dependencies]
-relayburn-reader = { path = "../relayburn-reader" }
-relayburn-ledger = { path = "../relayburn-ledger" }
+relayburn-reader = { path = "../relayburn-reader", version = "0.0.0" }
+relayburn-ledger = { path = "../relayburn-ledger", version = "0.0.0" }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true, features = ["sync"] }
