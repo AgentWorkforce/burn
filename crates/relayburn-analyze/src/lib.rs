@@ -29,6 +29,7 @@ pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
 pub mod subagent_tree;
+pub mod tool_output_bloat;
 
 pub use claude_md::{
     attribute_claude_md, build_trim_recommendations, find_claude_md_files, load_claude_md_file,
@@ -95,4 +96,11 @@ pub use quality::{
 pub use subagent_tree::{
     aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions, SubagentTreeNode,
     SubagentTypeStats,
+};
+pub use tool_output_bloat::{
+    detect_observed_bloat, detect_static_config_bloat, detect_tool_output_bloat,
+    load_claude_settings, project_claude_settings_path, tool_output_bloat_to_finding,
+    user_claude_settings_path, ClaudeSettings, DetectObservedBloatOptions,
+    DetectStaticConfigBloatOptions, DetectToolOutputBloatOptions, LoadedClaudeSettings,
+    ToolOutputBloat, ToolOutputBloatKind, BASH_MAX_OUTPUT_ENV_KEY, DEFAULT_BLOAT_TOKEN_THRESHOLD,
 };
