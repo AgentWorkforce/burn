@@ -6,3 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Embedding API for relayburn — published to crates.io as the supported Rust surface."
+
+[dependencies]
+relayburn-reader = { path = "../relayburn-reader" }
+relayburn-ledger = { path = "../relayburn-ledger" }
+relayburn-analyze = { path = "../relayburn-analyze" }
+relayburn-ingest = { path = "../relayburn-ingest" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
