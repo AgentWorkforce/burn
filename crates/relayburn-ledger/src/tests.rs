@@ -698,6 +698,27 @@ fn list_content_session_ids_returns_distinct_set() {
     assert!(ids.contains("ses_a"));
     assert!(ids.contains("ses_b"));
     assert!(ids.contains("ses_c"));
+
+    // The `content` table is non-STRICT, so a row whose `session_id`
+    // column holds a non-TEXT storage class can land in the DB (e.g. via
+    // a future schema migration bug or direct ops intervention). The
+    // TEXT affinity coerces incoming integers/reals into text on insert,
+    // but it preserves BLOBs — so a BLOB literal is the way to plant a
+    // row that will not decode as `String`. The `list_session_ids` call
+    // must skip it rather than aborting the whole query.
+    l.conns
+        .content
+        .execute(
+            "INSERT INTO content (source, session_id, message_id, content_hash, body, byte_length, created_at)
+             VALUES ('claude-code', X'AABBCCDD', 'm-bad', 'h-bad', 'corrupt', 7, '2026-05-05T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    let ids = l.list_content_session_ids().unwrap();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.contains("ses_a"));
+    assert!(ids.contains("ses_b"));
+    assert!(ids.contains("ses_c"));
 }
 
 #[test]

@@ -134,11 +134,20 @@ pub(crate) fn count_content(conn: &Connection) -> Result<i64> {
 /// `listContentSessionIds()` adapter method.
 ///
 /// Filters out malformed ids defensively (mirrors the TS sqlite-adapter);
-/// a corrupted row should not poison the caller's skip set.
+/// a corrupted row should not poison the caller's skip set. The `content`
+/// table is non-STRICT, so a row whose `session_id` decodes as something
+/// other than TEXT is skipped rather than aborting the whole call.
 pub(crate) fn list_session_ids(conn: &Connection) -> Result<HashSet<String>> {
     let mut stmt = conn.prepare("SELECT DISTINCT session_id FROM content")?;
-    let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows.into_iter().filter(|s| is_valid_session_id(s)).collect())
+    let mut rows = stmt.query([])?;
+    let mut out = HashSet::new();
+    while let Some(row) = rows.next()? {
+        let Ok(session_id) = row.get::<_, String>(0) else {
+            continue;
+        };
+        if is_valid_session_id(&session_id) {
+            out.insert(session_id);
+        }
+    }
+    Ok(out)
 }

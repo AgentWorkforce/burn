@@ -25,14 +25,19 @@ use crate::paths::ledger_home;
 
 /// Default content retention window in days. Matches TS
 /// `DEFAULT_RETENTION_DAYS`.
-pub const DEFAULT_RETENTION_DAYS: u64 = 90;
+pub const DEFAULT_RETENTION_DAYS: f64 = 90.0;
 
 /// Retention window for content rows. Mirrors the TS
 /// `number | 'forever'` shape; `Forever` disables TTL-based pruning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Retention is `f64` to match TS, where `retentionDays` is a JS `number`
+/// and fractional values like `0.5` (12 hours) round-trip without
+/// truncation through the env/file → ms pipeline.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Retention {
-    /// Retain content for at most `days` days.
-    Days(u64),
+    /// Retain content for at most `days` days. Fractional values are
+    /// preserved (e.g. `0.5` → 12 hours).
+    Days(f64),
     /// Retain content indefinitely.
     Forever,
 }
@@ -40,23 +45,24 @@ pub enum Retention {
 impl Retention {
     /// Convert the retention window to milliseconds. Mirrors TS
     /// `retentionMs`. Returns `None` for `Forever` (no cutoff).
+    /// Truncates the f64 result to `u64`; `Days(0.5)` yields `Some(43_200_000)`.
     pub fn as_millis(self) -> Option<u64> {
         match self {
             Retention::Forever => None,
-            Retention::Days(d) => Some(d.saturating_mul(24 * 60 * 60 * 1000)),
+            Retention::Days(d) => Some((d * 24.0 * 60.0 * 60.0 * 1000.0) as u64),
         }
     }
 }
 
 /// `content.*` block of the resolved config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContentConfig {
     pub store: ContentStoreMode,
     pub retention_days: Retention,
 }
 
 /// Resolved user config, with all defaults applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BurnConfig {
     pub content: ContentConfig,
 }
@@ -227,22 +233,8 @@ fn normalize_retention_value(v: Option<&serde_json::Value>) -> Option<Retention>
     match v? {
         serde_json::Value::String(s) => normalize_retention_str(Some(s)),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                if i < 0 {
-                    return Some(Retention::Forever);
-                }
-                return Some(Retention::Days(i as u64));
-            }
-            if let Some(f) = n.as_f64() {
-                if !f.is_finite() {
-                    return None;
-                }
-                if f < 0.0 {
-                    return Some(Retention::Forever);
-                }
-                return Some(Retention::Days(f as u64));
-            }
-            None
+            let f = n.as_f64()?;
+            normalize_retention_f64(f)
         }
         _ => None,
     }
@@ -260,22 +252,20 @@ fn normalize_retention_str(v: Option<&str>) -> Option<Retention> {
     if trimmed.eq_ignore_ascii_case("forever") {
         return Some(Retention::Forever);
     }
-    if let Ok(i) = trimmed.parse::<i64>() {
-        if i < 0 {
-            return Some(Retention::Forever);
-        }
-        return Some(Retention::Days(i as u64));
+    // Parse as f64 directly so fractional values like `0.5` survive
+    // (matches TS `Number(s)` semantics — JS numbers are always f64).
+    let f = trimmed.parse::<f64>().ok()?;
+    normalize_retention_f64(f)
+}
+
+fn normalize_retention_f64(f: f64) -> Option<Retention> {
+    if !f.is_finite() {
+        return None;
     }
-    if let Ok(f) = trimmed.parse::<f64>() {
-        if !f.is_finite() {
-            return None;
-        }
-        if f < 0.0 {
-            return Some(Retention::Forever);
-        }
-        return Some(Retention::Days(f as u64));
+    if f < 0.0 {
+        return Some(Retention::Forever);
     }
-    None
+    Some(Retention::Days(f))
 }
 
 #[cfg(test)]
@@ -304,7 +294,7 @@ mod tests {
             let tmp = TempDir::new().unwrap();
             let cfg = load_config_at(&tmp.path().join("config.json")).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::Full);
-            assert_eq!(cfg.content.retention_days, Retention::Days(90));
+            assert_eq!(cfg.content.retention_days, Retention::Days(90.0));
             assert_eq!(cfg, BurnConfig::default());
         });
     }
@@ -321,7 +311,7 @@ mod tests {
             .unwrap();
             let cfg = load_config_at(&path).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::HashOnly);
-            assert_eq!(cfg.content.retention_days, Retention::Days(7));
+            assert_eq!(cfg.content.retention_days, Retention::Days(7.0));
         });
     }
 
@@ -369,7 +359,7 @@ mod tests {
             std::env::set_var("RELAYBURN_CONTENT_TTL_DAYS", "30");
             let cfg = load_config_at(&path).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::Off);
-            assert_eq!(cfg.content.retention_days, Retention::Days(30));
+            assert_eq!(cfg.content.retention_days, Retention::Days(30.0));
         });
     }
 
@@ -381,7 +371,37 @@ mod tests {
             std::env::set_var("RELAYBURN_CONTENT_TTL_DAYS", "");
             let tmp = TempDir::new().unwrap();
             let cfg = load_config_at(&tmp.path().join("missing.json")).unwrap();
-            assert_eq!(cfg.content.retention_days, Retention::Days(90));
+            assert_eq!(cfg.content.retention_days, Retention::Days(90.0));
+        });
+    }
+
+    #[test]
+    fn env_fractional_retention_preserved() {
+        // `RELAYBURN_CONTENT_TTL_DAYS=0.5` must keep the half-day window —
+        // truncating to integer days would silently shrink it to 0 and
+        // prune content immediately. Mirrors TS `normalizeRetention`,
+        // which keeps any finite JS number as-is.
+        with_clean_env(|| {
+            std::env::set_var("RELAYBURN_CONTENT_TTL_DAYS", "0.5");
+            let tmp = TempDir::new().unwrap();
+            let cfg = load_config_at(&tmp.path().join("missing.json")).unwrap();
+            assert_eq!(cfg.content.retention_days, Retention::Days(0.5));
+            assert_eq!(cfg.content.retention_days.as_millis(), Some(43_200_000));
+        });
+    }
+
+    #[test]
+    fn file_fractional_retention_preserved() {
+        with_clean_env(|| {
+            let tmp = TempDir::new().unwrap();
+            let path = tmp.path().join("config.json");
+            std::fs::write(
+                &path,
+                r#"{"content":{"store":"full","retentionDays":1.5}}"#,
+            )
+            .unwrap();
+            let cfg = load_config_at(&path).unwrap();
+            assert_eq!(cfg.content.retention_days, Retention::Days(1.5));
         });
     }
 
@@ -419,17 +439,18 @@ mod tests {
             .unwrap();
             let cfg = load_config_at(&path).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::Full);
-            assert_eq!(cfg.content.retention_days, Retention::Days(7));
+            assert_eq!(cfg.content.retention_days, Retention::Days(7.0));
         });
     }
 
     #[test]
     fn retention_as_millis() {
         assert_eq!(Retention::Forever.as_millis(), None);
-        assert_eq!(Retention::Days(0).as_millis(), Some(0));
-        assert_eq!(
-            Retention::Days(1).as_millis(),
-            Some(24 * 60 * 60 * 1000),
-        );
+        assert_eq!(Retention::Days(0.0).as_millis(), Some(0));
+        assert_eq!(Retention::Days(1.0).as_millis(), Some(24 * 60 * 60 * 1000));
+        // Fractional days round-trip through the ms conversion without
+        // truncation at the day boundary.
+        assert_eq!(Retention::Days(0.5).as_millis(), Some(43_200_000));
+        assert_eq!(Retention::Days(1.5).as_millis(), Some(129_600_000));
     }
 }
