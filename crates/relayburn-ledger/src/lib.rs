@@ -11,6 +11,7 @@
 //! // append turns / compactions / stamps / content via Ledger methods.
 //! ```
 
+mod config;
 mod content;
 mod db;
 mod error;
@@ -22,10 +23,15 @@ mod schema;
 mod stamp;
 mod writer;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use rusqlite::params;
 
+pub use crate::config::{
+    config_path, load_config, load_config_at, BurnConfig, ContentConfig, Retention,
+    DEFAULT_RETENTION_DAYS,
+};
 pub use crate::content::{PruneStats, SearchHit, SearchOptions};
 pub use crate::error::{LedgerError, Result};
 pub use crate::fingerprint::{
@@ -167,6 +173,13 @@ impl Ledger {
 
     pub fn count_content(&self) -> Result<i64> {
         content::count_content(&self.conns.content)
+    }
+
+    /// Distinct session ids that have at least one content row in
+    /// `content.sqlite`. Powers the skip filter in
+    /// `relayburn-ingest::reingest_missing_content` (#278).
+    pub fn list_content_session_ids(&self) -> Result<HashSet<String>> {
+        content::list_session_ids(&self.conns.content)
     }
 
     // --- content + FTS5 ----------------------------------------------

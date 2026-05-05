@@ -12,6 +12,8 @@
 //! upstream mtime here — once a row lands in `content.sqlite` it's a
 //! cache that re-ingest can refill.
 
+use std::collections::HashSet;
+
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -124,4 +126,28 @@ pub(crate) fn prune_older_than(conn: &mut Connection, cutoff: &str) -> Result<Pr
 pub(crate) fn count_content(conn: &Connection) -> Result<i64> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM content", [], |r| r.get(0))?;
     Ok(count)
+}
+
+/// Distinct `session_id` values present in `content.sqlite`. Powers the
+/// "skip sessions whose content I already have" filter in
+/// `relayburn-ingest::reingest_missing_content` (#278). Mirrors the TS
+/// `listContentSessionIds()` adapter method.
+///
+/// Filters out malformed ids defensively (mirrors the TS sqlite-adapter);
+/// a corrupted row should not poison the caller's skip set. The `content`
+/// table is non-STRICT, so a row whose `session_id` decodes as something
+/// other than TEXT is skipped rather than aborting the whole call.
+pub(crate) fn list_session_ids(conn: &Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT session_id FROM content")?;
+    let mut rows = stmt.query([])?;
+    let mut out = HashSet::new();
+    while let Some(row) = rows.next()? {
+        let Ok(session_id) = row.get::<_, String>(0) else {
+            continue;
+        };
+        if is_valid_session_id(&session_id) {
+            out.insert(session_id);
+        }
+    }
+    Ok(out)
 }
