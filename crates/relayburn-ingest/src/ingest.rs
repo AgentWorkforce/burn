@@ -38,6 +38,10 @@ use crate::cursors::{
     load_cursors, save_cursor_changes, ClaudeCursor, CodexCumulative, CodexCursor, Cursors,
     FileCursor, OpencodeCursor,
 };
+use crate::gap::{
+    count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap,
+    AdapterName,
+};
 use crate::pending_stamps::{
     cleanup_stale_pending_stamps, resolve_pending_stamps_for_session, PendingStampHarness,
     PendingStampSessionCandidate,
