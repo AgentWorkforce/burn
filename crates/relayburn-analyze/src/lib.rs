@@ -17,9 +17,11 @@
 
 pub mod cost;
 pub mod fidelity;
+pub mod findings;
 pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
+pub mod quality;
 
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
@@ -27,6 +29,16 @@ pub use cost::{
 pub use fidelity::{
     empty_fidelity_summary, has_minimum_fidelity, summarize_fidelity, summarize_fidelity_from_iter,
     FidelitySummary, COVERAGE_FIELDS,
+};
+pub use findings::{
+    cancellation_run_to_finding, compaction_loss_to_finding, edit_heavy_to_finding,
+    edit_revert_to_finding, failure_run_to_finding, findings_from_patterns, retry_loop_to_finding,
+    skill_pruning_protection_to_finding, skill_recall_dup_to_finding, sort_findings,
+    system_prompt_tax_to_finding, CancellationRun, CompactionLoss, CompactionLostWork,
+    EditHeavySession, EditPreview, EditRevertCycle, EditRevertSamplePreview, EstimatedSavings,
+    FailureRun, FailureRunErrorSignature, PatternEventSource, PatternsResult, RetryLoop,
+    SessionPatternSummary, SkillPruningProtection, SkillRecallDup, SystemPromptTax, WasteAction,
+    WasteFinding, WasteSeverity,
 };
 pub use pricing::{
     flatten_value, load_builtin_pricing, load_pricing, ModelCost, PricingTable, ReasoningMode,
@@ -41,4 +53,8 @@ pub use provider::{
 pub use provider_reattribution::{
     default_rules, extend_default_rules, resolve_provider, resolve_provider_with_rules,
     ProviderPattern, ProviderResolution, ProviderRule,
+};
+pub use quality::{
+    compute_one_shot_rate, compute_quality, infer_outcome, ComputeQualityOptions, OneShotMetrics,
+    OutcomeConfidence, OutcomeLabel, OutcomeReason, QualityResult, SessionOutcome,
 };
