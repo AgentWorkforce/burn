@@ -15,6 +15,8 @@
 //! 1e-9 USD precision contract that the future `overhead` sub-issue gates
 //! against.
 
+pub mod compare;
+pub mod compare_archive;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
@@ -23,6 +25,11 @@ pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
 
+pub use compare::{
+    build_compare_table, CompareCategory, CompareCell, CompareOptions, CompareTable, CompareTotals,
+    DEFAULT_MIN_SAMPLE,
+};
+pub use compare_archive::{compare_from_archive, CompareFromArchiveResult};
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
 };
