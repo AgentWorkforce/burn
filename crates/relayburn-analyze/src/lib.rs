@@ -25,6 +25,7 @@ pub mod ghost_surface;
 pub mod ghost_surface_inputs;
 pub mod hotspots;
 pub mod overhead;
+pub mod patterns;
 pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
@@ -53,6 +54,7 @@ pub use overhead::{
     AttributeOverheadInput, OverheadAttribution, OverheadFile, OverheadFileAttribution,
     OverheadFileKind, ParsedOverheadFile,
 };
+pub use patterns::{detect_patterns, DetectPatternsOptions};
 pub use fidelity::{
     empty_fidelity_summary, has_minimum_fidelity, summarize_fidelity, summarize_fidelity_from_iter,
     FidelitySummary, COVERAGE_FIELDS,
