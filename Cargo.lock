@@ -421,6 +421,7 @@ dependencies = [
  "relayburn-reader",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

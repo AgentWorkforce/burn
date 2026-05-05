@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-analyze` (Rust): port the tool-output-bloat detector — Signal A's `BASH_MAX_OUTPUT_LENGTH` static-config check (with `~/.claude/settings.json` + `<cwd>/.claude/settings.json` loader) and Signal B's cross-harness observed-bloat aggregation, plus the `WasteFinding` adapter. Public surface mirrors `@relayburn/analyze`: `BASH_MAX_OUTPUT_ENV_KEY`, `DEFAULT_BLOAT_TOKEN_THRESHOLD`, `detect_observed_bloat`, `detect_static_config_bloat`, `detect_tool_output_bloat`, `load_claude_settings`, `project_claude_settings_path`, `user_claude_settings_path`, `tool_output_bloat_to_finding`. (#271)
 - `relayburn-ingest` (Rust): port the standalone primitives — `pending_stamps` (binary-compatible with the TS `@relayburn/ingest` wire format), `walk` (`walk_jsonl` / `walk_opencode_sessions`), `watch_loop` (`tokio::time::interval`-driven `WatchController` with graceful stop), and the typed `cursors` module layered on the SQLite ledger's cursor blob. Public verb surface (`ingest_all`, per-harness verbs, `reingest_missing_content`) is wired; per-harness orchestration follow-ups deferred to dedicated sub-issues. (#245)
 
 ## [1.9.0] - 2026-05-03

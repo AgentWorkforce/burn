@@ -22,6 +22,7 @@ pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
+pub mod tool_output_bloat;
 
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
@@ -57,4 +58,11 @@ pub use provider_reattribution::{
 pub use quality::{
     compute_one_shot_rate, compute_quality, infer_outcome, ComputeQualityOptions, OneShotMetrics,
     OutcomeConfidence, OutcomeLabel, OutcomeReason, QualityResult, SessionOutcome,
+};
+pub use tool_output_bloat::{
+    detect_observed_bloat, detect_static_config_bloat, detect_tool_output_bloat,
+    load_claude_settings, project_claude_settings_path, tool_output_bloat_to_finding,
+    user_claude_settings_path, ClaudeSettings, DetectObservedBloatOptions,
+    DetectStaticConfigBloatOptions, DetectToolOutputBloatOptions, LoadedClaudeSettings,
+    ToolOutputBloat, ToolOutputBloatKind, BASH_MAX_OUTPUT_ENV_KEY, DEFAULT_BLOAT_TOKEN_THRESHOLD,
 };
