@@ -38,6 +38,10 @@ use crate::cursors::{
     load_cursors, save_cursor_changes, ClaudeCursor, CodexCumulative, CodexCursor, Cursors,
     FileCursor, OpencodeCursor,
 };
+use crate::gap::{
+    count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap,
+    AdapterName,
+};
 use crate::pending_stamps::{
     cleanup_stale_pending_stamps, resolve_pending_stamps_for_session, PendingStampHarness,
     PendingStampSessionCandidate,
@@ -162,16 +166,25 @@ pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Re
 
     progress(opts, "loading content settings");
     let content_mode = resolve_content_mode();
+    let on_warn: Option<&dyn Fn(&str)> = opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str));
 
+    // Emit per-adapter, immediately after each scan, so a later adapter
+    // returning Err does not swallow a gap the earlier adapter already
+    // recorded against work that was already appended.
     progress(opts, "scanning Claude Code sessions");
     let r = ingest_claude_into(ledger, &mut after, &opts.roots, content_mode)?;
     report.merge(&r);
+    emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
+
     progress(opts, "scanning Codex sessions");
     let r = ingest_codex_into(ledger, &mut after, &opts.roots, content_mode)?;
     report.merge(&r);
+    emit_gap_warning(AdapterName::Codex, content_mode, on_warn);
+
     progress(opts, "scanning OpenCode sessions");
     let r = ingest_opencode_into(ledger, &mut after, &opts.roots, content_mode)?;
     report.merge(&r);
+    emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
 
     progress(opts, "saving ingest cursors");
     save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
@@ -188,6 +201,11 @@ pub async fn ingest_claude_projects(
     let mut after = before.clone();
     let content_mode = resolve_content_mode();
     let report = ingest_claude_into(ledger, &mut after, &opts.roots, content_mode)?;
+    emit_gap_warning(
+        AdapterName::Claude,
+        content_mode,
+        opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str)),
+    );
     save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
@@ -202,6 +220,11 @@ pub async fn ingest_codex_sessions(
     let mut after = before.clone();
     let content_mode = resolve_content_mode();
     let report = ingest_codex_into(ledger, &mut after, &opts.roots, content_mode)?;
+    emit_gap_warning(
+        AdapterName::Codex,
+        content_mode,
+        opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str)),
+    );
     save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
@@ -216,6 +239,11 @@ pub async fn ingest_opencode_sessions(
     let mut after = before.clone();
     let content_mode = resolve_content_mode();
     let report = ingest_opencode_into(ledger, &mut after, &opts.roots, content_mode)?;
+    emit_gap_warning(
+        AdapterName::Opencode,
+        content_mode,
+        opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str)),
+    );
     save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
@@ -390,7 +418,23 @@ fn ingest_claude_into(
                 report.ingested_sessions += 1;
                 ledger.append_turns(&parsed.turns)?;
             }
-            // TODO(#278): record gap (claude, sessionId, tool calls vs results)
+            if matches!(content_mode, ContentStoreMode::Full) {
+                // Claude JSONL files are 1:1 with session_id; derive the id
+                // from the first parsed record (mirrors the TS behaviour:
+                // `turns[0]?.sessionId ?? content[0]?.sessionId ?? ''`).
+                let session_id = parsed
+                    .turns
+                    .first()
+                    .map(|t| t.session_id.as_str())
+                    .or_else(|| parsed.content.first().map(|c| c.session_id.as_str()))
+                    .unwrap_or("");
+                record_session_gap(
+                    AdapterName::Claude,
+                    session_id,
+                    count_new_tool_calls(&parsed.turns),
+                    count_new_tool_results(&parsed.content),
+                );
+            }
             if !parsed.content.is_empty() {
                 ledger.append_content(&parsed.content)?;
             }
@@ -548,7 +592,14 @@ fn ingest_codex_into(
             report.ingested_sessions += 1;
             ledger.append_turns(&parsed.turns)?;
         }
-        // TODO(#278): record gap (codex, sessionId, tool calls vs results)
+        if matches!(content_mode, ContentStoreMode::Full) {
+            record_session_gap(
+                AdapterName::Codex,
+                codex_session_id.as_deref().unwrap_or(""),
+                count_new_tool_calls(&parsed.turns),
+                count_new_tool_results(&parsed.content),
+            );
+        }
         if !parsed.content.is_empty() {
             ledger.append_content(&parsed.content)?;
         }
@@ -658,7 +709,14 @@ fn ingest_opencode_into(
             report.ingested_sessions += 1;
             ledger.append_turns(&parsed.turns)?;
         }
-        // TODO(#278): record gap (opencode, sessionId, tool calls vs results)
+        if matches!(content_mode, ContentStoreMode::Full) {
+            record_session_gap(
+                AdapterName::Opencode,
+                &session_id,
+                count_new_tool_calls(&parsed.turns),
+                count_new_tool_results(&parsed.content),
+            );
+        }
         if !parsed.content.is_empty() {
             ledger.append_content(&parsed.content)?;
         }
