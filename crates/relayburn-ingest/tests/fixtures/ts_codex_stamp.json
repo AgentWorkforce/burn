@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "harness": "codex",
+  "spawnerPid": 12345,
+  "spawnStartTs": "2025-05-01T12:34:56.789Z",
+  "cwd": "/home/user/repo",
+  "enrichment": {
+    "role": "fix-bug",
+    "ticket": "CRD-42"
+  },
+  "sessionDirHint": "/home/user/repo/.codex"
+}
