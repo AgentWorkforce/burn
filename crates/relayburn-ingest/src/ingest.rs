@@ -906,8 +906,7 @@ fn match_uuid_suffix(s: &str) -> Option<String> {
 
 fn is_uuid(s: &str) -> bool {
     let groups = [8usize, 4, 4, 4, 12];
-    let mut expected_dashes = [8usize, 13, 18, 23];
-    expected_dashes.sort();
+    let expected_dashes = [8usize, 13, 18, 23];
     if s.len() != groups.iter().sum::<usize>() + (groups.len() - 1) {
         return false;
     }
