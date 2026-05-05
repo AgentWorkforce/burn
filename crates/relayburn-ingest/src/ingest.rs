@@ -166,20 +166,24 @@ pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Re
 
     progress(opts, "loading content settings");
     let content_mode = resolve_content_mode();
+    let on_warn: Option<&dyn Fn(&str)> = opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str));
 
+    // Emit per-adapter, immediately after each scan, so a later adapter
+    // returning Err does not swallow a gap the earlier adapter already
+    // recorded against work that was already appended.
     progress(opts, "scanning Claude Code sessions");
     let r = ingest_claude_into(ledger, &mut after, &opts.roots, content_mode)?;
     report.merge(&r);
+    emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
+
     progress(opts, "scanning Codex sessions");
     let r = ingest_codex_into(ledger, &mut after, &opts.roots, content_mode)?;
     report.merge(&r);
+    emit_gap_warning(AdapterName::Codex, content_mode, on_warn);
+
     progress(opts, "scanning OpenCode sessions");
     let r = ingest_opencode_into(ledger, &mut after, &opts.roots, content_mode)?;
     report.merge(&r);
-
-    let on_warn: Option<&dyn Fn(&str)> = opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str));
-    emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
-    emit_gap_warning(AdapterName::Codex, content_mode, on_warn);
     emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
 
     progress(opts, "saving ingest cursors");
