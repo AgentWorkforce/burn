@@ -15,16 +15,28 @@
 //! 1e-9 USD precision contract that the future `overhead` sub-issue gates
 //! against.
 
+pub mod claude_md;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
+pub mod overhead;
 pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
 
+pub use claude_md::{
+    attribute_claude_md, find_claude_md_files, load_claude_md_file, parse_claude_md,
+    AttributeClaudeMdInput, ClaudeMdAttributionResult, MarkdownSection, ParsedClaudeMd,
+    SectionCost, SessionClaudeMdCost,
+};
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
+};
+pub use overhead::{
+    attribute_overhead, describe_applies_to, find_overhead_files, load_overhead_file,
+    AttributeOverheadInput, OverheadAttribution, OverheadFile, OverheadFileAttribution,
+    OverheadFileKind, ParsedOverheadFile,
 };
 pub use fidelity::{
     empty_fidelity_summary, has_minimum_fidelity, summarize_fidelity, summarize_fidelity_from_iter,
