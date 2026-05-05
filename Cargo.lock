@@ -417,6 +417,7 @@ name = "relayburn-analyze"
 version = "0.0.0"
 dependencies = [
  "indexmap",
+ "phf",
  "regex",
  "relayburn-reader",
  "serde",

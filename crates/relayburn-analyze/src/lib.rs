@@ -22,6 +22,8 @@ pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
+pub mod replacement_savings;
+pub mod tool_call_patterns;
 
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
@@ -57,4 +59,13 @@ pub use provider_reattribution::{
 pub use quality::{
     compute_one_shot_rate, compute_quality, infer_outcome, ComputeQualityOptions, OneShotMetrics,
     OutcomeConfidence, OutcomeLabel, OutcomeReason, QualityResult, SessionOutcome,
+};
+pub use replacement_savings::{
+    estimate_savings_for_tool_call, summarize_replacement_savings, ReplacementSavingsOptions,
+    ReplacementSavingsSummary, ToolCallSavings, ToolSavingsAggregate,
+    DEFAULT_FALLBACK_TOKEN_COST, DEFAULT_REPLACED_TOOL_TOKEN_COST,
+};
+pub use tool_call_patterns::{
+    detect_tool_call_patterns, tool_call_pattern_to_finding, DetectToolCallPatternsOptions,
+    ToolCallPatternCategory, ToolCallPatternFinding,
 };
