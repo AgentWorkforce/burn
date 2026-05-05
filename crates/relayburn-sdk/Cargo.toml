@@ -8,10 +8,14 @@ repository.workspace = true
 description = "Embedding API for relayburn — published to crates.io as the supported Rust surface."
 
 [dependencies]
-relayburn-reader = { path = "../relayburn-reader" }
-relayburn-ledger = { path = "../relayburn-ledger" }
-relayburn-analyze = { path = "../relayburn-analyze" }
-relayburn-ingest = { path = "../relayburn-ingest" }
+# Path + version on every workspace dep so `cargo publish --dry-run` can
+# verify the manifest without erroring on missing version requirements.
+# The four lower crates publish in lockstep; the workspace version is the
+# source of truth (`workspace = true`).
+relayburn-reader = { path = "../relayburn-reader", version = "0.0.0" }
+relayburn-ledger = { path = "../relayburn-ledger", version = "0.0.0" }
+relayburn-analyze = { path = "../relayburn-analyze", version = "0.0.0" }
+relayburn-ingest = { path = "../relayburn-ingest", version = "0.0.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

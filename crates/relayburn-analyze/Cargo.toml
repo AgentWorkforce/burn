@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pricing, cost derivation, hotspots, and overhead computation (Rust port)."
-publish = false
 
 [dependencies]
 serde = { workspace = true }
@@ -18,8 +17,8 @@ serde_json = { workspace = true }
 indexmap = { version = "2", features = ["serde"] }
 phf = { version = "0.11", features = ["macros"] }
 regex = "1"
-relayburn-reader = { path = "../relayburn-reader" }
-relayburn-ledger = { path = "../relayburn-ledger" }
+relayburn-reader = { path = "../relayburn-reader", version = "0.0.0" }
+relayburn-ledger = { path = "../relayburn-ledger", version = "0.0.0" }
 
 [dev-dependencies]
 tempfile = "3"

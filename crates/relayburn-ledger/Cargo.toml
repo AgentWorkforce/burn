@@ -6,10 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "SQLite-backed ledger (events + stamps) and FTS5 content store for relayburn (Rust port)."
-publish = false
 
 [dependencies]
-relayburn-reader = { path = "../relayburn-reader" }
+relayburn-reader = { path = "../relayburn-reader", version = "0.0.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { workspace = true }

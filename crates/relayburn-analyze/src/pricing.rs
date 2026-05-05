@@ -82,9 +82,12 @@ struct ModelsDevProvider {
 // overwrites the earlier one, matching the TS `Object.values(root)` walk.
 type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
 
-/// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`.
-const BUILTIN_PRICING_JSON: &str =
-    include_str!("../../../packages/analyze/pricing/models.dev.json");
+/// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`,
+/// which writes through to both this crate's `data/` copy and the TS tree's
+/// `packages/analyze/pricing/` copy (kept in lockstep). Vendoring inside the
+/// crate is required so `cargo package` / `cargo publish --dry-run` can verify
+/// the tarball without reaching back into the TS tree.
+const BUILTIN_PRICING_JSON: &str = include_str!("../data/models.dev.json");
 
 /// Load the bundled `models.dev` snapshot. No I/O — the JSON is embedded at
 /// compile time via `include_str!`.
