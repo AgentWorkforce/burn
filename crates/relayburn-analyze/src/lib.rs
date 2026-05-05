@@ -21,6 +21,7 @@ pub mod compare_archive;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
+pub mod overhead;
 pub mod pricing;
 pub mod provider;
 pub mod provider_reattribution;
@@ -40,6 +41,11 @@ pub use compare::{
 pub use compare_archive::{compare_from_archive, CompareFromArchiveResult};
 pub use cost::{
     cost_for_turn, cost_for_usage, lookup_model_rate, sum_costs, CostBreakdown, CostForUsageOptions,
+};
+pub use overhead::{
+    attribute_overhead, describe_applies_to, find_overhead_files, load_overhead_file,
+    AttributeOverheadInput, OverheadAttribution, OverheadFile, OverheadFileAttribution,
+    OverheadFileKind, ParsedOverheadFile,
 };
 pub use fidelity::{
     empty_fidelity_summary, has_minimum_fidelity, summarize_fidelity, summarize_fidelity_from_iter,
