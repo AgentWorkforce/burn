@@ -350,7 +350,7 @@ fn matches_test_run(parsed: &BashParse) -> bool {
     }
     if matches!(bin, "pnpm" | "npm" | "yarn" | "bun") {
         if let Some(sub) = parsed.subcommand.as_deref() {
-            return sub == "test" || sub.starts_with("test:") || sub.starts_with("test ");
+            return sub == "test" || sub.starts_with("test:");
         }
     }
     false
