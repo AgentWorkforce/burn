@@ -10,8 +10,9 @@
 //! views (`compare`, `summary --by-provider`).
 
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
+use indexmap::IndexMap;
 use relayburn_reader::{Coverage, SourceKind, TurnRecord, Usage};
 
 use crate::cost::{cost_for_turn, CostBreakdown};
@@ -242,10 +243,13 @@ pub fn aggregate_by_provider(
         Some(r) => r,
         None => default_rules(),
     };
-    // Use a HashMap for accumulation, then sort the final vec by descending
-    // total cost to mirror the TS sort. Order of insertion isn't observable
-    // because the sort is stable on cost.
-    let mut by_provider: HashMap<String, ProviderAggregateRow> = HashMap::new();
+    // `IndexMap` (vs `HashMap`) preserves first-seen insertion order so the
+    // final stable sort by descending cost keeps cross-language tie-breaks
+    // matching the TS implementation, where the underlying `Map` already
+    // iterates in insertion order. Without this, two providers tied at the
+    // same `cost.total` (e.g. multiple unpriced providers all at $0) would
+    // surface in arbitrary order from run to run.
+    let mut by_provider: IndexMap<String, ProviderAggregateRow> = IndexMap::new();
     for t in turns {
         let provider = provider_for_with_rules(t, rules).provider;
         let provider = if provider.is_empty() {
@@ -541,6 +545,31 @@ mod tests {
         assert_eq!(rows[0].provider, "openai");
         assert_eq!(rows[1].provider, "synthetic");
         assert!(rows[0].cost.total > rows[1].cost.total);
+    }
+
+    #[test]
+    fn aggregate_preserves_first_seen_order_for_cost_ties() {
+        // Two unpriced providers both end up at $0; the stable sort must
+        // preserve first-seen insertion order so output is deterministic and
+        // matches the TS `Map`-based implementation.
+        let pricing = PricingTable::new();
+        let rows = aggregate_by_provider(
+            &[
+                turn(
+                    "unknown-model-a",
+                    SourceKind::AnthropicApi,
+                    input_only(1_000),
+                ),
+                turn("unknown-model-b", SourceKind::OpenaiApi, input_only(1_000)),
+            ],
+            AggregateByProviderOptions::new(&pricing),
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].cost.total, 0.0);
+        assert_eq!(rows[1].cost.total, 0.0);
+        // First-seen wins on ties: anthropic before openai.
+        assert_eq!(rows[0].provider, "anthropic");
+        assert_eq!(rows[1].provider, "openai");
     }
 
     #[test]
