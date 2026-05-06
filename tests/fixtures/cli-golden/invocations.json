@@ -63,13 +63,13 @@
     "name": "state-status",
     "args": ["state", "status"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "state-status-json",
     "args": ["state", "status", "--json"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "ingest-help",

@@ -65,6 +65,22 @@ pub fn report_unimplemented(name: &str, globals: &GlobalArgs) -> i32 {
     report(globals, &message, EXIT_NOT_YET_IMPLEMENTED)
 }
 
+/// Print an advisory warning without failing the run. Used when a flag
+/// (e.g. `state rebuild archive --full`) is accepted for compatibility
+/// but is a no-op in the 2.0 layout — the caller still proceeds with
+/// the real rebuild path, but we want a stderr breadcrumb so scripts
+/// don't silently get the wrong behaviour.
+///
+/// Writes to stderr in both human and `--json` modes. We deliberately
+/// do NOT route this through the `--json` envelope: stdout in JSON
+/// mode stays single-shape (the actual command result), and informative
+/// warnings go to stderr where conventional Unix tools put them. The
+/// stderr line is prefixed `burn: warning: ` so callers can grep for
+/// it.
+pub fn report_advisory(message: &str, _globals: &GlobalArgs) {
+    let _ = writeln!(io::stderr(), "burn: warning: {message}");
+}
+
 /// Internal: do the actual stderr / JSON-envelope writing. Tolerates
 /// I/O errors on the way out — if stderr is closed, the best we can
 /// do is return the chosen exit code anyway.

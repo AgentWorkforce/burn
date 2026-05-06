@@ -13,9 +13,11 @@ archive.sqlite-wal
 burn.sqlite
 burn.sqlite-shm
 burn.sqlite-wal
+burn.sqlite-journal
 content.sqlite
 content.sqlite-shm
 content.sqlite-wal
+content.sqlite-journal
 cursors.json
 hwm.json
 config.json
