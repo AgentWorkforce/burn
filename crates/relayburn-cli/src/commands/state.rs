@@ -323,18 +323,19 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
     };
 
     // The 2.0 content store stamps each row with a monotonic
-    // `ts:NNN.NNN` value (see `writer::debug_now`); compare by computing
-    // a lex-comparable cutoff string from the current wall-clock minus
-    // the retention window. The TS sibling exposes a stable wall-clock
-    // ms value here; for the Rust port we approximate by passing the
-    // retention age as a `ts:` string the SDK's `prune_older_than`
-    // can compare lexically.
+    // `ts:{:020}.{:09}` value (see `writer::now_iso`); compare by
+    // computing a lex-comparable cutoff string in the SAME format from
+    // the current wall-clock minus the retention window. Using a
+    // narrower padding (e.g. `{:013}.000`) makes every stamped row
+    // lexicographically GREATER than the cutoff, so a literal
+    // `created_at < cutoff` deletes nothing (or, after a width mismatch
+    // flips the sort, deletes everything). The padding must match.
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let cutoff_ms = now_ms.saturating_sub(cutoff_ms);
-    let cutoff = format!("ts:{:013}.000", cutoff_ms);
+    let cutoff = format_cutoff_ts(cutoff_ms);
 
     let opts = LedgerOpenOptions {
         home: globals.ledger_path.clone(),
@@ -372,6 +373,18 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
         );
     }
     0
+}
+
+/// Format a wall-clock millisecond value as a `ts:{:020}.{:09}` string
+/// that is lexically comparable against the `content.created_at` rows
+/// stamped by `relayburn_sdk::ledger::writer::now_iso`. Both the seconds
+/// (20 chars, zero-padded) and the nanosecond fraction (9 chars,
+/// zero-padded) widths must match exactly — any narrower padding flips
+/// the lexical ordering and breaks the `created_at < cutoff` filter.
+fn format_cutoff_ts(ms: u64) -> String {
+    let secs = ms / 1_000;
+    let nanos = (ms % 1_000) * 1_000_000;
+    format!("ts:{:020}.{:09}", secs, nanos)
 }
 
 fn parse_retention(s: &str) -> Option<relayburn_sdk::Retention> {
@@ -427,5 +440,48 @@ fn report_anyhow(err: &anyhow::Error, globals: &GlobalArgs) -> i32 {
         return report_ledger_error(le, globals);
     }
     report_error(err, globals)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_cutoff_ts;
+
+    /// Mirror of `relayburn_sdk::ledger::writer::now_iso`'s format string.
+    /// Re-deriving it locally guards against the writer's format drifting
+    /// without the cutoff helper following.
+    fn writer_style_ts(secs: u64, nanos_part: u64) -> String {
+        format!("ts:{:020}.{:09}", secs, nanos_part)
+    }
+
+    #[test]
+    fn cutoff_matches_writer_format_byte_for_byte() {
+        // 1234.567 seconds since epoch, expressed in ms, must produce
+        // the same string the writer would stamp for that instant.
+        let ms = 1_234_567u64;
+        let writer = writer_style_ts(1_234, 567_000_000);
+        assert_eq!(format_cutoff_ts(ms), writer);
+    }
+
+    #[test]
+    fn cutoff_is_lex_comparable_against_writer_rows() {
+        // A row stamped *before* the cutoff sorts lex-less; a row
+        // stamped *after* sorts lex-greater. This is the invariant
+        // `prune_content_older_than(&cutoff)` relies on.
+        let cutoff = format_cutoff_ts(2_000); // 2.000s
+        let earlier_row = writer_style_ts(1, 500_000_000); // 1.500s
+        let later_row = writer_style_ts(2, 500_000_000); // 2.500s
+        assert!(earlier_row.as_str() < cutoff.as_str());
+        assert!(later_row.as_str() > cutoff.as_str());
+    }
+
+    #[test]
+    fn cutoff_padding_widths_are_stable() {
+        // Width of `ts:` + 20-digit secs + `.` + 9-digit nanos = 33.
+        // A narrower padding (the original `{:013}.000` bug) would flip
+        // the lex ordering — cover the constant here so a formatting
+        // tweak that breaks the invariant fails this test first.
+        assert_eq!(format_cutoff_ts(0).len(), 33);
+        assert_eq!(format_cutoff_ts(u64::MAX).len(), 33);
+    }
 }
 

@@ -208,12 +208,28 @@ pub struct StateRebuildClassifyArgs {
 
 #[derive(Debug, Clone, ClapArgs, Default)]
 pub struct StateRebuildArchiveArgs {
+    /// Legacy positional from the TS CLI: `burn state rebuild archive
+    /// vacuum`. Equivalent to `--vacuum`; kept so existing scripts that
+    /// target the 1.x surface keep parsing.
+    #[arg(value_name = "ACTION")]
+    pub action: Option<ArchiveAction>,
     /// Drop archive state and rebuild from zero.
     #[arg(long)]
     pub full: bool,
     /// Reclaim unused SQLite pages after the apply.
     #[arg(long)]
     pub vacuum: bool,
+}
+
+/// Legacy positional action for `burn state rebuild archive`. Today
+/// `vacuum` is the only accepted value; both the positional and
+/// `--vacuum` flag route through the same `rebuild_derivable` path
+/// in 2.0 (there's no separate `archive.sqlite` to vacuum), but the
+/// surface stays so 1.x automation doesn't error out.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ArchiveAction {
+    Vacuum,
 }
 
 #[derive(Debug, Clone, ClapArgs, Default)]
@@ -240,7 +256,8 @@ pub struct StateResetArgs {
     #[arg(long)]
     pub force: bool,
     /// After a successful `--force` wipe, re-parse all source harness
-    /// logs from offset 0.
-    #[arg(long)]
+    /// logs from offset 0. Only meaningful with `--force`; clap rejects
+    /// `--reingest` on its own so a typo can't silently no-op.
+    #[arg(long, requires = "force")]
     pub reingest: bool,
 }
