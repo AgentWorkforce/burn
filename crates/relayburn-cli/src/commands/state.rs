@@ -143,13 +143,27 @@ fn format_status(s: &StateStatus) -> String {
 }
 
 fn rel_to_home(path: &str, home: &str) -> String {
-    if !home.is_empty() && path.starts_with(home) {
-        let rest = &path[home.len()..];
-        let rest = rest.trim_start_matches('/');
-        format!("${{RELAYBURN_HOME}}/{}", rest)
-    } else {
-        path.to_string()
+    if home.is_empty() {
+        return path.to_string();
     }
+    // Normalize trailing slash so `home="/x/home/"` and `home="/x/home"`
+    // behave the same; bail if `home` was just `/` (or all slashes) —
+    // that's not a meaningful prefix to rewrite.
+    let home = home.trim_end_matches('/');
+    if home.is_empty() {
+        return path.to_string();
+    }
+    // Treat `path` as inside `home` only when it equals home or
+    // continues with a `/` separator. This rejects byte-prefix
+    // collisions like `/x/home2/foo` against `home="/x/home"`, which
+    // the prior `path.starts_with(home)` check would mislabel as
+    // `${RELAYBURN_HOME}/2/foo`.
+    let rest = match path.strip_prefix(home) {
+        Some("") => "",
+        Some(after) if after.starts_with('/') => after.trim_start_matches('/'),
+        _ => return path.to_string(),
+    };
+    format!("${{RELAYBURN_HOME}}/{}", rest)
 }
 
 fn format_int(n: u64) -> String {
@@ -484,7 +498,7 @@ fn report_anyhow(err: &anyhow::Error, globals: &GlobalArgs) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::format_cutoff_ts;
+    use super::{format_cutoff_ts, rel_to_home};
 
     /// Mirror of `relayburn_sdk::ledger::writer::now_iso`'s format string.
     /// Re-deriving it locally guards against the writer's format drifting
@@ -522,6 +536,64 @@ mod tests {
         // tweak that breaks the invariant fails this test first.
         assert_eq!(format_cutoff_ts(0).len(), 33);
         assert_eq!(format_cutoff_ts(u64::MAX).len(), 33);
+    }
+
+    #[test]
+    fn rel_to_home_rewrites_paths_inside_home() {
+        assert_eq!(
+            rel_to_home("/x/home/burn.sqlite", "/x/home"),
+            "${RELAYBURN_HOME}/burn.sqlite"
+        );
+        assert_eq!(
+            rel_to_home("/x/home/sub/dir/file", "/x/home"),
+            "${RELAYBURN_HOME}/sub/dir/file"
+        );
+    }
+
+    #[test]
+    fn rel_to_home_rejects_byte_prefix_siblings() {
+        // The bug guarded against: `/x/home2/...` mustn't be treated as
+        // `home="/x/home"`'s child (would have rewritten to
+        // `${RELAYBURN_HOME}/2/...` under the old `starts_with` byte
+        // match).
+        assert_eq!(
+            rel_to_home("/x/home2/burn.sqlite", "/x/home"),
+            "/x/home2/burn.sqlite"
+        );
+        assert_eq!(rel_to_home("/x/homer", "/x/home"), "/x/homer");
+    }
+
+    #[test]
+    fn rel_to_home_normalizes_trailing_slash_on_home() {
+        // `home` with or without a trailing slash should produce the
+        // same rewrite for paths underneath.
+        assert_eq!(
+            rel_to_home("/x/home/burn.sqlite", "/x/home/"),
+            "${RELAYBURN_HOME}/burn.sqlite"
+        );
+        assert_eq!(
+            rel_to_home("/x/home2/foo", "/x/home/"),
+            "/x/home2/foo"
+        );
+    }
+
+    #[test]
+    fn rel_to_home_handles_degenerate_home_inputs() {
+        // Empty home is a passthrough; a `/`-only home is too — the
+        // rewrite would be meaningless ("everything is inside root").
+        assert_eq!(rel_to_home("/x/home/foo", ""), "/x/home/foo");
+        assert_eq!(rel_to_home("/x/home/foo", "/"), "/x/home/foo");
+        assert_eq!(rel_to_home("/x/home/foo", "//"), "/x/home/foo");
+    }
+
+    #[test]
+    fn rel_to_home_path_equals_home() {
+        // `path == home` preserves the prior trailing-slash output
+        // shape (`${RELAYBURN_HOME}/`) — callers downstream that
+        // pattern-match on the prefix shouldn't see a behavioral
+        // change here.
+        assert_eq!(rel_to_home("/x/home", "/x/home"), "${RELAYBURN_HOME}/");
+        assert_eq!(rel_to_home("/x/home/", "/x/home"), "${RELAYBURN_HOME}/");
     }
 }
 
