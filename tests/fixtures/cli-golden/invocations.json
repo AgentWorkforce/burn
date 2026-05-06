@@ -3,49 +3,49 @@
     "name": "summary",
     "args": ["summary"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "summary-json",
     "args": ["summary", "--json"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "hotspots",
     "args": ["hotspots"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "hotspots-json",
     "args": ["hotspots", "--json"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "overhead",
     "args": ["overhead", "--project", "tests/fixtures/cli-golden/project"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "overhead-json",
     "args": ["overhead", "--project", "tests/fixtures/cli-golden/project", "--json"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "overhead-trim",
     "args": ["overhead", "trim", "--project", "tests/fixtures/cli-golden/project"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "overhead-trim-json",
     "args": ["overhead", "trim", "--project", "tests/fixtures/cli-golden/project", "--json"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "compare",

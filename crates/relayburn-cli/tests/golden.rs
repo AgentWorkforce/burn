@@ -37,11 +37,163 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use relayburn_sdk::{
-    Ledger, LedgerOpenOptions, SessionRelationshipRecord, Stamp, ToolResultEventRecord,
+    CompactionEvent, RawLedger, SessionRelationshipRecord, Stamp, ToolResultEventRecord,
     TurnRecord, UserTurnRecord,
 };
 use serde::Deserialize;
-use serde_json::Value;
+
+/// Bootstrap the SQLite fixture from the committed `ledger.jsonl`.
+///
+/// The CLI-golden fixture's source of truth is `ledger.jsonl` (the SQLite
+/// counterparts are gitignored because they're rematerialized on demand;
+/// see `tests/fixtures/cli-golden/ledger/.gitignore`). The TS CLI reads
+/// JSONL natively via its `file` storage adapter; the Rust SDK is sqlite-
+/// only, so we replay the JSONL into `burn.sqlite` here before invoking
+/// the binary.
+///
+/// Idempotent: if `burn.sqlite` already has a non-empty `turns` table we
+/// skip the rebuild. Local devs running the diff runner repeatedly thus
+/// only pay the JSONL-replay cost once.
+fn bootstrap_sqlite_from_jsonl(ledger_home: &Path) -> std::io::Result<()> {
+    let jsonl_path = ledger_home.join("ledger.jsonl");
+    if !jsonl_path.is_file() {
+        // No JSONL source: assume the fixture was built another way and
+        // bail (the binary will surface the resulting empty-ledger
+        // diff loud and clear when it runs).
+        return Ok(());
+    }
+    let burn_path = ledger_home.join("burn.sqlite");
+    let content_path = ledger_home.join("content.sqlite");
+
+    // Wipe any prior bootstrap. We don't try to do incremental upserts
+    // here — the JSONL is canonical and small; rewriting from scratch
+    // keeps the bootstrap deterministic across runs.
+    for name in [
+        "burn.sqlite",
+        "burn.sqlite-shm",
+        "burn.sqlite-wal",
+        "content.sqlite",
+        "content.sqlite-shm",
+        "content.sqlite-wal",
+    ] {
+        let p = ledger_home.join(name);
+        let _ = fs::remove_file(p);
+    }
+
+    let mut ledger =
+        RawLedger::open(&burn_path, &content_path).expect("open fixture ledger for bootstrap");
+
+    let raw = fs::read_to_string(&jsonl_path)?;
+    let mut turns: Vec<TurnRecord> = Vec::new();
+    let mut user_turns: Vec<UserTurnRecord> = Vec::new();
+    let mut tool_results: Vec<ToolResultEventRecord> = Vec::new();
+    let mut relationships: Vec<SessionRelationshipRecord> = Vec::new();
+    let mut compactions: Vec<CompactionEvent> = Vec::new();
+    let mut stamps: Vec<Stamp> = Vec::new();
+
+    for (line_no, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let envelope: serde_json::Value = serde_json::from_str(trimmed).unwrap_or_else(|err| {
+            panic!(
+                "[golden bootstrap] line {} of ledger.jsonl is not valid JSON: {err}",
+                line_no + 1
+            )
+        });
+        let kind = envelope.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let mut record = envelope
+            .get("record")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        match kind {
+            "turn" => turns.push(serde_json::from_value(record).expect("turn record")),
+            "user_turn" => {
+                user_turns.push(serde_json::from_value(record).expect("user_turn record"))
+            }
+            "tool_result_event" => {
+                normalize_tool_result_event(&mut record);
+                tool_results.push(serde_json::from_value(record).expect("tool_result_event record"))
+            }
+            "relationship" => {
+                relationships.push(serde_json::from_value(record).expect("relationship record"))
+            }
+            "compaction" => {
+                compactions.push(serde_json::from_value(record).expect("compaction record"))
+            }
+            "stamp" => stamps.push(stamp_from_envelope(&envelope)),
+            _ => {
+                // Unknown kinds (`text`, `tool_result`, etc. emitted by older
+                // ledger writers) are noise here — they belong to the content
+                // sidecar lifecycle, not the events DB.
+            }
+        }
+    }
+
+    ledger.append_turns(&turns).expect("append turns");
+    ledger
+        .append_user_turns(&user_turns)
+        .expect("append user_turns");
+    ledger
+        .append_tool_result_events(&tool_results)
+        .expect("append tool_result_events");
+    ledger
+        .append_relationships(&relationships)
+        .expect("append relationships");
+    ledger
+        .append_compactions(&compactions)
+        .expect("append compactions");
+    for s in &stamps {
+        ledger.append_stamp(s).expect("append stamp");
+    }
+    Ok(())
+}
+
+/// The hand-built fixture writes `eventSource: "transcript"` for Claude
+/// `tool_result` events; the canonical schema dropped that variant in
+/// favor of the more specific `"tool_result"` value. The TS reader is
+/// lenient and stores the JSON verbatim; the Rust SDK is strict. Normalize
+/// here so the fixture replays cleanly without retroactively rewriting
+/// the JSONL on disk (which would drift the snapshot capture corpus). The
+/// substitution also fills in `eventIndex` if the fixture omits it
+/// (required by the SDK schema; the TS reader defaults missing values to
+/// `0` via `??`).
+fn normalize_tool_result_event(record: &mut serde_json::Value) {
+    let Some(obj) = record.as_object_mut() else {
+        return;
+    };
+    if let Some(src) = obj.get_mut("eventSource") {
+        if src.as_str() == Some("transcript") {
+            *src = serde_json::Value::String("tool_result".to_string());
+        }
+    }
+    obj.entry("eventIndex").or_insert(serde_json::json!(0));
+}
+
+fn stamp_from_envelope(envelope: &serde_json::Value) -> Stamp {
+    Stamp {
+        ts: envelope
+            .get("ts")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        selector: serde_json::from_value(
+            envelope
+                .get("selector")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
+        enrichment: serde_json::from_value(
+            envelope
+                .get("enrichment")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,7 +232,10 @@ fn golden_diff_against_ts_cli_snapshots() {
         return;
     }
 
-    let fixture_dir = repo_root().join("tests").join("fixtures").join("cli-golden");
+    let fixture_dir = repo_root()
+        .join("tests")
+        .join("fixtures")
+        .join("cli-golden");
     assert!(
         fixture_dir.is_dir(),
         "fixture corpus missing at {}",
@@ -98,25 +253,13 @@ fn golden_diff_against_ts_cli_snapshots() {
         .unwrap_or_else(|err| panic!("invocations.json is malformed: {err}"));
 
     let snapshots_dir = fixture_dir.join("snapshots");
-    let ts_ledger_home = fixture_dir.join("ledger");
+    let ledger_home = fixture_dir.join("ledger");
     let project_dir = fixture_dir.join("project");
 
-    // The on-disk fixture is a TS-style JSONL ledger. The Rust SDK reads
-    // SQLite, so we materialize a sibling SQLite home from the JSONL once
-    // and point the binary at it for every invocation. Done up front so
-    // the import cost is paid once per test run, not per invocation.
-    let rust_ledger_home = tempdir_under(&fixture_dir);
-    if let Err(err) = import_jsonl_into_sqlite(
-        &ts_ledger_home.join("ledger.jsonl"),
-        &rust_ledger_home,
-    ) {
-        let _ = fs::remove_dir_all(&rust_ledger_home);
-        panic!(
-            "[golden] failed to import {} into a Rust-SDK SQLite ledger: {err:?}",
-            ts_ledger_home.display(),
-        );
-    }
-    let ledger_home = rust_ledger_home.clone();
+    // Bootstrap the SQLite fixture from `ledger.jsonl`. The Rust SDK only
+    // reads from sqlite; the in-tree fixture is JSONL-only because the
+    // sqlite binaries are gitignored. Replays once per test run.
+    bootstrap_sqlite_from_jsonl(&ledger_home).expect("bootstrap sqlite from JSONL");
 
     // Sealed HOME so the Rust binary's eventual ingest sweep doesn't
     // discover the developer's real session stores.
@@ -212,7 +355,6 @@ fn golden_diff_against_ts_cli_snapshots() {
     }
 
     let _ = fs::remove_dir_all(&sealed_home);
-    let _ = fs::remove_dir_all(&rust_ledger_home);
 
     if !failures.is_empty() {
         panic!(
@@ -288,9 +430,8 @@ fn squash_numeric_field(text: &str, key: &str, placeholder: &str) -> String {
         // below is the right scope. NB: `char::is_ascii_whitespace` is *not*
         // equivalent — it excludes U+000B (vertical tab), which JS `\s` does
         // match, so we list the bytes explicitly.
-        let trimmed_start = after_key.trim_start_matches(|c: char| {
-            matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
-        });
+        let trimmed_start = after_key
+            .trim_start_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
         let ws_consumed = after_key.len() - trimmed_start.len();
         // If the value isn't a bare integer (e.g. `null`), bail and emit
         // the original bytes untouched.
@@ -360,128 +501,6 @@ fn indent(text: &str, prefix: &str) -> String {
         .map(|l| format!("{prefix}{l}"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Read a TS-style JSONL ledger (the on-disk shape `@relayburn/ledger`
-/// emits today) and materialize an equivalent SQLite-backed home that
-/// `relayburn_sdk::Ledger::open` can read. The cli-golden corpus ships
-/// only the JSONL form; this bridge keeps the corpus source-of-truth
-/// while letting the Rust binary read the same data.
-///
-/// The supported line kinds mirror what `tests/fixtures/cli-golden/scripts/
-/// build-ledger.mjs` writes: `turn`, `user_turn`, `tool_result_event`,
-/// `relationship`, `stamp`. Anything else is passed through silently
-/// (the legacy `text` / `tool_result` line kinds are the inner block
-/// shapes nested under `user_turn.blocks` and never appear at the top
-/// level — they're caught by the catch-all path so a future fixture
-/// extension doesn't drop data on the floor without warning).
-fn import_jsonl_into_sqlite(jsonl_path: &Path, sqlite_home: &Path) -> anyhow::Result<()> {
-    use anyhow::{anyhow, Context};
-
-    fs::create_dir_all(sqlite_home)
-        .with_context(|| format!("create_dir_all({})", sqlite_home.display()))?;
-    let raw = fs::read_to_string(jsonl_path)
-        .with_context(|| format!("read_to_string({})", jsonl_path.display()))?;
-
-    let mut turns: Vec<TurnRecord> = Vec::new();
-    let mut user_turns: Vec<UserTurnRecord> = Vec::new();
-    let mut tool_results: Vec<ToolResultEventRecord> = Vec::new();
-    let mut relationships: Vec<SessionRelationshipRecord> = Vec::new();
-    let mut stamps: Vec<Stamp> = Vec::new();
-
-    for (i, line) in raw.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let v: Value = serde_json::from_str(line)
-            .with_context(|| format!("parse JSON at line {}", i + 1))?;
-        let kind = v
-            .get("kind")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| anyhow!("missing kind at line {}", i + 1))?;
-        match kind {
-            "turn" => {
-                let rec = v
-                    .get("record")
-                    .ok_or_else(|| anyhow!("missing record at line {}", i + 1))?;
-                let parsed: TurnRecord = serde_json::from_value(rec.clone())
-                    .with_context(|| format!("parse turn at line {}", i + 1))?;
-                turns.push(parsed);
-            }
-            "user_turn" => {
-                let rec = v
-                    .get("record")
-                    .ok_or_else(|| anyhow!("missing record at line {}", i + 1))?;
-                let parsed: UserTurnRecord = serde_json::from_value(rec.clone())
-                    .with_context(|| format!("parse user_turn at line {}", i + 1))?;
-                user_turns.push(parsed);
-            }
-            "tool_result_event" => {
-                let rec = v
-                    .get("record")
-                    .ok_or_else(|| anyhow!("missing record at line {}", i + 1))?;
-                // Best-effort: the cli-golden fixture writes `eventSource:
-                // "transcript"`, which is a synthetic value the strict
-                // Rust enum doesn't recognize. Skip on parse failure
-                // rather than panicking — `compare` doesn't read this
-                // table anyway, so dropping these rows doesn't drift
-                // the snapshot output. (#310 left this loose-typed in
-                // the fixture; tightening that is out of scope here.)
-                match serde_json::from_value::<ToolResultEventRecord>(rec.clone()) {
-                    Ok(parsed) => tool_results.push(parsed),
-                    Err(err) => {
-                        eprintln!(
-                            "[golden] skipping tool_result_event at line {}: {err}",
-                            i + 1
-                        );
-                    }
-                }
-            }
-            "relationship" => {
-                let rec = v
-                    .get("record")
-                    .ok_or_else(|| anyhow!("missing record at line {}", i + 1))?;
-                match serde_json::from_value::<SessionRelationshipRecord>(rec.clone()) {
-                    Ok(parsed) => relationships.push(parsed),
-                    Err(err) => {
-                        eprintln!(
-                            "[golden] skipping relationship at line {}: {err}",
-                            i + 1
-                        );
-                    }
-                }
-            }
-            "stamp" => {
-                // Stamp lines are flat — selector / enrichment / ts at
-                // the top level, no `record` envelope (matches the TS
-                // `stamp()` writer).
-                match serde_json::from_value::<Stamp>(v.clone()) {
-                    Ok(parsed) => stamps.push(parsed),
-                    Err(err) => {
-                        eprintln!("[golden] skipping stamp at line {}: {err}", i + 1);
-                    }
-                }
-            }
-            _ => {
-                // Unknown kind — skip with a stderr breadcrumb so
-                // fixture extensions surface explicitly.
-                eprintln!(
-                    "[golden] skipping unknown ledger line kind `{kind}` at line {}",
-                    i + 1
-                );
-            }
-        }
-    }
-
-    let mut handle = Ledger::open(LedgerOpenOptions::with_home(sqlite_home))?;
-    handle.raw_mut().append_turns(&turns)?;
-    handle.raw_mut().append_user_turns(&user_turns)?;
-    handle.raw_mut().append_tool_result_events(&tool_results)?;
-    handle.raw_mut().append_relationships(&relationships)?;
-    for s in &stamps {
-        handle.raw_mut().append_stamp(s)?;
-    }
-    Ok(())
 }
 
 fn tempdir_under(parent: &Path) -> PathBuf {
