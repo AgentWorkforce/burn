@@ -26,10 +26,9 @@
 
 use clap::Args;
 use relayburn_sdk::{
-    hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation,
-    BashVerbAggregation, FileAggregation, HotspotsAttributionResult, HotspotsGroupBy,
-    HotspotsOptions, HotspotsResult, HotspotsSessionTotal, Ledger, LedgerOpenOptions,
-    SubagentAggregation,
+    hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation, BashVerbAggregation,
+    FileAggregation, HotspotsAttributionResult, HotspotsGroupBy, HotspotsOptions, HotspotsResult,
+    HotspotsSessionTotal, Ledger, LedgerOpenOptions, SubagentAggregation,
 };
 use serde_json::{json, Map, Value};
 
@@ -514,9 +513,7 @@ where
     let mut lines = Vec::<String>::new();
     lines.push(String::new());
     lines.push(heading.to_string());
-    let body: Vec<Vec<String>> = rows
-        .map(|r| r.into_iter().collect())
-        .collect();
+    let body: Vec<Vec<String>> = rows.map(|r| r.into_iter().collect()).collect();
     if body.is_empty() {
         lines.push(format!("  {}", empty_msg));
     } else {
@@ -538,7 +535,10 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
     if let Some(notice) = coverage_notice(a) {
         out.push(notice);
     }
-    out.push(format!("session grand total: {}", format_usd(a.grand_total)));
+    out.push(format!(
+        "session grand total: {}",
+        format_usd(a.grand_total)
+    ));
 
     if degraded {
         let total = a.sessions.len();

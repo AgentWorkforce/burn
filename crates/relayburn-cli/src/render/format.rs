@@ -224,10 +224,7 @@ mod tests {
 
     #[test]
     fn render_table_handles_em_dash_as_single_char_width() {
-        let rendered = render_table(&[
-            vec!["k".into(), "v".into()],
-            vec!["x".into(), "—".into()],
-        ]);
+        let rendered = render_table(&[vec!["k".into(), "v".into()], vec!["x".into(), "—".into()]]);
         // `—` (U+2014) is one codepoint; column width should be 1.
         assert_eq!(rendered, "k  v\nx  —");
     }

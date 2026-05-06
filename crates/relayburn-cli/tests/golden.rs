@@ -80,8 +80,8 @@ fn bootstrap_sqlite_from_jsonl(ledger_home: &Path) -> std::io::Result<()> {
         let _ = fs::remove_file(p);
     }
 
-    let mut ledger = RawLedger::open(&burn_path, &content_path)
-        .expect("open fixture ledger for bootstrap");
+    let mut ledger =
+        RawLedger::open(&burn_path, &content_path).expect("open fixture ledger for bootstrap");
 
     let raw = fs::read_to_string(&jsonl_path)?;
     let mut turns: Vec<TurnRecord> = Vec::new();
@@ -102,11 +102,11 @@ fn bootstrap_sqlite_from_jsonl(ledger_home: &Path) -> std::io::Result<()> {
                 line_no + 1
             )
         });
-        let kind = envelope
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let mut record = envelope.get("record").cloned().unwrap_or(serde_json::Value::Null);
+        let kind = envelope.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let mut record = envelope
+            .get("record")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         match kind {
             "turn" => turns.push(serde_json::from_value(record).expect("turn record")),
             "user_turn" => {
@@ -114,11 +114,11 @@ fn bootstrap_sqlite_from_jsonl(ledger_home: &Path) -> std::io::Result<()> {
             }
             "tool_result_event" => {
                 normalize_tool_result_event(&mut record);
-                tool_results
-                    .push(serde_json::from_value(record).expect("tool_result_event record"))
+                tool_results.push(serde_json::from_value(record).expect("tool_result_event record"))
             }
-            "relationship" => relationships
-                .push(serde_json::from_value(record).expect("relationship record")),
+            "relationship" => {
+                relationships.push(serde_json::from_value(record).expect("relationship record"))
+            }
             "compaction" => {
                 compactions.push(serde_json::from_value(record).expect("compaction record"))
             }
@@ -232,7 +232,10 @@ fn golden_diff_against_ts_cli_snapshots() {
         return;
     }
 
-    let fixture_dir = repo_root().join("tests").join("fixtures").join("cli-golden");
+    let fixture_dir = repo_root()
+        .join("tests")
+        .join("fixtures")
+        .join("cli-golden");
     assert!(
         fixture_dir.is_dir(),
         "fixture corpus missing at {}",
@@ -427,9 +430,8 @@ fn squash_numeric_field(text: &str, key: &str, placeholder: &str) -> String {
         // below is the right scope. NB: `char::is_ascii_whitespace` is *not*
         // equivalent — it excludes U+000B (vertical tab), which JS `\s` does
         // match, so we list the bytes explicitly.
-        let trimmed_start = after_key.trim_start_matches(|c: char| {
-            matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
-        });
+        let trimmed_start = after_key
+            .trim_start_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
         let ws_consumed = after_key.len() - trimmed_start.len();
         // If the value isn't a bare integer (e.g. `null`), bail and emit
         // the original bytes untouched.

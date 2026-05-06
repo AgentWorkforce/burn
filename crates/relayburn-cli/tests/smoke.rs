@@ -54,12 +54,7 @@ fn burn() -> Command {
 
 #[test]
 fn top_level_help_lists_every_subcommand() {
-    let output = burn()
-        .arg("--help")
-        .assert()
-        .success()
-        .get_output()
-        .clone();
+    let output = burn().arg("--help").assert().success().get_output().clone();
     let stdout = String::from_utf8(output.stdout).expect("help should be valid UTF-8");
     assert!(!stdout.is_empty(), "--help must emit non-empty stdout");
     for sub in SUBCOMMANDS {

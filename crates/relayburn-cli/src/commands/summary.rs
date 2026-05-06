@@ -29,11 +29,10 @@
 use clap::Args;
 use indexmap::IndexMap;
 use relayburn_sdk::{
-    aggregate_by_provider, cost_for_turn, ingest_all, load_pricing, normalize_since,
-    summarize_fidelity, summarize_replacement_savings, sum_costs, AggregateByProviderOptions,
-    CostBreakdown, Coverage, CoverageField, FidelityClass, FidelitySummary, Ledger,
-    LedgerHandle, LedgerOpenOptions, ProviderAggregateRow, Query, RowCoverage, TurnRecord,
-    UsageCostAggregateRow,
+    aggregate_by_provider, cost_for_turn, ingest_all, load_pricing, normalize_since, sum_costs,
+    summarize_fidelity, summarize_replacement_savings, AggregateByProviderOptions, CostBreakdown,
+    Coverage, CoverageField, FidelityClass, FidelitySummary, Ledger, LedgerHandle,
+    LedgerOpenOptions, ProviderAggregateRow, Query, RowCoverage, TurnRecord, UsageCostAggregateRow,
 };
 use serde_json::{json, Map, Value};
 
@@ -132,9 +131,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         return Ok(2);
     }
     if args.by_provider
-        && (args.by_subagent_type
-            || args.by_relationship.is_some()
-            || args.subagent_tree.is_some())
+        && (args.by_subagent_type || args.by_relationship.is_some() || args.subagent_tree.is_some())
     {
         eprintln!(
             "burn: --by-provider cannot be combined with --by-subagent-type/--by-relationship/--subagent-tree"
@@ -153,9 +150,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
     }
     if let Some(rel) = &args.by_relationship {
         if !rel.is_empty() && rel != "subagent" {
-            eprintln!(
-                "burn: --by-relationship accepts only the optional value \"subagent\""
-            );
+            eprintln!("burn: --by-relationship accepts only the optional value \"subagent\"");
             return Ok(2);
         }
     }
@@ -213,10 +208,8 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
 
     if args.by_provider {
         let rows = aggregate_by_provider(&turns, AggregateByProviderOptions::new(&pricing));
-        let provider_rows: Vec<UsageCostAggregateRow> = rows
-            .into_iter()
-            .map(provider_to_aggregate_row)
-            .collect();
+        let provider_rows: Vec<UsageCostAggregateRow> =
+            rows.into_iter().map(provider_to_aggregate_row).collect();
         emit_grouped(
             globals,
             true,
@@ -415,7 +408,14 @@ fn emit_grouped(
         );
         return;
     }
-    emit_human(by_provider, rows, ingest_report, &total_cost, fidelity, savings);
+    emit_human(
+        by_provider,
+        rows,
+        ingest_report,
+        &total_cost,
+        fidelity,
+        savings,
+    );
 }
 
 fn emit_json(
@@ -630,8 +630,14 @@ fn replacement_savings_to_json(savings: &relayburn_sdk::ReplacementSavingsSummar
         })
         .collect();
     by_tool.sort_by(|a, b| {
-        let av = a.get("estimatedTokensSaved").and_then(Value::as_u64).unwrap_or(0);
-        let bv = b.get("estimatedTokensSaved").and_then(Value::as_u64).unwrap_or(0);
+        let av = a
+            .get("estimatedTokensSaved")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let bv = b
+            .get("estimatedTokensSaved")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         bv.cmp(&av)
     });
     json!({
@@ -818,4 +824,3 @@ fn render_fidelity_notice(f: &FidelitySummary) -> Option<String> {
         parts.join(" / ")
     ))
 }
-
