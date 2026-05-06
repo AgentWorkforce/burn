@@ -320,6 +320,27 @@ impl Ledger {
         })
     }
 
+    /// Snapshot the single-row `archive_state` table as a JSON object —
+    /// `{ schema_version, upstream_cursors_json, last_built_at,
+    /// last_rebuild_at }`. Powers `state_status`'s `archive` block; kept
+    /// here rather than at the SDK verb so callers don't have to bind
+    /// to rusqlite directly to read first-party rows.
+    pub fn read_archive_state_json(&self) -> Result<String> {
+        let row: (i64, String, Option<String>, Option<String>) = self.conns.burn.query_row(
+            "SELECT schema_version, upstream_cursors_json, last_built_at, last_rebuild_at \
+             FROM archive_state WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?;
+        let value = serde_json::json!({
+            "schema_version": row.0,
+            "upstream_cursors_json": row.1,
+            "last_built_at": row.2,
+            "last_rebuild_at": row.3,
+        });
+        Ok(value.to_string())
+    }
+
     /// Directly access the `archive_state.upstream_cursors_json` blob.
     /// Cursors are caller-defined JSON; we just round-trip the string.
     pub fn read_cursors(&self) -> Result<String> {

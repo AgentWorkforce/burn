@@ -1265,6 +1265,198 @@ fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
+// state_status — derived-state report for `burn state status`
+// ---------------------------------------------------------------------------
+
+/// Per-table row counts in `burn.sqlite`. First-seen order of fields matches
+/// the human-render layout the CLI emits.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BurnDbRowCounts {
+    pub turns: u64,
+    pub user_turns: u64,
+    pub compactions: u64,
+    pub relationships: u64,
+    pub tool_result_events: u64,
+    pub sessions: u64,
+    pub stamps: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BurnDbStatus {
+    pub path: String,
+    pub exists: bool,
+    pub rows: BurnDbRowCounts,
+    pub total_rows: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentDbStatus {
+    pub path: String,
+    pub exists: bool,
+    pub rows: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveStateStatus {
+    pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_built_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_rebuild_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateConfigSummary {
+    pub store: String,
+    /// Numeric retention window in days, or `null` when retention is `forever`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<f64>,
+    /// `true` iff retention is configured as `forever`.
+    pub retention_forever: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateStatus {
+    pub home: String,
+    pub burn: BurnDbStatus,
+    pub content: ContentDbStatus,
+    pub archive: ArchiveStateStatus,
+    pub config: StateConfigSummary,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateStatusOptions {
+    pub ledger_home: Option<PathBuf>,
+}
+
+impl LedgerHandle {
+    /// Compose a [`StateStatus`] report describing the on-disk layout of
+    /// the open ledger: file paths/sizes for the two SQLite databases,
+    /// per-table row counts in `burn.sqlite`, the row count in
+    /// `content.sqlite`, the `archive_state` schema/last-built/last-rebuild
+    /// fields, and the resolved [`crate::BurnConfig`].
+    pub fn state_status(&self) -> Result<StateStatus> {
+        let burn_path = self.inner.burn_path().to_path_buf();
+        let content_path = self.inner.content_path().to_path_buf();
+
+        // We deliberately don't report file sizes here. WAL checkpointing
+        // grows the SQLite files in non-deterministic increments after
+        // the first write transaction, so a size readout would drift
+        // across runs even on a logically-empty ledger. Callers that
+        // need disk-usage info should `du` the files directly.
+        let burn_exists = fs::metadata(&burn_path).is_ok();
+        let content_exists = fs::metadata(&content_path).is_ok();
+
+        let rows = BurnDbRowCounts {
+            turns: self.inner.count_table("turns")? as u64,
+            user_turns: self.inner.count_table("user_turns")? as u64,
+            compactions: self.inner.count_table("compactions")? as u64,
+            relationships: self.inner.count_table("relationships")? as u64,
+            tool_result_events: self.inner.count_table("tool_result_events")? as u64,
+            sessions: self.inner.count_table("sessions")? as u64,
+            stamps: self.inner.count_table("stamps")? as u64,
+        };
+        let total_rows = rows.turns
+            + rows.user_turns
+            + rows.compactions
+            + rows.relationships
+            + rows.tool_result_events
+            + rows.sessions
+            + rows.stamps;
+
+        let archive = read_archive_state(&self.inner)?;
+        let config = resolve_config_summary();
+
+        // Render paths through the home directory if both share a common
+        // ancestor. The CLI normalizer rewrites the absolute fixture path
+        // to ${RELAYBURN_HOME}; keep them as plain strings here so the
+        // structured output is faithful and the presenter does any
+        // home-relative rewriting.
+        let home = burn_path
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        Ok(StateStatus {
+            home,
+            burn: BurnDbStatus {
+                path: burn_path.to_string_lossy().into_owned(),
+                exists: burn_exists,
+                rows,
+                total_rows,
+            },
+            content: ContentDbStatus {
+                path: content_path.to_string_lossy().into_owned(),
+                exists: content_exists,
+                rows: self.inner.count_content()? as u64,
+            },
+            archive,
+            config,
+        })
+    }
+}
+
+/// Free-function form of [`LedgerHandle::state_status`] — opens a ledger
+/// from `opts.ledger_home` (or the env-var default) and returns the status.
+pub fn state_status(opts: StateStatusOptions) -> Result<StateStatus> {
+    let handle = open_with(opts.ledger_home.as_deref())?;
+    handle.state_status()
+}
+
+fn read_archive_state(ledger: &crate::RawLedger) -> Result<ArchiveStateStatus> {
+    // The archive_state row is created by `Ledger::open` (DDL inserts id=1
+    // ON CONFLICT DO NOTHING), so this query is reliable. Reach through
+    // the public `count_table` surface for schema_version by querying via
+    // a small helper; rusqlite is exposed via the raw `Ledger` so we use
+    // its connection directly through a query method.
+    let json: String = ledger.read_archive_state_json()?;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    struct Raw {
+        schema_version: u32,
+        #[serde(default)]
+        last_built_at: Option<String>,
+        #[serde(default)]
+        last_rebuild_at: Option<String>,
+    }
+    let raw: Raw = serde_json::from_str(&json).map_err(|e| anyhow::anyhow!(e))?;
+    Ok(ArchiveStateStatus {
+        schema_version: raw.schema_version,
+        last_built_at: raw.last_built_at,
+        last_rebuild_at: raw.last_rebuild_at,
+    })
+}
+
+fn resolve_config_summary() -> StateConfigSummary {
+    let cfg = crate::ledger::load_config().unwrap_or_default();
+    let store = match cfg.content.store {
+        crate::reader::ContentStoreMode::Full => "full",
+        crate::reader::ContentStoreMode::HashOnly => "hash-only",
+        crate::reader::ContentStoreMode::Off => "off",
+    }
+    .to_string();
+    match cfg.content.retention_days {
+        crate::ledger::Retention::Forever => StateConfigSummary {
+            store,
+            retention_days: None,
+            retention_forever: true,
+        },
+        crate::ledger::Retention::Days(d) => StateConfigSummary {
+            store,
+            retention_days: Some(d),
+            retention_forever: false,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1617,5 +1809,48 @@ mod tests {
         .unwrap();
         assert_eq!(s.turn_count, 1);
         assert_eq!(s.total_tokens, 150);
+    }
+
+    #[test]
+    fn state_status_reports_zero_rows_on_fresh_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+        let s = handle.state_status().unwrap();
+        assert!(s.burn.exists);
+        assert!(s.content.exists);
+        assert_eq!(s.burn.rows.turns, 0);
+        assert_eq!(s.burn.rows.user_turns, 0);
+        assert_eq!(s.burn.rows.compactions, 0);
+        assert_eq!(s.burn.rows.relationships, 0);
+        assert_eq!(s.burn.rows.tool_result_events, 0);
+        assert_eq!(s.burn.rows.sessions, 0);
+        assert_eq!(s.burn.rows.stamps, 0);
+        assert_eq!(s.burn.total_rows, 0);
+        assert_eq!(s.content.rows, 0);
+        assert_eq!(s.archive.schema_version, 1);
+        assert!(s.archive.last_built_at.is_none());
+        assert!(s.archive.last_rebuild_at.is_none());
+    }
+
+    #[test]
+    fn state_status_counts_appended_turns_and_user_turns() {
+        let (_dir, handle) = fixture_handle();
+        let s = handle.state_status().unwrap();
+        assert_eq!(s.burn.rows.turns, 2);
+        assert_eq!(s.burn.total_rows, 2);
+    }
+
+    #[test]
+    fn state_status_free_function_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let _ = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+        }
+        let s = state_status(StateStatusOptions {
+            ledger_home: Some(dir.path().to_path_buf()),
+        })
+        .unwrap();
+        assert!(s.burn.exists);
+        assert_eq!(s.burn.total_rows, 0);
     }
 }

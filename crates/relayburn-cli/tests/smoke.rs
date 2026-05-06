@@ -76,7 +76,15 @@ fn each_subcommand_help_exits_zero_with_non_empty_stdout() {
 
 #[test]
 fn each_stub_exits_one_with_not_yet_implemented_message() {
+    // Subcommands that have already replaced their stub with a real
+    // presenter. Each Wave 2 fan-out PR adds its command here as it
+    // lands. The remaining entries in SUBCOMMANDS still hit the
+    // `not yet implemented` path.
+    const REAL_COMMANDS: &[&str] = &["state"];
     for sub in SUBCOMMANDS {
+        if REAL_COMMANDS.contains(sub) {
+            continue;
+        }
         // Run the stub with no extra args. The default exit-code
         // contract for the scaffold is `EXIT_NOT_YET_IMPLEMENTED == 1`;
         // assert it explicitly so a future Wave 2 PR that wires up a

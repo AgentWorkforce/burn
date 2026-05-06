@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 
 /// Parsed top-level argv — what every command handler receives via
 /// [`Args::globals`].
@@ -112,7 +112,7 @@ pub enum Command {
     Run,
 
     /// Inspect or rebuild derived state under `~/.relayburn`.
-    State,
+    State(StateArgs),
 
     /// Scan harness session stores and append new turns to the ledger.
     Ingest,
@@ -121,4 +121,126 @@ pub enum Command {
     /// in-session self-query.
     #[command(name = "mcp-server")]
     McpServer,
+}
+
+// ---------------------------------------------------------------------------
+// `burn state` — typed args + nested subcommand
+// ---------------------------------------------------------------------------
+
+/// `burn state [...]` — derived-state inspection / maintenance verbs.
+/// Mirrors the TS surface in `packages/cli/src/commands/state.ts`:
+///
+/// - `burn state status` (default when no subcommand): print the row /
+///   file / archive_state report.
+/// - `burn state rebuild <target>`: rebuild derivable tables from
+///   upstream session files.
+/// - `burn state prune`: TTL-based content sidecar prune.
+/// - `burn state reset`: wipe derived state and (optionally) re-ingest.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct StateArgs {
+    #[command(subcommand)]
+    pub command: Option<StateSubcommand>,
+}
+
+/// Nested subcommand for `burn state`. `None` (no positional) is treated
+/// as `Status` to match the TS default.
+#[derive(Debug, Clone, Subcommand)]
+pub enum StateSubcommand {
+    /// Print derived-artifact status: file paths, sizes, row counts,
+    /// archive-state metadata, resolved retention config.
+    Status(StateStatusArgs),
+
+    /// Rebuild derived ledger artifacts from upstream session files.
+    Rebuild(StateRebuildArgs),
+
+    /// Prune expired content sidecars below the TTL window.
+    Prune(StatePruneArgs),
+
+    /// Wipe derived state under `$RELAYBURN_HOME` (and optionally
+    /// re-ingest from upstream session logs).
+    Reset(StateResetArgs),
+}
+
+/// `burn state status` — flags. `--json` is global and lives on
+/// [`Args::json`]; nothing local today, but keep an args struct so
+/// future flags (`--minimal`, `--quiet`) land without churning the
+/// dispatch sig.
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateStatusArgs {}
+
+/// `burn state rebuild` — target + flags. Mirrors the TS surface:
+/// `index | classify | content | archive [--full|--vacuum] | all`.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct StateRebuildArgs {
+    #[command(subcommand)]
+    pub target: StateRebuildTarget,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum StateRebuildTarget {
+    /// Rebuild the derivable tables from upstream session logs.
+    /// In the 2.0 SQLite layout there is one rebuild path
+    /// (`rebuild_derivable`) which drops + replays every derivable
+    /// table. The TS subtargets (index / classify / content / archive)
+    /// existed because each artifact lived in a separate file; in 2.0
+    /// they collapse onto the same SQL transaction.
+    Index,
+    /// Re-run activity classification on existing turns. Today this
+    /// is a no-op stub — the Rust ingest classifier writes the
+    /// `activity` field at append time (#274). A standalone reclassify
+    /// pass is filed for follow-up.
+    Classify(StateRebuildClassifyArgs),
+    /// Re-derive content rows from source session files.
+    Content,
+    /// Apply / rebuild the archive_state metadata.
+    Archive(StateRebuildArchiveArgs),
+    /// Run content + index + classify + archive in one pass.
+    All(StateRebuildAllArgs),
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateRebuildClassifyArgs {
+    /// Force reclassification of every turn even when `activity` is
+    /// already populated.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateRebuildArchiveArgs {
+    /// Drop archive state and rebuild from zero.
+    #[arg(long)]
+    pub full: bool,
+    /// Reclaim unused SQLite pages after the apply.
+    #[arg(long)]
+    pub vacuum: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateRebuildAllArgs {
+    /// Forwarded to `rebuild classify --force` when bundling.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StatePruneArgs {
+    /// Override the configured retention window. Accepts a number
+    /// (days) or the literal `forever`.
+    #[arg(long)]
+    pub days: Option<String>,
+    /// Delete sidecars even when the source session file still exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateResetArgs {
+    /// Actually delete. Without this flag, reset is a dry-run.
+    #[arg(long)]
+    pub force: bool,
+    /// After a successful `--force` wipe, re-parse all source harness
+    /// logs from offset 0.
+    #[arg(long)]
+    pub reingest: bool,
 }
