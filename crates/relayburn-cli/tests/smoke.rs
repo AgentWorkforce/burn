@@ -35,12 +35,14 @@ const SUBCOMMANDS: &[&str] = &[
 ];
 
 /// Subcommands that still print "not yet implemented" when invoked
-/// without args. Wave 2 D1 wired up `summary` and `hotspots` as real
-/// presenters and Wave 2 D2 wired up `overhead`, so they're excluded
-/// from the stub-mode tripwire below. The remaining entries are owned
-/// by sibling Wave 2 PRs.
+/// without args. Wave 2 D1 wired up `summary` and `hotspots`, D2 wired
+/// up `overhead`, and D3 wired up `compare` as real presenters, so
+/// they're excluded from the stub-mode tripwire below. The remaining
+/// entries are owned by sibling Wave 2 PRs. As each Wave 2 D1–D8 PR
+/// wires its presenter, drop the command from this list — the missing
+/// entries fall under a more targeted assertion (see
+/// `compare_command_rejects_missing_models` below for an example).
 const UNIMPLEMENTED_SUBCOMMANDS: &[&str] = &[
-    "compare",
     "run",
     "state",
     "ingest",
@@ -120,14 +122,27 @@ fn each_stub_exits_one_with_not_yet_implemented_message() {
 }
 
 #[test]
+fn compare_command_rejects_missing_models() {
+    // `burn compare` is wired (Wave 2 D3); no positional list means
+    // exit 2 + the canonical "needs at least 2 models" message. This
+    // asserts the wired path exists so a future regression that nukes
+    // the dispatch arm fails loud.
+    burn()
+        .arg("compare")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("needs at least 2 models"));
+}
+
+#[test]
 fn json_mode_emits_error_envelope_on_unimplemented() {
     // The `--json` global flips error reporting from a stderr line to
     // a `{"error": …}` JSON envelope on stdout. Cover the toggle so
     // Wave 2 commands inherit a consistent JSON-mode error shape.
-    // Use a still-stubbed command (`compare`) so the assertion remains
+    // Use a still-stubbed command (`run`) so the assertion remains
     // meaningful as Wave 2 PRs replace stubs with real presenters.
     let output = burn()
-        .args(["--json", "compare"])
+        .args(["--json", "run"])
         .assert()
         .code(1)
         .get_output()
