@@ -1,0 +1,13 @@
+# archive.sqlite is rematerialized by `state status` / `summary` and is not
+# the source of truth — it's a perf cache that the streaming-ledger fallback
+# (RELAYBURN_ARCHIVE=0) can rebuild on demand. Keeping the binary out of git
+# means snapshot regeneration doesn't churn a multi-KB blob on every run.
+archive.sqlite
+archive.sqlite-shm
+archive.sqlite-wal
+burn.sqlite
+burn.sqlite-shm
+burn.sqlite-wal
+cursors.json
+hwm.json
+config.json

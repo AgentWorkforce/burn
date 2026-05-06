@@ -1,0 +1,73 @@
+{
+  "project": "${PROJECT}",
+  "since": "all time",
+  "recommendations": [
+    {
+      "file": "CLAUDE.md",
+      "kind": "claude-md",
+      "appliesTo": [
+        "claude-code"
+      ],
+      "section": {
+        "heading": "## Conventions",
+        "startLine": 7,
+        "endLine": 11,
+        "tokens": 25
+      },
+      "projectedSavings": {
+        "perSessionUsd": 0,
+        "acrossWindowUsd": 0,
+        "tokens": 25,
+        "tokenShare": 0.10682819383259912
+      },
+      "diff": "# TRIM: ## Conventions\n# projected savings per session: $0.0000\n# projected savings across window: $0.0000\n--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -7,5 +7,0 @@\n-## Conventions\n-\n-- Use `node --test` for tests.\n-- Prefer the SDK over hand-rolling ledger reads.\n-"
+    },
+    {
+      "file": "CLAUDE.md",
+      "kind": "claude-md",
+      "appliesTo": [
+        "claude-code"
+      ],
+      "section": {
+        "heading": "## Frequently asked",
+        "startLine": 12,
+        "endLine": 16,
+        "tokens": 47
+      },
+      "projectedSavings": {
+        "perSessionUsd": 0,
+        "acrossWindowUsd": 0,
+        "tokens": 47,
+        "tokenShare": 0.20374449339207049
+      },
+      "diff": "# TRIM: ## Frequently asked\n# projected savings per session: $0.0000\n# projected savings across window: $0.0000\n--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -12,5 +12,0 @@\n-## Frequently asked\n-\n-- Q: where does the ledger live? A: under `${RELAYBURN_HOME}` or `~/.relayburn`.\n-- Q: how do I add a harness? A: drop an adapter in `packages/cli/src/harnesses/`.\n-"
+    },
+    {
+      "file": "CLAUDE.md",
+      "kind": "claude-md",
+      "appliesTo": [
+        "claude-code"
+      ],
+      "section": {
+        "heading": "## Long-tail trivia",
+        "startLine": 17,
+        "endLine": 23,
+        "tokens": 95
+      },
+      "projectedSavings": {
+        "perSessionUsd": 0,
+        "acrossWindowUsd": 0,
+        "tokens": 95,
+        "tokenShare": 0.4185022026431718
+      },
+      "diff": "# TRIM: ## Long-tail trivia\n# projected savings per session: $0.0000\n# projected savings across window: $0.0000\n--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -17,7 +17,0 @@\n-## Long-tail trivia\n-\n-A deliberately wordy section so the trim recommender has size to bite into:\n-the goal here is just to give the per-section token estimate something larger\n-than the surrounding sections, not to communicate any real content.\n-The phrase \"lorem ipsum\" appears here for tokenization volume only.\n-Nothing in this section is load-bearing for the rest of the project."
+    }
+  ],
+  "summary": {
+    "filesAnalyzed": 1,
+    "filesWithRecommendations": 1,
+    "totalRecommendations": 3,
+    "totalProjectedSavingsPerSession": 0,
+    "totalProjectedSavingsAcrossWindow": 0
+  }
+}

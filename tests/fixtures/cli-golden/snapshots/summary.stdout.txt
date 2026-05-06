@@ -1,0 +1,14 @@
+
+ingested 0 new sessions (+0 turns)
+
+turns analyzed: 7
+
+model              turns  input  output  reasoning  cacheRead  cacheCreate  cost
+claude-sonnet-4-6  4      5,100  830     0          19,500     200          $0.034
+gpt-5-codex        1      2,000  400     350        —          —            $0.0065
+claude-haiku-4-5   2      1,700  220     0          4,500      0            $0.0033
+
+total cost: $0.044
+  input $0.019 / output $0.018 / reasoning $0.00 / cacheRead $0.0063 / cacheCreate $0.0008
+
+fidelity: 6 full / 1 partial (use --json for per-field coverage)

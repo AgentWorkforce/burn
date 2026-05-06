@@ -1,0 +1,49 @@
+{
+  "index": {
+    "ids": {
+      "path": "${RELAYBURN_HOME}/ledger.idx",
+      "exists": true,
+      "bytes": 289,
+      "entries": 17
+    },
+    "content": {
+      "path": "${RELAYBURN_HOME}/ledger.content.idx",
+      "exists": true,
+      "bytes": 119,
+      "entries": 7
+    }
+  },
+  "content": {
+    "path": "${RELAYBURN_HOME}/content",
+    "exists": false,
+    "files": 0,
+    "sessions": 0,
+    "bytes": 0,
+    "userTurns": 3
+  },
+  "classifier": {
+    "turns": 7,
+    "classified": 7,
+    "missing": 0
+  },
+  "archive": {
+    "archivePath": "${RELAYBURN_HOME}/archive.sqlite",
+    "exists": true,
+    "archiveVersion": 3,
+    "ledgerOffsetBytes": 0,
+    "ledgerMtimeMs": 0,
+    "ledgerSizeBytes": 8229,
+    "ledgerMtimeMsCurrent": "${MTIME}",
+    "upToDate": false,
+    "lastBuiltAt": null,
+    "lastRebuildAt": null,
+    "rowCounts": {
+      "sessions": 0,
+      "turns": 0,
+      "toolCalls": 0,
+      "toolResultEvents": 0,
+      "compactions": 0
+    },
+    "fidelityHistogram": {}
+  }
+}

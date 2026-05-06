@@ -1,0 +1,11 @@
+burn mcp-server — stdio MCP server exposing read-only ledger queries
+
+Usage:
+  burn mcp-server [--session-id <uuid>]
+
+Registers tools for in-session self-query by an agent that was spawned with
+this server attached via Claude Code's --mcp-config (see buildMcpConfig in
+@relayburn/mcp). Tools default to the session id baked into the command line.
+
+Tools:
+  burn__sessionCost   { sessionId? } → total USD / tokens / turns / models

@@ -121,16 +121,16 @@ jobs:
         # block to learn the binary name, then dispatches to `cargo build`
         # under the hood. The output is a per-target `.node` file and a
         # generated `binding.cjs` / `binding.d.ts` co-located with it.
-        # While #247-a is in flight the binding crate has no `#[napi]`
-        # exports yet, so this step may emit an empty addon — that's fine
-        # for the matrix-validation use case, and once the bindings land
-        # the same step produces a real binary without changes here.
+        # `--cargo-cwd` points at the binding crate (which lives under
+        # `crates/relayburn-sdk-node/`, not co-located with the npm package)
+        # so the `cargo metadata` step that resolves the cdylib succeeds.
         working-directory: packages/sdk-node
         run: |
           pnpm exec napi build \
             --platform \
             --release \
             --target ${{ matrix.target }} \
+            --cargo-cwd ../../crates/relayburn-sdk-node \
             --js src/binding.cjs \
             --dts src/binding.d.ts
 

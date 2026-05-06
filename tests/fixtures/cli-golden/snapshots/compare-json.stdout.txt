@@ -1,0 +1,184 @@
+{
+  "analyzedTurns": 7,
+  "minSample": 5,
+  "models": [
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5"
+  ],
+  "categories": [
+    "coding",
+    "delegation",
+    "review",
+    "testing"
+  ],
+  "totals": {
+    "claude-sonnet-4-6": {
+      "turns": 4,
+      "totalCost": 0.03435
+    },
+    "claude-haiku-4-5": {
+      "turns": 2,
+      "totalCost": 0.0032500000000000003
+    }
+  },
+  "cells": [
+    {
+      "model": "claude-sonnet-4-6",
+      "category": "coding",
+      "turns": 2,
+      "editTurns": 1,
+      "oneShotTurns": 1,
+      "pricedTurns": 2,
+      "totalCost": 0.0225,
+      "costPerTurn": 0.01125,
+      "oneShotRate": 1,
+      "cacheHitRate": 0.7586,
+      "medianRetries": 0,
+      "noData": false,
+      "insufficientSample": true
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "category": "delegation",
+      "turns": 1,
+      "editTurns": 0,
+      "oneShotTurns": 0,
+      "pricedTurns": 1,
+      "totalCost": 0.00345,
+      "costPerTurn": 0.00345,
+      "oneShotRate": null,
+      "cacheHitRate": 0.7143,
+      "medianRetries": null,
+      "noData": false,
+      "insufficientSample": true
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "category": "review",
+      "turns": 0,
+      "editTurns": 0,
+      "oneShotTurns": 0,
+      "pricedTurns": 0,
+      "totalCost": 0,
+      "costPerTurn": null,
+      "oneShotRate": null,
+      "cacheHitRate": null,
+      "medianRetries": null,
+      "noData": true,
+      "insufficientSample": false
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "category": "testing",
+      "turns": 1,
+      "editTurns": 0,
+      "oneShotTurns": 0,
+      "pricedTurns": 1,
+      "totalCost": 0.0084,
+      "costPerTurn": 0.0084,
+      "oneShotRate": null,
+      "cacheHitRate": 0.8537,
+      "medianRetries": null,
+      "noData": false,
+      "insufficientSample": true
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "category": "coding",
+      "turns": 1,
+      "editTurns": 1,
+      "oneShotTurns": 1,
+      "pricedTurns": 1,
+      "totalCost": 0.0017,
+      "costPerTurn": 0.0017,
+      "oneShotRate": 1,
+      "cacheHitRate": 0.6897,
+      "medianRetries": 0,
+      "noData": false,
+      "insufficientSample": true
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "category": "delegation",
+      "turns": 0,
+      "editTurns": 0,
+      "oneShotTurns": 0,
+      "pricedTurns": 0,
+      "totalCost": 0,
+      "costPerTurn": null,
+      "oneShotRate": null,
+      "cacheHitRate": null,
+      "medianRetries": null,
+      "noData": true,
+      "insufficientSample": false
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "category": "review",
+      "turns": 1,
+      "editTurns": 0,
+      "oneShotTurns": 0,
+      "pricedTurns": 1,
+      "totalCost": 0.00155,
+      "costPerTurn": 0.00155,
+      "oneShotRate": null,
+      "cacheHitRate": 0.7576,
+      "medianRetries": null,
+      "noData": false,
+      "insufficientSample": true
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "category": "testing",
+      "turns": 0,
+      "editTurns": 0,
+      "oneShotTurns": 0,
+      "pricedTurns": 0,
+      "totalCost": 0,
+      "costPerTurn": null,
+      "oneShotRate": null,
+      "cacheHitRate": null,
+      "medianRetries": null,
+      "noData": true,
+      "insufficientSample": false
+    }
+  ],
+  "fidelity": {
+    "minimum": "partial",
+    "excluded": {
+      "total": 0,
+      "aggregateOnly": 0,
+      "costOnly": 0,
+      "partial": 0,
+      "usageOnly": 0
+    },
+    "summary": {
+      "total": 7,
+      "byClass": {
+        "full": 6,
+        "usage-only": 0,
+        "aggregate-only": 0,
+        "cost-only": 0,
+        "partial": 1
+      },
+      "byGranularity": {
+        "per-turn": 7,
+        "per-message": 0,
+        "per-session-aggregate": 0,
+        "cost-only": 0
+      },
+      "missingCoverage": {
+        "hasInputTokens": 0,
+        "hasOutputTokens": 0,
+        "hasReasoningTokens": 0,
+        "hasCacheReadTokens": 1,
+        "hasCacheCreateTokens": 1,
+        "hasToolCalls": 0,
+        "hasToolResultEvents": 1,
+        "hasSessionRelationships": 1,
+        "hasRawContent": 1
+      },
+      "unknown": 0
+    }
+  }
+}

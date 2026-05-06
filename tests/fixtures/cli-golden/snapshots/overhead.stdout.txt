@@ -1,0 +1,7 @@
+
+Overhead files in ${PROJECT}:
+
+CLAUDE.md (tests/fixtures/cli-golden/project/CLAUDE.md) — 23 lines, ~227 tokens — applies to: claude-code
+  no matching sessions in window.
+
+Grand total (all overhead files, all time): $0.00
