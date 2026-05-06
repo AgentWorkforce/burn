@@ -24,11 +24,14 @@
 //!    discriminator and emits the inner `HotspotsAttributionResult`
 //!    shape directly (TS contract).
 
+use std::collections::BTreeMap;
+
 use clap::Args;
 use relayburn_sdk::{
-    hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation, BashVerbAggregation,
-    FileAggregation, HotspotsAttributionResult, HotspotsGroupBy, HotspotsOptions, HotspotsResult,
-    HotspotsSessionTotal, Ledger, LedgerOpenOptions, SubagentAggregation,
+    hotspots as sdk_hotspots, ingest_all, normalize_since, AttributionMethod, BashAggregation,
+    BashVerbAggregation, FileAggregation, HotspotsAttributionResult, HotspotsGroupBy,
+    HotspotsOptions, HotspotsResult, HotspotsSessionTotal, Ledger, LedgerOpenOptions, Query,
+    SourceKind, SubagentAggregation,
 };
 use serde_json::{json, Map, Value};
 
@@ -145,6 +148,23 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         .build()?;
     let raw_opts = relayburn_sdk::RawIngestOptions::default();
     rt.block_on(ingest_all(handle.raw_mut(), &raw_opts))?;
+
+    // Pre-compute the per-source coverage-gap breakdown so the human
+    // renderer can name *which* sources contributed excluded turns and
+    // *what* they were missing. Reaching past the SDK verb here is a
+    // small layering compromise: the verb internally walks the same
+    // slice but only surfaces an aggregate `fidelity` block. Doing it
+    // here keeps the source-attributed clause in `coverage_notice` honest
+    // when the slice mixes sources (e.g. excluded codex + opencode turns
+    // both showing up in the message).
+    let mut q = Query::default();
+    if let Some(p) = args.project.clone() {
+        q.project = Some(p);
+    }
+    if let Some(since) = normalize_since(args.since.as_deref())? {
+        q.since = Some(since);
+    }
+    let breakdown = describe_excluded_turns(&handle, &q)?;
     drop(handle);
 
     let result = sdk_hotspots(HotspotsOptions {
@@ -161,8 +181,91 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         return Ok(0);
     }
     let limit = if args.all { usize::MAX } else { DEFAULT_TOP_N };
-    emit_human(&result, limit);
+    emit_human(&result, limit, &breakdown);
     Ok(0)
+}
+
+/// Per-source coverage-gap breakdown, mirroring the TS
+/// `describeExcluded` helper. Only counts turns that *fail* the
+/// hotspots-attribution gate (`hasToolCalls && hasToolResultEvents`);
+/// turns without a `fidelity` field are best-effort full and never
+/// excluded. The SDK's [`relayburn_sdk::HotspotsResult`] reports
+/// aggregate analyzed/excluded counts but not the source mix; we walk
+/// the ledger slice ourselves to recover that detail.
+#[derive(Debug, Clone, Default)]
+struct CoverageGapBreakdown {
+    /// Sorted by source label so the rendered clause is deterministic.
+    sources: BTreeMap<String, SourceClause>,
+    /// Total excluded count across all sources. Equal to
+    /// `attribution_result.fidelity.excluded` for non-empty slices.
+    excluded: u64,
+    /// Total analyzed (eligible) count.
+    analyzed: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SourceClause {
+    /// Distinct missing-coverage labels (`tool-call records`, etc.).
+    missing: BTreeMap<String, ()>,
+    /// Distinct granularities observed on excluded turns from this
+    /// source. Used by the inline rendered form `<missing>, <gran>
+    /// granularity (<source>)`.
+    granularities: BTreeMap<String, ()>,
+    count: u64,
+}
+
+fn describe_excluded_turns(
+    handle: &relayburn_sdk::LedgerHandle,
+    q: &Query,
+) -> anyhow::Result<CoverageGapBreakdown> {
+    let mut out = CoverageGapBreakdown::default();
+    for enriched in handle.raw().query_turns(q)? {
+        let t = &enriched.turn;
+        let Some(f) = t.fidelity.as_ref() else {
+            // No fidelity → treat as best-effort full; never excluded.
+            out.analyzed += 1;
+            continue;
+        };
+        let passes = f.coverage.has_tool_calls && f.coverage.has_tool_result_events;
+        if passes {
+            out.analyzed += 1;
+            continue;
+        }
+        out.excluded += 1;
+        let source = source_label(t.source);
+        let entry = out.sources.entry(source.to_string()).or_default();
+        entry.count += 1;
+        if !f.coverage.has_tool_calls {
+            entry.missing.insert("tool-call records".to_string(), ());
+        }
+        if !f.coverage.has_tool_result_events {
+            entry.missing.insert("tool-result events".to_string(), ());
+        }
+        entry
+            .granularities
+            .insert(granularity_label(f.granularity).to_string(), ());
+    }
+    Ok(out)
+}
+
+fn source_label(s: SourceKind) -> &'static str {
+    match s {
+        SourceKind::ClaudeCode => "claude-code",
+        SourceKind::Codex => "codex",
+        SourceKind::Opencode => "opencode",
+        SourceKind::AnthropicApi => "anthropic-api",
+        SourceKind::OpenaiApi => "openai-api",
+        SourceKind::GeminiApi => "gemini-api",
+    }
+}
+
+fn granularity_label(g: relayburn_sdk::UsageGranularity) -> &'static str {
+    match g {
+        relayburn_sdk::UsageGranularity::PerTurn => "per-turn",
+        relayburn_sdk::UsageGranularity::PerMessage => "per-message",
+        relayburn_sdk::UsageGranularity::PerSessionAggregate => "per-session-aggregate",
+        relayburn_sdk::UsageGranularity::CostOnly => "cost-only",
+    }
 }
 
 fn emit_json(result: &HotspotsResult) {
@@ -410,9 +513,9 @@ fn subagent_to_json(s: &SubagentAggregation) -> Value {
 
 // ---------- human rendering ----------
 
-fn emit_human(result: &HotspotsResult, limit: usize) {
+fn emit_human(result: &HotspotsResult, limit: usize, breakdown: &CoverageGapBreakdown) {
     match result {
-        HotspotsResult::Attribution(a) => emit_human_attribution(a, limit),
+        HotspotsResult::Attribution(a) => emit_human_attribution(a, limit, breakdown),
         // The single-axis group_by surfaces aren't yet tied to a golden
         // snapshot (the snapshot covers the default attribution view),
         // so we render their tables on a best-effort basis with the same
@@ -526,13 +629,17 @@ where
     print!("{}", lines.join("\n"));
 }
 
-fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
+fn emit_human_attribution(
+    a: &HotspotsAttributionResult,
+    limit: usize,
+    breakdown: &CoverageGapBreakdown,
+) {
     let degraded = a.attribution_degraded;
     let approx_suffix = if degraded { " (approximate)" } else { "" };
     let mut out: Vec<String> = Vec::new();
     out.push(String::new());
     out.push(format!("turns analyzed: {}", format_uint(a.turns_analyzed)));
-    if let Some(notice) = coverage_notice(a) {
+    if let Some(notice) = coverage_notice(a, breakdown) {
         out.push(notice);
     }
     out.push(format!(
@@ -687,82 +794,57 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
     print!("{}", out.join("\n"));
 }
 
-fn coverage_notice(a: &HotspotsAttributionResult) -> Option<String> {
+fn coverage_notice(
+    a: &HotspotsAttributionResult,
+    breakdown: &CoverageGapBreakdown,
+) -> Option<String> {
     let analyzed = a.fidelity.analyzed;
     let excluded = a.fidelity.excluded;
     if excluded == 0 {
         return None;
     }
     let total = analyzed + excluded;
-    // Build a single inline source clause matching the TS shape. The
-    // SDK exposes `fidelity.summary` only as a `serde_json::Value`, so we
-    // reach into it for `missingCoverage` flags + granularities. The TS
-    // shape groups by `SourceKind`; without per-source bookkeeping in the
-    // SDK output, fall back to a single best-effort clause naming the
-    // missing fields and the dominant granularity from the summary block.
-    let summary = &a.fidelity.summary;
-    let granularity = summary
-        .get("byGranularity")
-        .and_then(Value::as_object)
-        .and_then(|m| {
-            // Pick the highest-count granularity that's >0 other than `per-turn`
-            // when `per-turn` is the dominant bucket — TS's clause names the
-            // *actual* granularity an excluded turn carries, not the
-            // slice-wide top. Without per-source breakdowns we approximate by
-            // listing the non-`per-turn` granularities present.
-            let mut entries: Vec<(&str, u64)> = m
-                .iter()
-                .filter_map(|(k, v)| v.as_u64().map(|n| (k.as_str(), n)))
-                .filter(|(_, n)| *n > 0)
-                .collect();
-            entries.sort_by(|a, b| a.0.cmp(b.0));
-            // Prefer non-`per-turn` entries when both are present
-            let picked = entries
-                .iter()
-                .find(|(k, _)| *k != "per-turn")
-                .or_else(|| entries.first())
-                .map(|(k, _)| k.to_string());
-            picked
-        })
-        .unwrap_or_else(|| "per-turn".to_string());
-
-    let mut missing_fields: Vec<&'static str> = Vec::new();
-    if let Some(missing) = summary.get("missingCoverage").and_then(Value::as_object) {
-        for (key, label) in [
-            ("hasToolCalls", "tool-call records"),
-            ("hasToolResultEvents", "tool-result events"),
-        ] {
-            if let Some(n) = missing.get(key).and_then(Value::as_u64) {
-                if n > 0 {
-                    missing_fields.push(label);
-                }
-            }
-        }
-    }
-    let missing_clause = if missing_fields.is_empty() {
+    // The TS shape is one inline clause per source kind, joined with " and ".
+    // Each clause names the missing field(s) + the granularity bucket the
+    // excluded turns carried, with the source name in parens. Sources are
+    // walked in BTreeMap order for stable rendering.
+    let clauses: Vec<String> = breakdown
+        .sources
+        .iter()
+        .map(|(source, row)| render_inline_source_clause(source, row))
+        .collect();
+    let suffix = if clauses.is_empty() {
+        // Fall back to the SDK's aggregate counts if for some reason the
+        // re-walk surfaced no breakdown (e.g. record without fidelity but
+        // the SDK still excluded it). Don't fabricate a source label.
         String::new()
     } else {
-        format!("missing {}, ", missing_fields.join(", "))
-    };
-    // Source label — the SDK summary doesn't currently break this down per
-    // source, so we use the dominant non-Claude source heuristic by
-    // checking whether any record dropped tool-result events (codex
-    // omits per-turn tool-result events) — this matches the snapshot's
-    // `(codex)` parenthetical without requiring a richer SDK contract.
-    let source_label = if missing_fields.contains(&"tool-result events") {
-        "codex"
-    } else {
-        "claude-code"
+        format!(" for {}", clauses.join(" and "))
     };
     Some(format!(
-        "analyzed {} of {} turns; {} excluded for {}{} granularity ({})",
+        "analyzed {} of {} turns; {} excluded{}",
         format_uint(analyzed),
         format_uint(total),
         format_uint(excluded),
-        missing_clause,
-        granularity,
-        source_label,
+        suffix,
     ))
+}
+
+fn render_inline_source_clause(source: &str, row: &SourceClause) -> String {
+    let mut inner: Vec<String> = Vec::new();
+    if !row.missing.is_empty() {
+        let missing: Vec<&str> = row.missing.keys().map(String::as_str).collect();
+        inner.push(format!("missing {}", missing.join(", ")));
+    }
+    if !row.granularities.is_empty() {
+        let grans: Vec<&str> = row.granularities.keys().map(String::as_str).collect();
+        inner.push(format!("{} granularity", grans.join("+")));
+    }
+    if inner.is_empty() {
+        source.to_string()
+    } else {
+        format!("{} ({})", inner.join(", "), source)
+    }
 }
 
 fn file_row(f: &FileAggregation, attributed: f64) -> Vec<String> {
