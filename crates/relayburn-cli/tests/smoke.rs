@@ -82,6 +82,26 @@ fn each_subcommand_help_exits_zero_with_non_empty_stdout() {
 }
 
 #[test]
+fn overhead_trim_help_exits_zero_with_non_empty_stdout() {
+    // `burn overhead` is in IMPLEMENTED_SUBCOMMANDS, so the parent
+    // `each_subcommand_help_exits_zero_with_non_empty_stdout` covers
+    // its top-level help. The nested `trim` subcommand has its own
+    // `clap` derive though; cover it explicitly so a regression in
+    // the nested-action help wiring doesn't slip past CI.
+    let output = burn()
+        .args(["overhead", "trim", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).expect("help should be valid UTF-8");
+    assert!(
+        !stdout.is_empty(),
+        "`overhead trim --help` should emit non-empty stdout; got empty",
+    );
+}
+
+#[test]
 fn each_stub_exits_one_with_not_yet_implemented_message() {
     for sub in SUBCOMMANDS {
         if IMPLEMENTED_SUBCOMMANDS.contains(sub) {
