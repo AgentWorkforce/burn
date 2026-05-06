@@ -11,6 +11,18 @@ description = "The `burn` CLI — published to crates.io. Crate name is relaybur
 name = "burn"
 path = "src/main.rs"
 
+# A library target is added alongside the `burn` binary so the harness
+# substrate (`HarnessAdapter` trait, registry, pending-stamp factory)
+# under `src/harnesses/` can be unit-tested with `cargo test -p
+# relayburn-cli` and so future integration tests under `tests/` can
+# reach it without re-declaring the module tree. The binary path
+# (`src/main.rs`) and the library path (`src/lib.rs`) live side-by-side
+# — cargo treats them as two separate compile units that share the
+# same package metadata.
+[lib]
+name = "relayburn_cli"
+path = "src/lib.rs"
+
 [dependencies]
 # The CLI is the canonical external embedder of the SDK — every read
 # verb the binary surfaces will wrap a `relayburn-sdk` call once #248
@@ -23,8 +35,24 @@ path = "src/main.rs"
 # Tighten this once the SDK ships a stable 0.x line.
 relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }
 
+# Harness substrate (#248-b): the `HarnessAdapter` trait under `harnesses/`
+# uses `async fn` in trait — `async-trait` desugars to `Pin<Box<…>>` futures
+# without forcing every adapter to spell that out. `phf` macros give us a
+# perfect-hash registry that's evaluated at compile time, so harness lookup
+# costs nothing at startup. `tokio::sync` is needed for the watch controller
+# wiring exposed by `relayburn-sdk` (`WatchController` holds a `Mutex`).
+anyhow = { workspace = true }
+async-trait = "0.1"
+phf = { version = "0.11", features = ["macros"] }
+tokio = { workspace = true, features = ["sync"] }
+
 [dev-dependencies]
 # Used by `tests/golden.rs` to load the invocations contract that drives
 # both the TS-CLI snapshot capture and the Rust diff runner.
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Async test harness for the `harnesses` module unit tests (lookup, factory
+# round-trips). `rt-multi-thread` + `macros` lets `#[tokio::test]` resolve
+# and gives spawned watch-loop ticks a runtime to land on.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
