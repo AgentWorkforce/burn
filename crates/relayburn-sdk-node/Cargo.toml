@@ -8,8 +8,22 @@ repository.workspace = true
 description = "napi-rs bindings over relayburn-sdk — built in CI to produce the @relayburn/sdk npm artifacts. Not published to crates.io."
 publish = false
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
-# napi-rs glue lands in #247; this crate's only direct dep is the SDK.
-# Not published to crates.io, so the version pin is loose by design — it
-# just keeps `cargo metadata` and the workspace resolver happy.
+# napi-rs glue. The Node bindings sit on top of the SDK and expose
+# `#[napi]` shims for every public verb. Not published to crates.io —
+# this crate is consumed exclusively by the napi-rs CI matrix in #247-b
+# to produce the per-platform `.node` artifacts under
+# `packages/sdk-node/`.
 relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }
+napi = { version = "2", default-features = false, features = ["napi6", "tokio_rt", "serde-json"] }
+napi-derive = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"

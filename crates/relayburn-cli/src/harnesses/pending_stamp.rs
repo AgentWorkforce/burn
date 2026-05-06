@@ -91,12 +91,41 @@ impl PendingStampAdapter {
 
 /// Build a [`HarnessAdapter`] from a [`PendingStampAdapter`] config.
 ///
-/// The Wave 2 codex / opencode adapter PRs each call this once (with
-/// `name = "codex"` or `name = "opencode"`) and register the returned
-/// adapter as a `&'static` in [`super::registry`]. The boxed-then-leaked
-/// pattern is fine because adapters live for the entire CLI process.
+/// Returns a heap-allocated trait object the caller owns. Tests and bespoke
+/// drivers that don't need to feed the result into the `phf::Map` registry
+/// use this form. Wave 2 codex / opencode adapter PRs go through
+/// [`adapter_static`] instead so the registry can store them as
+/// `&'static dyn HarnessAdapter`.
 pub fn adapter(config: PendingStampAdapter) -> Box<dyn HarnessAdapter> {
     Box::new(PendingStampAdapterImpl::new(config))
+}
+
+/// Build a `&'static dyn HarnessAdapter` from a [`PendingStampAdapter`] config.
+///
+/// Wave 2 codex / opencode adapter PRs use this form so the value can be
+/// stored in `super::registry::ADAPTERS`, which is a compile-time
+/// `phf::Map<&'static str, &'static dyn HarnessAdapter>` and therefore
+/// cannot hold a runtime `Box`.
+///
+/// ## Memory leak by design
+///
+/// Internally this calls [`Box::leak`]. The allocation is unrecoverable
+/// for the rest of the process lifetime — there is no way to drop the
+/// returned `&'static`. That is fine in this codebase for two reasons:
+///
+/// 1. There are at most three pending-stamp harnesses ever (codex,
+///    opencode, and any future addition that joins the same protocol),
+///    so the leaked footprint is bytes, not megabytes.
+/// 2. Each adapter is registered exactly once at process start (via a
+///    `LazyLock<&'static dyn HarnessAdapter>` next to its module
+///    declaration in `super::registry`) and lives until process exit.
+///    There is no register/deregister churn.
+///
+/// Callers that need a non-static, droppable adapter — e.g. unit tests
+/// that construct a one-off adapter and let it fall out of scope —
+/// should use [`adapter`] instead.
+pub fn adapter_static(config: PendingStampAdapter) -> &'static dyn HarnessAdapter {
+    Box::leak(Box::new(PendingStampAdapterImpl::new(config)))
 }
 
 /// `HarnessAdapter` implementation backing the [`adapter`] factory. Kept
