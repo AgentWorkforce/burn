@@ -73,6 +73,32 @@ pub fn adapter() -> &'static dyn HarnessAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialize tests that mutate `$HOME` so a parallel test (in this
+    /// module or another using the same env var) can't observe a
+    /// half-set state. Mirrors the `ENV_LOCK` pattern in
+    /// `relayburn_sdk::query_verbs::state_status` tests. Poisoned-mutex
+    /// recovery is intentional — a panicking test shouldn't break
+    /// every subsequent run.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Runs `f` with `$HOME` pinned to `home`, restoring (or removing)
+    /// the prior value before returning. Holds `ENV_LOCK` for the whole
+    /// closure so concurrent tests serialize on the env mutation.
+    fn with_test_home(home: &str, f: impl FnOnce()) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
 
     /// `config()` returns a `PendingStampAdapter` named `codex` with the
     /// standard 1s tick interval. Sanity check that the constructor wires
@@ -83,13 +109,14 @@ mod tests {
         assert_eq!(cfg.name, "codex");
         // session_root closure resolves to `$HOME/.codex/sessions`. Use a
         // controlled $HOME so the assertion doesn't depend on the
-        // developer's actual home dir.
-        std::env::set_var("HOME", "/tmp/burn-codex-test-home");
-        let resolved = (cfg.session_root)();
-        assert_eq!(
-            resolved,
-            PathBuf::from("/tmp/burn-codex-test-home/.codex/sessions")
-        );
+        // developer's actual home dir; restored after via `with_test_home`.
+        with_test_home("/tmp/burn-codex-test-home", || {
+            let resolved = (cfg.session_root)();
+            assert_eq!(
+                resolved,
+                PathBuf::from("/tmp/burn-codex-test-home/.codex/sessions")
+            );
+        });
     }
 
     /// `adapter()` round-trips through the trait surface — name, session
@@ -100,10 +127,11 @@ mod tests {
     fn adapter_round_trip() {
         let a: &'static dyn HarnessAdapter = adapter();
         assert_eq!(a.name(), "codex");
-        std::env::set_var("HOME", "/tmp/burn-codex-test-home");
-        assert_eq!(
-            a.session_root(),
-            PathBuf::from("/tmp/burn-codex-test-home/.codex/sessions")
-        );
+        with_test_home("/tmp/burn-codex-test-home", || {
+            assert_eq!(
+                a.session_root(),
+                PathBuf::from("/tmp/burn-codex-test-home/.codex/sessions")
+            );
+        });
     }
 }
