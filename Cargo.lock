@@ -811,6 +811,7 @@ dependencies = [
  "async-trait",
  "clap",
  "comfy-table",
+ "indexmap",
  "phf",
  "predicates",
  "relayburn-sdk",

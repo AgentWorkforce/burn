@@ -3,25 +3,25 @@
     "name": "summary",
     "args": ["summary"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "summary-json",
     "args": ["summary", "--json"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "hotspots",
     "args": ["hotspots"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "hotspots-json",
     "args": ["hotspots", "--json"],
     "expectStatus": 0,
-    "enabled": false
+    "enabled": true
   },
   {
     "name": "overhead",

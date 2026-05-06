@@ -96,10 +96,10 @@ impl Args {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Aggregate session usage and cost.
-    Summary,
+    Summary(crate::commands::summary::SummaryArgs),
 
     /// Surface high-cost / high-overhead hotspots from the ledger.
-    Hotspots,
+    Hotspots(crate::commands::hotspots::HotspotsArgs),
 
     /// Estimate context overhead and (optionally) trim it.
     Overhead(OverheadArgs),

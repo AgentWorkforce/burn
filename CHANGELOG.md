@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-cli` (Rust): wire `burn summary` and `burn hotspots` as thin presenters over `relayburn-sdk`, matching the TS CLI's flag set and stdout byte-for-byte (default + `--json`). Un-ignores the four matching golden invocations. (#248 D1)
 - `relayburn-cli` (Rust): port `burn overhead` and `burn overhead trim` as thin presenters over `relayburn_sdk::overhead` / `::overhead_trim`. Output (human + `--json`) is byte-equivalent with the TS CLI. (#248 D2)
 - `relayburn-sdk-node` (Rust): napi-rs bindings skeleton — `#[napi]` shims for every public verb in `relayburn-sdk` (`summary`, `sessionCost`, `overhead`, `overheadTrim`, `hotspots`, `search`, `exportLedger`, `exportStamps`, async `ingest`, plus `ledgerOpen`), with u64 token counts surfaced as JS `BigInt`, ISO-8601 timestamps as `String`, async verbs returning `Promise<T>`, and a typed `BurnError` mapping for SDK failures. (#247)
 - `relayburn-cli` (Rust): introduce the harness substrate — `HarnessAdapter` trait, lazy compile-time `phf` registry (`lookup` / `list_harness_names`), and the shared `pending_stamp::adapter` factory codex + opencode will reuse. Adapter slots in the registry are reserved but empty pending the Wave 2 PRs (#248-d/e/f). `relayburn-sdk` re-exports `start_watch_loop`, `WatchController`, `write_pending_stamp`, `PendingStampHarness`, and friends so the CLI doesn't have to reach into private SDK modules. (#248)
