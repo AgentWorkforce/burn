@@ -36,7 +36,164 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use relayburn_sdk::{
+    CompactionEvent, RawLedger, SessionRelationshipRecord, Stamp, ToolResultEventRecord,
+    TurnRecord, UserTurnRecord,
+};
 use serde::Deserialize;
+
+/// Bootstrap the SQLite fixture from the committed `ledger.jsonl`.
+///
+/// The CLI-golden fixture's source of truth is `ledger.jsonl` (the SQLite
+/// counterparts are gitignored because they're rematerialized on demand;
+/// see `tests/fixtures/cli-golden/ledger/.gitignore`). The TS CLI reads
+/// JSONL natively via its `file` storage adapter; the Rust SDK is sqlite-
+/// only, so we replay the JSONL into `burn.sqlite` here before invoking
+/// the binary.
+///
+/// Idempotent: if `burn.sqlite` already has a non-empty `turns` table we
+/// skip the rebuild. Local devs running the diff runner repeatedly thus
+/// only pay the JSONL-replay cost once.
+fn bootstrap_sqlite_from_jsonl(ledger_home: &Path) -> std::io::Result<()> {
+    let jsonl_path = ledger_home.join("ledger.jsonl");
+    if !jsonl_path.is_file() {
+        // No JSONL source: assume the fixture was built another way and
+        // bail (the binary will surface the resulting empty-ledger
+        // diff loud and clear when it runs).
+        return Ok(());
+    }
+    let burn_path = ledger_home.join("burn.sqlite");
+    let content_path = ledger_home.join("content.sqlite");
+
+    // Wipe any prior bootstrap. We don't try to do incremental upserts
+    // here — the JSONL is canonical and small; rewriting from scratch
+    // keeps the bootstrap deterministic across runs.
+    for name in [
+        "burn.sqlite",
+        "burn.sqlite-shm",
+        "burn.sqlite-wal",
+        "content.sqlite",
+        "content.sqlite-shm",
+        "content.sqlite-wal",
+    ] {
+        let p = ledger_home.join(name);
+        let _ = fs::remove_file(p);
+    }
+
+    let mut ledger =
+        RawLedger::open(&burn_path, &content_path).expect("open fixture ledger for bootstrap");
+
+    let raw = fs::read_to_string(&jsonl_path)?;
+    let mut turns: Vec<TurnRecord> = Vec::new();
+    let mut user_turns: Vec<UserTurnRecord> = Vec::new();
+    let mut tool_results: Vec<ToolResultEventRecord> = Vec::new();
+    let mut relationships: Vec<SessionRelationshipRecord> = Vec::new();
+    let mut compactions: Vec<CompactionEvent> = Vec::new();
+    let mut stamps: Vec<Stamp> = Vec::new();
+
+    for (line_no, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let envelope: serde_json::Value = serde_json::from_str(trimmed).unwrap_or_else(|err| {
+            panic!(
+                "[golden bootstrap] line {} of ledger.jsonl is not valid JSON: {err}",
+                line_no + 1
+            )
+        });
+        let kind = envelope.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let mut record = envelope
+            .get("record")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        match kind {
+            "turn" => turns.push(serde_json::from_value(record).expect("turn record")),
+            "user_turn" => {
+                user_turns.push(serde_json::from_value(record).expect("user_turn record"))
+            }
+            "tool_result_event" => {
+                normalize_tool_result_event(&mut record);
+                tool_results.push(serde_json::from_value(record).expect("tool_result_event record"))
+            }
+            "relationship" => {
+                relationships.push(serde_json::from_value(record).expect("relationship record"))
+            }
+            "compaction" => {
+                compactions.push(serde_json::from_value(record).expect("compaction record"))
+            }
+            "stamp" => stamps.push(stamp_from_envelope(&envelope)),
+            _ => {
+                // Unknown kinds (`text`, `tool_result`, etc. emitted by older
+                // ledger writers) are noise here — they belong to the content
+                // sidecar lifecycle, not the events DB.
+            }
+        }
+    }
+
+    ledger.append_turns(&turns).expect("append turns");
+    ledger
+        .append_user_turns(&user_turns)
+        .expect("append user_turns");
+    ledger
+        .append_tool_result_events(&tool_results)
+        .expect("append tool_result_events");
+    ledger
+        .append_relationships(&relationships)
+        .expect("append relationships");
+    ledger
+        .append_compactions(&compactions)
+        .expect("append compactions");
+    for s in &stamps {
+        ledger.append_stamp(s).expect("append stamp");
+    }
+    Ok(())
+}
+
+/// The hand-built fixture writes `eventSource: "transcript"` for Claude
+/// `tool_result` events; the canonical schema dropped that variant in
+/// favor of the more specific `"tool_result"` value. The TS reader is
+/// lenient and stores the JSON verbatim; the Rust SDK is strict. Normalize
+/// here so the fixture replays cleanly without retroactively rewriting
+/// the JSONL on disk (which would drift the snapshot capture corpus). The
+/// substitution also fills in `eventIndex` if the fixture omits it
+/// (required by the SDK schema; the TS reader defaults missing values to
+/// `0` via `??`).
+fn normalize_tool_result_event(record: &mut serde_json::Value) {
+    let Some(obj) = record.as_object_mut() else {
+        return;
+    };
+    if let Some(src) = obj.get_mut("eventSource") {
+        if src.as_str() == Some("transcript") {
+            *src = serde_json::Value::String("tool_result".to_string());
+        }
+    }
+    obj.entry("eventIndex").or_insert(serde_json::json!(0));
+}
+
+fn stamp_from_envelope(envelope: &serde_json::Value) -> Stamp {
+    Stamp {
+        ts: envelope
+            .get("ts")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        selector: serde_json::from_value(
+            envelope
+                .get("selector")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
+        enrichment: serde_json::from_value(
+            envelope
+                .get("enrichment")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +232,10 @@ fn golden_diff_against_ts_cli_snapshots() {
         return;
     }
 
-    let fixture_dir = repo_root().join("tests").join("fixtures").join("cli-golden");
+    let fixture_dir = repo_root()
+        .join("tests")
+        .join("fixtures")
+        .join("cli-golden");
     assert!(
         fixture_dir.is_dir(),
         "fixture corpus missing at {}",
@@ -95,6 +255,11 @@ fn golden_diff_against_ts_cli_snapshots() {
     let snapshots_dir = fixture_dir.join("snapshots");
     let ledger_home = fixture_dir.join("ledger");
     let project_dir = fixture_dir.join("project");
+
+    // Bootstrap the SQLite fixture from `ledger.jsonl`. The Rust SDK only
+    // reads from sqlite; the in-tree fixture is JSONL-only because the
+    // sqlite binaries are gitignored. Replays once per test run.
+    bootstrap_sqlite_from_jsonl(&ledger_home).expect("bootstrap sqlite from JSONL");
 
     // Sealed HOME so the Rust binary's eventual ingest sweep doesn't
     // discover the developer's real session stores.
@@ -265,9 +430,8 @@ fn squash_numeric_field(text: &str, key: &str, placeholder: &str) -> String {
         // below is the right scope. NB: `char::is_ascii_whitespace` is *not*
         // equivalent — it excludes U+000B (vertical tab), which JS `\s` does
         // match, so we list the bytes explicitly.
-        let trimmed_start = after_key.trim_start_matches(|c: char| {
-            matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
-        });
+        let trimmed_start = after_key
+            .trim_start_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
         let ws_consumed = after_key.len() - trimmed_start.len();
         // If the value isn't a bare integer (e.g. `null`), bail and emit
         // the original bytes untouched.

@@ -64,9 +64,18 @@ thiserror = { workspace = true }
 # perfect-hash registry that's evaluated at compile time, so harness lookup
 # costs nothing at startup. `tokio::sync` is needed for the watch controller
 # wiring exposed by `relayburn-sdk` (`WatchController` holds a `Mutex`).
+# `rt` is required by Wave 2 read-path commands so they can drive
+# `relayburn_sdk::ingest_all` (async) from the otherwise-sync presenter
+# bodies via a current-thread runtime.
 async-trait = "0.1"
 phf = { version = "0.11", features = ["macros"] }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "rt"] }
+
+# `IndexMap` preserves first-seen iteration order, which matters for the
+# Wave 2 read-path commands so their grouped output (`summary --by-model`,
+# the per-cell fidelity block) ties cost-sorts the same way the TS CLI's
+# `Map`-backed implementation does. Mirrors the SDK's own dependency.
+indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 # `assert_cmd` drives the binary in the smoke test under `tests/`.
@@ -82,3 +91,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 # `tests/golden.rs` loads `invocations.json` to drive both the TS-CLI snapshot
 # capture and the Rust diff runner. `serde` / `serde_json` are workspace deps
 # already pulled in via `[dependencies]`, so this entry is documentation only.
+#
+# The diff runner also bootstraps the SQLite fixture from the committed
+# `ledger.jsonl` (the in-tree fixture is JSONL-only because the SQLite
+# binaries are gitignored). It does so by parsing the JSONL with `serde_json`
+# and replaying the records via `relayburn_sdk::RawLedger::append_*` methods,
+# which is reachable through the `relayburn-sdk` dep already declared above.

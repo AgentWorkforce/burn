@@ -31,8 +31,8 @@ fn main() {
 fn dispatch(args: Args) -> i32 {
     let globals = args.globals();
     match args.command {
-        Command::Summary => commands::summary::run(&globals),
-        Command::Hotspots => commands::hotspots::run(&globals),
+        Command::Summary(sub) => commands::summary::run(&globals, sub),
+        Command::Hotspots(sub) => commands::hotspots::run(&globals, sub),
         Command::Overhead => commands::overhead::run(&globals),
         Command::Compare => commands::compare::run(&globals),
         Command::Run => commands::run::run(&globals),
