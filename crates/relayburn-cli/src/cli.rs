@@ -109,7 +109,7 @@ pub enum Command {
 
     /// Run an agent CLI under a harness wrapper that ingests its
     /// session log on exit.
-    Run,
+    Run(RunArgs),
 
     /// Inspect or rebuild derived state under `~/.relayburn`.
     State(StateArgs),
@@ -121,6 +121,40 @@ pub enum Command {
     /// in-session self-query.
     #[command(name = "mcp-server")]
     McpServer,
+}
+
+/// `burn run <harness> [--tag k=v ...] [-- <harness args>]` — flags +
+/// trailing argv for the harness driver. Mirrors the TS surface in
+/// `packages/cli/src/commands/run.ts`.
+///
+/// The first positional is the harness name (`claude`, `codex`,
+/// `opencode`). Everything after `--` (or any unknown flag, courtesy of
+/// `trailing_var_arg`) is captured into `passthrough` and forwarded to
+/// the spawned binary verbatim. `--tag k=v` may be repeated; bad shapes
+/// (no `=`, empty key) are rejected at runtime by the driver with the
+/// same error message as the TS sibling.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct RunArgs {
+    /// Lowercase harness identifier (`claude`, `codex`, `opencode`).
+    /// Optional so `burn run --help` and `burn run` both succeed; the
+    /// driver translates a missing name to a help-or-exit-2 outcome
+    /// matching the TS sibling.
+    #[arg(value_name = "HARNESS")]
+    pub harness: Option<String>,
+
+    /// User-supplied stamp enrichment. Repeatable — `--tag workflow=foo
+    /// --tag agent=bar` produces `{"workflow":"foo","agent":"bar"}` on
+    /// the resulting [`relayburn_sdk::Stamp`].
+    #[arg(long = "tag", value_name = "K=V")]
+    pub tag: Vec<String>,
+
+    /// Everything after the harness name (or `--`). Forwarded to the
+    /// spawned binary in `SpawnPlan::args` after the adapter's own
+    /// transport-level args. `trailing_var_arg = true` makes clap stop
+    /// option parsing at the first non-flag token so `burn run claude
+    /// --resume` works without an explicit `--`.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+    pub passthrough: Vec<String>,
 }
 
 /// Per-command flag set for `burn compare`. Mirrors
