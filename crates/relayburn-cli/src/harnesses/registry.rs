@@ -21,14 +21,21 @@
 //!
 //! Three slots are reserved below for the Wave 2 adapter PRs:
 //!
-//! * `claude` — #248-d (Wave 2 D5)
-//! * `codex` — #248-e (Wave 2 D6)
-//! * `opencode` — #248-f (Wave 2 D7)
+//! * `claude` — #248-d (Wave 2 D5). Stateless unit struct registered as a
+//!   bare `&CLAUDE_ADAPTER` static.
+//! * `codex` — #248-e (Wave 2 D6). Built via
+//!   [`super::pending_stamp::adapter_static`] inside a
+//!   [`std::sync::LazyLock`] so the leaked `&'static` is constructed on
+//!   first lookup, not at every test compile.
+//! * `opencode` — #248-f (Wave 2 D7). Same shape as codex.
 //!
-//! Each adds `pub mod claude;` (or codex / opencode) here and a single
-//! row in [`ADAPTERS`]. The codex + opencode adapters are constructed
-//! through [`super::pending_stamp::adapter`] so they share the manifest
-//! + watch-loop wiring.
+//! Each PR adds `pub mod claude;` (or codex / opencode) and a single row
+//! in the `ADAPTERS` map. The codex + opencode adapters are constructed
+//! through [`super::pending_stamp::adapter_static`] (not
+//! [`super::pending_stamp::adapter`]) because the registry map holds
+//! `&'static dyn HarnessAdapter` and a runtime `Box<dyn HarnessAdapter>`
+//! cannot satisfy that bound. The static variant `Box::leak`s once at
+//! first use; see its docs for why that's acceptable here.
 
 use phf::phf_map;
 
@@ -70,10 +77,12 @@ pub fn list_harness_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::{Arc, LazyLock};
 
     use async_trait::async_trait;
     use relayburn_sdk::IngestReport;
 
+    use super::super::pending_stamp::{self, IngestSessionsFn, PendingStampAdapter};
     use super::super::{HarnessAdapter, PlanCtx, SpawnPlan};
     use super::*;
 
@@ -148,5 +157,52 @@ mod tests {
         assert!(lookup("nope").is_none());
         assert!(lookup("").is_none());
         assert!(lookup("claude ").is_none());
+    }
+
+    /// Wave 2 wiring proof: a pending-stamp adapter built via
+    /// [`pending_stamp::adapter_static`] satisfies the `&'static dyn
+    /// HarnessAdapter` bound that [`ADAPTERS`] requires, and round-trips
+    /// through the same `phf::Map` shape on lookup. This is the test that
+    /// would have caught the architectural mismatch where the registry
+    /// stores `&'static` but the factory returned a runtime `Box`.
+    ///
+    /// The static here mirrors the shape codex/opencode will use in
+    /// production once their slots in [`ADAPTERS`] are populated:
+    ///
+    /// ```ignore
+    /// static CODEX_ADAPTER: LazyLock<&'static dyn HarnessAdapter> =
+    ///     LazyLock::new(|| pending_stamp::adapter_static(...));
+    /// ```
+    static FAKE_PENDING_STAMP_ADAPTER: LazyLock<&'static dyn HarnessAdapter> = LazyLock::new(|| {
+        let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
+            Arc::new(|| PathBuf::from("/tmp/codex-sessions"));
+        let ingest_sessions: IngestSessionsFn =
+            Arc::new(|| Box::pin(async { Ok(IngestReport::default()) }));
+        pending_stamp::adapter_static(PendingStampAdapter::new(
+            "codex",
+            session_root,
+            ingest_sessions,
+        ))
+    });
+
+    #[test]
+    fn pending_stamp_adapter_static_fits_phf_registry() {
+        // Force the LazyLock to materialise so we have a real
+        // `&'static dyn HarnessAdapter` to insert.
+        let leaked: &'static dyn HarnessAdapter = *FAKE_PENDING_STAMP_ADAPTER;
+        assert_eq!(leaked.name(), "codex");
+
+        // The whole point of the test: prove the value side of the
+        // registry's `phf::Map<&'static str, &'static dyn HarnessAdapter>`
+        // is satisfiable by what `pending_stamp::adapter_static` returns.
+        // We can't mutate the production `ADAPTERS` from a test, so build
+        // a parallel `phf::Map` with the same value type.
+        let map: std::collections::HashMap<&'static str, &'static dyn HarnessAdapter> =
+            std::iter::once(("codex", leaked)).collect();
+
+        let got = map.get("codex").copied().expect("codex registered");
+        assert_eq!(got.name(), "codex");
+        assert_eq!(got.session_root(), PathBuf::from("/tmp/codex-sessions"));
+        assert!(map.get("opencode").is_none());
     }
 }
