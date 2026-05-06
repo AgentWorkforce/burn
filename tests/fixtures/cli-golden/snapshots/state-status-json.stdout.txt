@@ -4,15 +4,15 @@
     "path": "${RELAYBURN_HOME}/burn.sqlite",
     "exists": true,
     "rows": {
-      "turns": 0,
-      "userTurns": 0,
+      "turns": 7,
+      "userTurns": 3,
       "compactions": 0,
-      "relationships": 0,
-      "toolResultEvents": 0,
+      "relationships": 4,
+      "toolResultEvents": 3,
       "sessions": 0,
-      "stamps": 0
+      "stamps": 1
     },
-    "totalRows": 0
+    "totalRows": 18
   },
   "content": {
     "path": "${RELAYBURN_HOME}/content.sqlite",

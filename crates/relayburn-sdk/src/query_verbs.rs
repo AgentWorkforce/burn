@@ -26,8 +26,8 @@ use crate::analyze::{
     BashVerbAggregation, DetectPatternsOptions, DetectToolCallPatternsOptions,
     DetectToolOutputBloatOptions, FidelitySummary, FileAggregation,
     HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings, MarkdownSection,
-    OverheadFile, OverheadFileKind, ParsedOverheadFile, PricingTable, SubagentAggregation,
-    WasteFinding,
+    OverheadFile, OverheadFileKind, ParsedOverheadFile, PricingTable, SessionClaudeMdCost,
+    SubagentAggregation, WasteFinding,
 };
 use crate::ledger::Query;
 use crate::reader::{
@@ -425,18 +425,9 @@ pub struct OverheadOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct OverheadSection {
-    pub heading: String,
-    pub start_line: u64,
-    pub end_line: u64,
-    pub tokens: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct OverheadSectionCost {
     pub file_path: String,
-    pub section: OverheadSection,
+    pub section: MarkdownSection,
     pub token_share: f64,
     pub cost_per_session: f64,
     pub total_cost: f64,
@@ -445,11 +436,13 @@ pub struct OverheadSectionCost {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverheadAttributionDetail {
-    pub session_count: u64,
+    pub total_tokens: u64,
+    pub total_cost: f64,
+    pub session_costs: Vec<SessionClaudeMdCost>,
+    pub section_costs: Vec<OverheadSectionCost>,
     pub per_session_avg: f64,
     pub per_session_p95: f64,
-    pub total_cost: f64,
-    pub section_costs: Vec<OverheadSectionCost>,
+    pub session_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -636,27 +629,24 @@ impl LedgerHandle {
                 kind: p.file.kind,
                 applies_to: p.file.applies_to.clone(),
                 attribution: OverheadAttributionDetail {
-                    session_count: p.attribution.session_count,
-                    per_session_avg: p.attribution.per_session_avg,
-                    per_session_p95: p.attribution.per_session_p95,
+                    total_tokens: p.attribution.total_tokens,
                     total_cost: p.attribution.total_cost,
+                    session_costs: p.attribution.session_costs.clone(),
                     section_costs: p
                         .attribution
                         .section_costs
                         .iter()
                         .map(|sc| OverheadSectionCost {
                             file_path: sc.file_path.clone(),
-                            section: OverheadSection {
-                                heading: sc.section.heading.clone(),
-                                start_line: sc.section.start_line,
-                                end_line: sc.section.end_line,
-                                tokens: sc.section.tokens,
-                            },
+                            section: sc.section.clone(),
                             token_share: sc.token_share,
                             cost_per_session: sc.cost_per_session,
                             total_cost: sc.total_cost,
                         })
                         .collect(),
+                    per_session_avg: p.attribution.per_session_avg,
+                    per_session_p95: p.attribution.per_session_p95,
+                    session_count: p.attribution.session_count,
                 },
             })
             .collect();
