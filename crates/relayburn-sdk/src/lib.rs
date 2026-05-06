@@ -36,6 +36,18 @@
 
 use std::path::PathBuf;
 
+// Absorbed lower-stack modules. Order matches the dependency graph
+// (reader → ledger → analyze → ingest); the verb modules below pull from
+// them. These were standalone crates (#242–#245) until the monolith
+// restructure; collapsing them removed a lockstep-publish requirement
+// against crates.io that bought us nothing for ~3s of incremental rebuild
+// tax. Each module's source-of-truth comment still points back to the TS
+// sibling under `packages/<name>`.
+mod analyze;
+mod ingest;
+mod ledger;
+mod reader;
+
 // Verb modules — each is populated by a separate follow-up PR. They share
 // the `LedgerHandle` and `LedgerOpenOptions` types defined here, plus the
 // re-exports below. Keeping them in their own files lets the three
@@ -60,7 +72,7 @@ pub use query_verbs::*;
 // destructure a result, without forcing them to add the lower crates to
 // their own `Cargo.toml`. The grouping mirrors the four wave-1 crates.
 
-pub use relayburn_reader::{
+pub use crate::reader::{
     parse_bash_command, resolve_project, ActivityCategory, BashParse, ClassificationInput,
     ClassificationResult, CompactionEvent, ContentKind, ContentRecord, ContentRole,
     ContentStoreMode, ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass,
@@ -70,14 +82,14 @@ pub use relayburn_reader::{
     UsageGranularity, UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
 };
 
-pub use relayburn_ledger::{
+pub use crate::ledger::{
     burn_sqlite_path, config_path, content_sqlite_path, is_valid_session_id, ledger_home,
     load_config, BurnConfig, ContentConfig, EnrichedTurn, Enrichment, Ledger as RawLedger,
     LedgerError, MessageRange, PruneStats, Query, RebuildSummary, Retention, SearchHit,
     SearchOptions, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
 };
 
-pub use relayburn_analyze::{
+pub use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent,
     attribute_hotspots, attribute_overhead, build_trim_recommendations, cost_for_turn,
     cost_for_usage, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
@@ -91,7 +103,7 @@ pub use relayburn_analyze::{
     WasteSeverity,
 };
 
-pub use relayburn_ingest::{
+pub use crate::ingest::{
     cleanup_stale_pending_stamps, ingest_all, IngestOptions as RawIngestOptions, IngestReport,
     IngestRoots,
 };
@@ -145,7 +157,7 @@ impl LedgerOpenOptions {
 
 // --- Ledger / LedgerHandle -------------------------------------------------
 
-/// Handle on an open relayburn ledger. Wraps [`relayburn_ledger::Ledger`]
+/// Handle on an open relayburn ledger. Wraps [`crate::ledger::Ledger`]
 /// (re-exported as [`RawLedger`]) and exposes the SDK verb surface.
 ///
 /// Not `Sync`; wrap in a `Mutex` if you need to share it across threads.

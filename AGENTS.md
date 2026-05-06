@@ -31,19 +31,24 @@ relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the
 
 ### Rust crates (`crates/`)
 
-Cargo workspace mirroring the TS dependency graph. Crate names are prefixed `relayburn-*` because `burn` is taken on crates.io; the binary keeps the `burn` invocation via `[[bin]] name = "burn"` in `relayburn-cli`.
+The Rust tree is a **monolith**: only `relayburn-sdk` and `relayburn-cli` are published to crates.io. Crate names are prefixed `relayburn-*` because `burn` is taken on crates.io; the binary keeps the `burn` invocation via `[[bin]] name = "burn"` in `relayburn-cli`.
 
 ```
-relayburn-reader      — parsers + classifier (port of @relayburn/reader; #242)
-relayburn-ledger      — JSONL append + content sidecar + lock + sqlite archive (#243)
-relayburn-analyze     — pricing, cost derivation, hotspots, overhead (#244)
-relayburn-ingest      — session discovery + parse-and-append + pending stamps + watch loop (#245)
 relayburn-sdk         — PUBLISHED to crates.io; embedding API mirroring @relayburn/sdk (#246)
-relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary via [[bin]] rename (#248)
-relayburn-sdk-node    — napi-rs bindings; built in CI to produce @relayburn/sdk@2.0 .node artifacts (#247)
+                          src/{reader,ledger,analyze,ingest}/ are internal modules
+                          (formerly the four lower crates from #242–#245; absorbed
+                          when keeping them as separate crates would have forced a
+                          public crates.io contract for what is really a single
+                          implementation)
+relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary via [[bin]] rename (#248).
+                          Consumes the SDK as an external embedder would.
+relayburn-sdk-node    — napi-rs bindings; built in CI to produce @relayburn/sdk@2.0 .node artifacts (#247).
+                          Not published to crates.io.
 ```
 
-Build order matches TS: `relayburn-reader → -ledger → -analyze → -ingest → -sdk → -cli`, with `relayburn-sdk-node` depending on `relayburn-sdk`. Toolchain pinned in `rust-toolchain.toml` at the repo root.
+Three crates total. Build order is `relayburn-sdk → relayburn-cli`, with `relayburn-sdk-node` also depending on `relayburn-sdk`. Toolchain pinned in `rust-toolchain.toml` at the repo root.
+
+Inside `relayburn-sdk`, the absorbed modules build in dependency order `reader → ledger → analyze → ingest`; each module's source-of-truth comment still points back to the TS sibling under `packages/<name>`. The verb surface lives in `src/{query_verbs,export_verbs,ingest_verb}.rs` at the SDK crate root and pulls from those modules.
 
 `@relayburn/sdk` owns the canonical query/compute surface — every new read verb should land there first as a pure function. `@relayburn/mcp` and `@relayburn/cli` are presenters: MCP wraps SDK calls in tool definitions, CLI wraps them in flag parsing + table rendering. Don't duplicate query logic across CLI/MCP — extract it into SDK.
 
@@ -161,8 +166,8 @@ The codex / opencode adapters share the pending-stamp + watch-loop shape; both a
 
 ## When in doubt
 
-- **Architecture / API surface:** read `README.md` first, then the package's `src/index.ts` for exports.
-- **Activity classifier rules:** the rule tables (`TEST_PATTERNS`, `EDIT_TOOLS`, `TOOL_ALIASES`, etc.) live at `packages/reader/src/classifier.ts`. They're the source of truth for what `burn compare` buckets each turn into. Adding a new harness = adding entries to `TOOL_ALIASES`; adding a new category = updating `ActivityCategory` in `packages/reader/src/types.ts` and adding its rule + a test.
+- **Architecture / API surface:** read `README.md` first, then the package's `src/index.ts` for exports (TS) or `crates/relayburn-sdk/src/lib.rs` for the Rust public surface.
+- **Activity classifier rules:** the rule tables (`TEST_PATTERNS`, `EDIT_TOOLS`, `TOOL_ALIASES`, etc.) live at `packages/reader/src/classifier.ts` (TS) and `crates/relayburn-sdk/src/reader/classifier.rs` (Rust). They're the source of truth for what `burn compare` buckets each turn into. Adding a new harness = adding entries to `TOOL_ALIASES`; adding a new category = updating `ActivityCategory` in `packages/reader/src/types.ts` (and the Rust mirror at `crates/relayburn-sdk/src/reader/types.rs`) and adding its rule + a test.
 - **Derived state commands:** status, rebuild targets, and content pruning live under `burn state` in `packages/cli/src/commands/state.ts`. Keep maintenance verbs there rather than adding new top-level CLI dispatch.
-- **Ledger schema:** `packages/reader/src/types.ts` (`TurnRecord`, `ContentRecord`) and `packages/ledger/src/schema.ts` (`LedgerLine`, `TurnLine`, `StampLine`). Bump `v` if the on-disk shape changes.
+- **Ledger schema:** `packages/reader/src/types.ts` (`TurnRecord`, `ContentRecord`) and `packages/ledger/src/schema.ts` (`LedgerLine`, `TurnLine`, `StampLine`); Rust mirrors at `crates/relayburn-sdk/src/reader/types.rs` and `crates/relayburn-sdk/src/ledger/schema.rs`. Bump `v` if the on-disk shape changes.
 - **Concurrency:** any read-modify-write on the ledger MUST hold `withLock('ledger', …)` from `@relayburn/ledger`. Append-only writes use the same lock to avoid racing reclassify-style rewrites.

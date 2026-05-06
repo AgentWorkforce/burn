@@ -1,4 +1,4 @@
-//! Ingest verb — async wrapper over [`relayburn_ingest::ingest_all`].
+//! Ingest verb — async wrapper over [`crate::ingest::ingest_all`].
 //!
 //! Mirrors the TS `ingest` verb in `packages/sdk/index.js`. The Rust port
 //! threads the ledger location through [`crate::Ledger::open`] explicitly
@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use relayburn_ingest::{ingest_all, IngestOptions as RawIngestOptions, IngestReport, IngestRoots};
+use crate::ingest::{ingest_all, IngestOptions as RawIngestOptions, IngestReport, IngestRoots};
 
 use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
 

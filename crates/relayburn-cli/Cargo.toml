@@ -10,3 +10,15 @@ description = "The `burn` CLI — published to crates.io. Crate name is relaybur
 [[bin]]
 name = "burn"
 path = "src/main.rs"
+
+[dependencies]
+# The CLI is the canonical external embedder of the SDK — every read
+# verb the binary surfaces will wrap a `relayburn-sdk` call once #248
+# fills in the CLI source (the binary is an `eprintln!` stub today).
+#
+# Version requirement is `0.0` (= `>=0.0.0, <0.1.0`) so the loose
+# 0.0.x prerelease line satisfies both the local workspace path
+# (currently 0.0.0) AND the published `relayburn-sdk` on crates.io
+# (currently 0.0.1) without forcing a lockstep bump on every release.
+# Tighten this once the SDK ships a stable 0.x line.
+relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }
