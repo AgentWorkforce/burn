@@ -91,6 +91,28 @@ static EAGER_ADAPTERS: phf::Map<&'static str, &'static dyn HarnessAdapter> = phf
 static RUNTIME_ADAPTERS: LazyLock<HashMap<&'static str, &'static dyn HarnessAdapter>> =
     LazyLock::new(HashMap::new);
 
+/// Sibling list of runtime adapter names in stable, deterministic
+/// order. Read by [`list_harness_names`] so the CLI's `--help` output
+/// (a) doesn't force [`RUNTIME_ADAPTERS`] lazy init — `HashMap::keys()`
+/// would, via `LazyLock`'s `Deref` — and (b) doesn't flicker between
+/// runs (Rust's `HashMap` randomizes iteration order across program
+/// runs for HashDoS resistance).
+///
+/// **Wave 2 sync requirement.** This list MUST stay in lockstep with
+/// [`RUNTIME_ADAPTERS`]: every name registered in the lazy map needs a
+/// matching entry here, in the order it should appear in `--help`.
+/// When codex (#248-e) and opencode (#248-f) land, each PR uncomments
+/// **two** rows: its `RUNTIME_ADAPTERS` insert AND its
+/// `RUNTIME_ADAPTER_NAMES` entry. The deterministic-ordering test in
+/// this module's `tests` block pins the resulting order.
+static RUNTIME_ADAPTER_NAMES: &[&str] = &[
+    // Wave 2 PRs will populate these slots in lockstep with
+    // RUNTIME_ADAPTERS:
+    //
+    // "codex",     // #248-e
+    // "opencode",  // #248-f
+];
+
 /// Look up an adapter by name. Returns `None` for unknown names; the
 /// `burn run` driver maps `None` to a "did you mean …?" diagnostic
 /// using [`list_harness_names`].
@@ -108,13 +130,20 @@ pub fn lookup(name: &str) -> Option<&'static dyn HarnessAdapter> {
 /// List every registered harness name. The CLI's `--help` block reads
 /// this so the harness list updates automatically when a new adapter
 /// is registered. Order is `phf::Map` iteration order (eager
-/// adapters) followed by `HashMap` iteration order (runtime
-/// adapters); both are stable but not guaranteed alphabetical, so
-/// callers that want deterministic ordering should sort the result —
-/// mirroring how the TS test sorts for comparison.
+/// adapters; deterministic, fixed at compile time by the perfect-hash
+/// build) followed by [`RUNTIME_ADAPTER_NAMES`] (runtime adapters; a
+/// hand-ordered slice).
+///
+/// **Cold-start contract:** this function must not force
+/// [`RUNTIME_ADAPTERS`] lazy init. `burn --help` calls into here, and
+/// the registry-level doc comment promises help-path callers don't
+/// pay harness-table construction cost. The runtime tier is read via
+/// the sibling [`RUNTIME_ADAPTER_NAMES`] slice for that reason; touching
+/// `RUNTIME_ADAPTERS.keys()` would defeat the goal (and also leak
+/// `HashMap`'s non-deterministic iteration order into help output).
 pub fn list_harness_names() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = EAGER_ADAPTERS.keys().copied().collect();
-    names.extend(RUNTIME_ADAPTERS.keys().copied());
+    names.extend(RUNTIME_ADAPTER_NAMES.iter().copied());
     names
 }
 
@@ -187,14 +216,72 @@ mod tests {
     /// On this branch the production registry is intentionally empty;
     /// Wave 2 PRs (claude/codex/opencode) flip this to the `["claude",
     /// "codex", "opencode"]` shape the TS sibling already ships. Once
-    /// those merge, this test should be tightened to assert all three.
+    /// those merge, update [`EXPECTED_HARNESS_NAMES`] below to the
+    /// post-Wave-2 contract.
+    ///
+    /// This test pins the **deterministic ordering** contract for
+    /// [`list_harness_names`]: callers (CLI `--help`, "did you mean"
+    /// diagnostics) get the same sequence on every run, regardless of
+    /// `HashMap`'s HashDoS-randomized iteration order. The contract is
+    /// "eager `phf::Map` order, then [`RUNTIME_ADAPTER_NAMES`] order"
+    /// — both compile-time fixed.
+    ///
+    /// **Cold-start proof.** This test passes without [`lookup`]
+    /// being called, so [`RUNTIME_ADAPTERS`] is never dereferenced.
+    /// Inspection of [`list_harness_names`] confirms it reads
+    /// [`RUNTIME_ADAPTER_NAMES`] (a plain `&[&'static str]`) and never
+    /// touches the `LazyLock`. Wave 2 adapters added to
+    /// [`RUNTIME_ADAPTERS`] must not change this property — i.e. don't
+    /// reach for `RUNTIME_ADAPTERS.keys()` here later.
     #[test]
-    fn list_is_empty_until_wave_2_adapters_land() {
+    fn list_harness_names_is_deterministic() {
+        /// Snapshot of the expected harness ordering. Empty on this
+        /// branch; Wave 2 PRs will append their entries:
+        /// `&["claude", "codex", "opencode"]` post-#248-d/e/f.
+        const EXPECTED_HARNESS_NAMES: &[&str] = &[
+            // Wave 2 PRs append their names here in the same order they
+            // appear in EAGER_ADAPTERS / RUNTIME_ADAPTER_NAMES:
+            //
+            // "claude",    // #248-d (eager)
+            // "codex",     // #248-e (runtime)
+            // "opencode",  // #248-f (runtime)
+        ];
+
         let names = list_harness_names();
-        assert!(
-            names.is_empty(),
-            "expected registry to be empty on this branch, got {names:?}"
+        assert_eq!(
+            names, EXPECTED_HARNESS_NAMES,
+            "harness ordering drifted; if a Wave 2 adapter just landed, \
+             update EXPECTED_HARNESS_NAMES to match the new contract"
         );
+
+        // Calling twice yields identical output — guards against any
+        // future regression that swaps RUNTIME_ADAPTER_NAMES for a
+        // hashed source.
+        assert_eq!(
+            list_harness_names(),
+            names,
+            "list_harness_names must be deterministic across calls"
+        );
+    }
+
+    /// Sync invariant: every name advertised in
+    /// [`RUNTIME_ADAPTER_NAMES`] must resolve through [`lookup`] to an
+    /// adapter actually registered in [`RUNTIME_ADAPTERS`]. This
+    /// catches the "uncomment one row, forget the other" footgun
+    /// Wave 2 PRs face — see the doc comment on
+    /// [`RUNTIME_ADAPTER_NAMES`].
+    ///
+    /// On this branch both lists are empty, so the loop is a no-op
+    /// but the contract is pinned for Wave 2.
+    #[test]
+    fn runtime_adapter_names_match_runtime_adapters() {
+        for name in RUNTIME_ADAPTER_NAMES.iter().copied() {
+            assert!(
+                lookup(name).is_some(),
+                "RUNTIME_ADAPTER_NAMES advertises {name:?} but RUNTIME_ADAPTERS \
+                 has no entry for it; the two lists must stay in lockstep"
+            );
+        }
     }
 
     #[test]
