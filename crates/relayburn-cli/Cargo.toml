@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 # The CLI is the canonical external embedder of the SDK — every read
 # verb the binary surfaces will wrap a `relayburn-sdk` call once #248
-# fills in the CLI source (the binary is an `eprintln!` stub today).
+# fills in the CLI source.
 #
 # Version requirement is `0.0` (= `>=0.0.0, <0.1.0`) so the loose
 # 0.0.x prerelease line satisfies both the local workspace path
@@ -22,3 +22,32 @@ path = "src/main.rs"
 # (currently 0.0.1) without forcing a lockstep bump on every release.
 # Tighten this once the SDK ships a stable 0.x line.
 relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }
+
+# clap v4 derive — argument parsing root and subcommand dispatch. The
+# scaffold defines globals + subcommand stubs only; per-command flag
+# wiring lands in the Wave 2 fan-out PRs.
+clap = { workspace = true }
+
+# `comfy-table` is used by the shared table renderer in `render::table`.
+# Picked over `tabled` because it ships with sane Unicode/ASCII presets
+# and a simple builder API that maps cleanly onto a `Vec<Vec<String>>`
+# of rows. Wave 2 commands render tabular output through this helper.
+comfy-table = "7"
+
+# Used by `render::json` to emit the structured-output mode the TS CLI's
+# `--json` global produces. `serde` derive lives here too because the
+# rendering helpers are generic over `Serialize` types from the SDK.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# `anyhow` for the binary entrypoint; typed errors flow through
+# `relayburn_sdk::LedgerError` and friends. `render::error::report_error`
+# does the SDK-error → stderr/exit-code mapping.
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# `assert_cmd` drives the binary in the smoke test under `tests/`.
+# `predicates` provides the matchers `assert_cmd` wants.
+assert_cmd = "2"
+predicates = "3"
