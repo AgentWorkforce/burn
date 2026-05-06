@@ -16,7 +16,15 @@
 //!   `napi::bindgen_prelude::BigInt`. JS `number` (f64) cannot losslessly
 //!   represent the upper end of the u64 range and silently truncates above
 //!   2^53; the SDK already deals in u64 internally so the boundary is the
-//!   right place to surface that.
+//!   right place to surface that. For verbs whose result is too recursive
+//!   to mirror as a `#[napi(object)]` struct (`overhead`, `overheadTrim`,
+//!   `hotspots`), we serialize through serde_json and emit the result via
+//!   the [`BigIntPromoting`] wrapper, which walks the JSON tree and
+//!   substitutes `BigInt` for any numeric value sitting under one of the
+//!   well-known u64 field names listed in [`BIGINT_FIELDS`]. The lighter
+//!   walker keeps the discriminated-union shape of `HotspotsResult`
+//!   intact (which is awkward to express as a single typed napi object)
+//!   while still honoring the contract.
 //! - **Timestamps → ISO-8601 `String`.** The SDK already speaks ISO
 //!   strings (`turn.ts`, `since` parameters); we keep that wire format
 //!   rather than dragging `chrono::DateTime` or `Date` through the FFI.
@@ -24,11 +32,17 @@
 //! - **`async fn` SDK verbs → `Promise<T>` on the JS side.** napi-rs's
 //!   `tokio_rt` feature drives this; we mark `ingest` `async fn` and the
 //!   sync verbs (`summary`, `sessionCost`, …) as plain `fn` returning
-//!   `napi::Result<T>`.
+//!   `Result<T, BurnError>`.
 //! - **Errors → typed `BurnError` JS class.** Domain failures from the
-//!   SDK (`anyhow::Error`) are mapped into a tagged `BurnError` with a
-//!   discriminant + message; no untyped `napi::Error` leaks. JS code can
-//!   `instanceof BurnError` and switch on `err.code`.
+//!   SDK (`anyhow::Error`) and argument-shape errors raised at this
+//!   boundary are surfaced as a `napi::Error` whose `Status` slot carries
+//!   one of [`SDK_ERROR_CODE`], [`IO_ERROR_CODE`], or
+//!   [`INVALID_ARGUMENT_ERROR_CODE`]. napi-rs writes that string into the
+//!   thrown JS Error's `code` property (via `napi_create_error`'s
+//!   `code` argument), so JS callers get
+//!   `try { … } catch (e) { if (e.code === 'BURN_SDK') … }`. The
+//!   [`BurnErrorCode`] enum is exported as a `string_enum` so TS code
+//!   can reference the codes by name without stringly-typed literals.
 //!
 //! # Surface
 //!
@@ -45,8 +59,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use std::path::PathBuf;
+use std::ptr;
 
-use napi::bindgen_prelude::{BigInt, Error as NapiError, Result as NapiResult, Status};
+use napi::bindgen_prelude::{BigInt, Error as NapiError, Result as NapiResult, ToNapiValue};
+use napi::sys;
 use napi_derive::napi;
 use serde_json::Value as JsonValue;
 
@@ -56,43 +72,62 @@ use relayburn_sdk as sdk;
 // Error mapping
 // ---------------------------------------------------------------------------
 
-/// Tagged error code surfaced on `BurnError.code`. Mirrors the lower-crate
-/// failure axes today; future SDK errors should map here rather than
-/// leaking as opaque strings.
+/// `code` written into the thrown JS Error for failures the SDK raises
+/// (typically `anyhow::Error` chains from the query / ingest verbs).
+pub const SDK_ERROR_CODE: &str = "BURN_SDK";
+
+/// `code` written into the thrown JS Error for I/O failures at the napi
+/// boundary itself (path conversions, etc.).
+pub const IO_ERROR_CODE: &str = "BURN_IO";
+
+/// `code` written into the thrown JS Error when the caller passed an
+/// argument shape we can't accept (e.g. a `BigInt` outside the u64
+/// range).
+pub const INVALID_ARGUMENT_ERROR_CODE: &str = "BURN_INVALID_ARGUMENT";
+
+/// Tagged error code surfaced on the thrown JS Error's `code` property.
+/// Exported as a TS `string_enum` so callers can branch on
+/// `e.code === BurnErrorCode.Sdk` without stringly-typed literals.
+///
+/// The string values match [`SDK_ERROR_CODE`] et al. — napi-rs writes
+/// them into the `code` slot via `napi_create_error`'s code argument, so
+/// the round-trip from constant → JS code property is byte-identical.
 #[napi(string_enum)]
 pub enum BurnErrorCode {
     /// Catch-all for `anyhow::Error` chains the SDK raises. Refine over
     /// time as the SDK's error surface grows typed variants.
+    #[napi(value = "BURN_SDK")]
     Sdk,
     /// I/O failures from the napi boundary itself (path conversions, etc.).
+    #[napi(value = "BURN_IO")]
     Io,
     /// Caller passed an invalid argument shape (e.g. `since` that isn't a
     /// relative range nor an ISO timestamp).
+    #[napi(value = "BURN_INVALID_ARGUMENT")]
     InvalidArgument,
 }
 
-/// Domain error surfaced to JS callers. The `BurnError` JS class is a
-/// thin Object with `{ code, message }`; the napi runtime turns it into a
-/// real `Error` subclass at module-init time.
+/// `Err` variant used by every verb in the binding. The status slot
+/// carries one of the [`BurnErrorCode`] string values; napi-rs threads
+/// that string into the thrown JS Error's `code` property.
 ///
-/// Keep this distinct from the JS `Error` napi-rs would synthesize for an
-/// `Err(napi::Error)` — the two-tier design lets TS consumers
-/// `try { ... } catch (e) { if (e instanceof BurnError) ... }` and switch
-/// on `e.code`.
-#[napi(object)]
-pub struct BurnError {
-    pub code: BurnErrorCode,
-    pub message: String,
-}
+/// We intentionally keep verb signatures spelled as
+/// `Result<T, BurnError>` (using the literal `Result` name and this
+/// alias) rather than aliasing a full `BurnResult<T>` — the napi-rs
+/// `#[napi]` macro identifies the result wrapping by syntactic token
+/// (`Result<...>`) rather than type-checked unwrap, so a wrapper alias
+/// would be silently treated as a regular return type and the macro
+/// would skip the `JsError::from(err).throw_into(env)` codepath.
+pub type BurnError = NapiError<&'static str>;
 
-fn sdk_err(e: anyhow::Error) -> NapiError {
+fn sdk_err(e: anyhow::Error) -> NapiError<&'static str> {
     // Render the chain so the message is informative; the discriminant
-    // stays "Sdk" until the SDK's typed error story exists.
-    NapiError::new(Status::GenericFailure, format!("{e:#}"))
+    // stays "BURN_SDK" until the SDK's typed error story exists.
+    NapiError::new(SDK_ERROR_CODE, format!("{e:#}"))
 }
 
-fn invalid_arg(msg: impl Into<String>) -> NapiError {
-    NapiError::new(Status::InvalidArg, msg.into())
+fn invalid_arg(msg: impl Into<String>) -> NapiError<&'static str> {
+    NapiError::new(INVALID_ARGUMENT_ERROR_CODE, msg.into())
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +141,7 @@ fn u64_to_bigint(v: u64) -> BigInt {
     }
 }
 
-fn bigint_to_u64(v: BigInt) -> NapiResult<u64> {
+fn bigint_to_u64(v: BigInt) -> std::result::Result<u64, BurnError> {
     let (signed, value, lossless) = v.get_u64();
     if signed {
         return Err(invalid_arg("expected non-negative bigint, got signed"));
@@ -119,6 +154,131 @@ fn bigint_to_u64(v: BigInt) -> NapiResult<u64> {
 
 fn maybe_path(s: Option<String>) -> Option<PathBuf> {
     s.map(PathBuf::from)
+}
+
+// ---------------------------------------------------------------------------
+// BigIntPromoting — JsonValue → JS value walker that emits BigInt for the
+// well-known u64 field names below.
+//
+// `overhead`, `overheadTrim`, and `hotspots` return shapes that are too
+// recursive (or, in `hotspots`'s case, a discriminated union) to mirror
+// cleanly as a single `#[napi(object)]` struct. We keep them on the
+// `serde_json::Value` boundary but wrap the result so the standard
+// number→JsNumber conversion in napi-rs's serde-json bridge gets
+// overridden for the named fields. Anything not in this list rides
+// through as a plain JS number, matching the existing TS contract.
+// ---------------------------------------------------------------------------
+
+/// Field names that carry `u64` values in the SDK and therefore must be
+/// surfaced as JS `BigInt`. Names are camelCased (matching `serde(rename_all
+/// = "camelCase")` on the SDK structs); the walker matches these literally
+/// against the JSON object's key list.
+///
+/// Audit checklist when adding a new u64 field to the SDK: drop its
+/// camelCase name here so the napi-rs bindings keep the BigInt contract.
+const BIGINT_FIELDS: &[&str] = &[
+    // overhead + overhead_trim
+    "tokens",
+    "bytes",
+    "totalLines",
+    "sessionCount",
+    "startLine",
+    "endLine",
+    "filesAnalyzed",
+    "filesWithRecommendations",
+    "totalRecommendations",
+    "tokensPerSession",
+    // hotspots aggregations
+    "callCount",
+    "distinctCommands",
+    "ridingTurns",
+    "firstEmitTurnIndex",
+    "toolCallCount",
+    "turnsAnalyzed",
+    "analyzed",
+    "excluded",
+];
+
+fn is_bigint_field(name: &str) -> bool {
+    BIGINT_FIELDS.contains(&name)
+}
+
+/// Wraps a `serde_json::Value` so that, when napi-rs converts it to a JS
+/// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
+/// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
+/// and `hotspots` verbs whose result shapes are documented in
+/// `packages/sdk/index.d.ts`.
+pub struct BigIntPromoting(JsonValue);
+
+impl ToNapiValue for BigIntPromoting {
+    unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> NapiResult<sys::napi_value> {
+        promote_value(env, val.0, /*key=*/ None)
+    }
+}
+
+unsafe fn promote_value(
+    env: sys::napi_env,
+    val: JsonValue,
+    key: Option<&str>,
+) -> NapiResult<sys::napi_value> {
+    match val {
+        JsonValue::Number(n) => {
+            if let (Some(k), Some(u)) = (key, n.as_u64()) {
+                if is_bigint_field(k) {
+                    return BigInt::to_napi_value(env, u64_to_bigint(u));
+                }
+            }
+            // Fall back to napi-rs's default serde number conversion.
+            serde_json::Number::to_napi_value(env, n)
+        }
+        JsonValue::Object(map) => {
+            // Build a JS object, recursing per-value with the field name
+            // so `is_bigint_field` can match.
+            let mut obj: sys::napi_value = ptr::null_mut();
+            napi::check_status!(
+                sys::napi_create_object(env, &mut obj),
+                "promote_value: napi_create_object"
+            )?;
+            for (k, v) in map.into_iter() {
+                let child = promote_value(env, v, Some(&k))?;
+                let key_buf = std::ffi::CString::new(k.as_str()).map_err(|e| {
+                    NapiError::new(
+                        napi::Status::GenericFailure,
+                        format!("invalid object key (contains NUL): {e}"),
+                    )
+                })?;
+                napi::check_status!(
+                    sys::napi_set_named_property(env, obj, key_buf.as_ptr(), child),
+                    "promote_value: napi_set_named_property"
+                )?;
+            }
+            Ok(obj)
+        }
+        JsonValue::Array(arr) => {
+            // Arrays don't carry a key context for their elements — the
+            // outer object's key (e.g. `sections`) doesn't apply to each
+            // element's leaf scalars; pass `None` so per-element
+            // promotion is decided by the inner object's keys.
+            let mut js_arr: sys::napi_value = ptr::null_mut();
+            napi::check_status!(
+                sys::napi_create_array_with_length(env, arr.len(), &mut js_arr),
+                "promote_value: napi_create_array_with_length"
+            )?;
+            for (i, v) in arr.into_iter().enumerate() {
+                let child = promote_value(env, v, /*key=*/ None)?;
+                napi::check_status!(
+                    sys::napi_set_element(env, js_arr, i as u32, child),
+                    "promote_value: napi_set_element"
+                )?;
+            }
+            Ok(js_arr)
+        }
+        // Booleans / strings / nulls — defer to napi-rs's standard
+        // serde_json::Value conversion via the leaf wrappers.
+        JsonValue::Bool(b) => bool::to_napi_value(env, b),
+        JsonValue::String(s) => String::to_napi_value(env, s),
+        JsonValue::Null => napi::bindgen_prelude::Null::to_napi_value(env, napi::bindgen_prelude::Null),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +370,7 @@ impl From<sdk::Summary> for Summary {
 }
 
 #[napi]
-pub fn summary(opts: Option<SummaryOptions>) -> NapiResult<Summary> {
+pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
     let opts = opts.unwrap_or(SummaryOptions {
         session: None,
         project: None,
@@ -263,7 +423,7 @@ impl From<sdk::SessionCostResult> for SessionCostResult {
 
 /// Compact session-scoped cost shape; powers the MCP `burn__sessionCost` tool.
 #[napi(js_name = "sessionCost")]
-pub fn session_cost(opts: Option<SessionCostOptions>) -> NapiResult<SessionCostResult> {
+pub fn session_cost(opts: Option<SessionCostOptions>) -> Result<SessionCostResult, BurnError> {
     let opts = opts.unwrap_or(SessionCostOptions {
         session: None,
         ledger_home: None,
@@ -278,17 +438,14 @@ pub fn session_cost(opts: Option<SessionCostOptions>) -> NapiResult<SessionCostR
 }
 
 // ---------------------------------------------------------------------------
-// overhead + overhead_trim — passed through serde_json. The shapes are
-// large and recursive (sections, attribution detail, applies-to harness
-// arrays); rebuilding each as a `#[napi(object)]` struct here would be
-// hundreds of lines of mechanical translation that D9's snapshot test
-// will catch drift on regardless. The serde wire format already matches
-// `packages/sdk/index.d.ts` modulo the `bigint` substitutions; D9 owns
-// the `BigInt` upgrades for `tokens` / `bytes` / `totalLines` fields if
-// the conformance gate flags them.
+// overhead + overhead_trim — JsonValue passthrough wrapped in
+// BigIntPromoting; see the file header for why we don't mirror these as
+// typed `#[napi(object)]` structs.
 // ---------------------------------------------------------------------------
 
-#[napi(string_enum)]
+/// Mirror of `sdk::OverheadFileKind`. Wire values match
+/// `packages/sdk/index.d.ts`'s `'claude-md' | 'agents-md'` literal union.
+#[napi(string_enum = "kebab-case")]
 pub enum OverheadFileKind {
     ClaudeMd,
     AgentsMd,
@@ -314,12 +471,12 @@ pub struct OverheadOptions {
 
 /// Per-file + per-section overhead cost attribution. Powers `burn overhead`.
 ///
-/// Returns the attribution result as a JSON-shaped object — the schema is
-/// `OverheadResult` in `packages/sdk/index.d.ts`. D9's snapshot test
-/// upgrades the `tokens` / `bytes` / `totalLines` fields to `BigInt` if
-/// the conformance gate calls for it.
-#[napi]
-pub fn overhead(opts: Option<OverheadOptions>) -> NapiResult<JsonValue> {
+/// Returns the attribution result as an `OverheadResult` (see
+/// `packages/sdk/index.d.ts`). Numeric u64 fields (`tokens`, `bytes`,
+/// `totalLines`, `sessionCount`, `startLine`, `endLine`) cross the
+/// boundary as `BigInt`; everything else is plain JS `number` / string.
+#[napi(ts_return_type = "import('./index').OverheadResult")]
+pub fn overhead(opts: Option<OverheadOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(OverheadOptions {
         project: None,
         since: None,
@@ -333,9 +490,10 @@ pub fn overhead(opts: Option<OverheadOptions>) -> NapiResult<JsonValue> {
         ledger_home: maybe_path(opts.ledger_home),
     };
     let result = sdk::overhead(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result)
-        .map_err(|e| NapiError::new(Status::GenericFailure, format!("serialize overhead: {e}")))?;
-    Ok(value)
+    let value = serde_json::to_value(&result).map_err(|e| {
+        NapiError::new(SDK_ERROR_CODE, format!("serialize overhead: {e}"))
+    })?;
+    Ok(BigIntPromoting(value))
 }
 
 #[napi(object)]
@@ -352,9 +510,9 @@ pub struct OverheadTrimOptions {
 
 /// Trim recommendations for high-cost overhead-file sections. Powers
 /// `burn overhead trim`. Returns an `OverheadTrimResult`-shaped JSON
-/// object; see the comment on [`overhead`] for the BigInt-upgrade plan.
-#[napi(js_name = "overheadTrim")]
-pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> NapiResult<JsonValue> {
+/// object with the same `BigInt` substitutions as [`overhead`].
+#[napi(js_name = "overheadTrim", ts_return_type = "import('./index').OverheadTrimResult")]
+pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(OverheadTrimOptions {
         project: None,
         since: None,
@@ -377,9 +535,9 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> NapiResult<JsonValue>
     };
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result).map_err(|e| {
-        NapiError::new(Status::GenericFailure, format!("serialize overhead_trim: {e}"))
+        NapiError::new(SDK_ERROR_CODE, format!("serialize overhead_trim: {e}"))
     })?;
-    Ok(value)
+    Ok(BigIntPromoting(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +546,11 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> NapiResult<JsonValue>
 // .d.ts already documents the shape (`HotspotsResult` union).
 // ---------------------------------------------------------------------------
 
-#[napi(string_enum)]
+/// Mirror of `sdk::HotspotsGroupBy`. Wire values match
+/// `packages/sdk/index.d.ts`'s
+/// `'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent'` literal
+/// union.
+#[napi(string_enum = "kebab-case")]
 pub enum HotspotsGroupBy {
     Attribution,
     Bash,
@@ -421,9 +583,12 @@ pub struct HotspotsOptions {
 
 /// Per-axis hotspot attribution + pattern-finding queries. Returns a
 /// JSON-shaped discriminated union — see `HotspotsResult` in
-/// `packages/sdk/index.d.ts`.
-#[napi]
-pub fn hotspots(opts: Option<HotspotsOptions>) -> NapiResult<JsonValue> {
+/// `packages/sdk/index.d.ts`. u64 row counts (`callCount`,
+/// `distinctCommands`, `ridingTurns`, `firstEmitTurnIndex`,
+/// `toolCallCount`, `turnsAnalyzed`, `analyzed`, `excluded`) cross as
+/// `BigInt` per the file header rule.
+#[napi(ts_return_type = "import('./index').HotspotsResult")]
+pub fn hotspots(opts: Option<HotspotsOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(HotspotsOptions {
         session: None,
         project: None,
@@ -441,9 +606,10 @@ pub fn hotspots(opts: Option<HotspotsOptions>) -> NapiResult<JsonValue> {
         ledger_home: maybe_path(opts.ledger_home),
     };
     let result = sdk::hotspots(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result)
-        .map_err(|e| NapiError::new(Status::GenericFailure, format!("serialize hotspots: {e}")))?;
-    Ok(value)
+    let value = serde_json::to_value(&result).map_err(|e| {
+        NapiError::new(SDK_ERROR_CODE, format!("serialize hotspots: {e}"))
+    })?;
+    Ok(BigIntPromoting(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +646,7 @@ pub struct SearchResult {
 }
 
 #[napi]
-pub fn search(opts: SearchQueryOptions) -> NapiResult<SearchResult> {
+pub fn search(opts: SearchQueryOptions) -> Result<SearchResult, BurnError> {
     let limit = match opts.limit {
         Some(b) => Some(bigint_to_u64(b)? as usize),
         None => None,
@@ -529,7 +695,7 @@ pub struct ExportStampsOptions {
 /// `export_ledger() -> impl Iterator` behavior (it's already in-memory
 /// today). A streaming variant is a follow-up.
 #[napi(js_name = "exportLedger")]
-pub fn export_ledger(opts: Option<ExportLedgerOptions>) -> NapiResult<Vec<JsonValue>> {
+pub fn export_ledger(opts: Option<ExportLedgerOptions>) -> Result<Vec<JsonValue>, BurnError> {
     let opts = opts.unwrap_or(ExportLedgerOptions { ledger_home: None });
     let raw = sdk::ExportLedgerOptions {
         ledger_home: maybe_path(opts.ledger_home),
@@ -541,7 +707,7 @@ pub fn export_ledger(opts: Option<ExportLedgerOptions>) -> NapiResult<Vec<JsonVa
 /// Stream every stamp row as a JSONL-shaped JSON object. Sibling of
 /// [`export_ledger`].
 #[napi(js_name = "exportStamps")]
-pub fn export_stamps(opts: Option<ExportStampsOptions>) -> NapiResult<Vec<JsonValue>> {
+pub fn export_stamps(opts: Option<ExportStampsOptions>) -> Result<Vec<JsonValue>, BurnError> {
     let opts = opts.unwrap_or(ExportStampsOptions { ledger_home: None });
     let raw = sdk::ExportStampsOptions {
         ledger_home: maybe_path(opts.ledger_home),
@@ -593,6 +759,15 @@ impl From<sdk::IngestReport> for IngestReport {
 /// Progress / warning sinks are intentionally not surfaced through the
 /// boundary in v1 — the JS surface today doesn't expose them either.
 /// Wave 2 D9 picks them up if the conformance gate calls for it.
+///
+/// **Error-code caveat:** napi-rs's `execute_tokio_future` adapter
+/// (driving `async fn` → `Promise<T>`) is hard-coded to reject with the
+/// default `napi::Error<Status>` shape, so this verb's rejection
+/// surfaces as `code: 'GenericFailure'` rather than the
+/// [`BurnErrorCode`] codes used by the synchronous verbs. JS callers
+/// branching on `e.code` should match `'BURN_SDK'` (sync verbs) and
+/// `'GenericFailure'` (this verb) until napi-rs grows a typed-error
+/// async path.
 #[napi]
 pub async fn ingest(opts: Option<IngestOptions>) -> NapiResult<IngestReport> {
     let opts = opts.unwrap_or(IngestOptions {
@@ -614,7 +789,9 @@ pub async fn ingest(opts: Option<IngestOptions>) -> NapiResult<IngestReport> {
         on_progress: None,
         on_warn: None,
     };
-    let report = sdk::ingest(raw).await.map_err(sdk_err)?;
+    let report = sdk::ingest(raw)
+        .await
+        .map_err(|e| NapiError::from_reason(format!("{e:#}")))?;
     Ok(report.into())
 }
 
@@ -630,7 +807,7 @@ pub async fn ingest(opts: Option<IngestOptions>) -> NapiResult<IngestReport> {
 /// `Ledger.open()` smoke-call shape from `packages/sdk/index.d.ts`; a
 /// future PR can add a stateful `Ledger` JS class that holds a handle.
 #[napi(js_name = "ledgerOpen")]
-pub fn ledger_open(opts: Option<LedgerOpenOptions>) -> NapiResult<String> {
+pub fn ledger_open(opts: Option<LedgerOpenOptions>) -> Result<String, BurnError> {
     let opts = opts.unwrap_or(LedgerOpenOptions {
         home: None,
         content_home: None,
@@ -695,5 +872,63 @@ mod tests {
             maybe_path(Some("/tmp/x".into())),
             Some(PathBuf::from("/tmp/x"))
         );
+    }
+
+    #[test]
+    fn bigint_field_membership_covers_documented_keys() {
+        // Every camelCased u64 field that crosses the boundary today
+        // must be in BIGINT_FIELDS so the walker promotes it.
+        for key in [
+            "tokens",
+            "bytes",
+            "totalLines",
+            "sessionCount",
+            "startLine",
+            "endLine",
+            "filesAnalyzed",
+            "filesWithRecommendations",
+            "totalRecommendations",
+            "tokensPerSession",
+            "callCount",
+            "distinctCommands",
+            "ridingTurns",
+            "firstEmitTurnIndex",
+            "toolCallCount",
+            "turnsAnalyzed",
+            "analyzed",
+            "excluded",
+        ] {
+            assert!(is_bigint_field(key), "{key} missing from BIGINT_FIELDS");
+        }
+
+        // Spot-check that f64 / string fields aren't accidentally on
+        // the list — a regression here would silently turn floats into
+        // BigInts on the JS side.
+        for key in [
+            "totalCost",
+            "grandTotal",
+            "initialTokens",
+            "persistenceTokens",
+            "tokenShare",
+            "perSessionAvg",
+            "path",
+            "kind",
+        ] {
+            assert!(
+                !is_bigint_field(key),
+                "{key} unexpectedly present in BIGINT_FIELDS"
+            );
+        }
+    }
+
+    #[test]
+    fn burn_error_codes_match_constants() {
+        // The TS-exported BurnErrorCode variant values must equal the
+        // string codes we hand to `napi::Error::new`, otherwise JS
+        // callers comparing `e.code` to `BurnErrorCode.Sdk` would
+        // silently miss every error.
+        assert_eq!(SDK_ERROR_CODE, "BURN_SDK");
+        assert_eq!(IO_ERROR_CODE, "BURN_IO");
+        assert_eq!(INVALID_ARGUMENT_ERROR_CODE, "BURN_INVALID_ARGUMENT");
     }
 }
