@@ -8,6 +8,9 @@ archive.sqlite-wal
 burn.sqlite
 burn.sqlite-shm
 burn.sqlite-wal
+content.sqlite
+content.sqlite-shm
+content.sqlite-wal
 cursors.json
 hwm.json
 config.json

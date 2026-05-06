@@ -92,15 +92,15 @@ pub use crate::ledger::{
 pub use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent,
     attribute_hotspots, attribute_overhead, build_trim_recommendations, cost_for_turn,
-    cost_for_usage, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
-    find_overhead_files, findings_from_patterns, has_minimum_fidelity, load_overhead_file,
-    load_pricing, render_unified_diff_for_recommendation, summarize_fidelity, sum_costs,
-    AttributeOverheadInput, AttributionMethod, BashAggregation, BashVerbAggregation,
+    cost_for_usage, describe_applies_to, detect_patterns, detect_tool_call_patterns,
+    detect_tool_output_bloat, find_overhead_files, findings_from_patterns, has_minimum_fidelity,
+    load_overhead_file, load_pricing, render_unified_diff_for_recommendation, summarize_fidelity,
+    sum_costs, AttributeOverheadInput, AttributionMethod, BashAggregation, BashVerbAggregation,
     CostBreakdown, FidelitySummary, FileAggregation, HotspotsOptions as AnalyzeHotspotsOptions,
-    HotspotsResult as AnalyzeHotspotsResult, ModelCost, OverheadAttribution, OverheadFile,
-    OverheadFileAttribution, OverheadFileKind, ParsedOverheadFile, PricingTable, ReasoningMode,
-    SessionTotals, SubagentAggregation, ToolAttribution, TrimRecommendation, WasteFinding,
-    WasteSeverity,
+    HotspotsResult as AnalyzeHotspotsResult, MarkdownSection, ModelCost, OverheadAttribution,
+    OverheadFile, OverheadFileAttribution, OverheadFileKind, ParsedOverheadFile, PricingTable,
+    ReasoningMode, SessionClaudeMdCost, SessionTotals, SubagentAggregation, ToolAttribution,
+    TrimRecommendation, WasteFinding, WasteSeverity,
 };
 
 pub use crate::ingest::{

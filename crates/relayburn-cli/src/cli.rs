@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 
 /// Parsed top-level argv — what every command handler receives via
 /// [`Args::globals`].
@@ -102,7 +102,7 @@ pub enum Command {
     Hotspots,
 
     /// Estimate context overhead and (optionally) trim it.
-    Overhead,
+    Overhead(OverheadArgs),
 
     /// Compare cost across two or more models on the same workload.
     Compare,
@@ -121,4 +121,63 @@ pub enum Command {
     /// in-session self-query.
     #[command(name = "mcp-server")]
     McpServer,
+}
+
+/// `burn overhead [trim]` argument set. The top-level form takes the
+/// shared `--project` / `--since` / `--kind` flags; the optional
+/// `trim` subcommand layers on `--top` for recommendation count.
+#[derive(Debug, ClapArgs)]
+pub struct OverheadArgs {
+    /// Project root to scan for overhead files (CLAUDE.md, .claude/CLAUDE.md,
+    /// AGENTS.md). Defaults to the current working directory.
+    #[arg(long, value_name = "PATH", global = true)]
+    pub project: Option<PathBuf>,
+
+    /// Time window to attribute over: a relative range (`24h`, `7d`,
+    /// `4w`, `2m`) or an ISO timestamp. Defaults to all time.
+    #[arg(long, value_name = "RANGE", global = true)]
+    pub since: Option<String>,
+
+    /// Narrow to a single overhead-file kind.
+    #[arg(long, value_enum, value_name = "KIND", global = true)]
+    pub kind: Option<OverheadKind>,
+
+    #[command(subcommand)]
+    pub action: Option<OverheadAction>,
+}
+
+/// CLI-facing mirror of [`relayburn_sdk::OverheadFileKind`]. Lives here
+/// so the SDK enum doesn't have to take a `clap` dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OverheadKind {
+    #[value(name = "claude-md")]
+    ClaudeMd,
+    #[value(name = "agents-md")]
+    AgentsMd,
+}
+
+impl From<OverheadKind> for relayburn_sdk::OverheadFileKind {
+    fn from(k: OverheadKind) -> Self {
+        match k {
+            OverheadKind::ClaudeMd => relayburn_sdk::OverheadFileKind::ClaudeMd,
+            OverheadKind::AgentsMd => relayburn_sdk::OverheadFileKind::AgentsMd,
+        }
+    }
+}
+
+/// `burn overhead <action>`.
+#[derive(Debug, Subcommand)]
+pub enum OverheadAction {
+    /// Surface trim recommendations for the highest-cost sections of
+    /// each overhead file. Recommendations only — `burn` never
+    /// modifies the source files.
+    Trim(OverheadTrimArgs),
+}
+
+/// `burn overhead trim` flags layered on top of [`OverheadArgs`].
+#[derive(Debug, ClapArgs)]
+pub struct OverheadTrimArgs {
+    /// Number of recommendations per file. Defaults to 3.
+    #[arg(long, value_name = "N")]
+    pub top: Option<u64>,
 }
