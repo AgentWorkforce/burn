@@ -115,12 +115,76 @@ pub enum Command {
     State(StateArgs),
 
     /// Scan harness session stores and append new turns to the ledger.
-    Ingest,
+    Ingest(IngestArgs),
 
     /// Stdio MCP server exposing read-only ledger queries for
     /// in-session self-query.
     #[command(name = "mcp-server")]
-    McpServer,
+    McpServer(McpServerArgs),
+}
+
+/// Per-command flags for `burn ingest`. Mirrors the TS surface in
+/// `packages/cli/src/commands/ingest.ts` so flag muscle memory carries
+/// across.
+///
+/// Three modes, exactly one applies per invocation:
+///
+/// - No flags: scan all known session stores once and exit.
+/// - `--watch` (optionally with `--interval <MS>`): foreground poll loop
+///   driven by [`relayburn_sdk::start_watch_loop`].
+/// - `--hook <HARNESS> [--quiet]`: stdin-driven hook entrypoint. Today
+///   only `--hook claude` is supported; the `--quiet` flag suppresses
+///   non-error stderr breadcrumbs so it is safe to call from every
+///   Claude Code hook.
+///
+/// `--watch` and `--hook` are mutually exclusive; the presenter rejects
+/// the combination at runtime with exit 2 (matching TS).
+#[derive(Debug, Clone, ClapArgs)]
+pub struct IngestArgs {
+    /// Stay running and poll session stores at `--interval` ms.
+    /// Mutually exclusive with `--hook`.
+    #[arg(long)]
+    pub watch: bool,
+
+    /// Poll interval for `--watch`, in milliseconds. Defaults to 1000.
+    /// Ignored without `--watch`.
+    #[arg(long, value_name = "MS")]
+    pub interval: Option<u64>,
+
+    /// Read a harness-specific hook payload from stdin and ingest the
+    /// transcript it references. Today only `claude` is supported.
+    /// Mutually exclusive with `--watch`.
+    #[arg(long, value_name = "HARNESS")]
+    pub hook: Option<String>,
+
+    /// Suppress non-error stderr breadcrumbs. Used by hook callers so
+    /// the surrounding tool invocation isn't blocked by a noisy
+    /// pipeline.
+    #[arg(long)]
+    pub quiet: bool,
+}
+
+/// Per-command flags for `burn mcp-server`. The stdio MCP server speaks
+/// JSON-RPC 2.0 line-delimited frames over stdin/stdout and exposes the
+/// `burn__sessionCost` read-only tool. Closes #210.
+///
+/// Global `--ledger-path` (on [`Args`]) is consulted as the SDK ledger
+/// home. `--session-id` registers a default session id so MCP clients
+/// that omit `sessionId` in `tools/call` get a useful answer (the
+/// running agent's own session).
+#[derive(Debug, Clone, ClapArgs)]
+pub struct McpServerArgs {
+    /// Default sessionId to use when `tools/call burn__sessionCost`
+    /// omits the argument. Lets the host wrap the server with the
+    /// running agent's own session id so the agent can self-query
+    /// without knowing it.
+    #[arg(long = "session-id", value_name = "ID")]
+    pub session_id: Option<String>,
+
+    /// Emit protocol-level diagnostics to stderr. Off by default so a
+    /// well-behaved client doesn't see unexpected noise on the channel.
+    #[arg(long)]
+    pub debug: bool,
 }
 
 /// Per-command flag set for `burn compare`. Mirrors
