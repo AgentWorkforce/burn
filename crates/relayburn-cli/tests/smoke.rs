@@ -34,6 +34,19 @@ const SUBCOMMANDS: &[&str] = &[
     "mcp-server",
 ];
 
+/// Subcommands that still print "not yet implemented" when invoked
+/// without args. Wave 2 D1 wired up `summary` and `hotspots` as real
+/// presenters, so they're excluded from the stub-mode tripwire below.
+/// The remaining entries are owned by sibling Wave 2 PRs.
+const UNIMPLEMENTED_SUBCOMMANDS: &[&str] = &[
+    "overhead",
+    "compare",
+    "run",
+    "state",
+    "ingest",
+    "mcp-server",
+];
+
 /// Helper: build a `Command` driving the locally-built `burn` binary.
 fn burn() -> Command {
     Command::cargo_bin("burn").expect("`burn` binary must build for the smoke test")
@@ -76,12 +89,13 @@ fn each_subcommand_help_exits_zero_with_non_empty_stdout() {
 
 #[test]
 fn each_stub_exits_one_with_not_yet_implemented_message() {
-    for sub in SUBCOMMANDS {
+    for sub in UNIMPLEMENTED_SUBCOMMANDS {
         // Run the stub with no extra args. The default exit-code
         // contract for the scaffold is `EXIT_NOT_YET_IMPLEMENTED == 1`;
         // assert it explicitly so a future Wave 2 PR that wires up a
         // real presenter is forced to update this assertion (and the
-        // scaffold acceptance criterion).
+        // scaffold acceptance criterion). Subcommands that have already
+        // been wired up live in `SUBCOMMANDS` but not here.
         burn()
             .arg(sub)
             .assert()
@@ -95,8 +109,10 @@ fn json_mode_emits_error_envelope_on_unimplemented() {
     // The `--json` global flips error reporting from a stderr line to
     // a `{"error": …}` JSON envelope on stdout. Cover the toggle so
     // Wave 2 commands inherit a consistent JSON-mode error shape.
+    // Use a still-stubbed command (`compare`) so the assertion remains
+    // meaningful as Wave 2 PRs replace stubs with real presenters.
     let output = burn()
-        .args(["--json", "summary"])
+        .args(["--json", "compare"])
         .assert()
         .code(1)
         .get_output()
