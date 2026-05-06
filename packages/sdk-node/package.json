@@ -1,0 +1,64 @@
+{
+  "name": "@relayburn/sdk",
+  "version": "2.0.0-pre.0",
+  "description": "Embeddable Relayburn SDK — napi-rs bindings over the Rust relayburn-sdk crate (2.x). Drop-in replacement for the TS @relayburn/sdk@1.x.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "require": "./src/index.cjs"
+    }
+  },
+  "files": [
+    "src/index.js",
+    "src/index.cjs",
+    "src/index.d.ts",
+    "src/binding.js",
+    "src/binding.d.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "node -e \"process.exit(0)\"",
+    "build:napi": "napi build --platform --release --js src/binding.js --dts src/binding.d.ts",
+    "build:napi:debug": "napi build --platform --js src/binding.js --dts src/binding.d.ts",
+    "test": "node --test 'test/**/*.test.js'",
+    "test:bundle": "node test/esbuild-smoke.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "napi": {
+    "binaryName": "relayburn-sdk",
+    "packageName": "@relayburn/sdk",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu"
+    ]
+  },
+  "optionalDependencies": {
+    "@relayburn/sdk-darwin-arm64": "2.0.0-pre.0",
+    "@relayburn/sdk-darwin-x64": "2.0.0-pre.0",
+    "@relayburn/sdk-linux-arm64-gnu": "2.0.0-pre.0",
+    "@relayburn/sdk-linux-x64-gnu": "2.0.0-pre.0"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4",
+    "esbuild": "^0.25.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/sdk-node"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

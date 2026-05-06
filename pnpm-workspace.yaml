@@ -1,2 +1,11 @@
 packages:
   - packages/*
+  # Exclude `packages/sdk-node` until the 2.0 cutover (#249). It declares
+  # `@relayburn/sdk` at version `2.0.0-pre.x`, which pnpm would prefer
+  # over the 1.x package at `packages/sdk` when resolving `workspace:*`
+  # dependencies in `cli` / `mcp` — flipping every consumer onto the
+  # not-yet-built napi-rs umbrella mid-port. Keeping it out of the
+  # workspace means the 1.x SDK stays the source of truth for in-repo
+  # consumers; the napi-rs CI matrix and conformance test scaffolding
+  # operate on `packages/sdk-node` directly via path.
+  - '!packages/sdk-node'

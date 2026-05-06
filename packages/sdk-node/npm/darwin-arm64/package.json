@@ -1,0 +1,29 @@
+{
+  "name": "@relayburn/sdk-darwin-arm64",
+  "version": "2.0.0-pre.0",
+  "description": "Prebuilt napi-rs binding for @relayburn/sdk on darwin-arm64.",
+  "main": "relayburn-sdk.darwin-arm64.node",
+  "files": [
+    "relayburn-sdk.darwin-arm64.node",
+    "package.json",
+    "README.md"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/sdk-node/npm/darwin-arm64"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

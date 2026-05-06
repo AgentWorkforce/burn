@@ -1,0 +1,198 @@
+name: napi build
+
+# Build prebuilt napi-rs `.node` artifacts for every platform we publish to
+# npm under `@relayburn/sdk-*`. PRs validate the matrix; tags / manual
+# dispatch *would* publish, but the publish step is stubbed off for now —
+# wired up properly in #249 (cutover release workflow).
+#
+# Caches Cargo registry + git + target dir, plus pnpm store, so the matrix
+# stays fast on the hot path.
+
+on:
+  pull_request:
+    paths:
+      - 'crates/relayburn-sdk/**'
+      - 'crates/relayburn-sdk-node/**'
+      - 'packages/sdk-node/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/napi-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/relayburn-sdk/**'
+      - 'crates/relayburn-sdk-node/**'
+      - 'packages/sdk-node/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/napi-build.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish prebuilt artifacts to npm under the `next` tag (stubbed; full wiring in #249)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: napi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+            short: darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-14
+            short: darwin-arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            short: linux-x64-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            short: linux-arm64-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+          cache: 'pnpm'
+
+      - name: Setup Rust toolchain
+        # rust-toolchain.toml at the repo root pins channel + components.
+        # `cross` handles the aarch64 linux target via container, so we
+        # only register the host target by default and add the matrix
+        # target explicitly when it's a supported native cross.
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      - name: Install cross (linux-arm64 only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        # `cross` provides the aarch64 sysroot via Docker on the linux runner.
+        # napi-rs's CLI auto-detects `cross` for arm64 linux, so installing
+        # it is the only setup step we need.
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.target }}-
+            cargo-${{ runner.os }}-
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install packages/sdk-node deps
+        # `packages/sdk-node` is intentionally excluded from the pnpm
+        # workspace until the 2.0 cutover (see pnpm-workspace.yaml), so
+        # `pnpm install` at the root won't pull its devDependencies
+        # (`@napi-rs/cli`, `esbuild`). `--ignore-workspace` makes pnpm
+        # treat this directory as a standalone project and install into
+        # `packages/sdk-node/node_modules/` directly.
+        working-directory: packages/sdk-node
+        run: pnpm install --ignore-workspace --no-frozen-lockfile
+
+      - name: Build napi binding for ${{ matrix.target }}
+        # `napi build` reads `packages/sdk-node/package.json`'s `napi`
+        # block to learn the binary name, then dispatches to `cargo build`
+        # under the hood. The output is a per-target `.node` file and a
+        # generated `binding.js` / `binding.d.ts` co-located with it.
+        # While #247-a is in flight the binding crate has no `#[napi]`
+        # exports yet, so this step may emit an empty addon — that's fine
+        # for the matrix-validation use case, and once the bindings land
+        # the same step produces a real binary without changes here.
+        working-directory: packages/sdk-node
+        run: |
+          pnpm exec napi build \
+            --platform \
+            --release \
+            --target ${{ matrix.target }} \
+            --js src/binding.js \
+            --dts src/binding.d.ts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relayburn-sdk-${{ matrix.short }}
+          path: packages/sdk-node/*.node
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Bundle smoke test (esbuild)
+        # Confirms the umbrella facade resolves + bundles cleanly. Runs on
+        # every matrix leg so we catch platform-specific resolution issues
+        # (path casing, native-binding aliases) close to where they'd
+        # surface for an embedder.
+        working-directory: packages/sdk-node
+        run: node --test 'test/esbuild-smoke.test.js'
+
+      - name: Conformance test (skipped until #247-a binding lands)
+        # While #247-a is in flight the binding crate has no exports, so
+        # the conformance suite skips itself. Once those bindings land,
+        # flipping `RELAYBURN_SDK_NAPI_BUILT=1` here turns the skip into a
+        # real deep-equal gate against TS @relayburn/sdk@1.x.
+        working-directory: packages/sdk-node
+        env:
+          RELAYBURN_SDK_NAPI_BUILT: '0'
+        run: node --test 'test/conformance.test.js'
+
+  publish:
+    # Stub. Real publish wiring lands in #249 (Wave 3 cutover) — at that
+    # point this job downloads the matrix artifacts, drops each into the
+    # right `npm/<platform>/` directory, and runs `npm publish --tag=next`
+    # for the umbrella + each per-platform package via OIDC trusted
+    # publisher. Until then, calling `workflow_dispatch` with
+    # `publish: true` exercises the artifact download path so we catch
+    # wiring errors early without actually pushing to npm.
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+          cache: 'pnpm'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: packages/sdk-node/artifacts
+
+      - name: Inspect artifacts (publish stub)
+        run: |
+          echo 'Publish step is currently a stub. Full wiring lands in #249.'
+          ls -lah packages/sdk-node/artifacts || true
