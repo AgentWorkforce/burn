@@ -1,10 +1,10 @@
 // Conformance test: TS @relayburn/sdk@1.x vs napi-rs @relayburn/sdk@2.0.0-pre.
 //
-// For each of the 6 verbs (`ingest`, `summary`, `sessionCost`, `overhead`,
-// `overheadTrim`, `hotspots`), run both implementations against the existing
-// fixture ledger and assert `deepStrictEqual` on the return value. This is
-// the gate that says "the Rust port is behavior-equivalent to the TS port"
-// — it's the test #247 cites as the acceptance criterion.
+// For each of the 7 verbs (`ingest`, `summary`, `sessionCost`, `overhead`,
+// `overheadTrim`, `hotspots`, `compare`), run both implementations against
+// the existing fixture ledger and assert `deepStrictEqual` on the return
+// value. This is the gate that says "the Rust port is behavior-equivalent
+// to the TS port" — it's the test #247 cites as the acceptance criterion.
 //
 // **Status (2026-05-06): scaffolded but skipped.** The napi-rs bindings
 // land in #247-a (parallel agent worktree). Until that crate is published
@@ -35,8 +35,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../../..');
 
 // Fixture ledger location. CI seeds `tests/fixtures/ledger/` from the
-// reader corpus during the `prepare-fixture-ledger` step (kept simple here:
-// the fixture ledger is built on demand if missing).
+// reader corpus during the `prepare-fixture-ledger` step. When
+// `RELAYBURN_SDK_NAPI_BUILT=1` is set this directory MUST exist —
+// `ensureFixtureLedger()` below throws if it's missing so the gate can't
+// silently pass on empty homes.
 const FIXTURE_LEDGER_DIR = join(REPO_ROOT, 'tests', 'fixtures', 'ledger');
 
 const NAPI_READY = process.env.RELAYBURN_SDK_NAPI_BUILT === '1';
@@ -61,15 +63,34 @@ function bindingMissing(err) {
   return /native binding not found/i.test(String(err && err.message));
 }
 
+// When the gate is on (`RELAYBURN_SDK_NAPI_BUILT=1`) the fixture ledger MUST
+// exist — otherwise both implementations would compare against empty homes
+// and the deep-equality checks would tautologically pass. Throwing here turns
+// "fixture missing" into a loud failure instead of a silent green.
+//
+// The fixture lives at `tests/fixtures/ledger/` and should mirror the on-disk
+// shape of `~/.relayburn/` (typically a `ledger.jsonl` plus `content/`
+// sidecar). CI's `prepare-fixture-ledger` step seeds it from the reader
+// corpus before flipping the gate.
+function ensureFixtureLedger() {
+  if (!existsSync(FIXTURE_LEDGER_DIR)) {
+    throw new Error(
+      `conformance fixture ledger missing at ${FIXTURE_LEDGER_DIR}. ` +
+        `Seed it (e.g. cp -R ~/.relayburn tests/fixtures/ledger) before ` +
+        `running with RELAYBURN_SDK_NAPI_BUILT=1, or unset the env var to ` +
+        `skip the conformance suite.`,
+    );
+  }
+}
+
 function makeHome() {
   const home = mkdtempSync(join(tmpdir(), 'relayburn-conformance-'));
-  if (existsSync(FIXTURE_LEDGER_DIR)) {
-    cpSync(FIXTURE_LEDGER_DIR, home, { recursive: true });
-  }
+  cpSync(FIXTURE_LEDGER_DIR, home, { recursive: true });
   return home;
 }
 
 async function callBoth(verb, opts) {
+  ensureFixtureLedger();
   const ts = await loadTsSdk();
   const napi = await loadNapiSdk();
   const tsHome = makeHome();
@@ -96,6 +117,18 @@ const VERBS = [
   { name: 'overhead', opts: { project: REPO_ROOT } },
   { name: 'overheadTrim', opts: { project: REPO_ROOT, includeDiff: false } },
   { name: 'hotspots', opts: {} },
+  // compare() requires >=2 models; pick a stable pair that may or may not
+  // appear in the fixture — both implementations see the same input so
+  // missing models surface as identical empty/no-data rows on each side.
+  // The deep-equality check still catches drift in cell shape, fidelity
+  // accounting, and totals.
+  {
+    name: 'compare',
+    opts: {
+      models: ['claude-sonnet-4-5', 'claude-opus-4-7'],
+      minFidelity: 'partial',
+    },
+  },
   // ingest is exercised separately because both impls mutate the ledger;
   // we run it last in its own block.
 ];
