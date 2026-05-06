@@ -7,3 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "napi-rs bindings over relayburn-sdk — built in CI to produce the @relayburn/sdk npm artifacts. Not published to crates.io."
 publish = false
+
+[dependencies]
+# napi-rs glue lands in #247; this crate's only direct dep is the SDK.
+# Not published to crates.io, so the version pin is loose by design — it
+# just keeps `cargo metadata` and the workspace resolver happy.
+relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }

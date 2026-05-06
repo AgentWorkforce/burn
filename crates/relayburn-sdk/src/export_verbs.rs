@@ -1,7 +1,7 @@
 //! Export + search verbs — `search`, `export_ledger`, `export_stamps`.
 //!
 //! Wraps the FTS5 search and JSONL export APIs on
-//! [`relayburn_ledger::Ledger`]. Each verb appears as an
+//! [`crate::ledger::Ledger`]. Each verb appears as an
 //! [`LedgerHandle`] method (sync, returns [`anyhow::Result`]) plus a
 //! free-function form that opens its own handle from a
 //! [`LedgerOpenOptions`].
@@ -15,7 +15,7 @@ use crate::{Ledger, LedgerHandle, LedgerOpenOptions, SearchHit, SearchOptions};
 // --- search ----------------------------------------------------------------
 
 /// Options for the FTS5 search verb. Equivalent to
-/// [`relayburn_ledger::SearchOptions`] but owns its strings so callers can
+/// [`crate::ledger::SearchOptions`] but owns its strings so callers can
 /// build it without juggling lifetimes.
 #[derive(Debug, Clone)]
 pub struct SearchQueryOptions {
@@ -112,7 +112,7 @@ pub struct ExportLedgerOptions {
 impl LedgerHandle {
     /// Stream every event row as a JSONL-shaped [`serde_json::Value`].
     /// Each value has the form `{"v":1,"kind":"<kind>","record":<json>}`,
-    /// matching the bytes [`relayburn_ledger::Ledger::export_ledger_jsonl`]
+    /// matching the bytes [`crate::ledger::Ledger::export_ledger_jsonl`]
     /// would write.
     ///
     /// Buffered into a `Vec` for v1 (relayburn ledgers are small enough
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn export_ledger_returns_one_value_per_record() {
-        use relayburn_reader::{TurnRecord, Usage};
+        use crate::reader::{TurnRecord, Usage};
 
         let tmp = tempfile::TempDir::new().unwrap();
         let mut handle = open_handle(&tmp);
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn export_stamps_returns_appended_stamps() {
-        use relayburn_ledger::{Stamp, StampSelector};
+        use crate::ledger::{Stamp, StampSelector};
         use std::collections::BTreeMap;
 
         let tmp = tempfile::TempDir::new().unwrap();

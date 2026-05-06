@@ -8,20 +8,38 @@ repository.workspace = true
 description = "Embedding API for relayburn — published to crates.io as the supported Rust surface."
 
 [dependencies]
-# Path + version on every workspace dep so `cargo publish --dry-run` can
-# verify the manifest without erroring on missing version requirements.
-# The four lower crates publish in lockstep; the workspace version is the
-# source of truth (`workspace = true`).
-relayburn-reader = { path = "../relayburn-reader", version = "0.0.0" }
-relayburn-ledger = { path = "../relayburn-ledger", version = "0.0.0" }
-relayburn-analyze = { path = "../relayburn-analyze", version = "0.0.0" }
-relayburn-ingest = { path = "../relayburn-ingest", version = "0.0.0" }
+# Deps absorbed from the four former lower crates
+# (`relayburn-{reader,ledger,analyze,ingest}`) when the monolith
+# restructure collapsed them into modules under
+# `src/{reader,ledger,analyze,ingest}/`.
+
+# Common
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+# reader: hashing + classifier rule tables
+sha2 = "0.10"
+hex = "0.4"
+regex = "1"
+phf = { version = "0.11", features = ["macros"] }
+
+# ledger: SQLite events + content store
+rusqlite = { workspace = true }
+
+# analyze: order-preserving pricing table.
+# `IndexMap` preserves JSON insertion order so duplicate model IDs in
+# `models.dev.json` (e.g. `claude-sonnet-4-6` under both `anthropic` and
+# `nano-gpt`) resolve deterministically — last entry in file order wins,
+# matching the TS `Object.values` / `Object.entries` iteration semantics.
+indexmap = { version = "2", features = ["serde"] }
+
+[target.'cfg(unix)'.dependencies]
+# ingest: pid-liveness probe in the pending-stamp resolver
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }

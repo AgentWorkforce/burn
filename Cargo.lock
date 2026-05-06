@@ -413,63 +413,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "relayburn-analyze"
-version = "0.0.0"
-dependencies = [
- "indexmap",
- "phf",
- "regex",
- "relayburn-ledger",
- "relayburn-reader",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "relayburn-cli"
 version = "0.0.0"
-
-[[package]]
-name = "relayburn-ingest"
-version = "0.0.0"
 dependencies = [
- "anyhow",
- "libc",
- "relayburn-ledger",
- "relayburn-reader",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "relayburn-ledger"
-version = "0.0.0"
-dependencies = [
- "hex",
- "relayburn-reader",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
-name = "relayburn-reader"
-version = "0.0.0"
-dependencies = [
- "hex",
- "phf",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
+ "relayburn-sdk",
 ]
 
 [[package]]
@@ -477,12 +424,15 @@ name = "relayburn-sdk"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "relayburn-analyze",
- "relayburn-ingest",
- "relayburn-ledger",
- "relayburn-reader",
+ "hex",
+ "indexmap",
+ "libc",
+ "phf",
+ "regex",
+ "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
@@ -491,6 +441,9 @@ dependencies = [
 [[package]]
 name = "relayburn-sdk-node"
 version = "0.0.0"
+dependencies = [
+ "relayburn-sdk",
+]
 
 [[package]]
 name = "rusqlite"

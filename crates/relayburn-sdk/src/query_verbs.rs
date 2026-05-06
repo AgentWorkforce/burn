@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use relayburn_analyze::{
+use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent,
     attribute_hotspots, attribute_overhead, build_trim_recommendations, cost_for_turn,
     detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
@@ -29,8 +29,8 @@ use relayburn_analyze::{
     OverheadFile, OverheadFileKind, ParsedOverheadFile, PricingTable, SubagentAggregation,
     WasteFinding,
 };
-use relayburn_ledger::Query;
-use relayburn_reader::{
+use crate::ledger::Query;
+use crate::reader::{
     parse_bash_command, resolve_project, BashParse, SourceKind, TurnRecord, UserTurnRecord,
 };
 
@@ -546,7 +546,7 @@ pub struct OverheadTrimResult {
 struct GatheredOverhead {
     project_path: PathBuf,
     files: Vec<ParsedOverheadFile>,
-    attribution: Option<relayburn_analyze::OverheadAttribution>,
+    attribution: Option<crate::analyze::OverheadAttribution>,
 }
 
 fn gather_overhead(
@@ -1271,7 +1271,7 @@ fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use relayburn_reader::{ToolCall, Usage};
+    use crate::reader::{ToolCall, Usage};
     use tempfile::TempDir;
 
     fn fixture_handle() -> (TempDir, LedgerHandle) {
