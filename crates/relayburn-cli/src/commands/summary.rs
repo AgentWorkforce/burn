@@ -191,14 +191,13 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         return Ok(2);
     }
 
-    let ledger_home = globals.ledger_path.clone();
-    let opts = match &ledger_home {
+    let opts = match globals.ledger_path.as_deref() {
         Some(h) => LedgerOpenOptions::with_home(h),
         None => LedgerOpenOptions::default(),
     };
     let mut handle = Ledger::open(opts)?;
 
-    let ingest_report = run_ingest(&mut handle, ledger_home.as_deref())?;
+    let ingest_report = run_ingest(&mut handle)?;
 
     let q = build_query(&args)?;
     let turns: Vec<TurnRecord> = handle
@@ -260,10 +259,7 @@ fn build_query(args: &SummaryArgs) -> anyhow::Result<Query> {
 
 /// Run an ingest sweep on the open handle. Builds a current-thread tokio
 /// runtime so the otherwise-sync presenter can drive the async verb.
-fn run_ingest(
-    handle: &mut LedgerHandle,
-    _ledger_home: Option<&std::path::Path>,
-) -> anyhow::Result<relayburn_sdk::IngestReport> {
+fn run_ingest(handle: &mut LedgerHandle) -> anyhow::Result<relayburn_sdk::IngestReport> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
