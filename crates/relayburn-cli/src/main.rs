@@ -34,7 +34,7 @@ fn dispatch(args: Args) -> i32 {
         Command::Summary => commands::summary::run(&globals),
         Command::Hotspots => commands::hotspots::run(&globals),
         Command::Overhead => commands::overhead::run(&globals),
-        Command::Compare => commands::compare::run(&globals),
+        Command::Compare(args) => commands::compare::run(&globals, args),
         Command::Run => commands::run::run(&globals),
         Command::State => commands::state::run(&globals),
         Command::Ingest => commands::ingest::run(&globals),

@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 
 /// Parsed top-level argv — what every command handler receives via
 /// [`Args::globals`].
@@ -105,7 +105,7 @@ pub enum Command {
     Overhead,
 
     /// Compare cost across two or more models on the same workload.
-    Compare,
+    Compare(CompareArgs),
 
     /// Run an agent CLI under a harness wrapper that ingests its
     /// session log on exit.
@@ -121,4 +121,73 @@ pub enum Command {
     /// in-session self-query.
     #[command(name = "mcp-server")]
     McpServer,
+}
+
+/// Per-command flag set for `burn compare`. Mirrors
+/// `packages/cli/src/commands/compare.ts` so the CLI surfaces match
+/// byte-for-byte; see that file for the canonical help text.
+///
+/// The first positional argument is a comma-separated model list
+/// (`claude-sonnet-4-6,claude-haiku-4-5`). The presenter rejects fewer
+/// than two distinct models with exit code 2 and a stderr message; this
+/// is enforced at runtime rather than by clap so we get the same error
+/// message shape as the TS CLI (`burn compare: needs at least 2
+/// models...`).
+#[derive(Debug, Clone, ClapArgs)]
+pub struct CompareArgs {
+    /// Comma-separated model list (e.g. `claude-sonnet-4-6,claude-haiku-4-5`).
+    /// Required at runtime — see the struct doc comment for the
+    /// minimum-models contract.
+    #[arg(value_name = "MODELS")]
+    pub models: Option<String>,
+
+    /// Comma-separated list of effective providers to include
+    /// (e.g. `synthetic,anthropic,openai`).
+    #[arg(long, value_name = "LIST")]
+    pub provider: Option<String>,
+
+    /// Relative range (e.g. `24h`, `7d`, `4w`) or ISO timestamp.
+    /// Defaults to all time.
+    #[arg(long, value_name = "WHEN")]
+    pub since: Option<String>,
+
+    /// Filter by project path or git-canonical projectKey.
+    #[arg(long, value_name = "PATH")]
+    pub project: Option<String>,
+
+    /// Filter by sessionId.
+    #[arg(long, value_name = "ID")]
+    pub session: Option<String>,
+
+    /// Filter by stamped workflowId.
+    #[arg(long, value_name = "ID")]
+    pub workflow: Option<String>,
+
+    /// Filter by stamped agentId.
+    #[arg(long, value_name = "ID")]
+    pub agent: Option<String>,
+
+    /// Insufficient-sample threshold; cells below this get flagged in
+    /// the coverage-notes block. Default 5.
+    #[arg(long = "min-sample", value_name = "N")]
+    pub min_sample: Option<u64>,
+
+    /// Minimum fidelity class to include
+    /// (`full | usage-only | aggregate-only | cost-only | partial`).
+    /// Default `usage-only`.
+    #[arg(long, value_name = "CLASS")]
+    pub fidelity: Option<String>,
+
+    /// Shorthand for `--fidelity partial`.
+    #[arg(long = "include-partial")]
+    pub include_partial: bool,
+
+    /// Emit a stable CSV with one row per (model, category) pair.
+    #[arg(long)]
+    pub csv: bool,
+
+    /// Bypass the SQLite archive and stream the ledger directly.
+    /// Honored when env `RELAYBURN_ARCHIVE=0`.
+    #[arg(long = "no-archive")]
+    pub no_archive: bool,
 }

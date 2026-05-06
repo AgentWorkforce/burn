@@ -34,6 +34,21 @@ const SUBCOMMANDS: &[&str] = &[
     "mcp-server",
 ];
 
+/// Subset of [`SUBCOMMANDS`] still on the scaffold "not yet implemented"
+/// exit path. As each Wave 2 D1–D8 PR wires its presenter, drop the
+/// command from this list — the missing entries fall under a more
+/// targeted assertion (see `compare_command_rejects_missing_models`
+/// below for an example).
+const STUB_SUBCOMMANDS: &[&str] = &[
+    "summary",
+    "hotspots",
+    "overhead",
+    "run",
+    "state",
+    "ingest",
+    "mcp-server",
+];
+
 /// Helper: build a `Command` driving the locally-built `burn` binary.
 fn burn() -> Command {
     Command::cargo_bin("burn").expect("`burn` binary must build for the smoke test")
@@ -76,7 +91,7 @@ fn each_subcommand_help_exits_zero_with_non_empty_stdout() {
 
 #[test]
 fn each_stub_exits_one_with_not_yet_implemented_message() {
-    for sub in SUBCOMMANDS {
+    for sub in STUB_SUBCOMMANDS {
         // Run the stub with no extra args. The default exit-code
         // contract for the scaffold is `EXIT_NOT_YET_IMPLEMENTED == 1`;
         // assert it explicitly so a future Wave 2 PR that wires up a
@@ -88,6 +103,19 @@ fn each_stub_exits_one_with_not_yet_implemented_message() {
             .code(1)
             .stderr(predicate::str::contains("not yet implemented"));
     }
+}
+
+#[test]
+fn compare_command_rejects_missing_models() {
+    // `burn compare` is wired (Wave 2 D3); no positional list means
+    // exit 2 + the canonical "needs at least 2 models" message. This
+    // asserts the wired path exists so a future regression that nukes
+    // the dispatch arm fails loud.
+    burn()
+        .arg("compare")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("needs at least 2 models"));
 }
 
 #[test]
