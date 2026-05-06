@@ -19,7 +19,7 @@ use relayburn_sdk::{
 use serde_json::{json, Value};
 
 use crate::cli::{CompareArgs, GlobalArgs};
-use crate::render::error::{report_error, EXIT_GENERIC_ERROR};
+use crate::render::error::report_error;
 use crate::render::json::render_json;
 
 const FIDELITY_CHOICES: &[&str] = &[
@@ -39,7 +39,7 @@ const FIDELITY_ORDER: &[&str] = &[
 ];
 
 const NEEDS_MODELS_MSG: &str =
-    "burn compare: needs at least 2 models. Run `burn summary --by-provider` (or `burn summary --by-tool`) to see which models have data.";
+    "compare: needs at least 2 models. Run `burn summary --by-provider` (or `burn summary --by-tool`) to see which models have data.";
 
 const NOTE_LIMIT: usize = 8;
 const DASH: &str = "—";
@@ -53,11 +53,15 @@ pub fn run(globals: &GlobalArgs, args: CompareArgs) -> i32 {
 
 fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     // 1. Parse positional models list (comma-separated, dedup, preserve order).
+    //    Argument-validation failures route through `report_error` (the outer
+    //    `run` catches the `Err` from this function) so `--json` mode emits
+    //    the documented `{"error": ...}` envelope instead of plain stderr.
+    //    `report_error` prepends `burn: ` for human stderr, so the messages
+    //    here read as the natural-language continuation (no leading `burn`).
     let raw = match args.models.as_deref() {
         Some(s) => s,
         None => {
-            eprintln!("{NEEDS_MODELS_MSG}");
-            return Ok(EXIT_GENERIC_ERROR);
+            return Err(anyhow!("{NEEDS_MODELS_MSG}"));
         }
     };
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -72,27 +76,26 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         }
     }
     if models.len() < 2 {
-        eprintln!("{NEEDS_MODELS_MSG}");
-        return Ok(EXIT_GENERIC_ERROR);
+        return Err(anyhow!("{NEEDS_MODELS_MSG}"));
     }
 
     // 2. Resolve --fidelity / --include-partial.
     let mut min_fidelity: FidelityClass = FidelityClass::UsageOnly;
     if let Some(raw) = args.fidelity.as_deref() {
         if !FIDELITY_CHOICES.contains(&raw) {
-            eprintln!(
-                "burn: invalid --fidelity: {raw} (expected one of {})",
+            return Err(anyhow!(
+                "invalid --fidelity: {raw} (expected one of {})",
                 FIDELITY_CHOICES.join(", ")
-            );
-            return Ok(EXIT_GENERIC_ERROR);
+            ));
         }
         min_fidelity = parse_fidelity(raw)?;
     }
     if args.include_partial {
         if let Some(raw) = args.fidelity.as_deref() {
             if raw != "partial" {
-                eprintln!("burn: --include-partial conflicts with --fidelity {raw}");
-                return Ok(EXIT_GENERIC_ERROR);
+                return Err(anyhow!(
+                    "--include-partial conflicts with --fidelity {raw}"
+                ));
             }
         }
         min_fidelity = FidelityClass::Partial;
@@ -102,8 +105,7 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     //    per-command so the global JSON take-precedence rule in the TS CLI
     //    becomes "explicit conflict" here — same exit code, same message.
     if globals.json && args.csv {
-        eprintln!("burn: --json and --csv are mutually exclusive; pick one.");
-        return Ok(EXIT_GENERIC_ERROR);
+        return Err(anyhow!("--json and --csv are mutually exclusive; pick one."));
     }
 
     // 4. Provider filter. Surfaced as an explicit "not yet wired" error
@@ -121,8 +123,7 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     // 5. min-sample.
     let min_sample = args.min_sample.unwrap_or(DEFAULT_MIN_SAMPLE);
     if min_sample < 1 {
-        eprintln!("burn: invalid --min-sample: {min_sample}");
-        return Ok(EXIT_GENERIC_ERROR);
+        return Err(anyhow!("invalid --min-sample: {min_sample}"));
     }
 
     // 6. Honor --no-archive by exporting RELAYBURN_ARCHIVE=0 for the
@@ -237,9 +238,22 @@ fn fidelity_class_str(cls: FidelityClass) -> &'static str {
     }
 }
 
-/// Normalize `--since` exactly like the SDK's free-fn would (relative
-/// `7d` → ISO Z, ISO pass-through, garbage → error). Inlined here rather
-/// than imported because the SDK helper isn't on the public surface.
+/// Normalize `--since` exactly like the TS CLI's `parseSinceArg` does:
+///
+/// - Relative ranges (`7d`, `24h`, `4w`, `30m`) → `now - delta` rendered
+///   as a fully canonical UTC ISO string with milliseconds
+///   (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
+/// - ISO inputs (with or without an offset, with or without fractional
+///   seconds) get parsed and re-rendered as UTC `...Z` with milliseconds.
+///   This matters because `Ledger::query_turns` applies `since` via
+///   lexicographic comparison against stored `...mmmZ` timestamps:
+///     * an offset like `2026-05-06T00:00:00-07:00` would otherwise sort
+///       before any ledger row regardless of the actual instant, and
+///     * a no-fraction `...12Z` would sort before `...12.500Z` even
+///       though `...12.500Z` is a later instant.
+///   Re-emitting as UTC with `.000Z` (or the original sub-second
+///   precision) keeps the lex order stable against the ledger.
+/// - Garbage → error.
 fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = since else {
         return Ok(None);
@@ -260,14 +274,14 @@ fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let when = now.saturating_sub(secs_back);
-        return Ok(Some(format_iso_z(when)));
+        return Ok(Some(format_iso_z_ms(when, 0)));
     }
-    if !looks_like_iso(raw) {
-        return Err(anyhow!(
-            "invalid since: {raw} (expected ISO timestamp or relative range like 7d)"
-        ));
+    if let Some(canonical) = normalize_iso_to_utc_z(raw) {
+        return Ok(Some(canonical));
     }
-    Ok(Some(raw.to_string()))
+    Err(anyhow!(
+        "invalid since: {raw} (expected ISO timestamp or relative range like 7d)"
+    ))
 }
 
 fn parse_relative(s: &str) -> Option<(u64, char)> {
@@ -287,24 +301,182 @@ fn parse_relative(s: &str) -> Option<(u64, char)> {
     Some((n, unit))
 }
 
-fn looks_like_iso(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() >= 10
-        && b[0..4].iter().all(|c| c.is_ascii_digit())
-        && b[4] == b'-'
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[7] == b'-'
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
+/// Parse an ISO 8601 / RFC 3339 timestamp and re-emit it as a fully
+/// canonical UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` string. Handles:
+///
+/// - `YYYY-MM-DD` (date-only — assumed midnight UTC).
+/// - `YYYY-MM-DDTHH:MM:SS` (offset-less — assumed UTC).
+/// - `YYYY-MM-DDTHH:MM:SS.fff` (fractional seconds, any width 1–9).
+/// - `Z` suffix.
+/// - `+HH:MM` / `-HH:MM` offsets.
+///
+/// Returns `None` for inputs that don't look ISO-shaped, so the caller
+/// can surface a usage error. Emits with millisecond precision: any
+/// sub-millisecond fractional digits are truncated, matching JS
+/// `Date.toISOString()` rounding behavior closely enough for ledger
+/// `since` lex-ordering. Whole-second inputs are widened to `.000Z`.
+fn normalize_iso_to_utc_z(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 {
+        return None;
+    }
+    // YYYY-MM-DD prefix.
+    if !(bytes[0..4].iter().all(|c| c.is_ascii_digit())
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(|c| c.is_ascii_digit())
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(|c| c.is_ascii_digit()))
+    {
+        return None;
+    }
+    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
+    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
+    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    // Defaults for date-only inputs.
+    let mut hour: u32 = 0;
+    let mut minute: u32 = 0;
+    let mut second: u32 = 0;
+    let mut millis: u32 = 0;
+    let mut offset_minutes: i32 = 0;
+
+    if bytes.len() > 10 {
+        // Expect a time component starting with 'T' or ' '.
+        if !(bytes[10] == b'T' || bytes[10] == b't' || bytes[10] == b' ') {
+            return None;
+        }
+        // HH:MM:SS at offsets 11..19.
+        if bytes.len() < 19 {
+            return None;
+        }
+        if !(bytes[11..13].iter().all(|c| c.is_ascii_digit())
+            && bytes[13] == b':'
+            && bytes[14..16].iter().all(|c| c.is_ascii_digit())
+            && bytes[16] == b':'
+            && bytes[17..19].iter().all(|c| c.is_ascii_digit()))
+        {
+            return None;
+        }
+        hour = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
+        minute = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
+        second = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
+        if hour > 23 || minute > 59 || second > 60 {
+            return None;
+        }
+
+        // Optional fractional seconds.
+        let mut idx = 19;
+        if idx < bytes.len() && (bytes[idx] == b'.' || bytes[idx] == b',') {
+            idx += 1;
+            let frac_start = idx;
+            while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+                idx += 1;
+            }
+            if idx == frac_start {
+                return None;
+            }
+            // Truncate to milliseconds: take the first 3 digits, pad
+            // with zeros if shorter, ignore the rest.
+            let mut frac_str = String::from(std::str::from_utf8(&bytes[frac_start..idx]).ok()?);
+            if frac_str.len() > 3 {
+                frac_str.truncate(3);
+            }
+            while frac_str.len() < 3 {
+                frac_str.push('0');
+            }
+            millis = frac_str.parse().ok()?;
+        }
+
+        // Optional offset.
+        if idx < bytes.len() {
+            match bytes[idx] {
+                b'Z' | b'z' => {
+                    if idx + 1 != bytes.len() {
+                        return None;
+                    }
+                }
+                b'+' | b'-' => {
+                    let sign: i32 = if bytes[idx] == b'-' { -1 } else { 1 };
+                    idx += 1;
+                    if bytes.len() < idx + 5 {
+                        return None;
+                    }
+                    if !(bytes[idx..idx + 2].iter().all(|c| c.is_ascii_digit())
+                        && bytes[idx + 2] == b':'
+                        && bytes[idx + 3..idx + 5].iter().all(|c| c.is_ascii_digit()))
+                    {
+                        return None;
+                    }
+                    let oh: i32 = std::str::from_utf8(&bytes[idx..idx + 2])
+                        .ok()?
+                        .parse()
+                        .ok()?;
+                    let om: i32 = std::str::from_utf8(&bytes[idx + 3..idx + 5])
+                        .ok()?
+                        .parse()
+                        .ok()?;
+                    if oh > 23 || om > 59 {
+                        return None;
+                    }
+                    offset_minutes = sign * (oh * 60 + om);
+                    if idx + 5 != bytes.len() {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    // Convert (year, month, day, h, m, s, offset) → unix seconds.
+    let days = ymd_to_days(year, month, day)?;
+    let local_secs: i64 = days * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
+    // Subtract the offset to land on UTC seconds: `local = utc + offset`,
+    // so `utc = local - offset`. Offset is in minutes.
+    let utc_secs: i64 = local_secs - (offset_minutes as i64) * 60;
+    Some(format_iso_z_ms_signed(utc_secs, millis))
 }
 
-fn format_iso_z(secs: u64) -> String {
-    let total_days = (secs / 86_400) as i64;
-    let secs_in_day = (secs % 86_400) as u32;
+/// Format Unix-seconds as `YYYY-MM-DDTHH:MM:SS.mmmZ`. Always emits the
+/// milliseconds component so the resulting string sorts correctly against
+/// ledger rows that always carry sub-second precision.
+fn format_iso_z_ms(secs: u64, millis: u32) -> String {
+    format_iso_z_ms_signed(secs as i64, millis)
+}
+
+fn format_iso_z_ms_signed(secs: i64, millis: u32) -> String {
+    // `secs` may be negative for pre-1970 timestamps — split into a
+    // floored day count and a non-negative seconds-in-day remainder so
+    // the formatting math doesn't have to care about sign.
+    let total_days = secs.div_euclid(86_400);
+    let secs_in_day = secs.rem_euclid(86_400) as u32;
     let hour = secs_in_day / 3_600;
     let minute = (secs_in_day / 60) % 60;
     let second = secs_in_day % 60;
     let (year, month, day) = days_to_ymd(total_days);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+    )
+}
+
+/// Civil-date → days-from-Unix-epoch (Howard Hinnant's algorithm,
+/// proleptic Gregorian). Inverse of [`days_to_ymd`].
+fn ymd_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let m = month as i64;
+    let d = day as i64;
+    let y = if m <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64; // [0, 399]
+    let mp = if m > 2 { m - 3 } else { m + 9 } as u64; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + (d as u64) - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    Some(era * 146_097 + (doe as i64) - 719_468)
 }
 
 fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {
@@ -1050,5 +1222,130 @@ mod tests {
     fn display_model_name_strips_provider_prefix() {
         assert_eq!(display_model_name("anthropic/claude-sonnet-4-6"), "claude-sonnet-4-6");
         assert_eq!(display_model_name("claude-haiku-4-5"), "claude-haiku-4-5");
+    }
+
+    // -------------------------------------------------------------------
+    // Codex P1 / P2: ISO normalization + relative-range millisecond
+    // padding.  Both bugs surface as ledger lex-order skews: the ledger
+    // stores rows with `...mmmZ` precision, so a `since` that doesn't
+    // match that shape gets compared as the wrong instant.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn normalize_iso_widens_no_fraction_to_three_zeros() {
+        // P2 root cause: same-second ledger row `...12.500Z` would sort
+        // *before* a `--since` cutoff of `...12Z`, dropping valid turns.
+        // Normalizing widens to `.000Z` so the cutoff is the lower bound
+        // for that second.
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06T00:00:00Z"),
+            Some("2026-05-06T00:00:00.000Z".to_string()),
+        );
+    }
+
+    #[test]
+    fn normalize_iso_preserves_millisecond_precision() {
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06T00:00:00.500Z"),
+            Some("2026-05-06T00:00:00.500Z".to_string()),
+        );
+        // Sub-millisecond digits are truncated to 3 (matches the ledger
+        // shape; mirrors `Date.toISOString()` truncation closely enough
+        // for `since`-cutoff lex ordering).
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06T00:00:00.500999Z"),
+            Some("2026-05-06T00:00:00.500Z".to_string()),
+        );
+        // Shorter fraction is right-padded.
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06T00:00:00.5Z"),
+            Some("2026-05-06T00:00:00.500Z".to_string()),
+        );
+    }
+
+    #[test]
+    fn normalize_iso_converts_negative_offset_to_utc() {
+        // P1 root cause: `-07:00` is 7h *behind* UTC, so the same
+        // wall-clock time corresponds to a UTC instant 7h *later*.
+        // 2026-05-06T00:00:00-07:00 == 2026-05-06T07:00:00Z.
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06T00:00:00-07:00"),
+            Some("2026-05-06T07:00:00.000Z".to_string()),
+        );
+    }
+
+    #[test]
+    fn normalize_iso_converts_positive_offset_to_utc() {
+        // 2026-05-06T00:00:00+09:00 == 2026-05-05T15:00:00Z.
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06T00:00:00+09:00"),
+            Some("2026-05-05T15:00:00.000Z".to_string()),
+        );
+    }
+
+    #[test]
+    fn normalize_iso_handles_lowercase_z() {
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06t00:00:00.500z"),
+            Some("2026-05-06T00:00:00.500Z".to_string()),
+        );
+    }
+
+    #[test]
+    fn normalize_iso_accepts_date_only() {
+        // Date-only input: no time component → midnight UTC.
+        assert_eq!(
+            normalize_iso_to_utc_z("2026-05-06"),
+            Some("2026-05-06T00:00:00.000Z".to_string()),
+        );
+    }
+
+    #[test]
+    fn normalize_iso_rejects_garbage() {
+        assert_eq!(normalize_iso_to_utc_z("not a date"), None);
+        assert_eq!(normalize_iso_to_utc_z("2026/05/06"), None);
+        assert_eq!(normalize_iso_to_utc_z("2026-13-01T00:00:00Z"), None); // bad month
+        assert_eq!(normalize_iso_to_utc_z("2026-05-06T25:00:00Z"), None); // bad hour
+        assert_eq!(normalize_iso_to_utc_z("2026-05-06T00:00:00+9"), None); // malformed offset
+    }
+
+    #[test]
+    fn normalize_since_relative_emits_milliseconds() {
+        // P2: relative range output must carry the `.000Z` fragment so
+        // ledger rows with sub-second precision sort correctly against
+        // the cutoff. We can't pin the absolute value (depends on `now`),
+        // but we can assert the shape.
+        let out = normalize_since(Some("7d")).unwrap().unwrap();
+        assert!(out.ends_with(".000Z"), "expected .000Z suffix in {out}");
+        assert_eq!(out.len(), 24, "expected 24-char canonical shape: {out}");
+    }
+
+    #[test]
+    fn normalize_since_iso_pass_normalizes_offset() {
+        let out = normalize_since(Some("2026-05-06T00:00:00-07:00"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, "2026-05-06T07:00:00.000Z");
+    }
+
+    #[test]
+    fn normalize_since_relative_format_is_lex_compatible_with_ledger_rows() {
+        // Sanity check: a canonical `.000Z` cutoff must lex *before* the
+        // same-second ledger row carrying any non-zero millisecond
+        // suffix. This is the property the bug was breaking.
+        let cutoff = "2026-05-06T12:00:00.000Z";
+        let row_a = "2026-05-06T12:00:00.500Z";
+        let row_b = "2026-05-06T12:00:00.001Z";
+        assert!(cutoff <= row_a);
+        assert!(cutoff <= row_b);
+    }
+
+    #[test]
+    fn ymd_round_trip() {
+        for (y, m, d) in &[(1970, 1, 1), (2026, 5, 6), (2000, 2, 29), (1999, 12, 31)] {
+            let days = ymd_to_days(*y, *m, *d).unwrap();
+            let (ry, rm, rd) = days_to_ymd(days);
+            assert_eq!((*y, *m, *d), (ry, rm, rd));
+        }
     }
 }
