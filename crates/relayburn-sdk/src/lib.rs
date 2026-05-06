@@ -104,8 +104,10 @@ pub use crate::analyze::{
 };
 
 pub use crate::ingest::{
-    cleanup_stale_pending_stamps, ingest_all, IngestOptions as RawIngestOptions, IngestReport,
-    IngestRoots,
+    cleanup_stale_pending_stamps, ingest_all, run_ingest_tick, start_watch_loop,
+    write_pending_stamp, ErrorSink, IngestFn, IngestOptions as RawIngestOptions, IngestReport,
+    IngestRoots, PendingStamp, PendingStampHarness, PendingStampWriteResult, ReportSink,
+    StartWatchLoopOptions, WatchController, WriteOptions as PendingStampWriteOptions,
 };
 
 // --- LedgerOpenOptions -----------------------------------------------------
