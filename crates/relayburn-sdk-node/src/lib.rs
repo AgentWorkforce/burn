@@ -18,13 +18,17 @@
 //!   2^53; the SDK already deals in u64 internally so the boundary is the
 //!   right place to surface that. For verbs whose result is too recursive
 //!   to mirror as a `#[napi(object)]` struct (`overhead`, `overheadTrim`,
-//!   `hotspots`), we serialize through serde_json and emit the result via
-//!   the [`BigIntPromoting`] wrapper, which walks the JSON tree and
-//!   substitutes `BigInt` for any numeric value sitting under one of the
-//!   well-known u64 field names listed in [`BIGINT_FIELDS`]. The lighter
-//!   walker keeps the discriminated-union shape of `HotspotsResult`
-//!   intact (which is awkward to express as a single typed napi object)
-//!   while still honoring the contract.
+//!   `hotspots`, `exportLedger`, `exportStamps`), we serialize through
+//!   serde_json and emit the result via the [`BigIntPromoting`] wrapper,
+//!   which walks the JSON tree and substitutes `BigInt` for any numeric
+//!   value sitting under one of the well-known u64 field names listed in
+//!   [`BIGINT_FIELDS`]. The lighter walker keeps the discriminated-union
+//!   shape of `HotspotsResult` intact (which is awkward to express as a
+//!   single typed napi object) and lets the export verbs surface every
+//!   nested u64 (`turnIndex`, `eventIndex`, `contentLength`,
+//!   `tokensBeforeCompact`, `byteLen`, `approxTokens`, the six `usage`
+//!   fields, …) without per-record type plumbing — all while honoring
+//!   the contract.
 //! - **Timestamps → ISO-8601 `String`.** The SDK already speaks ISO
 //!   strings (`turn.ts`, `since` parameters); we keep that wire format
 //!   rather than dragging `chrono::DateTime` or `Date` through the FFI.
@@ -222,6 +226,30 @@ const BIGINT_FIELDS: &[&str] = &[
     "turnsAnalyzed",
     "analyzed",
     "excluded",
+    // export_ledger / export_stamps record bodies — every camelCased
+    // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /
+    // CompactionEvent / nested Usage and ToolCall payloads. These values
+    // already round-trip as u64 inside the SDK; without explicit
+    // promotion the serde-json bridge emits them as JS `number` (f64)
+    // and silently truncates anything above 2^53 when crossing the
+    // napi boundary.
+    "turnIndex",
+    "eventIndex",
+    "callIndex",
+    "contentLength",
+    "tokensBeforeCompact",
+    "byteLen",
+    "approxTokens",
+    "retries",
+    "collapsedCalls",
+    // nested `usage` shape on TurnRecord / ToolResultEventRecord —
+    // every field is u64, all six need promotion.
+    "input",
+    "output",
+    "reasoning",
+    "cacheRead",
+    "cacheCreate5m",
+    "cacheCreate1h",
 ];
 
 fn is_bigint_field(name: &str) -> bool {
@@ -231,8 +259,8 @@ fn is_bigint_field(name: &str) -> bool {
 /// Wraps a `serde_json::Value` so that, when napi-rs converts it to a JS
 /// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
 /// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
-/// and `hotspots` verbs whose result shapes are documented in
-/// `packages/sdk/index.d.ts`.
+/// `hotspots`, `exportLedger`, and `exportStamps` verbs whose result
+/// shapes are documented in `packages/sdk/index.d.ts`.
 pub struct BigIntPromoting(JsonValue);
 
 impl ToNapiValue for BigIntPromoting {
@@ -719,26 +747,41 @@ pub struct ExportStampsOptions {
 /// Buffered into an array for v1; matches the SDK's
 /// `export_ledger() -> impl Iterator` behavior (it's already in-memory
 /// today). A streaming variant is a follow-up.
-#[napi(js_name = "exportLedger")]
-pub fn export_ledger(opts: Option<ExportLedgerOptions>) -> Result<Vec<JsonValue>, BurnError> {
+///
+/// The result is wrapped in [`BigIntPromoting`] so u64 fields nested
+/// inside each `record` object (`turnIndex`, `eventIndex`, `callIndex`,
+/// `contentLength`, `tokensBeforeCompact`, `byteLen`, `approxTokens`,
+/// `retries`, `collapsedCalls`, and the `usage` sub-object's six u64
+/// keys) cross as JS `BigInt` instead of being silently truncated above
+/// 2^53 by the default serde-json `number` conversion.
+#[napi(js_name = "exportLedger", ts_return_type = "unknown[]")]
+pub fn export_ledger(opts: Option<ExportLedgerOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(ExportLedgerOptions { ledger_home: None });
     let raw = sdk::ExportLedgerOptions {
         ledger_home: maybe_path(opts.ledger_home),
     };
     let iter = sdk::export_ledger(raw).map_err(sdk_err)?;
-    Ok(iter.collect())
+    let values: Vec<JsonValue> = iter.collect();
+    Ok(BigIntPromoting(JsonValue::Array(values)))
 }
 
 /// Stream every stamp row as a JSONL-shaped JSON object. Sibling of
 /// [`export_ledger`].
-#[napi(js_name = "exportStamps")]
-pub fn export_stamps(opts: Option<ExportStampsOptions>) -> Result<Vec<JsonValue>, BurnError> {
+///
+/// The result is wrapped in [`BigIntPromoting`] for symmetry with
+/// [`export_ledger`]. Stamps don't currently carry u64 fields, but the
+/// wrapper is cheap and means a future stamp-shape change that
+/// introduces one (e.g. a `byteLen` on a range bound) won't silently
+/// regress to f64 truncation.
+#[napi(js_name = "exportStamps", ts_return_type = "unknown[]")]
+pub fn export_stamps(opts: Option<ExportStampsOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(ExportStampsOptions { ledger_home: None });
     let raw = sdk::ExportStampsOptions {
         ledger_home: maybe_path(opts.ledger_home),
     };
     let iter = sdk::export_stamps(raw).map_err(sdk_err)?;
-    Ok(iter.collect())
+    let values: Vec<JsonValue> = iter.collect();
+    Ok(BigIntPromoting(JsonValue::Array(values)))
 }
 
 // ---------------------------------------------------------------------------
@@ -907,6 +950,7 @@ mod tests {
         // Every camelCased u64 field that crosses the boundary today
         // must be in BIGINT_FIELDS so the walker promotes it.
         for key in [
+            // overhead + hotspots verbs (round-1 set)
             "tokens",
             "bytes",
             "totalLines",
@@ -925,6 +969,23 @@ mod tests {
             "turnsAnalyzed",
             "analyzed",
             "excluded",
+            // export_ledger / export_stamps record-body u64s (round-3 set)
+            "turnIndex",
+            "eventIndex",
+            "callIndex",
+            "contentLength",
+            "tokensBeforeCompact",
+            "byteLen",
+            "approxTokens",
+            "retries",
+            "collapsedCalls",
+            // nested `usage` shape on TurnRecord / ToolResultEventRecord
+            "input",
+            "output",
+            "reasoning",
+            "cacheRead",
+            "cacheCreate5m",
+            "cacheCreate1h",
         ] {
             assert!(is_bigint_field(key), "{key} missing from BIGINT_FIELDS");
         }
@@ -941,11 +1002,93 @@ mod tests {
             "perSessionAvg",
             "path",
             "kind",
+            // Record envelope fields that live alongside the promoted
+            // u64 keys but are themselves a schema version (u32 small)
+            // or a string discriminant — promoting these would corrupt
+            // the JSONL contract.
+            "v",
+            "ts",
+            "sessionId",
+            "messageId",
+            "source",
         ] {
             assert!(
                 !is_bigint_field(key),
                 "{key} unexpectedly present in BIGINT_FIELDS"
             );
+        }
+    }
+
+    #[test]
+    fn export_record_u64_fields_survive_above_2_pow_53() {
+        // Pin the round-3 fix: the four field names CodeRabbit called
+        // out, plus the rest of the export-record u64 surface, must be
+        // in BIGINT_FIELDS so the BigIntPromoting walker hands them to
+        // JS as `BigInt`. A regression — anyone removing one of these
+        // and forgetting to update the export verbs — would silently
+        // truncate values >2^53 in `exportLedger` / `exportStamps`.
+        //
+        // This is a static membership test rather than a live napi-env
+        // round-trip because the napi sys calls require a running JS
+        // environment (covered end-to-end by the wave-2 D9 conformance
+        // suite). The walker's behavior given a matched key is already
+        // exercised structurally — see `is_bigint_field` / the round-1
+        // overhead+hotspots tests — so guarding the membership here is
+        // load-bearing for the contract.
+        const ABOVE_2_POW_53: u64 = (1u64 << 53) + 1;
+        // Sanity: this value is precisely the kind we'd lose to f64
+        // rounding, so pinning it in the test doc keeps the failure
+        // mode visible.
+        assert!(ABOVE_2_POW_53 > (1u64 << 53));
+        assert!(ABOVE_2_POW_53 as f64 as u64 != ABOVE_2_POW_53);
+
+        // The exact field names from CodeRabbit's report.
+        for key in [
+            "turnIndex",
+            "eventIndex",
+            "contentLength",
+            "tokensBeforeCompact",
+        ] {
+            assert!(
+                is_bigint_field(key),
+                "round-3 fix regressed: {key} not in BIGINT_FIELDS"
+            );
+        }
+
+        // The wrapper itself round-trips a JsonValue::Array (the shape
+        // export_ledger / export_stamps emit). We can't assert on the
+        // napi conversion here — see comment above — but we *can*
+        // build the wrapper to confirm the type plumbing compiles and
+        // accepts a value-above-2^53 inside a record body shaped like
+        // the live emitter.
+        let record = serde_json::json!({
+            "v": 1,
+            "kind": "turn",
+            "record": {
+                "turnIndex": ABOVE_2_POW_53,
+                "eventIndex": ABOVE_2_POW_53,
+                "contentLength": ABOVE_2_POW_53,
+                "tokensBeforeCompact": ABOVE_2_POW_53,
+            },
+        });
+        let wrapped = BigIntPromoting(JsonValue::Array(vec![record.clone()]));
+        // We exposed the inner JsonValue as the tuple field; make sure
+        // the value we just wrapped wasn't lossily reshaped before
+        // hand-off to the walker — `serde_json::Number::as_u64` is what
+        // the walker calls, and that path returns the original u64.
+        if let JsonValue::Array(arr) = &wrapped.0 {
+            let rec = &arr[0]["record"];
+            for k in [
+                "turnIndex",
+                "eventIndex",
+                "contentLength",
+                "tokensBeforeCompact",
+            ] {
+                let n = rec[k].as_u64().expect("u64 survived the JSON round-trip");
+                assert_eq!(n, ABOVE_2_POW_53, "{k} value mutated");
+            }
+        } else {
+            panic!("BigIntPromoting wrapper dropped the array shape");
         }
     }
 
