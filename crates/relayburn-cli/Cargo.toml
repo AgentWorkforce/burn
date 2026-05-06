@@ -26,7 +26,7 @@ path = "src/lib.rs"
 [dependencies]
 # The CLI is the canonical external embedder of the SDK — every read
 # verb the binary surfaces will wrap a `relayburn-sdk` call once #248
-# fills in the CLI source (the binary is an `eprintln!` stub today).
+# fills in the CLI source.
 #
 # Version requirement is `0.0` (= `>=0.0.0, <0.1.0`) so the loose
 # 0.0.x prerelease line satisfies both the local workspace path
@@ -35,24 +35,50 @@ path = "src/lib.rs"
 # Tighten this once the SDK ships a stable 0.x line.
 relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }
 
+# clap v4 derive — argument parsing root and subcommand dispatch. The
+# scaffold defines globals + subcommand stubs only; per-command flag
+# wiring lands in the Wave 2 fan-out PRs.
+clap = { workspace = true }
+
+# `comfy-table` is used by the shared table renderer in `render::table`.
+# Picked over `tabled` because it ships with sane Unicode/ASCII presets
+# and a simple builder API that maps cleanly onto a `Vec<Vec<String>>`
+# of rows. Wave 2 commands render tabular output through this helper.
+comfy-table = "7"
+
+# Used by `render::json` to emit the structured-output mode the TS CLI's
+# `--json` global produces. `serde` derive lives here too because the
+# rendering helpers are generic over `Serialize` types from the SDK.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# `anyhow` for the binary entrypoint; typed errors flow through
+# `relayburn_sdk::LedgerError` and friends. `render::error::report_error`
+# does the SDK-error → stderr/exit-code mapping.
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
 # Harness substrate (#248-b): the `HarnessAdapter` trait under `harnesses/`
 # uses `async fn` in trait — `async-trait` desugars to `Pin<Box<…>>` futures
 # without forcing every adapter to spell that out. `phf` macros give us a
 # perfect-hash registry that's evaluated at compile time, so harness lookup
 # costs nothing at startup. `tokio::sync` is needed for the watch controller
 # wiring exposed by `relayburn-sdk` (`WatchController` holds a `Mutex`).
-anyhow = { workspace = true }
 async-trait = "0.1"
 phf = { version = "0.11", features = ["macros"] }
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
-# Used by `tests/golden.rs` to load the invocations contract that drives
-# both the TS-CLI snapshot capture and the Rust diff runner.
-serde = { workspace = true }
-serde_json = { workspace = true }
+# `assert_cmd` drives the binary in the smoke test under `tests/`.
+# `predicates` provides the matchers `assert_cmd` wants.
+assert_cmd = "2"
+predicates = "3"
 
 # Async test harness for the `harnesses` module unit tests (lookup, factory
 # round-trips). `rt-multi-thread` + `macros` lets `#[tokio::test]` resolve
 # and gives spawned watch-loop ticks a runtime to land on.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+
+# `tests/golden.rs` loads `invocations.json` to drive both the TS-CLI snapshot
+# capture and the Rust diff runner. `serde` / `serde_json` are workspace deps
+# already pulled in via `[dependencies]`, so this entry is documentation only.
