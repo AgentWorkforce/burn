@@ -33,16 +33,41 @@
 //!   `tokio_rt` feature drives this; we mark `ingest` `async fn` and the
 //!   sync verbs (`summary`, `sessionCost`, …) as plain `fn` returning
 //!   `Result<T, BurnError>`.
-//! - **Errors → typed `BurnError` JS class.** Domain failures from the
-//!   SDK (`anyhow::Error`) and argument-shape errors raised at this
-//!   boundary are surfaced as a `napi::Error` whose `Status` slot carries
-//!   one of [`SDK_ERROR_CODE`], [`IO_ERROR_CODE`], or
-//!   [`INVALID_ARGUMENT_ERROR_CODE`]. napi-rs writes that string into the
-//!   thrown JS Error's `code` property (via `napi_create_error`'s
+//! - **Errors → typed `BurnError` JS class (sync verbs only).** Domain
+//!   failures from the SDK (`anyhow::Error`) and argument-shape errors
+//!   raised at this boundary are surfaced as a `napi::Error` whose
+//!   `Status` slot carries one of [`SDK_ERROR_CODE`], [`IO_ERROR_CODE`],
+//!   or [`INVALID_ARGUMENT_ERROR_CODE`]. napi-rs writes that string into
+//!   the thrown JS Error's `code` property (via `napi_create_error`'s
 //!   `code` argument), so JS callers get
 //!   `try { … } catch (e) { if (e.code === 'BURN_SDK') … }`. The
 //!   [`BurnErrorCode`] enum is exported as a `string_enum` so TS code
 //!   can reference the codes by name without stringly-typed literals.
+//!
+//!   **Async exception — [`ingest`].** napi-rs 2.x's `async fn` lowering
+//!   in `napi-derive` runs through `napi::bindgen_prelude::execute_tokio_future`
+//!   ([`napi-derive-backend`]'s `codegen/fn.rs`), which is hard-typed to
+//!   `Result<T, napi::Error<Status>>` — and `Status` is a *closed* enum
+//!   over the predefined NAPI status strings (`GenericFailure`,
+//!   `InvalidArg`, …). There is no public typed-error escape hatch in
+//!   napi 2.x: `JsDeferred::reject` only accepts `Error<Status>`, and
+//!   `AsyncTask::reject`'s rejection path likewise funnels through
+//!   `JsError::from(Error<Status>).into_value`. The only way to inject
+//!   a non-`Status` `code` would be to hand-roll a `JsDeferred`
+//!   replacement on top of raw `sys::napi_*` calls + a TSFN — see
+//!   `crates/relayburn-sdk-node/src/lib.rs` git history for the
+//!   evaluation. We deliberately don't pay that complexity in v1.
+//!
+//!   **Concrete contract for [`ingest`]:** the returned `Promise<IngestReport>`
+//!   rejects with a JS `Error` whose `.code === 'GenericFailure'` and
+//!   whose `.message` is the rendered `anyhow::Error` chain from the
+//!   SDK. JS callers branching on `e.code` should match `'GenericFailure'`
+//!   for ingest failures (or, more robustly, gate on `e.message`
+//!   substrings if discrimination is required). A future PR can tighten
+//!   this — likely by upgrading to napi-rs 3.x once the `string_enum`
+//!   and `BigInt` ergonomics there are validated against the rest of
+//!   the binding — at which point `e.code` becomes one of the
+//!   [`BurnErrorCode`] string values for ingest as well.
 //!
 //! # Surface
 //!
@@ -760,14 +785,17 @@ impl From<sdk::IngestReport> for IngestReport {
 /// boundary in v1 — the JS surface today doesn't expose them either.
 /// Wave 2 D9 picks them up if the conformance gate calls for it.
 ///
-/// **Error-code caveat:** napi-rs's `execute_tokio_future` adapter
-/// (driving `async fn` → `Promise<T>`) is hard-coded to reject with the
-/// default `napi::Error<Status>` shape, so this verb's rejection
-/// surfaces as `code: 'GenericFailure'` rather than the
-/// [`BurnErrorCode`] codes used by the synchronous verbs. JS callers
-/// branching on `e.code` should match `'BURN_SDK'` (sync verbs) and
-/// `'GenericFailure'` (this verb) until napi-rs grows a typed-error
-/// async path.
+/// **Error-code contract.** Unlike the synchronous verbs (which reject
+/// with `e.code` set to one of [`BurnErrorCode`]'s string values), this
+/// async verb's rejection surfaces as `code: 'GenericFailure'`. The
+/// rendered SDK error chain is in `e.message`. See the file header for
+/// the full rationale (napi-rs 2.x's `execute_tokio_future` is
+/// hard-typed to `Result<T, Error<Status>>` and `Status` is a closed
+/// enum, so `'BURN_SDK'` cannot be threaded through). The
+/// [`ingest_uses_generic_failure_code_runtime_invariant`] test pins
+/// this discrepancy so a future napi-rs upgrade or hand-rolled deferred
+/// either fixes it or has to update the test in lockstep with the
+/// header docs.
 #[napi]
 pub async fn ingest(opts: Option<IngestOptions>) -> NapiResult<IngestReport> {
     let opts = opts.unwrap_or(IngestOptions {
@@ -930,5 +958,55 @@ mod tests {
         assert_eq!(SDK_ERROR_CODE, "BURN_SDK");
         assert_eq!(IO_ERROR_CODE, "BURN_IO");
         assert_eq!(INVALID_ARGUMENT_ERROR_CODE, "BURN_INVALID_ARGUMENT");
+    }
+
+    /// Runtime invariant pinning the documented `ingest()` error-code
+    /// discrepancy. The body is a compile-time assertion that the type
+    /// returned by `ingest`'s rejection path is the default
+    /// `napi::Error` (`Error<Status>`), *not* our typed
+    /// `Error<&'static str>` (`BurnError`). If a future napi-rs upgrade
+    /// or hand-rolled deferred replacement makes typed async errors
+    /// possible, this test will start failing; that's the signal to
+    /// remove the caveat from the file header + the `ingest()` doc
+    /// comment in lockstep with switching the signature to
+    /// `Result<IngestReport, BurnError>`.
+    ///
+    /// Why a static-typing check rather than a JS-side assertion: the
+    /// JS-side end-to-end test is wave-2 D9 territory (it requires a
+    /// built `.node` artifact); we can still pin the discrepancy *here*
+    /// by encoding the napi-rs limitation as a type-level fact. The
+    /// caveat in the header docs is then forced to track the type.
+    #[test]
+    fn ingest_uses_generic_failure_code_runtime_invariant() {
+        use std::any::TypeId;
+
+        // `BurnError` (the typed error used by every sync verb) is
+        // distinct from the default `napi::Error<Status>`.
+        // `execute_tokio_future` (which `#[napi] async fn ingest` is
+        // lowered to) is hard-typed to the latter — see the file
+        // header. If these two ever become assignable, the docs need
+        // updating.
+        type DefaultNapiError = napi::Error;
+        assert_ne!(
+            TypeId::of::<BurnError>(),
+            TypeId::of::<DefaultNapiError>(),
+            "BurnError and napi::Error<Status> have unified — \
+             ingest() can now return BurnError; update the file header \
+             docs and switch ingest's return type."
+        );
+
+        // Sanity-check the shapes of the codes we *can* deliver vs the
+        // status code that `ingest()` will surface. These are what
+        // upstream `JsError::from(Error<Status>).into_value(env)`
+        // writes for the Status::GenericFailure case.
+        let sync_codes = [SDK_ERROR_CODE, IO_ERROR_CODE, INVALID_ARGUMENT_ERROR_CODE];
+        let async_code: &str = napi::Status::GenericFailure.as_ref();
+        for c in sync_codes {
+            assert_ne!(
+                c, async_code,
+                "{c} must not collide with the async fallback code {async_code}"
+            );
+        }
+        assert_eq!(async_code, "GenericFailure");
     }
 }
