@@ -51,7 +51,7 @@ mod tests {
     // test under `tests/smoke.rs` which drives the binary end-to-end.
     #[test]
     fn render_json_accepts_arbitrary_serialize_input() {
-        let _ = render_json(&json!({ "ok": true, "rows": [1, 2, 3] }));
-        let _ = render_json_compact(&json!({ "ok": true }));
+        assert!(render_json(&json!({ "ok": true, "rows": [1, 2, 3] })).is_ok());
+        assert!(render_json_compact(&json!({ "ok": true })).is_ok());
     }
 }

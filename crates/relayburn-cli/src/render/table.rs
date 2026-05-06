@@ -15,6 +15,8 @@
 
 #![allow(dead_code)]
 
+use std::io::{self, Write};
+
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{ContentArrangement, Table};
 
@@ -60,9 +62,22 @@ pub fn render_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]
 }
 
 /// Convenience: render and write to stdout with a trailing newline.
-pub fn print_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]) {
+///
+/// Returns the underlying I/O error rather than panicking on EPIPE
+/// (e.g. `burn summary | head`); the caller is expected to surface
+/// failures via `render::error::report_error`. Mirrors the shape of
+/// [`crate::render::json::render_json`] so all rendering helpers
+/// uniformly bubble I/O errors up to the dispatcher.
+pub fn print_table(
+    globals: &GlobalArgs,
+    headers: &[&str],
+    rows: &[Vec<String>],
+) -> io::Result<()> {
     let rendered = render_table(globals, headers, rows);
-    println!("{rendered}");
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    handle.write_all(rendered.as_bytes())?;
+    handle.write_all(b"\n")
 }
 
 #[cfg(test)]
@@ -150,6 +165,21 @@ mod tests {
             !rendered.contains('\u{1b}'),
             "ANSI escape leaked through despite no_color: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn print_table_returns_ok_on_happy_path() {
+        // Smoke test mirroring `render_json_accepts_arbitrary_serialize_input`:
+        // `print_table` writes to the process's locked stdout, so we can't
+        // capture output here, but we can at least pin that the happy
+        // path returns `Ok(())` (i.e. no panic, no EPIPE in this test
+        // harness). End-to-end stdout assertions live in `tests/smoke.rs`.
+        let result = print_table(
+            &no_globals(),
+            &["model", "turns"],
+            &[vec!["claude-sonnet-4-6".into(), "12".into()]],
+        );
+        assert!(result.is_ok(), "print_table happy path returned {result:?}");
     }
 
     #[test]

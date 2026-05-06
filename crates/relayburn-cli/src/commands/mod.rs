@@ -1,7 +1,8 @@
 //! Per-subcommand presenter modules. Each `run` here is a stub that
-//! prints `not yet implemented` to stderr and returns a non-zero exit
-//! code. Wave 2 fan-out PRs replace these stubs with thin presenters
-//! over `relayburn-sdk`.
+//! reports `not yet implemented` (stderr in human mode, stdout JSON
+//! envelope in `--json` mode) and returns a non-zero exit code.
+//! Wave 2 fan-out PRs replace these stubs with thin presenters over
+//! `relayburn-sdk`.
 //!
 //! Subcommands deliberately get one file each so the eight Wave 2 PRs
 //! can land in parallel without touching a shared dispatcher table:
