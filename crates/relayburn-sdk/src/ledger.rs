@@ -35,8 +35,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::params;
 
 pub use crate::ledger::config::{
-    config_path, load_config, load_config_at, BurnConfig, ContentConfig, Retention,
-    DEFAULT_RETENTION_DAYS,
+    config_path, config_path_at_home, load_config, load_config_at, load_config_with_home,
+    BurnConfig, ContentConfig, Retention, DEFAULT_RETENTION_DAYS,
 };
 pub use crate::ledger::content::{PruneStats, SearchHit, SearchOptions};
 pub use crate::ledger::error::{LedgerError, Result};

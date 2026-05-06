@@ -20,9 +20,9 @@
 use relayburn_sdk::{Ledger, LedgerOpenOptions, StateStatus};
 
 use crate::cli::{
-    GlobalArgs, StateArgs, StateRebuildArgs, StateRebuildTarget, StateSubcommand,
+    ArchiveAction, GlobalArgs, StateArgs, StateRebuildArgs, StateRebuildTarget, StateSubcommand,
 };
-use crate::render::error::{report_error, report_ledger_error};
+use crate::render::error::{report_advisory, report_error, report_ledger_error};
 use crate::render::json::render_json;
 
 pub fn run(globals: &GlobalArgs, args: StateArgs) -> i32 {
@@ -78,8 +78,8 @@ fn format_status(s: &StateStatus) -> String {
         out.push_str("  status: not built yet\n");
     }
     out.push_str(&format!(
-        "  rows: {} total\n",
-        format_int(s.burn.total_rows)
+        "  tracked rows: {}\n",
+        format_int(s.burn.tracked_rows)
     ));
     out.push_str(&format!(
         "    turns:              {}\n",
@@ -202,12 +202,47 @@ fn format_retention_days(d: f64) -> String {
 fn run_rebuild(globals: &GlobalArgs, args: StateRebuildArgs) -> i32 {
     match args.target {
         StateRebuildTarget::Index | StateRebuildTarget::Content => run_rebuild_derivable(globals),
-        StateRebuildTarget::All(_) => run_rebuild_derivable(globals),
-        StateRebuildTarget::Archive(_) => {
+        StateRebuildTarget::All(all_args) => {
+            // 2.0 collapses index/classify/content/archive onto a single
+            // `rebuild_derivable` SQL transaction. `--force` was only
+            // meaningful when `rebuild all` forwarded to a separate
+            // `rebuild classify --force` pass; the standalone reclassify
+            // is still unimplemented in the Rust port (#240 follow-up),
+            // so the flag is currently accepted-but-inert. Surface the
+            // no-op so scripts that pass `--force` see a breadcrumb
+            // rather than a silent success.
+            if all_args.force {
+                report_advisory(
+                    "state rebuild all --force: standalone reclassify is not yet \
+                     implemented in the Rust port (#240 follow-up); --force will \
+                     apply once classify is wired",
+                    globals,
+                );
+            }
+            run_rebuild_derivable(globals)
+        }
+        StateRebuildTarget::Archive(archive_args) => {
             // 2.0 doesn't have a separate archive.sqlite — the
             // archive_state row lives inside burn.sqlite and is
             // refreshed on every rebuild_derivable. Treat
-            // `rebuild archive` as an alias.
+            // `rebuild archive` as an alias. Both `--full` and
+            // `--vacuum` (and the legacy `vacuum` positional) are
+            // surface-compatible with 1.x scripts but inert in 2.0;
+            // print a stderr breadcrumb so the no-op is honest.
+            if archive_args.full {
+                report_advisory(
+                    "state rebuild archive --full: in 2.0 every rebuild replays \
+                     from zero, so --full is a no-op",
+                    globals,
+                );
+            }
+            if archive_args.vacuum || matches!(archive_args.action, Some(ArchiveAction::Vacuum)) {
+                report_advisory(
+                    "state rebuild archive vacuum: 2.0 collapses archive.sqlite \
+                     into burn.sqlite, so there is nothing to vacuum",
+                    globals,
+                );
+            }
             run_rebuild_derivable(globals)
         }
         StateRebuildTarget::Classify(_) => {

@@ -1,7 +1,7 @@
 derived state at ${RELAYBURN_HOME}:
 events DB (burn.sqlite):
   path: ${RELAYBURN_HOME}/burn.sqlite
-  rows: 18 total
+  tracked rows: 18
     turns:              7
     user_turns:         3
     compactions:        0

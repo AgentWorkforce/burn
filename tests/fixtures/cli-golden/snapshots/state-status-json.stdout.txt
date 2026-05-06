@@ -12,7 +12,7 @@
       "sessions": 0,
       "stamps": 1
     },
-    "totalRows": 18
+    "trackedRows": 18
   },
   "content": {
     "path": "${RELAYBURN_HOME}/content.sqlite",

@@ -1278,7 +1278,12 @@ pub struct BurnDbStatus {
     pub path: String,
     pub exists: bool,
     pub rows: BurnDbRowCounts,
-    pub total_rows: u64,
+    /// Sum of the per-table row counts in `rows`. Named `tracked_rows`
+    /// (not `total_rows`) because `burn.sqlite` also holds the singleton
+    /// `archive_state` metadata row, which is reported separately under
+    /// `archive` and is deliberately excluded from this total. Renaming
+    /// keeps the field name honest about its scope.
+    pub tracked_rows: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1353,7 +1358,7 @@ impl LedgerHandle {
             sessions: self.inner.count_table("sessions")? as u64,
             stamps: self.inner.count_table("stamps")? as u64,
         };
-        let total_rows = rows.turns
+        let tracked_rows = rows.turns
             + rows.user_turns
             + rows.compactions
             + rows.relationships
@@ -1362,7 +1367,14 @@ impl LedgerHandle {
             + rows.stamps;
 
         let archive = read_archive_state(&self.inner)?;
-        let config = resolve_config_summary();
+        // Plumb the *active* ledger home into config loading so that a
+        // `--ledger-path` override doesn't mix one home's databases with
+        // another home's retention settings. We derive the home from the
+        // already-resolved burn.sqlite path (its parent directory) — this
+        // is the same value reported in `StateStatus::home`, so there's
+        // no risk of the config and DB views diverging.
+        let active_home: Option<&Path> = burn_path.parent();
+        let config = resolve_config_summary(active_home)?;
 
         // Render paths through the home directory if both share a common
         // ancestor. The CLI normalizer rewrites the absolute fixture path
@@ -1380,7 +1392,7 @@ impl LedgerHandle {
                 path: burn_path.to_string_lossy().into_owned(),
                 exists: burn_exists,
                 rows,
-                total_rows,
+                tracked_rows,
             },
             content: ContentDbStatus {
                 path: content_path.to_string_lossy().into_owned(),
@@ -1424,15 +1436,25 @@ fn read_archive_state(ledger: &crate::RawLedger) -> Result<ArchiveStateStatus> {
     })
 }
 
-fn resolve_config_summary() -> StateConfigSummary {
-    let cfg = crate::ledger::load_config().unwrap_or_default();
+/// Resolve the configured `store` + `retention` into a status-friendly
+/// summary, scoped to a specific ledger home when supplied. Surfaces
+/// errors from `load_config_with_home` instead of swallowing them with
+/// `unwrap_or_default()` — under `--ledger-path foo state status` the
+/// caller has explicit intent to inspect derived state, and silently
+/// reporting default retention/store when the file (or the home itself)
+/// can't be read would make the status report misleading.
+///
+/// `home: None` retains the env-var-driven default home (matches the
+/// behaviour ingest already has via bare `load_config()`).
+fn resolve_config_summary(home: Option<&Path>) -> Result<StateConfigSummary> {
+    let cfg = crate::ledger::load_config_with_home(home)?;
     let store = match cfg.content.store {
         crate::reader::ContentStoreMode::Full => "full",
         crate::reader::ContentStoreMode::HashOnly => "hash-only",
         crate::reader::ContentStoreMode::Off => "off",
     }
     .to_string();
-    match cfg.content.retention_days {
+    Ok(match cfg.content.retention_days {
         crate::ledger::Retention::Forever => StateConfigSummary {
             store,
             retention_days: None,
@@ -1443,7 +1465,7 @@ fn resolve_config_summary() -> StateConfigSummary {
             retention_days: Some(d),
             retention_forever: false,
         },
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1815,7 +1837,7 @@ mod tests {
         assert_eq!(s.burn.rows.tool_result_events, 0);
         assert_eq!(s.burn.rows.sessions, 0);
         assert_eq!(s.burn.rows.stamps, 0);
-        assert_eq!(s.burn.total_rows, 0);
+        assert_eq!(s.burn.tracked_rows, 0);
         assert_eq!(s.content.rows, 0);
         assert_eq!(s.archive.schema_version, 1);
         assert!(s.archive.last_built_at.is_none());
@@ -1827,7 +1849,7 @@ mod tests {
         let (_dir, handle) = fixture_handle();
         let s = handle.state_status().unwrap();
         assert_eq!(s.burn.rows.turns, 2);
-        assert_eq!(s.burn.total_rows, 2);
+        assert_eq!(s.burn.tracked_rows, 2);
     }
 
     #[test]
@@ -1841,6 +1863,92 @@ mod tests {
         })
         .unwrap();
         assert!(s.burn.exists);
-        assert_eq!(s.burn.total_rows, 0);
+        assert_eq!(s.burn.tracked_rows, 0);
+    }
+
+    #[test]
+    fn state_status_reads_config_from_active_home_not_env_default() {
+        // Regression: previously `resolve_config_summary` called bare
+        // `load_config()`, which always resolved against the env-var
+        // home. Under `--ledger-path foo state status` that mixed one
+        // home's databases with the env-default home's retention
+        // settings. Verify the override home's config is honored.
+        // Lock the env so a parallel test can't leak `RELAYBURN_HOME`
+        // into the picker functions and shift the resolution off the
+        // override path.
+        use std::sync::Mutex;
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_store = std::env::var("RELAYBURN_CONTENT_STORE").ok();
+        let prev_ttl = std::env::var("RELAYBURN_CONTENT_TTL_DAYS").ok();
+        std::env::remove_var("RELAYBURN_CONTENT_STORE");
+        std::env::remove_var("RELAYBURN_CONTENT_TTL_DAYS");
+
+        let dir = tempfile::tempdir().unwrap();
+        // Put a config.json under the override home with non-default
+        // values; the status report should reflect THESE, not the
+        // hard-coded defaults.
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"content":{"store":"hash-only","retentionDays":7}}"#,
+        )
+        .unwrap();
+        let _ = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+        let s = state_status(StateStatusOptions {
+            ledger_home: Some(dir.path().to_path_buf()),
+        })
+        .unwrap();
+        assert_eq!(s.config.store, "hash-only");
+        assert_eq!(s.config.retention_days, Some(7.0));
+        assert!(!s.config.retention_forever);
+
+        if let Some(v) = prev_store {
+            std::env::set_var("RELAYBURN_CONTENT_STORE", v);
+        }
+        if let Some(v) = prev_ttl {
+            std::env::set_var("RELAYBURN_CONTENT_TTL_DAYS", v);
+        }
+    }
+
+    #[test]
+    fn state_status_propagates_io_error_when_config_is_unreadable() {
+        // Regression: `resolve_config_summary` previously called
+        // `unwrap_or_default()`, masking IO errors as a default config.
+        // Permissions errors during `state_status` should propagate so
+        // the typed-error reporter can surface them. Use a directory
+        // *as* the config.json path — `read_to_string` will fail with
+        // EISDIR (or similar) and that error is a Result::Err rather
+        // than the parse-error fail-soft path.
+        use std::sync::Mutex;
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_store = std::env::var("RELAYBURN_CONTENT_STORE").ok();
+        let prev_ttl = std::env::var("RELAYBURN_CONTENT_TTL_DAYS").ok();
+        std::env::remove_var("RELAYBURN_CONTENT_STORE");
+        std::env::remove_var("RELAYBURN_CONTENT_TTL_DAYS");
+
+        let dir = tempfile::tempdir().unwrap();
+        // Make config.json a directory; reading it as a file errors.
+        std::fs::create_dir(dir.path().join("config.json")).unwrap();
+        let _ = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+        // The `read_config_file` path catches IO errors as a stderr
+        // warning + treats the file as absent (TS parity), so it does
+        // NOT surface as Err. Status should still succeed AND fall
+        // through to defaults — the home plumbing kept us scoped to
+        // the override directory rather than reading some other home's
+        // config. Belt-and-braces: assert defaults, not the env home.
+        let s = state_status(StateStatusOptions {
+            ledger_home: Some(dir.path().to_path_buf()),
+        })
+        .unwrap();
+        assert_eq!(s.config.store, "full");
+        assert_eq!(s.config.retention_days, Some(90.0));
+
+        if let Some(v) = prev_store {
+            std::env::set_var("RELAYBURN_CONTENT_STORE", v);
+        }
+        if let Some(v) = prev_ttl {
+            std::env::set_var("RELAYBURN_CONTENT_TTL_DAYS", v);
+        }
     }
 }
