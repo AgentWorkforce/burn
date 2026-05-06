@@ -84,12 +84,16 @@ jobs:
           rustup toolchain install
           rustup target add ${{ matrix.target }}
 
-      - name: Install cross (linux-arm64 only)
+      - name: Install aarch64-linux cross toolchain (linux-arm64 only)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        # `cross` provides the aarch64 sysroot via Docker on the linux runner.
-        # napi-rs's CLI auto-detects `cross` for arm64 linux, so installing
-        # it is the only setup step we need.
-        run: cargo install cross --locked --version 0.2.5
+        # `napi build` calls `cargo build --target aarch64-unknown-linux-gnu`
+        # directly (it does not auto-route through `cross`), so we need a real
+        # aarch64 cross-compiler available on the runner. `libsqlite3-sys` (a
+        # transitive dep via `rusqlite`) compiles bundled SQLite C source via
+        # `cc-rs`, which probes for `aarch64-linux-gnu-gcc`.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Cache cargo registry + target
         uses: actions/cache@v4
@@ -124,7 +128,14 @@ jobs:
         # `--cargo-cwd` points at the binding crate (which lives under
         # `crates/relayburn-sdk-node/`, not co-located with the npm package)
         # so the `cargo metadata` step that resolves the cdylib succeeds.
+        # The CC_/linker env vars only take effect for the aarch64-linux leg
+        # (cargo ignores per-target vars when the host matches the target);
+        # native legs are unaffected.
         working-directory: packages/sdk-node
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           pnpm exec napi build \
             --platform \
