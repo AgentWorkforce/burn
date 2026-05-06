@@ -3,75 +3,119 @@
 //! The TS sibling defers each adapter import (`async () => (await
 //! import('./claude.js')).claudeAdapter`) so unrelated commands don't
 //! pay ingest/ledger startup cost. The Rust port doesn't have lazy
-//! module imports, but trait-object adapters are zero-sized so the
-//! equivalent is "don't construct heavy state at registry build time".
-//! All three Wave 2 adapters will be unit structs — adding them to the
-//! `phf::Map` below is free.
+//! module imports, but trait-object adapters either fit a `phf::Map`
+//! (zero-sized unit-struct adapters) or hide behind a [`LazyLock`]
+//! (adapters constructed via [`Box::leak`] at first lookup).
 //!
-//! ## Why `phf` and not `OnceLock<HashMap<…>>`
+//! ## Two-tier layout — and why
 //!
-//! `phf::Map` is built at compile time; lookup is a single perfect-hash
-//! probe with zero allocation. Cold-start matters here: `burn --help`
-//! and `burn summary` should not pay any harness-table init cost.
-//! `OnceLock<HashMap<…>>` is what we'd reach for if the table needed
-//! runtime configuration (e.g. user-pluggable harnesses), which is not
-//! on the roadmap.
+//! There are two real categories of harness adapters:
+//!
+//! 1. **Eager / unit-struct adapters.** Stateless, zero-sized impls
+//!    declared as `static FOO: FooAdapter = FooAdapter;`. These fit a
+//!    `phf::Map<&'static str, &'static dyn HarnessAdapter>` directly:
+//!    the value `&FOO` is a const expression and `phf_map!` is happy.
+//!    Claude (#248-d) lands here.
+//!
+//! 2. **Runtime-constructed adapters.** Codex / opencode are built via
+//!    [`super::pending_stamp::adapter_static`], which captures
+//!    closures (session-root resolver, ingest callback) inside an
+//!    `Arc` and `Box::leak`s the resulting trait object. The leak
+//!    happens at runtime — there is no const expression that yields a
+//!    `&'static dyn HarnessAdapter` for these, so `phf_map!` cannot
+//!    hold them. They live in a [`LazyLock`]-backed sibling map keyed
+//!    the same way.
+//!
+//! [`lookup`] checks the eager `phf::Map` first (single perfect-hash
+//! probe, zero allocation), then falls back to the runtime map. List
+//! ordering merges both: phf entries first, runtime entries appended.
+//!
+//! ## Why not push everything into a runtime `HashMap`?
+//!
+//! Cold-start matters: `burn --help` and `burn summary` shouldn't pay
+//! any harness-table init cost. Eager adapters belong in `phf::Map`
+//! because they can be there for free. The runtime tier is a precise
+//! escape hatch for adapters that genuinely need runtime
+//! construction, not a default.
 //!
 //! ## Wave 2 plug-in points
 //!
-//! Three slots are reserved below for the Wave 2 adapter PRs:
+//! Three slots are reserved for the Wave 2 adapter PRs:
 //!
-//! * `claude` — #248-d (Wave 2 D5). Stateless unit struct registered as a
-//!   bare `&CLAUDE_ADAPTER` static.
+//! * `claude` — #248-d (Wave 2 D5). Stateless unit struct registered
+//!   in [`EAGER_ADAPTERS`] as `&CLAUDE_ADAPTER`.
 //! * `codex` — #248-e (Wave 2 D6). Built via
-//!   [`super::pending_stamp::adapter_static`] inside a
-//!   [`std::sync::LazyLock`] so the leaked `&'static` is constructed on
-//!   first lookup, not at every test compile.
+//!   [`super::pending_stamp::adapter_static`] inside a [`LazyLock`]
+//!   and registered in [`RUNTIME_ADAPTERS`].
 //! * `opencode` — #248-f (Wave 2 D7). Same shape as codex.
-//!
-//! Each PR adds `pub mod claude;` (or codex / opencode) and a single row
-//! in the `ADAPTERS` map. The codex + opencode adapters are constructed
-//! through [`super::pending_stamp::adapter_static`] (not
-//! [`super::pending_stamp::adapter`]) because the registry map holds
-//! `&'static dyn HarnessAdapter` and a runtime `Box<dyn HarnessAdapter>`
-//! cannot satisfy that bound. The static variant `Box::leak`s once at
-//! first use; see its docs for why that's acceptable here.
+
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use phf::phf_map;
 
 use super::HarnessAdapter;
 
 /// Compile-time perfect-hash map from harness name to a `&'static dyn
-/// HarnessAdapter`. Empty on this branch — populated by the three Wave 2
-/// fan-out PRs (#248-d/e/f).
+/// HarnessAdapter`. Holds eager / unit-struct adapters whose value is a
+/// const expression (`&SOMETHING_STATIC`). Empty on this branch —
+/// populated by the claude Wave 2 PR (#248-d).
 ///
-/// `&'static dyn HarnessAdapter` requires the value side to be a trait
-/// object reference; `phf` supports that as long as the referent has a
-/// `'static` lifetime, which works for stateless unit-struct adapters
-/// or adapters defined as `static`s in their own module.
-static ADAPTERS: phf::Map<&'static str, &'static dyn HarnessAdapter> = phf_map! {
+/// **Do not register pending-stamp adapters here.**
+/// `pending_stamp::adapter_static` returns a value produced by
+/// `Box::leak` at runtime; that is not a const expression and cannot
+/// appear inside `phf_map!`. Those adapters go in [`RUNTIME_ADAPTERS`].
+static EAGER_ADAPTERS: phf::Map<&'static str, &'static dyn HarnessAdapter> = phf_map! {
     // Wave 2 PRs will populate these slots:
     //
     // "claude"   => &claude::CLAUDE_ADAPTER,        // #248-d
-    // "codex"    => &codex::CODEX_ADAPTER,          // #248-e
-    // "opencode" => &opencode::OPENCODE_ADAPTER,    // #248-f
 };
+
+/// Runtime-constructed adapters. The closure runs once on first
+/// lookup; afterwards the map is read-only. Each entry's value is a
+/// `&'static dyn HarnessAdapter` produced by
+/// [`super::pending_stamp::adapter_static`] (`Box::leak`-backed).
+///
+/// Empty on this branch — populated by the codex (#248-e) and
+/// opencode (#248-f) Wave 2 PRs. Wave 2 wiring will look like:
+///
+/// ```ignore
+/// static RUNTIME_ADAPTERS: LazyLock<HashMap<&'static str, &'static dyn HarnessAdapter>> =
+///     LazyLock::new(|| {
+///         let mut m = HashMap::new();
+///         m.insert("codex", pending_stamp::adapter_static(codex_config()));
+///         m.insert("opencode", pending_stamp::adapter_static(opencode_config()));
+///         m
+///     });
+/// ```
+static RUNTIME_ADAPTERS: LazyLock<HashMap<&'static str, &'static dyn HarnessAdapter>> =
+    LazyLock::new(HashMap::new);
 
 /// Look up an adapter by name. Returns `None` for unknown names; the
 /// `burn run` driver maps `None` to a "did you mean …?" diagnostic
 /// using [`list_harness_names`].
+///
+/// Eager adapters (single perfect-hash probe) are checked first; the
+/// runtime map is consulted only on a miss so common-case lookups
+/// never touch the [`LazyLock`].
 pub fn lookup(name: &str) -> Option<&'static dyn HarnessAdapter> {
-    ADAPTERS.get(name).copied()
+    if let Some(adapter) = EAGER_ADAPTERS.get(name).copied() {
+        return Some(adapter);
+    }
+    RUNTIME_ADAPTERS.get(name).copied()
 }
 
 /// List every registered harness name. The CLI's `--help` block reads
-/// this so the harness list updates automatically when a new adapter is
-/// registered. Order is the iteration order of `phf::Map` (stable but
-/// not guaranteed alphabetical) — callers that want deterministic order
-/// should sort the result, mirroring how the TS test sorts for
-/// comparison.
+/// this so the harness list updates automatically when a new adapter
+/// is registered. Order is `phf::Map` iteration order (eager
+/// adapters) followed by `HashMap` iteration order (runtime
+/// adapters); both are stable but not guaranteed alphabetical, so
+/// callers that want deterministic ordering should sort the result —
+/// mirroring how the TS test sorts for comparison.
 pub fn list_harness_names() -> Vec<&'static str> {
-    ADAPTERS.keys().copied().collect()
+    let mut names: Vec<&'static str> = EAGER_ADAPTERS.keys().copied().collect();
+    names.extend(RUNTIME_ADAPTERS.keys().copied());
+    names
 }
 
 #[cfg(test)]
@@ -113,30 +157,31 @@ mod tests {
 
     static FAKE: FakeAdapter = FakeAdapter;
 
-    /// Static fake registry shaped exactly like production [`ADAPTERS`].
-    /// `phf_map!` requires its output to live for `'static`, so the
-    /// fixture is module-scoped rather than declared inside the test
-    /// body. This proves a `&'static dyn HarnessAdapter` round-trips
-    /// through the same `phf::Map::get` → `Option::copied` path that
-    /// [`lookup`] uses, without needing to mutate the real table (which
-    /// is compile-time and intentionally unreachable from tests).
-    static FAKE_REGISTRY: phf::Map<&'static str, &'static dyn HarnessAdapter> = phf_map! {
+    /// Static fake registry shaped exactly like production
+    /// [`EAGER_ADAPTERS`]. `phf_map!` requires its output to live for
+    /// `'static`, so the fixture is module-scoped rather than declared
+    /// inside the test body. This proves a `&'static dyn
+    /// HarnessAdapter` round-trips through the same `phf::Map::get` →
+    /// `Option::copied` path that [`lookup`] uses, without needing to
+    /// mutate the real table (which is compile-time and intentionally
+    /// unreachable from tests).
+    static FAKE_EAGER_REGISTRY: phf::Map<&'static str, &'static dyn HarnessAdapter> = phf_map! {
         "fake" => &FAKE,
     };
 
     /// Lookup-by-name on a static fake adapter. Mirrors what `lookup`
-    /// does internally and what the Wave 2 PRs will rely on once they
-    /// register `claude` / `codex` / `opencode`.
+    /// does internally and what the claude Wave 2 PR will rely on
+    /// once it registers `claude` in [`EAGER_ADAPTERS`].
     #[test]
     fn dyn_adapter_round_trip_by_name() {
-        let got = FAKE_REGISTRY
+        let got = FAKE_EAGER_REGISTRY
             .get("fake")
             .copied()
             .expect("fake registered");
         assert_eq!(got.name(), "fake");
         assert_eq!(got.session_root(), PathBuf::from("/tmp/fake-sessions"));
 
-        assert!(FAKE_REGISTRY.get("missing").is_none());
+        assert!(FAKE_EAGER_REGISTRY.get("missing").is_none());
     }
 
     /// On this branch the production registry is intentionally empty;
@@ -159,20 +204,29 @@ mod tests {
         assert!(lookup("claude ").is_none());
     }
 
-    /// Wave 2 wiring proof: a pending-stamp adapter built via
+    /// Wave 2 wiring proof for **pending-stamp** adapters: a
+    /// pending-stamp adapter built via
     /// [`pending_stamp::adapter_static`] satisfies the `&'static dyn
-    /// HarnessAdapter` bound that [`ADAPTERS`] requires, and round-trips
-    /// through the same `phf::Map` shape on lookup. This is the test that
-    /// would have caught the architectural mismatch where the registry
-    /// stores `&'static` but the factory returned a runtime `Box`.
+    /// HarnessAdapter` value bound that [`RUNTIME_ADAPTERS`] requires.
+    /// This is the regression test that would have caught the
+    /// architectural mismatch where the registry stored `&'static`
+    /// but the factory returned a runtime `Box`.
     ///
     /// The static here mirrors the shape codex/opencode will use in
-    /// production once their slots in [`ADAPTERS`] are populated:
+    /// production once their slots in [`RUNTIME_ADAPTERS`] are
+    /// populated:
     ///
     /// ```ignore
     /// static CODEX_ADAPTER: LazyLock<&'static dyn HarnessAdapter> =
     ///     LazyLock::new(|| pending_stamp::adapter_static(...));
     /// ```
+    ///
+    /// We use the same value type (`HashMap<&'static str, &'static
+    /// dyn HarnessAdapter>` wrapped in `LazyLock`) that production
+    /// uses for [`RUNTIME_ADAPTERS`], so this test exercises the
+    /// actual production wiring path: if `adapter_static`'s return
+    /// type stopped fitting the runtime registry's value bound, this
+    /// test would fail to compile.
     static FAKE_PENDING_STAMP_ADAPTER: LazyLock<&'static dyn HarnessAdapter> = LazyLock::new(|| {
         let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
             Arc::new(|| PathBuf::from("/tmp/codex-sessions"));
@@ -185,24 +239,45 @@ mod tests {
         ))
     });
 
+    /// Module-scoped runtime fake registry. Same value type as the
+    /// production [`RUNTIME_ADAPTERS`] above, so this fixture
+    /// asserts the leaked reference fits the *exact* container shape
+    /// codex/opencode will land in.
+    static FAKE_RUNTIME_REGISTRY: LazyLock<
+        std::collections::HashMap<&'static str, &'static dyn HarnessAdapter>,
+    > = LazyLock::new(|| {
+        let mut m = std::collections::HashMap::new();
+        m.insert("codex", *FAKE_PENDING_STAMP_ADAPTER);
+        m
+    });
+
     #[test]
-    fn pending_stamp_adapter_static_fits_phf_registry() {
-        // Force the LazyLock to materialise so we have a real
-        // `&'static dyn HarnessAdapter` to insert.
-        let leaked: &'static dyn HarnessAdapter = *FAKE_PENDING_STAMP_ADAPTER;
-        assert_eq!(leaked.name(), "codex");
-
-        // The whole point of the test: prove the value side of the
-        // registry's `phf::Map<&'static str, &'static dyn HarnessAdapter>`
-        // is satisfiable by what `pending_stamp::adapter_static` returns.
-        // We can't mutate the production `ADAPTERS` from a test, so build
-        // a parallel `phf::Map` with the same value type.
-        let map: std::collections::HashMap<&'static str, &'static dyn HarnessAdapter> =
-            std::iter::once(("codex", leaked)).collect();
-
-        let got = map.get("codex").copied().expect("codex registered");
+    fn pending_stamp_adapter_static_fits_runtime_registry() {
+        // Lookup goes through the same `HashMap::get → Option::copied`
+        // path that `lookup` uses for the runtime tier. If
+        // `adapter_static` ever stopped returning `&'static dyn
+        // HarnessAdapter` (e.g. regressed to `Box<dyn HarnessAdapter>`),
+        // construction of `FAKE_RUNTIME_REGISTRY` would fail to compile.
+        let got = FAKE_RUNTIME_REGISTRY
+            .get("codex")
+            .copied()
+            .expect("codex registered");
         assert_eq!(got.name(), "codex");
         assert_eq!(got.session_root(), PathBuf::from("/tmp/codex-sessions"));
-        assert!(map.get("opencode").is_none());
+        assert!(FAKE_RUNTIME_REGISTRY.get("opencode").is_none());
     }
+
+    /// Compile-time proof that
+    /// [`pending_stamp::adapter_static`]'s return type is exactly
+    /// the value bound the runtime registry holds. This is a stricter
+    /// check than the runtime test above: even if a hypothetical
+    /// future refactor accidentally made the runtime test pass via
+    /// some implicit conversion, this assertion would still fire if
+    /// the types diverged.
+    ///
+    /// The bound is enforced by storing the function pointer in a
+    /// const with the explicit signature; mismatched types cause a
+    /// compile error here, not a test failure.
+    const _ASSERT_ADAPTER_STATIC_FITS_REGISTRY: fn(PendingStampAdapter) -> &'static dyn HarnessAdapter =
+        pending_stamp::adapter_static;
 }
