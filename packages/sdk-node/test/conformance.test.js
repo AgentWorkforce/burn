@@ -26,7 +26,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, cpSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,21 +64,121 @@ function bindingMissing(err) {
 }
 
 // When the gate is on (`RELAYBURN_SDK_NAPI_BUILT=1`) the fixture ledger MUST
-// exist — otherwise both implementations would compare against empty homes
-// and the deep-equality checks would tautologically pass. Throwing here turns
-// "fixture missing" into a loud failure instead of a silent green.
+// exist AND be well-formed enough to actually exercise the verbs — otherwise
+// both implementations would compare against empty/garbage homes and the
+// deep-equality checks would tautologically pass on noise (both sides see the
+// same nothing). Throwing here turns "fixture missing or malformed" into a
+// loud failure instead of a silent green.
 //
-// The fixture lives at `tests/fixtures/ledger/` and should mirror the on-disk
-// shape of `~/.relayburn/` (typically a `ledger.jsonl` plus `content/`
-// sidecar). CI's `prepare-fixture-ledger` step seeds it from the reader
-// corpus before flipping the gate.
+// The fixture lives at `tests/fixtures/ledger/` and mirrors the on-disk shape
+// of `~/.relayburn/`: a canonical `ledger.jsonl` (see
+// `packages/ledger/src/paths.ts::ledgerPath`) plus a `content/` sidecar. CI's
+// `prepare-fixture-ledger` step seeds it from the reader corpus before
+// flipping the gate.
+//
+// Preconditions checked:
+//   1. The fixture directory exists.
+//   2. `ledger.jsonl` exists and is non-empty.
+//   3. The first line of `ledger.jsonl` parses as JSON and matches the
+//      `LedgerLine` shape (`v: 1` + `kind: <known>`) defined in
+//      `packages/ledger/src/schema.ts`. This catches the easy "I copied the
+//      wrong thing" failure mode (e.g. a stray text file) without doing a
+//      full schema sweep.
+//   4. At least one `kind: 'turn'` line is present anywhere in the file —
+//      verbs like `summary` / `hotspots` / `compare` need turns to produce
+//      non-trivial output, so a stamp-only fixture would still let the
+//      conformance gate pass on empty rows.
+const KNOWN_LEDGER_KINDS = new Set([
+  'turn',
+  'stamp',
+  'compaction',
+  'relationship',
+  'tool_result_event',
+  'user_turn',
+]);
+
+function fixtureSeedHint() {
+  return (
+    `Seed it (e.g. cp -R ~/.relayburn tests/fixtures/ledger) before ` +
+    `running with RELAYBURN_SDK_NAPI_BUILT=1, or unset the env var to ` +
+    `skip the conformance suite.`
+  );
+}
+
 function ensureFixtureLedger() {
   if (!existsSync(FIXTURE_LEDGER_DIR)) {
     throw new Error(
       `conformance fixture ledger missing at ${FIXTURE_LEDGER_DIR}. ` +
-        `Seed it (e.g. cp -R ~/.relayburn tests/fixtures/ledger) before ` +
-        `running with RELAYBURN_SDK_NAPI_BUILT=1, or unset the env var to ` +
-        `skip the conformance suite.`,
+        fixtureSeedHint(),
+    );
+  }
+  const ledgerJsonl = join(FIXTURE_LEDGER_DIR, 'ledger.jsonl');
+  if (!existsSync(ledgerJsonl)) {
+    throw new Error(
+      `conformance fixture ledger malformed: expected ${ledgerJsonl} ` +
+        `(canonical ledger filename per packages/ledger/src/paths.ts). ` +
+        fixtureSeedHint(),
+    );
+  }
+  if (statSync(ledgerJsonl).size === 0) {
+    throw new Error(
+      `conformance fixture ledger malformed: ${ledgerJsonl} is empty. ` +
+        fixtureSeedHint(),
+    );
+  }
+  // Cheap sanity sweep: confirm the file looks like a JSONL ledger and
+  // contains at least one turn line. We read the whole file because real
+  // fixtures are small (kilobytes); if that ever stops being true, switch to
+  // a streaming scan.
+  const lines = readFileSync(ledgerJsonl, 'utf8').split('\n').filter((l) => l.length > 0);
+  if (lines.length === 0) {
+    throw new Error(
+      `conformance fixture ledger malformed: ${ledgerJsonl} has no JSONL ` +
+        `lines. ` +
+        fixtureSeedHint(),
+    );
+  }
+  let firstLine;
+  try {
+    firstLine = JSON.parse(lines[0]);
+  } catch (err) {
+    throw new Error(
+      `conformance fixture ledger malformed: ${ledgerJsonl} first line is ` +
+        `not valid JSON (${err && err.message}). ` +
+        fixtureSeedHint(),
+    );
+  }
+  if (
+    !firstLine ||
+    typeof firstLine !== 'object' ||
+    firstLine.v !== 1 ||
+    typeof firstLine.kind !== 'string' ||
+    !KNOWN_LEDGER_KINDS.has(firstLine.kind)
+  ) {
+    throw new Error(
+      `conformance fixture ledger malformed: ${ledgerJsonl} first line ` +
+        `does not match the LedgerLine shape (expected v:1 + kind:<known>, ` +
+        `got ${JSON.stringify({ v: firstLine && firstLine.v, kind: firstLine && firstLine.kind })}). ` +
+        fixtureSeedHint(),
+    );
+  }
+  // Require at least one turn so summary/hotspots/compare have something to
+  // diff against. A pure stamp/relationship-only fixture would still let
+  // both impls return empty rows and pass on noise.
+  const hasTurn = lines.some((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return parsed && parsed.v === 1 && parsed.kind === 'turn';
+    } catch {
+      return false;
+    }
+  });
+  if (!hasTurn) {
+    throw new Error(
+      `conformance fixture ledger malformed: ${ledgerJsonl} contains no ` +
+        `kind:'turn' lines, so verbs like summary/hotspots/compare would ` +
+        `compare empty results on both sides. ` +
+        fixtureSeedHint(),
     );
   }
 }
