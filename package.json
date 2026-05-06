@@ -16,7 +16,8 @@
     "test:ts": "tsc --build && pnpm run test",
     "clean": "tsc --build --clean",
     "tokenizer:measure": "pnpm run build && node scripts/measure-user-turn-tokenizer.mjs",
-    "pricing:update": "node scripts/update-pricing.mjs"
+    "pricing:update": "node scripts/update-pricing.mjs",
+    "golden:capture": "pnpm run build && node tests/fixtures/cli-golden/scripts/capture-snapshots.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

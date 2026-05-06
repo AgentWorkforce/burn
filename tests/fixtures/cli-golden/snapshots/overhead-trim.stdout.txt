@@ -1,0 +1,42 @@
+# burn overhead trim — projected savings if trimmed
+# (recommendations only; burn never modifies your overhead files)
+
+# === CLAUDE.md (applies to: claude-code) ===
+
+# TRIM: ## Conventions
+# projected savings per session: $0.0000
+# projected savings across window: $0.0000
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -7,5 +7,0 @@
+-## Conventions
+-
+-- Use `node --test` for tests.
+-- Prefer the SDK over hand-rolling ledger reads.
+-
+
+# TRIM: ## Frequently asked
+# projected savings per session: $0.0000
+# projected savings across window: $0.0000
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -12,5 +12,0 @@
+-## Frequently asked
+-
+-- Q: where does the ledger live? A: under `${RELAYBURN_HOME}` or `~/.relayburn`.
+-- Q: how do I add a harness? A: drop an adapter in `packages/cli/src/harnesses/`.
+-
+
+# TRIM: ## Long-tail trivia
+# projected savings per session: $0.0000
+# projected savings across window: $0.0000
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -17,7 +17,0 @@
+-## Long-tail trivia
+-
+-A deliberately wordy section so the trim recommender has size to bite into:
+-the goal here is just to give the per-section token estimate something larger
+-than the surrounding sections, not to communicate any real content.
+-The phrase "lorem ipsum" appears here for tokenization volume only.
+-Nothing in this section is load-bearing for the rest of the project.

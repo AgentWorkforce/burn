@@ -1,0 +1,126 @@
+{
+  "project": "${PROJECT}",
+  "files": [
+    {
+      "kind": "claude-md",
+      "path": "${PROJECT}/CLAUDE.md",
+      "appliesTo": [
+        "claude-code"
+      ],
+      "totalLines": 23,
+      "bytes": 908,
+      "tokens": 227,
+      "sections": [
+        {
+          "heading": "(preamble)",
+          "level": 0,
+          "startLine": 1,
+          "endLine": 6,
+          "bytes": 246,
+          "tokens": 62
+        },
+        {
+          "heading": "## Conventions",
+          "level": 2,
+          "startLine": 7,
+          "endLine": 11,
+          "bytes": 97,
+          "tokens": 25
+        },
+        {
+          "heading": "## Frequently asked",
+          "level": 2,
+          "startLine": 12,
+          "endLine": 16,
+          "bytes": 185,
+          "tokens": 47
+        },
+        {
+          "heading": "## Long-tail trivia",
+          "level": 2,
+          "startLine": 17,
+          "endLine": 23,
+          "bytes": 380,
+          "tokens": 95
+        }
+      ],
+      "groupingLevel": 2
+    }
+  ],
+  "perFile": [
+    {
+      "path": "${PROJECT}/CLAUDE.md",
+      "kind": "claude-md",
+      "appliesTo": [
+        "claude-code"
+      ],
+      "attribution": {
+        "totalTokens": 227,
+        "totalCost": 0,
+        "sessionCosts": [],
+        "sectionCosts": [
+          {
+            "filePath": "${PROJECT}/CLAUDE.md",
+            "section": {
+              "heading": "(preamble)",
+              "level": 0,
+              "startLine": 1,
+              "endLine": 6,
+              "bytes": 246,
+              "tokens": 62
+            },
+            "tokenShare": 0.2709251101321586,
+            "costPerSession": 0,
+            "totalCost": 0
+          },
+          {
+            "filePath": "${PROJECT}/CLAUDE.md",
+            "section": {
+              "heading": "## Conventions",
+              "level": 2,
+              "startLine": 7,
+              "endLine": 11,
+              "bytes": 97,
+              "tokens": 25
+            },
+            "tokenShare": 0.10682819383259912,
+            "costPerSession": 0,
+            "totalCost": 0
+          },
+          {
+            "filePath": "${PROJECT}/CLAUDE.md",
+            "section": {
+              "heading": "## Frequently asked",
+              "level": 2,
+              "startLine": 12,
+              "endLine": 16,
+              "bytes": 185,
+              "tokens": 47
+            },
+            "tokenShare": 0.20374449339207049,
+            "costPerSession": 0,
+            "totalCost": 0
+          },
+          {
+            "filePath": "${PROJECT}/CLAUDE.md",
+            "section": {
+              "heading": "## Long-tail trivia",
+              "level": 2,
+              "startLine": 17,
+              "endLine": 23,
+              "bytes": 380,
+              "tokens": 95
+            },
+            "tokenShare": 0.4185022026431718,
+            "costPerSession": 0,
+            "totalCost": 0
+          }
+        ],
+        "perSessionAvg": 0,
+        "perSessionP95": 0,
+        "sessionCount": 0
+      }
+    }
+  ],
+  "grandTotal": 0
+}

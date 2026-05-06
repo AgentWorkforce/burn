@@ -78,3 +78,7 @@ predicates = "3"
 # round-trips). `rt-multi-thread` + `macros` lets `#[tokio::test]` resolve
 # and gives spawned watch-loop ticks a runtime to land on.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+
+# `tests/golden.rs` loads `invocations.json` to drive both the TS-CLI snapshot
+# capture and the Rust diff runner. `serde` / `serde_json` are workspace deps
+# already pulled in via `[dependencies]`, so this entry is documentation only.
