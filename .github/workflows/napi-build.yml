@@ -50,7 +50,7 @@ jobs:
       matrix:
         include:
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             short: darwin-x64
           - target: aarch64-apple-darwin
             os: macos-14
@@ -120,7 +120,7 @@ jobs:
         # `napi build` reads `packages/sdk-node/package.json`'s `napi`
         # block to learn the binary name, then dispatches to `cargo build`
         # under the hood. The output is a per-target `.node` file and a
-        # generated `binding.js` / `binding.d.ts` co-located with it.
+        # generated `binding.cjs` / `binding.d.ts` co-located with it.
         # While #247-a is in flight the binding crate has no `#[napi]`
         # exports yet, so this step may emit an empty addon — that's fine
         # for the matrix-validation use case, and once the bindings land
@@ -131,7 +131,7 @@ jobs:
             --platform \
             --release \
             --target ${{ matrix.target }} \
-            --js src/binding.js \
+            --js src/binding.cjs \
             --dts src/binding.d.ts
 
       - name: Upload artifact

@@ -1,6 +1,6 @@
 // Thin ESM facade over the napi-rs binding. No behavior — every function
 // here re-exports the matching `#[napi]` export from the platform package
-// resolved by `./binding.js`.
+// resolved by `./binding.cjs`.
 //
 // All query / compute logic lives in the Rust SDK (`crates/relayburn-sdk`);
 // the binding crate (`crates/relayburn-sdk-node`) wraps it for napi-rs.
@@ -11,7 +11,7 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const binding = require('./binding.js');
+const binding = require('./binding.cjs');
 
 export const Ledger = binding.Ledger;
 

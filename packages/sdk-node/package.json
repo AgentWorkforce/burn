@@ -16,7 +16,7 @@
     "src/index.js",
     "src/index.cjs",
     "src/index.d.ts",
-    "src/binding.js",
+    "src/binding.cjs",
     "src/binding.d.ts",
     "README.md",
     "CHANGELOG.md",
@@ -24,8 +24,8 @@
   ],
   "scripts": {
     "build": "node -e \"process.exit(0)\"",
-    "build:napi": "napi build --platform --release --js src/binding.js --dts src/binding.d.ts",
-    "build:napi:debug": "napi build --platform --js src/binding.js --dts src/binding.d.ts",
+    "build:napi": "napi build --platform --release --js src/binding.cjs --dts src/binding.d.ts",
+    "build:napi:debug": "napi build --platform --js src/binding.cjs --dts src/binding.d.ts",
     "test": "node --test 'test/**/*.test.js'",
     "test:bundle": "node test/esbuild-smoke.test.js"
   },

@@ -5,7 +5,7 @@
 
 'use strict';
 
-const binding = require('./binding.js');
+const binding = require('./binding.cjs');
 
 module.exports = {
   Ledger: binding.Ledger,

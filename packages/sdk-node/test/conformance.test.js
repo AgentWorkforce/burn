@@ -8,7 +8,7 @@
 //
 // **Status (2026-05-06): scaffolded but skipped.** The napi-rs bindings
 // land in #247-a (parallel agent worktree). Until that crate is published
-// and the umbrella's `src/binding.js` resolves a real native package, the
+// and the umbrella's `src/binding.cjs` resolves a real native package, the
 // `loadNapiSdk()` helper below throws and the suite skips. Flip the
 // `RELAYBURN_SDK_NAPI_BUILT=1` env var (CI sets this once #247-a's bindings
 // produce a valid `*.node` artifact) to enable the comparison.
@@ -153,9 +153,10 @@ test('conformance: ingest() matches TS 1.x', async (t) => {
     t.skip('napi-rs binding not built — set RELAYBURN_SDK_NAPI_BUILT=1 once #247-a lands');
     return;
   }
-  // ingest mutates the ledger, so we deep-equal the *returned report*
-  // and additionally compare a follow-up summary() to confirm both
-  // implementations wrote the same rows.
+  // ingest mutates the ledger, so we deep-equal the *returned report*.
+  // Once the napi binding is wired up we may also want to compare a
+  // follow-up summary() across both homes to confirm the two
+  // implementations wrote the same rows; that's tracked separately.
   const out = await callBoth('ingest', {});
   if (out.skipped) {
     t.skip('napi-rs binding load failed — #247-a binding artifact missing');

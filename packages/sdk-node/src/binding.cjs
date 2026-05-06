@@ -5,6 +5,14 @@
 // version pulls the prebuilt `.node` file out of `optionalDependencies` so
 // installs don't need a Rust toolchain.
 //
+// **File extension note:** this file is `.cjs` (not `.js`) because the
+// umbrella package is `"type": "module"`, which would make Node treat a
+// bare `.js` as ESM and reject the `module.exports` below at load time.
+// `napi build` is invoked with `--js src/binding.cjs` (see
+// `package.json` scripts + `.github/workflows/napi-build.yml`) so the
+// regeneration writes back to the `.cjs` path; both `src/index.js`
+// (ESM facade) and `src/index.cjs` (CJS facade) `require('./binding.cjs')`.
+//
 // This stub matches the napi-rs-generated dispatcher *shape* so the umbrella
 // package's TS facade (`src/index.js`) can import from it during local dev /
 // CI conformance scaffolding before the prebuilt binaries exist. While
@@ -19,7 +27,7 @@ const { join } = require('node:path');
 const { platform, arch } = process;
 
 // Detect glibc vs musl on Linux. napi-rs generates this with `detect-libc`
-// at build time; we keep a minimal fallback so `require('./binding.js')`
+// at build time; we keep a minimal fallback so `require('./binding.cjs')`
 // doesn't crash when run before the binary build.
 function isMusl() {
   if (!process.report) return false;
