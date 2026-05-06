@@ -253,7 +253,15 @@ fn squash_numeric_field(text: &str, key: &str, placeholder: &str) -> String {
         out.push_str(&rest[..idx]);
         out.push_str(&needle);
         let after_key = &rest[idx + needle.len()..];
-        let trimmed_start = after_key.trim_start_matches(|c: char| c == ' ' || c == '\t');
+        // Mirror the JS capture path's `\s*\d+` semantics. JS's `\s` matches
+        // the full ASCII whitespace set (space, tab, LF, CR, VT, FF) plus
+        // some Unicode spaces; JSON is ASCII at this layer so the byte set
+        // below is the right scope. NB: `char::is_ascii_whitespace` is *not*
+        // equivalent — it excludes U+000B (vertical tab), which JS `\s` does
+        // match, so we list the bytes explicitly.
+        let trimmed_start = after_key.trim_start_matches(|c: char| {
+            matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
+        });
         let ws_consumed = after_key.len() - trimmed_start.len();
         // If the value isn't a bare integer (e.g. `null`), bail and emit
         // the original bytes untouched.
@@ -335,4 +343,45 @@ fn tempdir_under(parent: &Path) -> PathBuf {
     let dir = parent.join(format!(".golden-home-{pid}-{nanos}"));
     fs::create_dir_all(&dir).expect("create sealed HOME");
     dir
+}
+
+#[cfg(test)]
+mod tests {
+    use super::squash_numeric_field;
+
+    #[test]
+    fn squash_numeric_field_matches_space_and_tab() {
+        let input = "{\"lastBuiltAt\": 12345,\"lastRebuildAt\":\t67890}";
+        let out = squash_numeric_field(input, "lastBuiltAt", "${TS}");
+        let out = squash_numeric_field(&out, "lastRebuildAt", "${TS}");
+        assert_eq!(
+            out,
+            "{\"lastBuiltAt\": \"${TS}\",\"lastRebuildAt\": \"${TS}\"}"
+        );
+    }
+
+    #[test]
+    fn squash_numeric_field_matches_newline_and_indent() {
+        // Matches the JS regex `\s*\d+` semantics — if a formatter ever
+        // pretty-prints a numeric field across a line break, the runner
+        // still has to normalize it.
+        let input = "{\"lastBuiltAt\":\n  12345}";
+        let out = squash_numeric_field(input, "lastBuiltAt", "${TS}");
+        assert_eq!(out, "{\"lastBuiltAt\": \"${TS}\"}");
+    }
+
+    #[test]
+    fn squash_numeric_field_matches_carriage_return_and_other_ws() {
+        // CR, vertical tab, form feed — all in `\s` and all ASCII whitespace.
+        let input = "{\"lastBuiltAt\":\r\n\x0b\x0c 12345}";
+        let out = squash_numeric_field(input, "lastBuiltAt", "${TS}");
+        assert_eq!(out, "{\"lastBuiltAt\": \"${TS}\"}");
+    }
+
+    #[test]
+    fn squash_numeric_field_leaves_non_numeric_value_untouched() {
+        let input = r#"{"lastBuiltAt": null}"#;
+        let out = squash_numeric_field(input, "lastBuiltAt", "${TS}");
+        assert_eq!(out, input);
+    }
 }
