@@ -36,10 +36,10 @@ const SUBCOMMANDS: &[&str] = &[
 
 /// Subcommands that still print "not yet implemented" when invoked
 /// without args. Wave 2 D1 wired up `summary` and `hotspots` as real
-/// presenters, so they're excluded from the stub-mode tripwire below.
-/// The remaining entries are owned by sibling Wave 2 PRs.
+/// presenters and Wave 2 D2 wired up `overhead`, so they're excluded
+/// from the stub-mode tripwire below. The remaining entries are owned
+/// by sibling Wave 2 PRs.
 const UNIMPLEMENTED_SUBCOMMANDS: &[&str] = &[
-    "overhead",
     "compare",
     "run",
     "state",
@@ -80,6 +80,26 @@ fn each_subcommand_help_exits_zero_with_non_empty_stdout() {
             "`{sub} --help` should emit non-empty stdout; got empty",
         );
     }
+}
+
+#[test]
+fn overhead_trim_help_exits_zero_with_non_empty_stdout() {
+    // `burn overhead` is no longer in UNIMPLEMENTED_SUBCOMMANDS, so the
+    // parent `each_subcommand_help_exits_zero_with_non_empty_stdout`
+    // covers its top-level help. The nested `trim` subcommand has its
+    // own `clap` derive though; cover it explicitly so a regression in
+    // the nested-action help wiring doesn't slip past CI.
+    let output = burn()
+        .args(["overhead", "trim", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).expect("help should be valid UTF-8");
+    assert!(
+        !stdout.is_empty(),
+        "`overhead trim --help` should emit non-empty stdout; got empty",
+    );
 }
 
 #[test]

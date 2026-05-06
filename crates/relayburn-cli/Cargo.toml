@@ -49,8 +49,16 @@ comfy-table = "7"
 # Used by `render::json` to emit the structured-output mode the TS CLI's
 # `--json` global produces. `serde` derive lives here too because the
 # rendering helpers are generic over `Serialize` types from the SDK.
+#
+# `preserve_order` keeps insertion order on `serde_json::Map` so the
+# pretty-printed JSON in `commands/overhead.rs` (and any future verb that
+# round-trips through `to_value` / `to_writer_pretty`) matches the TS
+# CLI's `JSON.stringify` output byte-for-byte. The SDK already enables
+# this feature; cargo's feature unification means the CLI inherits it
+# transitively today, but pinning it here is defense-in-depth so a
+# future SDK refactor can't silently regress the golden snapshots.
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
 
 # `anyhow` for the binary entrypoint; typed errors flow through
 # `relayburn_sdk::LedgerError` and friends. `render::error::report_error`
