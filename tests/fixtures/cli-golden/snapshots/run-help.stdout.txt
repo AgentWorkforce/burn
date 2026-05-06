@@ -1,0 +1,11 @@
+burn run — spawn an agent harness with attribution
+
+Usage:
+  burn run <harness> [--tag k=v ...] [-- <harness args>]
+
+Known harnesses: claude, codex, opencode
+
+Examples:
+  burn run claude   --tag workflow=refactor -- --resume
+  burn run codex    --tag workflow=refactor
+  burn run opencode --tag workflow=refactor

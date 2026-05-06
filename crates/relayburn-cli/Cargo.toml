@@ -22,3 +22,9 @@ path = "src/main.rs"
 # (currently 0.0.1) without forcing a lockstep bump on every release.
 # Tighten this once the SDK ships a stable 0.x line.
 relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }
+
+[dev-dependencies]
+# Used by `tests/golden.rs` to load the invocations contract that drives
+# both the TS-CLI snapshot capture and the Rust diff runner.
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -417,6 +417,8 @@ name = "relayburn-cli"
 version = "0.0.0"
 dependencies = [
  "relayburn-sdk",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,21 @@
+
+turns analyzed: 7
+
+            claude-sonnet-4-6         claude-haiku-4-5
+Activity    Turns  Cost/turn  1-shot  Turns  Cost/turn  1-shot
+coding      2      $0.011     100%    1      $0.0017    100%
+delegation  1      $0.0034    —       —      —          —
+review      —      —          —       1      $0.0015    —
+testing     1      $0.0084    —       —      —          —
+
+  low claude-sonnet-4-6 sample in 'coding' (2 turns < 5) — treat as indicative.
+  low claude-haiku-4-5 sample in 'coding' (1 turns < 5) — treat as indicative.
+  low claude-sonnet-4-6 sample in 'delegation' (1 turns < 5) — treat as indicative.
+  no claude-haiku-4-5 data in 'delegation' — no comparison available.
+  no claude-sonnet-4-6 data in 'review' — no comparison available.
+  low claude-haiku-4-5 sample in 'review' (1 turns < 5) — treat as indicative.
+  low claude-sonnet-4-6 sample in 'testing' (1 turns < 5) — treat as indicative.
+  no claude-haiku-4-5 data in 'testing' — no comparison available.
+
+claude-sonnet-4-6: 4 turns, $0.034 total
+claude-haiku-4-5: 2 turns, $0.0033 total

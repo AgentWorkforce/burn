@@ -1,0 +1,11 @@
+burn ingest — incremental ingest from agent session stores
+
+Usage:
+  burn ingest [--quiet]
+  burn ingest --watch [--interval <ms>] [--quiet] [--opencode-stream] [--opencode-url <url>]
+  burn ingest --hook claude [--quiet]
+
+Default mode scans Claude Code, Codex, and OpenCode session stores once.
+--watch keeps that scan loop running in the foreground.
+--hook claude reads a Claude Code hook payload JSON from stdin and ingests the
+transcript it references. Safe to call from every Claude Code hook.
