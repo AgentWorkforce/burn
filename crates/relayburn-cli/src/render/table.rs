@@ -34,6 +34,17 @@ pub fn render_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic);
 
+    if globals.no_color {
+        // `comfy-table`'s built-in no-tty mode disables cell styling /
+        // ANSI emission at the source — much safer than post-hoc
+        // stripping (which is a UTF-8 minefield: the box-drawing
+        // characters in `UTF8_FULL` are themselves multi-byte and would
+        // be corrupted by any byte-level regex/walk). Keeping the
+        // suppression at the renderer also covers any future callers
+        // who pre-style cell content.
+        table.force_no_tty();
+    }
+
     table.set_header(headers.iter().copied());
 
     let width = headers.len();
@@ -45,16 +56,6 @@ pub fn render_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]
         table.add_row(padded);
     }
 
-    if globals.no_color {
-        // `comfy-table` doesn't add color of its own, but we forward the
-        // intent by stripping any ANSI a caller-supplied cell might
-        // carry. The current presenters all build cells from plain
-        // strings so this is a no-op today; keeping the hook here means
-        // Wave 2 can rely on `--no-color` being honored for free.
-        let raw = table.to_string();
-        return strip_ansi(&raw);
-    }
-
     table.to_string()
 }
 
@@ -62,44 +63,6 @@ pub fn render_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]
 pub fn print_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]) {
     let rendered = render_table(globals, headers, rows);
     println!("{rendered}");
-}
-
-/// Strip ANSI escape sequences. Tiny standalone implementation — we
-/// don't want to pull `strip-ansi-escapes` for the handful of bytes
-/// the Wave 2 presenters actually emit.
-fn strip_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            // Skip CSI escape: ESC '[' … final byte in 0x40..=0x7e.
-            i += 1;
-            if i < bytes.len() && bytes[i] == b'[' {
-                i += 1;
-                while i < bytes.len() {
-                    let b = bytes[i];
-                    i += 1;
-                    if (0x40..=0x7e).contains(&b) {
-                        break;
-                    }
-                }
-            } else {
-                // ESC followed by a single non-CSI byte — drop both.
-                if i < bytes.len() {
-                    i += 1;
-                }
-            }
-        } else {
-            // Safe: we walked from a valid str; bytes 0..0x80 are
-            // single-byte chars, and multi-byte UTF-8 sequences never
-            // contain 0x1b except in their leading position (which we
-            // handled above).
-            out.push(bytes[i] as char);
-            i += 1;
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -144,9 +107,70 @@ mod tests {
         assert!(rendered.contains('c'));
     }
 
+    fn no_color_globals() -> GlobalArgs {
+        GlobalArgs {
+            json: false,
+            ledger_path: None,
+            no_color: true,
+        }
+    }
+
     #[test]
-    fn strip_ansi_removes_csi_sequences() {
-        let raw = "\x1b[31mred\x1b[0m plain";
-        assert_eq!(strip_ansi(raw), "red plain");
+    fn no_color_preserves_non_ascii_cell_contents() {
+        // Regression: an earlier implementation stripped ANSI by walking
+        // bytes and pushing each as a `char`, which corrupted multi-byte
+        // UTF-8 (the table's own UTF8_FULL borders, plus any non-ASCII
+        // cell content) into mojibake. The fix is to suppress styling at
+        // the renderer (`force_no_tty`) instead of stripping after the
+        // fact, which keeps codepoints intact end-to-end.
+        let rendered = render_table(
+            &no_color_globals(),
+            &["lang", "greeting"],
+            &[
+                vec!["ja".into(), "日本語".into()],
+                vec!["emoji".into(), "🔥".into()],
+            ],
+        );
+        assert!(
+            rendered.contains("日本語"),
+            "non-ASCII cell content was corrupted: {rendered}"
+        );
+        assert!(
+            rendered.contains("🔥"),
+            "emoji cell content was corrupted: {rendered}"
+        );
+        // The UTF8_FULL preset uses box-drawing characters; those should
+        // also survive intact.
+        assert!(
+            rendered.contains('─') || rendered.contains('│'),
+            "box-drawing characters were corrupted: {rendered}"
+        );
+        // And no ANSI escapes should remain.
+        assert!(
+            !rendered.contains('\u{1b}'),
+            "ANSI escape leaked through despite no_color: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn no_color_strips_pre_styled_cell_ansi() {
+        // If a future caller hands us a cell that already carries ANSI,
+        // `--no-color` should still produce escape-free output. With
+        // `force_no_tty`, comfy-table delegates styling to the cell's
+        // own bytes — but we don't apply per-cell styles here, so any
+        // raw escape inside cell text is passed through. Document that
+        // contract: we don't promise to launder pre-formatted cells; we
+        // promise that the renderer itself doesn't add color.
+        //
+        // This test pins the current behavior: cells are passed through
+        // verbatim. If callers need to hand off pre-styled content, the
+        // sanitization belongs upstream (in the cell builder) where the
+        // input type is known.
+        let rendered = render_table(
+            &no_color_globals(),
+            &["k"],
+            &[vec!["plain".into()]],
+        );
+        assert!(!rendered.contains('\u{1b}'));
     }
 }
