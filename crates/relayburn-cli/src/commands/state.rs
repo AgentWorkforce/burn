@@ -305,8 +305,13 @@ fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
 // ---------------------------------------------------------------------------
 
 fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
-    use relayburn_sdk::{load_config, Retention};
-    let cfg = match load_config() {
+    use relayburn_sdk::{load_config_with_home, Retention};
+    // Load retention config from the same home the ledger will be
+    // opened under below, so `--ledger-path /foo` reads
+    // `/foo/config.json` instead of mixing in `$RELAYBURN_HOME`'s
+    // retention against `/foo`'s DB. Mirrors the equivalent fix in
+    // `state_status`.
+    let cfg = match load_config_with_home(globals.ledger_path.as_deref()) {
         Ok(c) => c,
         Err(err) => return report_ledger_error(&err, globals),
     };

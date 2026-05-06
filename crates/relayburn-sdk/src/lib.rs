@@ -83,10 +83,10 @@ pub use crate::reader::{
 };
 
 pub use crate::ledger::{
-    burn_sqlite_path, config_path, content_sqlite_path, is_valid_session_id, ledger_home,
-    load_config, BurnConfig, ContentConfig, EnrichedTurn, Enrichment, Ledger as RawLedger,
-    LedgerError, MessageRange, PruneStats, Query, RebuildSummary, Retention, SearchHit,
-    SearchOptions, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
+    burn_sqlite_path, config_path, config_path_at_home, content_sqlite_path, is_valid_session_id,
+    ledger_home, load_config, load_config_with_home, BurnConfig, ContentConfig, EnrichedTurn,
+    Enrichment, Ledger as RawLedger, LedgerError, MessageRange, PruneStats, Query, RebuildSummary,
+    Retention, SearchHit, SearchOptions, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
 };
 
 pub use crate::analyze::{
