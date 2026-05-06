@@ -29,7 +29,7 @@
   ],
   "files": [
     {
-      "path": "/tmp/golden-project/src/foo.ts",
+      "path": "${FIXTURE_PROJECT}/src/foo.ts",
       "toolCallCount": 2,
       "initialTokens": 1200,
       "persistenceTokens": 1000,
@@ -39,7 +39,7 @@
       "firstEmitTurnIndex": 0
     },
     {
-      "path": "/tmp/golden-project/src/bar.ts",
+      "path": "${FIXTURE_PROJECT}/src/bar.ts",
       "toolCallCount": 2,
       "initialTokens": 800,
       "persistenceTokens": 0,

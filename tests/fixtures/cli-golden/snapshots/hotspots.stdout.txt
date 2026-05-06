@@ -14,8 +14,8 @@ unattributed $0.033  (output, system overhead, untracked)
 
 Top files by cumulative cost (approximate)
 path                            firstTurn  initial(tok)  persist(tok)  rideTurns  cost     %attr
-/tmp/golden-project/src/foo.ts  0          1,200         1,000         1          $0.0040  83.2%
-/tmp/golden-project/src/bar.ts  0          800           0             0          $0.0008  16.8%
+${FIXTURE_PROJECT}/src/foo.ts  0          1,200         1,000         1          $0.0040  83.2%
+${FIXTURE_PROJECT}/src/bar.ts  0          800           0             0          $0.0008  16.8%
 
 Top Bash verbs by cost (approximate)
 verb      calls  commands  initial(tok)  persist(tok)  avgRide  cost   examples

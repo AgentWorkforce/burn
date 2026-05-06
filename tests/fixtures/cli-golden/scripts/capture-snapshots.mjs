@@ -30,6 +30,11 @@ const PROJECT_DIR = path.join(FIXTURE_DIR, 'project');
 const SNAPSHOT_DIR = path.join(FIXTURE_DIR, 'snapshots');
 const INVOCATIONS = path.join(FIXTURE_DIR, 'invocations.json');
 const CLI_PATH = path.join(ROOT, 'packages', 'cli', 'dist', 'cli.js');
+// Synthetic "project" path hard-coded into the fixture ledger by
+// build-ledger.mjs. We replace it with ${FIXTURE_PROJECT} at capture time
+// so absolute-looking paths stay out of golden snapshots; the Rust diff
+// runner mirrors this substitution. Keep in sync with build-ledger.mjs.
+const FIXTURE_PROJECT = '/tmp/golden-project';
 
 await mkdir(LEDGER_HOME, { recursive: true });
 await mkdir(SNAPSHOT_DIR, { recursive: true });
@@ -124,9 +129,20 @@ console.error('[capture] done');
  * before comparing. Wall-clock millisecond fields in the `state status --json`
  * shape (`ledgerMtimeMsCurrent`, `lastBuiltAt`, `lastRebuildAt`) are squashed
  * to a stable placeholder for the same reason.
+ *
+ * The synthetic ledger built by build-ledger.mjs hard-codes
+ * `/tmp/golden-project` as the fake project / tool-target path. Even though
+ * that string is deterministic (it's never read off disk), absolute-looking
+ * `/tmp/...` paths in a golden snapshot are confusing and would block
+ * cross-platform reuse if the fixture ever moved off Unix-style roots. We
+ * normalize it to ${FIXTURE_PROJECT} here and keep the Rust diff runner in
+ * sync (see crates/relayburn-cli/tests/golden.rs::normalize).
  */
 function normalize(text, ledgerHome, projectDir) {
-  let out = text.replaceAll(ledgerHome, '${RELAYBURN_HOME}').replaceAll(projectDir, '${PROJECT}');
+  let out = text
+    .replaceAll(ledgerHome, '${RELAYBURN_HOME}')
+    .replaceAll(projectDir, '${PROJECT}')
+    .replaceAll(FIXTURE_PROJECT, '${FIXTURE_PROJECT}');
   // Squash wall-clock millisecond fields — they're load-bearing for cache
   // invalidation but have no business in a golden snapshot.
   out = out.replaceAll(

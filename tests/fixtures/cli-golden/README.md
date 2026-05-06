@@ -8,7 +8,7 @@ no-op until Wave 2 flips invocations on one at a time.
 
 ## Layout
 
-```
+```text
 tests/fixtures/cli-golden/
 ├── README.md             — you are here
 ├── invocations.json      — args + sealed env per snapshot; the contract

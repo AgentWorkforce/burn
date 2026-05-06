@@ -17,7 +17,9 @@
 //     node tests/fixtures/cli-golden/scripts/build-ledger.mjs
 
 import { readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   appendTurns,
@@ -37,6 +39,37 @@ import {
 const STAMP_FIXED_TS = '2026-04-23T12:00:00.000Z';
 
 const HOME = ledgerHome();
+
+// Hard precondition: refuse to run unless the resolved ledger home is
+// inside one of the known-safe prefixes. Without this guard, a missing
+// RELAYBURN_HOME (which falls back to ~/.relayburn) plus the rm() loop
+// below would happily wipe a developer's real ledger. The allowlist:
+//   - the in-repo fixture dir (tests/fixtures/cli-golden/)
+//   - the CI runner temp dir ($RUNNER_TEMP)
+//   - the OS temp dir (used by capture-snapshots' mkdtemp paths)
+const FIXTURE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SAFE_PREFIXES = [
+  path.resolve(FIXTURE_DIR),
+  path.resolve(tmpdir()),
+];
+if (typeof process.env['RUNNER_TEMP'] === 'string' && process.env['RUNNER_TEMP'].length > 0) {
+  SAFE_PREFIXES.push(path.resolve(process.env['RUNNER_TEMP']));
+}
+const RESOLVED_HOME = path.resolve(HOME);
+const insideSafePrefix = SAFE_PREFIXES.some((prefix) => {
+  const rel = path.relative(prefix, RESOLVED_HOME);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+});
+if (!insideSafePrefix) {
+  process.stderr.write(
+    `\n[fixture] REFUSING TO RUN: ledger home resolved to ${RESOLVED_HOME}\n` +
+      `[fixture] which is NOT inside any known-safe prefix:\n` +
+      SAFE_PREFIXES.map((p) => `[fixture]   - ${p}\n`).join('') +
+      `[fixture] Set RELAYBURN_HOME to tests/fixtures/cli-golden/ledger (or a tmpdir)\n` +
+      `[fixture] before running this script. Aborting before any filesystem mutation.\n\n`,
+  );
+  process.exit(2);
+}
 
 // Wipe any prior generation so re-runs are reproducible. We only delete
 // known-burn files inside HOME to avoid clobbering an unrelated dir if a
@@ -384,14 +417,25 @@ await appendRelationships([
 // Substitute the stamp's wall-clock ts for the fixed value so the ledger
 // hashes the same on every run. Other ledger lines have hand-pinned ts
 // values already; only stamp() inserts a live timestamp.
+//
+// Hard-fail if the regex didn't match — a silent miss (e.g. JSON key
+// reordering changed the serialization) would leave a non-deterministic
+// stamp `ts` in the ledger, and downstream snapshots would drift on every
+// run without an obvious cause. We stamped above, so the regex MUST hit.
 const ledgerFile = ledgerPath();
 const raw = await readFile(ledgerFile, 'utf8');
-const rewritten = raw.replace(
-  /("kind":"stamp","ts":")[^"]+(")/g,
-  `$1${STAMP_FIXED_TS}$2`,
-);
-if (rewritten !== raw) {
-  await writeFile(ledgerFile, rewritten);
+const stampPattern = /("kind":"stamp","ts":")[^"]+(")/g;
+const rewritten = raw.replace(stampPattern, `$1${STAMP_FIXED_TS}$2`);
+if (rewritten === raw) {
+  throw new Error(
+    `[fixture] stamp ts normalization regex did not match. The stamp() call ` +
+      `above should have written a "kind":"stamp" line with a "ts": field, ` +
+      `but the regex /${stampPattern.source}/ found nothing in ${ledgerFile}. ` +
+      `Has the stamp serialization shape changed (e.g. JSON key reordering)? ` +
+      `Update the regex to match the new shape — the alternative is a ` +
+      `non-deterministic ledger that drifts on every run.`,
+  );
 }
+await writeFile(ledgerFile, rewritten);
 
 console.error('[fixture] done');

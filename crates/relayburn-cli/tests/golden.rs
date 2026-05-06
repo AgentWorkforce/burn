@@ -60,17 +60,19 @@ struct Invocation {
 
 #[test]
 fn golden_diff_against_ts_cli_snapshots() {
-    let golden_gate = std::env::var("BURN_GOLDEN").ok();
-    if golden_gate.as_deref() != Some("1") {
+    if std::env::var("BURN_GOLDEN").ok().as_deref() != Some("1") {
         // CI runs `cargo test --workspace` without BURN_GOLDEN set, so the
         // diff runner is silent there. Local devs run `BURN_GOLDEN=1
         // cargo test --test golden -- --nocapture` to enforce the gate;
         // once Wave 2 finishes, the gate flips on by default in CI.
+        // Return early so an unset BURN_GOLDEN truly skips — no fixture
+        // discovery, no snapshot reads, no env-prep work.
         eprintln!(
             "[golden] BURN_GOLDEN!=1 — skipping (set BURN_GOLDEN=1 to enforce). \
              Even when enforced, individual invocations stay skipped until their \
              `enabled: true` flag is set in invocations.json."
         );
+        return;
     }
 
     let fixture_dir = repo_root().join("tests").join("fixtures").join("cli-golden");
@@ -106,10 +108,8 @@ fn golden_diff_against_ts_cli_snapshots() {
             eprintln!("[golden] skip {} (enabled=false)", inv.name);
             continue;
         }
-        if golden_gate.as_deref() != Some("1") {
-            eprintln!("[golden] skip {} (BURN_GOLDEN!=1)", inv.name);
-            continue;
-        }
+        // The whole-test BURN_GOLDEN!=1 short-circuit at the top returned
+        // before this loop, so by the time we get here the gate is set.
 
         let snapshot_stdout = snapshots_dir.join(format!("{}.stdout.txt", inv.name));
         let expected_stdout = fs::read_to_string(&snapshot_stdout).unwrap_or_else(|err| {
@@ -227,6 +227,11 @@ fn burn_binary_path() -> PathBuf {
 /// Apply the same path / mtime placeholders the capture script uses so the
 /// snapshot stays portable across machines. Keep this in sync with
 /// `tests/fixtures/cli-golden/scripts/capture-snapshots.mjs::normalize`.
+///
+/// The synthetic ledger embeds `/tmp/golden-project` as a fake project /
+/// tool-target path; we substitute it here too so the Rust binary's output
+/// matches the snapshot byte-for-byte regardless of how the path appears
+/// on the host (it's a literal in the JSON, not a real filesystem path).
 fn normalize(text: &str, ledger_home: &Path, project_dir: &Path) -> String {
     let mut out = text.replace(
         ledger_home.to_str().expect("ledger home is utf8"),
@@ -236,6 +241,7 @@ fn normalize(text: &str, ledger_home: &Path, project_dir: &Path) -> String {
         project_dir.to_str().expect("project dir is utf8"),
         "${PROJECT}",
     );
+    out = out.replace("/tmp/golden-project", "${FIXTURE_PROJECT}");
     out = squash_numeric_field(&out, "ledgerMtimeMsCurrent", "${MTIME}");
     out = squash_numeric_field(&out, "lastBuiltAt", "${TS}");
     out = squash_numeric_field(&out, "lastRebuildAt", "${TS}");
