@@ -1855,7 +1855,7 @@ fn build_explicit_claude_relationship(
     if let Some(s) = string_field(line, &["sourceSessionId", "source_session_id"], true) {
         row.source_session_id = Some(s);
     }
-    if let Some(s) = string_field(line, &["version", "sourceVersion", "source_version"], true) {
+    if let Some(s) = string_field(line, SOURCE_VERSION_KEYS, true) {
         row.source_version = Some(s);
     }
     row
@@ -1977,11 +1977,7 @@ fn record_evidence_from_line(evidence: &mut ClaudeRelationshipEvidence, line: &V
         }
     }
     if evidence.source_version.is_none() {
-        if let Some(v) = lo.get("version").and_then(Value::as_str) {
-            if !v.is_empty() {
-                evidence.source_version = Some(v.to_string());
-            }
-        }
+        evidence.source_version = string_field(lo, SOURCE_VERSION_KEYS, true);
     }
     let line_type = lo.get("type").and_then(Value::as_str).unwrap_or("");
     let is_sidechain = lo
@@ -2882,19 +2878,24 @@ fn new_evidence(file_session_id: Option<String>) -> ClaudeRelationshipEvidence {
 
 const SESSION_ID_KEYS: &[&str] = &["sessionId", "session_id"];
 const TIMESTAMP_KEYS: &[&str] = &["timestamp", "ts"];
+const SOURCE_VERSION_KEYS: &[&str] = &["version", "sourceVersion", "source_version"];
 
 fn string_field(
     obj: &serde_json::Map<String, Value>,
     keys: &[&str],
     require_nonempty: bool,
 ) -> Option<String> {
+    let mut empty_match: Option<String> = None;
     for k in keys {
         match obj.get(*k).and_then(Value::as_str) {
-            Some(s) if !require_nonempty || !s.is_empty() => return Some(s.to_string()),
-            _ => continue,
+            Some(s) if !s.is_empty() => return Some(s.to_string()),
+            Some(s) if !require_nonempty && empty_match.is_none() => {
+                empty_match = Some(s.to_string());
+            }
+            _ => {}
         }
     }
-    None
+    empty_match
 }
 
 fn first_present<'a>(obj: &'a serde_json::Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
@@ -3046,11 +3047,13 @@ mod tests {
                     "content": [{"type": "tool_result", "tool_use_id": "toolu_alias", "content": "ok"}]
                 },
                 "uuid": "u-alias-user",
+                "sessionId": "",
                 "session_id": "alias-session",
+                "timestamp": "",
                 "ts": "2026-04-25T00:00:00.000Z",
                 "continued_from_session_id": "parent-session",
                 "cwd": "/tmp/project",
-                "version": "2.1.alias",
+                "sourceVersion": "2.1.alias",
             }),
             serde_json::json!({
                 "parentUuid": "u-alias-user",
@@ -3072,20 +3075,26 @@ mod tests {
                 },
                 "type": "assistant",
                 "uuid": "u-alias-asst",
+                "sessionId": "",
                 "session_id": "alias-session",
+                "timestamp": "",
                 "ts": "2026-04-25T00:00:01.000Z",
                 "cwd": "/tmp/project",
             }),
             serde_json::json!({
                 "type": "system",
                 "subtype": "compact_boundary",
+                "sessionId": "",
                 "session_id": "alias-session",
+                "timestamp": "",
                 "ts": "2026-04-25T00:00:02.000Z",
             }),
             serde_json::json!({
                 "type": "system",
                 "subtype": "subagent_completed",
+                "sessionId": "",
                 "session_id": "alias-session",
+                "timestamp": "",
                 "ts": "2026-04-25T00:00:03.000Z",
                 "parent_tool_use_id": "toolu_alias",
                 "agent_id": "agent-alias",
@@ -3162,6 +3171,7 @@ mod tests {
             .expect("root relationship");
         assert_eq!(root.session_id, "alias-session");
         assert_eq!(root.ts.as_deref(), Some("2026-04-25T00:00:00.000Z"));
+        assert_eq!(root.source_version.as_deref(), Some("2.1.alias"));
         let continuation = res
             .relationships
             .iter()
@@ -3173,6 +3183,7 @@ mod tests {
             Some("parent-session")
         );
         assert_eq!(continuation.ts.as_deref(), Some("2026-04-25T00:00:00.000Z"));
+        assert_eq!(continuation.source_version.as_deref(), Some("2.1.alias"));
 
         assert_eq!(res.events.len(), 1);
         assert_eq!(res.events[0].session_id, "alias-session");
@@ -3203,6 +3214,7 @@ mod tests {
             res.evidence.first_ts.as_deref(),
             Some("2026-04-25T00:00:00.000Z")
         );
+        assert_eq!(res.evidence.source_version.as_deref(), Some("2.1.alias"));
     }
 
     #[test]
@@ -3253,6 +3265,7 @@ mod tests {
             res.evidence.first_ts.as_deref(),
             Some("2026-04-25T00:00:00.000Z")
         );
+        assert_eq!(res.evidence.source_version.as_deref(), Some("2.1.alias"));
     }
 
     #[test]
