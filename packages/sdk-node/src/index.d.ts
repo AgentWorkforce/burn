@@ -12,11 +12,25 @@
 // Source-of-truth comment: track `packages/sdk/index.d.ts`. Whenever a verb
 // shape changes in TS, mirror it here AND in the Rust napi-rs binding (#247-a).
 
-export interface LedgerOpenOptions { home?: string }
-export declare class Ledger { static open(opts?: LedgerOpenOptions): Promise<Ledger> }
+export interface LedgerOpenOptions { home?: string; contentHome?: string }
+/**
+ * Stateful ledger handle. The 1.x TS class only exposes the static
+ * `open()` constructor; instances are placeholders today, with `home`
+ * exposed for callers that want to confirm which ledger they attached
+ * to. Verb methods are a future PR.
+ */
+export declare class Ledger {
+  readonly home: string;
+  static open(opts?: LedgerOpenOptions): Promise<Ledger>;
+}
 
 export interface IngestOptions { sessionId?: string; harness?: 'claude-code'|'codex'|'opencode'; ledgerHome?: string }
-export declare function ingest(opts?: IngestOptions): Promise<unknown>
+export interface IngestReport {
+  scannedSessions: number | bigint;
+  ingestedSessions: number | bigint;
+  appendedTurns: number | bigint;
+}
+export declare function ingest(opts?: IngestOptions): Promise<IngestReport>
 
 export interface SummaryOptions {
   session?: string;
@@ -327,3 +341,82 @@ export interface CompareResult {
 
 /** Per-(model, activity) comparison shape. Powers `burn compare`. */
 export declare function compare(opts: CompareOptions): Promise<CompareResult>
+
+// ---------------------------------------------------------------------------
+// 2.x extensions — surfaces present in `relayburn-sdk` (the Rust crate)
+// but not in the TS 1.x `packages/sdk/index.d.ts`. Pre-1.0 widening per
+// the SDK shape rule; embedders that pinned to 1.x won't see these names
+// (the missing `onLog` etc. plus the absence of these is the only TS-vs-
+// napi gap the conformance gate measures).
+// ---------------------------------------------------------------------------
+
+export interface SearchQueryOptions {
+  /** FTS5 query string. Phrase, boolean, and prefix syntax supported. */
+  query: string;
+  /** Hit cap. Defaults to 25 when omitted. */
+  limit?: number | bigint;
+  /** Restrict to a single session_id. Omit to search all sessions. */
+  sessionId?: string;
+  ledgerHome?: string;
+}
+
+export interface SearchHit {
+  sessionId: string;
+  messageId: string;
+  source: string;
+  /** FTS5 BM25 rank (lower = better match). */
+  rank: number;
+  /** `<b>…</b>`-highlighted snippet around the matching tokens. */
+  snippet: string;
+}
+
+export interface SearchResult {
+  query: string;
+  hits: SearchHit[];
+}
+
+/** FTS5-backed message-content search. 2.x extension over the TS surface. */
+export declare function search(opts: SearchQueryOptions): Promise<SearchResult>
+
+export interface ExportLedgerOptions { ledgerHome?: string }
+export interface ExportStampsOptions { ledgerHome?: string }
+
+/**
+ * Stream every event row as a JSONL-shaped JSON object. Each value has
+ * the form `{ v: 1, kind: '<kind>', record: <json> }`. 2.x extension.
+ */
+export declare function exportLedger(opts?: ExportLedgerOptions): Promise<unknown[]>
+
+/** Stream every stamp row as a JSONL-shaped JSON object. 2.x extension. */
+export declare function exportStamps(opts?: ExportStampsOptions): Promise<unknown[]>
+
+/**
+ * Tagged error code surfaced on the thrown JS `Error.code` property.
+ * Sync verbs reject with one of these; the async `ingest` verb's
+ * rejection currently sets `code: 'GenericFailure'` — see the binding
+ * crate's `ingest` doc comment for the napi-rs-2.x rationale.
+ *
+ * The values are the literal strings written to `e.code`, matching the
+ * Rust constants `SDK_ERROR_CODE` / `IO_ERROR_CODE` / `INVALID_ARGUMENT_ERROR_CODE`.
+ */
+export declare const BurnErrorCode: {
+  readonly Sdk: 'BURN_SDK';
+  readonly Io: 'BURN_IO';
+  readonly InvalidArgument: 'BURN_INVALID_ARGUMENT';
+};
+export type BurnErrorCodeValue = (typeof BurnErrorCode)[keyof typeof BurnErrorCode];
+
+/** Wire-value enum for `OverheadOptions.kind` and `OverheadTrimOptions.kind`. */
+export declare const OverheadFileKind: {
+  readonly ClaudeMd: 'claude-md';
+  readonly AgentsMd: 'agents-md';
+};
+
+/** Wire-value enum for `HotspotsOptions.groupBy`. */
+export declare const HotspotsGroupBy: {
+  readonly Attribution: 'attribution';
+  readonly Bash: 'bash';
+  readonly BashVerb: 'bash-verb';
+  readonly File: 'file';
+  readonly Subagent: 'subagent';
+};
