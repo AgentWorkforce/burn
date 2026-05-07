@@ -65,18 +65,13 @@ importers:
 
   packages/mcp:
     dependencies:
-      '@relayburn/analyze':
-        specifier: workspace:*
-        version: link:../analyze
-      '@relayburn/ledger':
-        specifier: workspace:*
-        version: link:../ledger
-      '@relayburn/reader':
-        specifier: workspace:*
-        version: link:../reader
       '@relayburn/sdk':
         specifier: workspace:*
         version: link:../sdk
+    devDependencies:
+      '@relayburn/ledger':
+        specifier: workspace:*
+        version: link:../ledger
 
   packages/reader:
     dependencies:

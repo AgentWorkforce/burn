@@ -10,7 +10,6 @@ import {
   archivePath,
   buildArchive,
 } from '@relayburn/ledger';
-import type { TurnRecord } from '@relayburn/reader';
 
 import { createSessionCostTool, type SessionCostResult } from './session-cost.js';
 
@@ -18,7 +17,33 @@ import { createSessionCostTool, type SessionCostResult } from './session-cost.js
 // onto MCP tool handlers — including the transparent fallback to `queryAll`
 // when the archive cannot be opened or queried.
 
-function fakeTurn(overrides: Partial<TurnRecord> = {}): TurnRecord {
+// Minimal `TurnRecord` shape inlined here so MCP doesn't need to depend on
+// `@relayburn/reader` (which is being retired as a published package at the
+// 2.0 cutover). Captures only the fields these archive-backed integration
+// tests construct and pass through to `appendTurns`; the ledger writer
+// preserves all fields verbatim and the SDK consumes them through the same
+// JSONL → SQLite path.
+interface TestTurnRecord {
+  v: 1;
+  source: 'claude-code';
+  sessionId: string;
+  messageId: string;
+  turnIndex: number;
+  ts: string;
+  model: string;
+  usage: {
+    input: number;
+    output: number;
+    reasoning: number;
+    cacheRead: number;
+    cacheCreate5m: number;
+    cacheCreate1h: number;
+  };
+  toolCalls: never[];
+  project: string;
+}
+
+function fakeTurn(overrides: Partial<TestTurnRecord> = {}): TestTurnRecord {
   return {
     v: 1,
     source: 'claude-code',

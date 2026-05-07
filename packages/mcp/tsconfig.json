@@ -7,8 +7,6 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../reader" },
-    { "path": "../ledger" },
-    { "path": "../analyze" }
+    { "path": "../ledger" }
   ]
 }

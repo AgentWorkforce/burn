@@ -23,10 +23,10 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@relayburn/reader": "workspace:*",
-    "@relayburn/ledger": "workspace:*",
-    "@relayburn/analyze": "workspace:*",
     "@relayburn/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@relayburn/ledger": "workspace:*"
   },
   "repository": {
     "type": "git",
