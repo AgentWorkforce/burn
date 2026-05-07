@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-07
+
 - `relayburn-sdk` (Rust): default ledger home moves from `~/.relayburn` to `~/.agentworkforce/burn` so the Rust 2.0 port and the TS 1.x package can coexist on disk during the #249 cutover. `RELAYBURN_HOME` (and the per-DB path overrides) continue to override the path; TS 1.x users on `~/.relayburn` are unaffected. Rust-port testers with data under the old path can `mv ~/.relayburn ~/.agentworkforce/burn` to carry it over (formats are not compatible — Rust treats any non-2.0 layout as empty and requires a `burn ingest` re-population).
 - `relayburn-cli` (Rust): wire opencode `HarnessAdapter` via `pending_stamp::adapter_static` factory; registered in `RUNTIME_ADAPTERS`. (#248 D7)
 - `relayburn-cli` (Rust): wire `burn run <harness>` driver + claude adapter (eager unit-struct in `EAGER_ADAPTERS`); `afterExit` ingest folds into `[burn] claude ingest: ...` summary line. (#248 D5)

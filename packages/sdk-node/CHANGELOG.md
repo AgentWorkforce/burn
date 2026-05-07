@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-07
+
 - Initial scaffolding: umbrella package layout (`@relayburn/sdk`) +
   per-platform packages (`@relayburn/sdk-{darwin-arm64,darwin-x64,linux-arm64-gnu,linux-x64-gnu}`)
   resolved via `optionalDependencies`, TS facade re-exporting the napi-rs
@@ -26,3 +28,4 @@
   ledger via `tests/fixtures/cli-golden/scripts/build-ledger.mjs` and
   flips `RELAYBURN_SDK_NAPI_BUILT=1` to enable the `deepStrictEqual` gate
   against TS `@relayburn/sdk@1.x`. (#247 part d)
+

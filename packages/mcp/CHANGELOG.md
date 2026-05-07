@@ -4,6 +4,8 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-07
+
 ### Changed
 
 - Drop `@relayburn/{reader, ledger, analyze}` from MCP entirely; `@relayburn/sdk` is now the only `@relayburn/*` package edge.
