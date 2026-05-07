@@ -222,7 +222,14 @@ pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
         if immediate {
             ticker.run_tick_skip_if_busy().await;
         }
-        let mut iv = tokio::time::interval(interval);
+        // Schedule the periodic ticker to first fire `interval` from now.
+        // `tokio::time::interval` fires immediately on the first `tick()`,
+        // so for the immediate path we'd want to skip that first tick;
+        // for the non-immediate path we'd want to wait `interval` before
+        // the first periodic run. `interval_at(now + interval, …)` covers
+        // both: the next tick lands `interval` after start in either case.
+        let start_at = tokio::time::Instant::now() + interval;
+        let mut iv = tokio::time::interval_at(start_at, interval);
         // Default `MissedTickBehavior::Burst` would fire catch-up ticks
         // back-to-back after a slow ingest pass, which can spike CPU/IO
         // exactly when the system is already under load. `Delay` schedules
@@ -230,10 +237,6 @@ pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
         // stable polling cadence — closer to TS `setInterval` pacing under
         // a single-threaded runner.
         iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // First tick of `tokio::time::interval` fires immediately; skip it
-        // because we already ran one above (or because the caller asked us
-        // not to run an immediate tick at all).
-        iv.tick().await;
         loop {
             if ticker.stopped.load(Ordering::SeqCst) {
                 break;
@@ -302,6 +305,38 @@ mod tests {
         let runs = counter.load(Ordering::SeqCst);
         // Immediate tick + ≥1 periodic tick.
         assert!(runs >= 2, "expected ≥2 runs, got {runs}");
+    }
+
+    /// Non-immediate watch loop must fire its first periodic tick after
+    /// `interval`, not `2 * interval`. Regression test for an earlier
+    /// shape that called `iv.tick().await` to skip a tick that the
+    /// immediate branch hadn't actually produced.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn non_immediate_first_tick_lands_at_interval() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let opts = StartWatchLoopOptions::new(ingest_counting(counter.clone()))
+            .with_immediate(false)
+            .with_interval(Duration::from_millis(100));
+        let ctrl = start_watch_loop(opts);
+
+        // Let the spawned task park on its sleep, then advance time
+        // *just past* one interval. After this much paused time the
+        // loop should have fired exactly once.
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(101)).await;
+        // Yield again so the spawned task gets a chance to run the tick
+        // body before we read the counter.
+        for _ in 0..3 {
+            tokio::task::yield_now().await;
+        }
+        let runs_after_one_interval = counter.load(Ordering::SeqCst);
+
+        ctrl.stop().await;
+
+        assert_eq!(
+            runs_after_one_interval, 1,
+            "expected exactly 1 run after ~1 interval (was the loop firing at 2*interval?), got {runs_after_one_interval}"
+        );
     }
 
     #[tokio::test]

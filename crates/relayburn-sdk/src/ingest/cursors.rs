@@ -160,10 +160,13 @@ pub fn save_cursors(ledger: &mut Ledger, cursors: &Cursors) -> LedgerResult<()> 
     ledger.write_cursors(&json)
 }
 
-/// Persist only the keys whose cursor value differs between `before` and
-/// `after`. Keys present in `before` but absent in `after` are deleted.
-/// Mirrors `saveCursorChanges` — minimizes lock window when nothing changed.
-pub fn save_cursor_changes(
+/// If `after` differs from `before`, persist `after` in full; otherwise
+/// no-op. The early-return spares the write lock when an ingest pass
+/// produced no cursor changes — it does NOT compute a per-key diff
+/// (despite an earlier name + doc that claimed it did). Per-key delta
+/// writes are tracked separately as a perf follow-up; today every
+/// non-empty change rewrites the whole cursor map.
+pub fn save_cursors_if_changed(
     ledger: &mut Ledger,
     before: &Cursors,
     after: &Cursors,
