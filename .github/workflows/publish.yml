@@ -832,18 +832,24 @@ jobs:
           for short in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu; do
             # CLI: drop `burn` at packages/relayburn/npm/<short>/bin/burn.
             #
-            # `upload-artifact@v4` preserves the full directory hierarchy for
-            # single-file uploads (cli-build.yml uploads
-            # `packages/relayburn/npm/<short>/bin/burn` as the `path` input,
-            # so the artifact retains that nested structure on download).
-            # The SDK leg uses a glob (`*.node`) which strips the prefix up
-            # to the first wildcard, so its `find` lookup at line ~860 stays
-            # generic.
-            cli_src="/tmp/cli-artifacts/relayburn-cli-${short}/packages/relayburn/npm/${short}/bin/burn"
+            # `upload-artifact@v4` flattens single-file uploads to the
+            # artifact root (the binary lands at
+            # `/tmp/cli-artifacts/relayburn-cli-<short>/burn`, NOT at the
+            # original `packages/relayburn/npm/<short>/bin/burn` path).
+            # Locate the binary defensively with `find` so a future
+            # upload-artifact behavior change can't silently break staging
+            # — same pattern the SDK leg uses for `*.node`.
+            cli_src_dir="/tmp/cli-artifacts/relayburn-cli-${short}"
             cli_dst_dir="packages/relayburn/npm/${short}/bin"
-            if [ ! -f "$cli_src" ]; then
-              echo "::error title=Missing CLI artifact::expected $cli_src" >&2
-              ls -la "/tmp/cli-artifacts/relayburn-cli-${short}/" 2>/dev/null || true
+            if [ ! -d "$cli_src_dir" ]; then
+              echo "::error title=Missing CLI artifact dir::expected $cli_src_dir" >&2
+              ls -la /tmp/cli-artifacts/ 2>/dev/null || true
+              exit 1
+            fi
+            cli_src=$(find "$cli_src_dir" -maxdepth 6 -name 'burn' -type f -print -quit)
+            if [ -z "$cli_src" ]; then
+              echo "::error title=Missing CLI artifact::no 'burn' file under $cli_src_dir" >&2
+              ls -laR "$cli_src_dir" 2>/dev/null || true
               exit 1
             fi
             mkdir -p "$cli_dst_dir"
