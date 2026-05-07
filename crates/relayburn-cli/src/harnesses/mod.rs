@@ -44,6 +44,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use relayburn_sdk::{Enrichment, IngestReport, WatchController};
 
+pub mod codex;
 pub mod pending_stamp;
 pub mod registry;
 
