@@ -17,6 +17,7 @@
 // agent absorbing more verbs will need them.
 #![allow(dead_code, unused_imports)]
 
+mod bootstrap;
 mod config;
 mod content;
 mod db;
