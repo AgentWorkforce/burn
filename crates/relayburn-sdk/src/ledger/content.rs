@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::ledger::error::Result;
@@ -128,12 +128,28 @@ pub(crate) fn count_content(conn: &Connection) -> Result<i64> {
 }
 
 pub(crate) fn query(conn: &Connection, q: &Query) -> Result<Vec<ContentRecord>> {
-    let mut stmt = conn.prepare("SELECT body FROM content ORDER BY rowid")?;
-    let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut sql = String::from("SELECT body FROM content");
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+    if let Some(session_id) = &q.session_id {
+        clauses.push("session_id = ?");
+        params.push(session_id.clone());
+    }
+    if let Some(source) = q.source {
+        clauses.push("source = ?");
+        params.push(source.wire_str().to_string());
+    }
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY rowid");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), |r| r.get::<_, String>(0))?;
     let mut out = Vec::new();
-    for json in rows {
+    for row in rows {
+        let json = row?;
         let record: ContentRecord = match serde_json::from_str(&json) {
             Ok(r) => r,
             Err(_) => continue,

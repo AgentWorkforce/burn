@@ -167,6 +167,8 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         }
     };
 
+    let _archive_guard = ArchiveOverride::activate(args.no_archive);
+
     let opts = match globals.ledger_path.as_deref() {
         Some(h) => LedgerOpenOptions::with_home(h),
         None => LedgerOpenOptions::default(),
@@ -194,6 +196,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
     }
 
     let enriched = handle.raw().query_turns(&q)?;
+    let attribution_turns = turns_from_enriched(&enriched);
     let enriched = filter_enriched_turns(
         enriched,
         args.agent.as_deref(),
@@ -212,7 +215,14 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
     }
 
     if args.by_tool {
-        return render_by_tool_mode(globals, handle.raw(), &turns, &ingest_report, &pricing);
+        return render_by_tool_mode(
+            globals,
+            handle.raw(),
+            &turns,
+            &attribution_turns,
+            &ingest_report,
+            &pricing,
+        );
     }
 
     let fidelity = summarize_fidelity(&turns);
@@ -422,6 +432,43 @@ fn run_ingest(handle: &mut LedgerHandle) -> anyhow::Result<relayburn_sdk::Ingest
         .build()?;
     let opts = relayburn_sdk::RawIngestOptions::default();
     rt.block_on(ingest_all(handle.raw_mut(), &opts))
+}
+
+/// Drop-in for `RELAYBURN_ARCHIVE=0`. The Rust SDK is already SQLite-native,
+/// but this preserves the TS CLI flag contract for any lower layer that checks
+/// the env escape hatch.
+struct ArchiveOverride {
+    previous: Option<String>,
+    activated: bool,
+}
+
+impl ArchiveOverride {
+    fn activate(no_archive: bool) -> Self {
+        if !no_archive {
+            return Self {
+                previous: None,
+                activated: false,
+            };
+        }
+        let previous = std::env::var("RELAYBURN_ARCHIVE").ok();
+        std::env::set_var("RELAYBURN_ARCHIVE", "0");
+        Self {
+            previous,
+            activated: true,
+        }
+    }
+}
+
+impl Drop for ArchiveOverride {
+    fn drop(&mut self) {
+        if !self.activated {
+            return;
+        }
+        match self.previous.take() {
+            Some(v) => std::env::set_var("RELAYBURN_ARCHIVE", v),
+            None => std::env::remove_var("RELAYBURN_ARCHIVE"),
+        }
+    }
 }
 
 fn aggregate_by_model(
@@ -682,11 +729,18 @@ fn render_by_tool_mode(
     globals: &GlobalArgs,
     ledger: &RawLedger,
     turns: &[TurnRecord],
+    attribution_turns: &[TurnRecord],
     ingest_report: &relayburn_sdk::IngestReport,
     pricing: &relayburn_sdk::PricingTable,
 ) -> anyhow::Result<i32> {
-    let user_turns_by_session = load_user_turns_for_by_tool(ledger, turns)?;
-    let (by_tool, unattributed) = attribute_cost_to_tools(turns, pricing, &user_turns_by_session);
+    let user_turns_by_session = load_user_turns_for_by_tool(ledger, attribution_turns)?;
+    let selected_turns = selected_turn_keys(turns);
+    let (by_tool, unattributed) = attribute_cost_to_tools(
+        attribution_turns,
+        pricing,
+        &user_turns_by_session,
+        Some(&selected_turns),
+    );
     let fidelity = summarize_fidelity(turns);
     let savings = summarize_replacement_savings(turns, None);
     let mut sorted: Vec<(String, ToolAgg)> = by_tool.into_iter().collect();
@@ -801,27 +855,31 @@ fn load_user_turns_for_by_tool(
     ledger: &RawLedger,
     turns: &[TurnRecord],
 ) -> anyhow::Result<HashMap<String, Vec<UserTurnRecord>>> {
-    let mut seen = HashSet::new();
+    let session_ids: HashSet<String> = turns.iter().map(|t| t.session_id.clone()).collect();
     let mut out = HashMap::new();
-    for t in turns {
-        if !seen.insert(t.session_id.clone()) {
+    if session_ids.is_empty() {
+        return Ok(out);
+    }
+    for row in ledger.query_user_turns(&Query::default())? {
+        if !session_ids.contains(&row.session_id) {
             continue;
         }
-        let rows = ledger.query_user_turns(&Query {
-            session_id: Some(t.session_id.clone()),
-            ..Default::default()
-        })?;
-        if !rows.is_empty() {
-            out.insert(t.session_id.clone(), rows);
-        }
+        out.entry(row.session_id.clone())
+            .or_insert_with(Vec::new)
+            .push(row);
     }
     Ok(out)
+}
+
+fn selected_turn_keys(turns: &[TurnRecord]) -> HashSet<String> {
+    turns.iter().map(turn_identity_key).collect()
 }
 
 fn attribute_cost_to_tools(
     turns: &[TurnRecord],
     pricing: &relayburn_sdk::PricingTable,
     user_turns_by_session: &HashMap<String, Vec<UserTurnRecord>>,
+    selected_turns: Option<&HashSet<String>>,
 ) -> (IndexMap<String, ToolAgg>, f64) {
     let mut by_tool: IndexMap<String, ToolAgg> = IndexMap::new();
     let mut unattributed = 0.0;
@@ -840,6 +898,9 @@ fn attribute_cost_to_tools(
         );
         for i in 0..list.len() {
             let turn = list[i];
+            if !turn_is_selected(turn, selected_turns) {
+                continue;
+            }
             let Some(c) = cost_for_turn(turn, pricing) else {
                 continue;
             };
@@ -911,6 +972,21 @@ fn attribute_cost_to_tools(
     }
 
     (by_tool, unattributed)
+}
+
+fn turn_is_selected(turn: &TurnRecord, selected_turns: Option<&HashSet<String>>) -> bool {
+    selected_turns
+        .map(|keys| keys.contains(&turn_identity_key(turn)))
+        .unwrap_or(true)
+}
+
+fn turn_identity_key(turn: &TurnRecord) -> String {
+    format!(
+        "{}\0{}\0{}",
+        turn.source.wire_str(),
+        turn.session_id,
+        turn.message_id
+    )
 }
 
 fn index_user_turn_block_sizes(
@@ -1527,29 +1603,47 @@ fn collect_subagent_tree_relationships(
     session_id: &str,
     q: &Query,
 ) -> anyhow::Result<Vec<SessionRelationshipRecord>> {
-    let query_base = relationship_query_for_turn_slice(q);
+    let relationships = ledger.query_relationships(&Query {
+        source: q.source,
+        ..Default::default()
+    })?;
+    Ok(collect_connected_relationships(&relationships, session_id))
+}
+
+fn collect_connected_relationships(
+    relationships: &[SessionRelationshipRecord],
+    session_id: &str,
+) -> Vec<SessionRelationshipRecord> {
+    let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, r) in relationships.iter().enumerate() {
+        for id in relationship_connected_ids(r) {
+            if !id.is_empty() {
+                by_id.entry(id).or_default().push(idx);
+            }
+        }
+    }
+
     let mut out: IndexMap<String, SessionRelationshipRecord> = IndexMap::new();
     let mut seen_ids = HashSet::new();
     let mut queue = VecDeque::from([session_id.to_string()]);
-
     while let Some(id) = queue.pop_front() {
         if !seen_ids.insert(id.clone()) {
             continue;
         }
-        let rows = ledger.query_relationships(&Query {
-            session_id: Some(id),
-            ..query_base.clone()
-        })?;
-        for r in rows {
-            for next in relationship_connected_ids(&r) {
+        let Some(rows) = by_id.get(&id) else {
+            continue;
+        };
+        for idx in rows {
+            let r = &relationships[*idx];
+            for next in relationship_connected_ids(r) {
                 if !next.is_empty() && !seen_ids.contains(&next) {
                     queue.push_back(next);
                 }
             }
-            out.insert(relationship_instance_key(&r), r);
+            out.insert(relationship_instance_key(r), r.clone());
         }
     }
-    Ok(out.into_values().collect())
+    out.into_values().collect()
 }
 
 fn relationship_connected_ids(r: &SessionRelationshipRecord) -> Vec<String> {
@@ -2061,6 +2155,22 @@ mod tests {
     }
 
     #[test]
+    fn collect_connected_relationships_follows_related_sessions_and_agent_ids() {
+        let rels = vec![
+            relationship("child-session", "root-session", Some("child-agent")),
+            relationship("grandchild-session", "child-agent", None),
+            relationship("unrelated-session", "other-session", None),
+        ];
+
+        let connected = collect_connected_relationships(&rels, "root-session");
+        let session_ids: HashSet<&str> = connected.iter().map(|r| r.session_id.as_str()).collect();
+
+        assert!(session_ids.contains("child-session"));
+        assert!(session_ids.contains("grandchild-session"));
+        assert!(!session_ids.contains("unrelated-session"));
+    }
+
+    #[test]
     fn by_tool_attribution_uses_user_turn_block_byte_shares() {
         let pricing = load_pricing(None);
         let turns = vec![
@@ -2099,7 +2209,7 @@ mod tests {
         );
 
         let (by_tool, unattributed) =
-            attribute_cost_to_tools(&turns, &pricing, &user_turns_by_session);
+            attribute_cost_to_tools(&turns, &pricing, &user_turns_by_session, None);
         let read = by_tool.get("Read").expect("read agg");
         let edit = by_tool.get("Edit").expect("edit agg");
 
@@ -2109,6 +2219,43 @@ mod tests {
         assert!(read.cost < edit.cost * 3.1);
         assert!(unattributed.abs() < 1e-12);
         assert_eq!(tool_attribution_method(read), "sized");
+    }
+
+    #[test]
+    fn by_tool_attribution_uses_real_predecessor_when_selection_skips_turns() {
+        let pricing = load_pricing(None);
+        let turns = vec![
+            turn(
+                0,
+                "assistant-1",
+                Usage::default(),
+                vec![tool("call-read", "Read")],
+            ),
+            turn(
+                1,
+                "assistant-2",
+                Usage::default(),
+                vec![tool("call-edit", "Edit")],
+            ),
+            turn(
+                2,
+                "assistant-3",
+                Usage {
+                    input: 1_000,
+                    ..Usage::default()
+                },
+                Vec::new(),
+            ),
+        ];
+        let selected = HashSet::from([turn_identity_key(&turns[2])]);
+        let user_turns_by_session: HashMap<String, Vec<UserTurnRecord>> = HashMap::new();
+
+        let (by_tool, unattributed) =
+            attribute_cost_to_tools(&turns, &pricing, &user_turns_by_session, Some(&selected));
+
+        assert!(by_tool.get("Edit").expect("edit agg").cost > 0.0);
+        assert_eq!(by_tool.get("Read").map(|agg| agg.cost).unwrap_or(0.0), 0.0);
+        assert_eq!(unattributed, 0.0);
     }
 
     fn relationship(
