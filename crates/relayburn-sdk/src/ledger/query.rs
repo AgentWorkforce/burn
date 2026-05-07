@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ledger::stamp::Enrichment;
 use crate::reader::SourceKind;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +22,10 @@ pub struct Query {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceKind>,
+    /// Folded stamp enrichment filters. Every provided key/value pair must
+    /// match the turn's enrichment map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrichment: Option<Enrichment>,
 }
 
 impl Query {

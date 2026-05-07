@@ -1,4 +1,4 @@
-//! End-to-end test for all nine SDK verbs.
+//! End-to-end test for all ten SDK verbs.
 //!
 //! Opens a fixture ledger in a `TempDir`, appends a small set of records
 //! (one turn, one content blob with a known FTS token, one stamp), and
@@ -11,11 +11,12 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use relayburn_sdk::{
-    export_ledger, export_stamps, hotspots, ingest, overhead, overhead_trim, search, session_cost,
-    summary, ContentKind, ContentRecord, ContentRole, Enrichment, ExportLedgerOptions,
+    CompareOptions, ContentKind, ContentRecord, ContentRole, Enrichment, ExportLedgerOptions,
     ExportStampsOptions, HotspotsOptions, HotspotsResult, IngestOptions, IngestRoots, Ledger,
-    LedgerOpenOptions, OverheadOptions, OverheadTrimOptions, SearchQueryOptions, SessionCostOptions,
-    SourceKind, Stamp, StampSelector, SummaryOptions, ToolCall, TurnRecord, Usage,
+    LedgerOpenOptions, OverheadOptions, OverheadTrimOptions, SearchQueryOptions,
+    SessionCostOptions, SourceKind, Stamp, StampSelector, SummaryOptions, ToolCall, TurnRecord,
+    Usage, compare, export_ledger, export_stamps, hotspots, ingest, overhead, overhead_trim,
+    search, session_cost, summary,
 };
 
 const SESSION_ID: &str = "ses_integration_001";
@@ -97,12 +98,13 @@ fn populate(home: &Path) {
     let raw = handle.raw_mut();
     raw.append_turns(&[make_turn("claude-sonnet-4-6")])
         .expect("append turn");
-    raw.append_content(&[make_content()]).expect("append content");
+    raw.append_content(&[make_content()])
+        .expect("append content");
     raw.append_stamp(&make_stamp()).expect("append stamp");
 }
 
 #[test]
-fn all_nine_verbs_round_trip_against_a_fixture_ledger() {
+fn all_ten_verbs_round_trip_against_a_fixture_ledger() {
     let home = TempDir::new().expect("home tmp");
     populate(home.path());
 
@@ -135,7 +137,6 @@ fn all_nine_verbs_round_trip_against_a_fixture_ledger() {
     let sc2 = session_cost(SessionCostOptions {
         session: Some(SESSION_ID.into()),
         ledger_home: Some(home.path().to_path_buf()),
-        ..Default::default()
     })
     .expect("free session_cost");
     assert_eq!(sc2.turn_count, 1);
@@ -191,7 +192,27 @@ fn all_nine_verbs_round_trip_against_a_fixture_ledger() {
     })
     .expect("free hotspots");
 
-    // 6. search — handle + free. The content body contains the unique
+    // 6. compare — handle + free. The fixture has one populated model and
+    // one explicitly requested absent model.
+    let cmp = handle
+        .compare(CompareOptions {
+            models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+            min_fidelity: Some(relayburn_sdk::FidelityClass::Partial),
+            ..Default::default()
+        })
+        .expect("handle compare");
+    assert_eq!(cmp.analyzed_turns, 1);
+    assert!(cmp.models.contains(&"claude-sonnet-4-6".to_string()));
+    let cmp2 = compare(CompareOptions {
+        models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+        ledger_home: Some(home.path().to_path_buf()),
+        min_fidelity: Some(relayburn_sdk::FidelityClass::Partial),
+        ..Default::default()
+    })
+    .expect("free compare");
+    assert_eq!(cmp2.analyzed_turns, 1);
+
+    // 7. search — handle + free. The content body contains the unique
     // token, so an FTS query must find at least one hit.
     let sr = handle
         .search(SearchQueryOptions::new(FTS_TOKEN))
@@ -206,13 +227,16 @@ fn all_nine_verbs_round_trip_against_a_fixture_ledger() {
     .expect("free search");
     assert!(!sr2.hits.is_empty());
 
-    // 7. export_ledger — handle + free. The seeded turn must show up as
+    // 8. export_ledger — handle + free. The seeded turn must show up as
     // at least one JSONL row of kind "turn".
     let ledger_rows: Vec<_> = handle
         .export_ledger(ExportLedgerOptions::default())
         .expect("handle export_ledger")
         .collect();
-    assert!(!ledger_rows.is_empty(), "exported ledger must include the turn");
+    assert!(
+        !ledger_rows.is_empty(),
+        "exported ledger must include the turn"
+    );
     assert!(
         ledger_rows
             .iter()
@@ -225,12 +249,15 @@ fn all_nine_verbs_round_trip_against_a_fixture_ledger() {
     .expect("free export_ledger")
     .collect();
 
-    // 8. export_stamps — handle + free. The seeded stamp must round-trip.
+    // 9. export_stamps — handle + free. The seeded stamp must round-trip.
     let stamp_rows: Vec<_> = handle
         .export_stamps(ExportStampsOptions::default())
         .expect("handle export_stamps")
         .collect();
-    assert!(!stamp_rows.is_empty(), "exported stamps must include the stamp");
+    assert!(
+        !stamp_rows.is_empty(),
+        "exported stamps must include the stamp"
+    );
     assert!(
         stamp_rows
             .iter()
@@ -246,17 +273,12 @@ fn all_nine_verbs_round_trip_against_a_fixture_ledger() {
 
 #[tokio::test]
 async fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
-    // 9. ingest — handle + free. Both forms must accept empty roots and
+    // 10. ingest — handle + free. Both forms must accept empty roots and
     // return an all-zero report without scanning the developer's HOME.
     let home = TempDir::new().expect("home tmp");
     let claude = TempDir::new().expect("claude tmp");
     let codex = TempDir::new().expect("codex tmp");
     let opencode = TempDir::new().expect("opencode tmp");
-
-    // `cleanup_stale_pending_stamps` and `load_config` inside ingest_all
-    // honor RELAYBURN_HOME; pin it to the temp dir so the test never
-    // touches `~/.relayburn`.
-    std::env::set_var("RELAYBURN_HOME", home.path());
 
     let mut handle = Ledger::open(LedgerOpenOptions::with_home(home.path())).expect("open");
     let report = handle

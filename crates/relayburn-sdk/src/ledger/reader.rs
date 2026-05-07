@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::reader::{
@@ -18,7 +18,7 @@ use crate::reader::{
 use crate::ledger::error::Result;
 use crate::ledger::paths::is_valid_session_id;
 use crate::ledger::query::Query;
-use crate::ledger::stamp::{stamp_matches, Enrichment, Stamp, StampSelector};
+use crate::ledger::stamp::{Enrichment, Stamp, StampSelector, stamp_matches};
 
 /// A turn with stamp enrichment folded in. Enrichment is a flat
 /// string→string map; entries from later stamps win.
@@ -31,9 +31,7 @@ pub struct EnrichedTurn {
 
 pub(crate) fn query_turns(conn: &Connection, q: &Query) -> Result<Vec<EnrichedTurn>> {
     let stamps = collect_stamps(conn)?;
-    let mut stmt = conn.prepare(
-        "SELECT record_json FROM turns ORDER BY rowid",
-    )?;
+    let mut stmt = conn.prepare("SELECT record_json FROM turns ORDER BY rowid")?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -52,10 +50,7 @@ pub(crate) fn query_turns(conn: &Connection, q: &Query) -> Result<Vec<EnrichedTu
     Ok(out)
 }
 
-pub(crate) fn query_compactions(
-    conn: &Connection,
-    q: &Query,
-) -> Result<Vec<CompactionEvent>> {
+pub(crate) fn query_compactions(conn: &Connection, q: &Query) -> Result<Vec<CompactionEvent>> {
     select_records(conn, "compactions", |r: CompactionEvent| {
         compaction_passes(&r, q).then_some(r)
     })
@@ -79,10 +74,7 @@ pub(crate) fn query_tool_result_events(
     })
 }
 
-pub(crate) fn query_user_turns(
-    conn: &Connection,
-    q: &Query,
-) -> Result<Vec<UserTurnRecord>> {
+pub(crate) fn query_user_turns(conn: &Connection, q: &Query) -> Result<Vec<UserTurnRecord>> {
     select_records(conn, "user_turns", |r: UserTurnRecord| {
         user_turn_passes(&r, q).then_some(r)
     })
@@ -158,8 +150,7 @@ fn collect_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::with_capacity(rows.len());
     for (ts, sel_json, enr_json) in rows {
-        let selector: StampSelector =
-            serde_json::from_str(&sel_json).unwrap_or_default();
+        let selector: StampSelector = serde_json::from_str(&sel_json).unwrap_or_default();
         let enrichment: Enrichment =
             serde_json::from_str(&enr_json).unwrap_or_else(|_| BTreeMap::new());
         // Stamps were validated on write; re-read may surface a row
@@ -188,7 +179,7 @@ fn fold_stamps(turn: &TurnRecord, stamps: &[Stamp]) -> Enrichment {
     out
 }
 
-fn turn_passes(turn: &TurnRecord, q: &Query, _enrichment: &Enrichment) -> bool {
+fn turn_passes(turn: &TurnRecord, q: &Query, enrichment: &Enrichment) -> bool {
     if let Some(ref since) = q.since {
         if &turn.ts < since {
             return false;
@@ -214,6 +205,13 @@ fn turn_passes(turn: &TurnRecord, q: &Query, _enrichment: &Enrichment) -> bool {
     if let Some(source) = q.source {
         if turn.source != source {
             return false;
+        }
+    }
+    if let Some(ref wanted) = q.enrichment {
+        for (key, value) in wanted {
+            if enrichment.get(key) != Some(value) {
+                return false;
+            }
         }
     }
     true
@@ -269,7 +267,7 @@ fn relationship_passes(r: &SessionRelationshipRecord, q: &Query) -> bool {
         let want = serde_json::to_value(source)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string));
-        let have = serde_json::to_value(&r.source)
+        let have = serde_json::to_value(r.source)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string));
         if want != have {
@@ -370,10 +368,7 @@ pub(crate) fn raw_record_jsons(conn: &Connection, table: &str) -> Result<Vec<Str
 }
 
 #[allow(dead_code)]
-pub(crate) fn lookup_content_fingerprint(
-    conn: &Connection,
-    fingerprint: &str,
-) -> Result<bool> {
+pub(crate) fn lookup_content_fingerprint(conn: &Connection, fingerprint: &str) -> Result<bool> {
     let exists: Option<i64> = conn
         .query_row(
             "SELECT 1 FROM turns WHERE content_fingerprint = ? LIMIT 1",

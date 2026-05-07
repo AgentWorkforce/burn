@@ -11,12 +11,10 @@
 //!
 //! # Surface at a glance
 //!
-//! Nine verbs, each callable two ways: as a free function or as a method
-//! on [`LedgerHandle`]. The verbs themselves land in follow-up PRs;
-//! this crate currently exposes the scaffold ([`Ledger::open`],
-//! [`LedgerOpenOptions`], [`LedgerHandle`]) plus the re-exports below.
+//! Ten verbs, each callable two ways: as a free function or as a method
+//! on [`LedgerHandle`].
 //!
-//! `ingest` is async (tokio); the eight query/compute verbs are sync
+//! `ingest` is async (tokio); the query/compute verbs are sync
 //! (CPU-bound). Callers running them from an async context — the typical
 //! pattern in the MCP server — should wrap them in `tokio::task::spawn_blocking`.
 //!
