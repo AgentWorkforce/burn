@@ -7,6 +7,14 @@ license.workspace = true
 repository.workspace = true
 description = "Embedding API for relayburn — published to crates.io as the supported Rust surface."
 
+[features]
+# Opt-in feature for downstream integration tests that need the
+# test-only API (`set_ingest_gap_writer` / `restore_ingest_gap_writer`).
+# In-crate unit tests reach the same items via `cfg(test)`; external
+# crates wanting the same hooks enable this feature explicitly so the
+# items are NOT part of the SDK's default public surface.
+test-utils = []
+
 [dependencies]
 # Deps absorbed from the four former lower crates
 # (`relayburn-{reader,ledger,analyze,ingest}`) when the monolith

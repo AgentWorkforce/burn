@@ -135,6 +135,12 @@ pub fn reset_ingest_gap_warnings() {
 /// back to `set_ingest_gap_writer` in a `defer`-equivalent so a panicking
 /// test leaves the global state restored on the next test that pulls the
 /// guard.
+///
+/// Gated to `cfg(test)` for in-crate tests and to the `test-utils`
+/// feature for downstream integration tests so the hook is NOT part of
+/// the SDK's default public surface — otherwise an embedder could
+/// hijack stderr writes for the whole process.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn set_ingest_gap_writer<F>(write: F) -> WriterFn
 where
     F: Fn(&str) + Send + Sync + 'static,
@@ -146,6 +152,9 @@ where
 /// Restore a previously captured sink. Convenience for the
 /// `let prev = set_ingest_gap_writer(...); ...; restore_ingest_gap_writer(prev);`
 /// idiom — equivalent to `setIngestGapWriter(prev)` in TS.
+///
+/// Gated alongside `set_ingest_gap_writer` — see that function.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn restore_ingest_gap_writer(write: WriterFn) {
     state_lock().write = write;
 }
