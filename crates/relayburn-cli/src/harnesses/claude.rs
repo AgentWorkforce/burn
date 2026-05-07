@@ -34,6 +34,7 @@ use relayburn_sdk::{
 };
 
 use super::{HarnessAdapter, PlanCtx, SpawnPlan};
+use crate::util::time::iso_now;
 
 /// Public unit-struct adapter for `claude`. Held as `&'static
 /// CLAUDE_ADAPTER` in the eager `phf::Map` registry — the value `&CLAUDE_ADAPTER`
@@ -101,44 +102,6 @@ fn mint_session_id() -> String {
         bytes[8], bytes[9],
         bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
     )
-}
-
-/// Build an ISO-8601 UTC timestamp suitable for the [`Stamp`]'s `ts`
-/// field. Mirrors `new Date().toISOString()` in the TS sibling.
-fn iso_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs_since_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    // Defer to chrono-free formatting: we re-use the same approach the
-    // SDK uses elsewhere for ISO timestamps. Convert ms → seconds + ms.
-    let total_ms = secs_since_epoch as i64;
-    let total_secs = total_ms / 1000;
-    let ms = (total_ms % 1000) as u32;
-    // Civil-date conversion (Howard Hinnant's algorithm). Sufficient for
-    // the y2038-and-beyond range we care about.
-    let z = total_secs.div_euclid(86_400);
-    let secs_of_day = total_secs.rem_euclid(86_400) as u32;
-    let (y, m, d) = civil_from_days(z);
-    let hh = secs_of_day / 3600;
-    let mm = (secs_of_day % 3600) / 60;
-    let ss = secs_of_day % 60;
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{ms:03}Z")
-}
-
-/// Days-since-epoch → (year, month, day). Hinnant 2014.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (y + (if m <= 2 { 1 } else { 0 }), m, d)
 }
 
 #[async_trait]

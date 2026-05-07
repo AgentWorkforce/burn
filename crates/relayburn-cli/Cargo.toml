@@ -77,7 +77,10 @@ thiserror = { workspace = true }
 # bodies via a current-thread runtime.
 async-trait = "0.1"
 phf = { version = "0.11", features = ["macros"] }
-tokio = { workspace = true, features = ["sync", "rt"] }
+# `process` is needed by `commands/run.rs` so the `burn run` driver can
+# `await` the child via `tokio::process::Command::status()` rather than
+# blocking the current-thread runtime with `std::process::Command::status()`.
+tokio = { workspace = true, features = ["sync", "rt", "process"] }
 
 # `IndexMap` preserves first-seen iteration order, which matters for the
 # Wave 2 read-path commands so their grouped output (`summary --by-model`,

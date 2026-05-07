@@ -24,15 +24,19 @@
 //!
 //! The driver is async so adapter calls can stay async; we drive it on a
 //! current-thread tokio runtime, the same pattern the D1 summary
-//! presenter uses for `ingest_all`. Process spawn itself goes through
-//! `std::process::Command` so we don't need tokio's `process` feature.
+//! presenter uses for `ingest_all`. Process spawn goes through
+//! `tokio::process::Command::status().await` so the watcher can tick
+//! while the child is alive — `std::process::Command::status()` would
+//! synchronously block the only thread on the current-thread runtime.
 
 use std::collections::BTreeMap;
-use std::process::{Command as StdCommand, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 
-use relayburn_cli::harnesses::{lookup, list_harness_names, HarnessAdapter, PlanCtx};
+use relayburn_cli::harnesses::{list_harness_names, lookup, HarnessAdapter, PlanCtx};
+use relayburn_cli::util::time::iso_from_system_time;
 use relayburn_sdk::{Enrichment, IngestReport, ReportSink};
+use tokio::process::Command as TokioCommand;
 
 use crate::cli::{GlobalArgs, RunArgs};
 use crate::render::error::report_error;
@@ -131,7 +135,7 @@ async fn drive(
     tags.insert("harness".to_string(), adapter.name().to_string());
     tags.insert("burnSpawn".to_string(), "1".to_string());
     let spawn_start_ts = std::time::SystemTime::now();
-    tags.insert("burnSpawnTs".to_string(), iso_now_from(spawn_start_ts));
+    tags.insert("burnSpawnTs".to_string(), iso_from_system_time(spawn_start_ts));
 
     let cwd = std::env::current_dir()?;
     let ctx = PlanCtx {
@@ -167,7 +171,15 @@ async fn drive(
     // stays interactive. Layer plan.env_overrides on top of the parent
     // env, plus re-export the merged tag bag so transitive `burn …`
     // invocations inside the child see the same context.
-    let mut cmd = StdCommand::new(&plan.binary);
+    //
+    // Use `tokio::process::Command::status().await` (not
+    // `std::process::Command::status()`): the driver runs on a
+    // current-thread tokio runtime so a synchronous `status()` call
+    // would block the only thread, starving any watcher ticks scheduled
+    // on the same runtime. The async variant yields between tokio
+    // primitives so periodic watcher work can land while the child
+    // lives.
+    let mut cmd = TokioCommand::new(&plan.binary);
     cmd.args(&plan.args);
     cmd.stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -188,26 +200,37 @@ async fn drive(
         w.tick().await;
     }
 
-    let exit_status = match cmd.status() {
-        Ok(s) => s,
+    // Capture the spawn outcome up front so cleanup ALWAYS runs:
+    // `before_spawn` may have written a stamp / pending manifest that
+    // `after_exit` needs to reconcile, and the watcher may have
+    // accumulated reports during its first tick. Returning early on
+    // spawn failure (the previous shape) skipped both. The TS sibling
+    // runs finalization regardless of spawn success; this matches that.
+    let spawn_outcome: SpawnOutcome = match cmd.status().await {
+        Ok(status) => SpawnOutcome::Exited(status),
         Err(err) => {
             eprintln!("[burn] failed to spawn {}: {err}", plan.binary);
-            // Match the TS sibling: 127 for spawn failure (POSIX
-            // "command not found"-ish).
-            return Ok(127);
+            SpawnOutcome::SpawnFailed
         }
     };
-    let code = exit_status.code().unwrap_or(0);
 
     if let Some(w) = &watcher {
         w.stop().await;
     }
-    let final_report = adapter.after_exit(&ctx, &plan).await?;
-    {
-        let mut t = totals.lock().unwrap();
-        t.scanned_sessions += final_report.scanned_sessions;
-        t.ingested_sessions += final_report.ingested_sessions;
-        t.appended_turns += final_report.appended_turns;
+
+    // `after_exit` may itself fail (stamp resolve, ledger I/O); fold
+    // that error into the summary line rather than short-circuiting,
+    // so the user always gets the `[burn] <name> ingest: …` line.
+    match adapter.after_exit(&ctx, &plan).await {
+        Ok(final_report) => {
+            let mut t = totals.lock().unwrap();
+            t.scanned_sessions += final_report.scanned_sessions;
+            t.ingested_sessions += final_report.ingested_sessions;
+            t.appended_turns += final_report.appended_turns;
+        }
+        Err(err) => {
+            eprintln!("[burn] {} after_exit failed: {err}", adapter.name());
+        }
     }
     let totals = totals.lock().unwrap().clone();
     let session_word = if totals.ingested_sessions == 1 {
@@ -228,7 +251,22 @@ async fn drive(
         totals.appended_turns,
         turn_word,
     );
-    Ok(code)
+
+    // Match the TS sibling: 127 for spawn failure (POSIX "command not
+    // found"-ish), otherwise propagate the child's exit code (0 if it
+    // exited via signal, mirroring `ExitStatus::code().unwrap_or(0)`).
+    Ok(match spawn_outcome {
+        SpawnOutcome::Exited(status) => status.code().unwrap_or(0),
+        SpawnOutcome::SpawnFailed => 127,
+    })
+}
+
+/// Captured spawn result. The driver finalizes (stops the watcher, runs
+/// `after_exit`, emits the summary line) regardless of which arm fired,
+/// then maps to a process exit code at the very end.
+enum SpawnOutcome {
+    Exited(ExitStatus),
+    SpawnFailed,
 }
 
 /// Parse `--tag k=v` repetitions into an [`Enrichment`]. Mirrors the
@@ -275,35 +313,6 @@ fn spawn_tag_env_overrides(final_tags: &Enrichment) -> Vec<(String, String)> {
         }
     }
     out
-}
-
-/// ISO-8601 UTC formatter for the `burnSpawnTs` tag. Same shape as the
-/// claude adapter's local `iso_now`; keep them in sync.
-fn iso_now_from(t: std::time::SystemTime) -> String {
-    use std::time::UNIX_EPOCH;
-    let total_ms = t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-    let total_secs = total_ms / 1000;
-    let ms = (total_ms.rem_euclid(1000)) as u32;
-    let z = total_secs.div_euclid(86_400);
-    let secs_of_day = total_secs.rem_euclid(86_400) as u32;
-    let (y, m, d) = civil_from_days(z);
-    let hh = secs_of_day / 3600;
-    let mm = (secs_of_day % 3600) / 60;
-    let ss = secs_of_day % 60;
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{ms:03}Z")
-}
-
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (y + (if m <= 2 { 1 } else { 0 }), m, d)
 }
 
 #[cfg(test)]
