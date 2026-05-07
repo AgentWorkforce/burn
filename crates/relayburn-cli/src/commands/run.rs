@@ -121,7 +121,7 @@ fn print_run_help() {
 /// Async core. Owns the plan → before_spawn → spawn → after_exit
 /// sequence and aggregates ingest reports.
 async fn drive(
-    _globals: &GlobalArgs,
+    globals: &GlobalArgs,
     adapter: &'static dyn HarnessAdapter,
     passthrough: Vec<String>,
     user_tags: Enrichment,
@@ -142,6 +142,7 @@ async fn drive(
         cwd,
         passthrough,
         tags: tags.clone(),
+        ledger_home: globals.ledger_path.clone(),
         spawn_start_ts,
     };
 

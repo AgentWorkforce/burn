@@ -19,7 +19,9 @@
 //! `ingest_sessions` is a caller-supplied async closure (Wave 2 will pass
 //! `relayburn_sdk::ingest` with codex-only or opencode-only roots). The
 //! factory doesn't reach into `relayburn_sdk::ingest` directly so adapter
-//! authors can swap in test doubles without monkey-patching env vars.
+//! authors can swap in test doubles without monkey-patching env vars. The
+//! closure receives the active ledger home so its ingest pass can read the
+//! same sidecar directory `before_spawn` wrote to.
 //!
 //! ## What this PR does NOT do
 //!
@@ -48,7 +50,7 @@ use super::{HarnessAdapter, PlanCtx, SpawnPlan, WatcherController};
 /// Async ingest callback supplied by the caller. Returns the report the
 /// watch loop and `after_exit` hand back to the driver.
 pub type IngestSessionsFn = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send>>
+    dyn Fn(Option<PathBuf>) -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send>>
         + Send
         + Sync,
 >;
@@ -167,11 +169,12 @@ impl PendingStampAdapterImpl {
     /// Build the IngestFn the watch loop calls each tick. Captures the
     /// caller-supplied `ingest_sessions` closure so the loop runs the
     /// same path `after_exit` does.
-    fn ingest_fn(&self) -> IngestFn {
+    fn ingest_fn(&self, ledger_home: Option<PathBuf>) -> IngestFn {
         let ingest_sessions = self.ingest_sessions.clone();
         Arc::new(move || {
             let f = ingest_sessions.clone();
-            Box::pin(async move { f().await })
+            let ledger_home = ledger_home.clone();
+            Box::pin(async move { f(ledger_home).await })
         })
     }
 
@@ -202,7 +205,7 @@ impl HarnessAdapter for PendingStampAdapterImpl {
         let session_dir_hint = (self.session_root)();
         let opts = PendingStampWriteOptions {
             harness: self.harness,
-            ledger_home: None,
+            ledger_home: ctx.ledger_home.clone(),
             cwd: ctx.cwd.to_string_lossy().into_owned(),
             enrichment: ctx.tags.clone(),
             session_dir_hint: Some(session_dir_hint.to_string_lossy().into_owned()),
@@ -222,22 +225,22 @@ impl HarnessAdapter for PendingStampAdapterImpl {
 
     fn start_watcher(
         &self,
-        _ctx: &PlanCtx,
+        ctx: &PlanCtx,
         on_report: ReportSink,
     ) -> Option<WatcherController> {
         // Match the TS adapter: do not run an immediate first tick. The
         // child has barely started; let the periodic interval drive the
         // first scan so we don't spawn an ingest pass that races the
         // freshly-written pending stamp.
-        let opts = StartWatchLoopOptions::new(self.ingest_fn())
+        let opts = StartWatchLoopOptions::new(self.ingest_fn(ctx.ledger_home.clone()))
             .with_immediate(false)
             .with_interval(self.watch_interval)
             .with_on_report(on_report);
         Some(WatcherController::new(start_watch_loop(opts)))
     }
 
-    async fn after_exit(&self, _ctx: &PlanCtx, _plan: &SpawnPlan) -> anyhow::Result<IngestReport> {
-        (self.ingest_sessions)().await
+    async fn after_exit(&self, ctx: &PlanCtx, _plan: &SpawnPlan) -> anyhow::Result<IngestReport> {
+        (self.ingest_sessions)(ctx.ledger_home.clone()).await
     }
 }
 
@@ -250,14 +253,13 @@ mod tests {
     use super::*;
 
     /// `adapter()` round-trips through the trait surface for codex.
-    /// Exercises name + session_root + plan; `before_spawn` is covered
-    /// by an integration test (would need a writable $RELAYBURN_HOME).
+    /// Exercises name + session_root + plan.
     #[tokio::test]
     async fn codex_factory_round_trip() {
         let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
             Arc::new(|| PathBuf::from("/tmp/codex-sessions"));
         let ingest_sessions: IngestSessionsFn =
-            Arc::new(|| Box::pin(async { Ok(IngestReport::default()) }));
+            Arc::new(|_ledger_home| Box::pin(async { Ok(IngestReport::default()) }));
         let config = PendingStampAdapter::new("codex", session_root, ingest_sessions);
         let adapter: Box<dyn HarnessAdapter> = adapter(config);
 
@@ -268,6 +270,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             passthrough: vec!["--help".into()],
             tags: Enrichment::new(),
+            ledger_home: None,
             spawn_start_ts: std::time::SystemTime::now(),
         };
         let plan = adapter.plan(&ctx).await.unwrap();
@@ -286,7 +289,7 @@ mod tests {
         let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
             Arc::new(|| PathBuf::from("/tmp/opencode-storage"));
         let ingest_sessions: IngestSessionsFn =
-            Arc::new(|| Box::pin(async { Ok(IngestReport::default()) }));
+            Arc::new(|_ledger_home| Box::pin(async { Ok(IngestReport::default()) }));
         let config = PendingStampAdapter::new("opencode", session_root, ingest_sessions);
         let adapter = adapter(config);
         assert_eq!(adapter.name(), "opencode");
@@ -305,7 +308,7 @@ mod tests {
         let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
             Arc::new(|| PathBuf::from("/tmp"));
         let ingest_sessions: IngestSessionsFn =
-            Arc::new(|| Box::pin(async { Ok(IngestReport::default()) }));
+            Arc::new(|_ledger_home| Box::pin(async { Ok(IngestReport::default()) }));
         let _ = adapter(PendingStampAdapter::new(
             "cursor",
             session_root,
@@ -321,7 +324,7 @@ mod tests {
         let count_for_closure = count.clone();
         let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
             Arc::new(|| PathBuf::from("/tmp/codex-sessions"));
-        let ingest_sessions: IngestSessionsFn = Arc::new(move || {
+        let ingest_sessions: IngestSessionsFn = Arc::new(move |_ledger_home| {
             let c = count_for_closure.clone();
             Box::pin(async move {
                 c.fetch_add(1, Ordering::SeqCst);
@@ -335,6 +338,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             passthrough: vec![],
             tags: Enrichment::new(),
+            ledger_home: None,
             spawn_start_ts: std::time::SystemTime::now(),
         };
         let plan = adapter.plan(&ctx).await.unwrap();
@@ -342,5 +346,45 @@ mod tests {
         adapter.after_exit(&ctx, &plan).await.unwrap();
 
         assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn before_spawn_writes_pending_stamp_under_context_ledger_home() {
+        let ledger_home = tempdir("ledger-home");
+        let cwd = tempdir("cwd");
+        let session_root_path = tempdir("session-root");
+        let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
+            Arc::new(move || session_root_path.clone());
+        let ingest_sessions: IngestSessionsFn =
+            Arc::new(|_ledger_home| Box::pin(async { Ok(IngestReport::default()) }));
+        let config = PendingStampAdapter::new("codex", session_root, ingest_sessions);
+        let adapter = adapter(config);
+
+        let ctx = PlanCtx {
+            cwd: cwd.clone(),
+            passthrough: vec![],
+            tags: Enrichment::new(),
+            ledger_home: Some(ledger_home.clone()),
+            spawn_start_ts: std::time::SystemTime::now(),
+        };
+        let plan = adapter.plan(&ctx).await.unwrap();
+        adapter.before_spawn(&ctx, &plan).await.unwrap();
+
+        let dir = ledger_home.join("pending-stamps");
+        let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+    }
+
+    fn tempdir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "burn-pending-stamp-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }

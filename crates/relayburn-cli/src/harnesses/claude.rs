@@ -178,6 +178,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             passthrough: vec!["--resume".to_string(), "abc".to_string()],
             tags: Enrichment::new(),
+            ledger_home: None,
             spawn_start_ts: std::time::SystemTime::now(),
         };
         let plan = CLAUDE_ADAPTER.plan(&ctx).await.unwrap();

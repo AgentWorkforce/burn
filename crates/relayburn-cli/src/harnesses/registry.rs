@@ -316,7 +316,7 @@ mod tests {
         let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
             Arc::new(|| PathBuf::from("/tmp/codex-sessions"));
         let ingest_sessions: IngestSessionsFn =
-            Arc::new(|| Box::pin(async { Ok(IngestReport::default()) }));
+            Arc::new(|_ledger_home| Box::pin(async { Ok(IngestReport::default()) }));
         pending_stamp::adapter_static(PendingStampAdapter::new(
             "codex",
             session_root,

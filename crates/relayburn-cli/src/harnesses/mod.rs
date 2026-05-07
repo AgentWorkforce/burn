@@ -57,7 +57,7 @@ pub use registry::{list_harness_names, lookup};
 
 /// Driver-side context handed to every adapter call. Mirrors the TS
 /// `HarnessRunContext` shape one-to-one (`cwd`, `passthrough`, `tags`,
-/// `spawnStartTs`).
+/// `spawnStartTs`) plus the Rust port's typed ledger-home override.
 ///
 /// `tags` is a `BTreeMap<String, String>` (re-exported from the SDK as
 /// [`Enrichment`]) so insertion order doesn't matter for the on-disk
@@ -75,6 +75,11 @@ pub struct PlanCtx {
     /// stamp. Keys are free-form (`task`, `pr`, …); the Wave 2 driver
     /// translates `--tag k=v` flags into entries here.
     pub tags: Enrichment,
+    /// Optional ledger home selected by `--ledger-path`. Pending-stamp
+    /// adapters use this for both manifest writes and ingest passes so
+    /// read/write sidecars stay scoped to the same home without relying
+    /// solely on process env mutation.
+    pub ledger_home: Option<PathBuf>,
     /// Wall-clock timestamp captured by the driver immediately before
     /// `before_spawn`. Used by the pending-stamp manifest so the
     /// post-exit resolver can match against session-file mtimes.
@@ -258,6 +263,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             passthrough: vec![],
             tags: Enrichment::new(),
+            ledger_home: None,
             spawn_start_ts: std::time::SystemTime::now(),
         };
         let plan = adapter.plan(&ctx).await.unwrap();
