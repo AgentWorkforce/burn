@@ -61,8 +61,8 @@ pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 pub(crate) static TEST_GAP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub use cursors::{
-    load_cursors, save_cursor_changes, save_cursors, ClaudeCursor, CodexCumulative, CodexCursor,
-    Cursors, FileCursor, OpencodeCursor, OpencodeStreamCursor,
+    load_cursors, save_cursors, save_cursors_if_changed, ClaudeCursor, CodexCumulative,
+    CodexCursor, Cursors, FileCursor, OpencodeCursor, OpencodeStreamCursor,
 };
 pub use gap::{
     count_new_tool_calls, count_new_tool_results, count_tool_call_gaps, emit_gap_warning,

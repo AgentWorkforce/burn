@@ -36,7 +36,7 @@ use crate::reader::{
 
 use crate::ingest::cursors::{
     ClaudeCursor, CodexCumulative, CodexCursor, Cursors, FileCursor, OpencodeCursor, load_cursors,
-    save_cursor_changes,
+    save_cursors_if_changed,
 };
 use crate::ingest::gap::{
     AdapterName, count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap,
@@ -206,7 +206,7 @@ pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Re
     emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
 
     progress(opts, "saving ingest cursors");
-    save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
+    save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
 
@@ -225,7 +225,7 @@ pub async fn ingest_claude_projects(
         content_mode,
         opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str)),
     );
-    save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
+    save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
 
@@ -250,7 +250,7 @@ pub async fn ingest_codex_sessions(
         content_mode,
         opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str)),
     );
-    save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
+    save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
 
@@ -275,7 +275,7 @@ pub async fn ingest_opencode_sessions(
         content_mode,
         opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str)),
     );
-    save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
+    save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
 
@@ -355,7 +355,7 @@ pub async fn ingest_claude_session(
     };
     let key = file.to_string_lossy().into_owned();
     after.insert(key, FileCursor::Claude(cursor));
-    save_cursor_changes(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
+    save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
 
     Ok(IngestReport {
         scanned_sessions: 1,

@@ -377,7 +377,7 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
     };
 
     // The 2.0 content store stamps each row with a monotonic
-    // `ts:{:020}.{:09}` value (see `writer::now_iso`); compare by
+    // `ts:{:020}.{:09}` value (see `writer::now_lex_token`); compare by
     // computing a lex-comparable cutoff string in the SAME format from
     // the current wall-clock minus the retention window. Using a
     // narrower padding (e.g. `{:013}.000`) makes every stamped row
@@ -431,7 +431,7 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
 
 /// Format a wall-clock millisecond value as a `ts:{:020}.{:09}` string
 /// that is lexically comparable against the `content.created_at` rows
-/// stamped by `relayburn_sdk::ledger::writer::now_iso`. Both the seconds
+/// stamped by `relayburn_sdk::ledger::writer::now_lex_token`. Both the seconds
 /// (20 chars, zero-padded) and the nanosecond fraction (9 chars,
 /// zero-padded) widths must match exactly — any narrower padding flips
 /// the lexical ordering and breaks the `created_at < cutoff` filter.
@@ -500,7 +500,7 @@ fn report_anyhow(err: &anyhow::Error, globals: &GlobalArgs) -> i32 {
 mod tests {
     use super::{format_cutoff_ts, rel_to_home};
 
-    /// Mirror of `relayburn_sdk::ledger::writer::now_iso`'s format string.
+    /// Mirror of `relayburn_sdk::ledger::writer::now_lex_token`'s format string.
     /// Re-deriving it locally guards against the writer's format drifting
     /// without the cutoff helper following.
     fn writer_style_ts(secs: u64, nanos_part: u64) -> String {

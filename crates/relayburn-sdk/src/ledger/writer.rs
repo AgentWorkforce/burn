@@ -23,15 +23,19 @@ use crate::ledger::fingerprint::{
 use crate::ledger::paths::is_valid_session_id;
 use crate::ledger::stamp::Stamp;
 
-fn now_iso() -> String {
+/// Sortable monotonic application-clock token used to stamp `written_at`
+/// and content `created_at`. Format is `ts:{secs:020}.{nanos:09}` — NOT
+/// ISO-8601. Ordering (lex == chronological) is the only contract; we
+/// don't pay for a calendar-formatting dep just for stamps. The widths
+/// matter — anything narrower flips the lex sort. See `format_cutoff_ts`
+/// in `relayburn-cli/src/commands/state.rs` for the matching cutoff
+/// helper.
+fn now_lex_token() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    // Application-clock string for `written_at`. We don't need calendar
-    // formatting here — ordering is the only contract — and rolling our
-    // own ISO formatter avoids a chrono / time dep just for stamps.
     let secs = nanos / 1_000_000_000;
     let nanos_part = nanos % 1_000_000_000;
     format!("ts:{:020}.{:09}", secs, nanos_part)
@@ -220,7 +224,7 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
     let synthesized = synthesize_relationship(stamp);
 
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let written_at = now_iso();
+    let written_at = now_lex_token();
     {
         tx.prepare(
             "INSERT INTO stamps (source, session_id, ts, selector_json, enrichment_json, written_at)
@@ -273,7 +277,7 @@ pub(crate) fn append_content(
                  (source, session_id, message_id, content_hash, body, byte_length, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )?;
-        let now = now_iso();
+        let now = now_lex_token();
         for r in records {
             if !is_valid_session_id(&r.session_id) {
                 return Err(LedgerError::InvalidSessionId(r.session_id.clone()));
@@ -329,6 +333,6 @@ pub(crate) fn synthesize_relationship(stamp: &Stamp) -> Option<SessionRelationsh
 }
 
 pub(crate) fn debug_now() -> String {
-    now_iso()
+    now_lex_token()
 }
 
