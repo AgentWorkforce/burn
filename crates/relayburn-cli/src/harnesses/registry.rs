@@ -54,7 +54,7 @@ use std::sync::LazyLock;
 
 use phf::phf_map;
 
-use super::{codex, HarnessAdapter};
+use super::{codex, opencode, HarnessAdapter};
 
 /// Compile-time perfect-hash map from harness name to a `&'static dyn
 /// HarnessAdapter`. Holds eager / unit-struct adapters whose value is a
@@ -92,6 +92,7 @@ static RUNTIME_ADAPTERS: LazyLock<HashMap<&'static str, &'static dyn HarnessAdap
     LazyLock::new(|| {
         let mut m = HashMap::new();
         m.insert("codex", codex::adapter()); // #248-e (Wave 2 D6)
+        m.insert("opencode", opencode::adapter()); // #248-f (Wave 2 D7)
         m
     });
 
@@ -111,8 +112,8 @@ static RUNTIME_ADAPTERS: LazyLock<HashMap<&'static str, &'static dyn HarnessAdap
 /// this module's `tests` block pins the resulting order.
 static RUNTIME_ADAPTER_NAMES: &[&str] = &[
     // Wave 2 PRs populate these slots in lockstep with RUNTIME_ADAPTERS:
-    "codex", // #248-e (Wave 2 D6)
-             // "opencode",  // #248-f (Wave 2 D7)
+    "codex",    // #248-e (Wave 2 D6)
+    "opencode", // #248-f (Wave 2 D7)
 ];
 
 /// Look up an adapter by name. Returns `None` for unknown names; the
@@ -245,8 +246,8 @@ mod tests {
             // appear in EAGER_ADAPTERS / RUNTIME_ADAPTER_NAMES:
             //
             // "claude",    // #248-d (eager)
-            "codex", // #248-e (runtime)
-                     // "opencode",  // #248-f (runtime)
+            "codex",    // #248-e (runtime)
+            "opencode", // #248-f (runtime)
         ];
 
         let names = list_harness_names();
