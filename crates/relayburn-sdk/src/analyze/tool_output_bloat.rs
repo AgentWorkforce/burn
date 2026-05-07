@@ -83,21 +83,7 @@ fn fmt_usd(n: f64) -> String {
     format!("${:.4}", n)
 }
 
-/// Format an integer with thousands separators, matching the JS
-/// `Number.prototype.toLocaleString()` output for plain en-US locale.
-fn format_with_commas(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let mut out = String::with_capacity(len + len / 3);
-    for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(b as char);
-    }
-    out
-}
+use super::util::format_with_commas;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

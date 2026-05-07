@@ -799,21 +799,7 @@ fn basename_of(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// `Number.prototype.toLocaleString()`-style thousands separator for
-/// `sizeTokens`. Mirrors the helper in `findings.rs`.
-fn format_with_commas(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let mut result = String::with_capacity(len + len / 3);
-    for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(b as char);
-    }
-    result
-}
+use super::util::format_with_commas;
 
 pub fn ghost_surface_to_finding(
     ghost: &GhostSurfaceFinding,

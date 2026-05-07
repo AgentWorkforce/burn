@@ -367,14 +367,3 @@ pub(crate) fn raw_record_jsons(conn: &Connection, table: &str) -> Result<Vec<Str
     Ok(rows)
 }
 
-#[allow(dead_code)]
-pub(crate) fn lookup_content_fingerprint(conn: &Connection, fingerprint: &str) -> Result<bool> {
-    let exists: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM turns WHERE content_fingerprint = ? LIMIT 1",
-            params![fingerprint],
-            |r| r.get(0),
-        )
-        .ok();
-    Ok(exists.is_some())
-}

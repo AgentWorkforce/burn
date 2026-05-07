@@ -345,7 +345,6 @@ pub(crate) fn synthesize_relationship(stamp: &Stamp) -> Option<SessionRelationsh
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn debug_now() -> String {
     now_iso()
 }

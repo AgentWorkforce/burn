@@ -114,7 +114,7 @@ fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
 /// callbacks, etc.) needs to survive across ticks.
 fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
     let interval_ms = match args.interval {
-        Some(n) if n == 0 => {
+        Some(0) => {
             eprintln!("burn: ingest --interval must be a positive integer in milliseconds");
             return EXIT_FLAG_MISUSE;
         }
@@ -277,7 +277,7 @@ fn open_handle(globals: &GlobalArgs) -> anyhow::Result<LedgerHandle> {
         Some(h) => LedgerOpenOptions::with_home(h),
         None => LedgerOpenOptions::default(),
     };
-    Ok(Ledger::open(opts)?)
+    Ledger::open(opts)
 }
 
 /// Format an `IngestReport` as the canonical TS log line. Kept as a
