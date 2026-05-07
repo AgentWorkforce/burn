@@ -2,10 +2,10 @@
 // Platform-resolving spawner for the `burn` Rust binary. Mirrors the
 // `@relayburn/sdk` napi-rs dispatcher pattern (see
 // `packages/sdk-node/src/binding.cjs`): the umbrella `relayburn` package
-// declares the per-platform packages as `optionalDependencies`, npm
-// installs the one matching `os` + `cpu` filters, and this script
-// `require.resolve`s the prebuilt `burn` binary out of it and spawns it
-// with the user's argv.
+// declares the per-platform packages plus the generic `@relayburn/cli`
+// fallback as `optionalDependencies`, npm installs the matching native
+// package when available, and this script `require.resolve`s the native
+// `burn` binary first, then falls back to the TS CLI when needed.
 //
 // The actual binaries live in `packages/relayburn/npm/<platform>/bin/burn`
 // and are dropped there by the cli-build CI matrix at publish time. They
@@ -22,7 +22,7 @@ const require = createRequire(import.meta.url);
 // Map (process.platform, process.arch) → platform-package short string.
 // Linux glibc-vs-musl detection follows the same `process.report` probe
 // the napi-rs loader uses; we only ship glibc artifacts today, so a musl
-// host falls through to the unsupported-platform error below.
+// host falls through to the generic CLI fallback below.
 function detectShort() {
   const { platform, arch } = process;
 
@@ -56,34 +56,65 @@ function binSuffix() {
 }
 
 const short = detectShort();
-if (!short) {
-  process.stderr.write(
-    `relayburn: unsupported platform ${process.platform}-${process.arch}.\n` +
-      `Supported: darwin-arm64, darwin-x64, linux-arm64-gnu (glibc), linux-x64-gnu (glibc).\n` +
-      `Track Windows support at https://github.com/AgentWorkforce/burn/issues/359.\n`,
-  );
-  process.exit(1);
+const fallbackSpecifier = '@relayburn/cli/dist/cli.js';
+const passthroughArgs = process.argv.slice(2);
+
+function formatError(err) {
+  return err && err.message ? err.message : String(err);
 }
 
-const pkg = `@relayburn/cli-${short}`;
-const binSpecifier = `${pkg}/bin/burn${binSuffix()}`;
+function writeResolveFailure(prebuiltError, fallbackError) {
+  if (!short) {
+    process.stderr.write(
+      `relayburn: unsupported prebuilt platform ${process.platform}-${process.arch}.\n` +
+        `Supported prebuilt packages: darwin-arm64, darwin-x64, linux-arm64-gnu (glibc), linux-x64-gnu (glibc).\n` +
+        `Track native Windows support at https://github.com/AgentWorkforce/burn/issues/359.\n` +
+        `Tried generic TypeScript CLI fallback \`${fallbackSpecifier}\`, but it was not installed.\n` +
+        `Reinstall \`relayburn\` with optional dependencies enabled or install \`@relayburn/cli\`.\n` +
+        `\nFallback resolution error: ${formatError(fallbackError)}\n`,
+    );
+    return;
+  }
 
-let binPath;
-try {
-  binPath = require.resolve(binSpecifier);
-} catch (err) {
+  const pkg = `@relayburn/cli-${short}`;
   process.stderr.write(
     `relayburn: failed to resolve prebuilt \`burn\` binary for ${short}.\n` +
       `Expected the optional dependency \`${pkg}\` to be installed; it ships the binary\n` +
       `at \`bin/burn${binSuffix()}\`. This usually means \`npm install\` skipped the optional\n` +
       `dependency (e.g. \`--no-optional\`, a lockfile pinned without it, or an unsupported\n` +
-      `platform filter). Reinstall \`relayburn\` without \`--no-optional\` and try again.\n` +
-      `\nUnderlying error: ${err && err.message ? err.message : err}\n`,
+      `platform filter).\n` +
+      `Tried generic TypeScript CLI fallback \`${fallbackSpecifier}\`, but it also failed.\n` +
+      `Reinstall \`relayburn\` without \`--no-optional\` and try again.\n` +
+      `\nPrebuilt resolution error: ${formatError(prebuiltError)}\n` +
+      `Fallback resolution error: ${formatError(fallbackError)}\n`,
   );
-  process.exit(1);
 }
 
-const child = spawnSync(binPath, process.argv.slice(2), {
+let command = null;
+let childArgs = passthroughArgs;
+let prebuiltError = null;
+
+if (short) {
+  const pkg = `@relayburn/cli-${short}`;
+  const binSpecifier = `${pkg}/bin/burn${binSuffix()}`;
+  try {
+    command = require.resolve(binSpecifier);
+  } catch (err) {
+    prebuiltError = err;
+  }
+}
+
+if (!command) {
+  try {
+    command = process.execPath;
+    childArgs = [require.resolve(fallbackSpecifier), ...passthroughArgs];
+  } catch (fallbackError) {
+    writeResolveFailure(prebuiltError, fallbackError);
+    process.exit(1);
+  }
+}
+
+const child = spawnSync(command, childArgs, {
   stdio: 'inherit',
   windowsHide: false,
 });

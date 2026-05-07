@@ -221,6 +221,42 @@ jobs:
           done
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
 
+          # `relayburn` points at prebuilt platform packages with exact
+          # optionalDependency versions. Keep those package manifests and
+          # the generic CLI fallback in lockstep with the umbrella version
+          # that npm version just computed.
+          node --input-type=module <<'SYNCEOF'
+          import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+
+          const formatJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
+          const relayburnPath = 'packages/relayburn/package.json';
+          const relayburn = JSON.parse(readFileSync(relayburnPath, 'utf8'));
+          const version = relayburn.version;
+          const platformRoot = 'packages/relayburn/npm';
+
+          const platformPackages = readdirSync(platformRoot, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => {
+              const path = join(platformRoot, entry.name, 'package.json');
+              if (!existsSync(path)) return null;
+              const json = JSON.parse(readFileSync(path, 'utf8'));
+              json.version = version;
+              writeFileSync(path, formatJson(json));
+              return json.name;
+            })
+            .filter(Boolean)
+            .sort();
+
+          relayburn.optionalDependencies = {
+            '@relayburn/cli': version,
+            ...Object.fromEntries(platformPackages.map((name) => [name, version])),
+          };
+          writeFileSync(relayburnPath, formatJson(relayburn));
+
+          console.log(`relayburn optional dependencies and ${platformPackages.length} platform package(s) synced to ${version}.`);
+          SYNCEOF
+
           # Lockstep the Rust workspace to the npm version. Any package's
           # post-bump version works since they're all equal after the bump.
           # The cli/sdk-node path-deps on relayburn-sdk pin MAJOR.MINOR
@@ -564,6 +600,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packages/*/package.json packages/*/CHANGELOG.md CHANGELOG.md \
+                  packages/relayburn/npm/*/package.json \
                   Cargo.toml Cargo.lock \
                   crates/relayburn-cli/Cargo.toml crates/relayburn-sdk-node/Cargo.toml
           if git diff --cached --quiet; then

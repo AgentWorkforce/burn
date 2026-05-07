@@ -151,8 +151,24 @@ jobs:
         # host so the runner's interpreter cannot execute the binary.
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: |
+          set -euo pipefail
           packages/relayburn/npm/${{ matrix.short }}/bin/burn --help
           packages/relayburn/npm/${{ matrix.short }}/bin/burn --version
+
+          smoke_dir="$(mktemp -d)"
+          umbrella_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir" "$umbrella_dir"' EXIT
+          npm install --prefix "$smoke_dir" --no-save --omit=optional \
+            --ignore-scripts --no-audit --no-fund \
+            ./packages/relayburn/npm/${{ matrix.short }}
+          "$smoke_dir/node_modules/.bin/burn" --help
+          "$smoke_dir/node_modules/.bin/burn" --version
+
+          npm install --prefix "$umbrella_dir" --no-save --omit=optional \
+            --ignore-scripts --no-audit --no-fund \
+            ./packages/relayburn
+          NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --help
+          NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --version
 
   publish:
     # Stub. Real publish wiring lands as a follow-up that integrates with

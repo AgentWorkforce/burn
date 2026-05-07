@@ -12,7 +12,8 @@ packages:
   # Exclude `packages/relayburn` from the workspace for the same shape of
   # reason as `sdk-node` above: it declares the per-platform Rust binary
   # packages (`@relayburn/cli-darwin-arm64`, `@relayburn/cli-linux-x64-gnu`,
-  # …) as `optionalDependencies`, and those don't exist on npm until the
+  # …) plus the generic `@relayburn/cli` fallback as `optionalDependencies`,
+  # and the platform packages don't exist on npm until the
   # cutover publish workflow ships them. With the package in the workspace,
   # `pnpm install --frozen-lockfile` in CI rejects the lockfile because the
   # optional specifiers in `package.json` aren't represented (pnpm 10 drops
