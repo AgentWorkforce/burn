@@ -831,7 +831,15 @@ jobs:
           set -euo pipefail
           for short in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu; do
             # CLI: drop `burn` at packages/relayburn/npm/<short>/bin/burn.
-            cli_src="/tmp/cli-artifacts/relayburn-cli-${short}/burn"
+            #
+            # `upload-artifact@v4` preserves the full directory hierarchy for
+            # single-file uploads (cli-build.yml uploads
+            # `packages/relayburn/npm/<short>/bin/burn` as the `path` input,
+            # so the artifact retains that nested structure on download).
+            # The SDK leg uses a glob (`*.node`) which strips the prefix up
+            # to the first wildcard, so its `find` lookup at line ~860 stays
+            # generic.
+            cli_src="/tmp/cli-artifacts/relayburn-cli-${short}/packages/relayburn/npm/${short}/bin/burn"
             cli_dst_dir="packages/relayburn/npm/${short}/bin"
             if [ ! -f "$cli_src" ]; then
               echo "::error title=Missing CLI artifact::expected $cli_src" >&2
