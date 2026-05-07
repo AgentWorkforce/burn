@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-cli` (Rust): wire opencode `HarnessAdapter` via `pending_stamp::adapter_static` factory; registered in `RUNTIME_ADAPTERS`. (#248 D7)
 - `relayburn-cli` (Rust): wire `burn run <harness>` driver + claude adapter (eager unit-struct in `EAGER_ADAPTERS`); `afterExit` ingest folds into `[burn] claude ingest: ...` summary line. (#248 D5)
 - `relayburn-cli` (Rust): wire `burn ingest` (no-flag scan, `--watch` poll loop, `--hook claude --quiet`) and `burn mcp-server` stdio subcommand exposing `burn__sessionCost`; closes #210. (#248 D8)
 - `relayburn-cli` (Rust): wire codex `HarnessAdapter` via `pending_stamp::adapter_static` factory; registered in `RUNTIME_ADAPTERS`. (#248 D6)
