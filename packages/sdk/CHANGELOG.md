@@ -4,6 +4,10 @@ All notable changes to `@relayburn/sdk`.
 
 ## [Unreleased]
 
+### Deprecation
+
+- `@relayburn/sdk@1.x` is now in maintenance-only mode. New query-surface work lands in `@relayburn/sdk@2.x` (napi-rs binding over the Rust `relayburn-sdk` crate). The 1.x type surface is frozen; see [#249](https://github.com/AgentWorkforce/burn/issues/249).
+
 ## [1.10.0] - 2026-05-03
 
 ### Breaking Changes

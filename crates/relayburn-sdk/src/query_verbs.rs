@@ -21,16 +21,16 @@ use crate::analyze::{
     DetectToolCallPatternsOptions, DetectToolOutputBloatOptions, FidelitySummary, FileAggregation,
     GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings,
     MarkdownSection, OverheadFile, OverheadFileKind, ParsedOverheadFile, PricingTable,
-    ProviderFilter, SessionClaudeMdCost, SubagentAggregation, WasteFinding, aggregate_by_bash,
-    aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent, attribute_hotspots,
-    attribute_overhead, build_compare_table, build_ghost_surface_inputs,
-    build_trim_recommendations, cost_for_turn, detect_ghost_surface, detect_patterns,
-    detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
+    ProviderFilter, ReplacementSavingsSummary, SessionClaudeMdCost, SubagentAggregation,
+    WasteFinding, aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file,
+    aggregate_by_subagent, attribute_hotspots, attribute_overhead, build_compare_table,
+    build_ghost_surface_inputs, build_trim_recommendations, cost_for_turn, detect_ghost_surface,
+    detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
     findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity, load_claude_settings,
     load_overhead_file, load_pricing, project_claude_settings_path,
     render_unified_diff_for_recommendation, sum_costs, summarize_fidelity,
-    summarize_fidelity_from_iter, tool_call_pattern_to_finding, tool_output_bloat_to_finding,
-    user_claude_settings_path,
+    summarize_fidelity_from_iter, summarize_replacement_savings, tool_call_pattern_to_finding,
+    tool_output_bloat_to_finding, user_claude_settings_path,
 };
 use crate::ledger::Query;
 use crate::reader::{
@@ -237,6 +237,8 @@ pub struct Summary {
     pub turn_count: u64,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_savings: Option<ReplacementSavingsSummary>,
 }
 
 impl LedgerHandle {
@@ -307,6 +309,9 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
         }
     }
 
+    let savings = summarize_replacement_savings(turns, None);
+    let replacement_savings = if savings.calls > 0 { Some(savings) } else { None };
+
     Summary {
         total_tokens,
         total_cost,
@@ -319,6 +324,7 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
             .into_iter()
             .map(|k| by_model.remove(&k).unwrap())
             .collect(),
+        replacement_savings,
     }
 }
 
@@ -2420,5 +2426,84 @@ mod tests {
         if let Some(v) = prev_ttl {
             std::env::set_var("RELAYBURN_CONTENT_TTL_DAYS", v);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_summary — replacement_savings field
+    // -----------------------------------------------------------------------
+
+    fn make_turn_with_calls(calls: Vec<ToolCall>) -> TurnRecord {
+        TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "s".to_string(),
+            session_path: None,
+            message_id: "m".to_string(),
+            turn_index: 0,
+            ts: "2026-04-20T00:00:00.000Z".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            project: None,
+            project_key: None,
+            usage: Usage {
+                input: 100,
+                output: 50,
+                reasoning: 0,
+                cache_read: 0,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: calls,
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        }
+    }
+
+    #[test]
+    fn compute_summary_replacement_savings_some_when_replacement_tool_present() {
+        let tc = ToolCall {
+            id: "tc-1".into(),
+            name: "relaywash__Search".into(),
+            target: None,
+            args_hash: "h".into(),
+            is_error: None,
+            edit_pre_hash: None,
+            edit_post_hash: None,
+            skill_name: None,
+            replaced_tools: Some(vec!["Glob".into(), "Grep".into(), "Read".into()]),
+            collapsed_calls: Some(9),
+        };
+        let turns = vec![make_turn_with_calls(vec![tc])];
+        let pricing = load_pricing(None);
+        let result = compute_summary(&turns, &pricing);
+        let savings = result.replacement_savings.expect("should have replacement_savings");
+        assert_eq!(savings.calls, 1);
+        assert_eq!(savings.collapsed_calls, 9);
+        assert!(!savings.by_tool.is_empty());
+        assert!(savings.by_tool.contains_key("relaywash__Search"));
+    }
+
+    #[test]
+    fn compute_summary_replacement_savings_none_when_no_replacement_tools() {
+        let tc = ToolCall {
+            id: "tc-1".into(),
+            name: "Bash".into(),
+            target: None,
+            args_hash: "h".into(),
+            is_error: None,
+            edit_pre_hash: None,
+            edit_post_hash: None,
+            skill_name: None,
+            replaced_tools: None,
+            collapsed_calls: None,
+        };
+        let turns = vec![make_turn_with_calls(vec![tc])];
+        let pricing = load_pricing(None);
+        let result = compute_summary(&turns, &pricing);
+        assert!(result.replacement_savings.is_none());
     }
 }

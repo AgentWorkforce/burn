@@ -400,12 +400,49 @@ pub struct SummaryModelRow {
 }
 
 #[napi(object)]
+pub struct ReplacementSavingsToolRow {
+    pub tool: String,
+    pub calls: BigInt,
+    pub collapsed_calls: BigInt,
+    pub estimated_tokens_saved: BigInt,
+}
+
+#[napi(object)]
+pub struct ReplacementSavingsSummary {
+    pub calls: BigInt,
+    pub collapsed_calls: BigInt,
+    pub estimated_tokens_saved: BigInt,
+    pub by_tool: Vec<ReplacementSavingsToolRow>,
+}
+
+impl From<sdk::ReplacementSavingsSummary> for ReplacementSavingsSummary {
+    fn from(s: sdk::ReplacementSavingsSummary) -> Self {
+        ReplacementSavingsSummary {
+            calls: u64_to_bigint(s.calls),
+            collapsed_calls: u64_to_bigint(s.collapsed_calls),
+            estimated_tokens_saved: u64_to_bigint(s.estimated_tokens_saved),
+            by_tool: s
+                .by_tool
+                .into_iter()
+                .map(|(tool, agg)| ReplacementSavingsToolRow {
+                    tool,
+                    calls: u64_to_bigint(agg.calls),
+                    collapsed_calls: u64_to_bigint(agg.collapsed_calls),
+                    estimated_tokens_saved: u64_to_bigint(agg.estimated_tokens_saved),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[napi(object)]
 pub struct Summary {
     pub total_tokens: BigInt,
     pub total_cost: f64,
     pub turn_count: BigInt,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
+    pub replacement_savings: Option<ReplacementSavingsSummary>,
 }
 
 impl From<sdk::Summary> for Summary {
@@ -433,6 +470,7 @@ impl From<sdk::Summary> for Summary {
                     cost: r.cost,
                 })
                 .collect(),
+            replacement_savings: s.replacement_savings.map(ReplacementSavingsSummary::from),
         }
     }
 }
