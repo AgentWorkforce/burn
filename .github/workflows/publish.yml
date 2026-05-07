@@ -81,6 +81,19 @@ jobs:
       - name: Run tests
         run: pnpm run test
 
+      # Rust port build + test gates the whole publish job. If the Rust
+      # tree is red at this commit, abort before npm ships anything so the
+      # release tag points at a commit where both trees pass.
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+
+      - name: Cargo build + test
+        run: |
+          cargo build --workspace --all-targets
+          cargo test --workspace
+
       - name: Resolve target packages
         id: targets
         run: |
@@ -205,6 +218,23 @@ jobs:
             popd > /dev/null
           done
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
+
+          # Lockstep the Rust workspace to the npm version. Any package's
+          # post-bump version works since they're all equal after the bump.
+          # The cli/sdk-node path-deps on relayburn-sdk pin MAJOR.MINOR
+          # (caret semantics) so the constraint only needs rewriting on
+          # minor/major bumps; patch bumps no-op the sed.
+          RUST_VER=$(node -p "require('./packages/relayburn/package.json').version")
+          RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}')
+          echo "Rust workspace lockstep: $RUST_VER (minor pin: $RUST_MINOR)"
+
+          sed -i -E "s/^version = \"[^\"]+\"$/version = \"$RUST_VER\"/" Cargo.toml
+          for crate in relayburn-cli relayburn-sdk-node; do
+            sed -i -E "s|(relayburn-sdk = \\{ path = \"\\.\\./relayburn-sdk\", version = \")[^\"]+(\" \\})|\\1$RUST_MINOR\\2|" "crates/$crate/Cargo.toml"
+          done
+
+          # Refresh Cargo.lock to reflect the new workspace version.
+          cargo update --workspace
 
       # Belt-and-suspenders alongside the parity check above: even if the
       # local→npm baseline is in sync, the computed bump might collide with
@@ -531,7 +561,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/*/package.json packages/*/CHANGELOG.md CHANGELOG.md
+          git add packages/*/package.json packages/*/CHANGELOG.md CHANGELOG.md \
+                  Cargo.toml Cargo.lock \
+                  crates/relayburn-cli/Cargo.toml crates/relayburn-sdk-node/Cargo.toml
           if git diff --cached --quiet; then
             echo "No version changes to commit."
           else
@@ -543,6 +575,71 @@ jobs:
               MSG+=" $NPM_NAME@$version"
             done
             git commit -m "$MSG"
+          fi
+
+      # crates.io OIDC trusted publishing. The action exchanges this run's
+      # GitHub OIDC identity for a short-lived CARGO_REGISTRY_TOKEN — same
+      # trust model as the npm publish below, no long-lived secret.
+      #
+      # Both crates must be pre-registered as trusted publishers on
+      # crates.io (Settings → Trusted Publishing → GitHub) for this to
+      # mint a token. First-publish bootstrap (registering the crate name
+      # and configuring trusted publishing) is a one-time manual step
+      # documented in the PR that introduced this flow.
+      #
+      # Cargo runs BEFORE npm so a crate-side failure aborts before npm
+      # ships any tarball, pushes any tag, or commits any version bump.
+      # Both publishes are gated on whether the version is already on
+      # crates.io, making `version: none` re-runs idempotent for partial
+      # failure recovery.
+      - name: Mint crates.io token via OIDC
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        id: cargo-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Cargo publish (sdk → cli)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.cargo-auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          DRY=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            DRY="--dry-run"
+          fi
+          VER=$(node -p "require('./packages/relayburn/package.json').version")
+
+          # Idempotent gate: skip if already on crates.io. Lets a partial
+          # failure (e.g. npm step below) be retried with `version: none`.
+          # `index.crates.io` shards by first-two/second-two of the crate
+          # name (`re/la/relayburn-sdk`).
+          sdk_published=$(curl -sf "https://index.crates.io/re/la/relayburn-sdk" 2>/dev/null \
+            | grep -c "\"vers\":\"$VER\"" || true)
+          if [ "$sdk_published" = "0" ]; then
+            cargo publish -p relayburn-sdk $DRY
+          else
+            echo "relayburn-sdk@$VER already on crates.io — skipping"
+          fi
+
+          # Wait for the new SDK version to land in the sparse index so
+          # the CLI's dep resolution sees it. Poll rather than fixed-sleep.
+          if [ -z "$DRY" ] && [ "$sdk_published" = "0" ]; then
+            for i in $(seq 1 30); do
+              if curl -sf "https://index.crates.io/re/la/relayburn-sdk" \
+                 | grep -q "\"vers\":\"$VER\""; then
+                echo "relayburn-sdk@$VER visible in index"
+                break
+              fi
+              echo "waiting for index... ($i/30)"
+              sleep 10
+            done
+          fi
+
+          cli_published=$(curl -sf "https://index.crates.io/re/la/relayburn-cli" 2>/dev/null \
+            | grep -c "\"vers\":\"$VER\"" || true)
+          if [ "$cli_published" = "0" ]; then
+            cargo publish -p relayburn-cli $DRY
+          else
+            echo "relayburn-cli@$VER already on crates.io — skipping"
           fi
 
       # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
@@ -602,13 +699,21 @@ jobs:
             version="${entry##*:}"
             NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
             git tag -a "$pkg-v$version" -m "$NPM_NAME@$version"
+            # Lockstep: the Rust crates ship at the same workspace
+            # version, so reuse $version. Disambiguate from the npm
+            # `sdk-v…` / `cli-v…` tags via the `relayburn-` prefix.
+            if [ "$pkg" = "sdk" ]; then
+              git tag -a "relayburn-sdk-v$version" -m "relayburn-sdk@$version"
+            elif [ "$pkg" = "cli" ]; then
+              git tag -a "relayburn-cli-v$version" -m "relayburn-cli@$version"
+            fi
           done
           git push origin HEAD --follow-tags
 
       - name: Summary
         run: |
           {
-            echo "### Published"
+            echo "### Published (npm)"
             echo ""
             for entry in ${{ steps.bump.outputs.versions }}; do
               pkg="${entry%%:*}"
@@ -616,6 +721,12 @@ jobs:
               NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
               echo "- \`$NPM_NAME@$version\`"
             done
+            echo ""
+            RUST_VER=$(node -p "require('./packages/relayburn/package.json').version")
+            echo "### Published (crates.io)"
+            echo ""
+            echo "- \`relayburn-sdk@$RUST_VER\`"
+            echo "- \`relayburn-cli@$RUST_VER\`"
             echo ""
             echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
             echo "- **dry run**: \`${{ github.event.inputs.dry_run }}\`"
