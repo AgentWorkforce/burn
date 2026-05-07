@@ -84,8 +84,6 @@ importers:
         specifier: ^1.0.22
         version: 1.0.22
 
-  packages/relayburn: {}
-
   packages/sdk:
     dependencies:
       '@relayburn/analyze':
