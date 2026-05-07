@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crate::ingest::{ingest_all, IngestOptions as RawIngestOptions, IngestReport, IngestRoots};
+use crate::ingest::{IngestOptions as RawIngestOptions, IngestReport, IngestRoots, ingest_all};
 
 use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
 
@@ -20,13 +20,14 @@ pub type WarnSink = Box<dyn Fn(&str) + Send + Sync>;
 /// SDK-level options for the [`ingest`] verb. Mirrors the TS shape but
 /// uses Rust-friendly types (`PathBuf`, boxed sinks).
 ///
-/// `ledger_home` is only consulted by the free [`ingest`] function (which
-/// opens its own [`LedgerHandle`]); the [`LedgerHandle::ingest`] method
-/// uses the already-open ledger and ignores it.
+/// `ledger_home` chooses the sidecar home for config and pending-stamp
+/// manifests. The free [`ingest`] function also uses it to open the ledger;
+/// the [`LedgerHandle::ingest`] method defaults it from the open ledger path
+/// when omitted.
 #[derive(Default)]
 pub struct IngestOptions {
-    /// Override for `$RELAYBURN_HOME`. Forwarded to [`LedgerOpenOptions::home`]
-    /// when the free function opens a ledger.
+    /// Override for `$RELAYBURN_HOME`-scoped sidecars. Forwarded to
+    /// [`LedgerOpenOptions::home`] when the free function opens a ledger.
     pub ledger_home: Option<PathBuf>,
     /// Per-harness session-store roots. Defaults to scanning the developer's
     /// home dir (`~/.claude/projects`, `~/.codex/sessions`,
@@ -46,6 +47,7 @@ impl IngestOptions {
         RawIngestOptions {
             on_progress: self.on_progress,
             on_warn: self.on_warn,
+            ledger_home: self.ledger_home,
             roots: self.roots,
         }
     }
@@ -54,7 +56,10 @@ impl IngestOptions {
 impl LedgerHandle {
     /// Run [`ingest_all`] against this ledger handle. Returns the merged
     /// per-harness report.
-    pub async fn ingest(&mut self, opts: IngestOptions) -> anyhow::Result<IngestReport> {
+    pub async fn ingest(&mut self, mut opts: IngestOptions) -> anyhow::Result<IngestReport> {
+        if opts.ledger_home.is_none() {
+            opts.ledger_home = self.inner.burn_path().parent().map(|p| p.to_path_buf());
+        }
         let raw = opts.into_raw();
         ingest_all(&mut self.inner, &raw).await
     }
@@ -81,11 +86,6 @@ mod tests {
         let claude = TempDir::new().expect("claude tmp");
         let codex = TempDir::new().expect("codex tmp");
         let opencode = TempDir::new().expect("opencode tmp");
-
-        // Point `RELAYBURN_HOME` at the temp dir so `cleanup_stale_pending_stamps`
-        // and `load_config` (called inside ingest_all) don't touch the real
-        // `~/.agentworkforce/burn`. Set before any ledger-open call.
-        std::env::set_var("RELAYBURN_HOME", home.path());
 
         let opts = IngestOptions {
             ledger_home: Some(home.path().to_path_buf()),

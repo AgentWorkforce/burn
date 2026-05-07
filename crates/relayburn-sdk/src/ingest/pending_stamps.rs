@@ -2,9 +2,10 @@
 //!
 //! Wrapper harnesses (`burn run codex`, `burn run opencode`) that spawn a
 //! child process before the session id is known drop a JSON manifest into
-//! `$RELAYBURN_HOME/pending-stamps/`. After the child exits, the next ingest
-//! pass tries to match each manifest against a freshly-discovered session and
-//! folds the manifest's enrichment into the ledger via `Ledger::append_stamp`.
+//! `$RELAYBURN_HOME/pending-stamps/` (or an explicitly supplied ledger home).
+//! After the child exits, the next ingest pass tries to match each manifest
+//! against a freshly-discovered session and folds the manifest's enrichment
+//! into the ledger via `Ledger::append_stamp`.
 //!
 //! ## Wire-format compatibility
 //!
@@ -17,8 +18,8 @@
 //! * The file is `JSON.stringify(record, null, 2) + '\n'` — pretty-printed
 //!   with two-space indent and a trailing newline, matching `node:fs`.
 //! * The filename pattern is `<harness>-<spawnerPid>-<spawnStartMs>-<uuid>.json`
-//!   in `$RELAYBURN_HOME/pending-stamps/`. In-flight writes go through a
-//!   `.tmp-<pid>-<uuid>` sibling and are atomically renamed.
+//!   in the selected `pending-stamps/` directory. In-flight writes go through
+//!   a `.tmp-<pid>-<uuid>` sibling and are atomically renamed.
 //! * Claimed manifests are renamed to `<file>.claimed-<pid>-<uuid>` before the
 //!   ledger append, then unlinked on success or restored on failure.
 
@@ -28,7 +29,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::ledger::{ledger_home, Enrichment, Ledger, Stamp, StampSelector};
+use crate::ledger::{Enrichment, Ledger, Stamp, StampSelector, ledger_home};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -102,6 +103,7 @@ pub struct PendingStampCleanupResult {
 #[derive(Debug, Default, Clone)]
 pub struct WriteOptions {
     pub harness: PendingStampHarness,
+    pub ledger_home: Option<PathBuf>,
     pub cwd: String,
     pub enrichment: Enrichment,
     pub session_dir_hint: Option<String>,
@@ -114,11 +116,27 @@ pub fn pending_stamps_dir() -> PathBuf {
     ledger_home().join("pending-stamps")
 }
 
+/// Pending-stamp directory under an explicit ledger home.
+pub fn pending_stamps_dir_at_home(home: &Path) -> PathBuf {
+    home.join("pending-stamps")
+}
+
+fn pending_stamps_dir_for(home: Option<&Path>) -> PathBuf {
+    match home {
+        Some(home) => pending_stamps_dir_at_home(home),
+        None => pending_stamps_dir(),
+    }
+}
+
 /// Write a manifest for a freshly-spawned harness child. Cleanup runs first
 /// so old stamps don't leak into the matcher.
 pub fn write_pending_stamp(opts: WriteOptions) -> std::io::Result<PendingStampWriteResult> {
     let spawn_start = opts.spawn_start_ts.unwrap_or_else(SystemTime::now);
-    cleanup_stale_pending_stamps_at(spawn_start, PENDING_STAMP_TTL_MS)?;
+    cleanup_stale_pending_stamps_in_at(
+        opts.ledger_home.as_deref(),
+        spawn_start,
+        PENDING_STAMP_TTL_MS,
+    )?;
 
     let stamp = PendingStamp {
         v: 1,
@@ -133,7 +151,7 @@ pub fn write_pending_stamp(opts: WriteOptions) -> std::io::Result<PendingStampWr
             .map(|p| canonicalize_lossy(Path::new(p))),
     };
 
-    let dir = pending_stamps_dir();
+    let dir = pending_stamps_dir_for(opts.ledger_home.as_deref());
     fs::create_dir_all(&dir)?;
     let spawn_ms = system_time_ms(spawn_start);
     let uuid = uuid_v4();
@@ -168,12 +186,27 @@ pub fn cleanup_stale_pending_stamps() -> std::io::Result<PendingStampCleanupResu
     cleanup_stale_pending_stamps_at(SystemTime::now(), PENDING_STAMP_TTL_MS)
 }
 
+pub fn cleanup_stale_pending_stamps_in(
+    ledger_home: Option<&Path>,
+) -> std::io::Result<PendingStampCleanupResult> {
+    cleanup_stale_pending_stamps_in_at(ledger_home, SystemTime::now(), PENDING_STAMP_TTL_MS)
+}
+
 pub fn cleanup_stale_pending_stamps_at(
     now: SystemTime,
     ttl_ms: u64,
 ) -> std::io::Result<PendingStampCleanupResult> {
+    cleanup_stale_pending_stamps_in_at(None, now, ttl_ms)
+}
+
+pub fn cleanup_stale_pending_stamps_in_at(
+    ledger_home: Option<&Path>,
+    now: SystemTime,
+    ttl_ms: u64,
+) -> std::io::Result<PendingStampCleanupResult> {
     let now_ms = system_time_ms(now);
-    let files = list_pending_stamp_files(false)?;
+    let dir = pending_stamps_dir_for(ledger_home);
+    let files = list_pending_stamp_files_in(&dir, false)?;
     let scanned = files.len();
     let mut deleted = 0usize;
 
@@ -221,12 +254,21 @@ pub fn resolve_pending_stamps_for_session(
     ledger: &mut Ledger,
     candidate: &PendingStampSessionCandidate,
 ) -> std::io::Result<PendingStampResolveResult> {
+    resolve_pending_stamps_for_session_in(ledger, candidate, None)
+}
+
+pub fn resolve_pending_stamps_for_session_in(
+    ledger: &mut Ledger,
+    candidate: &PendingStampSessionCandidate,
+    ledger_home: Option<&Path>,
+) -> std::io::Result<PendingStampResolveResult> {
     if candidate.session_id.is_empty() {
         return Ok(PendingStampResolveResult::default());
     }
 
-    cleanup_stale_pending_stamps()?;
-    let files = list_pending_stamp_files(true)?;
+    cleanup_stale_pending_stamps_in(ledger_home)?;
+    let dir = pending_stamps_dir_for(ledger_home);
+    let files = list_pending_stamp_files_in(&dir, true)?;
     let mut matches: Vec<(PathBuf, PendingStamp)> = Vec::new();
     for file in files {
         let raw = match fs::read_to_string(&file) {
@@ -332,9 +374,8 @@ fn claim_pending_stamp(file: &Path) -> std::io::Result<Option<PathBuf>> {
     }
 }
 
-fn list_pending_stamp_files(active_only: bool) -> std::io::Result<Vec<PathBuf>> {
-    let dir = pending_stamps_dir();
-    let entries = match fs::read_dir(&dir) {
+fn list_pending_stamp_files_in(dir: &Path, active_only: bool) -> std::io::Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(dir) {
         Ok(it) => it,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(err) => return Err(err),
@@ -558,8 +599,22 @@ fn uuid_v4() -> String {
     bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     )
 }
 
@@ -631,4 +686,54 @@ fn civil_from_unix_seconds(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let mm = ((sod % 3600) / 60) as u32;
     let ss = (sod % 60) as u32;
     (y, m, d, hh, mm, ss)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_and_resolve_pending_stamp_can_share_explicit_home() {
+        let home = tempfile::tempdir().expect("home");
+        let project = home.path().join("project");
+        fs::create_dir_all(&project).expect("project dir");
+
+        let mut enrichment = Enrichment::new();
+        enrichment.insert("workflowId".to_string(), "wf-explicit".to_string());
+        let spawn = SystemTime::now();
+
+        let written = write_pending_stamp(WriteOptions {
+            harness: PendingStampHarness::Codex,
+            ledger_home: Some(home.path().to_path_buf()),
+            cwd: project.to_string_lossy().into_owned(),
+            enrichment: enrichment.clone(),
+            session_dir_hint: None,
+            spawn_start_ts: Some(spawn),
+            spawner_pid: Some(42),
+        })
+        .expect("write pending stamp");
+
+        assert!(written.file.starts_with(home.path().join("pending-stamps")));
+
+        let mut ledger = Ledger::open(
+            &home.path().join("burn.sqlite"),
+            &home.path().join("content.sqlite"),
+        )
+        .expect("open ledger");
+        let candidate = PendingStampSessionCandidate {
+            harness: PendingStampHarness::Codex,
+            session_id: "sess-explicit".to_string(),
+            session_path: None,
+            session_mtime_ms: Some(system_time_ms(spawn)),
+            cwd: Some(project.to_string_lossy().into_owned()),
+        };
+
+        let resolved =
+            resolve_pending_stamps_for_session_in(&mut ledger, &candidate, Some(home.path()))
+                .expect("resolve pending stamp");
+
+        assert_eq!(resolved.applied, 1);
+        assert_eq!(resolved.enrichment, enrichment);
+        assert!(!written.file.exists());
+    }
 }

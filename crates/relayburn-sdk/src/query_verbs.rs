@@ -1,6 +1,6 @@
-//! Query verbs — `summary`, `session_cost`, `overhead`, `overhead_trim`,
-//! `hotspots`. Rust port of the corresponding exports from
-//! `packages/sdk/index.js`.
+//! Query verbs — `summary`, `session_cost`, `compare`, `overhead`,
+//! `overhead_trim`, `hotspots`, and `search`. Rust port of the corresponding
+//! exports from `packages/sdk/index.js`.
 //!
 //! Each verb appears as an `impl LedgerHandle` method (sync, returns
 //! `anyhow::Result`) plus a free-function form that opens its own ledger
@@ -8,7 +8,7 @@
 //! Option<PathBuf>` so callers don't have to mutate process env to point
 //! at a non-default ledger.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,22 +16,26 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::{
-    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent,
-    attribute_hotspots, attribute_overhead, build_trim_recommendations, cost_for_turn,
-    detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
-    findings_from_patterns, load_claude_settings, load_overhead_file, load_pricing,
-    project_claude_settings_path, render_unified_diff_for_recommendation, summarize_fidelity,
-    sum_costs, tool_call_pattern_to_finding, tool_output_bloat_to_finding,
-    user_claude_settings_path, AttributeOverheadInput, AttributionMethod, BashAggregation,
-    BashVerbAggregation, DetectPatternsOptions, DetectToolCallPatternsOptions,
-    DetectToolOutputBloatOptions, FidelitySummary, FileAggregation,
-    HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings, MarkdownSection,
-    OverheadFile, OverheadFileKind, ParsedOverheadFile, PricingTable, SessionClaudeMdCost,
-    SubagentAggregation, WasteFinding,
+    AttributeOverheadInput, AttributionMethod, BashAggregation, BashVerbAggregation,
+    CompareOptions as AnalyzeCompareOptions, CompareTable, DetectPatternsOptions,
+    DetectToolCallPatternsOptions, DetectToolOutputBloatOptions, FidelitySummary, FileAggregation,
+    GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings,
+    MarkdownSection, OverheadFile, OverheadFileKind, ParsedOverheadFile, PricingTable,
+    ProviderFilter, SessionClaudeMdCost, SubagentAggregation, WasteFinding, aggregate_by_bash,
+    aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent, attribute_hotspots,
+    attribute_overhead, build_compare_table, build_ghost_surface_inputs,
+    build_trim_recommendations, cost_for_turn, detect_ghost_surface, detect_patterns,
+    detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
+    findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity, load_claude_settings,
+    load_overhead_file, load_pricing, project_claude_settings_path,
+    render_unified_diff_for_recommendation, sum_costs, summarize_fidelity,
+    summarize_fidelity_from_iter, tool_call_pattern_to_finding, tool_output_bloat_to_finding,
+    user_claude_settings_path,
 };
 use crate::ledger::Query;
 use crate::reader::{
-    parse_bash_command, resolve_project, BashParse, SourceKind, TurnRecord, UserTurnRecord,
+    BashParse, FidelityClass, SourceKind, TurnRecord, UserTurnRecord, parse_bash_command,
+    resolve_project,
 };
 
 use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
@@ -70,9 +74,7 @@ pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
     // chrono-grade parser would be heavier than the gate needs — anything
     // beyond the date prefix the ledger compares lexically.
     if !looks_like_iso(raw) {
-        anyhow::bail!(
-            "invalid since: {raw} (expected ISO timestamp or relative range like 7d)"
-        );
+        anyhow::bail!("invalid since: {raw} (expected ISO timestamp or relative range like 7d)");
     }
     Ok(Some(raw.to_string()))
 }
@@ -143,11 +145,7 @@ fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {
 // Shared helpers — query construction + hotspots coverage gate
 // ---------------------------------------------------------------------------
 
-fn build_query(
-    session: Option<&str>,
-    project: Option<&str>,
-    since: Option<&str>,
-) -> Result<Query> {
+fn build_query(session: Option<&str>, project: Option<&str>, since: Option<&str>) -> Result<Query> {
     let mut q = Query::default();
     if let Some(s) = session {
         q.session_id = Some(s.to_string());
@@ -659,10 +657,7 @@ impl LedgerHandle {
     }
 
     pub fn overhead_trim(&self, opts: OverheadTrimOptions) -> Result<OverheadTrimResult> {
-        let since_label = opts
-            .since
-            .clone()
-            .unwrap_or_else(|| "all time".to_string());
+        let since_label = opts.since.clone().unwrap_or_else(|| "all time".to_string());
         let data = gather_overhead(
             self,
             opts.project.as_deref(),
@@ -838,9 +833,9 @@ pub struct HotspotsSessionTotal {
 pub struct HotspotsFidelityBlock {
     pub analyzed: u64,
     pub excluded: u64,
-    /// Aggregate fidelity summary for the matched-window turns. The analyze
-    /// `FidelitySummary` doesn't derive `Serialize`, so this trip through
-    /// `serde_json::Value` keeps the wire shape stable.
+    /// Aggregate fidelity summary for the matched-window turns. Stored as a
+    /// `serde_json::Value` because older hotspot result shapes already exposed
+    /// this JSON block directly.
     pub summary: serde_json::Value,
     pub refused: bool,
 }
@@ -855,7 +850,11 @@ pub enum HotspotsResult {
         rows: Vec<BashAggregation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refused: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "refusalReason")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "refusalReason"
+        )]
         refusal_reason: Option<String>,
     },
     #[serde(rename = "bash-verb")]
@@ -863,7 +862,11 @@ pub enum HotspotsResult {
         rows: Vec<BashVerbAggregation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refused: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "refusalReason")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "refusalReason"
+        )]
         refusal_reason: Option<String>,
     },
     #[serde(rename = "file")]
@@ -871,7 +874,11 @@ pub enum HotspotsResult {
         rows: Vec<FileAggregation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refused: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "refusalReason")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "refusalReason"
+        )]
         refusal_reason: Option<String>,
     },
     #[serde(rename = "subagent")]
@@ -879,7 +886,11 @@ pub enum HotspotsResult {
         rows: Vec<SubagentAggregation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refused: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "refusalReason")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "refusalReason"
+        )]
         refusal_reason: Option<String>,
     },
     #[serde(rename = "findings")]
@@ -1104,8 +1115,8 @@ fn refused_for_group(
             refused: Some(true),
             refusal_reason: Some(refusal),
         },
-        HotspotsGroupBy::Attribution => HotspotsResult::Attribution(Box::new(
-            HotspotsAttributionResult {
+        HotspotsGroupBy::Attribution => {
+            HotspotsResult::Attribution(Box::new(HotspotsAttributionResult {
                 turns_analyzed: 0,
                 grand_total: 0.0,
                 attributed_total: 0.0,
@@ -1124,8 +1135,8 @@ fn refused_for_group(
                 },
                 refused: Some(true),
                 refusal_reason: Some(refusal),
-            },
-        )),
+            }))
+        }
     }
 }
 
@@ -1198,9 +1209,14 @@ fn run_hotspots_findings(
         }
     }
 
-    // ghost-surface omitted: its TS sibling drives an async pipeline of
-    // filesystem mining + synthetic-prompt deduction that goes well beyond
-    // the ledger surface. Defer to a follow-up SDK PR.
+    if wanted_set.contains("ghost-surface") {
+        let inputs = build_ghost_surface_inputs(turns, pricing, None);
+        let ghosts = detect_ghost_surface(&inputs);
+        let options = GhostSurfaceFindingOptions::default();
+        for g in ghosts {
+            findings.push(ghost_surface_to_finding(&g, &options));
+        }
+    }
 
     if wanted_set.contains("tool-call-pattern") {
         let patterns = detect_tool_call_patterns(turns, &DetectToolCallPatternsOptions { pricing });
@@ -1252,6 +1268,281 @@ fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Value {
         "missingCoverage": serde_json::Value::Object(missing),
         "unknown": s.unknown,
     })
+}
+
+// ---------------------------------------------------------------------------
+// compare
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareOptions {
+    pub models: Vec<String>,
+    pub session: Option<String>,
+    pub project: Option<String>,
+    pub since: Option<String>,
+    pub workflow: Option<String>,
+    pub agent: Option<String>,
+    pub provider: Option<Vec<String>>,
+    pub min_sample: Option<u64>,
+    pub min_fidelity: Option<FidelityClass>,
+    pub ledger_home: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareExcludedBreakdown {
+    pub total: u64,
+    pub aggregate_only: u64,
+    pub cost_only: u64,
+    pub partial: u64,
+    pub usage_only: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareCellResult {
+    pub model: String,
+    pub category: String,
+    pub turns: u64,
+    pub edit_turns: u64,
+    pub one_shot_turns: u64,
+    pub priced_turns: u64,
+    pub total_cost: f64,
+    pub cost_per_turn: Option<f64>,
+    pub one_shot_rate: Option<f64>,
+    pub cache_hit_rate: Option<f64>,
+    pub median_retries: Option<f64>,
+    pub no_data: bool,
+    pub insufficient_sample: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareModelTotal {
+    pub turns: u64,
+    pub total_cost: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareFidelityBlock {
+    pub minimum: FidelityClass,
+    pub excluded: CompareExcludedBreakdown,
+    pub summary: FidelitySummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareResult {
+    pub analyzed_turns: u64,
+    pub min_sample: u64,
+    pub models: Vec<String>,
+    pub categories: Vec<String>,
+    pub totals: BTreeMap<String, CompareModelTotal>,
+    pub cells: Vec<CompareCellResult>,
+    pub fidelity: CompareFidelityBlock,
+}
+
+impl LedgerHandle {
+    pub fn compare(&self, opts: CompareOptions) -> Result<CompareResult> {
+        if opts.models.len() < 2 {
+            anyhow::bail!("compare: needs at least 2 models");
+        }
+
+        let min_fidelity = opts.min_fidelity.unwrap_or(FidelityClass::UsageOnly);
+        let mut q = build_query(
+            opts.session.as_deref(),
+            opts.project.as_deref(),
+            opts.since.as_deref(),
+        )?;
+        let mut enrichment = BTreeMap::new();
+        if let Some(workflow) = opts.workflow {
+            enrichment.insert("workflowId".to_string(), workflow);
+        }
+        if let Some(agent) = opts.agent {
+            enrichment.insert("agentId".to_string(), agent);
+        }
+        if !enrichment.is_empty() {
+            q.enrichment = Some(enrichment);
+        }
+
+        let mut turns = self.inner.query_turns(&q)?;
+        if let Some(filter) = normalize_provider_filter(opts.provider) {
+            turns.retain(|t| {
+                let provider = crate::analyze::provider_for(&t.turn).provider;
+                filter.contains(&provider.to_ascii_lowercase())
+            });
+        }
+        {
+            let requested_models: HashSet<&str> = opts.models.iter().map(String::as_str).collect();
+            turns.retain(|t| requested_models.contains(compare_model_id(&t.turn)));
+        }
+
+        let fidelity_summary =
+            summarize_fidelity_from_iter(turns.iter().map(|t| t.turn.fidelity.as_ref()));
+        if min_fidelity != FidelityClass::Partial {
+            turns.retain(|t| has_minimum_fidelity(t.turn.fidelity.as_ref(), min_fidelity));
+        }
+
+        let pricing = load_pricing(None);
+        let table = build_compare_table(
+            &turns,
+            &AnalyzeCompareOptions {
+                pricing: &pricing,
+                models: Some(opts.models),
+                min_sample: opts.min_sample,
+            },
+        );
+        Ok(shape_compare_result(
+            table,
+            turns.len() as u64,
+            min_fidelity,
+            fidelity_summary,
+        ))
+    }
+}
+
+pub fn compare(opts: CompareOptions) -> Result<CompareResult> {
+    let handle = open_with(opts.ledger_home.as_deref())?;
+    handle.compare(CompareOptions {
+        ledger_home: None,
+        ..opts
+    })
+}
+
+pub fn compute_compare_excluded(
+    summary: &FidelitySummary,
+    minimum: FidelityClass,
+) -> CompareExcludedBreakdown {
+    let mut out = CompareExcludedBreakdown {
+        total: 0,
+        aggregate_only: 0,
+        cost_only: 0,
+        partial: 0,
+        usage_only: 0,
+    };
+    if minimum == FidelityClass::Partial {
+        return out;
+    }
+
+    for class in [
+        FidelityClass::CostOnly,
+        FidelityClass::AggregateOnly,
+        FidelityClass::Partial,
+        FidelityClass::UsageOnly,
+        FidelityClass::Full,
+    ] {
+        if fidelity_rank(class) >= fidelity_rank(minimum) {
+            continue;
+        }
+        let n = *summary.by_class.get(&class).unwrap_or(&0);
+        if n == 0 {
+            continue;
+        }
+        out.total += n;
+        match class {
+            FidelityClass::AggregateOnly => out.aggregate_only += n,
+            FidelityClass::CostOnly => out.cost_only += n,
+            FidelityClass::Partial => out.partial += n,
+            FidelityClass::UsageOnly => out.usage_only += n,
+            FidelityClass::Full => {}
+        }
+    }
+    out
+}
+
+fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFilter> {
+    let filter: ProviderFilter = provider
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.trim().to_ascii_lowercase())
+        .filter(|p| !p.is_empty())
+        .collect();
+    (!filter.is_empty()).then_some(filter)
+}
+
+fn compare_model_id(turn: &TurnRecord) -> &str {
+    if turn.model.is_empty() {
+        "unknown"
+    } else {
+        &turn.model
+    }
+}
+
+fn shape_compare_result(
+    table: CompareTable,
+    analyzed_turns: u64,
+    minimum: FidelityClass,
+    summary: FidelitySummary,
+) -> CompareResult {
+    let mut totals = BTreeMap::new();
+    for (model, total) in &table.totals {
+        totals.insert(
+            model.clone(),
+            CompareModelTotal {
+                turns: total.turns,
+                total_cost: total.total_cost,
+            },
+        );
+    }
+
+    let mut cells = Vec::new();
+    for model in &table.models {
+        let Some(row) = table.cells.get(model) else {
+            continue;
+        };
+        for category in &table.categories {
+            let Some(cell) = row.get(category) else {
+                continue;
+            };
+            cells.push(CompareCellResult {
+                model: model.clone(),
+                category: category.clone(),
+                turns: cell.turns,
+                edit_turns: cell.edit_turns,
+                one_shot_turns: cell.one_shot_turns,
+                priced_turns: cell.priced_turns,
+                total_cost: round_digits(cell.total_cost, 6),
+                cost_per_turn: cell.cost_per_turn.map(|n| round_digits(n, 6)),
+                one_shot_rate: cell.one_shot_rate.map(|n| round_digits(n, 4)),
+                cache_hit_rate: cell.cache_hit_rate.map(|n| round_digits(n, 4)),
+                median_retries: cell.median_retries,
+                no_data: cell.no_data,
+                insufficient_sample: cell.insufficient_sample,
+            });
+        }
+    }
+
+    let excluded = compute_compare_excluded(&summary, minimum);
+    CompareResult {
+        analyzed_turns,
+        min_sample: table.min_sample,
+        models: table.models,
+        categories: table.categories,
+        totals,
+        cells,
+        fidelity: CompareFidelityBlock {
+            minimum,
+            excluded,
+            summary,
+        },
+    }
+}
+
+fn fidelity_rank(class: FidelityClass) -> u8 {
+    match class {
+        FidelityClass::CostOnly => 0,
+        FidelityClass::AggregateOnly => 1,
+        FidelityClass::Partial => 2,
+        FidelityClass::UsageOnly => 3,
+        FidelityClass::Full => 4,
+    }
+}
+
+fn round_digits(n: f64, digits: i32) -> f64 {
+    let scale = 10_f64.powi(digits);
+    (n * scale).round() / scale
 }
 
 // ---------------------------------------------------------------------------
@@ -1777,6 +2068,129 @@ mod tests {
             }
             other => panic!("expected findings, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn compare_requires_at_least_two_models() {
+        let (_dir, handle) = fixture_handle();
+        let err = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into()],
+                ..CompareOptions::default()
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("needs at least 2 models"));
+    }
+
+    #[test]
+    fn compare_returns_flat_cells_and_absent_models() {
+        let (_dir, handle) = fixture_handle();
+        let r = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+        assert_eq!(r.analyzed_turns, 2);
+        assert_eq!(r.min_sample, 5);
+        assert!(r.models.contains(&"claude-sonnet-4-6".to_string()));
+        assert!(r.models.contains(&"claude-haiku-4-5".to_string()));
+        assert!(
+            r.cells
+                .iter()
+                .any(|c| c.model == "claude-sonnet-4-6" && c.turns == 2)
+        );
+        assert_eq!(r.fidelity.minimum, FidelityClass::Partial);
+        assert_eq!(r.fidelity.excluded.total, 0);
+
+        let json = serde_json::to_value(&r).unwrap();
+        assert!(json["fidelity"]["summary"]["byClass"].is_object());
+        assert!(json["fidelity"]["summary"]["missingCoverage"].is_object());
+    }
+
+    #[test]
+    fn compare_metadata_counts_requested_models_only() {
+        let (_dir, mut handle) = fixture_handle();
+        let extra = TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "sess-b".into(),
+            session_path: None,
+            message_id: "m-extra".into(),
+            turn_index: 0,
+            ts: "2026-04-23T00:02:00.000Z".into(),
+            model: "claude-opus-4-5".into(),
+            project: Some("/tmp/proj".into()),
+            project_key: None,
+            usage: Usage {
+                input: 100,
+                output: 50,
+                reasoning: 0,
+                cache_read: 0,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        };
+        handle.raw_mut().append_turns(&[extra]).unwrap();
+
+        let r = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+
+        assert_eq!(r.analyzed_turns, 2);
+        assert_eq!(r.fidelity.summary.total, 2);
+        assert!(!r.models.contains(&"claude-opus-4-5".to_string()));
+        assert!(!r.totals.contains_key("claude-opus-4-5"));
+    }
+
+    #[test]
+    fn compare_filters_by_folded_workflow_enrichment() {
+        let (_dir, mut handle) = fixture_handle();
+        let mut enrichment = crate::Enrichment::new();
+        enrichment.insert("workflowId".into(), "wf-1".into());
+        let stamp = crate::Stamp::new(
+            "2026-04-22T00:00:00.000Z",
+            crate::StampSelector {
+                session_id: Some("sess-a".into()),
+                ..Default::default()
+            },
+            enrichment,
+        )
+        .unwrap();
+        handle.raw_mut().append_stamp(&stamp).unwrap();
+
+        let matched = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                workflow: Some("wf-1".into()),
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+        assert_eq!(matched.analyzed_turns, 2);
+
+        let missed = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                workflow: Some("wf-missing".into()),
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+        assert_eq!(missed.analyzed_turns, 0);
     }
 
     #[test]

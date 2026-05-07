@@ -22,10 +22,10 @@
 //!   serde_json and emit the result via the [`BigIntPromoting`] wrapper,
 //!   which walks the JSON tree and substitutes `BigInt` for any numeric
 //!   value sitting under one of the well-known u64 field names listed in
-//!   [`BIGINT_FIELDS`]. The lighter walker keeps the discriminated-union
-//!   shape of `HotspotsResult` intact (which is awkward to express as a
-//!   single typed napi object) and lets the export verbs surface every
-//!   nested u64 (`turnIndex`, `eventIndex`, `contentLength`,
+//!   [`BIGINT_FIELDS`]. The lighter walker keeps shapes like
+//!   `HotspotsResult` and `CompareResult` intact (both are awkward to
+//!   express as single typed napi objects) and lets the export verbs surface
+//!   every nested u64 (`turnIndex`, `eventIndex`, `contentLength`,
 //!   `tokensBeforeCompact`, `byteLen`, `approxTokens`, the six `usage`
 //!   fields, …) without per-record type plumbing — all while honoring
 //!   the contract.
@@ -189,8 +189,8 @@ fn maybe_path(s: Option<String>) -> Option<PathBuf> {
 // BigIntPromoting — JsonValue → JS value walker that emits BigInt for the
 // well-known u64 field names below.
 //
-// `overhead`, `overheadTrim`, and `hotspots` return shapes that are too
-// recursive (or, in `hotspots`'s case, a discriminated union) to mirror
+// `overhead`, `overheadTrim`, `hotspots`, and `compare` return shapes that
+// are too recursive (or, in `hotspots`'s case, a discriminated union) to mirror
 // cleanly as a single `#[napi(object)]` struct. We keep them on the
 // `serde_json::Value` boundary but wrap the result so the standard
 // number→JsNumber conversion in napi-rs's serde-json bridge gets
@@ -226,6 +226,19 @@ const BIGINT_FIELDS: &[&str] = &[
     "turnsAnalyzed",
     "analyzed",
     "excluded",
+    // compare
+    "analyzedTurns",
+    "minSample",
+    "turns",
+    "editTurns",
+    "oneShotTurns",
+    "pricedTurns",
+    "total",
+    "aggregateOnly",
+    "costOnly",
+    "partial",
+    "usageOnly",
+    "unknown",
     // export_ledger / export_stamps record bodies — every camelCased
     // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /
     // CompactionEvent / nested Usage and ToolCall payloads. These values
@@ -259,8 +272,8 @@ fn is_bigint_field(name: &str) -> bool {
 /// Wraps a `serde_json::Value` so that, when napi-rs converts it to a JS
 /// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
 /// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
-/// `hotspots`, `exportLedger`, and `exportStamps` verbs whose result
-/// shapes are documented in `packages/sdk/index.d.ts`.
+/// `hotspots`, `compare`, `exportLedger`, and `exportStamps` verbs whose
+/// result shapes are documented in `packages/sdk/index.d.ts`.
 pub struct BigIntPromoting(JsonValue);
 
 impl ToNapiValue for BigIntPromoting {
@@ -330,7 +343,9 @@ unsafe fn promote_value(
         // serde_json::Value conversion via the leaf wrappers.
         JsonValue::Bool(b) => bool::to_napi_value(env, b),
         JsonValue::String(s) => String::to_napi_value(env, s),
-        JsonValue::Null => napi::bindgen_prelude::Null::to_napi_value(env, napi::bindgen_prelude::Null),
+        JsonValue::Null => {
+            napi::bindgen_prelude::Null::to_napi_value(env, napi::bindgen_prelude::Null)
+        }
     }
 }
 
@@ -543,9 +558,8 @@ pub fn overhead(opts: Option<OverheadOptions>) -> Result<BigIntPromoting, BurnEr
         ledger_home: maybe_path(opts.ledger_home),
     };
     let result = sdk::overhead(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result).map_err(|e| {
-        NapiError::new(SDK_ERROR_CODE, format!("serialize overhead: {e}"))
-    })?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize overhead: {e}")))?;
     Ok(BigIntPromoting(value))
 }
 
@@ -564,7 +578,10 @@ pub struct OverheadTrimOptions {
 /// Trim recommendations for high-cost overhead-file sections. Powers
 /// `burn overhead trim`. Returns an `OverheadTrimResult`-shaped JSON
 /// object with the same `BigInt` substitutions as [`overhead`].
-#[napi(js_name = "overheadTrim", ts_return_type = "import('./index').OverheadTrimResult")]
+#[napi(
+    js_name = "overheadTrim",
+    ts_return_type = "import('./index').OverheadTrimResult"
+)]
 pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(OverheadTrimOptions {
         project: None,
@@ -587,9 +604,8 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
         include_diff: opts.include_diff,
     };
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result).map_err(|e| {
-        NapiError::new(SDK_ERROR_CODE, format!("serialize overhead_trim: {e}"))
-    })?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize overhead_trim: {e}")))?;
     Ok(BigIntPromoting(value))
 }
 
@@ -659,10 +675,79 @@ pub fn hotspots(opts: Option<HotspotsOptions>) -> Result<BigIntPromoting, BurnEr
         ledger_home: maybe_path(opts.ledger_home),
     };
     let result = sdk::hotspots(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result).map_err(|e| {
-        NapiError::new(SDK_ERROR_CODE, format!("serialize hotspots: {e}"))
-    })?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize hotspots: {e}")))?;
     Ok(BigIntPromoting(value))
+}
+
+// ---------------------------------------------------------------------------
+// compare — dynamic model totals + fidelity maps, serialized via serde_json.
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct CompareOptions {
+    /// Required: at least two model names to compare.
+    pub models: Vec<String>,
+    pub session: Option<String>,
+    pub project: Option<String>,
+    pub since: Option<String>,
+    pub workflow: Option<String>,
+    pub agent: Option<String>,
+    pub provider: Option<Vec<String>>,
+    pub min_sample: Option<BigInt>,
+    /// One of `full`, `usage-only`, `aggregate-only`, `cost-only`, `partial`.
+    pub min_fidelity: Option<String>,
+    pub ledger_home: Option<String>,
+}
+
+/// Per-(model, activity) comparison shape. Returns a `CompareResult` JSON
+/// object; u64 counters (`analyzedTurns`, `turns`, `pricedTurns`, fidelity
+/// counts, etc.) cross as `BigInt` per the file-header rule.
+#[napi(ts_return_type = "import('./index').CompareResult")]
+pub fn compare(opts: CompareOptions) -> Result<BigIntPromoting, BurnError> {
+    let min_sample = match opts.min_sample {
+        Some(b) => Some(bigint_to_u64(b)?),
+        None => None,
+    };
+    let raw = sdk::CompareOptions {
+        models: opts.models,
+        session: opts.session,
+        project: opts.project,
+        since: opts.since,
+        workflow: opts.workflow,
+        agent: opts.agent,
+        provider: opts.provider,
+        min_sample,
+        min_fidelity: parse_fidelity_class(opts.min_fidelity.as_deref())?,
+        ledger_home: maybe_path(opts.ledger_home),
+    };
+    let result = sdk::compare(raw).map_err(sdk_err)?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize compare: {e}")))?;
+    Ok(BigIntPromoting(value))
+}
+
+fn parse_fidelity_class(raw: Option<&str>) -> Result<Option<sdk::FidelityClass>, BurnError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let class = match raw {
+        "full" => sdk::FidelityClass::Full,
+        "usage-only" => sdk::FidelityClass::UsageOnly,
+        "aggregate-only" => sdk::FidelityClass::AggregateOnly,
+        "cost-only" => sdk::FidelityClass::CostOnly,
+        "partial" => sdk::FidelityClass::Partial,
+        other => {
+            return Err(NapiError::new(
+                INVALID_ARGUMENT_ERROR_CODE,
+                format!(
+                    "compare: invalid minFidelity: {other} \
+                     (expected one of full, usage-only, aggregate-only, cost-only, partial)"
+                ),
+            ));
+        }
+    };
+    Ok(Some(class))
 }
 
 // ---------------------------------------------------------------------------
@@ -946,6 +1031,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_fidelity_class_accepts_compare_wire_values() {
+        assert_eq!(
+            parse_fidelity_class(Some("usage-only")).unwrap(),
+            Some(sdk::FidelityClass::UsageOnly)
+        );
+        assert_eq!(parse_fidelity_class(None).unwrap(), None);
+        assert!(parse_fidelity_class(Some("usage_only")).is_err());
+    }
+
+    #[test]
     fn bigint_field_membership_covers_documented_keys() {
         // Every camelCased u64 field that crosses the boundary today
         // must be in BIGINT_FIELDS so the walker promotes it.
@@ -969,6 +1064,19 @@ mod tests {
             "turnsAnalyzed",
             "analyzed",
             "excluded",
+            // compare
+            "analyzedTurns",
+            "minSample",
+            "turns",
+            "editTurns",
+            "oneShotTurns",
+            "pricedTurns",
+            "total",
+            "aggregateOnly",
+            "costOnly",
+            "partial",
+            "usageOnly",
+            "unknown",
             // export_ledger / export_stamps record-body u64s (round-3 set)
             "turnIndex",
             "eventIndex",
@@ -1035,12 +1143,12 @@ mod tests {
         // exercised structurally — see `is_bigint_field` / the round-1
         // overhead+hotspots tests — so guarding the membership here is
         // load-bearing for the contract.
-        const ABOVE_2_POW_53: u64 = (1u64 << 53) + 1;
+        let above_2_pow_53: u64 = (1u64 << 53) + 1;
         // Sanity: this value is precisely the kind we'd lose to f64
         // rounding, so pinning it in the test doc keeps the failure
         // mode visible.
-        assert!(ABOVE_2_POW_53 > (1u64 << 53));
-        assert!(ABOVE_2_POW_53 as f64 as u64 != ABOVE_2_POW_53);
+        assert!(above_2_pow_53 > (1u64 << 53));
+        assert!(above_2_pow_53 as f64 as u64 != above_2_pow_53);
 
         // The exact field names from CodeRabbit's report.
         for key in [
@@ -1065,10 +1173,10 @@ mod tests {
             "v": 1,
             "kind": "turn",
             "record": {
-                "turnIndex": ABOVE_2_POW_53,
-                "eventIndex": ABOVE_2_POW_53,
-                "contentLength": ABOVE_2_POW_53,
-                "tokensBeforeCompact": ABOVE_2_POW_53,
+                "turnIndex": above_2_pow_53,
+                "eventIndex": above_2_pow_53,
+                "contentLength": above_2_pow_53,
+                "tokensBeforeCompact": above_2_pow_53,
             },
         });
         let wrapped = BigIntPromoting(JsonValue::Array(vec![record.clone()]));
@@ -1085,7 +1193,7 @@ mod tests {
                 "tokensBeforeCompact",
             ] {
                 let n = rec[k].as_u64().expect("u64 survived the JSON round-trip");
-                assert_eq!(n, ABOVE_2_POW_53, "{k} value mutated");
+                assert_eq!(n, above_2_pow_53, "{k} value mutated");
             }
         } else {
             panic!("BigIntPromoting wrapper dropped the array shape");

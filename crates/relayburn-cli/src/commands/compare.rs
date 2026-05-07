@@ -12,9 +12,10 @@ use std::collections::BTreeSet;
 
 use anyhow::{anyhow, Result};
 use relayburn_sdk::{
-    build_compare_table, has_minimum_fidelity, load_pricing, summarize_fidelity, CompareCell,
-    CompareOptions, CompareTable, EnrichedTurn, FidelityClass, FidelitySummary, Ledger,
-    LedgerOpenOptions, Query, UsageGranularity, DEFAULT_MIN_SAMPLE,
+    build_compare_table, has_minimum_fidelity, load_pricing, summarize_fidelity,
+    AnalyzeCompareOptions as CompareOptions, CompareCell, CompareTable, EnrichedTurn,
+    FidelityClass, FidelitySummary, Ledger, LedgerOpenOptions, Query, UsageGranularity,
+    DEFAULT_MIN_SAMPLE,
 };
 use serde_json::{json, Value};
 

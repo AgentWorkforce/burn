@@ -6,8 +6,10 @@
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use crate::reader::{
-    classify_fidelity, Coverage, Fidelity, FidelityClass, TurnRecord, UsageGranularity,
+    Coverage, Fidelity, FidelityClass, TurnRecord, UsageGranularity, classify_fidelity,
 };
 
 /// Names of the boolean fields on [`Coverage`]. Mirrors the TS `keyof Coverage`
@@ -48,7 +50,8 @@ fn coverage_get(c: &Coverage, field: &str) -> bool {
 /// `TurnRecord` (older ledger writers, foreign sources). Treat them as
 /// best-effort full fidelity for backward compatibility, but expose the count
 /// so callers can show the gap if they care.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FidelitySummary {
     pub total: u64,
     pub by_class: HashMap<FidelityClass, u64>,
@@ -160,8 +163,8 @@ pub fn has_minimum_fidelity(fidelity: Option<&Fidelity>, minimum: FidelityClass)
 mod tests {
     use super::*;
     use crate::reader::{
-        parse_opencode_session, Coverage, Fidelity, FidelityClass, ParseOpencodeOptions,
-        UsageGranularity,
+        Coverage, Fidelity, FidelityClass, ParseOpencodeOptions, UsageGranularity,
+        parse_opencode_session,
     };
     use std::path::PathBuf;
 

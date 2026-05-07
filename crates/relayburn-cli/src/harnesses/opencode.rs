@@ -54,16 +54,23 @@ fn opencode_sessions_dir() -> PathBuf {
 /// [`pending_stamp::adapter_static`].
 pub fn config() -> PendingStampAdapter {
     let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> = Arc::new(opencode_sessions_dir);
-    let ingest_sessions: IngestSessionsFn = Arc::new(|| {
+    let ingest_sessions: IngestSessionsFn = Arc::new(|ledger_home| {
         Box::pin(async move {
             // Open a fresh ledger handle per tick. The TS sibling's
             // `ingestOpencodeSessions` does the same via `withLock('ledger', …)`;
-            // SQLite WAL keeps the per-call open cheap (no DDL after first
-            // open). Defaults pull `$RELAYBURN_HOME` (or `~/.agentworkforce/burn`)
-            // and the same per-harness session-store root the factory's
-            // `session_root` closure resolves above.
-            let mut handle = Ledger::open(LedgerOpenOptions::default())?;
-            let opts = RawIngestOptions::default();
+            // SQLite WAL keeps the per-call open cheap. Use the same typed
+            // ledger home the pending-stamp writer used so explicit
+            // `--ledger-path` runs keep manifest writes and resolution scoped
+            // to one home.
+            let ledger_opts = match ledger_home.as_deref() {
+                Some(home) => LedgerOpenOptions::with_home(home),
+                None => LedgerOpenOptions::default(),
+            };
+            let mut handle = Ledger::open(ledger_opts)?;
+            let opts = RawIngestOptions {
+                ledger_home,
+                ..RawIngestOptions::default()
+            };
             ingest_opencode_sessions(handle.raw_mut(), &opts).await
         })
     });

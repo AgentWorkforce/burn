@@ -24,27 +24,26 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::ledger::{load_config, Ledger};
+use crate::ledger::{Ledger, load_config};
 use crate::reader::{
-    parse_claude_session, parse_claude_session_incremental, parse_codex_session_incremental,
-    parse_opencode_session_incremental, reconcile_claude_session_relationships,
     ClaudeParseIncrementalOptions, ClaudeParseOptions, CodexLastCompletedTurn, CodexResumeState,
     CodexTurnContext, ContentStoreMode, CumulativeUsage as ReaderCumulativeUsage,
     ParseCodexIncrementalOptions, ParseOpencodeIncrementalOptions, PersistedUserTurnSlot,
-    ReconcileClaudeRelationshipsInput,
+    ReconcileClaudeRelationshipsInput, parse_claude_session, parse_claude_session_incremental,
+    parse_codex_session_incremental, parse_opencode_session_incremental,
+    reconcile_claude_session_relationships,
 };
 
 use crate::ingest::cursors::{
-    load_cursors, save_cursor_changes, ClaudeCursor, CodexCumulative, CodexCursor, Cursors,
-    FileCursor, OpencodeCursor,
+    ClaudeCursor, CodexCumulative, CodexCursor, Cursors, FileCursor, OpencodeCursor, load_cursors,
+    save_cursor_changes,
 };
 use crate::ingest::gap::{
-    count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap,
-    AdapterName,
+    AdapterName, count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap,
 };
 use crate::ingest::pending_stamps::{
-    cleanup_stale_pending_stamps, resolve_pending_stamps_for_session, PendingStampHarness,
-    PendingStampSessionCandidate,
+    PendingStampHarness, PendingStampSessionCandidate, cleanup_stale_pending_stamps_in,
+    resolve_pending_stamps_for_session_in,
 };
 use crate::ingest::reingest::derive_codex_session_id;
 use crate::ingest::walk::{walk_jsonl, walk_opencode_sessions};
@@ -84,6 +83,10 @@ pub type WarnSink = Box<dyn Fn(&str) + Send + Sync>;
 pub struct IngestOptions {
     pub on_progress: Option<ProgressSink>,
     pub on_warn: Option<WarnSink>,
+    /// Override for the relayburn home used by sidecar ingest state such as
+    /// config and pending-stamp manifests. The opened [`Ledger`] still owns
+    /// the actual database paths.
+    pub ledger_home: Option<PathBuf>,
     /// Override for the upstream session-store layout. Defaults to the
     /// per-harness home dirs (`~/.claude/projects`, `~/.codex/sessions`,
     /// `~/.local/share/opencode/storage`).
@@ -147,8 +150,12 @@ fn progress(opts: &IngestOptions, msg: &str) {
 /// overrides). Mirrors the TS `resolveContentMode`. Falls back to
 /// `ContentStoreMode::Full` if the config layer errors — keeps ingest
 /// resilient against a corrupt config file.
-fn resolve_content_mode() -> ContentStoreMode {
-    load_config()
+fn resolve_content_mode(ledger_home: Option<&Path>) -> ContentStoreMode {
+    let config = match ledger_home {
+        Some(home) => crate::ledger::load_config_at(&home.join("config.json")),
+        None => load_config(),
+    };
+    config
         .map(|c| c.content.store)
         .unwrap_or(ContentStoreMode::Full)
 }
@@ -158,14 +165,14 @@ fn resolve_content_mode() -> ContentStoreMode {
 /// cursor mutations. Returns the merged report.
 pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
-    cleanup_stale_pending_stamps()?;
+    cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     progress(opts, "loading ingest cursors");
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
     let mut report = IngestReport::empty();
 
     progress(opts, "loading content settings");
-    let content_mode = resolve_content_mode();
+    let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
     let on_warn: Option<&dyn Fn(&str)> = opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str));
 
     // Emit per-adapter, immediately after each scan, so a later adapter
@@ -177,12 +184,24 @@ pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Re
     emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
 
     progress(opts, "scanning Codex sessions");
-    let r = ingest_codex_into(ledger, &mut after, &opts.roots, content_mode)?;
+    let r = ingest_codex_into(
+        ledger,
+        &mut after,
+        &opts.roots,
+        content_mode,
+        opts.ledger_home.as_deref(),
+    )?;
     report.merge(&r);
     emit_gap_warning(AdapterName::Codex, content_mode, on_warn);
 
     progress(opts, "scanning OpenCode sessions");
-    let r = ingest_opencode_into(ledger, &mut after, &opts.roots, content_mode)?;
+    let r = ingest_opencode_into(
+        ledger,
+        &mut after,
+        &opts.roots,
+        content_mode,
+        opts.ledger_home.as_deref(),
+    )?;
     report.merge(&r);
     emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
 
@@ -196,10 +215,10 @@ pub async fn ingest_claude_projects(
     opts: &IngestOptions,
 ) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
-    cleanup_stale_pending_stamps()?;
+    cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
-    let content_mode = resolve_content_mode();
+    let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
     let report = ingest_claude_into(ledger, &mut after, &opts.roots, content_mode)?;
     emit_gap_warning(
         AdapterName::Claude,
@@ -215,11 +234,17 @@ pub async fn ingest_codex_sessions(
     opts: &IngestOptions,
 ) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
-    cleanup_stale_pending_stamps()?;
+    cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
-    let content_mode = resolve_content_mode();
-    let report = ingest_codex_into(ledger, &mut after, &opts.roots, content_mode)?;
+    let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
+    let report = ingest_codex_into(
+        ledger,
+        &mut after,
+        &opts.roots,
+        content_mode,
+        opts.ledger_home.as_deref(),
+    )?;
     emit_gap_warning(
         AdapterName::Codex,
         content_mode,
@@ -234,11 +259,17 @@ pub async fn ingest_opencode_sessions(
     opts: &IngestOptions,
 ) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
-    cleanup_stale_pending_stamps()?;
+    cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
-    let content_mode = resolve_content_mode();
-    let report = ingest_opencode_into(ledger, &mut after, &opts.roots, content_mode)?;
+    let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
+    let report = ingest_opencode_into(
+        ledger,
+        &mut after,
+        &opts.roots,
+        content_mode,
+        opts.ledger_home.as_deref(),
+    )?;
     emit_gap_warning(
         AdapterName::Opencode,
         content_mode,
@@ -275,7 +306,7 @@ pub async fn ingest_claude_session(
         }
     }
 
-    let content_mode = resolve_content_mode();
+    let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
     let parse_opts = ClaudeParseOptions {
         session_path: Some(file.to_string_lossy().into_owned()),
         content_mode: Some(content_mode),
@@ -487,6 +518,7 @@ fn ingest_codex_into(
     cursors: &mut Cursors,
     roots: &IngestRoots,
     content_mode: ContentStoreMode,
+    ledger_home: Option<&Path>,
 ) -> anyhow::Result<IngestReport> {
     let mut report = IngestReport::empty();
     let sessions_root = codex_sessions_dir(roots);
@@ -586,7 +618,7 @@ fn ingest_codex_into(
                     session_mtime_ms: Some(mtime),
                     cwd,
                 };
-                let _ = resolve_pending_stamps_for_session(ledger, &candidate);
+                let _ = resolve_pending_stamps_for_session_in(ledger, &candidate, ledger_home);
             }
             report.appended_turns += parsed.turns.len();
             report.ingested_sessions += 1;
@@ -631,6 +663,7 @@ fn ingest_opencode_into(
     cursors: &mut Cursors,
     roots: &IngestRoots,
     content_mode: ContentStoreMode,
+    ledger_home: Option<&Path>,
 ) -> anyhow::Result<IngestReport> {
     let mut report = IngestReport::empty();
     let session_root = opencode_session_root(roots);
@@ -704,7 +737,7 @@ fn ingest_opencode_into(
                 session_mtime_ms: Some(session_mtime_ms),
                 cwd,
             };
-            let _ = resolve_pending_stamps_for_session(ledger, &candidate);
+            let _ = resolve_pending_stamps_for_session_in(ledger, &candidate, ledger_home);
             report.appended_turns += parsed.turns.len();
             report.ingested_sessions += 1;
             ledger.append_turns(&parsed.turns)?;
@@ -1022,5 +1055,4 @@ mod tests {
         assert_eq!(codex_sessions_dir(&roots), PathBuf::from("/x/codex"));
         assert_eq!(opencode_storage_dir(&roots), PathBuf::from("/x/oc"));
     }
-
 }
