@@ -66,9 +66,14 @@ pub use cursors::{
 };
 pub use gap::{
     count_new_tool_calls, count_new_tool_results, count_tool_call_gaps, emit_gap_warning,
-    record_session_gap, reset_ingest_gap_warnings, restore_ingest_gap_writer,
-    set_ingest_gap_writer, AdapterName, ToolCallGapCounts,
+    record_session_gap, reset_ingest_gap_warnings, AdapterName, ToolCallGapCounts,
 };
+// Test-only writer-override hooks. Gated to `cfg(test)` for in-crate
+// tests and to the `test-utils` feature for downstream integration
+// tests; deliberately NOT part of the default SDK surface so embedders
+// can't hijack the global gap-warning writer for the whole process.
+#[cfg(any(test, feature = "test-utils"))]
+pub use gap::{restore_ingest_gap_writer, set_ingest_gap_writer};
 pub use ingest::{
     ingest_all, ingest_claude_projects, ingest_claude_session, ingest_codex_sessions,
     ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
