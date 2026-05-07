@@ -121,7 +121,7 @@ pub fn load_config_with_home(home: Option<&Path>) -> Result<BurnConfig> {
 }
 
 /// Load with an explicit config path. Tests use this to avoid touching
-/// `$HOME/.relayburn/config.json`.
+/// `$HOME/.agentworkforce/burn/config.json`.
 pub fn load_config_at(path: &Path) -> Result<BurnConfig> {
     let from_file = read_config_file(path);
     let store = pick_store(

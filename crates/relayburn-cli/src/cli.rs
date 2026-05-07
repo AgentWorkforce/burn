@@ -35,7 +35,7 @@ pub struct GlobalArgs {
     pub json: bool,
     /// Optional override for the relayburn home directory (the dir
     /// containing `burn.sqlite` + `content.sqlite`). When `None`,
-    /// commands fall through to the SDK's env-var / `~/.relayburn`
+    /// commands fall through to the SDK's env-var / `~/.agentworkforce/burn`
     /// resolution.
     pub ledger_path: Option<PathBuf>,
     /// Suppress ANSI color output. Honored by the table renderer and
@@ -64,7 +64,7 @@ pub struct Args {
 
     /// Override the relayburn home directory (the dir containing
     /// `burn.sqlite` + `content.sqlite`). Defaults to `$RELAYBURN_HOME`
-    /// or `~/.relayburn`.
+    /// or `~/.agentworkforce/burn`.
     #[arg(long, global = true, value_name = "PATH")]
     pub ledger_path: Option<PathBuf>,
 
@@ -111,7 +111,7 @@ pub enum Command {
     /// session log on exit.
     Run(RunArgs),
 
-    /// Inspect or rebuild derived state under `~/.relayburn`.
+    /// Inspect or rebuild derived state under `~/.agentworkforce/burn`.
     State(StateArgs),
 
     /// Scan harness session stores and append new turns to the ledger.
