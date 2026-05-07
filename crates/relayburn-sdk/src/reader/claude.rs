@@ -2990,7 +2990,7 @@ mod tests {
         let t = &res.turns[0];
         assert_eq!(t.tool_calls.len(), 3);
         assert_eq!(
-            t.files_touched.as_ref().map(|v| v.as_slice()),
+            t.files_touched.as_deref(),
             Some(["/src/a.ts".to_string(), "/src/b.ts".to_string()].as_slice())
         );
     }

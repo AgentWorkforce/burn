@@ -125,13 +125,11 @@ fn run_trim(
 /// integer-valued `f64`s print as bare integers (`0` not `0.0`), matching
 /// `JSON.stringify` semantics so the golden snapshots stay byte-equivalent.
 fn render_json_ts_compatible<T: serde::Serialize + ?Sized>(value: &T) -> io::Result<()> {
-    let mut json = serde_json::to_value(value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let mut json = serde_json::to_value(value).map_err(io::Error::other)?;
     coerce_integer_floats(&mut json);
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    serde_json::to_writer_pretty(&mut handle, &json)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    serde_json::to_writer_pretty(&mut handle, &json).map_err(io::Error::other)?;
     handle.write_all(b"\n")?;
     handle.flush()
 }
@@ -449,7 +447,7 @@ fn format_int(n: u64) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);

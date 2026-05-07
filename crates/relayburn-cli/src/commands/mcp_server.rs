@@ -76,7 +76,7 @@ fn open_handle(globals: &GlobalArgs) -> anyhow::Result<LedgerHandle> {
         Some(h) => LedgerOpenOptions::with_home(h),
         None => LedgerOpenOptions::default(),
     };
-    Ok(Ledger::open(opts)?)
+    Ledger::open(opts)
 }
 
 // ---------------------------------------------------------------------------

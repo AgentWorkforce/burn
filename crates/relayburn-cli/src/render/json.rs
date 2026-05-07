@@ -23,7 +23,7 @@ pub fn render_json<T: Serialize + ?Sized>(value: &T) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer_pretty(&mut handle, value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     handle.write_all(b"\n")?;
     handle.flush()
 }
@@ -36,7 +36,7 @@ pub fn render_json_compact<T: Serialize + ?Sized>(value: &T) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer(&mut handle, value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     handle.write_all(b"\n")?;
     handle.flush()
 }

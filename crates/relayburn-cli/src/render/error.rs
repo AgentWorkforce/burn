@@ -98,7 +98,7 @@ fn write_json_envelope(value: &serde_json::Value) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     serde_json::to_writer(&mut handle, value)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
     handle.write_all(b"\n")?;
     handle.flush()
 }
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn generic_error_uses_exit_two() {
-        let err = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let err = std::io::Error::other("boom");
         assert_eq!(report_error(&err, &human_globals()), EXIT_GENERIC_ERROR);
     }
 

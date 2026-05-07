@@ -40,6 +40,7 @@ pub mod replacement_savings;
 pub mod subagent_tree;
 pub mod tool_call_patterns;
 pub mod tool_output_bloat;
+mod util;
 
 pub use claude_md::{
     attribute_claude_md, build_trim_recommendations, find_claude_md_files, load_claude_md_file,

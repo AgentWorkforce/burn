@@ -21,12 +21,6 @@ use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 
 /// Parsed top-level argv — what every command handler receives via
 /// [`Args::globals`].
-//
-// `ledger_path` and `no_color` are unused on this branch because the
-// command stubs don't read them yet; Wave 2 presenter PRs are what
-// actually consume them. Suppress the resulting dead-code warnings
-// without losing the field on the struct.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GlobalArgs {
     /// Emit machine-readable JSON instead of human-formatted output.

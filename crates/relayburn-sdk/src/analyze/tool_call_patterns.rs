@@ -472,21 +472,7 @@ fn hotspots_action(session_id: &str) -> WasteAction {
     }
 }
 
-/// Format an integer with thousands separators, matching JS
-/// `Number.prototype.toLocaleString()` output for the en-US locale.
-fn format_with_commas(n: u64) -> String {
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let mut result = String::with_capacity(len + len / 3);
-    for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(b as char);
-    }
-    result
-}
+use super::util::format_with_commas;
 
 pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFinding {
     let evidence_str = if finding.evidence.is_empty() {
