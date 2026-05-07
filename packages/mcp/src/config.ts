@@ -1,8 +1,7 @@
 export interface BuildMcpConfigOptions {
   sessionId: string;
   // Path or bare name of the burn binary. Defaults to `burn`, which Claude
-  // Code's shell resolves against PATH when it spawns the MCP server. Match
-  // the convention used by `buildClaudeHookSettings` in @relayburn/ledger.
+  // Code's shell resolves against PATH when it spawns the MCP server.
   burnBin?: string;
 }
 

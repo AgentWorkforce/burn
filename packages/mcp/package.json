@@ -23,9 +23,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@relayburn/reader": "workspace:*",
-    "@relayburn/ledger": "workspace:*",
-    "@relayburn/analyze": "workspace:*",
     "@relayburn/sdk": "workspace:*"
   },
   "repository": {
