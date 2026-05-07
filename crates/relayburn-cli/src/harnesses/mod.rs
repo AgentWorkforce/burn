@@ -44,8 +44,14 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use relayburn_sdk::{Enrichment, IngestReport, WatchController};
 
+pub mod claude;
+pub mod codex;
+pub mod opencode;
 pub mod pending_stamp;
 pub mod registry;
+
+#[cfg(test)]
+mod test_env;
 
 pub use registry::{list_harness_names, lookup};
 

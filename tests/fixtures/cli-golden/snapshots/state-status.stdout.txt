@@ -1,19 +1,21 @@
-derived state:
-index:
-  id index: 17 hashes, 289 bytes at ${RELAYBURN_HOME}/ledger.idx
-  content index: 7 fingerprints, 119 bytes at ${RELAYBURN_HOME}/ledger.content.idx
-content:
-  status: not built yet at ${RELAYBURN_HOME}/content
-  sidecars: 0 files, 0 non-empty sessions, 0 bytes
-  user turns: 3 ledger rows
-classifier:
-  turns: 7 classified / 7 total (complete)
-archive: ${RELAYBURN_HOME}/archive.sqlite
-  schema version: 3
-  ledger cursor: 0 / 8,229 bytes (tail pending)
-  rows:
-    sessions:           0
-    turns:              0
-    tool_calls:         0
-    tool_result_events: 0
+derived state at ${RELAYBURN_HOME}:
+events DB (burn.sqlite):
+  path: ${RELAYBURN_HOME}/burn.sqlite
+  tracked rows: 18
+    turns:              7
+    user_turns:         3
     compactions:        0
+    relationships:      4
+    tool_result_events: 3
+    sessions:           0
+    stamps:             1
+content DB (content.sqlite):
+  path: ${RELAYBURN_HOME}/content.sqlite
+  rows: 0
+archive state:
+  schema version: 1
+  last built:   never
+  last rebuild: never
+config:
+  store: off
+  retention: 90 days

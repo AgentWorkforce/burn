@@ -2,15 +2,22 @@
 # the source of truth — it's a perf cache that the streaming-ledger fallback
 # (RELAYBURN_ARCHIVE=0) can rebuild on demand. Keeping the binary out of git
 # means snapshot regeneration doesn't churn a multi-KB blob on every run.
+#
+# burn.sqlite + content.sqlite are also rematerialized — the Rust diff
+# runner replays `ledger.jsonl` into them on first run (the Rust SDK is
+# sqlite-only) and the TS CLI uses the file adapter, so neither needs the
+# blobs in git.
 archive.sqlite
 archive.sqlite-shm
 archive.sqlite-wal
 burn.sqlite
 burn.sqlite-shm
 burn.sqlite-wal
+burn.sqlite-journal
 content.sqlite
 content.sqlite-shm
 content.sqlite-wal
+content.sqlite-journal
 cursors.json
 hwm.json
 config.json

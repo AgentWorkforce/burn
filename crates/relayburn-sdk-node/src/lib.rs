@@ -355,7 +355,7 @@ unsafe fn promote_value(
 
 /// Where on disk a ledger should land. Mirrors
 /// `relayburn_sdk::LedgerOpenOptions`. `home` defaults to `RELAYBURN_HOME`
-/// (or `~/.relayburn`); `contentHome` overrides only the `content.sqlite`
+/// (or `~/.agentworkforce/burn`); `contentHome` overrides only the `content.sqlite`
 /// path when it makes sense to park content on different storage.
 #[napi(object)]
 pub struct LedgerOpenOptions {

@@ -54,21 +54,19 @@ use std::sync::LazyLock;
 
 use phf::phf_map;
 
-use super::HarnessAdapter;
+use super::{claude, codex, opencode, HarnessAdapter};
 
 /// Compile-time perfect-hash map from harness name to a `&'static dyn
 /// HarnessAdapter`. Holds eager / unit-struct adapters whose value is a
-/// const expression (`&SOMETHING_STATIC`). Empty on this branch —
-/// populated by the claude Wave 2 PR (#248-d).
+/// const expression (`&SOMETHING_STATIC`). Wave 2 D5 (#248-d) registers
+/// the claude adapter here.
 ///
 /// **Do not register pending-stamp adapters here.**
 /// `pending_stamp::adapter_static` returns a value produced by
 /// `Box::leak` at runtime; that is not a const expression and cannot
 /// appear inside `phf_map!`. Those adapters go in [`RUNTIME_ADAPTERS`].
 static EAGER_ADAPTERS: phf::Map<&'static str, &'static dyn HarnessAdapter> = phf_map! {
-    // Wave 2 PRs will populate these slots:
-    //
-    // "claude"   => &claude::CLAUDE_ADAPTER,        // #248-d
+    "claude" => &claude::CLAUDE_ADAPTER,
 };
 
 /// Runtime-constructed adapters. The closure runs once on first
@@ -89,7 +87,12 @@ static EAGER_ADAPTERS: phf::Map<&'static str, &'static dyn HarnessAdapter> = phf
 ///     });
 /// ```
 static RUNTIME_ADAPTERS: LazyLock<HashMap<&'static str, &'static dyn HarnessAdapter>> =
-    LazyLock::new(HashMap::new);
+    LazyLock::new(|| {
+        let mut m = HashMap::new();
+        m.insert("codex", codex::adapter()); // #248-e (Wave 2 D6)
+        m.insert("opencode", opencode::adapter()); // #248-f (Wave 2 D7)
+        m
+    });
 
 /// Sibling list of runtime adapter names in stable, deterministic
 /// order. Read by [`list_harness_names`] so the CLI's `--help` output
@@ -106,11 +109,9 @@ static RUNTIME_ADAPTERS: LazyLock<HashMap<&'static str, &'static dyn HarnessAdap
 /// `RUNTIME_ADAPTER_NAMES` entry. The deterministic-ordering test in
 /// this module's `tests` block pins the resulting order.
 static RUNTIME_ADAPTER_NAMES: &[&str] = &[
-    // Wave 2 PRs will populate these slots in lockstep with
-    // RUNTIME_ADAPTERS:
-    //
-    // "codex",     // #248-e
-    // "opencode",  // #248-f
+    // Wave 2 PRs populate these slots in lockstep with RUNTIME_ADAPTERS:
+    "codex",    // #248-e (Wave 2 D6)
+    "opencode", // #248-f (Wave 2 D7)
 ];
 
 /// Look up an adapter by name. Returns `None` for unknown names; the
@@ -235,16 +236,13 @@ mod tests {
     /// reach for `RUNTIME_ADAPTERS.keys()` here later.
     #[test]
     fn list_harness_names_is_deterministic() {
-        /// Snapshot of the expected harness ordering. Empty on this
-        /// branch; Wave 2 PRs will append their entries:
-        /// `&["claude", "codex", "opencode"]` post-#248-d/e/f.
+        /// Snapshot of the expected harness ordering. Wave 2 D5 (#248-d)
+        /// landed claude in `EAGER_ADAPTERS`; codex (#248-e) and
+        /// opencode (#248-f) will append their runtime entries here.
         const EXPECTED_HARNESS_NAMES: &[&str] = &[
-            // Wave 2 PRs append their names here in the same order they
-            // appear in EAGER_ADAPTERS / RUNTIME_ADAPTER_NAMES:
-            //
-            // "claude",    // #248-d (eager)
-            // "codex",     // #248-e (runtime)
-            // "opencode",  // #248-f (runtime)
+            "claude",   // #248-d (eager)
+            "codex",    // #248-e (runtime)
+            "opencode", // #248-f (runtime)
         ];
 
         let names = list_harness_names();

@@ -140,9 +140,22 @@ fn render_json_ts_compatible<T: serde::Serialize + ?Sized>(value: &T) -> io::Res
 /// is finite and exactly representable as `i64`/`u64` into the integer form.
 /// Mirrors JavaScript's `JSON.stringify` numeric output, which always prints
 /// `0` for `0.0_f64`.
+///
+/// `Number::as_f64()` is lossy for exact integers above `2^53`, so the
+/// `is_f64()` guard short-circuits before we ever touch a Number that
+/// already serializes as an integer. Without the guard a u64 like
+/// `9_007_199_254_740_993` (2^53 + 1) would silently become
+/// `9_007_199_254_740_992` after a `to_value` → coerce → `to_writer_pretty`
+/// round-trip.
 fn coerce_integer_floats(v: &mut serde_json::Value) {
     match v {
         serde_json::Value::Number(n) => {
+            // Only coerce JSON Numbers that round-tripped as floats.
+            // `is_f64()` returns false for exact-integer Numbers (i64/u64),
+            // which already render without a decimal point and need no work.
+            if !n.is_f64() {
+                return;
+            }
             if let Some(f) = n.as_f64() {
                 if f.is_finite() && f.fract() == 0.0 {
                     if f >= 0.0 && f <= u64::MAX as f64 {
@@ -498,5 +511,63 @@ mod tests {
             vec!["ccc".into(), "d".into()],
         ]);
         assert_eq!(rendered, "a    bb\nccc  d");
+    }
+
+    // -- coerce_integer_floats ------------------------------------------------
+    //
+    // The helper walks a `serde_json::Value` tree and converts whole-valued
+    // floats (e.g. `0.0`) into their integer forms so the pretty-printed JSON
+    // matches `JSON.stringify`'s "0" not "0.0" rendering. The cases below
+    // pin down its core invariants — the most important one being that it
+    // never lossily coerces an exact-integer JSON Number that happens to be
+    // larger than `2^53`.
+
+    #[test]
+    fn coerce_integer_floats_leaves_exact_integers_untouched() {
+        // `Number::from(u64)` produces an exact-integer Number for which
+        // `is_f64()` returns false. Mutation must short-circuit so a
+        // round-trip through `to_value` is a no-op for integer fields.
+        let mut v = serde_json::json!({ "n": 42_u64 });
+        coerce_integer_floats(&mut v);
+        assert_eq!(v, serde_json::json!({ "n": 42_u64 }));
+    }
+
+    #[test]
+    fn coerce_integer_floats_preserves_large_u64_above_2_pow_53() {
+        // `2^53 + 1 = 9_007_199_254_740_993` — exactly representable as u64
+        // but NOT as f64. Without the `is_f64()` guard the value would round
+        // down to 2^53 = 9_007_199_254_740_992 after a lossy `as_f64()` cast.
+        let huge: u64 = (1u64 << 53) + 1;
+        let mut v = serde_json::json!({ "n": huge });
+        coerce_integer_floats(&mut v);
+        // Round-trip through to_string to assert the byte representation
+        // wasn't truncated by an unguarded f64 coercion.
+        let s = serde_json::to_string(&v).expect("serialize");
+        assert!(
+            s.contains(&huge.to_string()),
+            "expected `{huge}` in `{s}`; large u64 was lossily coerced",
+        );
+    }
+
+    #[test]
+    fn coerce_integer_floats_collapses_whole_valued_floats() {
+        // `42.0_f64` parsed through `serde_json::Number::from_f64` is the
+        // case the helper exists to handle. After coercion the Number must
+        // serialize as the integer form, matching `JSON.stringify`.
+        let n = serde_json::Number::from_f64(42.0).expect("finite");
+        let mut v = serde_json::Value::Number(n);
+        coerce_integer_floats(&mut v);
+        assert_eq!(serde_json::to_string(&v).expect("serialize"), "42");
+    }
+
+    #[test]
+    fn coerce_integer_floats_recurses_into_arrays_and_objects() {
+        // Smoke-cover the recursion arms — a nested whole-valued float
+        // inside an array inside an object should still flatten to its
+        // integer form.
+        let inner = serde_json::Number::from_f64(7.0).expect("finite");
+        let mut v = serde_json::json!({ "outer": [serde_json::Value::Number(inner)] });
+        coerce_integer_floats(&mut v);
+        assert_eq!(serde_json::to_string(&v).expect("serialize"), r#"{"outer":[7]}"#);
     }
 }

@@ -86,6 +86,15 @@ pub fn config_path() -> PathBuf {
     ledger_home().join("config.json")
 }
 
+/// Path to the JSON config file under an explicit home directory.
+/// Used by callers that resolve the home via something other than the
+/// `RELAYBURN_HOME` env var (e.g. `state_status` with an `--ledger-path`
+/// override) — mixing one home's databases with another's config would
+/// otherwise produce a misleading status report.
+pub fn config_path_at_home(home: &Path) -> PathBuf {
+    home.join("config.json")
+}
+
 /// Load the user config: read the JSON file (if present), then layer the
 /// `RELAYBURN_CONTENT_STORE` and `RELAYBURN_CONTENT_TTL_DAYS` env vars on
 /// top, falling back to [`BurnConfig::default`].
@@ -98,8 +107,21 @@ pub fn load_config() -> Result<BurnConfig> {
     load_config_at(&config_path())
 }
 
+/// Like [`load_config`], but resolves the config file under an explicit
+/// home directory when supplied. `None` falls back to the env-var-driven
+/// default home — same as bare `load_config()`. Use this from callers
+/// that already know the active home (e.g. `state_status` with an
+/// `--ledger-path` override) so the config can't drift from the
+/// databases.
+pub fn load_config_with_home(home: Option<&Path>) -> Result<BurnConfig> {
+    match home {
+        Some(h) => load_config_at(&config_path_at_home(h)),
+        None => load_config(),
+    }
+}
+
 /// Load with an explicit config path. Tests use this to avoid touching
-/// `$HOME/.relayburn/config.json`.
+/// `$HOME/.agentworkforce/burn/config.json`.
 pub fn load_config_at(path: &Path) -> Result<BurnConfig> {
     let from_file = read_config_file(path);
     let store = pick_store(

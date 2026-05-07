@@ -58,8 +58,8 @@ fn open_ledger_in(tmp: &TempDir) -> Ledger {
 }
 
 /// Pin RELAYBURN_HOME under `tmp` so the pending-stamp + config layers
-/// can't scribble on the developer's `~/.relayburn`. Caller holds the
-/// returned mutex guard for the whole test body.
+/// can't scribble on the developer's `~/.agentworkforce/burn`. Caller holds
+/// the returned mutex guard for the whole test body.
 fn isolated_relayburn_home<'a>(tmp: &TempDir) -> std::sync::MutexGuard<'a, ()> {
     let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let home = tmp.path().join("relayburn");

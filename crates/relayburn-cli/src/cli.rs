@@ -35,7 +35,7 @@ pub struct GlobalArgs {
     pub json: bool,
     /// Optional override for the relayburn home directory (the dir
     /// containing `burn.sqlite` + `content.sqlite`). When `None`,
-    /// commands fall through to the SDK's env-var / `~/.relayburn`
+    /// commands fall through to the SDK's env-var / `~/.agentworkforce/burn`
     /// resolution.
     pub ledger_path: Option<PathBuf>,
     /// Suppress ANSI color output. Honored by the table renderer and
@@ -64,7 +64,7 @@ pub struct Args {
 
     /// Override the relayburn home directory (the dir containing
     /// `burn.sqlite` + `content.sqlite`). Defaults to `$RELAYBURN_HOME`
-    /// or `~/.relayburn`.
+    /// or `~/.agentworkforce/burn`.
     #[arg(long, global = true, value_name = "PATH")]
     pub ledger_path: Option<PathBuf>,
 
@@ -96,31 +96,199 @@ impl Args {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Aggregate session usage and cost.
-    Summary,
+    Summary(crate::commands::summary::SummaryArgs),
 
     /// Surface high-cost / high-overhead hotspots from the ledger.
-    Hotspots,
+    Hotspots(crate::commands::hotspots::HotspotsArgs),
 
     /// Estimate context overhead and (optionally) trim it.
     Overhead(OverheadArgs),
 
     /// Compare cost across two or more models on the same workload.
-    Compare,
+    Compare(CompareArgs),
 
     /// Run an agent CLI under a harness wrapper that ingests its
     /// session log on exit.
-    Run,
+    Run(RunArgs),
 
-    /// Inspect or rebuild derived state under `~/.relayburn`.
-    State,
+    /// Inspect or rebuild derived state under `~/.agentworkforce/burn`.
+    State(StateArgs),
 
     /// Scan harness session stores and append new turns to the ledger.
-    Ingest,
+    Ingest(IngestArgs),
 
     /// Stdio MCP server exposing read-only ledger queries for
     /// in-session self-query.
     #[command(name = "mcp-server")]
-    McpServer,
+    McpServer(McpServerArgs),
+}
+
+/// Per-command flags for `burn ingest`. Mirrors the TS surface in
+/// `packages/cli/src/commands/ingest.ts` so flag muscle memory carries
+/// across.
+///
+/// Three modes, exactly one applies per invocation:
+///
+/// - No flags: scan all known session stores once and exit.
+/// - `--watch` (optionally with `--interval <MS>`): foreground poll loop
+///   driven by [`relayburn_sdk::start_watch_loop`].
+/// - `--hook <HARNESS> [--quiet]`: stdin-driven hook entrypoint. Today
+///   only `--hook claude` is supported; the `--quiet` flag suppresses
+///   non-error stderr breadcrumbs so it is safe to call from every
+///   Claude Code hook.
+///
+/// `--watch` and `--hook` are mutually exclusive; the presenter rejects
+/// the combination at runtime with exit 2 (matching TS).
+#[derive(Debug, Clone, ClapArgs)]
+pub struct IngestArgs {
+    /// Stay running and poll session stores at `--interval` ms.
+    /// Mutually exclusive with `--hook`.
+    #[arg(long)]
+    pub watch: bool,
+
+    /// Poll interval for `--watch`, in milliseconds. Defaults to 1000.
+    /// Ignored without `--watch`.
+    #[arg(long, value_name = "MS")]
+    pub interval: Option<u64>,
+
+    /// Read a harness-specific hook payload from stdin and ingest the
+    /// transcript it references. Today only `claude` is supported.
+    /// Mutually exclusive with `--watch`.
+    #[arg(long, value_name = "HARNESS")]
+    pub hook: Option<String>,
+
+    /// Suppress non-error stderr breadcrumbs. Used by hook callers so
+    /// the surrounding tool invocation isn't blocked by a noisy
+    /// pipeline. Only meaningful with `--hook`; clap rejects `--quiet`
+    /// on its own (or with `--watch`) so a typo can't silently no-op.
+    #[arg(long, requires = "hook")]
+    pub quiet: bool,
+}
+
+/// Per-command flags for `burn mcp-server`. The stdio MCP server speaks
+/// JSON-RPC 2.0 line-delimited frames over stdin/stdout and exposes the
+/// `burn__sessionCost` read-only tool. Closes #210.
+///
+/// Global `--ledger-path` (on [`Args`]) is consulted as the SDK ledger
+/// home. `--session-id` registers a default session id so MCP clients
+/// that omit `sessionId` in `tools/call` get a useful answer (the
+/// running agent's own session).
+#[derive(Debug, Clone, ClapArgs)]
+pub struct McpServerArgs {
+    /// Default sessionId to use when `tools/call burn__sessionCost`
+    /// omits the argument. Lets the host wrap the server with the
+    /// running agent's own session id so the agent can self-query
+    /// without knowing it.
+    #[arg(long = "session-id", value_name = "ID")]
+    pub session_id: Option<String>,
+
+    /// Emit protocol-level diagnostics to stderr. Off by default so a
+    /// well-behaved client doesn't see unexpected noise on the channel.
+    #[arg(long)]
+    pub debug: bool,
+}
+
+/// `burn run <harness> [--tag k=v ...] [-- <harness args>]` — flags +
+/// trailing argv for the harness driver. Mirrors the TS surface in
+/// `packages/cli/src/commands/run.ts`.
+///
+/// The first positional is the harness name (`claude`, `codex`,
+/// `opencode`). Everything after `--` (or any unknown flag, courtesy of
+/// `trailing_var_arg`) is captured into `passthrough` and forwarded to
+/// the spawned binary verbatim. `--tag k=v` may be repeated; bad shapes
+/// (no `=`, empty key) are rejected at runtime by the driver with the
+/// same error message as the TS sibling.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct RunArgs {
+    /// Lowercase harness identifier (`claude`, `codex`, `opencode`).
+    /// Optional so `burn run --help` and `burn run` both succeed; the
+    /// driver translates a missing name to a help-or-exit-2 outcome
+    /// matching the TS sibling.
+    #[arg(value_name = "HARNESS")]
+    pub harness: Option<String>,
+
+    /// User-supplied stamp enrichment. Repeatable — `--tag workflow=foo
+    /// --tag agent=bar` produces `{"workflow":"foo","agent":"bar"}` on
+    /// the resulting [`relayburn_sdk::Stamp`].
+    #[arg(long = "tag", value_name = "K=V")]
+    pub tag: Vec<String>,
+
+    /// Everything after the harness name (or `--`). Forwarded to the
+    /// spawned binary in `SpawnPlan::args` after the adapter's own
+    /// transport-level args. `trailing_var_arg = true` makes clap stop
+    /// option parsing at the first non-flag token so `burn run claude
+    /// --resume` works without an explicit `--`.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+    pub passthrough: Vec<String>,
+}
+
+/// Per-command flag set for `burn compare`. Mirrors
+/// `packages/cli/src/commands/compare.ts` so the CLI surfaces match
+/// byte-for-byte; see that file for the canonical help text.
+///
+/// The first positional argument is a comma-separated model list
+/// (`claude-sonnet-4-6,claude-haiku-4-5`). The presenter rejects fewer
+/// than two distinct models with exit code 2 and a stderr message; this
+/// is enforced at runtime rather than by clap so we get the same error
+/// message shape as the TS CLI (`burn compare: needs at least 2
+/// models...`).
+#[derive(Debug, Clone, ClapArgs)]
+pub struct CompareArgs {
+    /// Comma-separated model list (e.g. `claude-sonnet-4-6,claude-haiku-4-5`).
+    /// Required at runtime — see the struct doc comment for the
+    /// minimum-models contract.
+    #[arg(value_name = "MODELS")]
+    pub models: Option<String>,
+
+    /// Comma-separated list of effective providers to include
+    /// (e.g. `synthetic,anthropic,openai`).
+    #[arg(long, value_name = "LIST")]
+    pub provider: Option<String>,
+
+    /// Relative range (e.g. `24h`, `7d`, `4w`) or ISO timestamp.
+    /// Defaults to all time.
+    #[arg(long, value_name = "WHEN")]
+    pub since: Option<String>,
+
+    /// Filter by project path or git-canonical projectKey.
+    #[arg(long, value_name = "PATH")]
+    pub project: Option<String>,
+
+    /// Filter by sessionId.
+    #[arg(long, value_name = "ID")]
+    pub session: Option<String>,
+
+    /// Filter by stamped workflowId.
+    #[arg(long, value_name = "ID")]
+    pub workflow: Option<String>,
+
+    /// Filter by stamped agentId.
+    #[arg(long, value_name = "ID")]
+    pub agent: Option<String>,
+
+    /// Insufficient-sample threshold; cells below this get flagged in
+    /// the coverage-notes block. Default 5.
+    #[arg(long = "min-sample", value_name = "N")]
+    pub min_sample: Option<u64>,
+
+    /// Minimum fidelity class to include
+    /// (`full | usage-only | aggregate-only | cost-only | partial`).
+    /// Default `usage-only`.
+    #[arg(long, value_name = "CLASS")]
+    pub fidelity: Option<String>,
+
+    /// Shorthand for `--fidelity partial`.
+    #[arg(long = "include-partial")]
+    pub include_partial: bool,
+
+    /// Emit a stable CSV with one row per (model, category) pair.
+    #[arg(long)]
+    pub csv: bool,
+
+    /// Bypass the SQLite archive and stream the ledger directly.
+    /// Honored when env `RELAYBURN_ARCHIVE=0`.
+    #[arg(long = "no-archive")]
+    pub no_archive: bool,
 }
 
 /// `burn overhead [trim]` argument set. The top-level form takes the
@@ -180,4 +348,143 @@ pub struct OverheadTrimArgs {
     /// Number of recommendations per file. Defaults to 3.
     #[arg(long, value_name = "N")]
     pub top: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// `burn state` — typed args + nested subcommand
+// ---------------------------------------------------------------------------
+
+/// `burn state [...]` — derived-state inspection / maintenance verbs.
+/// Mirrors the TS surface in `packages/cli/src/commands/state.ts`:
+///
+/// - `burn state status` (default when no subcommand): print the row /
+///   file / archive_state report.
+/// - `burn state rebuild <target>`: rebuild derivable tables from
+///   upstream session files.
+/// - `burn state prune`: TTL-based content sidecar prune.
+/// - `burn state reset`: wipe derived state and (optionally) re-ingest.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct StateArgs {
+    #[command(subcommand)]
+    pub command: Option<StateSubcommand>,
+}
+
+/// Nested subcommand for `burn state`. `None` (no positional) is treated
+/// as `Status` to match the TS default.
+#[derive(Debug, Clone, Subcommand)]
+pub enum StateSubcommand {
+    /// Print derived-artifact status: file paths, sizes, row counts,
+    /// archive-state metadata, resolved retention config.
+    Status(StateStatusArgs),
+
+    /// Rebuild derived ledger artifacts from upstream session files.
+    Rebuild(StateRebuildArgs),
+
+    /// Prune expired content sidecars below the TTL window.
+    Prune(StatePruneArgs),
+
+    /// Wipe derived state under `$RELAYBURN_HOME` (and optionally
+    /// re-ingest from upstream session logs).
+    Reset(StateResetArgs),
+}
+
+/// `burn state status` — flags. `--json` is global and lives on
+/// [`Args::json`]; nothing local today, but keep an args struct so
+/// future flags (`--minimal`, `--quiet`) land without churning the
+/// dispatch sig.
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateStatusArgs {}
+
+/// `burn state rebuild` — target + flags. Mirrors the TS surface:
+/// `index | classify | content | archive [--full|--vacuum] | all`.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct StateRebuildArgs {
+    #[command(subcommand)]
+    pub target: StateRebuildTarget,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum StateRebuildTarget {
+    /// Rebuild the derivable tables from upstream session logs.
+    /// In the 2.0 SQLite layout there is one rebuild path
+    /// (`rebuild_derivable`) which drops + replays every derivable
+    /// table. The TS subtargets (index / classify / content / archive)
+    /// existed because each artifact lived in a separate file; in 2.0
+    /// they collapse onto the same SQL transaction.
+    Index,
+    /// Re-run activity classification on existing turns. Today this
+    /// is a no-op stub — the Rust ingest classifier writes the
+    /// `activity` field at append time (#274). A standalone reclassify
+    /// pass is filed for follow-up.
+    Classify(StateRebuildClassifyArgs),
+    /// Re-derive content rows from source session files.
+    Content,
+    /// Apply / rebuild the archive_state metadata.
+    Archive(StateRebuildArchiveArgs),
+    /// Run content + index + classify + archive in one pass.
+    All(StateRebuildAllArgs),
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateRebuildClassifyArgs {
+    /// Force reclassification of every turn even when `activity` is
+    /// already populated.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateRebuildArchiveArgs {
+    /// Legacy positional from the TS CLI: `burn state rebuild archive
+    /// vacuum`. Equivalent to `--vacuum`; kept so existing scripts that
+    /// target the 1.x surface keep parsing.
+    #[arg(value_name = "ACTION")]
+    pub action: Option<ArchiveAction>,
+    /// Drop archive state and rebuild from zero.
+    #[arg(long)]
+    pub full: bool,
+    /// Reclaim unused SQLite pages after the apply.
+    #[arg(long)]
+    pub vacuum: bool,
+}
+
+/// Legacy positional action for `burn state rebuild archive`. Today
+/// `vacuum` is the only accepted value; both the positional and
+/// `--vacuum` flag route through the same `rebuild_derivable` path
+/// in 2.0 (there's no separate `archive.sqlite` to vacuum), but the
+/// surface stays so 1.x automation doesn't error out.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ArchiveAction {
+    Vacuum,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateRebuildAllArgs {
+    /// Forwarded to `rebuild classify --force` when bundling.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StatePruneArgs {
+    /// Override the configured retention window. Accepts a number
+    /// (days) or the literal `forever`.
+    #[arg(long)]
+    pub days: Option<String>,
+    /// Delete sidecars even when the source session file still exists.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateResetArgs {
+    /// Actually delete. Without this flag, reset is a dry-run.
+    #[arg(long)]
+    pub force: bool,
+    /// After a successful `--force` wipe, re-parse all source harness
+    /// logs from offset 0. Only meaningful with `--force`; clap rejects
+    /// `--reingest` on its own so a typo can't silently no-op.
+    #[arg(long, requires = "force")]
+    pub reingest: bool,
 }
