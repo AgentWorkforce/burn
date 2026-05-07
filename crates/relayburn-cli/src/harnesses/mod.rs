@@ -50,6 +50,9 @@ pub mod opencode;
 pub mod pending_stamp;
 pub mod registry;
 
+#[cfg(test)]
+mod test_env;
+
 pub use registry::{list_harness_names, lookup};
 
 /// Driver-side context handed to every adapter call. Mirrors the TS

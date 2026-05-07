@@ -81,32 +81,7 @@ pub fn adapter() -> &'static dyn HarnessAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Serialize tests that mutate `$HOME` so a parallel test (in this
-    /// module or another using the same env var) can't observe a
-    /// half-set state. Mirrors the `ENV_LOCK` pattern in
-    /// `relayburn_sdk::query_verbs::state_status` tests and the codex
-    /// sibling. Poisoned-mutex recovery is intentional — a panicking
-    /// test shouldn't break every subsequent run.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Runs `f` with `$HOME` pinned to `home`, restoring (or removing)
-    /// the prior value before returning. Holds `ENV_LOCK` for the whole
-    /// closure so concurrent tests serialize on the env mutation.
-    fn with_test_home(home: &str, f: impl FnOnce()) {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", home);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        match prev {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
-        }
-    }
+    use crate::harnesses::test_env::with_test_home;
 
     /// `config()` returns a `PendingStampAdapter` named `opencode` with
     /// the standard 1s tick interval. Sanity check that the constructor
