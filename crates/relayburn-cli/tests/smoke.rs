@@ -36,16 +36,12 @@ const SUBCOMMANDS: &[&str] = &[
 
 /// Subcommands that still print "not yet implemented" when invoked
 /// without args. Wave 2 D1 wired up `summary` and `hotspots`, D2 wired
-/// up `overhead`, D3 wired up `compare`, and D4 wired up `state` as
-/// real presenters, so they're excluded from the stub-mode tripwire
-/// below. The remaining entries are owned by sibling Wave 2 PRs. As
-/// each Wave 2 D1–D8 PR wires its presenter, drop the command from this
-/// list — the missing entries fall under a more targeted assertion (see
-/// `compare_command_rejects_missing_models` below for an example).
+/// up `overhead`, D3 wired up `compare`, D4 wired up `state`, and D8
+/// wired up `ingest` + `mcp-server` as real presenters, so they're
+/// excluded from the stub-mode tripwire below. The remaining entries
+/// are owned by sibling Wave 2 PRs (D5 owns `run`).
 const UNIMPLEMENTED_SUBCOMMANDS: &[&str] = &[
     "run",
-    "ingest",
-    "mcp-server",
 ];
 
 /// Helper: build a `Command` driving the locally-built `burn` binary.
