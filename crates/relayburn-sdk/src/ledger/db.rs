@@ -47,10 +47,23 @@ impl Connections {
             }
         }
 
-        let burn = Connection::open(burn_path)?;
+        // Snapshot whether a bootstrap is needed BEFORE `Connection::open`
+        // creates `burn.sqlite` as a side effect — if we waited, the
+        // freshly-created (and newer-than-JSONL) sqlite mtime would
+        // always look "current" and we'd skip the rebuild.
+        let bootstrap_decision =
+            crate::ledger::bootstrap::decide_bootstrap(burn_path);
+
+        let mut burn = Connection::open(burn_path)?;
         configure_pragmas(&burn)?;
         burn.execute_batch(BURN_DDL)?;
         verify_schema_version(&burn)?;
+
+        // Bootstrap from `ledger.jsonl` sibling if the sqlite mirror is
+        // stale or missing. No-op when the JSONL doesn't exist (the
+        // SDK is in pure-sqlite mode) or when the sqlite is already
+        // current. See `bootstrap.rs` for the rationale.
+        crate::ledger::bootstrap::apply_bootstrap(&mut burn, bootstrap_decision)?;
 
         let content = Connection::open(content_path)?;
         configure_pragmas(&content)?;

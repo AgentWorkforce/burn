@@ -107,8 +107,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 # capture and the Rust diff runner. `serde` / `serde_json` are workspace deps
 # already pulled in via `[dependencies]`, so this entry is documentation only.
 #
-# The diff runner also bootstraps the SQLite fixture from the committed
-# `ledger.jsonl` (the in-tree fixture is JSONL-only because the SQLite
-# binaries are gitignored). It does so by parsing the JSONL with `serde_json`
-# and replaying the records via `relayburn_sdk::RawLedger::append_*` methods,
-# which is reachable through the `relayburn-sdk` dep already declared above.
+# The in-tree fixture is JSONL-only (the SQLite binaries are gitignored); the
+# diff runner just deletes any prior sqlite before invoking the binary, and
+# the SDK's `Ledger::open` rebuilds `burn.sqlite` from `ledger.jsonl`
+# automatically (see `relayburn_sdk::ledger::bootstrap`). No JSONL parsing in
+# the test helper itself.

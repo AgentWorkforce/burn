@@ -23,6 +23,46 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const binding = require('./binding.cjs');
 
+// napi-rs serializes Rust `u64` / `i64` as JS `BigInt`, but the TS 1.x
+// `@relayburn/sdk` shape (mirrored in `src/index.d.ts`) emits plain
+// `Number` for the same fields. To keep the conformance gate's
+// `deepStrictEqual` checks honest — and to match the runtime shape that
+// 1.x callers expect (e.g. `result.turnCount === 0`, not `=== 0n`) — we
+// downcast every `BigInt` in a verb's return value to `Number` when it
+// fits in `[Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]`. Values
+// outside that range are left as `BigInt`: realistic burn ledgers won't
+// hit 2^53 tokens, but if one ever does, leaking a `BigInt` that crashes
+// a `===` check is strictly safer than silently rounding to the nearest
+// 1024. The TS shape declares `number | bigint` everywhere this matters
+// so the type stays sound either way.
+const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+
+function coerceBigInts(value) {
+  if (typeof value === 'bigint') {
+    return value >= MIN_SAFE && value <= MAX_SAFE ? Number(value) : value;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      value[i] = coerceBigInts(value[i]);
+    }
+    return value;
+  }
+  if (value !== null && typeof value === 'object') {
+    // Skip class instances we don't own (Date, Map, Set, Buffer, …) —
+    // walking their guts would be both wasteful and risky. Plain objects
+    // produced by napi-rs serde have a null or Object prototype.
+    const proto = Object.getPrototypeOf(value);
+    if (proto === null || proto === Object.prototype) {
+      for (const key of Object.keys(value)) {
+        value[key] = coerceBigInts(value[key]);
+      }
+    }
+    return value;
+  }
+  return value;
+}
+
 /**
  * Stateful ledger handle. Mirrors the TS 1.x `Ledger` class shape from
  * `packages/sdk/index.d.ts`. The 1.x version only exposes the static
@@ -50,31 +90,31 @@ export class Ledger {
 }
 
 export async function ingest(opts) {
-  return binding.ingest(opts);
+  return coerceBigInts(await binding.ingest(opts));
 }
 
 export async function summary(opts) {
-  return binding.summary(opts);
+  return coerceBigInts(await binding.summary(opts));
 }
 
 export async function sessionCost(opts) {
-  return binding.sessionCost(opts);
+  return coerceBigInts(await binding.sessionCost(opts));
 }
 
 export async function overhead(opts) {
-  return binding.overhead(opts);
+  return coerceBigInts(await binding.overhead(opts));
 }
 
 export async function overheadTrim(opts) {
-  return binding.overheadTrim(opts);
+  return coerceBigInts(await binding.overheadTrim(opts));
 }
 
 export async function hotspots(opts) {
-  return binding.hotspots(opts);
+  return coerceBigInts(await binding.hotspots(opts));
 }
 
 export async function compare(opts) {
-  return binding.compare(opts);
+  return coerceBigInts(await binding.compare(opts));
 }
 
 // 2.x extensions — exposed by the Rust SDK but not declared in
@@ -83,15 +123,15 @@ export async function compare(opts) {
 // reach the FTS5 search index and the JSONL export iterators without
 // dropping into the binding directly.
 export async function search(opts) {
-  return binding.search(opts);
+  return coerceBigInts(await binding.search(opts));
 }
 
 export async function exportLedger(opts) {
-  return binding.exportLedger(opts);
+  return coerceBigInts(await binding.exportLedger(opts));
 }
 
 export async function exportStamps(opts) {
-  return binding.exportStamps(opts);
+  return coerceBigInts(await binding.exportStamps(opts));
 }
 
 // Re-exported enums from the Rust binding. These come across as plain
