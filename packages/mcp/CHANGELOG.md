@@ -6,7 +6,7 @@ All notable changes to `@relayburn/mcp`.
 
 ### Changed
 
-- Drop `@relayburn/{reader, ledger, analyze}` from runtime dependencies; `@relayburn/sdk` is now the only `@relayburn/*` runtime dep. The reader/analyze deps were already unreferenced at runtime, and the ledger import was test-only — moved to `devDependencies`. Unblocks the 2.0 retirement of those TS-internals packages.
+- Drop `@relayburn/{reader, ledger, analyze}` from MCP entirely; `@relayburn/sdk` is now the only `@relayburn/*` package edge.
 
 ## [1.9.0] - 2026-05-03
 

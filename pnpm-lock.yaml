@@ -68,10 +68,6 @@ importers:
       '@relayburn/sdk':
         specifier: workspace:*
         version: link:../sdk
-    devDependencies:
-      '@relayburn/ledger':
-        specifier: workspace:*
-        version: link:../ledger
 
   packages/reader:
     dependencies:
