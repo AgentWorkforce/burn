@@ -33,6 +33,12 @@ use crate::render::error::report_unimplemented;
 
 /// Shared "not yet implemented" exit path for every subcommand stub.
 /// Honors `--json` via [`crate::render::error::report_unimplemented`].
+//
+// All Wave 2 D1–D8 PRs have wired their presenters; no command currently
+// calls this helper. Kept in place (with `#[allow(dead_code)]`) so a
+// future scaffold of a new stub subcommand has a ready landing pad and
+// doesn't have to re-derive the JSON-aware error envelope here.
+#[allow(dead_code)]
 pub(crate) fn not_yet_implemented(name: &str, globals: &GlobalArgs) -> i32 {
     report_unimplemented(name, globals)
 }

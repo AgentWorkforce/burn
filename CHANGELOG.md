@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-cli` (Rust): wire `burn run <harness>` driver + claude adapter (eager unit-struct in `EAGER_ADAPTERS`); `afterExit` ingest folds into `[burn] claude ingest: ...` summary line. (#248 D5)
 - `relayburn-cli` (Rust): wire `burn ingest` (no-flag scan, `--watch` poll loop, `--hook claude --quiet`) and `burn mcp-server` stdio subcommand exposing `burn__sessionCost`; closes #210. (#248 D8)
 - `relayburn-cli` (Rust): wire codex `HarnessAdapter` via `pending_stamp::adapter_static` factory; registered in `RUNTIME_ADAPTERS`. (#248 D6)
 - `relayburn-cli` (Rust): wire `burn compare` as a presenter over `relayburn_sdk::analyze::compare` building blocks (`build_compare_table` + the per-turn fidelity gate), matching the TS CLI flag set (positional comma-separated model list, `--include-partial` / `--fidelity` / `--since` / `--project` / `--session` / `--min-sample` / `--csv` / `--no-archive`) and producing byte-equivalent stdout for the cli-golden `compare` / `compare-json` invocations. (#248 D3)
