@@ -16,3 +16,4 @@
 //! disturbing `main.rs`.
 
 pub mod harnesses;
+pub mod util;
