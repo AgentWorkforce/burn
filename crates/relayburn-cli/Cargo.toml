@@ -80,7 +80,11 @@ phf = { version = "0.11", features = ["macros"] }
 # `process` is needed by `commands/run.rs` so the `burn run` driver can
 # `await` the child via `tokio::process::Command::status()` rather than
 # blocking the current-thread runtime with `std::process::Command::status()`.
-tokio = { workspace = true, features = ["sync", "rt", "process"] }
+# `signal` is needed for the `burn ingest --watch` SIGINT/SIGTERM trap
+# (#248 D8); the watch loop blocks the foreground until a stop signal
+# comes in. `rt` drives the current-thread runtime that wraps the SDK's
+# async ingest verb from otherwise-sync presenter bodies.
+tokio = { workspace = true, features = ["sync", "rt", "process", "signal"] }
 
 # `IndexMap` preserves first-seen iteration order, which matters for the
 # Wave 2 read-path commands so their grouped output (`summary --by-model`,

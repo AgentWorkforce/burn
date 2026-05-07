@@ -37,7 +37,7 @@ fn dispatch(args: Args) -> i32 {
         Command::Compare(args) => commands::compare::run(&globals, args),
         Command::Run(args) => commands::run::run(&globals, args),
         Command::State(args) => commands::state::run(&globals, args),
-        Command::Ingest => commands::ingest::run(&globals),
-        Command::McpServer => commands::mcp_server::run(&globals),
+        Command::Ingest(args) => commands::ingest::run(&globals, args),
+        Command::McpServer(args) => commands::mcp_server::run(&globals, args),
     }
 }
