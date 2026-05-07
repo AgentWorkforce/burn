@@ -20,3 +20,9 @@
   for safe-range integers (`[Number.MIN_SAFE_INTEGER,
   Number.MAX_SAFE_INTEGER]`), matching the TS 1.x runtime shape; values
   outside that range stay `BigInt` to avoid silent precision loss.
+- Conformance suite is now wired into CI: `napi build` writes its outputs
+  (`.node`, `binding.cjs`, `binding.d.ts`) into `src/` so the generated
+  loader's local-file branch resolves; the suite seeds a deterministic
+  ledger via `tests/fixtures/cli-golden/scripts/build-ledger.mjs` and
+  flips `RELAYBURN_SDK_NAPI_BUILT=1` to enable the `deepStrictEqual` gate
+  against TS `@relayburn/sdk@1.x`. (#247 part d)
