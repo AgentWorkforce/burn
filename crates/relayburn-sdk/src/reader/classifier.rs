@@ -432,17 +432,14 @@ fn parse_bash_command_inner(command: &str, depth: u32) -> Option<BashParse> {
 }
 
 fn verb(binary: &str, subcommand: Option<&str>) -> BashParse {
-    match subcommand {
-        None => BashParse {
-            binary: binary.to_string(),
-            subcommand: None,
-            normalized: binary.to_string(),
-        },
-        Some(sub) => BashParse {
-            binary: binary.to_string(),
-            subcommand: Some(sub.to_string()),
-            normalized: format!("{binary} {sub}"),
-        },
+    let normalized = match subcommand {
+        Some(sub) => format!("{binary} {sub}"),
+        None => binary.to_string(),
+    };
+    BashParse {
+        binary: binary.to_string(),
+        subcommand: subcommand.map(str::to_string),
+        normalized,
     }
 }
 

@@ -342,8 +342,8 @@ impl ParseState {
             self.last_assistant_message_id = Some(mid.clone());
         }
 
-        let session_id = string_field(obj, "sessionId");
-        let timestamp = string_field(obj, "timestamp");
+        let session_id = string_field(obj, SESSION_ID_KEYS, false);
+        let timestamp = string_field(obj, TIMESTAMP_KEYS, false);
 
         if let Some(ref sid) = session_id {
             if !sid.is_empty() {
@@ -389,8 +389,8 @@ impl ParseState {
         }
         collect_errored_tool_use_ids(obj, &mut self.errored_tool_use_ids);
         collect_replacement_meta(obj, &mut self.replacement_meta_by_tool_use_id);
-        let session_id = string_field(obj, "sessionId");
-        let timestamp = string_field(obj, "timestamp");
+        let session_id = string_field(obj, SESSION_ID_KEYS, false);
+        let timestamp = string_field(obj, TIMESTAMP_KEYS, false);
         if let Some(ref sid) = session_id {
             if !sid.is_empty() {
                 record_root(
@@ -434,8 +434,8 @@ impl ParseState {
 
     fn ingest_system(&mut self, obj: &serde_json::Map<String, Value>) {
         if obj.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
-            let session_id = string_field(obj, "sessionId").unwrap_or_default();
-            let ts = string_field(obj, "timestamp").unwrap_or_default();
+            let session_id = string_field(obj, SESSION_ID_KEYS, false).unwrap_or_default();
+            let ts = string_field(obj, TIMESTAMP_KEYS, false).unwrap_or_default();
             if !session_id.is_empty() {
                 let mut ev = CompactionEvent {
                     v: 1,
@@ -587,9 +587,9 @@ fn ingest_assistant_record(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let session_id = string_field(obj, "sessionId").unwrap_or_default();
-    let timestamp = string_field(obj, "timestamp").unwrap_or_default();
-    let cwd = string_field(obj, "cwd");
+    let session_id = string_field(obj, SESSION_ID_KEYS, false).unwrap_or_default();
+    let timestamp = string_field(obj, TIMESTAMP_KEYS, false).unwrap_or_default();
+    let cwd = string_field(obj, &["cwd"], false);
     let is_sidechain = obj
         .get("isSidechain")
         .and_then(Value::as_bool)
@@ -603,8 +603,8 @@ fn ingest_assistant_record(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let uuid = string_field(obj, "uuid");
-    let parent_uuid = string_field(obj, "parentUuid");
+    let uuid = string_field(obj, &["uuid"], false);
+    let parent_uuid = string_field(obj, &["parentUuid"], false);
 
     let usage_with_cov = to_usage(msg.get("usage"));
 
@@ -1148,9 +1148,9 @@ fn extract_assistant_content(w: &WorkingRecord) -> Vec<ContentRecord> {
 
 fn extract_user_content(line: &serde_json::Map<String, Value>) -> Vec<ContentRecord> {
     let mut out = Vec::new();
-    let session_id = string_field(line, "sessionId").unwrap_or_default();
-    let message_id = string_field(line, "uuid").unwrap_or_default();
-    let ts = string_field(line, "timestamp").unwrap_or_default();
+    let session_id = string_field(line, SESSION_ID_KEYS, false).unwrap_or_default();
+    let message_id = string_field(line, &["uuid"], false).unwrap_or_default();
+    let ts = string_field(line, TIMESTAMP_KEYS, false).unwrap_or_default();
     if session_id.is_empty() || message_id.is_empty() {
         return out;
     }
@@ -1269,8 +1269,8 @@ fn build_user_turn_record<C: TokenCounter + ?Sized>(
     // port must reject blank IDs too. Without this, a malformed line carrying
     // `"sessionId": ""` would emit an unanchored UserTurnRecord and could
     // shadow the next assistant turn's `following_message_id` linkage.
-    let session_id = first_nonempty_string(line, "sessionId")?;
-    let user_uuid = first_nonempty_string(line, "uuid")?;
+    let session_id = string_field(line, SESSION_ID_KEYS, true)?;
+    let user_uuid = string_field(line, &["uuid"], true)?;
     let blocks = extract_user_turn_blocks(line, counter);
     if blocks.is_empty() {
         return None;
@@ -1280,7 +1280,7 @@ fn build_user_turn_record<C: TokenCounter + ?Sized>(
         source: SourceKind::ClaudeCode,
         session_id,
         user_uuid,
-        ts: string_field(line, "timestamp").unwrap_or_default(),
+        ts: string_field(line, TIMESTAMP_KEYS, false).unwrap_or_default(),
         preceding_message_id: preceding_message_id.map(str::to_string),
         following_message_id: None,
         blocks,
@@ -1345,7 +1345,7 @@ fn collect_tool_result_events(
     start_index: u64,
 ) -> u64 {
     let mut next = start_index;
-    let session_id = match string_field(line, "sessionId") {
+    let session_id = match string_field(line, SESSION_ID_KEYS, false) {
         Some(s) if !s.is_empty() => s,
         _ => return next,
     };
@@ -1357,8 +1357,8 @@ fn collect_tool_result_events(
         Some(a) => a,
         None => return next,
     };
-    let message_id = string_field(line, "uuid");
-    let ts = string_field(line, "timestamp");
+    let message_id = string_field(line, &["uuid"], false);
+    let ts = string_field(line, TIMESTAMP_KEYS, false);
     for block in arr {
         let bo = match block.as_object() {
             Some(o) => o,
@@ -1456,20 +1456,17 @@ fn build_claude_system_tool_result_event(
     counters: &mut HashMap<String, u64>,
     event_index: u64,
 ) -> Option<ToolResultEventRecord> {
-    let session_id = first_string_field(line, &["sessionId", "session_id"])?;
-    let tool_use_id = first_string_field(
-        line,
-        &[
+    let session_id = string_field(line, SESSION_ID_KEYS, true)?;
+    let tool_use_id = string_field(line, &[
             "parent_tool_use_id",
             "parentToolUseId",
             "parentToolUseID",
             "tool_use_id",
             "toolUseId",
-        ],
-    )?;
-    let agent_id = first_string_field(line, &["agent_id", "agentId"]);
+        ], true)?;
+    let agent_id = string_field(line, &["agent_id", "agentId"], true);
     let subagent_session_id =
-        first_string_field(line, &["subagent_session_id", "subagentSessionId"]);
+        string_field(line, &["subagent_session_id", "subagentSessionId"], true);
     if agent_id.is_none() && subagent_session_id.is_none() {
         return None;
     }
@@ -1484,7 +1481,7 @@ fn build_claude_system_tool_result_event(
         tool_use_id,
         call_index: Some(call_index),
         event_index,
-        ts: first_string_field(line, &["timestamp", "ts"]),
+        ts: string_field(line, TIMESTAMP_KEYS, true),
         status,
         event_source: ToolResultEventSource::SubagentNotification,
         content_length: None,
@@ -1515,10 +1512,7 @@ fn claude_system_event_status(line: &serde_json::Map<String, Value>) -> ToolResu
     {
         return ToolResultStatus::Errored;
     }
-    let raw = first_string_field(
-        line,
-        &["status", "state", "result", "terminal_status", "terminalStatus"],
-    );
+    let raw = string_field(line, &["status", "state", "result", "terminal_status", "terminalStatus"], true);
     if let Some(s) = normalize_tool_result_status(raw.as_deref()) {
         return s;
     }
@@ -1806,7 +1800,7 @@ fn build_explicit_claude_relationships(
     fallback_ts: Option<&str>,
 ) -> Vec<SessionRelationshipRecord> {
     let mut rows = Vec::new();
-    let fork = first_string_field(line, &["forkSessionId", "fork_session_id"]);
+    let fork = string_field(line, &["forkSessionId", "fork_session_id"], true);
     if let Some(ref fork_id) = fork {
         if fork_id != session_id {
             rows.push(build_explicit_claude_relationship(
@@ -1818,7 +1812,7 @@ fn build_explicit_claude_relationships(
             ));
         }
     }
-    let cont = first_string_field(line, &["continuedFromSessionId", "continued_from_session_id"]);
+    let cont = string_field(line, &["continuedFromSessionId", "continued_from_session_id"], true);
     if let Some(ref c) = cont {
         if c != session_id {
             rows.push(build_explicit_claude_relationship(
@@ -1854,15 +1848,14 @@ fn build_explicit_claude_relationship(
         subagent_type: None,
         description: None,
     };
-    let ts = first_string_field(line, &["timestamp", "ts"])
-        .or_else(|| fallback_ts.map(str::to_string));
+    let ts = string_field(line, TIMESTAMP_KEYS, true).or_else(|| fallback_ts.map(str::to_string));
     if let Some(t) = ts {
         row.ts = Some(t);
     }
-    if let Some(s) = first_string_field(line, &["sourceSessionId", "source_session_id"]) {
+    if let Some(s) = string_field(line, &["sourceSessionId", "source_session_id"], true) {
         row.source_session_id = Some(s);
     }
-    if let Some(s) = first_string_field(line, &["version", "sourceVersion", "source_version"]) {
+    if let Some(s) = string_field(line, SOURCE_VERSION_KEYS, true) {
         row.source_version = Some(s);
     }
     row
@@ -1873,14 +1866,14 @@ fn record_explicit_relationship_evidence(
     line: &serde_json::Map<String, Value>,
 ) {
     if let Some(c) =
-        first_string_field(line, &["continuedFromSessionId", "continued_from_session_id"])
+        string_field(line, &["continuedFromSessionId", "continued_from_session_id"], true)
     {
         evidence.explicit_continuation_target_session_ids = Some(append_unique(
             evidence.explicit_continuation_target_session_ids.clone(),
             c,
         ));
     }
-    if let Some(f) = first_string_field(line, &["forkSessionId", "fork_session_id"]) {
+    if let Some(f) = string_field(line, &["forkSessionId", "fork_session_id"], true) {
         evidence.explicit_fork_target_session_ids = Some(append_unique(
             evidence.explicit_fork_target_session_ids.clone(),
             f,
@@ -1975,26 +1968,16 @@ fn record_evidence_from_line(evidence: &mut ClaudeRelationshipEvidence, line: &V
             evidence.seen_uuids.push(uuid.to_string());
         }
     }
-    if let Some(sid) = lo.get("sessionId").and_then(Value::as_str) {
-        if !sid.is_empty() {
-            if !evidence.in_log_session_ids.iter().any(|s| s == sid) {
-                evidence.in_log_session_ids.push(sid.to_string());
-            }
-            if evidence.first_ts.is_none() {
-                if let Some(ts) = lo.get("timestamp").and_then(Value::as_str) {
-                    if !ts.is_empty() {
-                        evidence.first_ts = Some(ts.to_string());
-                    }
-                }
-            }
+    if let Some(sid) = string_field(lo, SESSION_ID_KEYS, true) {
+        if !evidence.in_log_session_ids.iter().any(|s| s == &sid) {
+            evidence.in_log_session_ids.push(sid);
+        }
+        if evidence.first_ts.is_none() {
+            evidence.first_ts = string_field(lo, TIMESTAMP_KEYS, true);
         }
     }
     if evidence.source_version.is_none() {
-        if let Some(v) = lo.get("version").and_then(Value::as_str) {
-            if !v.is_empty() {
-                evidence.source_version = Some(v.to_string());
-            }
-        }
+        evidence.source_version = string_field(lo, SOURCE_VERSION_KEYS, true);
     }
     let line_type = lo.get("type").and_then(Value::as_str).unwrap_or("");
     let is_sidechain = lo
@@ -2566,8 +2549,8 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                         .or_insert_with(|| current_user_text.clone());
                     last_assistant_message_id = Some(mid_str.clone());
                 }
-                let session_id = string_field(&obj, "sessionId");
-                let timestamp = string_field(&obj, "timestamp");
+                let session_id = string_field(&obj, SESSION_ID_KEYS, false);
+                let timestamp = string_field(&obj, TIMESTAMP_KEYS, false);
                 if let Some(ref sid) = session_id {
                     if !sid.is_empty() {
                         record_root_incremental(
@@ -2607,8 +2590,8 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 }
                 collect_errored_tool_use_ids(&obj, &mut errored_tool_use_ids);
                 collect_replacement_meta(&obj, &mut replacement_meta_by_tool_use_id);
-                let session_id = string_field(&obj, "sessionId");
-                let timestamp = string_field(&obj, "timestamp");
+                let session_id = string_field(&obj, SESSION_ID_KEYS, false);
+                let timestamp = string_field(&obj, TIMESTAMP_KEYS, false);
                 if let Some(ref sid) = session_id {
                     if !sid.is_empty() {
                         record_root_incremental(
@@ -2663,8 +2646,8 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             }
             "system" => {
                 if obj.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
-                    let session_id = string_field(&obj, "sessionId").unwrap_or_default();
-                    let ts = string_field(&obj, "timestamp").unwrap_or_default();
+                    let session_id = string_field(&obj, SESSION_ID_KEYS, false).unwrap_or_default();
+                    let ts = string_field(&obj, TIMESTAMP_KEYS, false).unwrap_or_default();
                     if !session_id.is_empty() {
                         let mut ev = CompactionEvent {
                             v: 1,
@@ -2893,26 +2876,26 @@ fn new_evidence(file_session_id: Option<String>) -> ClaudeRelationshipEvidence {
     }
 }
 
-fn string_field(obj: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
-    obj.get(key).and_then(Value::as_str).map(str::to_string)
-}
+const SESSION_ID_KEYS: &[&str] = &["sessionId", "session_id"];
+const TIMESTAMP_KEYS: &[&str] = &["timestamp", "ts"];
+const SOURCE_VERSION_KEYS: &[&str] = &["version", "sourceVersion", "source_version"];
 
-fn first_nonempty_string(obj: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
-    obj.get(key)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn first_string_field(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+fn string_field(
+    obj: &serde_json::Map<String, Value>,
+    keys: &[&str],
+    require_nonempty: bool,
+) -> Option<String> {
+    let mut empty_match: Option<String> = None;
     for k in keys {
-        if let Some(v) = obj.get(*k).and_then(Value::as_str) {
-            if !v.is_empty() {
-                return Some(v.to_string());
+        match obj.get(*k).and_then(Value::as_str) {
+            Some(s) if !s.is_empty() => return Some(s.to_string()),
+            Some(s) if !require_nonempty && empty_match.is_none() => {
+                empty_match = Some(s.to_string());
             }
+            _ => {}
         }
     }
-    None
+    empty_match
 }
 
 fn first_present<'a>(obj: &'a serde_json::Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
@@ -3051,6 +3034,85 @@ mod tests {
         f.write_all(b).unwrap();
     }
 
+    fn alias_key_session_file() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let working = dir.path().join("alias-session.jsonl");
+        let lines = [
+            serde_json::json!({
+                "parentUuid": null,
+                "isSidechain": false,
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_alias", "content": "ok"}]
+                },
+                "uuid": "u-alias-user",
+                "sessionId": "",
+                "session_id": "alias-session",
+                "timestamp": "",
+                "ts": "2026-04-25T00:00:00.000Z",
+                "continued_from_session_id": "parent-session",
+                "cwd": "/tmp/project",
+                "sourceVersion": "2.1.alias",
+            }),
+            serde_json::json!({
+                "parentUuid": "u-alias-user",
+                "isSidechain": false,
+                "message": {
+                    "model": "claude-sonnet-4-6",
+                    "id": "msg_alias_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "done"}],
+                    "stop_reason": "end_turn",
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation_input_tokens": 0,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}
+                    },
+                },
+                "type": "assistant",
+                "uuid": "u-alias-asst",
+                "sessionId": "",
+                "session_id": "alias-session",
+                "timestamp": "",
+                "ts": "2026-04-25T00:00:01.000Z",
+                "cwd": "/tmp/project",
+            }),
+            serde_json::json!({
+                "type": "system",
+                "subtype": "compact_boundary",
+                "sessionId": "",
+                "session_id": "alias-session",
+                "timestamp": "",
+                "ts": "2026-04-25T00:00:02.000Z",
+            }),
+            serde_json::json!({
+                "type": "system",
+                "subtype": "subagent_completed",
+                "sessionId": "",
+                "session_id": "alias-session",
+                "timestamp": "",
+                "ts": "2026-04-25T00:00:03.000Z",
+                "parent_tool_use_id": "toolu_alias",
+                "agent_id": "agent-alias",
+                "subagent_session_id": "child-alias",
+                "status": "completed",
+                "content": "subagent finished",
+            }),
+        ];
+        let body = lines
+            .iter()
+            .map(|j| j.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        write_bytes(&working, body.as_bytes());
+        (dir, working)
+    }
+
     fn append_str(p: &std::path::Path, s: &str) {
         let mut prev = std::fs::read(p).unwrap();
         prev.extend_from_slice(s.as_bytes());
@@ -3068,6 +3130,142 @@ mod tests {
             off += line.len() as u64;
         }
         panic!("needle {:?} not found in {:?}", needle, path);
+    }
+
+    #[test]
+    fn session_id_and_ts_aliases_reach_sync_outputs() {
+        let (_dir, path) = alias_key_session_file();
+        let res = parse_claude_session(
+            &path,
+            &ParseOptions {
+                content_mode: Some(ContentStoreMode::Full),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(res.turns.len(), 1);
+        assert_eq!(res.turns[0].session_id, "alias-session");
+        assert_eq!(res.turns[0].ts, "2026-04-25T00:00:01.000Z");
+
+        assert_eq!(res.user_turns.len(), 1);
+        assert_eq!(res.user_turns[0].session_id, "alias-session");
+        assert_eq!(res.user_turns[0].ts, "2026-04-25T00:00:00.000Z");
+        assert_eq!(
+            res.user_turns[0].following_message_id.as_deref(),
+            Some("msg_alias_1")
+        );
+
+        assert!(res.content.iter().all(|c| c.session_id == "alias-session"));
+        assert!(res.content.iter().any(
+            |c| matches!(c.role, ContentRole::ToolResult) && c.ts == "2026-04-25T00:00:00.000Z"
+        ));
+        assert!(res.content.iter().any(
+            |c| matches!(c.role, ContentRole::Assistant) && c.ts == "2026-04-25T00:00:01.000Z"
+        ));
+
+        let root = res
+            .relationships
+            .iter()
+            .find(|r| matches!(r.relationship_type, RelationshipType::Root))
+            .expect("root relationship");
+        assert_eq!(root.session_id, "alias-session");
+        assert_eq!(root.ts.as_deref(), Some("2026-04-25T00:00:00.000Z"));
+        assert_eq!(root.source_version.as_deref(), Some("2.1.alias"));
+        let continuation = res
+            .relationships
+            .iter()
+            .find(|r| matches!(r.relationship_type, RelationshipType::Continuation))
+            .expect("continuation relationship");
+        assert_eq!(continuation.session_id, "alias-session");
+        assert_eq!(
+            continuation.related_session_id.as_deref(),
+            Some("parent-session")
+        );
+        assert_eq!(continuation.ts.as_deref(), Some("2026-04-25T00:00:00.000Z"));
+        assert_eq!(continuation.source_version.as_deref(), Some("2.1.alias"));
+
+        assert_eq!(res.events.len(), 1);
+        assert_eq!(res.events[0].session_id, "alias-session");
+        assert_eq!(res.events[0].ts, "2026-04-25T00:00:02.000Z");
+        assert_eq!(
+            res.events[0].preceding_message_id.as_deref(),
+            Some("msg_alias_1")
+        );
+
+        let tool_event = res
+            .tool_result_events
+            .iter()
+            .find(|e| matches!(e.event_source, ToolResultEventSource::ToolResult))
+            .expect("tool result event");
+        assert_eq!(tool_event.session_id, "alias-session");
+        assert_eq!(tool_event.ts.as_deref(), Some("2026-04-25T00:00:00.000Z"));
+        let system_event = res
+            .tool_result_events
+            .iter()
+            .find(|e| matches!(e.event_source, ToolResultEventSource::SubagentNotification))
+            .expect("system tool result event");
+        assert_eq!(system_event.session_id, "alias-session");
+        assert_eq!(system_event.ts.as_deref(), Some("2026-04-25T00:00:03.000Z"));
+        assert_eq!(system_event.call_index, Some(1));
+
+        assert_eq!(res.evidence.in_log_session_ids, vec!["alias-session"]);
+        assert_eq!(
+            res.evidence.first_ts.as_deref(),
+            Some("2026-04-25T00:00:00.000Z")
+        );
+        assert_eq!(res.evidence.source_version.as_deref(), Some("2.1.alias"));
+    }
+
+    #[test]
+    fn session_id_and_ts_aliases_reach_incremental_outputs() {
+        let (_dir, path) = alias_key_session_file();
+        let res = parse_claude_session_incremental(
+            &path,
+            &ParseIncrementalOptions {
+                content_mode: Some(ContentStoreMode::Full),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(res.turns.len(), 1);
+        assert_eq!(res.turns[0].session_id, "alias-session");
+        assert_eq!(res.turns[0].ts, "2026-04-25T00:00:01.000Z");
+        assert_eq!(res.user_turns.len(), 1);
+        assert_eq!(res.user_turns[0].session_id, "alias-session");
+        assert_eq!(res.user_turns[0].ts, "2026-04-25T00:00:00.000Z");
+        assert!(res
+            .relationships
+            .iter()
+            .any(|r| matches!(r.relationship_type, RelationshipType::Root)
+                && r.session_id == "alias-session"));
+        assert!(res.relationships.iter().any(|r| matches!(
+            r.relationship_type,
+            RelationshipType::Continuation
+        ) && r.session_id == "alias-session"
+            && r.related_session_id.as_deref() == Some("parent-session")));
+        assert_eq!(res.events.len(), 1);
+        assert_eq!(res.events[0].session_id, "alias-session");
+        assert_eq!(res.events[0].ts, "2026-04-25T00:00:02.000Z");
+        assert_eq!(res.tool_result_events.len(), 2);
+        assert!(res.tool_result_events.iter().any(|e| matches!(
+            e.event_source,
+            ToolResultEventSource::ToolResult
+        ) && e.session_id == "alias-session"
+            && e.ts.as_deref() == Some("2026-04-25T00:00:00.000Z")));
+        assert!(res.tool_result_events.iter().any(|e| matches!(
+            e.event_source,
+            ToolResultEventSource::SubagentNotification
+        ) && e.session_id == "alias-session"
+            && e.ts.as_deref() == Some("2026-04-25T00:00:03.000Z")));
+        assert!(res.content.iter().all(|c| c.session_id == "alias-session"));
+        assert_eq!(res.evidence.in_log_session_ids, vec!["alias-session"]);
+        assert_eq!(
+            res.evidence.first_ts.as_deref(),
+            Some("2026-04-25T00:00:00.000Z")
+        );
+        assert_eq!(res.evidence.source_version.as_deref(), Some("2.1.alias"));
     }
 
     #[test]
