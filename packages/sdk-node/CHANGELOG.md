@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `summary()` result now includes `replacementSavings` — a rollup of per-tool collapsed-call counts and tokens-saved estimates derived from `_meta`-annotated tool results. Omitted (field absent) when no replacement-tool calls exist in the queried window.
+
 ## [2.0.0] - 2026-05-07
 
 - Initial scaffolding: umbrella package layout (`@relayburn/sdk`) +

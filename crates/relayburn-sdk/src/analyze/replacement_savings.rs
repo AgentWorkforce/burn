@@ -52,14 +52,16 @@ pub struct ToolCallSavings {
     pub estimated_tokens_saved: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolSavingsAggregate {
     pub calls: u64,
     pub collapsed_calls: u64,
     pub estimated_tokens_saved: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReplacementSavingsSummary {
     pub calls: u64,
     pub collapsed_calls: u64,

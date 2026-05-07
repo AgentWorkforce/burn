@@ -1,3 +1,5 @@
+ **Deprecated.** `@relayburn/sdk@1.x` is in maintenance-only mode. New work lands in `@relayburn/sdk@2.x` (the napi-rs binding over the Rust `relayburn-sdk` crate). Embedders should pin `^2.0.0` once it ships. The 1.x type surface is frozen and will not gain new fields. See [#249](https://github.com/AgentWorkforce/burn/issues/249) for the cutover schedule.
+
 # @relayburn/sdk
 
 Embeddable Relayburn SDK for in-process ingestion and analysis. This package is the **source of truth** for the in-process query/compute surface — `@relayburn/mcp` and `@relayburn/cli` consume the SDK rather than duplicating its logic.

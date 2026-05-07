@@ -47,6 +47,17 @@ export declare function summary(opts?: SummaryOptions): Promise<{
   turnCount: number;
   byTool: Array<{ tool: string; tokens: number | bigint; cost: number; count: number }>;
   byModel: Array<{ model: string; tokens: number | bigint; cost: number }>;
+  replacementSavings?: {
+    calls: number | bigint;
+    collapsedCalls: number | bigint;
+    estimatedTokensSaved: number | bigint;
+    byTool: Array<{
+      tool: string;
+      calls: number | bigint;
+      collapsedCalls: number | bigint;
+      estimatedTokensSaved: number | bigint;
+    }>;
+  };
 }>
 
 export interface SessionCostOptions {
