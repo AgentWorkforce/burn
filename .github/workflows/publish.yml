@@ -84,10 +84,12 @@ jobs:
       # Rust port build + test gates the whole publish job. If the Rust
       # tree is red at this commit, abort before npm ships anything so the
       # release tag points at a commit where both trees pass.
+      #
+      # `rustup toolchain install` (no args) reads rust-toolchain.toml and
+      # installs both the channel and the listed components — no explicit
+      # `rustup component add` needed.
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install
-          rustup component add rustfmt clippy
+        run: rustup toolchain install
 
       - name: Cargo build + test
         run: |
@@ -592,8 +594,15 @@ jobs:
       # Both publishes are gated on whether the version is already on
       # crates.io, making `version: none` re-runs idempotent for partial
       # failure recovery.
+      #
+      # Always mint the token, including on dry runs:
+      #   1. `cargo publish --dry-run` historically required registry auth
+      #      (and the requirement varies by cargo version), so passing a
+      #      real token avoids version-dependent surprises on the runner.
+      #   2. Running the OIDC exchange on every dry run validates that the
+      #      crates.io trusted-publisher registration is healthy — the
+      #      whole point of running a dry run before a real release.
       - name: Mint crates.io token via OIDC
-        if: ${{ github.event.inputs.dry_run != 'true' }}
         id: cargo-auth
         uses: rust-lang/crates-io-auth-action@v1
 
@@ -622,16 +631,25 @@ jobs:
 
           # Wait for the new SDK version to land in the sparse index so
           # the CLI's dep resolution sees it. Poll rather than fixed-sleep.
+          # Fail loudly if the version never appears — letting the CLI
+          # publish proceed produces a confusing "unsatisfied dep" error
+          # that's harder to diagnose than an explicit timeout.
           if [ -z "$DRY" ] && [ "$sdk_published" = "0" ]; then
+            found=0
             for i in $(seq 1 30); do
               if curl -sf "https://index.crates.io/re/la/relayburn-sdk" \
                  | grep -q "\"vers\":\"$VER\""; then
                 echo "relayburn-sdk@$VER visible in index"
+                found=1
                 break
               fi
               echo "waiting for index... ($i/30)"
               sleep 10
             done
+            if [ "$found" = "0" ]; then
+              echo "::error title=Sparse index timeout::relayburn-sdk@$VER not visible in index after 30 attempts (5 min). Aborting CLI publish to avoid a misleading dep-resolution error."
+              exit 1
+            fi
           fi
 
           cli_published=$(curl -sf "https://index.crates.io/re/la/relayburn-cli" 2>/dev/null \
