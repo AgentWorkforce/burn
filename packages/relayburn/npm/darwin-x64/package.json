@@ -1,0 +1,31 @@
+{
+  "name": "@relayburn/cli-darwin-x64",
+  "version": "1.10.0",
+  "description": "Prebuilt `burn` binary for darwin-x64.",
+  "bin": {
+    "burn": "./bin/burn"
+  },
+  "files": [
+    "bin/",
+    "package.json",
+    "README.md"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/relayburn/npm/darwin-x64"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

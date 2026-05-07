@@ -1,0 +1,34 @@
+{
+  "name": "@relayburn/cli-linux-x64-gnu",
+  "version": "1.10.0",
+  "description": "Prebuilt `burn` binary for linux-x64-gnu (glibc).",
+  "bin": {
+    "burn": "./bin/burn"
+  },
+  "files": [
+    "bin/",
+    "package.json",
+    "README.md"
+  ],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/relayburn/npm/linux-x64-gnu"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

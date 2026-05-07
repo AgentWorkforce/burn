@@ -4,6 +4,10 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn` now prefers the prebuilt Rust `burn` binary from per-platform `@relayburn/cli-<platform>` packages, with `@relayburn/cli` kept as a fallback for unsupported or missing native packages.
+
 ## [1.6.2] - 2026-05-02
 
 ### Changed

@@ -1,0 +1,199 @@
+name: cli build
+
+# Build prebuilt `burn` binaries for every platform we publish to npm under
+# `@relayburn/cli-*`. PRs validate the matrix; tags / manual dispatch *would*
+# publish, but the publish step is stubbed off for now — the cutover publish
+# workflow integration lands as a follow-up to this PR.
+#
+# Mirrors `.github/workflows/napi-build.yml`: the napi-rs SDK uses the same
+# umbrella + per-platform-package shape, just with `.node` artifacts instead
+# of native executables.
+
+on:
+  pull_request:
+    paths:
+      - 'crates/relayburn-cli/**'
+      - 'crates/relayburn-sdk/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'packages/relayburn/**'
+      - '.github/workflows/cli-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/relayburn-cli/**'
+      - 'crates/relayburn-sdk/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'packages/relayburn/**'
+      - '.github/workflows/cli-build.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish prebuilt artifacts to npm under the `next` tag (stubbed; full wiring lands with the cutover publish workflow)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.short }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            short: darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-14
+            short: darwin-arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            short: linux-x64-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            short: linux-arm64-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        # rust-toolchain.toml at the repo root pins the channel + components.
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      - name: Install aarch64-linux cross toolchain (linux-arm64 only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        # `libsqlite3-sys` (a transitive dep via `rusqlite`) compiles bundled
+        # SQLite C source via `cc-rs`, which probes for `aarch64-linux-gnu-gcc`.
+        # Same setup as `napi-build.yml`'s aarch64-linux leg.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-cli-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-cli-${{ runner.os }}-${{ matrix.target }}-
+            cargo-cli-${{ runner.os }}-
+
+      - name: Build burn binary for ${{ matrix.target }}
+        # The binary name is `burn` (the `[[bin]]` rename in
+        # `crates/relayburn-cli/Cargo.toml`); the crate is `relayburn-cli`.
+        # CC_/linker env vars only take effect on the aarch64-linux leg
+        # (cargo ignores per-target vars when host == target); native legs
+        # are unaffected.
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --target ${{ matrix.target }} --bin burn -p relayburn-cli
+
+      - name: Strip binary
+        # Stripping cuts ~half the size off a release `burn` (debug info,
+        # symbol tables that aren't needed at runtime). On macOS use `-x` to
+        # strip non-global symbols only — fully stripping a Mach-O binary
+        # breaks codesigning. On linux, default `strip` is fine; when
+        # cross-compiling for aarch64 we use the matching cross-strip.
+        run: |
+          BIN="target/${{ matrix.target }}/release/burn"
+          case "${{ matrix.target }}" in
+            *-apple-darwin)
+              strip -x "$BIN"
+              ;;
+            aarch64-unknown-linux-gnu)
+              aarch64-linux-gnu-strip "$BIN"
+              ;;
+            *-unknown-linux-gnu)
+              strip "$BIN"
+              ;;
+          esac
+          ls -lh "$BIN"
+
+      - name: Stage binary into platform package
+        # Mirror the layout the publish step will rely on:
+        # `packages/relayburn/npm/<short>/bin/burn`. The directory is
+        # gitignored at rest; the artifact upload below is what survives
+        # the matrix run for the publish job to download.
+        run: |
+          mkdir -p packages/relayburn/npm/${{ matrix.short }}/bin
+          cp target/${{ matrix.target }}/release/burn packages/relayburn/npm/${{ matrix.short }}/bin/burn
+          chmod +x packages/relayburn/npm/${{ matrix.short }}/bin/burn
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relayburn-cli-${{ matrix.short }}
+          path: packages/relayburn/npm/${{ matrix.short }}/bin/burn
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Smoke test (`burn --help`)
+        # Native legs only. The aarch64-linux leg cross-compiles on an x64
+        # host so the runner's interpreter cannot execute the binary.
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: |
+          set -euo pipefail
+          packages/relayburn/npm/${{ matrix.short }}/bin/burn --help
+          packages/relayburn/npm/${{ matrix.short }}/bin/burn --version
+
+          smoke_dir="$(mktemp -d)"
+          umbrella_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir" "$umbrella_dir"' EXIT
+          npm install --prefix "$smoke_dir" --no-save --omit=optional \
+            --ignore-scripts --no-audit --no-fund \
+            ./packages/relayburn/npm/${{ matrix.short }}
+          "$smoke_dir/node_modules/.bin/burn" --help
+          "$smoke_dir/node_modules/.bin/burn" --version
+
+          npm install --prefix "$umbrella_dir" --no-save --omit=optional \
+            --ignore-scripts --no-audit --no-fund \
+            ./packages/relayburn
+          NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --help
+          NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --version
+
+  publish:
+    # Stub. Real publish wiring lands as a follow-up that integrates with
+    # `.github/workflows/publish.yml`: download the matrix artifacts, drop
+    # each into the right `packages/relayburn/npm/<short>/bin/` directory,
+    # and `npm publish` the umbrella + each per-platform package via OIDC
+    # trusted publisher. Until then, calling `workflow_dispatch` with
+    # `publish: true` exercises the artifact download path so we catch
+    # wiring errors early without actually pushing to npm.
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: packages/relayburn/npm-artifacts
+
+      - name: Inspect artifacts (publish stub)
+        run: |
+          echo 'Publish step is currently a stub. Full wiring lands in the cutover publish.yml integration follow-up.'
+          ls -lahR packages/relayburn/npm-artifacts || true

@@ -9,3 +9,18 @@ packages:
   # consumers; the napi-rs CI matrix and conformance test scaffolding
   # operate on `packages/sdk-node` directly via path.
   - '!packages/sdk-node'
+  # Exclude `packages/relayburn` from the workspace for the same shape of
+  # reason as `sdk-node` above: it declares the per-platform Rust binary
+  # packages (`@relayburn/cli-darwin-arm64`, `@relayburn/cli-linux-x64-gnu`,
+  # …) plus the generic `@relayburn/cli` fallback as `optionalDependencies`,
+  # and the platform packages don't exist on npm until the
+  # cutover publish workflow ships them. With the package in the workspace,
+  # `pnpm install --frozen-lockfile` in CI rejects the lockfile because the
+  # optional specifiers in `package.json` aren't represented (pnpm 10 drops
+  # unresolvable optional deps from the lockfile silently, then frozen-mode
+  # complains they were "added"). Nothing in-repo consumes `relayburn` (it's
+  # a thin install wrapper that spawns the Rust binary), so dropping it from
+  # the workspace is a no-op for everyone except the install-time path. The
+  # cli-build CI matrix and the cutover publish workflow operate on
+  # `packages/relayburn` directly via path.
+  - '!packages/relayburn'
