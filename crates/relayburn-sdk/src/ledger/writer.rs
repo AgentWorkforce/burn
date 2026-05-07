@@ -37,14 +37,6 @@ fn now_iso() -> String {
     format!("ts:{:020}.{:09}", secs, nanos_part)
 }
 
-fn source_str<T: serde::Serialize>(v: &T) -> Result<String> {
-    let value = serde_json::to_value(v)?;
-    Ok(match value {
-        serde_json::Value::String(s) => s,
-        other => other.to_string(),
-    })
-}
-
 pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Result<usize> {
     if turns.is_empty() {
         return Ok(0);
@@ -67,10 +59,9 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
             if already.is_some() {
                 continue;
             }
-            let source = source_str(&t.source)?;
             let json = serde_json::to_string(t)?;
             let changed = insert.execute(params![
-                source,
+                t.source.wire_str(),
                 t.session_id,
                 t.message_id,
                 t.ts,
@@ -105,9 +96,8 @@ pub(crate) fn append_compactions(
         )?;
         for e in events {
             let id = compaction_id_fingerprint(e);
-            let source = source_str(&e.source)?;
             let json = serde_json::to_string(e)?;
-            let changed = insert.execute(params![id, source, e.session_id, e.ts, json])?;
+            let changed = insert.execute(params![id, e.source.wire_str(), e.session_id, e.ts, json])?;
             if changed > 0 {
                 appended += 1;
             }
@@ -135,15 +125,13 @@ pub(crate) fn append_relationships(
         )?;
         for r in records {
             let id = relationship_id_fingerprint(r);
-            let source = source_str(&r.source)?;
-            let relationship_type = source_str(&r.relationship_type)?;
             let json = serde_json::to_string(r)?;
             let changed = insert.execute(params![
                 id,
-                source,
+                r.source.wire_str(),
                 r.session_id,
                 r.related_session_id,
-                relationship_type,
+                r.relationship_type.wire_str(),
                 r.ts,
                 json,
             ])?;
@@ -173,11 +161,10 @@ pub(crate) fn append_tool_result_events(
         )?;
         for r in records {
             let id = tool_result_event_id_fingerprint(r);
-            let source = source_str(&r.source)?;
             let json = serde_json::to_string(r)?;
             let changed = insert.execute(params![
                 id,
-                source,
+                r.source.wire_str(),
                 r.session_id,
                 r.tool_use_id,
                 r.event_index as i64,
@@ -210,10 +197,9 @@ pub(crate) fn append_user_turns(
         )?;
         for r in records {
             let id = user_turn_id_fingerprint(r);
-            let source = source_str(&r.source)?;
             let json = serde_json::to_string(r)?;
             let changed = insert.execute(params![
-                id, source, r.session_id, r.user_uuid, r.ts, json,
+                id, r.source.wire_str(), r.session_id, r.user_uuid, r.ts, json,
             ])?;
             if changed > 0 {
                 appended += 1;
@@ -250,8 +236,6 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
         ])?;
         if let Some(rel) = synthesized {
             let id = relationship_id_fingerprint(&rel);
-            let source = source_str(&rel.source)?;
-            let relationship_type = source_str(&rel.relationship_type)?;
             let json = serde_json::to_string(&rel)?;
             tx.prepare(
                 "INSERT OR IGNORE INTO relationships
@@ -261,10 +245,10 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
             )?
             .execute(params![
                 id,
-                source,
+                rel.source.wire_str(),
                 rel.session_id,
                 rel.related_session_id,
-                relationship_type,
+                rel.relationship_type.wire_str(),
                 rel.ts,
                 json,
             ])?;
@@ -294,12 +278,11 @@ pub(crate) fn append_content(
             if !is_valid_session_id(&r.session_id) {
                 return Err(LedgerError::InvalidSessionId(r.session_id.clone()));
             }
-            let source = source_str(&r.source)?;
             let body = serde_json::to_string(r)?;
             let body_bytes = body.as_bytes();
             let hash = content_blob_fingerprint(body_bytes);
             let changed = insert.execute(params![
-                source,
+                r.source.wire_str(),
                 r.session_id,
                 r.message_id,
                 hash,

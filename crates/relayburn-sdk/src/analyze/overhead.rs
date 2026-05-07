@@ -168,11 +168,8 @@ pub fn attribute_overhead(input: AttributeOverheadInput<'_>) -> OverheadAttribut
 }
 
 pub fn describe_applies_to(applies_to: &[SourceKind]) -> String {
-    let mut as_strs: Vec<String> = applies_to
-        .iter()
-        .map(|s| serde_json::to_value(s).ok().and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_default())
-        .collect();
-    as_strs.sort();
+    let mut as_strs: Vec<&'static str> = applies_to.iter().map(SourceKind::wire_str).collect();
+    as_strs.sort_unstable();
     as_strs.join(", ")
 }
 
