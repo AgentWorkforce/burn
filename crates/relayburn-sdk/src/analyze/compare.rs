@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ledger::EnrichedTurn;
+use crate::ledger::{EnrichedTurn, Ledger, Query, Result as LedgerResult};
 use crate::reader::ActivityCategory;
 
 use crate::analyze::cost::cost_for_turn;
@@ -225,6 +225,39 @@ pub fn build_compare_table(turns: &[EnrichedTurn], opts: &CompareOptions<'_>) ->
         totals: model_totals,
         min_sample,
     }
+}
+
+/// Result of a [`compare_from_archive`] run. `analyzed_turns` is the
+/// pre-`models`-filter turn count — matches the TS path's `analyzedTurns`,
+/// which is sourced from `queryAll(q).length` rather than the post-filter
+/// table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompareFromArchiveResult {
+    pub table: CompareTable,
+    pub analyzed_turns: usize,
+}
+
+/// Build a [`CompareTable`] sourced from the SQLite ledger. Thin shell over
+/// [`Ledger::query_turns`] + [`build_compare_table`]: filters
+/// (since / until / project / session_id / source) are applied inside
+/// [`Ledger::query_turns`]; the model allow-list lives in `opts` and is
+/// honored by [`build_compare_table`].
+///
+/// Per #259 the Rust ledger is SQLite-only, so the TS path's bespoke
+/// per-column SQL aggregation collapses to this delegation. (Issue #347
+/// folded the previous `compare_archive` module here.)
+pub fn compare_from_archive(
+    ledger: &Ledger,
+    q: &Query,
+    opts: &CompareOptions<'_>,
+) -> LedgerResult<CompareFromArchiveResult> {
+    let turns = ledger.query_turns(q)?;
+    let analyzed_turns = turns.len();
+    let table = build_compare_table(&turns, opts);
+    Ok(CompareFromArchiveResult {
+        table,
+        analyzed_turns,
+    })
 }
 
 fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
@@ -691,6 +724,53 @@ mod tests {
         let sum = t.cells["claude-sonnet-4-6"]["coding"].total_cost
             + t.cells["claude-sonnet-4-6"]["debugging"].total_cost;
         assert!((sum - t.totals["claude-sonnet-4-6"].total_cost).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compare_from_archive_round_trips_through_ledger() {
+        use crate::ledger::{Ledger, LedgerLayout, Query};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let layout = LedgerLayout::under(tmp.path());
+        let mut ledger = Ledger::open(&layout.burn, &layout.content).unwrap();
+        let pricing = load_builtin_pricing();
+
+        let mut records: Vec<TurnRecord> = Vec::new();
+        for i in 0..3u64 {
+            records.push(TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: "s-1".into(),
+                session_path: None,
+                message_id: format!("m-{i}"),
+                turn_index: 0,
+                ts: format!("2026-04-20T00:00:0{i}.000Z"),
+                model: "claude-sonnet-4-6".into(),
+                project: None,
+                project_key: None,
+                usage: default_usage(),
+                tool_calls: Vec::<ToolCall>::new(),
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: Some(ActivityCategory::Coding),
+                retries: Some(0),
+                has_edits: Some(true),
+                fidelity: None,
+            });
+        }
+        ledger.append_turns(&records).unwrap();
+
+        let opts = CompareOptions::new(&pricing);
+        let result = compare_from_archive(&ledger, &Query::default(), &opts).unwrap();
+
+        assert_eq!(result.analyzed_turns, 3);
+        assert_eq!(result.table.models, vec!["claude-sonnet-4-6"]);
+        assert!(result.table.categories.iter().any(|c| c == "coding"));
+        let cell = &result.table.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 3);
+        assert_eq!(cell.edit_turns, 3);
     }
 
     #[test]
