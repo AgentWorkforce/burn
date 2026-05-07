@@ -24,8 +24,8 @@
   ],
   "scripts": {
     "build": "node -e \"process.exit(0)\"",
-    "build:napi": "napi build --platform --release --cargo-cwd ../../crates/relayburn-sdk-node --js src/binding.cjs --dts src/binding.d.ts",
-    "build:napi:debug": "napi build --platform --cargo-cwd ../../crates/relayburn-sdk-node --js src/binding.cjs --dts src/binding.d.ts",
+    "build:napi": "napi build --platform --release --cargo-cwd ../../crates/relayburn-sdk-node --js binding.cjs --dts binding.d.ts src",
+    "build:napi:debug": "napi build --platform --cargo-cwd ../../crates/relayburn-sdk-node --js binding.cjs --dts binding.d.ts src",
     "test": "node --test 'test/**/*.test.js'",
     "test:bundle": "node test/esbuild-smoke.test.js"
   },

@@ -123,8 +123,22 @@ jobs:
       - name: Build napi binding for ${{ matrix.target }}
         # `napi build` reads `packages/sdk-node/package.json`'s `napi`
         # block to learn the binary name, then dispatches to `cargo build`
-        # under the hood. The output is a per-target `.node` file and a
-        # generated `binding.cjs` / `binding.d.ts` co-located with it.
+        # under the hood. The output is a per-target `.node` file plus a
+        # generated `binding.cjs` / `binding.d.ts`.
+        #
+        # We pass `src` as the positional `[destDir]` so all three outputs
+        # (`.node`, `binding.cjs`, `binding.d.ts`) land in `src/` next to
+        # `index.js`. The generated `binding.cjs` resolves the local `.node`
+        # via `existsSync(join(__dirname, 'index.<target>.node'))`, and
+        # `__dirname` is `packages/sdk-node/src/`, so co-locating the
+        # artifacts is the simplest way to make the local-binding branch
+        # actually fire (without it, the loader silently falls through to
+        # `require('@relayburn/sdk-<target>')`, which isn't installed in
+        # dev). The `--js` / `--dts` paths are relative to the destDir so
+        # `pnpm exec napi build … --js binding.cjs --dts binding.d.ts src`
+        # writes to `src/binding.{cjs,d.ts}` (passing `src/binding.cjs` plus
+        # `src` would double-prefix to `src/src/binding.cjs`).
+        #
         # `--cargo-cwd` points at the binding crate (which lives under
         # `crates/relayburn-sdk-node/`, not co-located with the npm package)
         # so the `cargo metadata` step that resolves the cdylib succeeds.
@@ -142,14 +156,15 @@ jobs:
             --release \
             --target ${{ matrix.target }} \
             --cargo-cwd ../../crates/relayburn-sdk-node \
-            --js src/binding.cjs \
-            --dts src/binding.d.ts
+            --js binding.cjs \
+            --dts binding.d.ts \
+            src
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: relayburn-sdk-${{ matrix.short }}
-          path: packages/sdk-node/*.node
+          path: packages/sdk-node/src/*.node
           if-no-files-found: warn
           retention-days: 7
 
