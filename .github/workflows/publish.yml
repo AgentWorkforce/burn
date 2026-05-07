@@ -68,18 +68,79 @@ concurrency:
 # crates.io still ships exactly two crates (`relayburn-sdk` + `relayburn-cli`).
 
 jobs:
+  # Compute the release version BEFORE the build matrices kick off so the
+  # CLI and napi reusable workflows can sed Cargo.toml's workspace version
+  # to the post-bump value before `cargo build` runs. Without this, the
+  # `burn` binary inside `@relayburn/cli-<short>@N+1` would carry the
+  # pre-bump (`N`) `CARGO_PKG_VERSION` baked in by clap's `version,`
+  # directive, so `burn --version` would report the previous release
+  # forever (the original 2026-05-04 incident: 2.1.0 platform package
+  # shipping a 2.0.0 binary).
+  #
+  # This job mirrors the bump logic in the publish job below; it does NOT
+  # commit anything (mutations are isolated to its runner). The publish
+  # job re-runs the same logic deterministically against a fresh checkout
+  # and produces the same final state, so this stays decoupled from the
+  # actual on-disk version commit.
+  resolve-release-version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.compute.outputs.release_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+
+      - name: Compute next release version
+        id: compute
+        run: |
+          set -euo pipefail
+          CUSTOM='${{ github.event.inputs.custom_version }}'
+          BUMP='${{ github.event.inputs.version }}'
+          PREID='${{ github.event.inputs.prerelease_id }}'
+
+          # Read the current umbrella version as the baseline. Every
+          # keeper bumps to the same value so the umbrella is the
+          # canonical anchor.
+          pushd packages/relayburn > /dev/null
+          if [ -n "$CUSTOM" ]; then
+            npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+          elif [ "$BUMP" = "none" ]; then
+            : # keep existing version
+          elif [[ "$BUMP" == pre* ]]; then
+            npm version "$BUMP" --no-git-tag-version --preid="$PREID"
+          else
+            npm version "$BUMP" --no-git-tag-version
+          fi
+          NEW=$(node -p "require('./package.json').version")
+          popd > /dev/null
+
+          echo "release_version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Resolved release_version: $NEW"
+
   # Build the four `burn` binaries the platform packages need before publish.
   # `cli-build.yml` is a reusable workflow that runs the same matrix it
   # validates on PRs and uploads `relayburn-cli-<short>` artifacts.
   build-cli:
     name: Build CLI binaries
+    needs: resolve-release-version
     uses: ./.github/workflows/cli-build.yml
+    with:
+      release_version: ${{ needs.resolve-release-version.outputs.release_version }}
     secrets: inherit
 
   # Build the four napi-rs `.node` artifacts the SDK platform packages need.
   build-sdk:
     name: Build SDK napi bindings
+    needs: resolve-release-version
     uses: ./.github/workflows/napi-build.yml
+    with:
+      release_version: ${{ needs.resolve-release-version.outputs.release_version }}
     secrets: inherit
 
   publish:
