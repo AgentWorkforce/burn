@@ -45,6 +45,7 @@ use async_trait::async_trait;
 use relayburn_sdk::{Enrichment, IngestReport, WatchController};
 
 pub mod claude;
+pub mod codex;
 pub mod pending_stamp;
 pub mod registry;
 
