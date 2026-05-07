@@ -468,7 +468,11 @@ pub struct SessionCostOptions {
 #[napi(object)]
 pub struct SessionCostResult {
     pub session_id: Option<String>,
-    /// Total cost in USD, rounded to 6 decimal places.
+    /// Total cost in USD, rounded to 6 decimal places. Surfaced as
+    /// `totalUSD` (screaming USD) to match `packages/sdk/index.d.ts`'s
+    /// 1.x contract — napi-rs would otherwise camelCase it to
+    /// `totalUsd`.
+    #[napi(js_name = "totalUSD")]
     pub total_usd: f64,
     pub total_tokens: BigInt,
     pub turn_count: BigInt,
@@ -569,8 +573,10 @@ pub struct OverheadTrimOptions {
     pub since: Option<String>,
     pub kind: Option<OverheadFileKind>,
     pub ledger_home: Option<String>,
-    /// Recommendations per file. Default 3.
-    pub top: Option<BigInt>,
+    /// Recommendations per file. Default 3. Plain `u32` rather than
+    /// `BigInt` — `top` is a small recommendation cap, never near 2^32,
+    /// and TS `packages/sdk/index.d.ts` types it as `number`.
+    pub top: Option<u32>,
     /// Include the unified-diff text per recommendation. Default true.
     pub include_diff: Option<bool>,
 }
@@ -591,16 +597,12 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
         top: None,
         include_diff: None,
     });
-    let top = match opts.top {
-        Some(b) => Some(bigint_to_u64(b)?),
-        None => None,
-    };
     let raw = sdk::OverheadTrimOptions {
         project: maybe_path(opts.project),
         since: opts.since,
         kind: opts.kind.map(Into::into),
         ledger_home: maybe_path(opts.ledger_home),
-        top,
+        top: opts.top.map(u64::from),
         include_diff: opts.include_diff,
     };
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
@@ -694,7 +696,10 @@ pub struct CompareOptions {
     pub workflow: Option<String>,
     pub agent: Option<String>,
     pub provider: Option<Vec<String>>,
-    pub min_sample: Option<BigInt>,
+    /// Insufficient-sample threshold. Default 5. Plain `u32` — a turn
+    /// count never approaches 2^32, and TS
+    /// `packages/sdk/index.d.ts` types it as `number`.
+    pub min_sample: Option<u32>,
     /// One of `full`, `usage-only`, `aggregate-only`, `cost-only`, `partial`.
     pub min_fidelity: Option<String>,
     pub ledger_home: Option<String>,
@@ -705,10 +710,6 @@ pub struct CompareOptions {
 /// counts, etc.) cross as `BigInt` per the file-header rule.
 #[napi(ts_return_type = "import('./index').CompareResult")]
 pub fn compare(opts: CompareOptions) -> Result<BigIntPromoting, BurnError> {
-    let min_sample = match opts.min_sample {
-        Some(b) => Some(bigint_to_u64(b)?),
-        None => None,
-    };
     let raw = sdk::CompareOptions {
         models: opts.models,
         session: opts.session,
@@ -717,7 +718,7 @@ pub fn compare(opts: CompareOptions) -> Result<BigIntPromoting, BurnError> {
         workflow: opts.workflow,
         agent: opts.agent,
         provider: opts.provider,
-        min_sample,
+        min_sample: opts.min_sample.map(u64::from),
         min_fidelity: parse_fidelity_class(opts.min_fidelity.as_deref())?,
         ledger_home: maybe_path(opts.ledger_home),
     };
@@ -873,20 +874,36 @@ pub fn export_stamps(opts: Option<ExportStampsOptions>) -> Result<BigIntPromotin
 // ingest — async; returns a Promise<IngestReport> on the JS side.
 // ---------------------------------------------------------------------------
 
-#[napi(object)]
-pub struct IngestRoots {
-    /// `~/.claude/projects` override.
-    pub claude_projects_dir: Option<String>,
-    /// `~/.codex/sessions` override.
-    pub codex_sessions_dir: Option<String>,
-    /// `~/.local/share/opencode/storage` override.
-    pub opencode_storage_dir: Option<String>,
+/// Mirror of `packages/sdk/index.d.ts`'s
+/// `'claude-code' | 'codex' | 'opencode'` literal union. Surfaced as a
+/// `string_enum` so TS callers get the same string contract without a
+/// stringly-typed `harness: string` field.
+///
+/// Note: the SDK's `ingest_all` does not currently accept a per-harness
+/// filter — passing this is a forward-compat hook that mirrors the TS
+/// shape (`packages/sdk/index.js`'s `ingest()` likewise takes the option
+/// today and routes to `ingestAll()` without filtering).
+#[napi(string_enum = "kebab-case")]
+pub enum IngestHarness {
+    ClaudeCode,
+    Codex,
+    Opencode,
 }
 
+/// Mirrors `packages/sdk/index.d.ts`'s `IngestOptions` shape. The field
+/// set matches TS 1.x byte-for-byte; the binding routes to the SDK's
+/// fuller `sdk::IngestOptions` shape (with default `IngestRoots`) at the
+/// boundary.
 #[napi(object)]
 pub struct IngestOptions {
+    /// Reserved — TS 1.x accepts this option but `ingestAll()` ignores
+    /// it; mirrored here so the napi binding accepts the same caller
+    /// shape without a TypeError.
+    pub session_id: Option<String>,
+    /// Reserved — TS 1.x accepts this option but `ingestAll()` ignores
+    /// it; mirrored here for shape parity.
+    pub harness: Option<IngestHarness>,
     pub ledger_home: Option<String>,
-    pub roots: Option<IngestRoots>,
 }
 
 #[napi(object)]
@@ -925,23 +942,22 @@ impl From<sdk::IngestReport> for IngestReport {
 /// either fixes it or has to update the test in lockstep with the
 /// header docs.
 #[napi]
-pub async fn ingest(opts: Option<IngestOptions>) -> NapiResult<IngestReport> {
+pub async fn ingest(opts: Option<IngestOptions>) -> Result<IngestReport, NapiError> {
     let opts = opts.unwrap_or(IngestOptions {
+        session_id: None,
+        harness: None,
         ledger_home: None,
-        roots: None,
     });
-    let roots = opts.roots.unwrap_or(IngestRoots {
-        claude_projects_dir: None,
-        codex_sessions_dir: None,
-        opencode_storage_dir: None,
-    });
+    // session_id / harness are TS-shape mirror fields; the SDK's
+    // `ingest_all` takes neither, so we drop them here and rely on the
+    // SDK's discovery to pick up every session under the configured
+    // roots. Matches TS 1.x's behavior at packages/sdk/index.js's
+    // `ingest()`.
+    let _ = opts.session_id;
+    let _ = opts.harness;
     let raw = sdk::IngestOptions {
         ledger_home: maybe_path(opts.ledger_home),
-        roots: sdk::IngestRoots {
-            claude_projects_dir: maybe_path(roots.claude_projects_dir),
-            codex_sessions_dir: maybe_path(roots.codex_sessions_dir),
-            opencode_storage_dir: maybe_path(roots.opencode_storage_dir),
-        },
+        roots: sdk::IngestRoots::default(),
         on_progress: None,
         on_warn: None,
     };
