@@ -77,11 +77,19 @@ jobs:
   # forever (the original 2026-05-04 incident: 2.1.0 platform package
   # shipping a 2.0.0 binary).
   #
-  # This job mirrors the bump logic in the publish job below; it does NOT
-  # commit anything (mutations are isolated to its runner). The publish
-  # job re-runs the same logic deterministically against a fresh checkout
-  # and produces the same final state, so this stays decoupled from the
-  # actual on-disk version commit.
+  # **This job is the single source of truth for the release version.**
+  # It runs the same heal-baseline + bump logic the publish job used to
+  # run inline, and the publish job below now consumes this output
+  # rather than recomputing. That eliminates the race window where
+  # local-vs-npm version drift between the precursor's checkout and the
+  # publish job's checkout could yield different "next release" values
+  # — and with it the echo chamber where build-cli's smoke test asserted
+  # against the same stale value baked into the binary.
+  #
+  # The job mutates package.json files in its own runner's filesystem
+  # (the heal step uses `npm version --allow-same-version`); those
+  # mutations are scoped to this job and don't affect the publish job's
+  # fresh checkout.
   resolve-release-version:
     name: Resolve release version
     runs-on: ubuntu-latest
@@ -95,7 +103,124 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '22.14.0'
+          registry-url: 'https://registry.npmjs.org'
 
+      # Mirror the target table the publish job uses so the heal step
+      # below sees the same 11 packages. Kept in sync by hand — there's
+      # no clean way to share an output across jobs without making the
+      # publish job depend on this one twice (which we already do).
+      - name: Resolve target packages
+        id: targets
+        run: |
+          {
+            echo 'targets<<EOF'
+            echo 'cli-darwin-arm64:packages/relayburn/npm/darwin-arm64'
+            echo 'cli-darwin-x64:packages/relayburn/npm/darwin-x64'
+            echo 'cli-linux-arm64-gnu:packages/relayburn/npm/linux-arm64-gnu'
+            echo 'cli-linux-x64-gnu:packages/relayburn/npm/linux-x64-gnu'
+            echo 'sdk-darwin-arm64:packages/sdk-node/npm/darwin-arm64'
+            echo 'sdk-darwin-x64:packages/sdk-node/npm/darwin-x64'
+            echo 'sdk-linux-arm64-gnu:packages/sdk-node/npm/linux-arm64-gnu'
+            echo 'sdk-linux-x64-gnu:packages/sdk-node/npm/linux-x64-gnu'
+            echo 'sdk:packages/sdk-node'
+            echo 'mcp:packages/mcp'
+            echo 'relayburn:packages/relayburn'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # Heal step — verbatim copy of the publish job's "Heal local
+      # versions to lockstep baseline" logic. Pulls every keeper up to
+      # the highest stable version across (local versions ∪ npm latest)
+      # so the bump applied below operates on a coherent baseline. If
+      # this step is missing, a workspace where one keeper's local
+      # version lags its own npm `latest` (the recovery case the heal
+      # was originally added for) would cause the precursor and the
+      # publish job to disagree on the next release version.
+      - name: Heal local versions to lockstep baseline
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/lockstep-heal.mjs << 'HEALEOF'
+          import { execSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+
+          const raw = process.env.TARGETS || '';
+          const entries = raw.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+            const idx = line.indexOf(':');
+            return { key: line.slice(0, idx), dir: line.slice(idx + 1) };
+          });
+
+          const cmp = (a, b) => {
+            const pa = a.split('.').map(Number);
+            const pb = b.split('.').map(Number);
+            for (let i = 0; i < 3; i++) {
+              const da = pa[i] || 0;
+              const db = pb[i] || 0;
+              if (da !== db) return da - db;
+            }
+            return 0;
+          };
+          const isStable = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
+
+          const info = entries.map(({ key, dir }) => {
+            const json = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'));
+            let npmHighest = null;
+            try {
+              const out = execSync(`npm view ${json.name} versions --json`, {
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'ignore'],
+              }).trim() || '[]';
+              const parsed = JSON.parse(out);
+              const arr = Array.isArray(parsed) ? parsed : [parsed];
+              const stable = arr.filter(isStable).sort(cmp);
+              if (stable.length) npmHighest = stable[stable.length - 1];
+            } catch {
+              // unpublished package: leave npmHighest null
+            }
+            return { key, dir, name: json.name, local: json.version, npmHighest };
+          });
+
+          const candidates = info.flatMap((e) => [e.local, e.npmHighest]).filter(isStable);
+          if (candidates.length === 0) {
+            console.log('Lockstep baseline: (no stable versions yet, skipping heal)');
+            process.exit(0);
+          }
+          candidates.sort(cmp);
+          const baseline = candidates[candidates.length - 1];
+          console.log(`Lockstep baseline: ${baseline}`);
+
+          const heals = [];
+          for (const e of info) {
+            const remote = e.npmHighest ?? 'unpublished';
+            if (isStable(e.local) && cmp(e.local, baseline) < 0) {
+              heals.push(e);
+              console.log(`  ${e.name}: local=${e.local} npm=${remote} — healing to ${baseline}`);
+            } else {
+              console.log(`  ${e.name}: local=${e.local} npm=${remote} — OK`);
+            }
+          }
+
+          for (const e of heals) {
+            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version`, {
+              cwd: e.dir,
+              stdio: 'inherit',
+            });
+          }
+
+          if (heals.length === 0) {
+            console.log('All packages at baseline — no heal needed.');
+          } else {
+            console.log(`Healed ${heals.length} package(s) up to ${baseline}.`);
+          }
+          HEALEOF
+
+          node /tmp/lockstep-heal.mjs
+
+      # After heal, every keeper is at the same baseline. Bump the
+      # umbrella to derive the next release version — the other 10
+      # packages will be set to this same value by the publish job
+      # downstream, so the umbrella is a sufficient anchor.
       - name: Compute next release version
         id: compute
         run: |
@@ -104,14 +229,11 @@ jobs:
           BUMP='${{ github.event.inputs.version }}'
           PREID='${{ github.event.inputs.prerelease_id }}'
 
-          # Read the current umbrella version as the baseline. Every
-          # keeper bumps to the same value so the umbrella is the
-          # canonical anchor.
           pushd packages/relayburn > /dev/null
           if [ -n "$CUSTOM" ]; then
             npm version "$CUSTOM" --no-git-tag-version --allow-same-version
           elif [ "$BUMP" = "none" ]; then
-            : # keep existing version
+            : # keep existing version (post-heal baseline = "current")
           elif [[ "$BUMP" == pre* ]]; then
             npm version "$BUMP" --no-git-tag-version --preid="$PREID"
           else
@@ -145,7 +267,10 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
-    needs: [build-cli, build-sdk]
+    # `resolve-release-version` is already a transitive dep via
+    # build-cli/build-sdk, but listing it explicitly lets this job read
+    # `needs.resolve-release-version.outputs.release_version` directly.
+    needs: [build-cli, build-sdk, resolve-release-version]
     outputs:
       versions: ${{ steps.bump.outputs.versions }}
       release_version: ${{ steps.bump.outputs.release_version }}
@@ -228,137 +353,37 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-      # Lockstep baseline heal. The 11 keepers ship at the same version, so
-      # if any package's local version lags either its own npm `latest` or
-      # another workspace package, pull it up to the highest stable version
-      # across the whole set before the bump step runs. Two failure modes:
+      # Apply the release version computed by `resolve-release-version`
+      # to every keeper's package.json. The precursor is the single
+      # source of truth for what version we're shipping; we don't
+      # recompute heal+bump here because that's exactly the path that
+      # let the precursor and publish job disagree (and let stale
+      # `CARGO_PKG_VERSION` leak into shipped binaries while the
+      # cli-build smoke test agreed with itself on the wrong number).
       #
-      #   1. A previous publish run shipped @relayburn/*@X to npm but failed
-      #      at the Tag + push step (the original 2026-04-23 incident).
-      #   2. A new package was extracted into the workspace (e.g. the 8
-      #      platform packages bootstrapped at 0.0.1, getting absorbed into
-      #      the 1.10.x→2.0.0 lockstep).
-      #
-      # The downstream "Verify new versions are not yet published" step still
-      # catches the case where the post-bump version collides with an existing
-      # npm version, so a stray manual publish at a wildly higher version will
-      # surface as a publish-time error after the heal rather than silently
-      # promoting the whole workspace into it.
-      - name: Heal local versions to lockstep baseline
-        env:
-          TARGETS: ${{ steps.targets.outputs.targets }}
-        run: |
-          set -euo pipefail
-          cat > /tmp/lockstep-heal.mjs << 'HEALEOF'
-          import { execSync } from 'node:child_process';
-          import { readFileSync } from 'node:fs';
-
-          const raw = process.env.TARGETS || '';
-          const entries = raw.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
-            const idx = line.indexOf(':');
-            return { key: line.slice(0, idx), dir: line.slice(idx + 1) };
-          });
-
-          const cmp = (a, b) => {
-            const pa = a.split('.').map(Number);
-            const pb = b.split('.').map(Number);
-            for (let i = 0; i < 3; i++) {
-              const da = pa[i] || 0;
-              const db = pb[i] || 0;
-              if (da !== db) return da - db;
-            }
-            return 0;
-          };
-          const isStable = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
-
-          const info = entries.map(({ key, dir }) => {
-            const json = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'));
-            let npmHighest = null;
-            try {
-              const out = execSync(`npm view ${json.name} versions --json`, {
-                encoding: 'utf8',
-                stdio: ['ignore', 'pipe', 'ignore'],
-              }).trim() || '[]';
-              const parsed = JSON.parse(out);
-              const arr = Array.isArray(parsed) ? parsed : [parsed];
-              const stable = arr.filter(isStable).sort(cmp);
-              if (stable.length) npmHighest = stable[stable.length - 1];
-            } catch {
-              // unpublished package: leave npmHighest null
-            }
-            return { key, dir, name: json.name, local: json.version, npmHighest };
-          });
-
-          const candidates = info.flatMap((e) => [e.local, e.npmHighest]).filter(isStable);
-          if (candidates.length === 0) {
-            console.log('Lockstep baseline: (no stable versions yet, skipping heal)');
-            process.exit(0);
-          }
-          candidates.sort(cmp);
-          const baseline = candidates[candidates.length - 1];
-          console.log(`Lockstep baseline: ${baseline}`);
-
-          const heals = [];
-          for (const e of info) {
-            const remote = e.npmHighest ?? 'unpublished';
-            if (isStable(e.local) && cmp(e.local, baseline) < 0) {
-              heals.push(e);
-              console.log(`  ${e.name}: local=${e.local} npm=${remote} — healing to ${baseline}`);
-            } else {
-              console.log(`  ${e.name}: local=${e.local} npm=${remote} — OK`);
-            }
-          }
-
-          for (const e of heals) {
-            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version`, {
-              cwd: e.dir,
-              stdio: 'inherit',
-            });
-          }
-
-          if (heals.length === 0) {
-            console.log('All packages at baseline — no heal needed.');
-          } else {
-            console.log(`Healed ${heals.length} package(s) up to ${baseline}.`);
-          }
-          HEALEOF
-
-          node /tmp/lockstep-heal.mjs
-
-      - name: Bump versions
+      # `--allow-same-version` lets us idempotently set every package
+      # to the target version, including ones that already happen to
+      # match (the heal step in the precursor may have already brought
+      # them to the same baseline, and the package.json on disk here is
+      # a fresh checkout that hasn't seen any of that).
+      - name: Apply release version to all packages
         id: bump
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          RELEASE_VER: ${{ needs.resolve-release-version.outputs.release_version }}
         run: |
           set -euo pipefail
-          CUSTOM='${{ github.event.inputs.custom_version }}'
-          BUMP='${{ github.event.inputs.version }}'
-          PREID='${{ github.event.inputs.prerelease_id }}'
 
           VERSIONS=""
           while IFS=: read -r key dir; do
             [ -z "$key" ] && continue
             pushd "$dir" > /dev/null
-            if [ -n "$CUSTOM" ]; then
-              npm version "$CUSTOM" --no-git-tag-version --allow-same-version
-            elif [ "$BUMP" = "none" ]; then
-              : # keep existing version (useful for first publish or re-publish)
-            elif [[ "$BUMP" == pre* ]]; then
-              npm version "$BUMP" --no-git-tag-version --preid="$PREID"
-            else
-              npm version "$BUMP" --no-git-tag-version
-            fi
-            NEW=$(node -p "require('./package.json').version")
-            VERSIONS+=" $key:$NEW"
+            npm version "$RELEASE_VER" --no-git-tag-version --allow-same-version
             popd > /dev/null
+            VERSIONS+=" $key:$RELEASE_VER"
           done <<< "$TARGETS"
 
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
-
-          # The release version is the umbrella `relayburn` version (every
-          # keeper bumps to the same value, but this is the canonical anchor
-          # for the GitHub Release + Cargo workspace + tag stamps).
-          RELEASE_VER=$(node -p "require('./packages/relayburn/package.json').version")
           echo "release_version=$RELEASE_VER" >> "$GITHUB_OUTPUT"
 
           # Sync the umbrella `relayburn` and `@relayburn/sdk` (napi)
@@ -410,11 +435,12 @@ jobs:
           # Refresh Cargo.lock to reflect the new workspace version.
           cargo update --workspace
 
-      # Belt-and-suspenders alongside the heal step above: even if the
-      # local→npm baseline is in sync, the computed bump might collide with
-      # an existing version (e.g. someone manually published a one-off from
-      # another branch). Catch it before we waste a build + before npm
-      # rejects with a less specific error.
+      # Belt-and-suspenders alongside the precursor's heal: even if the
+      # local→npm baseline was in sync there, the computed release
+      # version might collide with an existing version (e.g. someone
+      # manually published a one-off from another branch between when
+      # the precursor ran and now). Catch it before we waste a build +
+      # before npm rejects with a less specific error.
       - name: Verify new versions are not yet published
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
@@ -938,6 +964,56 @@ jobs:
             cp "$sdk_node_file" "$sdk_dst"
             ls -lh "$sdk_dst"
           done
+
+      # Ship-gate: verify the staged `burn` binaries actually carry the
+      # release version we're about to publish. The cli-build smoke test
+      # already asserts this per-leg against the `release_version` input,
+      # but that check is upstream of artifact upload/download/staging.
+      # Re-checking right before `npm publish` closes the loop against
+      # any artifact mix-up between then and now.
+      #
+      # The publish runner is x64-linux, so we can only `exec` the
+      # linux-x64-gnu binary natively. For the cross-built ones we fall
+      # back to a byte-level grep for the expected version string —
+      # clap embeds `CARGO_PKG_VERSION` as a literal in the binary's
+      # rodata, so a `grep -aF` on the raw bytes is a reliable
+      # cross-arch substitute (false positive: a version string that
+      # incidentally appears as part of unrelated data, which is
+      # negligible given the specificity of `burn X.Y.Z`).
+      - name: Verify staged CLI binaries carry release version
+        env:
+          RELEASE_VER: ${{ needs.resolve-release-version.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          EXPECTED="burn $RELEASE_VER"
+          fail=0
+          for short in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu; do
+            bin="packages/relayburn/npm/${short}/bin/burn"
+            if [ ! -x "$bin" ]; then
+              echo "::error title=Missing staged binary::$bin not found or not executable" >&2
+              fail=1
+              continue
+            fi
+            if [ "$short" = "linux-x64-gnu" ]; then
+              actual=$("$bin" --version 2>&1 | head -1)
+              if [ "$actual" != "$EXPECTED" ]; then
+                echo "::error title=Binary version mismatch::$bin reported '$actual', expected '$EXPECTED'" >&2
+                fail=1
+              else
+                echo "$bin: $actual ✓ (native exec)"
+              fi
+            else
+              if grep -aF "$RELEASE_VER" "$bin" > /dev/null; then
+                echo "$bin: contains '$RELEASE_VER' literal ✓ (byte-level check; can't exec cross-arch on Linux runner)"
+              else
+                echo "::error title=Binary version not embedded::$bin does not contain literal '$RELEASE_VER' — built with stale CARGO_PKG_VERSION?" >&2
+                fail=1
+              fi
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
 
       # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
       - name: Install latest npm
