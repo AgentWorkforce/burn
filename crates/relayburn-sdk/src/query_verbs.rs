@@ -1374,6 +1374,10 @@ impl LedgerHandle {
                 filter.contains(&provider.to_ascii_lowercase())
             });
         }
+        {
+            let requested_models: HashSet<&str> = opts.models.iter().map(String::as_str).collect();
+            turns.retain(|t| requested_models.contains(compare_model_id(&t.turn)));
+        }
 
         let fidelity_summary =
             summarize_fidelity_from_iter(turns.iter().map(|t| t.turn.fidelity.as_ref()));
@@ -1456,6 +1460,14 @@ fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFi
         .filter(|p| !p.is_empty())
         .collect();
     (!filter.is_empty()).then_some(filter)
+}
+
+fn compare_model_id(turn: &TurnRecord) -> &str {
+    if turn.model.is_empty() {
+        "unknown"
+    } else {
+        &turn.model
+    }
 }
 
 fn shape_compare_result(
@@ -2095,6 +2107,53 @@ mod tests {
         let json = serde_json::to_value(&r).unwrap();
         assert!(json["fidelity"]["summary"]["byClass"].is_object());
         assert!(json["fidelity"]["summary"]["missingCoverage"].is_object());
+    }
+
+    #[test]
+    fn compare_metadata_counts_requested_models_only() {
+        let (_dir, mut handle) = fixture_handle();
+        let extra = TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "sess-b".into(),
+            session_path: None,
+            message_id: "m-extra".into(),
+            turn_index: 0,
+            ts: "2026-04-23T00:02:00.000Z".into(),
+            model: "claude-opus-4-5".into(),
+            project: Some("/tmp/proj".into()),
+            project_key: None,
+            usage: Usage {
+                input: 100,
+                output: 50,
+                reasoning: 0,
+                cache_read: 0,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        };
+        handle.raw_mut().append_turns(&[extra]).unwrap();
+
+        let r = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+
+        assert_eq!(r.analyzed_turns, 2);
+        assert_eq!(r.fidelity.summary.total, 2);
+        assert!(!r.models.contains(&"claude-opus-4-5".to_string()));
+        assert!(!r.totals.contains_key("claude-opus-4-5"));
     }
 
     #[test]

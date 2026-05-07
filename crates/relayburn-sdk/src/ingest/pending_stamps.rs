@@ -2,9 +2,10 @@
 //!
 //! Wrapper harnesses (`burn run codex`, `burn run opencode`) that spawn a
 //! child process before the session id is known drop a JSON manifest into
-//! `$RELAYBURN_HOME/pending-stamps/`. After the child exits, the next ingest
-//! pass tries to match each manifest against a freshly-discovered session and
-//! folds the manifest's enrichment into the ledger via `Ledger::append_stamp`.
+//! `$RELAYBURN_HOME/pending-stamps/` (or an explicitly supplied ledger home).
+//! After the child exits, the next ingest pass tries to match each manifest
+//! against a freshly-discovered session and folds the manifest's enrichment
+//! into the ledger via `Ledger::append_stamp`.
 //!
 //! ## Wire-format compatibility
 //!
@@ -17,8 +18,8 @@
 //! * The file is `JSON.stringify(record, null, 2) + '\n'` — pretty-printed
 //!   with two-space indent and a trailing newline, matching `node:fs`.
 //! * The filename pattern is `<harness>-<spawnerPid>-<spawnStartMs>-<uuid>.json`
-//!   in `$RELAYBURN_HOME/pending-stamps/`. In-flight writes go through a
-//!   `.tmp-<pid>-<uuid>` sibling and are atomically renamed.
+//!   in the selected `pending-stamps/` directory. In-flight writes go through
+//!   a `.tmp-<pid>-<uuid>` sibling and are atomically renamed.
 //! * Claimed manifests are renamed to `<file>.claimed-<pid>-<uuid>` before the
 //!   ledger append, then unlinked on success or restored on failure.
 
@@ -102,6 +103,7 @@ pub struct PendingStampCleanupResult {
 #[derive(Debug, Default, Clone)]
 pub struct WriteOptions {
     pub harness: PendingStampHarness,
+    pub ledger_home: Option<PathBuf>,
     pub cwd: String,
     pub enrichment: Enrichment,
     pub session_dir_hint: Option<String>,
@@ -130,7 +132,11 @@ fn pending_stamps_dir_for(home: Option<&Path>) -> PathBuf {
 /// so old stamps don't leak into the matcher.
 pub fn write_pending_stamp(opts: WriteOptions) -> std::io::Result<PendingStampWriteResult> {
     let spawn_start = opts.spawn_start_ts.unwrap_or_else(SystemTime::now);
-    cleanup_stale_pending_stamps_at(spawn_start, PENDING_STAMP_TTL_MS)?;
+    cleanup_stale_pending_stamps_in_at(
+        opts.ledger_home.as_deref(),
+        spawn_start,
+        PENDING_STAMP_TTL_MS,
+    )?;
 
     let stamp = PendingStamp {
         v: 1,
@@ -145,7 +151,7 @@ pub fn write_pending_stamp(opts: WriteOptions) -> std::io::Result<PendingStampWr
             .map(|p| canonicalize_lossy(Path::new(p))),
     };
 
-    let dir = pending_stamps_dir();
+    let dir = pending_stamps_dir_for(opts.ledger_home.as_deref());
     fs::create_dir_all(&dir)?;
     let spawn_ms = system_time_ms(spawn_start);
     let uuid = uuid_v4();
@@ -680,4 +686,54 @@ fn civil_from_unix_seconds(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
     let mm = ((sod % 3600) / 60) as u32;
     let ss = (sod % 60) as u32;
     (y, m, d, hh, mm, ss)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_and_resolve_pending_stamp_can_share_explicit_home() {
+        let home = tempfile::tempdir().expect("home");
+        let project = home.path().join("project");
+        fs::create_dir_all(&project).expect("project dir");
+
+        let mut enrichment = Enrichment::new();
+        enrichment.insert("workflowId".to_string(), "wf-explicit".to_string());
+        let spawn = SystemTime::now();
+
+        let written = write_pending_stamp(WriteOptions {
+            harness: PendingStampHarness::Codex,
+            ledger_home: Some(home.path().to_path_buf()),
+            cwd: project.to_string_lossy().into_owned(),
+            enrichment: enrichment.clone(),
+            session_dir_hint: None,
+            spawn_start_ts: Some(spawn),
+            spawner_pid: Some(42),
+        })
+        .expect("write pending stamp");
+
+        assert!(written.file.starts_with(home.path().join("pending-stamps")));
+
+        let mut ledger = Ledger::open(
+            &home.path().join("burn.sqlite"),
+            &home.path().join("content.sqlite"),
+        )
+        .expect("open ledger");
+        let candidate = PendingStampSessionCandidate {
+            harness: PendingStampHarness::Codex,
+            session_id: "sess-explicit".to_string(),
+            session_path: None,
+            session_mtime_ms: Some(system_time_ms(spawn)),
+            cwd: Some(project.to_string_lossy().into_owned()),
+        };
+
+        let resolved =
+            resolve_pending_stamps_for_session_in(&mut ledger, &candidate, Some(home.path()))
+                .expect("resolve pending stamp");
+
+        assert_eq!(resolved.applied, 1);
+        assert_eq!(resolved.enrichment, enrichment);
+        assert!(!written.file.exists());
+    }
 }

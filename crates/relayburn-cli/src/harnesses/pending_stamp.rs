@@ -202,6 +202,7 @@ impl HarnessAdapter for PendingStampAdapterImpl {
         let session_dir_hint = (self.session_root)();
         let opts = PendingStampWriteOptions {
             harness: self.harness,
+            ledger_home: None,
             cwd: ctx.cwd.to_string_lossy().into_owned(),
             enrichment: ctx.tags.clone(),
             session_dir_hint: Some(session_dir_hint.to_string_lossy().into_owned()),
