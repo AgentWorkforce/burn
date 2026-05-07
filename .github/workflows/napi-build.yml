@@ -183,6 +183,13 @@ jobs:
         # they can be required at runtime. The matrix runs `pnpm install` at
         # the root above, but no build — flip that here so the conformance
         # step's TS-side import resolves cleanly.
+        #
+        # Skipped on the aarch64-linux leg: that leg cross-compiles on an
+        # x64 host, so `node` (the runner's interpreter) cannot load the
+        # arm64 `.node` artifact we just built. Building the TS workspace
+        # is wasted work on that leg too — the conformance step below is
+        # also gated off there.
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: pnpm run build
 
       - name: Conformance test (TS @relayburn/sdk@1.x vs napi-rs @2.0.0-pre)
@@ -192,10 +199,23 @@ jobs:
         # `deepStrictEqual`. With α (#354) shape-conformant, this gate is
         # the acceptance test for #247.
         #
+        # Skipped on the aarch64-linux leg: that leg is a CROSS-COMPILE
+        # (host=ubuntu-latest x64, target=aarch64-unknown-linux-gnu), so
+        # the only `.node` artifact present is the arm64 binary. The
+        # x64 `node` interpreter on the runner cannot load it — and
+        # `binding.cjs` resolves the binding by `process.arch`, so it
+        # tries to load `index.linux-x64-gnu.node` (or the matching
+        # optionalDependency, which isn't installed in dev) and crashes
+        # the import before the test body's `t.skip` can fire. The other
+        # three legs (x64-darwin, arm64-darwin, x64-linux) are all native
+        # and exercise the same conformance contract; this leg's job is
+        # purely to validate the cross-compile build + artifact upload.
+        #
         # If conformance fails on a verb, the failure is α follow-up scope —
         # see the test header for the seeding strategy and the
         # `tests/fixtures/cli-golden/ledger/.gitignore` note about the
         # JSONL→SQLite replay the Rust SDK requires.
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
         working-directory: packages/sdk-node
         env:
           RELAYBURN_SDK_NAPI_BUILT: '1'
