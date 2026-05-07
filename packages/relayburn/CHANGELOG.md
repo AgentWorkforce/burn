@@ -4,6 +4,10 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn` now installs the prebuilt Rust `burn` binary via per-platform `@relayburn/cli-<platform>` packages instead of dispatching through the TS `@relayburn/cli`. The umbrella declares the platform packages as `optionalDependencies`; the `burn` shim resolves and execs the matching binary.
+
 ## [1.6.2] - 2026-05-02
 
 ### Changed

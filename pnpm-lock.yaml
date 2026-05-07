@@ -84,11 +84,7 @@ importers:
         specifier: ^1.0.22
         version: 1.0.22
 
-  packages/relayburn:
-    dependencies:
-      '@relayburn/cli':
-        specifier: workspace:*
-        version: link:../cli
+  packages/relayburn: {}
 
   packages/sdk:
     dependencies:

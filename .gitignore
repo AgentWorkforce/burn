@@ -15,3 +15,10 @@ target/
 # publish time. They should never be committed.
 packages/sdk-node/src/*.node
 packages/sdk-node/*.node
+
+# Prebuilt `burn` binaries for the Rust CLI — the cli-build matrix
+# produces these and the cutover publish workflow drops them into
+# `packages/relayburn/npm/<platform>/bin/` before `npm publish`. The
+# umbrella `relayburn` package resolves them at install time via
+# `optionalDependencies`. They should never be committed.
+packages/relayburn/npm/*/bin/
