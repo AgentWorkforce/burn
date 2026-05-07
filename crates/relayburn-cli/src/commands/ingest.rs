@@ -23,10 +23,14 @@
 //!   hook payload.
 //!
 //! Output shape: every successful run writes a single
-//! `[burn] ingest: ingested N session(s) (+M turn(s))` line on stderr
-//! (matching TS) so callers wrapping the binary can grep it without
-//! parsing JSON. `--quiet` suppresses the line when the report is
-//! empty; non-empty runs still log to stderr for parity with TS.
+//! `[burn] ingest: ingested N session(s) (+M turn(s))` line. The
+//! one-shot path emits it on **stdout** so pipelines can capture the
+//! summary (matching the TS `runIngestOnce` source-of-truth at
+//! `packages/cli/src/commands/ingest.ts:121-126`); `--watch` and
+//! `--hook` modes log on **stderr** so the foreground banner / hook
+//! breadcrumbs don't pollute downstream stdout consumers. `--quiet`
+//! (only valid with `--hook`) suppresses the hook breadcrumb when the
+//! report is empty.
 
 use std::io::{self, Read};
 use std::sync::Arc;
@@ -71,7 +75,13 @@ pub fn run(globals: &GlobalArgs, args: IngestArgs) -> i32 {
 /// One-shot scan: open the ledger, run a single `ingest_all`, log the
 /// summary, exit. Drives a current-thread tokio runtime so the otherwise
 /// sync presenter can drive the async SDK verb.
+///
+/// Summary line is emitted on **stdout** (matching TS `runIngestOnce`
+/// at `packages/cli/src/commands/ingest.ts:121-126`) so callers can
+/// capture pipeline output without redirecting stderr.
 fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
+    let _ = quiet; // `--quiet` is hook-only (clap `requires = "hook"`); kept in
+                   // the dispatch signature for symmetry with run_watch / run_hook.
     let mut handle = match open_handle(globals) {
         Ok(h) => h,
         Err(err) => return report_error(&err, globals),
@@ -86,7 +96,7 @@ fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
     let opts = RawIngestOptions::default();
     match rt.block_on(ingest_all(handle.raw_mut(), &opts)) {
         Ok(report) => {
-            log_report(&report, quiet);
+            log_report_oneshot(&report);
             0
         }
         Err(err) => report_error(&err, globals),
@@ -289,14 +299,14 @@ fn render_ingest_line(report: &IngestReport) -> String {
     )
 }
 
-/// Log the canonical `[burn] ingest: ...` line on stderr. Suppressed in
-/// `--quiet` mode unless work was done — empty zero-progress reports
-/// would otherwise be noise on every invocation.
-fn log_report(report: &IngestReport, quiet: bool) {
-    if quiet && report.appended_turns == 0 {
-        return;
-    }
-    eprint!("{}", render_ingest_line(report));
+/// Log the canonical `[burn] ingest: ...` line on **stdout** for the
+/// one-shot path. TS source of truth: `runIngestOnce` at
+/// `packages/cli/src/commands/ingest.ts:121-126` writes the rendered
+/// report via `process.stdout.write`, so pipelines that capture stdout
+/// see the summary. `--watch` and `--hook` keep their own stderr
+/// emitters (`render_ingest_line` is the shared formatter).
+fn log_report_oneshot(report: &IngestReport) {
+    print!("{}", render_ingest_line(report));
 }
 
 /// Read all of stdin into a String. Returns empty string when stdin is

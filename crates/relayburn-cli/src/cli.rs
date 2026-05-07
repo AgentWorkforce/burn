@@ -159,8 +159,9 @@ pub struct IngestArgs {
 
     /// Suppress non-error stderr breadcrumbs. Used by hook callers so
     /// the surrounding tool invocation isn't blocked by a noisy
-    /// pipeline.
-    #[arg(long)]
+    /// pipeline. Only meaningful with `--hook`; clap rejects `--quiet`
+    /// on its own (or with `--watch`) so a typo can't silently no-op.
+    #[arg(long, requires = "hook")]
     pub quiet: bool,
 }
 
