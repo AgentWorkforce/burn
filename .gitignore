@@ -10,11 +10,12 @@ target/
 **/*.rs.bk
 
 # napi-rs prebuilt bindings — `napi build` regenerates these into
-# `packages/sdk-node/src/`. CI uploads them as job artifacts; PR γ
-# (#249) wires them into the per-platform `npm/<short>/` packages at
-# publish time. They should never be committed.
+# `packages/sdk-node/src/`. CI uploads them as job artifacts; the cutover
+# publish workflow stages them into the per-platform `npm/<short>/`
+# packages at publish time. They should never be committed.
 packages/sdk-node/src/*.node
 packages/sdk-node/*.node
+packages/sdk-node/npm/*/*.node
 
 # Prebuilt `burn` binaries for the Rust CLI — the cli-build matrix
 # produces these and the cutover publish workflow drops them into

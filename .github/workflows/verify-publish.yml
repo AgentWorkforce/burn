@@ -12,15 +12,12 @@ on:
       package:
         description: 'Package to verify'
         required: true
-        default: '@relayburn/cli'
+        default: 'relayburn'
         type: choice
         options:
-          - '@relayburn/cli'
           - 'relayburn'
-          - '@relayburn/reader'
-          - '@relayburn/ledger'
-          - '@relayburn/analyze'
           - '@relayburn/sdk'
+          - '@relayburn/mcp'
       version:
         description: 'Version to verify (defaults to the "latest" dist-tag)'
         required: false
@@ -58,7 +55,7 @@ jobs:
           echo "Verifying ${{ github.event.inputs.package }}@$RESOLVED"
 
       - name: CLI smoke test
-        if: ${{ github.event.inputs.package == '@relayburn/cli' || github.event.inputs.package == 'relayburn' }}
+        if: ${{ github.event.inputs.package == 'relayburn' }}
         run: |
           set -euo pipefail
           npm install -g "${{ github.event.inputs.package }}@${{ steps.resolve.outputs.version }}"
@@ -81,7 +78,7 @@ jobs:
           echo "CLI smoke test passed."
 
       - name: Library smoke test (ESM import + exports surface)
-        if: ${{ github.event.inputs.package != '@relayburn/cli' && github.event.inputs.package != 'relayburn' }}
+        if: ${{ github.event.inputs.package != 'relayburn' }}
         run: |
           set -euo pipefail
           WORKDIR=$(mktemp -d)

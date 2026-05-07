@@ -1,9 +1,10 @@
 name: napi build
 
 # Build prebuilt napi-rs `.node` artifacts for every platform we publish to
-# npm under `@relayburn/sdk-*`. PRs validate the matrix; tags / manual
-# dispatch *would* publish, but the publish step is stubbed off for now —
-# wired up properly in #249 (cutover release workflow).
+# npm under `@relayburn/sdk-*`. PRs validate the matrix; the cutover publish
+# workflow (`.github/workflows/publish.yml`) calls this workflow via
+# `workflow_call` to produce the `.node` files it then stages into
+# per-platform packages.
 #
 # Caches Cargo registry + git + target dir, plus pnpm store, so the matrix
 # stays fast on the hot path.
@@ -29,11 +30,11 @@ on:
       - 'rust-toolchain.toml'
       - '.github/workflows/napi-build.yml'
   workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish prebuilt artifacts to npm under the `next` tag (stubbed; full wiring in #249)'
-        type: boolean
-        default: false
+  workflow_call:
+    # Publish runs the same matrix this workflow exercises on PRs. The
+    # caller downloads the uploaded `relayburn-sdk-<short>` artifacts and
+    # stages them into `packages/sdk-node/npm/<short>/` before
+    # `npm pack` + `npm publish`.
 
 permissions:
   contents: read
@@ -220,40 +221,3 @@ jobs:
         env:
           RELAYBURN_SDK_NAPI_BUILT: '1'
         run: node --test 'test/conformance.test.js'
-
-  publish:
-    # Stub. Real publish wiring lands in #249 (Wave 3 cutover) — at that
-    # point this job downloads the matrix artifacts, drops each into the
-    # right `npm/<platform>/` directory, and runs `npm publish --tag=next`
-    # for the umbrella + each per-platform package via OIDC trusted
-    # publisher. Until then, calling `workflow_dispatch` with
-    # `publish: true` exercises the artifact download path so we catch
-    # wiring errors early without actually pushing to npm.
-    needs: build
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22.14.0'
-          cache: 'pnpm'
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: packages/sdk-node/artifacts
-
-      - name: Inspect artifacts (publish stub)
-        run: |
-          echo 'Publish step is currently a stub. Full wiring lands in #249.'
-          ls -lah packages/sdk-node/artifacts || true
