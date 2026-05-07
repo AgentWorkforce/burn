@@ -68,17 +68,15 @@ pub fn resolve_project(cwd: &str) -> ResolvedProject {
 }
 
 fn resolve_uncached(cwd: &str) -> ResolvedProject {
+    let fallback = || ResolvedProject {
+        project: cwd.to_string(),
+        project_key: None,
+    };
     let Some(git_dir) = find_git_dir(Path::new(cwd)) else {
-        return ResolvedProject {
-            project: cwd.to_string(),
-            project_key: None,
-        };
+        return fallback();
     };
     let Ok(text) = fs::read_to_string(git_dir.join("config")) else {
-        return ResolvedProject {
-            project: cwd.to_string(),
-            project_key: None,
-        };
+        return fallback();
     };
     let key = parse_git_config(&text)
         .get("remote \"origin\"")
