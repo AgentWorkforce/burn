@@ -261,16 +261,10 @@ fn relationship_passes(r: &SessionRelationshipRecord, q: &Query) -> bool {
         // `Query.source` is a `SourceKind` (the harness identity);
         // `r.source` is a `RelationshipSourceKind` (a superset that
         // also covers `spawn-env`, `native-claude`, etc.). Compare via
-        // their serialized kebab-case forms so a `source = "claude-code"`
+        // their kebab-case wire labels so a `source = "claude-code"`
         // filter matches both enums identically — same semantics as the
         // TS adapter, which compared the raw strings.
-        let want = serde_json::to_value(source)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string));
-        let have = serde_json::to_value(r.source)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string));
-        if want != have {
+        if source.wire_str() != r.source.wire_str() {
             return false;
         }
     }

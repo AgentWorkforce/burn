@@ -8,6 +8,7 @@
 //! append-only JSONL and we want byte-identical output to the TS writer.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,6 +24,26 @@ pub enum SourceKind {
     GeminiApi,
 }
 
+impl SourceKind {
+    /// Kebab-case label as emitted on the wire (matches `#[serde(rename_all = "kebab-case")]`).
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+            Self::AnthropicApi => "anthropic-api",
+            Self::OpenaiApi => "openai-api",
+            Self::GeminiApi => "gemini-api",
+        }
+    }
+}
+
+impl fmt::Display for SourceKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RelationshipSourceKind {
@@ -35,6 +56,29 @@ pub enum RelationshipSourceKind {
     SpawnEnv,
     NativeClaude,
     NativeOpencode,
+}
+
+impl RelationshipSourceKind {
+    /// Kebab-case label as emitted on the wire.
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+            Self::AnthropicApi => "anthropic-api",
+            Self::OpenaiApi => "openai-api",
+            Self::GeminiApi => "gemini-api",
+            Self::SpawnEnv => "spawn-env",
+            Self::NativeClaude => "native-claude",
+            Self::NativeOpencode => "native-opencode",
+        }
+    }
+}
+
+impl fmt::Display for RelationshipSourceKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire_str())
+    }
 }
 
 /// Coarse harness identity. Mirrors `SourceKind` but exists as a separate type
@@ -106,6 +150,24 @@ pub enum UsageGranularity {
     CostOnly,
 }
 
+impl UsageGranularity {
+    /// Kebab-case label as emitted on the wire (matches `#[serde(rename_all = "kebab-case")]`).
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            Self::PerTurn => "per-turn",
+            Self::PerMessage => "per-message",
+            Self::PerSessionAggregate => "per-session-aggregate",
+            Self::CostOnly => "cost-only",
+        }
+    }
+}
+
+impl fmt::Display for UsageGranularity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Coverage {
@@ -167,6 +229,25 @@ pub enum FidelityClass {
     AggregateOnly,
     CostOnly,
     Partial,
+}
+
+impl FidelityClass {
+    /// Kebab-case label as emitted on the wire (matches `#[serde(rename_all = "kebab-case")]`).
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::UsageOnly => "usage-only",
+            Self::AggregateOnly => "aggregate-only",
+            Self::CostOnly => "cost-only",
+            Self::Partial => "partial",
+        }
+    }
+}
+
+impl fmt::Display for FidelityClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +356,24 @@ pub enum RelationshipType {
     Continuation,
     Fork,
     Subagent,
+}
+
+impl RelationshipType {
+    /// Kebab-case label as emitted on the wire.
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::Continuation => "continuation",
+            Self::Fork => "fork",
+            Self::Subagent => "subagent",
+        }
+    }
+}
+
+impl fmt::Display for RelationshipType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

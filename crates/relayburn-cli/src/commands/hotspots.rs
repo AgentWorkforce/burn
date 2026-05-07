@@ -31,7 +31,7 @@ use relayburn_sdk::{
     hotspots as sdk_hotspots, ingest_all, normalize_since, AttributionMethod, BashAggregation,
     BashVerbAggregation, FileAggregation, HotspotsAttributionResult, HotspotsGroupBy,
     HotspotsOptions, HotspotsResult, HotspotsSessionTotal, Ledger, LedgerOpenOptions, Query,
-    SourceKind, SubagentAggregation,
+    SubagentAggregation,
 };
 use serde_json::{json, Map, Value};
 
@@ -232,8 +232,7 @@ fn describe_excluded_turns(
             continue;
         }
         out.excluded += 1;
-        let source = source_label(t.source);
-        let entry = out.sources.entry(source.to_string()).or_default();
+        let entry = out.sources.entry(t.source.wire_str().to_string()).or_default();
         entry.count += 1;
         if !f.coverage.has_tool_calls {
             entry.missing.insert("tool-call records".to_string(), ());
@@ -243,29 +242,9 @@ fn describe_excluded_turns(
         }
         entry
             .granularities
-            .insert(granularity_label(f.granularity).to_string(), ());
+            .insert(f.granularity.wire_str().to_string(), ());
     }
     Ok(out)
-}
-
-fn source_label(s: SourceKind) -> &'static str {
-    match s {
-        SourceKind::ClaudeCode => "claude-code",
-        SourceKind::Codex => "codex",
-        SourceKind::Opencode => "opencode",
-        SourceKind::AnthropicApi => "anthropic-api",
-        SourceKind::OpenaiApi => "openai-api",
-        SourceKind::GeminiApi => "gemini-api",
-    }
-}
-
-fn granularity_label(g: relayburn_sdk::UsageGranularity) -> &'static str {
-    match g {
-        relayburn_sdk::UsageGranularity::PerTurn => "per-turn",
-        relayburn_sdk::UsageGranularity::PerMessage => "per-message",
-        relayburn_sdk::UsageGranularity::PerSessionAggregate => "per-session-aggregate",
-        relayburn_sdk::UsageGranularity::CostOnly => "cost-only",
-    }
 }
 
 fn emit_json(result: &HotspotsResult) {

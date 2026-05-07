@@ -36,47 +36,56 @@ fn short_sha256(input: &str) -> String {
 
 /// `sha256("source|sessionId|messageId")[..16]`.
 pub fn turn_id_fingerprint(t: &TurnRecord) -> String {
-    let source = serde_plain(&t.source);
-    short_sha256(&format!("{}|{}|{}", source, t.session_id, t.message_id))
+    short_sha256(&format!(
+        "{}|{}|{}",
+        t.source.wire_str(),
+        t.session_id,
+        t.message_id
+    ))
 }
 
 /// `sha256("source|sessionId|ts")[..16]` — compactions are unique per
 /// session/timestamp.
 pub fn compaction_id_fingerprint(e: &CompactionEvent) -> String {
-    let source = serde_plain(&e.source);
-    short_sha256(&format!("{}|{}|{}", source, e.session_id, e.ts))
+    short_sha256(&format!(
+        "{}|{}|{}",
+        e.source.wire_str(),
+        e.session_id,
+        e.ts
+    ))
 }
 
 /// `sha256("source|sessionId|relationshipType|relatedSessionId|agentId|parentToolUseId")[..16]`.
 pub fn relationship_id_fingerprint(r: &SessionRelationshipRecord) -> String {
-    let source = serde_plain(&r.source);
-    let relationship_type = serde_plain(&r.relationship_type);
     let parts = [
-        source,
-        r.session_id.clone(),
-        relationship_type,
-        r.related_session_id.clone().unwrap_or_default(),
-        r.agent_id.clone().unwrap_or_default(),
-        r.parent_tool_use_id.clone().unwrap_or_default(),
+        r.source.wire_str(),
+        r.session_id.as_str(),
+        r.relationship_type.wire_str(),
+        r.related_session_id.as_deref().unwrap_or(""),
+        r.agent_id.as_deref().unwrap_or(""),
+        r.parent_tool_use_id.as_deref().unwrap_or(""),
     ];
     short_sha256(&parts.join("|"))
 }
 
 /// `sha256("source|sessionId|toolUseId|eventIndex")[..16]`.
 pub fn tool_result_event_id_fingerprint(r: &ToolResultEventRecord) -> String {
-    let source = serde_plain(&r.source);
     short_sha256(&format!(
         "{}|{}|{}|{}",
-        source, r.session_id, r.tool_use_id, r.event_index
+        r.source.wire_str(),
+        r.session_id,
+        r.tool_use_id,
+        r.event_index
     ))
 }
 
 /// `sha256("source|sessionId|userUuid")[..16]`.
 pub fn user_turn_id_fingerprint(r: &UserTurnRecord) -> String {
-    let source = serde_plain(&r.source);
     short_sha256(&format!(
         "{}|{}|{}",
-        source, r.session_id, r.user_uuid
+        r.source.wire_str(),
+        r.session_id,
+        r.user_uuid
     ))
 }
 
@@ -110,17 +119,6 @@ pub fn turn_content_fingerprint(t: &TurnRecord) -> String {
 pub fn content_blob_fingerprint(body: &[u8]) -> String {
     let digest = Sha256::digest(body);
     hex::encode(digest)[..FINGERPRINT_LEN].to_string()
-}
-
-/// `serde_plain` shim — stringify an enum the same way it'd appear on the
-/// wire (`"claude-code"`, `"subagent"`, etc.) so id fingerprints are
-/// stable against TS-side hashing for the same record shape.
-fn serde_plain<T: serde::Serialize>(value: &T) -> String {
-    let v = serde_json::to_value(value).expect("serializable enum");
-    match v {
-        serde_json::Value::String(s) => s,
-        other => other.to_string(),
-    }
 }
 
 #[cfg(test)]

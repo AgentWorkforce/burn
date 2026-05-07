@@ -531,13 +531,9 @@ pub fn edit_heavy_to_finding(session: &EditHeavySession) -> WasteFinding {
     } else {
         raw_severity
     };
-    // SourceKind serializes via serde to kebab-case; render its discriminant
-    // through serde_json so the detail string matches TS's `${session.source}`
-    // (which uses the same string set).
-    let source_str = match serde_json::to_value(session.source) {
-        Ok(serde_json::Value::String(s)) => s,
-        _ => String::new(),
-    };
+    // Render the source's kebab-case label so the detail string matches TS's
+    // `${session.source}` (which uses the same string set).
+    let source_str = session.source.wire_str();
     WasteFinding {
         kind: "edit-heavy".to_string(),
         severity,

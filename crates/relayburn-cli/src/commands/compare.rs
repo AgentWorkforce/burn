@@ -229,16 +229,6 @@ fn parse_fidelity(s: &str) -> Result<FidelityClass> {
     }
 }
 
-fn fidelity_class_str(cls: FidelityClass) -> &'static str {
-    match cls {
-        FidelityClass::Full => "full",
-        FidelityClass::UsageOnly => "usage-only",
-        FidelityClass::AggregateOnly => "aggregate-only",
-        FidelityClass::CostOnly => "cost-only",
-        FidelityClass::Partial => "partial",
-    }
-}
-
 /// Normalize `--since` exactly like the TS CLI's `parseSinceArg` does:
 ///
 /// - Relative ranges (`7d`, `24h`, `4w`, `30m`) → `now - delta` rendered
@@ -670,7 +660,7 @@ fn compute_excluded(summary: &FidelitySummary, minimum: FidelityClass) -> Exclud
     }
     let need = FIDELITY_ORDER
         .iter()
-        .position(|c| *c == fidelity_class_str(minimum))
+        .position(|c| *c == minimum.wire_str())
         .unwrap_or(0);
     for (i, key) in FIDELITY_ORDER.iter().enumerate() {
         if i >= need {
@@ -756,7 +746,7 @@ fn build_json(
         "totals": Value::Object(totals),
         "cells": cells,
         "fidelity": {
-            "minimum": fidelity_class_str(minimum),
+            "minimum": minimum.wire_str(),
             "excluded": {
                 "total": excluded.total,
                 "aggregateOnly": excluded.aggregate_only,
@@ -1164,7 +1154,7 @@ fn format_excluded_note(excluded: &ExcludedBreakdown, minimum: FidelityClass) ->
     format!(
         "excluded {} {noun} below {} fidelity{breakdown}",
         format_int(excluded.total),
-        fidelity_class_str(minimum)
+        minimum.wire_str()
     )
 }
 

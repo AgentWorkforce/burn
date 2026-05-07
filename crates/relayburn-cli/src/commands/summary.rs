@@ -513,7 +513,7 @@ fn fidelity_summary_to_json(s: &FidelitySummary) -> Value {
         FidelityClass::Partial,
     ] {
         by_class.insert(
-            fidelity_class_key(class).to_string(),
+            class.wire_str().to_string(),
             json!(*s.by_class.get(&class).unwrap_or(&0)),
         );
     }
@@ -526,7 +526,7 @@ fn fidelity_summary_to_json(s: &FidelitySummary) -> Value {
         relayburn_sdk::UsageGranularity::CostOnly,
     ] {
         by_granularity.insert(
-            granularity_key(g).to_string(),
+            g.wire_str().to_string(),
             json!(*s.by_granularity.get(&g).unwrap_or(&0)),
         );
     }
@@ -556,25 +556,6 @@ fn fidelity_summary_to_json(s: &FidelitySummary) -> Value {
     out.insert("missingCoverage".into(), Value::Object(missing));
     out.insert("unknown".into(), json!(s.unknown));
     Value::Object(out)
-}
-
-fn fidelity_class_key(c: FidelityClass) -> &'static str {
-    match c {
-        FidelityClass::Full => "full",
-        FidelityClass::UsageOnly => "usage-only",
-        FidelityClass::AggregateOnly => "aggregate-only",
-        FidelityClass::CostOnly => "cost-only",
-        FidelityClass::Partial => "partial",
-    }
-}
-
-fn granularity_key(g: relayburn_sdk::UsageGranularity) -> &'static str {
-    match g {
-        relayburn_sdk::UsageGranularity::PerTurn => "per-turn",
-        relayburn_sdk::UsageGranularity::PerMessage => "per-message",
-        relayburn_sdk::UsageGranularity::PerSessionAggregate => "per-session-aggregate",
-        relayburn_sdk::UsageGranularity::CostOnly => "cost-only",
-    }
 }
 
 fn build_per_cell_fidelity(rows: &[UsageCostAggregateRow], by_provider: bool) -> Value {
