@@ -1170,6 +1170,14 @@ jobs:
             lines.push(`- \`${entry.npmName}@${entry.ver}\` (tag: \`${entry.tag}\`)`);
           }
 
+          // Crates section — `relayburn-sdk` and `relayburn-cli` ship to
+          // crates.io in lockstep with the npm umbrellas at the same
+          // workspace version. Tags `relayburn-{sdk,cli}-v<ver>` are pushed
+          // by the publish job's "Tag + push" step.
+          lines.push('', '## Crates', '');
+          lines.push(`- \`relayburn-sdk@${releaseVersion}\` (tag: \`relayburn-sdk-v${releaseVersion}\`) — https://crates.io/crates/relayburn-sdk/${releaseVersion}`);
+          lines.push(`- \`relayburn-cli@${releaseVersion}\` (tag: \`relayburn-cli-v${releaseVersion}\`) — https://crates.io/crates/relayburn-cli/${releaseVersion}`);
+
           const rootNotes = extractChangelogBody('CHANGELOG.md', releaseVersion);
           // Only the umbrellas + mcp ship hand-curated changelogs; platform
           // packages don't (they're implementation detail tracking the
