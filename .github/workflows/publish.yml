@@ -48,11 +48,46 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
+# 2.0 cutover (epic #240) target shape:
+#
+#   TS-only umbrellas (3):
+#     - relayburn                    packages/relayburn/
+#     - @relayburn/sdk (napi)        packages/sdk-node/
+#     - @relayburn/mcp               packages/mcp/
+#
+#   Per-platform binary packages (8):
+#     - @relayburn/cli-<short>       packages/relayburn/npm/<short>/  (Rust burn binary)
+#     - @relayburn/sdk-<short>       packages/sdk-node/npm/<short>/   (napi-rs .node)
+#
+# Total: 11 npm packages. The five legacy TS packages
+# (`@relayburn/{reader,ledger,analyze,ingest,cli}`) are intentionally not
+# in the publish loop — `npm deprecate` for those is a manual post-cutover
+# step. Their source dirs stay (they back the conformance fixture seeder
+# and the cli-golden suite).
+#
+# crates.io still ships exactly two crates (`relayburn-sdk` + `relayburn-cli`).
+
 jobs:
+  # Build the four `burn` binaries the platform packages need before publish.
+  # `cli-build.yml` is a reusable workflow that runs the same matrix it
+  # validates on PRs and uploads `relayburn-cli-<short>` artifacts.
+  build-cli:
+    name: Build CLI binaries
+    uses: ./.github/workflows/cli-build.yml
+    secrets: inherit
+
+  # Build the four napi-rs `.node` artifacts the SDK platform packages need.
+  build-sdk:
+    name: Build SDK napi bindings
+    uses: ./.github/workflows/napi-build.yml
+    secrets: inherit
+
   publish:
     runs-on: ubuntu-latest
+    needs: [build-cli, build-sdk]
     outputs:
       versions: ${{ steps.bump.outputs.versions }}
+      release_version: ${{ steps.bump.outputs.release_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -96,27 +131,52 @@ jobs:
           cargo build --workspace --all-targets
           cargo test --workspace
 
+      # The 11-package target table. Each entry is `key:dir` where:
+      #   - `key` is the suffix used for git tags and changelog identifiers
+      #     (so `mcp` → tag `mcp-v<ver>`, `relayburn` → `relayburn-v<ver>`,
+      #     `sdk` → `sdk-v<ver>`, platform packages → `cli-darwin-arm64-v<ver>`
+      #     etc.). Distinct from the npm package name (read from each
+      #     directory's `package.json`).
+      #   - `dir` is the relative path to the package directory.
+      #
+      # The order matters for two reasons:
+      #   1. The `relayburn` umbrella's optionalDependencies must be synced
+      #      after platform versions are bumped (handled in the bump step).
+      #   2. The publish loop ships platform packages BEFORE the umbrella
+      #      that depends on them, so `npm install relayburn` post-publish
+      #      can resolve all four `@relayburn/cli-<short>` optionalDeps.
+      #
+      # `@relayburn/sdk` (napi umbrella) similarly ships after its platform
+      # packages.
       - name: Resolve target packages
         id: targets
         run: |
-          # Dependency order: reader → ledger → analyze → ingest → sdk → mcp → cli → relayburn.
-          # `sdk` depends on ingest/ledger/analyze; `mcp` depends on sdk
-          # (MCP tools are thin wrappers over SDK functions); `cli` depends
-          # on ingest + mcp; `relayburn` is a thin wrapper that depends on
-          # `@relayburn/cli`, so cli must publish before relayburn.
-          echo "packages=reader ledger analyze ingest sdk mcp cli relayburn" >> "$GITHUB_OUTPUT"
+          {
+            echo 'targets<<EOF'
+            echo 'cli-darwin-arm64:packages/relayburn/npm/darwin-arm64'
+            echo 'cli-darwin-x64:packages/relayburn/npm/darwin-x64'
+            echo 'cli-linux-arm64-gnu:packages/relayburn/npm/linux-arm64-gnu'
+            echo 'cli-linux-x64-gnu:packages/relayburn/npm/linux-x64-gnu'
+            echo 'sdk-darwin-arm64:packages/sdk-node/npm/darwin-arm64'
+            echo 'sdk-darwin-x64:packages/sdk-node/npm/darwin-x64'
+            echo 'sdk-linux-arm64-gnu:packages/sdk-node/npm/linux-arm64-gnu'
+            echo 'sdk-linux-x64-gnu:packages/sdk-node/npm/linux-x64-gnu'
+            echo 'sdk:packages/sdk-node'
+            echo 'mcp:packages/mcp'
+            echo 'relayburn:packages/relayburn'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
-      # Lockstep baseline heal. The workspace publishes every package at the
-      # same version, so if any package's local version lags either its own
-      # npm `latest` or another workspace package, pull it up to the highest
-      # stable version across the whole set before the bump step runs. This
-      # absorbs two failure modes:
+      # Lockstep baseline heal. The 11 keepers ship at the same version, so
+      # if any package's local version lags either its own npm `latest` or
+      # another workspace package, pull it up to the highest stable version
+      # across the whole set before the bump step runs. Two failure modes:
       #
       #   1. A previous publish run shipped @relayburn/*@X to npm but failed
       #      at the Tag + push step (the original 2026-04-23 incident).
-      #   2. A new package was extracted into the workspace (e.g. ingest @ 1.6.2
-      #      between v1.7.0 and v1.8.0) and is starting below the lockstep
-      #      version.
+      #   2. A new package was extracted into the workspace (e.g. the 8
+      #      platform packages bootstrapped at 0.0.1, getting absorbed into
+      #      the 1.10.x→2.0.0 lockstep).
       #
       # The downstream "Verify new versions are not yet published" step still
       # catches the case where the post-bump version collides with an existing
@@ -124,13 +184,20 @@ jobs:
       # surface as a publish-time error after the heal rather than silently
       # promoting the whole workspace into it.
       - name: Heal local versions to lockstep baseline
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
           set -euo pipefail
           cat > /tmp/lockstep-heal.mjs << 'HEALEOF'
           import { execSync } from 'node:child_process';
           import { readFileSync } from 'node:fs';
 
-          const packages = process.argv.slice(2);
+          const raw = process.env.TARGETS || '';
+          const entries = raw.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+            const idx = line.indexOf(':');
+            return { key: line.slice(0, idx), dir: line.slice(idx + 1) };
+          });
+
           const cmp = (a, b) => {
             const pa = a.split('.').map(Number);
             const pb = b.split('.').map(Number);
@@ -143,22 +210,22 @@ jobs:
           };
           const isStable = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
 
-          const info = packages.map((pkg) => {
-            const json = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf8'));
+          const info = entries.map(({ key, dir }) => {
+            const json = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'));
             let npmHighest = null;
             try {
-              const raw = execSync(`npm view ${json.name} versions --json`, {
+              const out = execSync(`npm view ${json.name} versions --json`, {
                 encoding: 'utf8',
                 stdio: ['ignore', 'pipe', 'ignore'],
               }).trim() || '[]';
-              const parsed = JSON.parse(raw);
+              const parsed = JSON.parse(out);
               const arr = Array.isArray(parsed) ? parsed : [parsed];
               const stable = arr.filter(isStable).sort(cmp);
               if (stable.length) npmHighest = stable[stable.length - 1];
             } catch {
               // unpublished package: leave npmHighest null
             }
-            return { pkg, name: json.name, local: json.version, npmHighest };
+            return { key, dir, name: json.name, local: json.version, npmHighest };
           });
 
           const candidates = info.flatMap((e) => [e.local, e.npmHighest]).filter(isStable);
@@ -183,7 +250,7 @@ jobs:
 
           for (const e of heals) {
             execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version`, {
-              cwd: `packages/${e.pkg}`,
+              cwd: e.dir,
               stdio: 'inherit',
             });
           }
@@ -195,17 +262,22 @@ jobs:
           }
           HEALEOF
 
-          node /tmp/lockstep-heal.mjs ${{ steps.targets.outputs.packages }}
+          node /tmp/lockstep-heal.mjs
 
       - name: Bump versions
         id: bump
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
-          VERSIONS=""
+          set -euo pipefail
           CUSTOM='${{ github.event.inputs.custom_version }}'
           BUMP='${{ github.event.inputs.version }}'
           PREID='${{ github.event.inputs.prerelease_id }}'
-          for pkg in ${{ steps.targets.outputs.packages }}; do
-            pushd "packages/$pkg" > /dev/null
+
+          VERSIONS=""
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            pushd "$dir" > /dev/null
             if [ -n "$CUSTOM" ]; then
               npm version "$CUSTOM" --no-git-tag-version --allow-same-version
             elif [ "$BUMP" = "none" ]; then
@@ -216,45 +288,48 @@ jobs:
               npm version "$BUMP" --no-git-tag-version
             fi
             NEW=$(node -p "require('./package.json').version")
-            VERSIONS+=" $pkg:$NEW"
+            VERSIONS+=" $key:$NEW"
             popd > /dev/null
-          done
+          done <<< "$TARGETS"
+
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
 
-          # `relayburn` points at prebuilt platform packages with exact
-          # optionalDependency versions. Keep those package manifests and
-          # the generic CLI fallback in lockstep with the umbrella version
-          # that npm version just computed.
+          # The release version is the umbrella `relayburn` version (every
+          # keeper bumps to the same value, but this is the canonical anchor
+          # for the GitHub Release + Cargo workspace + tag stamps).
+          RELEASE_VER=$(node -p "require('./packages/relayburn/package.json').version")
+          echo "release_version=$RELEASE_VER" >> "$GITHUB_OUTPUT"
+
+          # Sync the umbrella `relayburn` and `@relayburn/sdk` (napi)
+          # optionalDependencies to the lockstep version. Both umbrellas
+          # resolve their per-platform packages by exact version, so the
+          # specifiers must move whenever the platform packages do.
           node --input-type=module <<'SYNCEOF'
-          import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-          import { join } from 'node:path';
+          import { readFileSync, writeFileSync } from 'node:fs';
 
           const formatJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
+
+          // relayburn (cli umbrella) → 4 × @relayburn/cli-<short>.
+          const cliShorts = ['darwin-arm64', 'darwin-x64', 'linux-arm64-gnu', 'linux-x64-gnu'];
           const relayburnPath = 'packages/relayburn/package.json';
           const relayburn = JSON.parse(readFileSync(relayburnPath, 'utf8'));
-          const version = relayburn.version;
-          const platformRoot = 'packages/relayburn/npm';
-
-          const platformPackages = readdirSync(platformRoot, { withFileTypes: true })
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => {
-              const path = join(platformRoot, entry.name, 'package.json');
-              if (!existsSync(path)) return null;
-              const json = JSON.parse(readFileSync(path, 'utf8'));
-              json.version = version;
-              writeFileSync(path, formatJson(json));
-              return json.name;
-            })
-            .filter(Boolean)
-            .sort();
-
-          relayburn.optionalDependencies = {
-            '@relayburn/cli': version,
-            ...Object.fromEntries(platformPackages.map((name) => [name, version])),
-          };
+          const relayburnVersion = relayburn.version;
+          relayburn.optionalDependencies = Object.fromEntries(
+            cliShorts.map((short) => [`@relayburn/cli-${short}`, relayburnVersion]),
+          );
           writeFileSync(relayburnPath, formatJson(relayburn));
 
-          console.log(`relayburn optional dependencies and ${platformPackages.length} platform package(s) synced to ${version}.`);
+          // @relayburn/sdk (napi umbrella) → 4 × @relayburn/sdk-<short>.
+          const sdkPath = 'packages/sdk-node/package.json';
+          const sdk = JSON.parse(readFileSync(sdkPath, 'utf8'));
+          const sdkVersion = sdk.version;
+          sdk.optionalDependencies = Object.fromEntries(
+            cliShorts.map((short) => [`@relayburn/sdk-${short}`, sdkVersion]),
+          );
+          writeFileSync(sdkPath, formatJson(sdk));
+
+          console.log(`relayburn@${relayburnVersion}: optionalDependencies synced.`);
+          console.log(`@relayburn/sdk@${sdkVersion}: optionalDependencies synced.`);
           SYNCEOF
 
           # Lockstep the Rust workspace to the npm version. Any package's
@@ -262,7 +337,7 @@ jobs:
           # The cli/sdk-node path-deps on relayburn-sdk pin MAJOR.MINOR
           # (caret semantics) so the constraint only needs rewriting on
           # minor/major bumps; patch bumps no-op the sed.
-          RUST_VER=$(node -p "require('./packages/relayburn/package.json').version")
+          RUST_VER="$RELEASE_VER"
           RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}')
           echo "Rust workspace lockstep: $RUST_VER (minor pin: $RUST_MINOR)"
 
@@ -274,18 +349,27 @@ jobs:
           # Refresh Cargo.lock to reflect the new workspace version.
           cargo update --workspace
 
-      # Belt-and-suspenders alongside the parity check above: even if the
+      # Belt-and-suspenders alongside the heal step above: even if the
       # local→npm baseline is in sync, the computed bump might collide with
       # an existing version (e.g. someone manually published a one-off from
       # another branch). Catch it before we waste a build + before npm
       # rejects with a less specific error.
       - name: Verify new versions are not yet published
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
           set -euo pipefail
+          declare -A DIRS
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            DIRS[$key]="$dir"
+          done <<< "$TARGETS"
+
           for entry in ${{ steps.bump.outputs.versions }}; do
-            pkg="${entry%%:*}"
+            key="${entry%%:*}"
             ver="${entry##*:}"
-            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            dir="${DIRS[$key]}"
+            NPM_NAME=$(node -p "require('./$dir/package.json').name")
             EXISTS=$(npm view "$NPM_NAME@$ver" version 2>/dev/null || true)
             if [ -n "$EXISTS" ]; then
               echo "::error title=Version already published::$NPM_NAME@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
@@ -294,33 +378,46 @@ jobs:
             echo "$NPM_NAME@$ver: unpublished — OK"
           done
 
-      # Per-package CHANGELOG.md generation. For each package being published:
+      # Per-package CHANGELOG.md generation. For each TS-only package being
+      # published (mcp, relayburn umbrella, @relayburn/sdk napi umbrella):
       #
       #   1. If `## [Unreleased]` contains hand-curated content, promote it
       #      verbatim into the new `## [x.y.z] - DATE` block, then reset
-      #      `## [Unreleased]` to empty. This is the authoritative path:
-      #      CONTRIBUTORS curate Unreleased as they land PRs and release just
-      #      stamps a date on it.
+      #      `## [Unreleased]` to empty. This is the authoritative path.
       #   2. Otherwise, fall back to inferring a block from `git log` since
-      #      the last `<pkg>-v*` tag. Bucketing prefers Conventional Commits
+      #      the last `<key>-v*` tag. Bucketing prefers Conventional Commits
       #      prefixes (feat:/fix:/refactor:) and falls back to imperative-verb
-      #      inference ("Add X" → feat, "Fix Y" → fix, …). Unclassified
-      #      commits land in `Changed` so nothing gets silently dropped.
+      #      inference. Unclassified commits land in `Changed` so nothing
+      #      gets silently dropped.
       #   3. Skips silently for prereleases (version contains `-`) and for
       #      first publishes where neither Unreleased nor a prior tag exists.
+      #
+      # The 8 platform packages get a minimal stub entry — they don't have
+      # narrative changelogs, just version stamps tracking the umbrella.
       - name: Generate changelogs
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
           TODAY=$(date -u +%Y-%m-%d)
           cat > /tmp/gen-changelog.mjs << 'GENEOF'
           import { execSync } from 'node:child_process';
           import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
-          const [,, pkg, newVersion, today] = process.argv;
-          const path = `packages/${pkg}/CHANGELOG.md`;
+          const [,, key, dir, newVersion, today] = process.argv;
+          const path = `${dir}/CHANGELOG.md`;
 
           if (newVersion.includes('-')) {
-            console.log(`prerelease ${pkg}@${newVersion}: skipping`);
+            console.log(`prerelease ${key}@${newVersion}: skipping`);
+            process.exit(0);
+          }
+
+          // Platform packages live under `packages/<umbrella>/npm/<short>/`
+          // and don't ship hand-curated changelogs. Skip them: they're
+          // covered by the umbrella's narrative + their git tag.
+          const isPlatformPackage = dir.includes('/npm/');
+          if (isPlatformPackage && !existsSync(path)) {
+            console.log(`${key}: platform package without CHANGELOG.md, skipping`);
             process.exit(0);
           }
 
@@ -330,11 +427,11 @@ jobs:
             process.exit(0);
           }
 
-          const tagPrefix = `${pkg}-v`;
+          const tagPrefix = `${key}-v`;
           const tags = execSync(`git tag -l '${tagPrefix}*' --sort=-v:refname`, { encoding: 'utf-8' })
             .trim().split('\n').filter(Boolean);
           const semverRe = new RegExp(`^${tagPrefix.replace(/\./g, '\\.')}\\d+\\.\\d+\\.\\d+$`);
-          const lastTag = tags.find(t => semverRe.test(t));
+          const lastTag = tags.find((t) => semverRe.test(t));
 
           // --- Step 1: extract any hand-curated [Unreleased] content. ---
           // We slice from the header line to the next `## [` (or EOF) so the
@@ -364,21 +461,21 @@ jobs:
           if (unreleasedBody.length > 0) {
             // Promote Unreleased verbatim. Curated text wins over commit log.
             newEntryBody = unreleasedBody + '\n';
-            console.log(`${pkg}: promoting [Unreleased] content into ${newVersion}`);
+            console.log(`${key}: promoting [Unreleased] content into ${newVersion}`);
           } else if (!lastTag) {
-            console.log(`${pkg}: empty [Unreleased] and no prior stable tag, skipping`);
+            console.log(`${key}: empty [Unreleased] and no prior stable tag, skipping`);
             process.exit(0);
           } else {
             const log = execSync(
-              `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- packages/${pkg}`,
+              `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- ${dir}`,
               { encoding: 'utf-8' }
             ).trim();
             if (!log) {
-              console.log(`${pkg}: empty [Unreleased] and no commits since ${lastTag}, skipping`);
+              console.log(`${key}: empty [Unreleased] and no commits since ${lastTag}, skipping`);
               process.exit(0);
             }
 
-            const commits = log.split('\0').filter(Boolean).map(record => {
+            const commits = log.split('\0').filter(Boolean).map((record) => {
               const idx = record.indexOf('|');
               const idx2 = record.indexOf('|', idx + 1);
               return {
@@ -455,14 +552,14 @@ jobs:
               bodyLines.push('### Released', '', `- v${newVersion}`, '');
             }
             newEntryBody = bodyLines.join('\n');
-            console.log(`${pkg}: inferred ${newVersion} body from git log`);
+            console.log(`${key}: inferred ${newVersion} body from git log`);
           }
 
           const newEntry = `## [${newVersion}] - ${today}\n\n${newEntryBody}`;
 
           // --- Step 3: write the file with Unreleased reset + new block. ---
           if (!existing) {
-            const npmName = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf-8')).name;
+            const npmName = JSON.parse(readFileSync(`${dir}/package.json`, 'utf-8')).name;
             const header = `# Changelog\n\nAll notable changes to \`${npmName}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
             writeFileSync(path, header + newEntry + '\n');
           } else if (parts) {
@@ -492,54 +589,46 @@ jobs:
           console.log(`${path} updated with ${newVersion}`);
           GENEOF
 
+          declare -A DIRS
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            DIRS[$key]="$dir"
+          done <<< "$TARGETS"
+
           for entry in ${{ steps.bump.outputs.versions }}; do
-            pkg="${entry%%:*}"
+            key="${entry%%:*}"
             version="${entry##*:}"
-            node /tmp/gen-changelog.mjs "$pkg" "$version" "$TODAY"
+            dir="${DIRS[$key]}"
+            node /tmp/gen-changelog.mjs "$key" "$dir" "$version" "$TODAY"
           done
 
       # Root CHANGELOG.md gets the same Unreleased→[x.y.z] promotion the
-      # per-package files just got, but driven by the highest version bumped
-      # in this release (packages move in lockstep today; using max also
-      # handles future drift). No git-log fallback — the root file is a
-      # hand-curated cross-package narrative, so an empty [Unreleased] means
+      # per-package files just got, anchored on the umbrella version (every
+      # keeper ships at the same version, so any of them works as the
+      # release stamp). No git-log fallback — the root file is a hand-
+      # curated cross-package narrative, so an empty [Unreleased] means
       # "no narrative-worthy changes this release" and we leave the file
       # alone rather than inventing bullets.
       - name: Generate root changelog
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
+        env:
+          RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
         run: |
           TODAY=$(date -u +%Y-%m-%d)
           cat > /tmp/gen-root-changelog.mjs << 'GENEOF'
           import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
-          const [,, versionsRaw, today] = process.argv;
+          const [,, newVersion, today] = process.argv;
           const path = 'CHANGELOG.md';
 
-          const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((e) => {
-            const [pkg, ver] = e.split(':');
-            return { pkg, ver };
-          });
-          if (entries.length === 0) {
-            console.log('root changelog: no versions bumped, skipping');
+          if (!newVersion) {
+            console.log('root changelog: no release version supplied, skipping');
             process.exit(0);
           }
-          if (entries.some((e) => e.ver.includes('-'))) {
+          if (newVersion.includes('-')) {
             console.log('root changelog: prerelease bump, skipping');
             process.exit(0);
           }
-
-          // Pick the highest version across packages bumped in this release.
-          const cmp = (a, b) => {
-            const pa = a.split('.').map(Number);
-            const pb = b.split('.').map(Number);
-            for (let i = 0; i < 3; i++) {
-              const da = pa[i] || 0;
-              const db = pb[i] || 0;
-              if (da !== db) return da - db;
-            }
-            return 0;
-          };
-          const newVersion = entries.map((e) => e.ver).sort(cmp).slice(-1)[0];
 
           if (!existsSync(path)) {
             console.log(`root changelog: ${path} not found, skipping`);
@@ -551,7 +640,7 @@ jobs:
             process.exit(0);
           }
 
-          // Same slicer as the per-package generator: header → body → next ##.
+          // Same slicer as the per-package generator.
           function splitAtUnreleased(raw) {
             const headerRe = /^## \[Unreleased\][^\n]*\n/m;
             const headerMatch = raw.match(headerRe);
@@ -592,25 +681,39 @@ jobs:
           console.log(`root changelog: promoted [Unreleased] into ${newVersion}`);
           GENEOF
 
-          node /tmp/gen-root-changelog.mjs "${{ steps.bump.outputs.versions }}" "$TODAY"
+          node /tmp/gen-root-changelog.mjs "$RELEASE_VERSION" "$TODAY"
 
       - name: Commit version bumps
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/*/package.json packages/*/CHANGELOG.md CHANGELOG.md \
+          git add packages/mcp/package.json packages/mcp/CHANGELOG.md \
+                  packages/relayburn/package.json packages/relayburn/CHANGELOG.md \
+                  packages/sdk-node/package.json packages/sdk-node/CHANGELOG.md \
                   packages/relayburn/npm/*/package.json \
+                  packages/sdk-node/npm/*/package.json \
+                  CHANGELOG.md \
                   Cargo.toml Cargo.lock \
                   crates/relayburn-cli/Cargo.toml crates/relayburn-sdk-node/Cargo.toml
           if git diff --cached --quiet; then
             echo "No version changes to commit."
           else
+            declare -A DIRS
+            while IFS=: read -r key dir; do
+              [ -z "$key" ] && continue
+              DIRS[$key]="$dir"
+            done <<< "$TARGETS"
+
             MSG="chore(release):"
             for entry in ${{ steps.bump.outputs.versions }}; do
-              pkg="${entry%%:*}"
+              key="${entry%%:*}"
               version="${entry##*:}"
-              NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+              dir="${DIRS[$key]}"
+              NPM_NAME=$(node -p "require('./$dir/package.json').name")
               MSG+=" $NPM_NAME@$version"
             done
             git commit -m "$MSG"
@@ -622,9 +725,7 @@ jobs:
       #
       # Both crates must be pre-registered as trusted publishers on
       # crates.io (Settings → Trusted Publishing → GitHub) for this to
-      # mint a token. First-publish bootstrap (registering the crate name
-      # and configuring trusted publishing) is a one-time manual step
-      # documented in the PR that introduced this flow.
+      # mint a token.
       #
       # Cargo runs BEFORE npm so a crate-side failure aborts before npm
       # ships any tarball, pushes any tag, or commits any version bump.
@@ -646,13 +747,14 @@ jobs:
       - name: Cargo publish (sdk → cli)
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.cargo-auth.outputs.token }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
         run: |
           set -euo pipefail
           DRY=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             DRY="--dry-run"
           fi
-          VER=$(node -p "require('./packages/relayburn/package.json').version")
+          VER="$RELEASE_VERSION"
 
           # Idempotent gate: skip if already on crates.io. Lets a partial
           # failure (e.g. npm step below) be retried with `version: none`.
@@ -667,10 +769,7 @@ jobs:
           fi
 
           # Wait for the new SDK version to land in the sparse index so
-          # the CLI's dep resolution sees it. Poll rather than fixed-sleep.
-          # Fail loudly if the version never appears — letting the CLI
-          # publish proceed produces a confusing "unsatisfied dep" error
-          # that's harder to diagnose than an explicit timeout.
+          # the CLI's dep resolution sees it.
           if [ -z "$DRY" ] && [ "$sdk_published" = "0" ]; then
             found=0
             for i in $(seq 1 30); do
@@ -697,6 +796,74 @@ jobs:
             echo "relayburn-cli@$VER already on crates.io — skipping"
           fi
 
+      # Stage the prebuilt binary artifacts produced by the `build-cli` and
+      # `build-sdk` reusable workflows. Each artifact name follows the
+      # convention `relayburn-{cli,sdk}-<short>` (set in cli-build.yml +
+      # napi-build.yml).
+      #
+      #   - cli artifacts contain a stripped `burn` binary; drop it at
+      #     `packages/relayburn/npm/<short>/bin/burn` and chmod +x.
+      #   - sdk artifacts contain `relayburn-sdk.<short>.node` (napi-rs
+      #     emits that filename because `binaryName: "relayburn-sdk"` in
+      #     packages/sdk-node/package.json); drop it at
+      #     `packages/sdk-node/npm/<short>/relayburn-sdk.<short>.node`.
+      #
+      # If `napi build` ever changes its output filename (e.g. emits
+      # `index.<short>.node`), the rename loop below catches it: anything
+      # that's not already named `relayburn-sdk.<short>.node` gets renamed
+      # so the per-platform package.json's `main` resolves correctly.
+      - name: Download CLI binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/cli-artifacts
+          pattern: relayburn-cli-*
+          merge-multiple: false
+
+      - name: Download SDK napi artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/sdk-artifacts
+          pattern: relayburn-sdk-*
+          merge-multiple: false
+
+      - name: Stage prebuilt binaries into platform packages
+        run: |
+          set -euo pipefail
+          for short in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu; do
+            # CLI: drop `burn` at packages/relayburn/npm/<short>/bin/burn.
+            cli_src="/tmp/cli-artifacts/relayburn-cli-${short}/burn"
+            cli_dst_dir="packages/relayburn/npm/${short}/bin"
+            if [ ! -f "$cli_src" ]; then
+              echo "::error title=Missing CLI artifact::expected $cli_src" >&2
+              ls -la "/tmp/cli-artifacts/relayburn-cli-${short}/" 2>/dev/null || true
+              exit 1
+            fi
+            mkdir -p "$cli_dst_dir"
+            cp "$cli_src" "$cli_dst_dir/burn"
+            chmod +x "$cli_dst_dir/burn"
+            ls -lh "$cli_dst_dir/burn"
+
+            # SDK: napi-rs uploads packages/sdk-node/src/*.node — there's
+            # only one .node file per matrix leg (the per-target binary).
+            # Locate it generically rather than hard-coding the filename so
+            # a `napi build` filename change doesn't silently break staging.
+            sdk_src_dir="/tmp/sdk-artifacts/relayburn-sdk-${short}"
+            if [ ! -d "$sdk_src_dir" ]; then
+              echo "::error title=Missing SDK artifact dir::expected $sdk_src_dir" >&2
+              ls -la /tmp/sdk-artifacts/ 2>/dev/null || true
+              exit 1
+            fi
+            sdk_node_file=$(find "$sdk_src_dir" -maxdepth 2 -name '*.node' -print -quit)
+            if [ -z "$sdk_node_file" ]; then
+              echo "::error title=Missing .node artifact::no *.node file in $sdk_src_dir" >&2
+              ls -la "$sdk_src_dir" 2>/dev/null || true
+              exit 1
+            fi
+            sdk_dst="packages/sdk-node/npm/${short}/relayburn-sdk.${short}.node"
+            cp "$sdk_node_file" "$sdk_dst"
+            ls -lh "$sdk_dst"
+          done
+
       # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
       - name: Install latest npm
         run: npm install -g npm@latest
@@ -708,11 +875,27 @@ jobs:
       # registered as a trusted publisher on npmjs.com under this
       # repo/workflow path for the first publish.
       #
-      # Pipeline: `pnpm pack` rewrites workspace:* deps to concrete versions
-      # inside the tarball's package.json, then `npm publish <tarball>`
-      # uploads it using npm's native auth. This decouples workspace-aware
-      # packing from publish-time auth.
+      # Pipeline:
+      #   - For workspace packages (mcp): `pnpm pack` rewrites `workspace:*`
+      #     deps to concrete versions inside the tarball's package.json.
+      #   - For non-workspace packages (relayburn umbrella, sdk-node
+      #     umbrella, 8 platform packages): `npm pack` from the package's
+      #     own directory. These packages live OUTSIDE the pnpm workspace
+      #     (see pnpm-workspace.yaml's `!packages/{relayburn,sdk-node}`
+      #     excludes, plus the platform packages are subdirs that pnpm
+      #     doesn't auto-include) so `pnpm pack` from the workspace root
+      #     can't resolve them by name.
+      #
+      # Then `npm publish <tarball>` uploads with `--provenance` (triggers
+      # OIDC) on real runs, or `--dry-run` on dry runs.
+      #
+      # Publish order: platform packages first, then their umbrellas. This
+      # ensures `npm install relayburn` (or `@relayburn/sdk`) post-publish
+      # can resolve all four `optionalDependencies` immediately rather than
+      # racing the registry's per-package propagation.
       - name: Pack + publish
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
           set -euo pipefail
           PACK_DIR="$RUNNER_TEMP/packs"
@@ -725,63 +908,116 @@ jobs:
             COMMON_FLAGS+=" --provenance"
           fi
 
-          for pkg in ${{ steps.targets.outputs.packages }}; do
-            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
-            VERSION=$(node -p "require('./packages/$pkg/package.json').version")
-            # `pnpm pack` writes <name-without-@>-<ver>.tgz with `/` → `-`.
-            # @relayburn/cli@0.33.0  → relayburn-cli-0.33.0.tgz
-            # relayburn@0.33.0       → relayburn-0.33.0.tgz
-            TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${VERSION}.tgz"
-            echo "==> Packing $NPM_NAME"
-            pnpm --filter "$NPM_NAME" pack --pack-destination "$PACK_DIR"
+          declare -A DIRS
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            DIRS[$key]="$dir"
+          done <<< "$TARGETS"
+
+          # Order matches `targets` output (platform packages → sdk umbrella
+          # → mcp → relayburn umbrella).
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            key="${entry%%:*}"
+            version="${entry##*:}"
+            dir="${DIRS[$key]}"
+            NPM_NAME=$(node -p "require('./$dir/package.json').name")
+
+            # Workspace-aware packing only for workspace packages. The mcp
+            # package is the only entry that lives inside the pnpm
+            # workspace (umbrellas + platform packages are excluded). Use
+            # `pnpm pack` for it (rewrites `workspace:*` → concrete versions
+            # at pack time); use `npm pack` from the package directory for
+            # everyone else.
+            if [ "$key" = "mcp" ]; then
+              echo "==> Packing $NPM_NAME (pnpm)"
+              # pnpm writes <name-without-@>-<ver>.tgz with `/` → `-`.
+              # @relayburn/mcp@2.0.0 → relayburn-mcp-2.0.0.tgz
+              TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${version}.tgz"
+              pnpm --filter "$NPM_NAME" pack --pack-destination "$PACK_DIR"
+            else
+              echo "==> Packing $NPM_NAME (npm, dir=$dir)"
+              # `npm pack` writes <name-without-@>-<ver>.tgz with `/` → `-`.
+              TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${version}.tgz"
+              (cd "$dir" && npm pack --pack-destination "$PACK_DIR")
+            fi
+
             TARBALL="$PACK_DIR/$TARBALL_BASENAME"
             if [ ! -f "$TARBALL" ]; then
               echo "::error::could not find packed tarball $TARBALL_BASENAME in $PACK_DIR" >&2
               ls -la "$PACK_DIR" >&2 || true
               exit 1
             fi
+
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
             npm publish "$TARBALL" $COMMON_FLAGS
           done
 
       # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
       # lightweight tags are skipped by --follow-tags.
+      #
+      # Tag scheme:
+      #   - `<key>-v<ver>` for each of the 11 npm targets (mcp-v…,
+      #     relayburn-v…, sdk-v…, cli-darwin-arm64-v…, sdk-linux-x64-gnu-v…,
+      #     etc.). The canonical release tag is `relayburn-v<ver>` — the
+      #     create-release job below anchors the GitHub Release on it.
+      #   - `relayburn-{sdk,cli}-v<ver>` for the two crates.io crates,
+      #     reusing the same lockstep version. Disambiguated from the npm
+      #     `sdk-v…` / (legacy) `cli-v…` tags via the `relayburn-` prefix.
       - name: Tag + push
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
         run: |
+          set -euo pipefail
+          declare -A DIRS
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            DIRS[$key]="$dir"
+          done <<< "$TARGETS"
+
           for entry in ${{ steps.bump.outputs.versions }}; do
-            pkg="${entry%%:*}"
+            key="${entry%%:*}"
             version="${entry##*:}"
-            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
-            git tag -a "$pkg-v$version" -m "$NPM_NAME@$version"
-            # Lockstep: the Rust crates ship at the same workspace
-            # version, so reuse $version. Disambiguate from the npm
-            # `sdk-v…` / `cli-v…` tags via the `relayburn-` prefix.
-            if [ "$pkg" = "sdk" ]; then
+            dir="${DIRS[$key]}"
+            NPM_NAME=$(node -p "require('./$dir/package.json').name")
+            git tag -a "$key-v$version" -m "$NPM_NAME@$version"
+            # crates.io tags. Lockstep, so reuse $version. Only emit on the
+            # `sdk` (napi umbrella) entry to avoid duplicate tags across
+            # the 11 npm targets.
+            if [ "$key" = "sdk" ]; then
               git tag -a "relayburn-sdk-v$version" -m "relayburn-sdk@$version"
-            elif [ "$pkg" = "cli" ]; then
               git tag -a "relayburn-cli-v$version" -m "relayburn-cli@$version"
             fi
           done
           git push origin HEAD --follow-tags
 
       - name: Summary
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
         run: |
+          set -euo pipefail
+          declare -A DIRS
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            DIRS[$key]="$dir"
+          done <<< "$TARGETS"
+
           {
             echo "### Published (npm)"
             echo ""
             for entry in ${{ steps.bump.outputs.versions }}; do
-              pkg="${entry%%:*}"
+              key="${entry%%:*}"
               version="${entry##*:}"
-              NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+              dir="${DIRS[$key]}"
+              NPM_NAME=$(node -p "require('./$dir/package.json').name")
               echo "- \`$NPM_NAME@$version\`"
             done
             echo ""
-            RUST_VER=$(node -p "require('./packages/relayburn/package.json').version")
             echo "### Published (crates.io)"
             echo ""
-            echo "- \`relayburn-sdk@$RUST_VER\`"
-            echo "- \`relayburn-cli@$RUST_VER\`"
+            echo "- \`relayburn-sdk@$RELEASE_VERSION\`"
+            echo "- \`relayburn-cli@$RELEASE_VERSION\`"
             echo ""
             echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
             echo "- **dry run**: \`${{ github.event.inputs.dry_run }}\`"
@@ -791,9 +1027,9 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # One GitHub Release per publish run. Package tags are still pushed above,
-  # but the public GitHub Release is anchored to the relayburn tag for
-  # lockstep publishes so the releases page has one item per version.
+  # One GitHub Release per publish run. All 11 npm tags are pushed above,
+  # but the public GitHub Release is anchored to the `relayburn-v<ver>` tag
+  # so the releases page has one item per version.
   create-release:
     name: Create GitHub Release
     needs: publish
@@ -807,31 +1043,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSIONS='${{ needs.publish.outputs.versions }}'
-          canonical=""
-          for entry in $VERSIONS; do
-            pkg="${entry%%:*}"
-            ver="${entry##*:}"
-            if [ -z "$canonical" ]; then
-              canonical="$entry"
-            fi
-            if [ "$pkg" = "relayburn" ]; then
-              canonical="$entry"
-              break
-            fi
-          done
-
-          if [ -z "$canonical" ]; then
-            echo "::error title=Missing release target::publish job did not report any package versions"
+          VER='${{ needs.publish.outputs.release_version }}'
+          if [ -z "$VER" ]; then
+            echo "::error title=Missing release version::publish job did not report a release_version output"
             exit 1
           fi
 
-          pkg="${canonical%%:*}"
-          ver="${canonical##*:}"
-          echo "canonical_pkg=$pkg" >> "$GITHUB_OUTPUT"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "tag_name=$pkg-v$ver" >> "$GITHUB_OUTPUT"
-          if [[ "$ver" == *-* ]]; then
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag_name=relayburn-v$VER" >> "$GITHUB_OUTPUT"
+          if [[ "$VER" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
@@ -845,37 +1065,69 @@ jobs:
 
       - name: Build combined release notes
         id: notes
+        env:
+          VERSIONS: ${{ needs.publish.outputs.versions }}
+          RELEASE_VERSION: ${{ needs.publish.outputs.release_version }}
         run: |
           cat > /tmp/build-release-notes.mjs << 'GENEOF'
           import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
           const versionsRaw = process.env.VERSIONS || '';
-          const canonicalPkg = process.env.CANONICAL_PKG;
-          const canonicalVersion = process.env.CANONICAL_VERSION;
+          const releaseVersion = process.env.RELEASE_VERSION;
 
-          const packageOrder = ['reader', 'ledger', 'analyze', 'ingest', 'sdk', 'mcp', 'cli', 'relayburn'];
+          // Display order: umbrellas first (the user-facing surfaces), then
+          // platform packages (implementation detail, but worth listing for
+          // completeness).
+          const keyOrder = [
+            'relayburn',
+            'sdk',
+            'mcp',
+            'cli-darwin-arm64',
+            'cli-darwin-x64',
+            'cli-linux-arm64-gnu',
+            'cli-linux-x64-gnu',
+            'sdk-darwin-arm64',
+            'sdk-darwin-x64',
+            'sdk-linux-arm64-gnu',
+            'sdk-linux-x64-gnu',
+          ];
+
+          // Mirror the targets table from publish.yml so we can resolve
+          // package directories for changelog extraction.
+          const dirByKey = new Map([
+            ['mcp', 'packages/mcp'],
+            ['relayburn', 'packages/relayburn'],
+            ['sdk', 'packages/sdk-node'],
+            ['cli-darwin-arm64', 'packages/relayburn/npm/darwin-arm64'],
+            ['cli-darwin-x64', 'packages/relayburn/npm/darwin-x64'],
+            ['cli-linux-arm64-gnu', 'packages/relayburn/npm/linux-arm64-gnu'],
+            ['cli-linux-x64-gnu', 'packages/relayburn/npm/linux-x64-gnu'],
+            ['sdk-darwin-arm64', 'packages/sdk-node/npm/darwin-arm64'],
+            ['sdk-darwin-x64', 'packages/sdk-node/npm/darwin-x64'],
+            ['sdk-linux-arm64-gnu', 'packages/sdk-node/npm/linux-arm64-gnu'],
+            ['sdk-linux-x64-gnu', 'packages/sdk-node/npm/linux-x64-gnu'],
+          ]);
+
           const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((entry) => {
             const idx = entry.indexOf(':');
-            return { pkg: entry.slice(0, idx), ver: entry.slice(idx + 1) };
-          }).sort((a, b) => packageOrder.indexOf(a.pkg) - packageOrder.indexOf(b.pkg));
+            return { key: entry.slice(0, idx), ver: entry.slice(idx + 1) };
+          }).sort((a, b) => keyOrder.indexOf(a.key) - keyOrder.indexOf(b.key));
 
           if (entries.length === 0) {
             throw new Error('publish job did not report any package versions');
           }
 
-          const packageInfo = entries.map(({ pkg, ver }) => {
-            const pkgJson = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf8'));
+          const packageInfo = entries.map(({ key, ver }) => {
+            const dir = dirByKey.get(key);
+            const pkgJson = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'));
             return {
-              pkg,
+              key,
               ver,
+              dir,
               npmName: pkgJson.name,
-              tag: `${pkg}-v${ver}`,
+              tag: `${key}-v${ver}`,
             };
           });
-
-          const canonical =
-            packageInfo.find((entry) => entry.pkg === canonicalPkg && entry.ver === canonicalVersion) ||
-            packageInfo[0];
 
           function escapeRegExp(value) {
             return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -904,11 +1156,16 @@ jobs:
             lines.push(`- \`${entry.npmName}@${entry.ver}\` (tag: \`${entry.tag}\`)`);
           }
 
-          const rootNotes = extractChangelogBody('CHANGELOG.md', canonical.ver);
+          const rootNotes = extractChangelogBody('CHANGELOG.md', releaseVersion);
+          // Only the umbrellas + mcp ship hand-curated changelogs; platform
+          // packages don't (they're implementation detail tracking the
+          // umbrella version).
+          const narrativeKeys = new Set(['relayburn', 'sdk', 'mcp']);
           const packageNotes = packageInfo
+            .filter((entry) => narrativeKeys.has(entry.key))
             .map((entry) => ({
               ...entry,
-              notes: extractChangelogBody(`packages/${entry.pkg}/CHANGELOG.md`, entry.ver),
+              notes: extractChangelogBody(`${entry.dir}/CHANGELOG.md`, entry.ver),
             }))
             .filter((entry) => entry.notes.length > 0);
 
@@ -929,16 +1186,9 @@ jobs:
 
           writeFileSync('/tmp/release-notes.md', `${lines.join('\n').trimEnd()}\n`);
 
-          const releaseName =
-            canonical.pkg === 'relayburn'
-              ? `relayburn@${canonical.ver}`
-              : `${canonical.npmName}@${canonical.ver}`;
-          appendFileSync(process.env.GITHUB_OUTPUT, `release_name=${releaseName}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_name=relayburn@${releaseVersion}\n`);
           GENEOF
 
-          VERSIONS='${{ needs.publish.outputs.versions }}' \
-          CANONICAL_PKG='${{ steps.release.outputs.canonical_pkg }}' \
-          CANONICAL_VERSION='${{ steps.release.outputs.version }}' \
           node /tmp/build-release-notes.mjs
 
       - name: Create GitHub Release

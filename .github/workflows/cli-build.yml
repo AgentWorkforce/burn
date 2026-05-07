@@ -1,9 +1,9 @@
 name: cli build
 
 # Build prebuilt `burn` binaries for every platform we publish to npm under
-# `@relayburn/cli-*`. PRs validate the matrix; tags / manual dispatch *would*
-# publish, but the publish step is stubbed off for now — the cutover publish
-# workflow integration lands as a follow-up to this PR.
+# `@relayburn/cli-*`. PRs validate the matrix; the cutover publish workflow
+# (`.github/workflows/publish.yml`) calls this workflow via `workflow_call`
+# to produce the binaries it then stages into per-platform packages.
 #
 # Mirrors `.github/workflows/napi-build.yml`: the napi-rs SDK uses the same
 # umbrella + per-platform-package shape, just with `.node` artifacts instead
@@ -30,11 +30,11 @@ on:
       - 'packages/relayburn/**'
       - '.github/workflows/cli-build.yml'
   workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish prebuilt artifacts to npm under the `next` tag (stubbed; full wiring lands with the cutover publish workflow)'
-        type: boolean
-        default: false
+  workflow_call:
+    # Publish runs the same matrix this workflow exercises on PRs. The
+    # caller downloads the uploaded `relayburn-cli-<short>` artifacts and
+    # stages them into `packages/relayburn/npm/<short>/bin/` before
+    # `npm pack` + `npm publish`.
 
 permissions:
   contents: read
@@ -169,31 +169,3 @@ jobs:
             ./packages/relayburn
           NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --help
           NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --version
-
-  publish:
-    # Stub. Real publish wiring lands as a follow-up that integrates with
-    # `.github/workflows/publish.yml`: download the matrix artifacts, drop
-    # each into the right `packages/relayburn/npm/<short>/bin/` directory,
-    # and `npm publish` the umbrella + each per-platform package via OIDC
-    # trusted publisher. Until then, calling `workflow_dispatch` with
-    # `publish: true` exercises the artifact download path so we catch
-    # wiring errors early without actually pushing to npm.
-    needs: build
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: packages/relayburn/npm-artifacts
-
-      - name: Inspect artifacts (publish stub)
-        run: |
-          echo 'Publish step is currently a stub. Full wiring lands in the cutover publish.yml integration follow-up.'
-          ls -lahR packages/relayburn/npm-artifacts || true
