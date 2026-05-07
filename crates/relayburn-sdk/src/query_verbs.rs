@@ -1367,16 +1367,27 @@ impl LedgerHandle {
             q.enrichment = Some(enrichment);
         }
 
+        // Mirror TS `compare()` (`packages/sdk/index.js`):
+        //   - provider filter (drops turns whose derived provider is excluded)
+        //   - fidelity summary over the *post-provider*, *pre-fidelity-gate*
+        //     slice (the TS path calls `summarizeFidelity(turns)` here)
+        //   - fidelity-gate filter (a no-op when minimum is `partial`)
+        //   - `analyzedTurns = filteredTurns.length` — i.e. AFTER the
+        //     fidelity gate but BEFORE the model allow-list, which is
+        //     applied inside `build_compare_table`.
+        //
+        // Crucially: do NOT pre-filter `turns` by `opts.models`. The TS
+        // contract is that `analyzedTurns` and `fidelity.summary` describe
+        // the slice the comparison was *drawn from*, not the cells. The
+        // model allow-list is honored by `build_compare_table` via
+        // `opts.models`, which also pre-seeds requested models that
+        // produced zero turns as all-empty columns.
         let mut turns = self.inner.query_turns(&q)?;
         if let Some(filter) = normalize_provider_filter(opts.provider) {
             turns.retain(|t| {
                 let provider = crate::analyze::provider_for(&t.turn).provider;
                 filter.contains(&provider.to_ascii_lowercase())
             });
-        }
-        {
-            let requested_models: HashSet<&str> = opts.models.iter().map(String::as_str).collect();
-            turns.retain(|t| requested_models.contains(compare_model_id(&t.turn)));
         }
 
         let fidelity_summary =
@@ -1460,14 +1471,6 @@ fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFi
         .filter(|p| !p.is_empty())
         .collect();
     (!filter.is_empty()).then_some(filter)
-}
-
-fn compare_model_id(turn: &TurnRecord) -> &str {
-    if turn.model.is_empty() {
-        "unknown"
-    } else {
-        &turn.model
-    }
 }
 
 fn shape_compare_result(
@@ -2110,7 +2113,17 @@ mod tests {
     }
 
     #[test]
-    fn compare_metadata_counts_requested_models_only() {
+    fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
+        // TS-parity contract: `analyzedTurns` and `fidelity.summary` describe
+        // the slice the comparison was *drawn from* — i.e. all turns passing
+        // (since/until/project/session/source/provider) and the fidelity
+        // gate. The `models` allow-list is honored by the cell builder, NOT
+        // by these top-level metadata counts. A `claude-opus-4-5` turn that
+        // is not in the requested-models list still counts toward
+        // `analyzedTurns` and `summary.total`, but does not appear in the
+        // `models` / `totals` rows. This mirrors `packages/sdk/index.js
+        // ::compare` where `analyzedTurns = filteredTurns.length` is taken
+        // before `buildCompareTable` applies the model filter.
         let (_dir, mut handle) = fixture_handle();
         let extra = TurnRecord {
             v: 1,
@@ -2150,10 +2163,53 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(r.analyzed_turns, 2);
-        assert_eq!(r.fidelity.summary.total, 2);
+        assert_eq!(r.analyzed_turns, 3);
+        assert_eq!(r.fidelity.summary.total, 3);
+        // The unrequested model is excluded from cells/totals/models, even
+        // though it counts toward analyzed_turns + fidelity summary above.
         assert!(!r.models.contains(&"claude-opus-4-5".to_string()));
         assert!(!r.totals.contains_key("claude-opus-4-5"));
+    }
+
+    #[test]
+    fn compare_reports_full_fidelity_summary_when_no_requested_model_appears() {
+        // Regression for the α-followup PR #355 conformance miss: when the
+        // caller asks to compare two models that don't appear in the
+        // ledger at all, `analyzedTurns` and `fidelity.summary` MUST still
+        // describe the underlying slice — not zero. The TS contract from
+        // `packages/sdk/index.js::compare` builds these counters from
+        // `filteredTurns.length` (post-fidelity-gate, pre-models-filter);
+        // an earlier Rust implementation pre-filtered by `opts.models`,
+        // collapsing the metadata to zeros and breaking the conformance
+        // gate even though models extraction worked.
+        let (_dir, handle) = fixture_handle();
+
+        let r = handle
+            .compare(CompareOptions {
+                // Neither model exists in the fixture.
+                models: vec!["claude-sonnet-4-5".into(), "claude-opus-4-7".into()],
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+
+        // Fixture has 2 sonnet-4-6 turns. Neither requested model matches
+        // them, but the metadata still describes the slice.
+        assert_eq!(r.analyzed_turns, 2);
+        assert_eq!(r.fidelity.summary.total, 2);
+        // Requested models stay visible as all-empty columns (compare
+        // pre-seeds the model allow-list).
+        assert!(r.models.contains(&"claude-sonnet-4-5".to_string()));
+        assert!(r.models.contains(&"claude-opus-4-7".to_string()));
+        // `claude-sonnet-4-6` is in the ledger but not requested, so it
+        // does NOT appear in the result rows even though it contributed
+        // to `analyzed_turns`.
+        assert!(!r.models.contains(&"claude-sonnet-4-6".to_string()));
+        // Every cell for the requested-but-absent models is no_data.
+        for cell in &r.cells {
+            assert!(cell.no_data, "expected no_data for cell {cell:?}");
+            assert_eq!(cell.turns, 0);
+        }
     }
 
     #[test]
