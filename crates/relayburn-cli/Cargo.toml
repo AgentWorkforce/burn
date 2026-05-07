@@ -28,12 +28,12 @@ path = "src/lib.rs"
 # verb the binary surfaces will wrap a `relayburn-sdk` call once #248
 # fills in the CLI source.
 #
-# Version requirement is `0.0` (= `>=0.0.0, <0.1.0`) so the loose
-# 0.0.x prerelease line satisfies both the local workspace path
-# (currently 0.0.0) AND the published `relayburn-sdk` on crates.io
-# (currently 0.0.1) without forcing a lockstep bump on every release.
-# Tighten this once the SDK ships a stable 0.x line.
-relayburn-sdk = { path = "../relayburn-sdk", version = "0.0" }
+# Version requirement is the current MAJOR.MINOR (caret semantics:
+# `>=1.10.0, <2.0.0`). The publish workflow rewrites this to match
+# the workspace MAJOR.MINOR on every release so the local workspace
+# path (currently 1.10.0) and the published `relayburn-sdk` on
+# crates.io always satisfy the dep at publish time.
+relayburn-sdk = { path = "../relayburn-sdk", version = "1.10" }
 
 # clap v4 derive — argument parsing root and subcommand dispatch. The
 # scaffold defines globals + subcommand stubs only; per-command flag
