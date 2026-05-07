@@ -757,7 +757,7 @@ fn severity_from_usd(usd: f64) -> WasteSeverity {
 }
 
 fn default_archive_dir() -> PathBuf {
-    home_dir().join(".relayburn").join("ghost-archive")
+    crate::ledger::ledger_home().join("ghost-archive")
 }
 
 fn home_dir() -> PathBuf {

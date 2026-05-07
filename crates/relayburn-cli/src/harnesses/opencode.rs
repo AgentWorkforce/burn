@@ -59,7 +59,7 @@ pub fn config() -> PendingStampAdapter {
             // Open a fresh ledger handle per tick. The TS sibling's
             // `ingestOpencodeSessions` does the same via `withLock('ledger', …)`;
             // SQLite WAL keeps the per-call open cheap (no DDL after first
-            // open). Defaults pull `$RELAYBURN_HOME` (or `~/.relayburn`)
+            // open). Defaults pull `$RELAYBURN_HOME` (or `~/.agentworkforce/burn`)
             // and the same per-harness session-store root the factory's
             // `session_root` closure resolves above.
             let mut handle = Ledger::open(LedgerOpenOptions::default())?;

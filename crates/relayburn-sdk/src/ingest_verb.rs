@@ -84,7 +84,7 @@ mod tests {
 
         // Point `RELAYBURN_HOME` at the temp dir so `cleanup_stale_pending_stamps`
         // and `load_config` (called inside ingest_all) don't touch the real
-        // `~/.relayburn`. Set before any ledger-open call.
+        // `~/.agentworkforce/burn`. Set before any ledger-open call.
         std::env::set_var("RELAYBURN_HOME", home.path());
 
         let opts = IngestOptions {

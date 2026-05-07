@@ -255,7 +255,7 @@ async fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
 
     // `cleanup_stale_pending_stamps` and `load_config` inside ingest_all
     // honor RELAYBURN_HOME; pin it to the temp dir so the test never
-    // touches `~/.relayburn`.
+    // touches `~/.agentworkforce/burn`.
     std::env::set_var("RELAYBURN_HOME", home.path());
 
     let mut handle = Ledger::open(LedgerOpenOptions::with_home(home.path())).expect("open");

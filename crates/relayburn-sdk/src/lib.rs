@@ -126,7 +126,7 @@ pub use crate::ingest::{
 pub struct LedgerOpenOptions {
     /// Override for `$RELAYBURN_HOME` (the directory containing
     /// `burn.sqlite`). When `None`, the env var is consulted, then
-    /// `~/.relayburn`.
+    /// `~/.agentworkforce/burn`.
     pub home: Option<PathBuf>,
     /// Override for the `content.sqlite` location specifically. When
     /// `None`, follows `home` (or its env-var fallback). Provided as a
