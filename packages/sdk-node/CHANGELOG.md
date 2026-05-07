@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-05-07
+
 ### Added
 
 - `summary()` result now includes `replacementSavings` — a rollup of per-tool collapsed-call counts and tokens-saved estimates derived from `_meta`-annotated tool results. Omitted (field absent) when no replacement-tool calls exist in the queried window.
