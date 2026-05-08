@@ -89,6 +89,11 @@ indexmap = { version = "2", features = ["serde"] }
 assert_cmd = "2"
 predicates = "3"
 
+# `tempfile` gives smoke tests an isolated `RELAYBURN_HOME` so they don't
+# touch the developer's real ledger when exercising `state` / `ingest`
+# verbs end-to-end.
+tempfile = "3"
+
 # Async test harness for the `harnesses` module unit tests (lookup, factory
 # round-trips). `rt-multi-thread` + `macros` lets `#[tokio::test]` resolve
 # and gives spawned watch-loop ticks a runtime to land on.

@@ -4,6 +4,17 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `relayburn-cli` / `relayburn-sdk`: `burn state reset` is now a real
+  presenter over the new SDK `Ledger::reset()` verb. Without flags it
+  dry-runs (counts derivable rows, stamps, and content rows that would
+  drop, exits 0); `--force` actually wipes both DBs and blanks the
+  ingest cursors so a follow-up `burn ingest` walks every upstream file
+  from offset 0; `--force --reingest` runs that ingest sweep in the
+  same invocation. Replaces the prior "not yet implemented" stub.
+  (#341)
+
 ## [2.4.0] - 2026-05-08
 
 ### Changed
