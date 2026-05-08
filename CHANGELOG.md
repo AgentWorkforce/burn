@@ -4,15 +4,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- `relayburn-sdk` (Rust): cache the bundled `models.dev` pricing snapshot
-  behind a `LazyLock` so the JSON parses once, hoist per-call regexes in
-  `analyze::ghost_surface`, `analyze::claude_md`, and `reader::classifier`
-  to module-scope statics (deduplicating the two `KEY=` cells in
-  `classifier`), and switch `CostBreakdown::model` to `Cow<'static, str>` so
-  `sum_costs` no longer allocates `"aggregate"` per call. **Breaking
-  (Rust SDK):** downstream code that constructs `CostBreakdown` via struct
-  literals must now pass a `Cow<'static, str>` (e.g. `model: my_string.into()`
-  or `Cow::Borrowed("..."`). (#344)
+- `relayburn-sdk` (Rust): reduced hot-path CPU/alloc overhead in pricing and
+  classifier parsing by caching the bundled pricing snapshot and reusing
+  compiled regexes. **Breaking (Rust SDK):** `CostBreakdown::model` is now
+  `Cow<'static, str>`; struct-literal construction must pass a `Cow` (for
+  example, `model: value.into()`).
 
 ## [2.4.0] - 2026-05-08
 
