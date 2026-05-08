@@ -10,8 +10,8 @@
 //!
 //! # Surface at a glance
 //!
-//! Ten verbs, each callable two ways: as a free function or as a method
-//! on [`LedgerHandle`].
+//! Verbs are callable two ways: as a free function or as a method on
+//! [`LedgerHandle`].
 //!
 //! `ingest` is async (tokio); the query/compute verbs are sync
 //! (CPU-bound). Callers running them from an async context — the typical
@@ -80,7 +80,8 @@ pub use crate::ledger::{
     burn_sqlite_path, config_path, config_path_at_home, content_sqlite_path, is_valid_session_id,
     ledger_home, load_config, load_config_with_home, BurnConfig, ContentConfig, EnrichedTurn,
     Enrichment, Ledger as RawLedger, LedgerError, MessageRange, PruneStats, Query, RebuildSummary,
-    Retention, SearchHit, SearchOptions, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
+    ResetSummary, Retention, SearchHit, SearchOptions, Stamp, StampError, StampSelector,
+    DEFAULT_RETENTION_DAYS,
 };
 
 pub use crate::analyze::{

@@ -1,4 +1,4 @@
-//! End-to-end test for all ten SDK verbs.
+//! End-to-end test for the SDK verbs.
 //!
 //! Opens a fixture ledger in a `TempDir`, appends a small set of records
 //! (one turn, one content blob with a known FTS token, one stamp), and
@@ -12,11 +12,11 @@ use tempfile::TempDir;
 
 use relayburn_sdk::{
     compare, export_ledger, export_stamps, hotspots, ingest, overhead, overhead_trim, search,
-    session_cost, summary, CompareOptions, ContentKind, ContentRecord, ContentRole, Enrichment,
-    ExportLedgerOptions, ExportStampsOptions, HotspotsOptions, HotspotsResult, IngestOptions,
-    IngestRoots, Ledger, LedgerOpenOptions, OverheadOptions, OverheadTrimOptions,
+    session_cost, summary, summary_report, CompareOptions, ContentKind, ContentRecord, ContentRole,
+    Enrichment, ExportLedgerOptions, ExportStampsOptions, HotspotsOptions, HotspotsResult,
+    IngestOptions, IngestRoots, Ledger, LedgerOpenOptions, OverheadOptions, OverheadTrimOptions,
     SearchQueryOptions, SessionCostOptions, SourceKind, Stamp, StampSelector, SummaryOptions,
-    ToolCall, TurnRecord, Usage,
+    SummaryReport, SummaryReportOptions, ToolCall, TurnRecord, Usage,
 };
 
 const SESSION_ID: &str = "ses_integration_001";
@@ -104,7 +104,7 @@ fn populate(home: &Path) {
 }
 
 #[test]
-fn all_ten_verbs_round_trip_against_a_fixture_ledger() {
+fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     let home = TempDir::new().expect("home tmp");
     populate(home.path());
 
@@ -124,6 +124,16 @@ fn all_ten_verbs_round_trip_against_a_fixture_ledger() {
     })
     .expect("free summary");
     assert_eq!(s2.turn_count, 1);
+    let sr = handle
+        .summary_report(SummaryReportOptions::default())
+        .expect("handle summary_report");
+    assert!(matches!(sr, SummaryReport::Grouped(_)));
+    let sr2 = summary_report(SummaryReportOptions {
+        ledger_home: Some(home.path().to_path_buf()),
+        ..Default::default()
+    })
+    .expect("free summary_report");
+    assert!(matches!(sr2, SummaryReport::Grouped(_)));
     let tagged = handle
         .summary(SummaryOptions {
             tags: Some(Enrichment::from([(
@@ -140,6 +150,27 @@ fn all_ten_verbs_round_trip_against_a_fixture_ledger() {
     assert_eq!(by_tag[0].tag, "role");
     assert_eq!(by_tag[0].value.as_deref(), Some("integration-test"));
     assert_eq!(by_tag[0].turn_count, 1);
+    let tagged_report = handle
+        .summary_report(SummaryReportOptions {
+            tags: Some(Enrichment::from([(
+                "role".to_string(),
+                "integration-test".to_string(),
+            )])),
+            group_by_tag: Some("role".to_string()),
+            ..Default::default()
+        })
+        .expect("tagged summary_report");
+    let SummaryReport::Grouped(tagged_report) = tagged_report else {
+        panic!("expected grouped tagged summary report");
+    };
+    assert_eq!(tagged_report.group_by, relayburn_sdk::SummaryGroupBy::Tag);
+    assert_eq!(tagged_report.tag_key.as_deref(), Some("role"));
+    assert_eq!(
+        tagged_report.tag_values,
+        vec![Some("integration-test".into())]
+    );
+    assert_eq!(tagged_report.rows.len(), 1);
+    assert_eq!(tagged_report.rows[0].turns, 1);
 
     // 2. session_cost — handle + free
     let sc = handle

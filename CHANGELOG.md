@@ -12,11 +12,22 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   explicit stubs that exit 2.
 - `relayburn-sdk`: `HotspotsOptions` gains `workflow` and `provider` filter
   fields, matching the shape `compare()` already exposes.
+- `relayburn-cli` / `relayburn-sdk`: `burn state reset` is now a real
+  presenter over the new SDK `Ledger::reset()` verb. Without flags it
+  dry-runs (counts derivable rows, stamps, and content rows that would
+  drop, exits 0); `--force` actually wipes both DBs and blanks the
+  ingest cursors so a follow-up `burn ingest` walks every upstream file
+  from offset 0; `--force --reingest` runs that ingest sweep in the
+  same invocation. Replaces the prior "not yet implemented" stub.
+  (#341)
 
 ## [2.4.0] - 2026-05-08
 
 ### Changed
 
+- `relayburn-sdk` (Rust): `summary_report` now exposes the richer summary result
+  used by `burn summary`, so presenters can render one SDK-owned aggregate
+  shape.
 - `relayburn-cli` / `relayburn-sdk`: `burn summary` now accepts repeatable
   `--tag k=v` filters and `--group-by-tag <key>` to report cost/tokens by
   generic folded enrichment tags; Claude, Codex, and OpenCode pending stamps

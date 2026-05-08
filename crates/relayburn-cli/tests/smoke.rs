@@ -234,3 +234,73 @@ fn hotspots_group_by_and_patterns_are_mutually_exclusive() {
         .code(2)
         .stderr(predicate::str::contains("mutually exclusive"));
 }
+
+/// `burn state reset` (no `--force`) is a dry-run: it must open the
+/// ledger, count what would be dropped, print a "would drop ... " line,
+/// and exit 0 *without* mutating either DB. Pin the contract here so a
+/// future refactor can't silently turn the dry-run destructive.
+#[test]
+fn state_reset_dry_run_does_not_mutate() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["state", "reset"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry run"))
+        .stdout(predicate::str::contains("--force"));
+
+    // Both DB files should exist (Ledger::open creates them) and be
+    // sized like a freshly-bootstrapped empty layout.
+    assert!(
+        home.path().join("burn.sqlite").is_file(),
+        "burn.sqlite must exist after dry-run open"
+    );
+    assert!(
+        home.path().join("content.sqlite").is_file(),
+        "content.sqlite must exist after dry-run open"
+    );
+}
+
+/// `burn state reset --force` actually wipes; pair it with `--json` so
+/// we can assert on the structured envelope without depending on the
+/// human-readable format.
+#[test]
+fn state_reset_force_emits_executed_envelope() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    let output = burn()
+        .args(["--json", "state", "reset", "--force"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json output is valid JSON");
+    assert_eq!(value["executed"], serde_json::Value::Bool(true));
+    assert_eq!(value["rowsDropped"], serde_json::Value::from(0));
+    assert_eq!(value["stampsDropped"], serde_json::Value::from(0));
+    assert_eq!(value["contentRowsDropped"], serde_json::Value::from(0));
+    assert!(
+        value.get("reingest").is_none(),
+        "no `reingest` key without --reingest"
+    );
+}
+
+/// `--reingest` requires `--force`. Clap should reject the lone flag at
+/// parse time so a typo can't silently no-op.
+#[test]
+fn state_reset_reingest_requires_force() {
+    burn()
+        .args(["state", "reset", "--reingest"])
+        .assert()
+        .failure();
+}

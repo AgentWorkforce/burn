@@ -258,6 +258,140 @@ fn cursors_survive_state_rebuild() {
 }
 
 #[test]
+fn reset_wipes_derivable_stamps_content_and_cursors() {
+    // `reset()` is the harder-hitting sibling of `rebuild_derivable`:
+    // unlike rebuild, it MUST drop stamps and blank ingest cursors so
+    // a follow-up `burn ingest` walks every upstream file from offset
+    // 0. This test pins all three behaviours.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    l.write_cursors(r#"{"claude-code": "2025-01-01T00:00:00Z"}"#).unwrap();
+
+    let mut enrichment = BTreeMap::new();
+    enrichment.insert("role".into(), "fix-bug".into());
+    let stamp = Stamp::new(
+        "2025-01-01T00:00:00Z",
+        StampSelector {
+            session_id: Some("s1".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+    l.append_stamp(&stamp).unwrap();
+
+    l.append_turns(&[make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10)])
+        .unwrap();
+    l.append_content(&[make_content("s1", "m1", "out of memory error")])
+        .unwrap();
+
+    assert_eq!(l.count_table("turns").unwrap(), 1);
+    assert_eq!(l.count_table("stamps").unwrap(), 1);
+    assert_eq!(l.count_content().unwrap(), 1);
+
+    let summary = l.reset().unwrap();
+    assert_eq!(summary.rows_dropped, 1, "1 derivable row dropped (turns)");
+    assert_eq!(summary.stamps_dropped, 1);
+    assert_eq!(summary.content_rows_dropped, 1);
+
+    assert_eq!(l.count_table("turns").unwrap(), 0);
+    assert_eq!(l.count_table("stamps").unwrap(), 0);
+    assert_eq!(l.count_content().unwrap(), 0);
+    assert_eq!(
+        l.read_cursors().unwrap(),
+        "{}",
+        "reset blanks ingest cursors"
+    );
+
+    // FTS must also be empty so post-reset search returns nothing.
+    let post = l.search_content(SearchOptions::new("memory")).unwrap();
+    assert!(post.is_empty(), "FTS5 should be empty after reset");
+}
+
+#[test]
+fn count_reset_targets_does_not_mutate() {
+    // The dry-run path of `burn state reset` calls
+    // `count_reset_targets()` and prints the would-drop counts. The
+    // call MUST be read-only — a stray DELETE here would silently turn
+    // every dry-run into a destructive op.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let mut enrichment = BTreeMap::new();
+    enrichment.insert("role".into(), "fix-bug".into());
+    let stamp = Stamp::new(
+        "2025-01-01T00:00:00Z",
+        StampSelector {
+            session_id: Some("s1".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+    l.append_stamp(&stamp).unwrap();
+    l.append_turns(&[make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10)])
+        .unwrap();
+    l.append_content(&[make_content("s1", "m1", "hello")]).unwrap();
+
+    let preview = l.count_reset_targets().unwrap();
+    assert_eq!(preview.rows_dropped, 1);
+    assert_eq!(preview.stamps_dropped, 1);
+    assert_eq!(preview.content_rows_dropped, 1);
+
+    // Nothing changed on disk.
+    assert_eq!(l.count_table("turns").unwrap(), 1);
+    assert_eq!(l.count_table("stamps").unwrap(), 1);
+    assert_eq!(l.count_content().unwrap(), 1);
+
+    // A second call returns the same numbers — idempotent dry-run.
+    let preview2 = l.count_reset_targets().unwrap();
+    assert_eq!(preview, preview2);
+}
+
+#[test]
+fn count_reset_targets_propagates_sql_errors() {
+    // Regression: before #341 review, this method swallowed
+    // `query_row` failures via `unwrap_or(0)` and reported a clean
+    // zero-count summary on a corrupt ledger. Drop the `turns` table
+    // out from under the open connection (a stand-in for any
+    // schema/corruption fault that would normally surface a
+    // `LedgerError::Sqlite`) and confirm the call now errors instead
+    // of silently returning `Ok(ResetSummary::default())`.
+    let tmp = TempDir::new().unwrap();
+    let l = open_in(&tmp);
+    l.conns.burn.execute("DROP TABLE turns", []).unwrap();
+
+    let result = l.count_reset_targets();
+    assert!(
+        result.is_err(),
+        "expected SQL failure to propagate, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn reset_is_idempotent_on_empty_ledger() {
+    // Running reset on a fresh ledger should be a no-op: zero counts,
+    // both DBs still openable, archive_state row still present (the
+    // CHECK constraint pins id=1, so "delete + reinsert" would have
+    // tripped the constraint).
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let summary = l.reset().unwrap();
+    assert_eq!(summary, ResetSummary::default());
+
+    // archive_state row survives — read_cursors() reads `id = 1` and
+    // would error on a missing row.
+    assert_eq!(l.read_cursors().unwrap(), "{}");
+
+    // A second reset still works (re-checks transaction path).
+    let again = l.reset().unwrap();
+    assert_eq!(again, ResetSummary::default());
+}
+
+#[test]
 fn rebuild_clears_content_and_fts_index() {
     // Acceptance: `burn state rebuild` regenerates the entire
     // content.sqlite (including the FTS index).
