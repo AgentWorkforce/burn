@@ -29,7 +29,8 @@ use relayburn_sdk::{
     hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation,
     BashVerbAggregation, FileAggregation, HotspotsAttributionResult, HotspotsExcludedBreakdown,
     HotspotsExcludedSourceRow, HotspotsGroupBy, HotspotsOptions, HotspotsResult,
-    HotspotsSessionTotal, Ledger, LedgerOpenOptions, SubagentAggregation,
+    HotspotsSessionTotal, Ledger, LedgerOpenOptions, SubagentAggregation, WasteFinding,
+    WasteSeverity,
 };
 use serde_json::{json, Map, Value};
 
@@ -85,6 +86,50 @@ pub struct HotspotsArgs {
     /// summary. Implies `--patterns` if it isn't already set.
     #[arg(long)]
     pub findings: bool,
+
+    /// Surface session relationship drift on top of the default attribution
+    /// view. Currently a stub in the Rust port — the relationship drift
+    /// query verb is not yet exposed by the SDK.
+    #[arg(long = "explain-drift")]
+    pub explain_drift: bool,
+}
+
+const PATTERN_KINDS: &[&str] = &[
+    "retry-loop",
+    "failure-run",
+    "cancellation-run",
+    "compaction",
+    "edit-revert",
+    "edit-heavy",
+    "opencode-skill-recall",
+    "opencode-skill-pruning",
+    "opencode-system-prompt",
+    "ghost-surface",
+    "tool-output-bloat",
+    "tool-call-pattern",
+];
+
+fn resolve_pattern_selection(raw: &str) -> Result<Vec<String>, String> {
+    if raw.is_empty() {
+        return Ok(PATTERN_KINDS.iter().map(|s| (*s).to_string()).collect());
+    }
+    let mut out: Vec<String> = Vec::new();
+    for piece in raw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if !PATTERN_KINDS.iter().any(|k| *k == piece) {
+            return Err(format!(
+                "unknown --patterns value \"{}\". Valid: {}",
+                piece,
+                PATTERN_KINDS.join(", ")
+            ));
+        }
+        if !out.iter().any(|s| s == piece) {
+            out.push(piece.to_string());
+        }
+    }
+    if out.is_empty() {
+        return Ok(PATTERN_KINDS.iter().map(|s| (*s).to_string()).collect());
+    }
+    Ok(out)
 }
 
 pub fn run(globals: &GlobalArgs, args: HotspotsArgs) -> i32 {
@@ -95,26 +140,42 @@ pub fn run(globals: &GlobalArgs, args: HotspotsArgs) -> i32 {
 }
 
 fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
-    if args.session.is_some() {
+    // The TS surface treats `--session` (no value) as "drop into the
+    // per-session aggregate / gap report." That view weaves session
+    // relationships, tool-result chronology, and per-session attribution —
+    // none of which the SDK exposes yet. Keep it a clear stub.
+    if matches!(args.session.as_deref(), Some("")) {
         eprintln!(
-            "burn: per-session hotspots view (--session) is not yet implemented in the Rust port"
+            "burn: per-session aggregate view (`--session` with no id) is not yet implemented in the Rust port. Pass a session id to filter the standard hotspots view."
         );
         return Ok(2);
     }
-    if args.patterns.is_some() || args.findings {
+    if args.explain_drift {
         eprintln!(
-            "burn: --patterns / --findings are not yet implemented in the Rust port (#248 D1 covers default attribution; follow-ups will add the waste-pattern detectors)"
+            "burn: --explain-drift is not yet implemented in the Rust port (relationship-drift query verb hasn't landed in relayburn-sdk yet)."
         );
         return Ok(2);
     }
-    if args.workflow.is_some() {
-        eprintln!("burn: --workflow filter is not yet implemented in the Rust port");
-        return Ok(2);
-    }
-    if args.provider.is_some() {
-        eprintln!("burn: --provider filter is not yet implemented in the Rust port");
-        return Ok(2);
-    }
+
+    // `--findings` standalone means "render findings unified view"; pin it
+    // to `--patterns` (all detectors) so the resolver below sees a value.
+    let patterns_arg: Option<&str> = if args.patterns.is_some() {
+        args.patterns.as_deref()
+    } else if args.findings {
+        Some("")
+    } else {
+        None
+    };
+    let patterns_selection: Option<Vec<String>> = match patterns_arg {
+        None => None,
+        Some(raw) => match resolve_pattern_selection(raw) {
+            Ok(sel) => Some(sel),
+            Err(msg) => {
+                eprintln!("burn: {msg}");
+                return Ok(2);
+            }
+        },
+    };
 
     let group_by = match args.group_by.as_deref() {
         None => None,
@@ -132,6 +193,22 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         }
     };
 
+    if group_by.is_some() && patterns_selection.is_some() {
+        eprintln!(
+            "burn: --group-by and --patterns/--findings are mutually exclusive (group-by selects an attribution rollup; patterns/findings drive the detector view)."
+        );
+        return Ok(2);
+    }
+
+    let provider_filter: Option<Vec<String>> = args.provider.as_deref().and_then(|raw| {
+        let parts: Vec<String> = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        (!parts.is_empty()).then_some(parts)
+    });
+
     // Open + ingest. We open the handle locally so ingest sees the same
     // sealed `RELAYBURN_HOME` the verb call does.
     let ledger_home = globals.ledger_path.clone();
@@ -148,12 +225,19 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
     rt.block_on(ingest_all(handle.raw_mut(), &raw_opts))?;
     drop(handle);
 
+    let session_filter = match args.session.as_deref() {
+        Some(s) if !s.is_empty() => Some(s.to_string()),
+        _ => None,
+    };
+
     let result = sdk_hotspots(HotspotsOptions {
-        session: None,
+        session: session_filter,
         project: args.project.clone(),
         since: args.since.clone(),
         group_by,
-        patterns: None,
+        patterns: patterns_selection,
+        workflow: args.workflow.clone(),
+        provider: provider_filter,
         ledger_home,
     })?;
 
@@ -162,7 +246,7 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         return Ok(0);
     }
     let limit = if args.all { usize::MAX } else { DEFAULT_TOP_N };
-    emit_human(&result, limit);
+    emit_human(&result, limit, args.findings);
     Ok(0)
 }
 
@@ -411,7 +495,7 @@ fn subagent_to_json(s: &SubagentAggregation) -> Value {
 
 // ---------- human rendering ----------
 
-fn emit_human(result: &HotspotsResult, limit: usize) {
+fn emit_human(result: &HotspotsResult, limit: usize, findings_view: bool) {
     match result {
         HotspotsResult::Attribution(a) => emit_human_attribution(a, limit),
         // The single-axis group_by surfaces aren't yet tied to a golden
@@ -488,9 +572,99 @@ fn emit_human(result: &HotspotsResult, limit: usize) {
             rows.iter().take(limit).map(subagent_row),
             &["subagent", "calls", "initial(tok)", "persist(tok)", "cost"],
         ),
-        HotspotsResult::Findings { .. } => {
-            eprintln!("burn: --patterns / --findings rendering is not yet implemented");
+        HotspotsResult::Findings { findings, .. } => {
+            if findings_view {
+                emit_findings_unified(findings);
+            } else {
+                emit_findings_grouped(findings, limit);
+            }
         }
+    }
+}
+
+fn emit_findings_unified(findings: &[WasteFinding]) {
+    let mut out: Vec<String> = Vec::new();
+    out.push(String::new());
+    out.push(format!("findings: {}", format_uint(findings.len() as u64)));
+    out.push(String::new());
+    if findings.is_empty() {
+        out.push("  (no hotspot findings)".to_string());
+        out.push(String::new());
+        print!("{}", out.join("\n"));
+        return;
+    }
+    let mut rows: Vec<Vec<String>> = vec![vec![
+        "severity".into(),
+        "kind".into(),
+        "session".into(),
+        "usd".into(),
+        "title".into(),
+    ]];
+    for f in findings {
+        let usd = f
+            .estimated_savings
+            .usd_per_session
+            .map(format_usd)
+            .unwrap_or_else(|| "—".to_string());
+        rows.push(vec![
+            severity_label(f.severity).to_string(),
+            f.kind.clone(),
+            f.session_id.chars().take(8).collect(),
+            usd,
+            truncate(&f.title, 80),
+        ]);
+    }
+    out.push(render_table(&rows));
+    out.push(String::new());
+    print!("{}", out.join("\n"));
+}
+
+fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) {
+    let mut out: Vec<String> = Vec::new();
+    out.push(String::new());
+    out.push(format!("findings: {}", format_uint(findings.len() as u64)));
+    out.push(String::new());
+    if findings.is_empty() {
+        out.push("  (no hotspot findings)".to_string());
+        out.push(String::new());
+        print!("{}", out.join("\n"));
+        return;
+    }
+    // Group by detector kind, preserving severity-sorted order of the
+    // sdk-emitted slice. Within each group we cap at `limit`.
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<&str, Vec<&WasteFinding>> = BTreeMap::new();
+    for f in findings {
+        groups.entry(f.kind.as_str()).or_default().push(f);
+    }
+    for (kind, items) in &groups {
+        out.push(format!("{} ({})", kind, format_uint(items.len() as u64)));
+        let mut rows: Vec<Vec<String>> =
+            vec![vec!["severity".into(), "session".into(), "usd".into(), "title".into()]];
+        for f in items.iter().take(limit) {
+            let usd = f
+                .estimated_savings
+                .usd_per_session
+                .map(format_usd)
+                .unwrap_or_else(|| "—".to_string());
+            rows.push(vec![
+                severity_label(f.severity).to_string(),
+                f.session_id.chars().take(8).collect(),
+                usd,
+                truncate(&f.title, 70),
+            ]);
+        }
+        out.push(render_table(&rows));
+        out.push(String::new());
+    }
+    print!("{}", out.join("\n"));
+}
+
+fn severity_label(s: WasteSeverity) -> &'static str {
+    match s {
+        WasteSeverity::High => "high",
+        WasteSeverity::Warn => "warn",
+        WasteSeverity::Info => "info",
     }
 }
 

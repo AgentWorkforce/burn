@@ -941,6 +941,8 @@ pub struct HotspotsOptions {
     pub since: Option<String>,
     pub group_by: Option<HotspotsGroupBy>,
     pub patterns: Option<Vec<String>>,
+    pub workflow: Option<String>,
+    pub provider: Option<Vec<String>>,
     pub ledger_home: Option<String>,
 }
 
@@ -958,6 +960,8 @@ pub fn hotspots(opts: Option<HotspotsOptions>) -> Result<BigIntPromoting, BurnEr
         since: None,
         group_by: None,
         patterns: None,
+        workflow: None,
+        provider: None,
         ledger_home: None,
     });
     let raw = sdk::HotspotsOptions {
@@ -966,6 +970,8 @@ pub fn hotspots(opts: Option<HotspotsOptions>) -> Result<BigIntPromoting, BurnEr
         since: opts.since,
         group_by: opts.group_by.map(Into::into),
         patterns: opts.patterns,
+        workflow: opts.workflow,
+        provider: opts.provider,
         ledger_home: maybe_path(opts.ledger_home),
     };
     let result = sdk::hotspots(raw).map_err(sdk_err)?;

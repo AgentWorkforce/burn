@@ -4,6 +4,16 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `relayburn-cli` / `relayburn-sdk`: `burn hotspots` now wires
+  `--session <id>`, `--workflow <id>`, `--provider <csv>`, `--patterns [csv]`,
+  and `--findings` over the existing SDK surface. `HotspotsOptions` gains
+  `workflow` + `provider` filter fields (also exposed through `@relayburn/sdk`
+  via napi). The per-session aggregate view (`--session` with no id) and
+  `--explain-drift` remain explicit stubs that exit 2 with a directed message.
+  (#376)
+
 ### Changed
 
 - `relayburn-cli` / `relayburn-sdk`: `burn summary` now accepts repeatable

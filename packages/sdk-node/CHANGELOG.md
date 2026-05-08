@@ -14,6 +14,9 @@
   enrichment filtering and cost/token grouping.
 - Exported `computeCompareExcluded()` from the Node facade for callers that
   need the same fidelity-exclusion breakdown used by `compare()`.
+- `hotspots()` options now accept `workflow` (folded `workflowId` enrichment
+  filter) and `provider` (case-insensitive provider allow-list) — same shape
+  the `compare()` options expose. (#376)
 
 ### Changed
 

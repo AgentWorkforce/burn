@@ -922,6 +922,11 @@ pub struct HotspotsOptions {
     pub since: Option<String>,
     pub group_by: Option<HotspotsGroupBy>,
     pub patterns: Option<Vec<String>>,
+    /// Restrict to turns whose `enrichment.workflowId` matches.
+    pub workflow: Option<String>,
+    /// Restrict to turns whose derived provider is in the given set
+    /// (case-insensitive). `None` / empty = no provider filter.
+    pub provider: Option<Vec<String>>,
     pub ledger_home: Option<PathBuf>,
 }
 
@@ -1061,12 +1066,23 @@ impl LedgerHandle {
             .as_ref()
             .map(|v| !v.is_empty())
             .unwrap_or(false);
-        let q = build_query(
+        let mut q = build_query(
             opts.session.as_deref(),
             opts.project.as_deref(),
             opts.since.as_deref(),
         )?;
-        let turns = collect_turns(self, &q)?;
+        if let Some(workflow) = opts.workflow.as_ref() {
+            let mut enrichment = q.enrichment.unwrap_or_default();
+            enrichment.insert("workflowId".to_string(), workflow.clone());
+            q.enrichment = Some(enrichment);
+        }
+        let mut turns = collect_turns(self, &q)?;
+        if let Some(filter) = normalize_provider_filter(opts.provider.clone()) {
+            turns.retain(|t| {
+                let provider = crate::analyze::provider_for(t).provider;
+                filter.contains(&provider.to_ascii_lowercase())
+            });
+        }
         let pricing = load_pricing(None);
 
         if using_patterns {
@@ -2234,6 +2250,100 @@ mod tests {
                 assert!(summary.is_object());
             }
             other => panic!("expected findings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hotspots_session_filter_narrows_to_session() {
+        let (_dir, handle) = fixture_handle();
+        // Match: fixture has 2 turns under sess-a.
+        let r_match = handle
+            .hotspots(HotspotsOptions {
+                session: Some("sess-a".into()),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match r_match {
+            HotspotsResult::Attribution(a) => assert_eq!(a.turns_analyzed, 2),
+            other => panic!("expected attribution, got {other:?}"),
+        }
+        // No match: nonexistent session id.
+        let r_none = handle
+            .hotspots(HotspotsOptions {
+                session: Some("ghost".into()),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match r_none {
+            HotspotsResult::Attribution(a) => assert_eq!(a.turns_analyzed, 0),
+            other => panic!("expected attribution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hotspots_workflow_filter_uses_enrichment_stamp() {
+        let (_dir, mut handle) = fixture_handle();
+        let mut enrichment = crate::Enrichment::new();
+        enrichment.insert("workflowId".into(), "wf-1".into());
+        let stamp = crate::Stamp::new(
+            "2026-04-23T00:00:30.000Z",
+            crate::StampSelector {
+                session_id: Some("sess-a".into()),
+                ..Default::default()
+            },
+            enrichment,
+        )
+        .unwrap();
+        handle.raw_mut().append_stamp(&stamp).unwrap();
+
+        // Match: sess-a turns are stamped with wf-1.
+        let r_match = handle
+            .hotspots(HotspotsOptions {
+                workflow: Some("wf-1".into()),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match r_match {
+            HotspotsResult::Attribution(a) => assert_eq!(a.turns_analyzed, 2),
+            other => panic!("expected attribution, got {other:?}"),
+        }
+        // No match: a workflow id no stamp folds onto.
+        let r_none = handle
+            .hotspots(HotspotsOptions {
+                workflow: Some("wf-missing".into()),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match r_none {
+            HotspotsResult::Attribution(a) => assert_eq!(a.turns_analyzed, 0),
+            other => panic!("expected attribution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hotspots_provider_filter_drops_non_matching_provider() {
+        let (_dir, handle) = fixture_handle();
+        // Both fixture turns are claude-sonnet-4-6 (provider=anthropic);
+        // filtering to anthropic keeps them, filtering to openai drops them.
+        let keep = handle
+            .hotspots(HotspotsOptions {
+                provider: Some(vec!["anthropic".into()]),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match keep {
+            HotspotsResult::Attribution(a) => assert_eq!(a.turns_analyzed, 2),
+            other => panic!("expected attribution, got {other:?}"),
+        }
+        let drop = handle
+            .hotspots(HotspotsOptions {
+                provider: Some(vec!["openai".into()]),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match drop {
+            HotspotsResult::Attribution(a) => assert_eq!(a.turns_analyzed, 0),
+            other => panic!("expected attribution, got {other:?}"),
         }
     }
 

@@ -182,3 +182,55 @@ fn unknown_subcommand_exits_non_zero() {
 fn run_subcommand_is_not_registered() {
     burn().args(["run", "--help"]).assert().failure();
 }
+
+#[test]
+fn hotspots_session_without_id_is_an_explicit_stub() {
+    // `--session` with no value is the per-session aggregate / gap report
+    // mode in the TS surface. The Rust port doesn't expose a relationship
+    // / chronology query verb yet, so we exit 2 with a directed message
+    // pointing users at the supported `--session <id>` filter. Cover the
+    // tripwire so a future PR that lands the per-session view is forced
+    // to update this assertion alongside the wiring.
+    burn()
+        .args(["hotspots", "--session"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "per-session aggregate view (`--session` with no id)",
+        ));
+}
+
+#[test]
+fn hotspots_explain_drift_is_an_explicit_stub() {
+    burn()
+        .args(["hotspots", "--explain-drift"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--explain-drift"));
+}
+
+#[test]
+fn hotspots_unknown_pattern_value_is_rejected() {
+    // `--patterns` accepts a CSV of detector kinds; an unknown kind is a
+    // hard fail (exit 2) rather than a silent ignore.
+    burn()
+        .args(["hotspots", "--patterns", "definitely-not-a-detector"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown --patterns value"));
+}
+
+#[test]
+fn hotspots_group_by_and_patterns_are_mutually_exclusive() {
+    burn()
+        .args([
+            "hotspots",
+            "--group-by",
+            "file",
+            "--patterns",
+            "retry-loop",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("mutually exclusive"));
+}
