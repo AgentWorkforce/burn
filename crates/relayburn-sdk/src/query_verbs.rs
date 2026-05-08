@@ -8,7 +8,7 @@
 //! Option<PathBuf>` so callers don't have to mutate process env to point
 //! at a non-default ledger.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -844,6 +844,33 @@ pub struct HotspotsFidelityBlock {
     /// this JSON block directly.
     pub summary: serde_json::Value,
     pub refused: bool,
+    /// Per-source coverage-gap breakdown. Computed in the same pass as the
+    /// eligible/excluded split so CLI/MCP renderers don't need to re-walk the
+    /// ledger to recover *which* sources contributed excluded turns. Not
+    /// serialized — the JSON contract owns the aggregate counts above; this
+    /// is an in-process renderer aid.
+    #[serde(skip)]
+    pub excluded_by_source: HotspotsExcludedBreakdown,
+}
+
+/// Per-source breakdown of turns that failed the hotspots coverage gate.
+/// Sources are keyed by their wire string (e.g. `claude`, `codex`,
+/// `opencode`) so the renderer can produce stable ordering without a second
+/// ledger walk. See `HotspotsFidelityBlock::excluded_by_source`.
+#[derive(Debug, Clone, Default)]
+pub struct HotspotsExcludedBreakdown {
+    pub sources: BTreeMap<String, HotspotsExcludedSourceRow>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HotspotsExcludedSourceRow {
+    pub count: u64,
+    /// Distinct missing-coverage labels (e.g. `tool-call records`,
+    /// `tool-result events`).
+    pub missing: BTreeSet<String>,
+    /// Distinct granularity buckets observed on excluded turns from this
+    /// source.
+    pub granularities: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -971,10 +998,12 @@ fn run_hotspots_attribution(
 ) -> Result<HotspotsResult> {
     let mut eligible: Vec<TurnRecord> = Vec::new();
     let mut excluded: Vec<TurnRecord> = Vec::new();
+    let mut excluded_by_source = HotspotsExcludedBreakdown::default();
     for t in turns {
         if turn_passes_hotspots_coverage(t) {
             eligible.push(t.clone());
         } else {
+            record_excluded_source(&mut excluded_by_source, t);
             excluded.push(t.clone());
         }
     }
@@ -993,6 +1022,7 @@ fn run_hotspots_attribution(
             refusal,
             turns.len() as u64,
             summary_value,
+            excluded_by_source,
         ));
     }
 
@@ -1087,6 +1117,7 @@ fn run_hotspots_attribution(
                 excluded: excluded.len() as u64,
                 summary: summary_value,
                 refused: false,
+                excluded_by_source,
             },
             refused: None,
             refusal_reason: None,
@@ -1094,11 +1125,36 @@ fn run_hotspots_attribution(
     )))
 }
 
+/// Folds the coverage gap on `t` into the per-source breakdown. Mirrors
+/// the CLI-side `describeExcluded` from `packages/cli/src/commands/hotspots.ts`
+/// so callers can render the inline source clause without a second ledger
+/// walk. Turns without `fidelity` are treated as best-effort full upstream
+/// (`turn_passes_hotspots_coverage`) and never reach this function.
+fn record_excluded_source(out: &mut HotspotsExcludedBreakdown, t: &TurnRecord) {
+    let entry = out
+        .sources
+        .entry(t.source.wire_str().to_string())
+        .or_default();
+    entry.count += 1;
+    if let Some(f) = t.fidelity.as_ref() {
+        if !f.coverage.has_tool_calls {
+            entry.missing.insert("tool-call records".to_string());
+        }
+        if !f.coverage.has_tool_result_events {
+            entry.missing.insert("tool-result events".to_string());
+        }
+        entry
+            .granularities
+            .insert(f.granularity.wire_str().to_string());
+    }
+}
+
 fn refused_for_group(
     group: HotspotsGroupBy,
     refusal: String,
     excluded_total: u64,
     summary_value: serde_json::Value,
+    excluded_by_source: HotspotsExcludedBreakdown,
 ) -> HotspotsResult {
     match group {
         HotspotsGroupBy::Bash => HotspotsResult::Bash {
@@ -1138,6 +1194,7 @@ fn refused_for_group(
                     excluded: excluded_total,
                     summary: summary_value,
                     refused: true,
+                    excluded_by_source,
                 },
                 refused: Some(true),
                 refusal_reason: Some(refusal),

@@ -9,11 +9,15 @@
   },
   "packageManager": "pnpm@10.17.1",
   "scripts": {
-    "build": "pnpm --filter @relayburn/sdk build && pnpm --filter relayburn build",
+    "build": "pnpm --filter @relayburn/sdk build && pnpm --filter @relayburn/mcp build && pnpm --filter relayburn build",
     "build:napi": "pnpm --filter @relayburn/sdk build:napi",
     "build:napi:debug": "pnpm --filter @relayburn/sdk build:napi:debug",
-    "test": "pnpm --filter @relayburn/sdk test",
+    "test": "pnpm --filter @relayburn/sdk test && pnpm --filter @relayburn/mcp test",
     "test:bundle": "pnpm --filter @relayburn/sdk test:bundle",
     "pricing:update": "node scripts/update-pricing.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
   }
 }

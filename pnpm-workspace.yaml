@@ -1,5 +1,6 @@
 packages:
   - packages/sdk-node
   - packages/sdk-node/npm/*
+  - packages/mcp
   - packages/relayburn
   - packages/relayburn/npm/*

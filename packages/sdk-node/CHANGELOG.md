@@ -2,15 +2,19 @@
 
 ## [Unreleased]
 
-### Changed
+### Breaking Changes
 
-- Replaced the TypeScript 1.x deep-conformance test with native 2.x smoke
-  coverage against the committed fixture ledger.
+- Removed the `onLog` option from `summary`, `sessionCost`, `overhead`, `overheadTrim`, `hotspots`, and `compare` option types. The 2.x stack is SQLite-native and has no archive-fallback path to surface, so the callback was already a no-op at the napi boundary. (#374)
 
 ### Added
 
 - Exported `computeCompareExcluded()` from the Node facade for callers that
   need the same fidelity-exclusion breakdown used by `compare()`.
+
+### Changed
+
+- Replaced the TypeScript 1.x deep-conformance test with native 2.x smoke
+  coverage against the committed fixture ledger.
 
 ## [2.1.0] - 2026-05-07
 

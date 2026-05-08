@@ -129,10 +129,7 @@ impl Ledger {
         writer::append_stamp(&mut self.conns.burn, stamp)
     }
 
-    pub fn append_content(
-        &mut self,
-        records: &[crate::reader::ContentRecord],
-    ) -> Result<usize> {
+    pub fn append_content(&mut self, records: &[crate::reader::ContentRecord]) -> Result<usize> {
         writer::append_content(&mut self.conns.content, records)
     }
 
@@ -142,10 +139,7 @@ impl Ledger {
         reader::query_turns(&self.conns.burn, q)
     }
 
-    pub fn query_compactions(
-        &self,
-        q: &Query,
-    ) -> Result<Vec<crate::reader::CompactionEvent>> {
+    pub fn query_compactions(&self, q: &Query) -> Result<Vec<crate::reader::CompactionEvent>> {
         reader::query_compactions(&self.conns.burn, q)
     }
 
@@ -163,10 +157,7 @@ impl Ledger {
         reader::query_tool_result_events(&self.conns.burn, q)
     }
 
-    pub fn query_user_turns(
-        &self,
-        q: &Query,
-    ) -> Result<Vec<crate::reader::UserTurnRecord>> {
+    pub fn query_user_turns(&self, q: &Query) -> Result<Vec<crate::reader::UserTurnRecord>> {
         reader::query_user_turns(&self.conns.burn, q)
     }
 
@@ -180,6 +171,10 @@ impl Ledger {
 
     pub fn count_content(&self) -> Result<i64> {
         content::count_content(&self.conns.content)
+    }
+
+    pub fn query_content(&self, q: &Query) -> Result<Vec<crate::reader::ContentRecord>> {
+        content::query(&self.conns.content, q)
     }
 
     /// Distinct session ids that have at least one content row in
@@ -215,7 +210,13 @@ impl Ledger {
     /// to what a 1.x JSONL ledger would have written for the same set of
     /// records, sufficient for `jq`/`grep` debugging.
     pub fn export_ledger_jsonl<W: std::io::Write>(&self, w: &mut W) -> Result<()> {
-        for kind in ["turn", "compaction", "relationship", "tool_result_event", "user_turn"] {
+        for kind in [
+            "turn",
+            "compaction",
+            "relationship",
+            "tool_result_event",
+            "user_turn",
+        ] {
             let table = match kind {
                 "turn" => "turns",
                 "compaction" => "compactions",

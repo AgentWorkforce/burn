@@ -14,11 +14,13 @@
 
 use std::collections::HashSet;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::ledger::error::Result;
 use crate::ledger::paths::is_valid_session_id;
+use crate::ledger::query::Query;
+use crate::reader::ContentRecord;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
@@ -112,10 +114,7 @@ pub(crate) fn prune_older_than(conn: &mut Connection, cutoff: &str) -> Result<Pr
             |r| r.get(0),
         )
         .unwrap_or(0);
-    let deleted = tx.execute(
-        "DELETE FROM content WHERE created_at < ?",
-        params![cutoff],
-    )?;
+    let deleted = tx.execute("DELETE FROM content WHERE created_at < ?", params![cutoff])?;
     tx.commit()?;
     Ok(PruneStats {
         rows_deleted: deleted,
@@ -126,6 +125,64 @@ pub(crate) fn prune_older_than(conn: &mut Connection, cutoff: &str) -> Result<Pr
 pub(crate) fn count_content(conn: &Connection) -> Result<i64> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM content", [], |r| r.get(0))?;
     Ok(count)
+}
+
+pub(crate) fn query(conn: &Connection, q: &Query) -> Result<Vec<ContentRecord>> {
+    let mut sql = String::from("SELECT body FROM content");
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+    if let Some(session_id) = &q.session_id {
+        clauses.push("session_id = ?");
+        params.push(session_id.clone());
+    }
+    if let Some(source) = q.source {
+        clauses.push("source = ?");
+        params.push(source.wire_str().to_string());
+    }
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY rowid");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let json = row?;
+        let record: ContentRecord = match serde_json::from_str(&json) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        if content_passes(&record, q) {
+            out.push(record);
+        }
+    }
+    Ok(out)
+}
+
+fn content_passes(r: &ContentRecord, q: &Query) -> bool {
+    if let Some(ref since) = q.since {
+        if &r.ts < since {
+            return false;
+        }
+    }
+    if let Some(ref until) = q.until {
+        if &r.ts > until {
+            return false;
+        }
+    }
+    if let Some(ref sid) = q.session_id {
+        if &r.session_id != sid {
+            return false;
+        }
+    }
+    if let Some(source) = q.source {
+        if r.source != source {
+            return false;
+        }
+    }
+    true
 }
 
 /// Distinct `session_id` values present in `content.sqlite`. Powers the

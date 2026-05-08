@@ -1,0 +1,37 @@
+{
+  "name": "@relayburn/mcp",
+  "version": "2.3.0",
+  "description": "MCP (Model Context Protocol) server exposing read-only relayburn ledger queries for in-session self-query",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./config": "./dist/config.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "test": "node --test 'dist/**/*.test.js'"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@relayburn/sdk": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/burn",
+    "directory": "packages/mcp"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -42,13 +42,15 @@ The npm workspace now contains wrappers and platform package manifests only:
 ```
 packages/sdk-node          — @relayburn/sdk Node facade over relayburn-sdk-node.
 packages/sdk-node/npm/*    — @relayburn/sdk-<platform> prebuilt native packages.
+packages/mcp               — @relayburn/mcp stdio MCP presenter over @relayburn/sdk.
 packages/relayburn         — unscoped npm install wrapper exposing `burn`.
 packages/relayburn/npm/*   — @relayburn/cli-<platform> prebuilt binary packages.
 ```
 
-Do not recreate the old standalone reader/ledger/analyze/ingest/cli/mcp TypeScript
-packages. If a 1.x feature is missing from 2.x, add it to the Rust SDK/CLI and
-record the gap in `RUST_2X_GAP_CATALOG.md` until it lands.
+Do not recreate the old standalone reader/ledger/analyze/ingest/cli TypeScript
+packages. If a 1.x feature is missing from 2.x, add it to the Rust SDK/CLI/MCP
+presenter surface as appropriate and record the gap in `RUST_2X_GAP_CATALOG.md`
+until it lands.
 
 ## Common commands
 
@@ -57,7 +59,7 @@ cargo build --workspace    # Build all Rust crates.
 cargo test --workspace     # Rust unit/integration tests.
 
 pnpm install               # Workspace install for npm wrappers.
-pnpm run test              # Node facade tests.
+pnpm run test              # Node SDK facade + MCP tests.
 pnpm run test:bundle       # esbuild smoke test for @relayburn/sdk.
 pnpm run build:napi        # Local napi-rs build for @relayburn/sdk.
 
@@ -80,6 +82,7 @@ Curate `[Unreleased]` in the relevant changelog as you land PRs:
 
 - `CHANGELOG.md` for cross-package or user-facing release narrative.
 - `packages/sdk-node/CHANGELOG.md` for the Node SDK facade.
+- `packages/mcp/CHANGELOG.md` for the MCP package.
 - `packages/relayburn/CHANGELOG.md` for the npm CLI install wrapper.
 
 Changelog entries should be concise and impact-first. Prefer one short bullet
@@ -100,8 +103,8 @@ impact.
 
 The workflow builds and tests the Rust workspace, builds native artifacts for
 the npm platform packages, publishes the umbrellas (`relayburn`,
-`@relayburn/sdk`) and their optional dependencies, then tags each published
-target.
+`@relayburn/sdk`, `@relayburn/mcp`) and their optional dependencies, then tags
+each published target.
 
 ## Adding a harness
 

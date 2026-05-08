@@ -96,13 +96,21 @@ pub fn parse_claude_session_with_counter<P: AsRef<Path>, C: TokenCounter + ?Size
     let capture_content = matches!(content_mode, ContentStoreMode::Full);
 
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
     let mut state = ParseState::new(options, path);
 
-    for line in reader.lines() {
-        let line = line?;
-        state.ingest_line(&line, counter, capture_content);
+    // `BufReader::lines()` allocates a fresh `String` per line; for sessions
+    // with tens of thousands of turns that's pure churn. `read_line` into a
+    // single reused buffer keeps allocation bounded by the longest line.
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => state.ingest_line(&line, counter, capture_content),
+            Err(err) => return Err(err),
+        }
     }
 
     Ok(state.finish(options, capture_content))
@@ -2290,7 +2298,7 @@ fn prescan_nodes(
             next_event_index: 0,
         });
     }
-    let mut file = File::open(path)?;
+    let file = File::open(path)?;
     let size = file.metadata()?.len();
     let length = end_offset.min(size);
     if length == 0 {
@@ -2299,18 +2307,29 @@ fn prescan_nodes(
             next_event_index: 0,
         });
     }
-    let mut buf = vec![0u8; length as usize];
-    file.read_exact(&mut buf)?;
-    let mut p: usize = 0;
+    // Stream the prefix line-by-line rather than reading `[0, length)`
+    // into memory all at once. For multi-GB sessions the up-front
+    // `vec![0u8; length as usize]` was a multi-GB allocation we never
+    // need — only the longest single line has to fit in memory.
+    let mut reader = BufReader::new(file).take(length);
+    let mut line_buf: Vec<u8> = Vec::new();
     let mut last_assistant_message_id: Option<String> = None;
     let mut next_event_index: u64 = 0;
-    while p < buf.len() {
-        let nl_idx = match buf[p..].iter().position(|&b| b == b'\n') {
-            Some(i) => p + i,
-            None => break,
-        };
-        let raw = std::str::from_utf8(&buf[p..nl_idx]).unwrap_or("").trim();
-        p = nl_idx + 1;
+    loop {
+        line_buf.clear();
+        let n = reader.read_until(b'\n', &mut line_buf)?;
+        if n == 0 {
+            break;
+        }
+        // A trailing partial line (no `\n`) inside the prescan window
+        // should never happen — incremental ingest only commits cursors
+        // at newline boundaries — but guard anyway.
+        if line_buf.last() != Some(&b'\n') {
+            break;
+        }
+        let raw = std::str::from_utf8(&line_buf[..n - 1])
+            .unwrap_or("")
+            .trim();
         if raw.is_empty() {
             continue;
         }
@@ -2499,20 +2518,30 @@ fn run_incremental<C: TokenCounter + ?Sized>(
 
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(start_offset))?;
-    let mut buf: Vec<u8> = Vec::with_capacity((size - start_offset) as usize);
-    file.read_to_end(&mut buf)?;
-
-    let mut p: usize = 0;
+    // Stream from `start_offset` line-by-line. The previous implementation
+    // allocated `Vec::with_capacity((size - start_offset) as usize)` and
+    // `read_to_end` into it — for a multi-GB session this was a multi-GB
+    // up-front allocation. With BufReader + `read_until` only the longest
+    // single line stays resident.
+    let mut reader = BufReader::new(file);
+    let mut line_buf: Vec<u8> = Vec::new();
     let mut cursor_offset: u64 = start_offset; // position past last complete \n
-    while p < buf.len() {
-        let nl_idx = match buf[p..].iter().position(|&b| b == b'\n') {
-            Some(i) => p + i,
-            None => break,
-        };
-        let line_start_offset = start_offset + p as u64;
-        let line_end_offset = start_offset + nl_idx as u64 + 1;
-        let trimmed = std::str::from_utf8(&buf[p..nl_idx]).unwrap_or("").trim();
-        p = nl_idx + 1;
+    loop {
+        line_buf.clear();
+        let n = reader.read_until(b'\n', &mut line_buf)?;
+        if n == 0 {
+            break;
+        }
+        // Drop trailing partial lines — the next incremental call resumes
+        // from `cursor_offset`, which we only advance past complete `\n`.
+        if line_buf.last() != Some(&b'\n') {
+            break;
+        }
+        let line_start_offset = cursor_offset;
+        let line_end_offset = cursor_offset + n as u64;
+        let trimmed = std::str::from_utf8(&line_buf[..n - 1])
+            .unwrap_or("")
+            .trim();
         cursor_offset = line_end_offset;
         if trimmed.is_empty() {
             continue;

@@ -72,8 +72,8 @@ pub use crate::reader::{
     ContentStoreMode, ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass,
     Harness, ProjectResolver, RelationshipSourceKind, RelationshipType, ResolvedProject,
     SessionRelationshipRecord, SourceKind, Subagent, ToolCall, ToolResultEventRecord,
-    ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageAttribution,
-    UsageGranularity, UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
+    ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageAttribution, UsageGranularity,
+    UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
 };
 
 pub use crate::ledger::{
@@ -85,21 +85,24 @@ pub use crate::ledger::{
 
 pub use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_provider,
-    aggregate_by_subagent, attribute_hotspots, attribute_overhead, build_compare_table,
-    build_trim_recommendations, compare_from_archive, cost_for_turn, cost_for_usage,
-    describe_applies_to, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
-    find_overhead_files, findings_from_patterns, has_minimum_fidelity, load_overhead_file,
-    load_pricing, render_unified_diff_for_recommendation, summarize_fidelity,
-    summarize_replacement_savings, sum_costs, AggregateByProviderOptions, AttributeOverheadInput,
-    AttributionMethod, BashAggregation, BashVerbAggregation, CompareCategory, CompareCell,
-    CompareFromArchiveResult, CompareOptions as AnalyzeCompareOptions, CompareTable,
-    CompareTotals, CostBreakdown, CoverageField, FidelitySummary, FieldCoverage, FileAggregation,
+    aggregate_by_subagent, aggregate_subagent_type_stats, attribute_hotspots, attribute_overhead,
+    build_compare_table, build_subagent_tree, build_trim_recommendations, compare_from_archive,
+    compute_quality, cost_for_turn, cost_for_usage, describe_applies_to, detect_patterns,
+    detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
+    findings_from_patterns, has_minimum_fidelity, load_overhead_file, load_pricing, provider_for,
+    render_unified_diff_for_recommendation, sum_costs, summarize_fidelity,
+    summarize_replacement_savings, AggregateByProviderOptions, AttributeOverheadInput,
+    AttributionMethod, BashAggregation, BashVerbAggregation, BuildSubagentTreeOptions,
+    CompareCategory, CompareCell, CompareFromArchiveResult,
+    CompareOptions as AnalyzeCompareOptions, CompareTable, CompareTotals, ComputeQualityOptions,
+    CostBreakdown, CoverageField, FidelitySummary, FieldCoverage, FileAggregation,
     HotspotsOptions as AnalyzeHotspotsOptions, HotspotsResult as AnalyzeHotspotsResult,
-    MarkdownSection, ModelCost, OverheadAttribution, OverheadFile, OverheadFileAttribution,
-    OverheadFileKind, ParsedOverheadFile, PricingTable, ProviderAggregateRow, ReasoningMode,
-    ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SessionTotals,
-    SubagentAggregation, ToolAttribution, TrimRecommendation, UsageCostAggregateRow, WasteFinding,
-    WasteSeverity, DEFAULT_MIN_SAMPLE,
+    MarkdownSection, ModelCost, OneShotMetrics, OutcomeLabel, OverheadAttribution, OverheadFile,
+    OverheadFileAttribution, OverheadFileKind, ParsedOverheadFile, PricingTable,
+    ProviderAggregateRow, QualityResult, ReasoningMode, ReplacementSavingsSummary, RowCoverage,
+    SessionClaudeMdCost, SessionOutcome, SessionTotals, SubagentAggregation, SubagentTreeNode,
+    SubagentTypeStats, ToolAttribution, TrimRecommendation, TurnProvider, UsageCostAggregateRow,
+    WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
 };
 
 pub use crate::ingest::{

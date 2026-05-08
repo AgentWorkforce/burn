@@ -35,6 +35,15 @@ on:
     # caller downloads the uploaded `relayburn-sdk-<short>` artifacts and
     # stages them into `packages/sdk-node/npm/<short>/` before
     # `npm pack` + `npm publish`.
+    inputs:
+      release_version:
+        description: >-
+          Post-bump release version (e.g. "2.1.0") to bake into the
+          napi-rs binding via CARGO_PKG_VERSION. Optional — when empty
+          (PR/push runs) we skip the lockstep sed and build with the
+          on-disk workspace version unchanged.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -110,6 +119,24 @@ jobs:
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile
+
+      - name: Lockstep Cargo.toml to release version
+        # When invoked via the publish workflow, sed the workspace
+        # `[workspace.package].version` (and the path-dep `version = "X.Y"`
+        # pin in `crates/relayburn-sdk-node/Cargo.toml`) so the napi-rs
+        # binding built below carries the post-bump `CARGO_PKG_VERSION`.
+        # Mirrors the lockstep regex in publish.yml and cli-build.yml.
+        #
+        # Skipped when `release_version` is empty (PR/push runs).
+        if: inputs.release_version != ''
+        run: |
+          set -euo pipefail
+          RUST_VER="${{ inputs.release_version }}"
+          RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}')
+          echo "Rust workspace lockstep: $RUST_VER (minor pin: $RUST_MINOR)"
+          sed -i.bak -E "s/^version = \"[^\"]+\"$/version = \"$RUST_VER\"/" Cargo.toml
+          sed -i.bak -E "s|(relayburn-sdk = \\{ path = \"\\.\\./relayburn-sdk\", version = \")[^\"]+(\" \\})|\\1$RUST_MINOR\\2|" crates/relayburn-sdk-node/Cargo.toml
+          rm -f Cargo.toml.bak crates/relayburn-sdk-node/Cargo.toml.bak
 
       - name: Build napi binding for ${{ matrix.target }}
         # `napi build` reads `packages/sdk-node/package.json`'s `napi`
