@@ -795,7 +795,17 @@ pub fn summary_replacement_savings_to_value(
             .get("estimatedTokensSaved")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        bv.cmp(&av)
+        bv.cmp(&av).then_with(|| {
+            let at = a
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let bt = b
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            at.cmp(bt)
+        })
     });
     serde_json::json!({
         "calls": savings.calls,
@@ -1176,10 +1186,6 @@ fn attribute_summary_cost_to_tools(
             };
             let ingest_cost = c.input + c.cache_read + c.cache_create;
 
-            for tc in &turn.tool_calls {
-                by_tool.entry(tc.name.clone()).or_default().calls += 1;
-            }
-
             if i == 0 {
                 unattributed += ingest_cost;
                 continue;
@@ -1213,6 +1219,7 @@ fn attribute_summary_cost_to_tools(
                     if bytes == 0 {
                         continue;
                     }
+                    by_tool.entry(tc.name.clone()).or_default().calls += 1;
                     raw_shares.push((
                         tc.name.clone(),
                         (bytes as f64 / sized_bytes as f64) * allocatable_cost,
@@ -1234,6 +1241,7 @@ fn attribute_summary_cost_to_tools(
                 let share = ingest_cost / prior.tool_calls.len() as f64;
                 for tc in &prior.tool_calls {
                     let agg = by_tool.entry(tc.name.clone()).or_default();
+                    agg.calls += 1;
                     agg.cost += share;
                     agg.even_split_cost += share;
                 }
@@ -3403,6 +3411,38 @@ mod tests {
     }
 
     #[test]
+    fn summary_replacement_savings_value_tie_breaks_by_tool_name() {
+        let mut savings = ReplacementSavingsSummary {
+            calls: 2,
+            collapsed_calls: 4,
+            estimated_tokens_saved: 20,
+            by_tool: IndexMap::new(),
+        };
+        savings.by_tool.insert(
+            "Write".to_string(),
+            ToolSavingsAggregate {
+                calls: 1,
+                collapsed_calls: 2,
+                estimated_tokens_saved: 10,
+            },
+        );
+        savings.by_tool.insert(
+            "Read".to_string(),
+            ToolSavingsAggregate {
+                calls: 1,
+                collapsed_calls: 2,
+                estimated_tokens_saved: 10,
+            },
+        );
+
+        let value = summary_replacement_savings_to_value(&savings);
+        let by_tool = value["byTool"].as_array().expect("byTool array");
+
+        assert_eq!(by_tool[0]["tool"], "Read");
+        assert_eq!(by_tool[1]["tool"], "Write");
+    }
+
+    #[test]
     fn summary_agent_session_tree_follows_nested_child_sessions_and_agent_ids() {
         let rels = vec![
             relationship("child-session", "root-agent", Some("child-agent")),
@@ -3558,7 +3598,9 @@ mod tests {
             Some(&selected),
         );
 
-        assert!(by_tool.get("Edit").expect("edit agg").cost > 0.0);
+        let edit = by_tool.get("Edit").expect("edit agg");
+        assert_eq!(edit.calls, 1);
+        assert!(edit.cost > 0.0);
         assert_eq!(by_tool.get("Read").map(|agg| agg.cost).unwrap_or(0.0), 0.0);
         assert_eq!(unattributed, 0.0);
     }

@@ -595,12 +595,12 @@ fn render_relationship_report(
     out.push(String::new());
     out.push(format!(
         "relationships: {}",
-        format_uint(report.relationships.iter().map(|s| s.session_count).sum()),
+        format_uint(report.relationships.iter().map(|s| s.count).sum()),
     ));
     out.push(String::new());
     let mut rows = vec![vec![
         "relationshipType".into(),
-        "sessionCount".into(),
+        "count".into(),
         "turnCount".into(),
         "total".into(),
         "median".into(),
@@ -610,7 +610,7 @@ fn render_relationship_report(
     for s in &report.relationships {
         rows.push(vec![
             s.relationship_type.wire_str().to_string(),
-            format_uint(s.session_count),
+            format_uint(s.count),
             format_uint(s.turn_count),
             format_usd(s.total_cost),
             format_usd(s.median_cost),
@@ -691,13 +691,14 @@ fn render_subagent_tree_report(
     report: &SummarySubagentTreeReport,
 ) -> anyhow::Result<i32> {
     if globals.json {
-        let mut value = match report.root.as_ref() {
+        let root = match report.root.as_ref() {
             Some(root) => serde_json::to_value(root)?,
-            None => json!({
-                "sessionId": report.session_id.as_str(),
-                "root": null,
-            }),
+            None => Value::Null,
         };
+        let mut value = json!({
+            "sessionId": report.session_id.as_str(),
+            "root": root,
+        });
         coerce_whole_f64_to_int(&mut value);
         print_json(&value);
         return Ok(0);
