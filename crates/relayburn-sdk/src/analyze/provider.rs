@@ -13,11 +13,15 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+
 use crate::reader::{Coverage, SourceKind, TurnRecord, Usage};
 
 use crate::analyze::cost::{cost_for_turn, CostBreakdown};
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::provider_reattribution::{default_rules, resolve_provider_with_rules, ProviderRule};
+use crate::analyze::provider_reattribution::{
+    default_rules, resolve_provider_with_rules, ProviderRule,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnProvider {
@@ -32,13 +36,15 @@ pub struct TurnProvider {
 /// future byte-equivalent output.
 pub type ProviderFilter = BTreeSet<String>;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FieldCoverage {
     pub known: u64,
     pub missing: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum CoverageField {
     Input,
     Output,
@@ -55,7 +61,8 @@ pub const COVERAGE_FIELDS: [CoverageField; 5] = [
     CoverageField::CacheCreate,
 ];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RowCoverage {
     pub input: FieldCoverage,
     pub output: FieldCoverage,
@@ -86,7 +93,8 @@ impl RowCoverage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageCostAggregateRow {
     pub label: String,
     pub turns: u64,
@@ -95,7 +103,8 @@ pub struct UsageCostAggregateRow {
     pub coverage: RowCoverage,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderAggregateRow {
     pub provider: String,
     pub label: String,
