@@ -45,6 +45,17 @@ clap = { workspace = true }
 # of rows. Wave 2 commands render tabular output through this helper.
 comfy-table = "7"
 
+# TTY-only spinners for long-running CLI work. The draw target is stderr so
+# stdout stays script-friendly.
+indicatif = "0.17"
+console = "0.15"
+dialoguer = "0.11"
+
+# Structured diagnostics for people debugging burn itself. Normal CLI output
+# stays quiet; set RELAYBURN_LOG or RUST_LOG to enable compact stderr logs.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
 # Used by `render::json` to emit the structured-output mode the TS CLI's
 # `--json` global produces. `serde` derive lives here too because the
 # rendering helpers are generic over `Serialize` types from the SDK.

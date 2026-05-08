@@ -30,6 +30,13 @@ fn main() {
 /// calls.
 fn dispatch(args: Args) -> i32 {
     let globals = args.globals();
+    crate::render::logging::init(&globals);
+    tracing::debug!(
+        command = command_name(&args.command),
+        json = globals.json,
+        no_color = globals.no_color,
+        "dispatching command"
+    );
     match args.command {
         Command::Summary(sub) => commands::summary::run(&globals, sub),
         Command::Hotspots(sub) => commands::hotspots::run(&globals, sub),
@@ -38,5 +45,17 @@ fn dispatch(args: Args) -> i32 {
         Command::State(args) => commands::state::run(&globals, args),
         Command::Ingest(args) => commands::ingest::run(&globals, args),
         Command::McpServer(args) => commands::mcp_server::run(&globals, args),
+    }
+}
+
+fn command_name(command: &Command) -> &'static str {
+    match command {
+        Command::Summary(_) => "summary",
+        Command::Hotspots(_) => "hotspots",
+        Command::Overhead(_) => "overhead",
+        Command::Compare(_) => "compare",
+        Command::State(_) => "state",
+        Command::Ingest(_) => "ingest",
+        Command::McpServer(_) => "mcp-server",
     }
 }

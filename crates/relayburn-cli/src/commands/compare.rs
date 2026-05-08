@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use crate::cli::{CompareArgs, GlobalArgs};
 use crate::render::error::report_error;
 use crate::render::json::render_json;
+use crate::render::progress::TaskProgress;
 
 const FIDELITY_CHOICES: &[&str] = &[
     "full",
@@ -155,11 +156,14 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     }
 
     // 8. Open ledger and walk turns.
+    let progress = TaskProgress::new(globals, "compare");
     let ledger_opts = match globals.ledger_path.as_deref() {
         Some(p) => LedgerOpenOptions::with_home(p),
         None => LedgerOpenOptions::default(),
     };
+    progress.set_task("opening ledger");
     let handle = Ledger::open(ledger_opts)?;
+    progress.set_task("loading turns");
     let queried_turns: Vec<EnrichedTurn> = handle.raw().query_turns(&q)?;
 
     // 9. Provider filter is rejected up-front (see step 4). Pipeline
@@ -191,7 +195,9 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         models: Some(models.clone()),
         min_sample: Some(min_sample),
     };
+    progress.set_task("building comparison");
     let table = build_compare_table(&filtered_turns, &opts);
+    progress.finish_and_clear();
 
     // 12. Render.
     if globals.json {

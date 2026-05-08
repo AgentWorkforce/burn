@@ -18,8 +18,7 @@
 //! `state-status*` invocations carry the 2.0 shape.
 
 use relayburn_sdk::{
-    ingest_all, Ledger, LedgerHandle, LedgerOpenOptions, RawIngestOptions, ResetSummary,
-    StateStatus,
+    ingest_all, Ledger, LedgerHandle, LedgerOpenOptions, ResetSummary, StateStatus,
 };
 
 use crate::cli::{
@@ -27,6 +26,7 @@ use crate::cli::{
 };
 use crate::render::error::{report_advisory, report_error, report_ledger_error};
 use crate::render::json::render_json;
+use crate::render::progress::TaskProgress;
 
 pub fn run(globals: &GlobalArgs, args: StateArgs) -> i32 {
     let sub = args
@@ -45,18 +45,28 @@ pub fn run(globals: &GlobalArgs, args: StateArgs) -> i32 {
 // ---------------------------------------------------------------------------
 
 fn run_status(globals: &GlobalArgs) -> i32 {
+    let progress = TaskProgress::new(globals, "state");
     let opts = LedgerOpenOptions {
         home: globals.ledger_path.clone(),
         content_home: None,
     };
+    progress.set_task("opening ledger");
     let handle = match Ledger::open(opts) {
         Ok(h) => h,
-        Err(err) => return report_anyhow(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_anyhow(&err, globals);
+        }
     };
+    progress.set_task("reading derived state");
     let status = match handle.state_status() {
         Ok(s) => s,
-        Err(err) => return report_anyhow(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_anyhow(&err, globals);
+        }
     };
+    progress.finish_and_clear();
 
     if globals.json {
         if let Err(err) = render_json(&status) {
@@ -283,18 +293,28 @@ fn run_rebuild(globals: &GlobalArgs, args: StateRebuildArgs) -> i32 {
 }
 
 fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
+    let progress = TaskProgress::new(globals, "state");
     let opts = LedgerOpenOptions {
         home: globals.ledger_path.clone(),
         content_home: None,
     };
+    progress.set_task("opening ledger");
     let mut handle = match Ledger::open(opts) {
         Ok(h) => h,
-        Err(err) => return report_anyhow(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_anyhow(&err, globals);
+        }
     };
+    progress.set_task("rebuilding derivable state");
     let summary = match handle.raw_mut().rebuild_derivable() {
         Ok(s) => s,
-        Err(err) => return report_ledger_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_ledger_error(&err, globals);
+        }
     };
+    progress.finish_and_clear();
     if globals.json {
         let payload = serde_json::json!({
             "rowsDropped": summary.rows_dropped,
@@ -323,19 +343,25 @@ fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
 
 fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
     use relayburn_sdk::{load_config_with_home, Retention};
+    let progress = TaskProgress::new(globals, "state");
     // Load retention config from the same home the ledger will be
     // opened under below, so `--ledger-path /foo` reads
     // `/foo/config.json` instead of mixing in `$RELAYBURN_HOME`'s
     // retention against `/foo`'s DB. Mirrors the equivalent fix in
     // `state_status`.
+    progress.set_task("loading retention config");
     let cfg = match load_config_with_home(globals.ledger_path.as_deref()) {
         Ok(c) => c,
-        Err(err) => return report_ledger_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_ledger_error(&err, globals);
+        }
     };
     let retention = match args.days.as_deref() {
         Some(s) => match parse_retention(s) {
             Some(r) => r,
             None => {
+                progress.finish_and_clear();
                 let msg = format!(
                     "invalid --days value: {:?} (expected a number or \"forever\")",
                     s
@@ -354,6 +380,7 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
 
     let cutoff_ms = match retention {
         Retention::Forever => {
+            progress.finish_and_clear();
             if globals.json {
                 let payload =
                     serde_json::json!({ "rowsDeleted": 0, "bytesFreed": 0, "retention": "forever" });
@@ -366,6 +393,7 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
         Retention::Days(_) => match retention.as_millis() {
             Some(ms) => ms,
             None => {
+                progress.finish_and_clear();
                 if globals.json {
                     let payload = serde_json::json!({
                         "rowsDeleted": 0, "bytesFreed": 0, "retention": "forever"
@@ -398,14 +426,23 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
         home: globals.ledger_path.clone(),
         content_home: None,
     };
+    progress.set_task("opening ledger");
     let mut handle = match Ledger::open(opts) {
         Ok(h) => h,
-        Err(err) => return report_anyhow(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_anyhow(&err, globals);
+        }
     };
+    progress.set_task("pruning content rows");
     let stats = match handle.raw_mut().prune_content_older_than(&cutoff) {
         Ok(s) => s,
-        Err(err) => return report_ledger_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_ledger_error(&err, globals);
+        }
     };
+    progress.finish_and_clear();
 
     let _ = args.force; // 2.0 prune is purely TTL-based; --force is a no-op
                         // because there are no recoverable on-disk sidecars to
@@ -481,37 +518,55 @@ fn parse_retention(s: &str) -> Option<relayburn_sdk::Retention> {
 // same handle.
 
 fn run_reset(globals: &GlobalArgs, args: crate::cli::StateResetArgs) -> i32 {
+    let progress = TaskProgress::new(globals, "state");
     let opts = LedgerOpenOptions {
         home: globals.ledger_path.clone(),
         content_home: None,
     };
+    progress.set_task("opening ledger");
     let mut handle = match Ledger::open(opts) {
         Ok(h) => h,
-        Err(err) => return report_anyhow(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_anyhow(&err, globals);
+        }
     };
 
     if !args.force {
+        progress.set_task("counting reset targets");
         let summary = match handle.raw().count_reset_targets() {
             Ok(s) => s,
-            Err(err) => return report_ledger_error(&err, globals),
+            Err(err) => {
+                progress.finish_and_clear();
+                return report_ledger_error(&err, globals);
+            }
         };
+        progress.finish_and_clear();
         return print_reset_report(globals, &summary, /*executed=*/ false, None);
     }
 
+    progress.set_task("resetting derived state");
     let summary = match handle.raw_mut().reset() {
         Ok(s) => s,
-        Err(err) => return report_ledger_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_ledger_error(&err, globals);
+        }
     };
 
     let ingest_report = if args.reingest {
-        match run_reset_reingest(&mut handle, globals.ledger_path.clone()) {
+        match run_reset_reingest(&mut handle, globals.ledger_path.clone(), &progress) {
             Ok(r) => Some(r),
-            Err(err) => return report_error(&err, globals),
+            Err(err) => {
+                progress.finish_and_clear();
+                return report_error(&err, globals);
+            }
         }
     } else {
         None
     };
 
+    progress.finish_and_clear();
     print_reset_report(globals, &summary, /*executed=*/ true, ingest_report.as_ref())
 }
 
@@ -529,14 +584,13 @@ fn run_reset(globals: &GlobalArgs, args: crate::cli::StateResetArgs) -> i32 {
 fn run_reset_reingest(
     handle: &mut LedgerHandle,
     ledger_home: Option<std::path::PathBuf>,
+    progress: &TaskProgress,
 ) -> anyhow::Result<relayburn_sdk::IngestReport> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let opts = RawIngestOptions {
-        ledger_home,
-        ..RawIngestOptions::default()
-    };
+    progress.set_task("re-ingesting sessions");
+    let opts = progress.ingest_options(ledger_home);
     rt.block_on(ingest_all(handle.raw_mut(), &opts))
 }
 
@@ -725,4 +779,3 @@ mod tests {
         assert_eq!(rel_to_home("/x/home/", "/x/home"), "${RELAYBURN_HOME}/");
     }
 }
-

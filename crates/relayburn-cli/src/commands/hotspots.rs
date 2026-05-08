@@ -12,8 +12,7 @@
 //!
 //! 1. Open a [`relayburn_sdk::LedgerHandle`] honoring `--ledger-path` /
 //!    `RELAYBURN_HOME`.
-//! 2. Run [`relayburn_sdk::ingest_all`] silently (no progress spinner —
-//!    that's a TTY-only concern that breaks golden output).
+//! 2. Run [`relayburn_sdk::ingest_all`] with TTY-only progress.
 //! 3. Call [`relayburn_sdk::hotspots`] (verb-form) with the resolved
 //!    [`relayburn_sdk::HotspotsOptions`]. The SDK enforces the coverage
 //!    gate, picks the `Sized` vs `EvenSplit` attribution method per
@@ -26,8 +25,8 @@
 
 use clap::Args;
 use relayburn_sdk::{
-    hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation,
-    BashVerbAggregation, FileAggregation, HotspotsAttributionResult, HotspotsExcludedBreakdown,
+    hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation, BashVerbAggregation,
+    FileAggregation, HotspotsAttributionResult, HotspotsExcludedBreakdown,
     HotspotsExcludedSourceRow, HotspotsGroupBy, HotspotsOptions, HotspotsResult,
     HotspotsSessionTotal, Ledger, LedgerOpenOptions, SubagentAggregation, WasteFinding,
     WasteSeverity,
@@ -37,6 +36,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::GlobalArgs;
 use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
+use crate::render::progress::TaskProgress;
 
 const DEFAULT_TOP_N: usize = 10;
 
@@ -219,16 +219,19 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
     // Open + ingest. We open the handle locally so ingest sees the same
     // sealed `RELAYBURN_HOME` the verb call does.
     let ledger_home = globals.ledger_path.clone();
+    let progress = TaskProgress::new(globals, "hotspots");
     let opts = match &ledger_home {
         Some(h) => LedgerOpenOptions::with_home(h),
         None => LedgerOpenOptions::default(),
     };
+    progress.set_task("opening ledger");
     let mut handle = Ledger::open(opts)?;
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let raw_opts = relayburn_sdk::RawIngestOptions::default();
+    progress.set_task("refreshing ledger");
+    let raw_opts = progress.ingest_options(ledger_home.clone());
     rt.block_on(ingest_all(handle.raw_mut(), &raw_opts))?;
     drop(handle);
 
@@ -237,6 +240,7 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         _ => None,
     };
 
+    progress.set_task("analyzing hotspots");
     let result = sdk_hotspots(HotspotsOptions {
         session: session_filter,
         project: args.project.clone(),
@@ -247,6 +251,7 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         provider: provider_filter,
         ledger_home,
     })?;
+    progress.finish_and_clear();
 
     if globals.json {
         emit_json(&result);
@@ -646,8 +651,12 @@ fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) {
     }
     for (kind, items) in &groups {
         out.push(format!("{} ({})", kind, format_uint(items.len() as u64)));
-        let mut rows: Vec<Vec<String>> =
-            vec![vec!["severity".into(), "session".into(), "usd".into(), "title".into()]];
+        let mut rows: Vec<Vec<String>> = vec![vec![
+            "severity".into(),
+            "session".into(),
+            "usd".into(),
+            "title".into(),
+        ]];
         for f in items.iter().take(limit) {
             let usd = f
                 .estimated_savings
