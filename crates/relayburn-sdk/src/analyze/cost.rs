@@ -110,6 +110,11 @@ pub fn lookup_model_rate<'a>(model: &str, pricing: &'a PricingTable) -> Option<&
     if let Some(direct) = pricing.get(model) {
         return Some(direct);
     }
+    if let Some(alias) = pricing_model_alias(model) {
+        if let Some(via) = pricing.get(alias) {
+            return Some(via);
+        }
+    }
     let reattributed = resolve_provider(model);
     if reattributed.normalized_model != model {
         if let Some(via) = pricing.get(&reattributed.normalized_model) {
@@ -123,6 +128,16 @@ pub fn lookup_model_rate<'a>(model: &str, pricing: &'a PricingTable) -> Option<&
         }
     }
     None
+}
+
+fn pricing_model_alias(model: &str) -> Option<&'static str> {
+    match model {
+        // Codex logs auto-approval LLM judge calls under an internal model id.
+        // Price those turns with the public GPT-5.2 Codex tariff while keeping
+        // report labels as `codex-auto-review` for attribution.
+        "codex-auto-review" => Some("gpt-5.2-codex"),
+        _ => None,
+    }
 }
 
 fn strip_provider_prefix(model: &str) -> &str {
@@ -450,6 +465,96 @@ mod tests {
         let rate = lookup_model_rate("synthetic/qwen3-coder", &p).expect("synthetic prefix routes");
         assert_eq!(rate.input, 1.0);
         assert_eq!(rate.output, 2.0);
+    }
+
+    #[test]
+    fn lookup_model_rate_maps_codex_auto_review_to_gpt_5_2_codex() {
+        let mut p = PricingTable::new();
+        p.insert(
+            "gpt-5.2-codex".into(),
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 1.75,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+            },
+        );
+        let rate = lookup_model_rate("codex-auto-review", &p).expect("auto-review alias routes");
+        assert_eq!(rate.input, 1.75);
+        assert_eq!(rate.output, 14.0);
+        assert_eq!(rate.cache_read, 0.175);
+    }
+
+    #[test]
+    fn direct_codex_auto_review_pricing_overrides_alias() {
+        let mut p = PricingTable::new();
+        p.insert(
+            "codex-auto-review".into(),
+            ModelCost {
+                input: 9.0,
+                output: 10.0,
+                cache_read: 1.0,
+                cache_write: 9.0,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+            },
+        );
+        p.insert(
+            "gpt-5.2-codex".into(),
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 1.75,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+            },
+        );
+        let rate =
+            lookup_model_rate("codex-auto-review", &p).expect("direct auto-review price wins");
+        assert_eq!(rate.input, 9.0);
+        assert_eq!(rate.output, 10.0);
+        assert_eq!(rate.cache_read, 1.0);
+    }
+
+    #[test]
+    fn codex_auto_review_uses_gpt_5_2_codex_rates_without_double_billing_reasoning() {
+        let mut p = PricingTable::new();
+        p.insert(
+            "gpt-5.2-codex".into(),
+            ModelCost {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 1.75,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+            },
+        );
+        let c = cost_for_turn(
+            &turn(
+                "codex-auto-review",
+                Usage {
+                    input: 1_000_000,
+                    output: 500_000,
+                    reasoning: 250_000,
+                    cache_read: 2_000_000,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                SourceKind::Codex,
+            ),
+            &p,
+        )
+        .expect("auto-review turn is priced");
+        assert_eq!(c.model, "codex-auto-review");
+        assert_eq!(c.input, 1.75);
+        assert_eq!(c.output, 7.0);
+        assert_eq!(c.cache_read, 0.35);
+        assert_eq!(c.reasoning, 0.0);
+        assert_eq!(c.total, 9.1);
     }
 
     #[test]

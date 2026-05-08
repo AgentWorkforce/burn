@@ -17,6 +17,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   truncated }`. Derived from the `turns` table so older ledgers with an
   empty `sessions` table still enumerate correctly.
 
+### Fixed
+
+- `relayburn-sdk`: price Codex `codex-auto-review` judge turns using the
+  GPT-5.2 Codex tariff so auto-approval review spend is no longer reported as
+  zero-cost.
+
 ## [2.5.1] - 2026-05-08
 
 ### Changed
