@@ -6,11 +6,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
-- `relayburn-sdk` (Rust): add `summary_report` as the richer SDK-owned
-  composition surface for `burn summary` rows, fidelity metadata, replacement
-  savings, quality, tool attribution, subagent, and relationship views. The CLI
-  now renders that typed result instead of rebuilding summary aggregates locally.
-  (#316)
+- `relayburn-sdk` (Rust): `summary_report` now exposes the richer summary result
+  used by `burn summary`, so presenters can render one SDK-owned aggregate
+  shape.
 - `relayburn-sdk` (Rust): reader hot loops in `claude.rs` and `codex.rs` now stream JSONL line-by-line via `BufReader::read_until` instead of pre-allocating a `(size - start_offset)`-byte buffer up front; only the longest single line stays resident. `memchr_newline` in the codex parser now actually uses the `memchr` crate for SIMD-accelerated newline scanning. The main `parse_claude_session` loop also drops `BufReader::lines()` in favor of `read_line` into a reused `String`. (#323)
 
 ### Removed

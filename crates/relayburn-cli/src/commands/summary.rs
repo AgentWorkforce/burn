@@ -690,17 +690,23 @@ fn render_subagent_tree_report(
     globals: &GlobalArgs,
     report: &SummarySubagentTreeReport,
 ) -> anyhow::Result<i32> {
-    let Some(root) = report.root.as_ref() else {
-        println!("no turns found for session {}", report.session_id);
-        return Ok(0);
-    };
-
     if globals.json {
-        let mut value = serde_json::to_value(root)?;
+        let mut value = match report.root.as_ref() {
+            Some(root) => serde_json::to_value(root)?,
+            None => json!({
+                "sessionId": report.session_id.as_str(),
+                "root": null,
+            }),
+        };
         coerce_whole_f64_to_int(&mut value);
         print_json(&value);
         return Ok(0);
     }
+
+    let Some(root) = report.root.as_ref() else {
+        println!("no turns found for session {}", report.session_id);
+        return Ok(0);
+    };
 
     let mut out = Vec::new();
     out.push(String::new());

@@ -1127,18 +1127,16 @@ fn load_summary_user_turns_for_by_tool(
     ledger: &crate::ledger::Ledger,
     turns: &[TurnRecord],
 ) -> Result<HashMap<String, Vec<UserTurnRecord>>> {
-    let session_ids: HashSet<String> = turns.iter().map(|t| t.session_id.clone()).collect();
+    let session_ids: BTreeSet<String> = turns.iter().map(|t| t.session_id.clone()).collect();
     let mut out = HashMap::new();
-    if session_ids.is_empty() {
-        return Ok(out);
-    }
-    for row in ledger.query_user_turns(&Query::default())? {
-        if !session_ids.contains(&row.session_id) {
-            continue;
+    for session_id in session_ids {
+        let rows = ledger.query_user_turns(&Query {
+            session_id: Some(session_id.clone()),
+            ..Default::default()
+        })?;
+        if !rows.is_empty() {
+            out.insert(session_id, rows);
         }
-        out.entry(row.session_id.clone())
-            .or_insert_with(Vec::new)
-            .push(row);
     }
     Ok(out)
 }
@@ -1466,12 +1464,21 @@ fn summary_turns_for_relationship<'a>(
 fn aggregate_summary_relationship_stats(
     matches: &[SummaryRelationshipMatch],
 ) -> Vec<SummaryRelationshipStats> {
-    let mut by_type: HashMap<RelationshipType, HashMap<String, (u64, f64)>> = HashMap::new();
+    #[derive(Default)]
+    struct RelationshipSessionRollup {
+        relationship_count: u64,
+        turn_count: u64,
+        cost: f64,
+    }
+
+    let mut by_type: HashMap<RelationshipType, HashMap<String, RelationshipSessionRollup>> =
+        HashMap::new();
     for m in matches {
         let by_session = by_type.entry(m.relationship_type).or_default();
         let current = by_session.entry(m.session_id.clone()).or_default();
-        current.0 += m.turn_count;
-        current.1 += m.cost;
+        current.relationship_count += 1;
+        current.turn_count += m.turn_count;
+        current.cost += m.cost;
     }
 
     let mut out = Vec::new();
@@ -1482,15 +1489,18 @@ fn aggregate_summary_relationship_stats(
         if by_session.is_empty() {
             continue;
         }
-        let mut costs: Vec<f64> = by_session.values().map(|(_, cost)| *cost).collect();
+        let mut costs: Vec<f64> = by_session.values().map(|rollup| rollup.cost).collect();
         costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let total_cost: f64 = costs.iter().sum();
         let session_count = by_session.len() as u64;
         out.push(SummaryRelationshipStats {
             relationship_type,
-            count: session_count,
+            count: by_session
+                .values()
+                .map(|rollup| rollup.relationship_count)
+                .sum(),
             session_count,
-            turn_count: by_session.values().map(|(turns, _)| *turns).sum(),
+            turn_count: by_session.values().map(|rollup| rollup.turn_count).sum(),
             total_cost,
             median_cost: summary_percentile(&costs, 0.5),
             p95_cost: summary_percentile(&costs, 0.95),
@@ -3422,6 +3432,37 @@ mod tests {
         assert!(session_ids.contains("child-session"));
         assert!(session_ids.contains("grandchild-session"));
         assert!(!session_ids.contains("unrelated-session"));
+    }
+
+    #[test]
+    fn summary_relationship_stats_count_relationships_separately_from_sessions() {
+        let matches = vec![
+            SummaryRelationshipMatch {
+                relationship_type: RelationshipType::Fork,
+                session_id: "session".to_string(),
+                subagent_type: None,
+                turn_count: 2,
+                cost: 1.0,
+            },
+            SummaryRelationshipMatch {
+                relationship_type: RelationshipType::Fork,
+                session_id: "session".to_string(),
+                subagent_type: None,
+                turn_count: 3,
+                cost: 2.0,
+            },
+        ];
+
+        let stats = aggregate_summary_relationship_stats(&matches);
+        let fork = stats
+            .iter()
+            .find(|s| s.relationship_type == RelationshipType::Fork)
+            .expect("fork stats");
+
+        assert_eq!(fork.count, 2);
+        assert_eq!(fork.session_count, 1);
+        assert_eq!(fork.turn_count, 5);
+        assert_eq!(fork.total_cost, 3.0);
     }
 
     #[test]
