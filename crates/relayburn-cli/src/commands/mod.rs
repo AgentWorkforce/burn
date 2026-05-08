@@ -23,5 +23,6 @@ pub mod hotspots;
 pub mod ingest;
 pub mod mcp_server;
 pub mod overhead;
+pub mod sessions;
 pub mod state;
 pub mod summary;
