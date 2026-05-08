@@ -2046,6 +2046,174 @@ pub fn session_cost(opts: SessionCostOptions) -> Result<SessionCostResult> {
 }
 
 // ---------------------------------------------------------------------------
+// sessions_list
+// ---------------------------------------------------------------------------
+
+/// Default row cap when `SessionsListOptions::limit` is `None`. Picked to
+/// match the "find a session to review" scroll budget — a tighter cap than
+/// the typical agent's recent-session count, with `--limit` for callers
+/// that want more.
+pub const SESSIONS_LIST_DEFAULT_LIMIT: u64 = 20;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionsListOptions {
+    /// Slice the ledger to events at or after this point. Same parser as
+    /// every other verb's `since` (relative `24h`/`7d`/`4w`/`2m` or ISO).
+    pub since: Option<String>,
+    /// Restrict to a single project (matches `project` or `projectKey`).
+    pub project: Option<String>,
+    /// Case-insensitive substring filter against `session_id` and the
+    /// resolved project label. Kept simple — FTS5 is not consulted here.
+    pub grep: Option<String>,
+    /// Row cap. Defaults to [`SESSIONS_LIST_DEFAULT_LIMIT`] when `None`.
+    pub limit: Option<u64>,
+    pub ledger_home: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListEntry {
+    /// Full session id. Renderers may truncate for human display.
+    pub session_id: String,
+    /// Project label (`project` if present, falling back to `projectKey`).
+    /// `None` when neither field was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// ISO timestamp of the earliest turn within the filter window.
+    pub started_at: String,
+    /// ISO timestamp of the latest turn within the filter window.
+    pub last_seen: String,
+    pub turn_count: u64,
+    #[serde(rename = "totalCostUSD")]
+    pub total_cost_usd: f64,
+    /// Distinct models observed in the session, sorted lexicographically.
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionsListResult {
+    /// Sessions ordered by `last_seen` descending — most-recent first.
+    pub sessions: Vec<SessionListEntry>,
+    /// Effective row cap used for the response (the `limit` flag, defaulted).
+    pub limit: u64,
+    /// `true` when the underlying turn scan was truncated by `limit`. Lets
+    /// callers tell "no more sessions" apart from "more exist; widen the
+    /// cap to see them".
+    pub truncated: bool,
+}
+
+impl LedgerHandle {
+    /// Enumerate sessions in the ledger most-recent first. Derived from the
+    /// `turns` table rather than `sessions` because the latter may be empty
+    /// in older ledgers (the canonical source of truth is the per-turn rows
+    /// every other read verb already trusts).
+    pub fn sessions_list(&self, opts: SessionsListOptions) -> Result<SessionsListResult> {
+        let limit = opts.limit.unwrap_or(SESSIONS_LIST_DEFAULT_LIMIT);
+        let q = build_query(None, opts.project.as_deref(), opts.since.as_deref())?;
+        let turns = collect_turns(self, &q)?;
+
+        let pricing = load_pricing(None);
+        // Aggregate per-session in a single pass over the turn stream.
+        let mut acc: BTreeMap<String, SessionAccumulator> = BTreeMap::new();
+        for turn in &turns {
+            let entry = acc.entry(turn.session_id.clone()).or_default();
+            entry.add_turn(turn, &pricing);
+        }
+
+        let needle = opts.grep.as_ref().map(|s| s.to_lowercase());
+        let mut entries: Vec<SessionListEntry> = acc
+            .into_iter()
+            .map(|(session_id, acc)| acc.into_entry(session_id))
+            .filter(|entry| match needle.as_deref() {
+                None => true,
+                Some(needle) => {
+                    let project_match = entry
+                        .project
+                        .as_deref()
+                        .map(|p| p.to_lowercase().contains(needle))
+                        .unwrap_or(false);
+                    project_match || entry.session_id.to_lowercase().contains(needle)
+                }
+            })
+            .collect();
+
+        // Most-recent first; tie-break on session_id for stable ordering when
+        // two sessions share a last_seen ts (mostly tests, but worth pinning).
+        entries.sort_by(|a, b| {
+            b.last_seen
+                .cmp(&a.last_seen)
+                .then_with(|| a.session_id.cmp(&b.session_id))
+        });
+
+        let truncated = entries.len() as u64 > limit;
+        entries.truncate(limit as usize);
+
+        Ok(SessionsListResult {
+            sessions: entries,
+            limit,
+            truncated,
+        })
+    }
+}
+
+pub fn sessions_list(opts: SessionsListOptions) -> Result<SessionsListResult> {
+    let handle = open_with(opts.ledger_home.as_deref())?;
+    handle.sessions_list(SessionsListOptions {
+        ledger_home: None,
+        ..opts
+    })
+}
+
+#[derive(Default)]
+struct SessionAccumulator {
+    started_at: Option<String>,
+    last_seen: Option<String>,
+    turn_count: u64,
+    cost_total: f64,
+    project: Option<String>,
+    models: BTreeSet<String>,
+}
+
+impl SessionAccumulator {
+    fn add_turn(&mut self, turn: &TurnRecord, pricing: &PricingTable) {
+        self.turn_count += 1;
+        match self.started_at.as_ref() {
+            Some(cur) if cur.as_str() <= turn.ts.as_str() => {}
+            _ => self.started_at = Some(turn.ts.clone()),
+        }
+        match self.last_seen.as_ref() {
+            Some(cur) if cur.as_str() >= turn.ts.as_str() => {}
+            _ => self.last_seen = Some(turn.ts.clone()),
+        }
+        if self.project.is_none() {
+            // Mirror the resolution `Query.project` filters on so the rendered
+            // column matches the value users would pass to `--project`.
+            self.project = turn.project.clone().or_else(|| turn.project_key.clone());
+        }
+        self.models.insert(turn.model.clone());
+        if let Some(c) = cost_for_turn(turn, pricing) {
+            self.cost_total += c.total;
+        }
+    }
+
+    fn into_entry(self, session_id: String) -> SessionListEntry {
+        SessionListEntry {
+            session_id,
+            project: self.project,
+            started_at: self.started_at.unwrap_or_default(),
+            last_seen: self.last_seen.unwrap_or_default(),
+            turn_count: self.turn_count,
+            // Round to 6 decimals — same precision contract `session_cost`
+            // uses, so the two surfaces are byte-comparable.
+            total_cost_usd: (self.cost_total * 1_000_000.0).round() / 1_000_000.0,
+            models: self.models.into_iter().collect(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // overhead + overhead_trim — share `gather_overhead`
 // ---------------------------------------------------------------------------
 
@@ -4635,5 +4803,199 @@ mod tests {
         let pricing = load_pricing(None);
         let result = compute_summary(&turns, &pricing);
         assert!(result.replacement_savings.is_none());
+    }
+
+    fn multi_session_handle() -> (TempDir, LedgerHandle) {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = LedgerOpenOptions::with_home(dir.path());
+        let mut handle = Ledger::open(opts).expect("open ledger");
+
+        let mk = |session: &str,
+                  project: Option<&str>,
+                  ts: &str,
+                  message_id: &str,
+                  model: &str|
+         -> TurnRecord {
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: session.into(),
+                session_path: None,
+                message_id: message_id.into(),
+                turn_index: 0,
+                ts: ts.into(),
+                model: model.into(),
+                project: project.map(|s| s.into()),
+                project_key: None,
+                usage: Usage {
+                    input: 100,
+                    output: 50,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: vec![],
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            }
+        };
+
+        // sess-old: oldest session, two turns, project /tmp/proj-a
+        // sess-mid: middle session, one turn, project /tmp/proj-b
+        // sess-new: newest session, one turn, project /tmp/proj-a
+        handle
+            .raw_mut()
+            .append_turns(&[
+                mk(
+                    "sess-old",
+                    Some("/tmp/proj-a"),
+                    "2026-04-20T10:00:00.000Z",
+                    "m-1",
+                    "claude-sonnet-4-6",
+                ),
+                mk(
+                    "sess-old",
+                    Some("/tmp/proj-a"),
+                    "2026-04-20T10:05:00.000Z",
+                    "m-2",
+                    "claude-sonnet-4-6",
+                ),
+                mk(
+                    "sess-mid",
+                    Some("/tmp/proj-b"),
+                    "2026-04-22T08:00:00.000Z",
+                    "m-3",
+                    "claude-sonnet-4-6",
+                ),
+                mk(
+                    "sess-new",
+                    Some("/tmp/proj-a"),
+                    "2026-04-23T12:00:00.000Z",
+                    "m-4",
+                    "claude-sonnet-4-6",
+                ),
+            ])
+            .expect("append turns");
+        (dir, handle)
+    }
+
+    #[test]
+    fn sessions_list_orders_most_recent_first_with_aggregates() {
+        let (_dir, handle) = multi_session_handle();
+        let result = handle
+            .sessions_list(SessionsListOptions::default())
+            .expect("sessions_list");
+        assert_eq!(result.limit, SESSIONS_LIST_DEFAULT_LIMIT);
+        assert!(!result.truncated);
+        let ids: Vec<&str> = result
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["sess-new", "sess-mid", "sess-old"]);
+
+        let old = result
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "sess-old")
+            .unwrap();
+        assert_eq!(old.turn_count, 2);
+        assert_eq!(old.started_at, "2026-04-20T10:00:00.000Z");
+        assert_eq!(old.last_seen, "2026-04-20T10:05:00.000Z");
+        assert_eq!(old.project.as_deref(), Some("/tmp/proj-a"));
+        assert_eq!(old.models, vec!["claude-sonnet-4-6"]);
+        assert!(old.total_cost_usd > 0.0);
+    }
+
+    #[test]
+    fn sessions_list_project_filter_narrows_to_match() {
+        let (_dir, handle) = multi_session_handle();
+        let result = handle
+            .sessions_list(SessionsListOptions {
+                project: Some("/tmp/proj-b".into()),
+                ..SessionsListOptions::default()
+            })
+            .expect("sessions_list");
+        let ids: Vec<&str> = result
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["sess-mid"]);
+    }
+
+    #[test]
+    fn sessions_list_grep_matches_session_id_or_project_case_insensitive() {
+        let (_dir, handle) = multi_session_handle();
+
+        // session_id substring
+        let by_id = handle
+            .sessions_list(SessionsListOptions {
+                grep: Some("OLD".into()),
+                ..SessionsListOptions::default()
+            })
+            .expect("sessions_list");
+        let ids: Vec<&str> = by_id
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["sess-old"]);
+
+        // project substring (matches sess-old + sess-new, both /tmp/proj-a)
+        let by_project = handle
+            .sessions_list(SessionsListOptions {
+                grep: Some("proj-a".into()),
+                ..SessionsListOptions::default()
+            })
+            .expect("sessions_list");
+        let ids: Vec<&str> = by_project
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["sess-new", "sess-old"]);
+    }
+
+    #[test]
+    fn sessions_list_limit_truncates_and_reports_truncation() {
+        let (_dir, handle) = multi_session_handle();
+        let result = handle
+            .sessions_list(SessionsListOptions {
+                limit: Some(2),
+                ..SessionsListOptions::default()
+            })
+            .expect("sessions_list");
+        assert_eq!(result.limit, 2);
+        assert!(result.truncated);
+        let ids: Vec<&str> = result
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["sess-new", "sess-mid"]);
+    }
+
+    #[test]
+    fn sessions_list_since_drops_sessions_outside_window() {
+        let (_dir, handle) = multi_session_handle();
+        let result = handle
+            .sessions_list(SessionsListOptions {
+                since: Some("2026-04-22T00:00:00.000Z".into()),
+                ..SessionsListOptions::default()
+            })
+            .expect("sessions_list");
+        let ids: Vec<&str> = result
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["sess-new", "sess-mid"]);
     }
 }

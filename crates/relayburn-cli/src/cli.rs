@@ -104,6 +104,9 @@ pub enum Command {
     /// Inspect or rebuild derived state under `~/.agentworkforce/burn`.
     State(StateArgs),
 
+    /// Enumerate sessions in the ledger.
+    Sessions(SessionsArgs),
+
     /// Scan harness session stores and append new turns to the ledger.
     Ingest(IngestArgs),
 
@@ -443,4 +446,56 @@ pub struct StateResetArgs {
     /// `--reingest` on its own so a typo can't silently no-op.
     #[arg(long, requires = "force")]
     pub reingest: bool,
+}
+
+// ---------------------------------------------------------------------------
+// `burn sessions` — typed args + nested subcommand
+// ---------------------------------------------------------------------------
+
+/// `burn sessions [...]` — session enumeration verbs.
+///
+/// Today the only nested verb is `list`, which prints recent sessions
+/// most-recent first so callers can find a session id to feed into
+/// `burn summary --session <id>` / `burn hotspots --session <id>`.
+/// The args struct exists so future verbs (`show`, `tag`, …) can land
+/// without churning the dispatcher.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct SessionsArgs {
+    #[command(subcommand)]
+    pub command: SessionsSubcommand,
+}
+
+/// Nested subcommand for `burn sessions`. Required (no positional default)
+/// — the subcommand surface is small enough that `burn sessions` on its
+/// own is more confusing than `burn sessions list` would be helpful.
+#[derive(Debug, Clone, Subcommand)]
+pub enum SessionsSubcommand {
+    /// Print a table of recent sessions (most-recent first).
+    List(SessionsListArgs),
+}
+
+/// `burn sessions list` — flags. `--json`, `--ledger-path`, `--no-color`
+/// are inherited via [`Args`].
+#[derive(Debug, Clone, ClapArgs)]
+pub struct SessionsListArgs {
+    /// Slice the ledger to events at or after `<since>`. Accepts either an
+    /// ISO timestamp or a relative range (`24h`, `7d`, `4w`, `2m`).
+    /// Defaults to `7d` so the table is bounded for a typical "what did
+    /// I run recently" lookup; pass an explicit value (e.g. `--since 30d`)
+    /// to widen the window.
+    #[arg(long, value_name = "WHEN")]
+    pub since: Option<String>,
+
+    /// Restrict to a single project (matches `project` or `projectKey`).
+    #[arg(long, value_name = "PROJECT")]
+    pub project: Option<String>,
+
+    /// Case-insensitive substring filter. Matched against `session_id` and
+    /// the resolved project label.
+    #[arg(long, value_name = "PATTERN")]
+    pub grep: Option<String>,
+
+    /// Row cap. Defaults to 20.
+    #[arg(long, value_name = "N")]
+    pub limit: Option<u64>,
 }

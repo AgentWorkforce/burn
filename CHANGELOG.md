@@ -4,6 +4,19 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `relayburn-cli`: new `burn sessions list` subcommand that enumerates
+  recent sessions (most-recent first) so callers can find a session id
+  without dropping into raw SQLite. Flags: `--since` (defaults to `7d`),
+  `--project`, `--grep` (case-insensitive substring against session id +
+  project), `--limit` (defaults to 20), and the global `--json`. Pipes
+  cleanly into `burn summary --session <id>` for drill-down.
+- `relayburn-sdk`: new `sessions_list` query verb (`LedgerHandle::sessions_list`
+  + free-function form) returning `SessionsListResult { sessions, limit,
+  truncated }`. Derived from the `turns` table so older ledgers with an
+  empty `sessions` table still enumerate correctly.
+
 ## [2.5.1] - 2026-05-08
 
 ### Changed

@@ -29,6 +29,7 @@ const SUBCOMMANDS: &[&str] = &[
     "overhead",
     "compare",
     "state",
+    "sessions",
     "ingest",
     "mcp-server",
 ];
@@ -223,13 +224,7 @@ fn hotspots_unknown_pattern_value_is_rejected() {
 #[test]
 fn hotspots_group_by_and_patterns_are_mutually_exclusive() {
     burn()
-        .args([
-            "hotspots",
-            "--group-by",
-            "file",
-            "--patterns",
-            "retry-loop",
-        ])
+        .args(["hotspots", "--group-by", "file", "--patterns", "retry-loop"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("mutually exclusive"));
@@ -303,4 +298,63 @@ fn state_reset_reingest_requires_force() {
         .args(["state", "reset", "--reingest"])
         .assert()
         .failure();
+}
+
+/// `burn sessions` is a parent verb that requires a nested subcommand;
+/// invoking it bare should fail (clap's required-subcommand check) so a
+/// future PR adding a sibling verb can't accidentally regress to a
+/// silent no-op default.
+#[test]
+fn sessions_without_subcommand_fails() {
+    burn().arg("sessions").assert().failure();
+}
+
+/// `burn sessions list` against an empty isolated ledger should open
+/// cleanly, scan zero turns, and report "no sessions found" with exit 0.
+/// Pins the empty-ledger path so a future regression in the SDK verb
+/// can't silently start erroring on a fresh install.
+#[test]
+fn sessions_list_against_empty_ledger_reports_no_sessions() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["sessions", "list"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no sessions found"));
+}
+
+/// `burn sessions list --json` against an empty isolated ledger should
+/// emit a valid JSON envelope with an empty `sessions` array and the
+/// resolved filters echoed back. Asserting on `--json` separately from
+/// the human form keeps the structured contract under test even if the
+/// human format gets stylistically tweaked later.
+#[test]
+fn sessions_list_json_envelope_shape() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    let output = burn()
+        .args(["--json", "sessions", "list", "--limit", "5"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json output is valid JSON");
+    assert_eq!(value["limit"], serde_json::Value::from(5));
+    assert_eq!(value["truncated"], serde_json::Value::Bool(false));
+    assert_eq!(
+        value["sessions"],
+        serde_json::Value::Array(Vec::new()),
+        "expected empty sessions array against fresh ledger"
+    );
+    assert_eq!(value["filters"]["since"], serde_json::Value::from("7d"));
 }
