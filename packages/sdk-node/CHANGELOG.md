@@ -16,6 +16,11 @@
 - Replaced the TypeScript 1.x deep-conformance test with native 2.x smoke
   coverage against the committed fixture ledger.
 
+### Fixed
+
+- `search()` now accepts a numeric `limit` in the Node facade and normalizes it
+  before calling the napi-rs binding.
+
 ## [2.1.0] - 2026-05-07
 
 ### Added

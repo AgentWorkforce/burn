@@ -39,6 +39,16 @@ function coerceBigInts(value) {
   return value;
 }
 
+function normalizeSearchOptions(opts) {
+  if (!opts || typeof opts !== 'object' || typeof opts.limit !== 'number') {
+    return opts;
+  }
+  if (!Number.isSafeInteger(opts.limit) || opts.limit < 0) {
+    throw new RangeError('search limit must be a non-negative safe integer');
+  }
+  return { ...opts, limit: BigInt(opts.limit) };
+}
+
 class Ledger {
   constructor(home) {
     this.home = home;
@@ -83,7 +93,7 @@ module.exports = {
   hotspots: async (opts) => coerceBigInts(await binding.hotspots(opts)),
   compare: async (opts) => coerceBigInts(await binding.compare(opts)),
   computeCompareExcluded,
-  search: async (opts) => coerceBigInts(await binding.search(opts)),
+  search: async (opts) => coerceBigInts(await binding.search(normalizeSearchOptions(opts))),
   exportLedger: async (opts) => coerceBigInts(await binding.exportLedger(opts)),
   exportStamps: async (opts) => coerceBigInts(await binding.exportStamps(opts)),
   BurnErrorCode: binding.BurnErrorCode,

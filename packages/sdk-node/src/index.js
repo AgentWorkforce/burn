@@ -58,6 +58,16 @@ function coerceBigInts(value) {
   return value;
 }
 
+function normalizeSearchOptions(opts) {
+  if (!opts || typeof opts !== 'object' || typeof opts.limit !== 'number') {
+    return opts;
+  }
+  if (!Number.isSafeInteger(opts.limit) || opts.limit < 0) {
+    throw new RangeError('search limit must be a non-negative safe integer');
+  }
+  return { ...opts, limit: BigInt(opts.limit) };
+}
+
 /**
  * Stateful ledger handle. The 1.x SDK only exposed the static `open(opts)`
  * constructor; instance methods are reserved for a future PR. Keep that shape
@@ -138,7 +148,7 @@ export function computeCompareExcluded(summary, minimum) {
 // the 1.x SDK surface. These let embedders reach the FTS5 search index and
 // JSONL export iterators without dropping into the binding directly.
 export async function search(opts) {
-  return coerceBigInts(await binding.search(opts));
+  return coerceBigInts(await binding.search(normalizeSearchOptions(opts)));
 }
 
 export async function exportLedger(opts) {
