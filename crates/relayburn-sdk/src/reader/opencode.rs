@@ -88,15 +88,20 @@ pub fn parse_opencode_session(
         tokenizer: options.tokenizer,
         seen_message_ids: None,
     };
-    let r = parse_opencode_session_incremental(session_file_path, &inc_opts)?;
-    Ok(ParseOpencodeResult {
-        turns: r.turns,
-        content: r.content,
-        events: r.events,
-        user_turns: r.user_turns,
-        relationships: r.relationships,
-        tool_result_events: r.tool_result_events,
-    })
+    parse_opencode_session_incremental(session_file_path, &inc_opts).map(ParseOpencodeResult::from)
+}
+
+impl From<ParseOpencodeIncrementalResult> for ParseOpencodeResult {
+    fn from(r: ParseOpencodeIncrementalResult) -> Self {
+        Self {
+            turns: r.turns,
+            content: r.content,
+            events: r.events,
+            user_turns: r.user_turns,
+            relationships: r.relationships,
+            tool_result_events: r.tool_result_events,
+        }
+    }
 }
 
 pub fn parse_opencode_session_incremental(

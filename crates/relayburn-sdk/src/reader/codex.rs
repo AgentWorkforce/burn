@@ -152,15 +152,20 @@ pub fn parse_codex_session(
         start_offset: Some(0),
         resume: None,
     };
-    let r = parse_codex_session_incremental(file_path, &inc_opts)?;
-    Ok(ParseCodexResult {
-        turns: r.turns,
-        content: r.content,
-        events: r.events,
-        user_turns: r.user_turns,
-        relationships: r.relationships,
-        tool_result_events: r.tool_result_events,
-    })
+    parse_codex_session_incremental(file_path, &inc_opts).map(ParseCodexResult::from)
+}
+
+impl From<ParseCodexIncrementalResult> for ParseCodexResult {
+    fn from(r: ParseCodexIncrementalResult) -> Self {
+        Self {
+            turns: r.turns,
+            content: r.content,
+            events: r.events,
+            user_turns: r.user_turns,
+            relationships: r.relationships,
+            tool_result_events: r.tool_result_events,
+        }
+    }
 }
 
 pub fn parse_codex_session_incremental(
@@ -389,7 +394,7 @@ fn parse_codex_buffer(
 
     let mut p: usize = 0;
     while p < buf.len() {
-        let nl_idx = match memchr_newline(&buf[p..]) {
+        let nl_idx = match find_newline(&buf[p..]) {
             Some(idx) => p + idx,
             None => break,
         };
@@ -1092,10 +1097,6 @@ fn parse_codex_buffer(
         }
     }
 
-    // Suppress unused warnings: these are kept for parity with the TS state
-    // machine even when their values aren't read after the loop.
-    let _ = (next_event_index, tool_result_counters);
-
     // Emit only committed turns.
     let committed = &finalized[..committed_finalized_count];
     let mut turns: Vec<TurnRecord> = Vec::with_capacity(committed.len());
@@ -1184,18 +1185,6 @@ fn parse_codex_buffer(
         }
     }
 
-    // Silence unused-mutable warnings for snapshot mirrors that are written
-    // but only read indirectly.
-    let _ = (
-        cumulative,
-        session_id,
-        session_cwd,
-        turn_contexts,
-        seen_session_meta_keys,
-        root_session_emitted,
-        last_completed_turn,
-    );
-
     ParseCodexIncrementalResult {
         turns,
         content: content_out,
@@ -1228,7 +1217,7 @@ fn resolve_token_counter(
     }
 }
 
-fn memchr_newline(buf: &[u8]) -> Option<usize> {
+fn find_newline(buf: &[u8]) -> Option<usize> {
     buf.iter().position(|&b| b == b'\n')
 }
 
