@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-05-08
+
 ### Added
 
 - `hotspots()` options now accept `workflow` (folded `workflowId` enrichment

@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-05-08
+
 ### Added
 
 - `relayburn-cli`: `burn hotspots` accepts `--session <id>`, `--workflow <id>`,
