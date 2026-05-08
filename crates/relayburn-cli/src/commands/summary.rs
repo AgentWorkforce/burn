@@ -12,8 +12,7 @@
 //! 2. Run [`relayburn_sdk::ingest_all`] against the same handle. The TS CLI
 //!    does this unconditionally so the summary block in human mode always
 //!    leads with `ingested N new sessions (+M turns)`. Output is captured
-//!    by reference (no progress spinner — that's a TTY-only concern that
-//!    breaks golden output).
+//!    by reference while TTY runs get a stderr spinner.
 //! 3. Lower CLI flags into [`relayburn_sdk::SummaryReportOptions`] and call
 //!    the SDK-owned `summary_report` verb.
 //! 4. Render the typed report as JSON or human output.
@@ -34,6 +33,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::GlobalArgs;
 use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
+use crate::render::progress::TaskProgress;
 
 /// Per-command flags for `burn summary`. Mirrors the TS surface in
 /// `packages/cli/src/commands/summary.ts` so a TS user can carry their
@@ -207,14 +207,16 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
     };
 
     let _archive_guard = ArchiveOverride::activate(args.no_archive);
+    let progress = TaskProgress::new(globals, "summary");
 
     let opts = match globals.ledger_path.as_deref() {
         Some(h) => LedgerOpenOptions::with_home(h),
         None => LedgerOpenOptions::default(),
     };
+    progress.set_task("opening ledger");
     let mut handle = Ledger::open(opts)?;
 
-    let ingest_report = run_ingest(&mut handle)?;
+    let ingest_report = run_ingest(&mut handle, &progress, globals.ledger_path.clone())?;
 
     let mode = if let Some(session_id) = subagent_tree_session_id {
         SummaryReportMode::SubagentTree { session_id }
@@ -232,6 +234,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         }
     };
 
+    progress.set_task("building summary");
     let report = handle.summary_report(SummaryReportOptions {
         session: args.session,
         project: args.project,
@@ -249,6 +252,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         include_quality: args.quality,
         ledger_home: None,
     })?;
+    progress.finish_and_clear();
 
     match report {
         SummaryReport::Grouped(report) => {
@@ -310,11 +314,16 @@ fn parse_tag_filters(tags: &[String]) -> anyhow::Result<BTreeMap<String, String>
 
 /// Run an ingest sweep on the open handle. Builds a current-thread tokio
 /// runtime so the otherwise-sync presenter can drive the async verb.
-fn run_ingest(handle: &mut LedgerHandle) -> anyhow::Result<relayburn_sdk::IngestReport> {
+fn run_ingest(
+    handle: &mut LedgerHandle,
+    progress: &TaskProgress,
+    ledger_home: Option<std::path::PathBuf>,
+) -> anyhow::Result<relayburn_sdk::IngestReport> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let opts = relayburn_sdk::RawIngestOptions::default();
+    progress.set_task("refreshing ledger");
+    let opts = progress.ingest_options(ledger_home);
     rt.block_on(ingest_all(handle.raw_mut(), &opts))
 }
 

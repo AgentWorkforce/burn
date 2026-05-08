@@ -21,6 +21,7 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{ContentArrangement, Table};
 
 use crate::cli::GlobalArgs;
+use crate::render::ux;
 
 /// Render a table to a `String`. Caller decides whether to write it to
 /// stdout, embed it in a larger envelope, or capture it in a test.
@@ -36,7 +37,7 @@ pub fn render_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic);
 
-    if globals.no_color {
+    if !ux::colors_enabled(globals) {
         // `comfy-table`'s built-in no-tty mode disables cell styling /
         // ANSI emission at the source — much safer than post-hoc
         // stripping (which is a UTF-8 minefield: the box-drawing
@@ -68,11 +69,7 @@ pub fn render_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]
 /// failures via `render::error::report_error`. Mirrors the shape of
 /// [`crate::render::json::render_json`] so all rendering helpers
 /// uniformly bubble I/O errors up to the dispatcher.
-pub fn print_table(
-    globals: &GlobalArgs,
-    headers: &[&str],
-    rows: &[Vec<String>],
-) -> io::Result<()> {
+pub fn print_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>]) -> io::Result<()> {
     let rendered = render_table(globals, headers, rows);
     let stdout = io::stdout();
     let mut handle = stdout.lock();
@@ -196,11 +193,7 @@ mod tests {
         // verbatim. If callers need to hand off pre-styled content, the
         // sanitization belongs upstream (in the cell builder) where the
         // input type is known.
-        let rendered = render_table(
-            &no_color_globals(),
-            &["k"],
-            &[vec!["plain".into()]],
-        );
+        let rendered = render_table(&no_color_globals(), &["k"], &[vec!["plain".into()]]);
         assert!(!rendered.contains('\u{1b}'));
     }
 }

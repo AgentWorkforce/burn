@@ -16,10 +16,13 @@ use relayburn_sdk::{
 
 use crate::cli::{GlobalArgs, OverheadAction, OverheadArgs};
 use crate::render::error::report_error;
+use crate::render::progress::TaskProgress;
 
 pub fn run(globals: &GlobalArgs, args: OverheadArgs) -> i32 {
     match args.action {
-        Some(OverheadAction::Trim(trim)) => run_trim(globals, args.project, args.since, args.kind, trim.top),
+        Some(OverheadAction::Trim(trim)) => {
+            run_trim(globals, args.project, args.since, args.kind, trim.top)
+        }
         None => run_report(globals, args.project, args.since, args.kind),
     }
 }
@@ -37,10 +40,16 @@ fn run_report(
         kind: kind.map(Into::into),
         ledger_home: globals.ledger_path.clone(),
     };
+    let progress = TaskProgress::new(globals, "overhead");
+    progress.set_task("analyzing overhead files");
     let result = match sdk_overhead(opts) {
         Ok(r) => r,
-        Err(err) => return report_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_error(&err, globals);
+        }
     };
+    progress.finish_and_clear();
 
     if result.files.is_empty() {
         let msg = match kind {
@@ -87,10 +96,16 @@ fn run_trim(
         top,
         include_diff: None,
     };
+    let progress = TaskProgress::new(globals, "overhead");
+    progress.set_task("finding trim candidates");
     let result = match sdk_overhead_trim(opts) {
         Ok(r) => r,
-        Err(err) => return report_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_error(&err, globals);
+        }
     };
+    progress.finish_and_clear();
 
     if result.summary.files_analyzed == 0 {
         let msg = match kind {
@@ -278,7 +293,11 @@ fn push_file_block(
         "  Cost over {since_label}: {} across {} session{}",
         format_usd(attribution.total_cost),
         format_int(attribution.session_count),
-        if attribution.session_count == 1 { "" } else { "s" },
+        if attribution.session_count == 1 {
+            ""
+        } else {
+            "s"
+        },
     ));
     lines.push("  Sections ranked by cost:".to_string());
     if attribution.section_costs.is_empty() {
@@ -379,13 +398,17 @@ fn render_human_trim(result: &OverheadTrimResult) -> io::Result<()> {
     let mut handle = stdout.lock();
 
     if result.recommendations.is_empty() {
-        return handle.write_all("# no trim candidates — overhead files have no headed sections\n".as_bytes());
+        return handle.write_all(
+            "# no trim candidates — overhead files have no headed sections\n".as_bytes(),
+        );
     }
 
     // Group by `file` while preserving insertion order.
     let mut order: Vec<String> = Vec::new();
-    let mut groups: std::collections::HashMap<String, Vec<&relayburn_sdk::OverheadTrimRecommendation>> =
-        std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<
+        String,
+        Vec<&relayburn_sdk::OverheadTrimRecommendation>,
+    > = std::collections::HashMap::new();
     for rec in &result.recommendations {
         groups
             .entry(rec.file.clone())
@@ -566,6 +589,9 @@ mod tests {
         let inner = serde_json::Number::from_f64(7.0).expect("finite");
         let mut v = serde_json::json!({ "outer": [serde_json::Value::Number(inner)] });
         coerce_integer_floats(&mut v);
-        assert_eq!(serde_json::to_string(&v).expect("serialize"), r#"{"outer":[7]}"#);
+        assert_eq!(
+            serde_json::to_string(&v).expect("serialize"),
+            r#"{"outer":[7]}"#
+        );
     }
 }

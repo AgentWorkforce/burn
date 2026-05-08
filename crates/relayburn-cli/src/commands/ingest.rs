@@ -38,11 +38,12 @@ use std::time::Duration;
 
 use relayburn_sdk::{
     ingest_all, start_watch_loop, IngestReport, Ledger, LedgerHandle, LedgerOpenOptions,
-    RawIngestOptions, StartWatchLoopOptions,
+    StartWatchLoopOptions,
 };
 
 use crate::cli::{GlobalArgs, IngestArgs};
 use crate::render::error::report_error;
+use crate::render::progress::TaskProgress;
 
 /// Exit codes mirror the TS CLI:
 /// - `0` happy path (including hook-mode empty-payload no-op).
@@ -82,19 +83,31 @@ pub fn run(globals: &GlobalArgs, args: IngestArgs) -> i32 {
 fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
     let _ = quiet; // `--quiet` is hook-only (clap `requires = "hook"`); kept in
                    // the dispatch signature for symmetry with run_watch / run_hook.
+    let progress = TaskProgress::new(globals, "ingest");
+    progress.set_task("opening ledger");
     let mut handle = match open_handle(globals) {
         Ok(h) => h,
-        Err(err) => return report_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_error(&err, globals);
+        }
     };
+    progress.set_task("starting runtime");
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
-        Err(err) => return report_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_error(&err, globals);
+        }
     };
-    let opts = RawIngestOptions::default();
-    match rt.block_on(ingest_all(handle.raw_mut(), &opts)) {
+    progress.set_task("scanning sessions");
+    let opts = progress.ingest_options(globals.ledger_path.clone());
+    let result = rt.block_on(ingest_all(handle.raw_mut(), &opts));
+    progress.finish_and_clear();
+    match result {
         Ok(report) => {
             log_report_oneshot(&report);
             0
@@ -122,49 +135,82 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         None => 1000,
     };
 
+    let progress = TaskProgress::new(globals, "ingest");
+    progress.set_task("opening ledger");
     let handle = match open_handle(globals) {
         Ok(h) => h,
-        Err(err) => return report_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_error(&err, globals);
+        }
     };
 
+    progress.set_task("starting watcher");
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
-        Err(err) => return report_error(&err, globals),
+        Err(err) => {
+            progress.finish_and_clear();
+            return report_error(&err, globals);
+        }
     };
 
     let quiet = args.quiet;
+    let watch_message = format!("watching every {interval_ms}ms; Ctrl-C to stop");
     if !quiet {
-        eprintln!(
-            "[burn] ingest: foreground ingest every {interval_ms}ms; Ctrl-C to stop",
-        );
+        if progress.is_visible() {
+            progress.set_task(watch_message.clone());
+        } else {
+            eprintln!("[burn] ingest: foreground ingest every {interval_ms}ms; Ctrl-C to stop",);
+        }
     }
 
+    let ledger_home = globals.ledger_path.clone();
+    let progress_for_loop = progress.clone();
     rt.block_on(async move {
         let handle_arc: Arc<tokio::sync::Mutex<LedgerHandle>> =
             Arc::new(tokio::sync::Mutex::new(handle));
         let handle_for_ingest = handle_arc.clone();
+        let progress_for_ingest = progress_for_loop.clone();
+        let watch_message_for_ingest = watch_message.clone();
         let ingest_fn: relayburn_sdk::IngestFn = Arc::new(move || {
             let h = handle_for_ingest.clone();
+            let progress = progress_for_ingest.clone();
+            let ledger_home = ledger_home.clone();
+            let watch_message = watch_message_for_ingest.clone();
             Box::pin(async move {
+                progress.set_task("scanning sessions");
                 let mut guard = h.lock().await;
-                ingest_all(guard.raw_mut(), &RawIngestOptions::default()).await
+                let opts = if quiet {
+                    TaskProgress::quiet_ingest_options(ledger_home)
+                } else {
+                    progress.ingest_options(ledger_home)
+                };
+                let result = ingest_all(guard.raw_mut(), &opts).await;
+                progress.set_task(watch_message);
+                result
             })
         });
 
+        let progress_for_report = progress_for_loop.clone();
         let on_report: relayburn_sdk::ReportSink = Arc::new(move |report: &IngestReport| {
             // Match TS: only log a summary when the tick actually
             // appended turns. Empty ticks would otherwise drown the
             // user with zero-progress lines.
             if !quiet && report.appended_turns > 0 {
-                eprint!("{}", render_ingest_line(report));
+                progress_for_report.suspend(|| {
+                    eprint!("{}", render_ingest_line(report));
+                });
             }
         });
 
-        let on_error: relayburn_sdk::ErrorSink = Arc::new(|err: &anyhow::Error| {
-            eprintln!("[burn] ingest: {err}");
+        let progress_for_error = progress_for_loop.clone();
+        let on_error: relayburn_sdk::ErrorSink = Arc::new(move |err: &anyhow::Error| {
+            progress_for_error.suspend(|| {
+                eprintln!("[burn] ingest: {err}");
+            });
         });
 
         let opts = StartWatchLoopOptions::new(ingest_fn)
@@ -177,6 +223,7 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         wait_for_stop_signal().await;
         controller.stop().await;
     });
+    progress.finish_and_clear();
 
     0
 }
@@ -236,26 +283,49 @@ fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
     // hook fires for. Matches the TS hook's "ingest the matching
     // session" intent — the Claude transcript that just changed will
     // be picked up by `ingest_claude_into` on the same sweep.
+    let progress = (!quiet).then(|| TaskProgress::new(globals, "ingest"));
+    if let Some(progress) = &progress {
+        progress.set_task("opening ledger");
+    }
     let mut handle = match open_handle(globals) {
         Ok(h) => h,
         Err(err) => {
             // Hook policy: never fail the parent.
+            if let Some(progress) = &progress {
+                progress.finish_and_clear();
+            }
             eprintln!("[burn] ingest: {err}");
             return 0;
         }
     };
+    if let Some(progress) = &progress {
+        progress.set_task("starting runtime");
+    }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(err) => {
+            if let Some(progress) = &progress {
+                progress.finish_and_clear();
+            }
             eprintln!("[burn] ingest: {err}");
             return 0;
         }
     };
-    let opts = RawIngestOptions::default();
-    match rt.block_on(ingest_all(handle.raw_mut(), &opts)) {
+    if let Some(progress) = &progress {
+        progress.set_task("scanning sessions");
+    }
+    let opts = match &progress {
+        Some(progress) => progress.ingest_options(globals.ledger_path.clone()),
+        None => TaskProgress::quiet_ingest_options(globals.ledger_path.clone()),
+    };
+    let result = rt.block_on(ingest_all(handle.raw_mut(), &opts));
+    if let Some(progress) = &progress {
+        progress.finish_and_clear();
+    }
+    match result {
         Ok(report) => {
             // In hook mode we keep stderr quiet by default; only log
             // when work was actually done so a per-tool-call hook

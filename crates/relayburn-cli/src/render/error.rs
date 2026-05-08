@@ -30,6 +30,7 @@ use std::io::{self, Write};
 use serde_json::json;
 
 use crate::cli::GlobalArgs;
+use crate::render::ux::{self, MessageKind};
 use relayburn_sdk::LedgerError;
 
 /// Exit code for a typed `LedgerError`. Distinct from generic-error
@@ -78,7 +79,7 @@ pub fn report_unimplemented(name: &str, globals: &GlobalArgs) -> i32 {
 /// stderr line is prefixed `burn: warning: ` so callers can grep for
 /// it.
 pub fn report_advisory(message: &str, _globals: &GlobalArgs) {
-    let _ = writeln!(io::stderr(), "burn: warning: {message}");
+    ux::print_warning(message, _globals);
 }
 
 /// Internal: do the actual stderr / JSON-envelope writing. Tolerates
@@ -89,7 +90,7 @@ fn report(globals: &GlobalArgs, message: &str, code: i32) -> i32 {
         let envelope = json!({ "error": message });
         let _ = write_json_envelope(&envelope);
     } else {
-        let _ = writeln!(io::stderr(), "burn: {message}");
+        ux::print_message(MessageKind::Error, message, globals);
     }
     code
 }
@@ -97,8 +98,7 @@ fn report(globals: &GlobalArgs, message: &str, code: i32) -> i32 {
 fn write_json_envelope(value: &serde_json::Value) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    serde_json::to_writer(&mut handle, value)
-        .map_err(io::Error::other)?;
+    serde_json::to_writer(&mut handle, value).map_err(io::Error::other)?;
     handle.write_all(b"\n")?;
     handle.flush()
 }
