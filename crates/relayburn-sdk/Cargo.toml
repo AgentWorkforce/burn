@@ -33,6 +33,10 @@ sha2 = "0.10"
 hex = "0.4"
 regex = "1"
 phf = { version = "0.11", features = ["macros"] }
+# reader: SIMD-accelerated newline split for the JSONL hot loops in
+# `reader/{claude,codex}.rs`. `regex` already pulls memchr in
+# transitively; we depend on it directly so we own the version.
+memchr = { workspace = true }
 
 # ledger: SQLite events + content store
 rusqlite = { workspace = true }

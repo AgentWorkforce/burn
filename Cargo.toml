@@ -17,3 +17,4 @@ anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+memchr = "2"
