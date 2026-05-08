@@ -79,6 +79,7 @@ interface CapturedOutput {
 
 async function captureSummary(
   flags: Record<string, string | true> = {},
+  tags: Record<string, string> = {},
 ): Promise<CapturedOutput> {
   const origStdout = process.stdout.write.bind(process.stdout);
   const origStderr = process.stderr.write.bind(process.stderr);
@@ -94,7 +95,7 @@ async function captureSummary(
   }) as typeof process.stderr.write;
   let code: number;
   try {
-    code = await runSummary({ flags, tags: {}, positional: [], passthrough: [] });
+    code = await runSummary({ flags, tags, positional: [], passthrough: [] });
   } finally {
     process.stdout.write = origStdout;
     process.stderr.write = origStderr;
@@ -1348,5 +1349,90 @@ describe('burn summary replacement-tool savings (#219)', () => {
     assert.equal(search!.savings!.collapsedCalls, 4);
     assert.equal(bash!.savings, undefined);
     assert.ok(parsed.replacementSavings!.estimatedTokensSaved > 0);
+  });
+
+  it('--tag k=v filters turns by stamped enrichment value', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 'tag-A', messageId: 'tag-a-1' }),
+      fakeTurn({
+        sessionId: 'tag-B',
+        messageId: 'tag-b-1',
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+    ]);
+    await stamp({ sessionId: 'tag-A' }, { team: 'platform' });
+    await stamp({ sessionId: 'tag-B' }, { team: 'data' });
+
+    const out = await captureSummary({ json: true }, { team: 'platform' });
+    assert.equal(out.code, 0);
+    const payload = JSON.parse(out.stdout) as {
+      turns: number;
+      byModel: Array<{ model: string; turns: number }>;
+    };
+    assert.equal(payload.turns, 1);
+    assert.equal(payload.byModel.reduce((s, r) => s + r.turns, 0), 1);
+  });
+
+  it('--by-tag groups turns by enrichment value and surfaces (unset)', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 'bg-A', messageId: 'bg-a-1' }),
+      fakeTurn({
+        sessionId: 'bg-A',
+        messageId: 'bg-a-2',
+        turnIndex: 1,
+        ts: '2026-04-20T00:01:00.000Z',
+      }),
+      fakeTurn({
+        sessionId: 'bg-B',
+        messageId: 'bg-b-1',
+        ts: '2026-04-20T00:02:00.000Z',
+      }),
+      fakeTurn({
+        sessionId: 'bg-C',
+        messageId: 'bg-c-1',
+        ts: '2026-04-20T00:03:00.000Z',
+      }),
+    ]);
+    await stamp({ sessionId: 'bg-A' }, { workflow: 'refactor' });
+    await stamp({ sessionId: 'bg-B' }, { workflow: 'review' });
+    // bg-C left unstamped → bucket as `(unset)`.
+
+    const out = await captureSummary({ 'by-tag': 'workflow', json: true });
+    assert.equal(out.code, 0);
+    const payload = JSON.parse(out.stdout) as {
+      turns: number;
+      byTag: { key: string; rows: Array<{ value: string; turns: number }> };
+      fidelity: { perCell: { groupBy: string } };
+    };
+    assert.equal(payload.turns, 4);
+    assert.equal(payload.byTag.key, 'workflow');
+    assert.equal(payload.fidelity.perCell.groupBy, 'tag');
+    const byValue = new Map(payload.byTag.rows.map((r) => [r.value, r.turns]));
+    assert.equal(byValue.get('refactor'), 2);
+    assert.equal(byValue.get('review'), 1);
+    assert.equal(byValue.get('(unset)'), 1);
+  });
+
+  it('--by-tag without a key exits non-zero', async () => {
+    const out = await captureSummary({ 'by-tag': true });
+    assert.equal(out.code, 2);
+    assert.match(out.stderr, /--by-tag requires a tag key/);
+  });
+
+  it('--by-tag combined with --by-tool exits non-zero', async () => {
+    const out = await captureSummary({ 'by-tag': 'workflow', 'by-tool': true });
+    assert.equal(out.code, 2);
+    assert.match(out.stderr, /--by-tag cannot be combined with/);
+  });
+
+  it('--by-tag text mode emits a tag:<key> column header', async () => {
+    await appendTurns([
+      fakeTurn({ sessionId: 'btt-A', messageId: 'btt-a-1' }),
+    ]);
+    await stamp({ sessionId: 'btt-A' }, { team: 'platform' });
+    const out = await captureSummary({ 'by-tag': 'team' });
+    assert.equal(out.code, 0);
+    assert.match(out.stdout, /tag:team/);
+    assert.match(out.stdout, /platform/);
   });
 });

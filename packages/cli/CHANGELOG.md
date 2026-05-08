@@ -4,6 +4,10 @@ All notable changes to `@relayburn/cli`.
 
 ## [Unreleased]
 
+### Added
+
+- `burn summary` now accepts `--tag k=v` to filter turns by stamped enrichment values (multiple `--tag` flags AND together) and `--by-tag <key>` to group rows by an enrichment value (turns missing the key bucket as `(unset)`). JSON output emits `byTag: { key, rows: [{ value, turns, usage, cost }] }` and the per-cell fidelity block uses `groupBy: 'tag'`.
+
 ## [1.10.0] - 2026-05-03
 
 ### Changed

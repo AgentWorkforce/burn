@@ -18,9 +18,9 @@ function getVersion(): string {
 const HELP = `burn — token usage & cost attribution for agent CLIs
 
 Usage:
-  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--quality]
-                     [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>] [--no-archive]
-                     (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
+  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--tag k=v ...] [--quality]
+                     [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --by-tag <key> | --subagent-tree <session-id>] [--no-archive]
+                     (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost; --by-tag groups by enrichment value)
   burn hotspots      [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--session [id]] [--explain-drift]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
@@ -41,6 +41,8 @@ Examples:
   burn summary --by-subagent-type --since 7d
   burn summary --by-relationship --since 7d
   burn summary --by-tool --since 7d
+  burn summary --tag workflow=refactor --since 7d
+  burn summary --by-tag workflow --since 30d
   burn hotspots --since 7d
   burn hotspots --patterns --since 7d
   burn hotspots --session --explain-drift

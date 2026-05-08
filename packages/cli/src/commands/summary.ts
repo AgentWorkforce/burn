@@ -52,7 +52,11 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   if (typeof args.flags['since'] === 'string') q.since = parseSinceArg(args.flags['since']);
   if (typeof args.flags['project'] === 'string') q.project = args.flags['project'];
   if (typeof args.flags['session'] === 'string') q.sessionId = args.flags['session'];
-  if (typeof args.flags['workflow'] === 'string') q.enrichment = { workflowId: args.flags['workflow'] };
+  // `--workflow` is a sugar alias over the workflowId tag; --tag k=v entries
+  // ride alongside it. Explicit --workflow wins on conflict.
+  const enrichmentFilter: Record<string, string> = { ...args.tags };
+  if (typeof args.flags['workflow'] === 'string') enrichmentFilter['workflowId'] = args.flags['workflow'];
+  if (Object.keys(enrichmentFilter).length > 0) q.enrichment = enrichmentFilter;
   const agentFilter = typeof args.flags['agent'] === 'string' ? args.flags['agent'] : undefined;
   const providerFilter = parseProviderFilter(args.flags['provider']);
   if (providerFilter instanceof Error) {
@@ -66,6 +70,12 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   const byRelationship = relationshipFlag !== undefined;
   const byProvider = args.flags['by-provider'] === true;
   const byTool = args.flags['by-tool'] === true;
+  const byTagFlag = args.flags['by-tag'];
+  const byTagKey = typeof byTagFlag === 'string' ? byTagFlag : undefined;
+  if (byTagFlag === true) {
+    process.stderr.write('burn: --by-tag requires a tag key (e.g. --by-tag workflow)\n');
+    return 2;
+  }
   if (
     relationshipFlag !== undefined &&
     relationshipFlag !== true &&
@@ -79,6 +89,15 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
   // them silently would surprise the caller (we'd pick one and drop the rest).
   // Subagent flags already implicitly assume one-axis-at-a-time; --by-tool
   // makes that explicit.
+  if (
+    byTagKey !== undefined &&
+    (byTool || byProvider || subagentTypeFlag || byRelationship || subagentTreeFlag !== undefined)
+  ) {
+    process.stderr.write(
+      'burn: --by-tag cannot be combined with --by-tool/--by-provider/--by-subagent-type/--by-relationship/--subagent-tree\n',
+    );
+    return 2;
+  }
   if (
     byTool &&
     (byProvider || subagentTypeFlag || byRelationship || subagentTreeFlag !== undefined)
@@ -155,9 +174,16 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return renderByToolMode(args, ingestReport, turns, pricing);
   }
 
-  const rows = byProvider
-    ? aggregateByProvider(turns, { pricing })
-    : aggregateByModel(turns, pricing);
+  const rows = byTagKey !== undefined
+    ? aggregateByTag(turns, pricing, byTagKey)
+    : byProvider
+      ? aggregateByProvider(turns, { pricing })
+      : aggregateByModel(turns, pricing);
+  const groupAxis: 'provider' | 'model' | 'tag' = byTagKey !== undefined
+    ? 'tag'
+    : byProvider
+      ? 'provider'
+      : 'model';
   const totalCost = sumCosts(rows.map((r) => r.cost));
   const fidelity = summarizeFidelity(turns);
   const replacementSavings = summarizeReplacementSavings(turns);
@@ -167,9 +193,15 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     // companion `fidelity` block is the only honest answer to "are these
     // zeros real?". Programmatic consumers should consult `summary` (the
     // slice-wide rollup, same shape compare/hotspots emit) and
-    // `perCell` (per-(model|provider) per-field known/missing counts) before
-    // trusting any aggregate.
-    const perCell = buildPerCellFidelity(rows, byProvider ? 'provider' : 'model');
+    // `perCell` (per-(model|provider|tag) per-field known/missing counts)
+    // before trusting any aggregate.
+    const perCell = buildPerCellFidelity(rows, groupAxis);
+    const groupedRows = rows.map((r) => ({
+      ...(groupAxis === 'tag' ? { value: r.label } : groupAxis === 'provider' ? { provider: r.label } : { model: r.label }),
+      turns: r.turns,
+      usage: r.usage,
+      cost: r.cost,
+    }));
     const payload = {
       ingest: {
         ingestedSessions: ingestReport.ingestedSessions,
@@ -177,23 +209,11 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
       },
       turns: turns.length,
       totalCost,
-      ...(byProvider
-        ? {
-            byProvider: rows.map((r) => ({
-              provider: r.label,
-              turns: r.turns,
-              usage: r.usage,
-              cost: r.cost,
-            })),
-          }
-        : {
-            byModel: rows.map((r) => ({
-              model: r.label,
-              turns: r.turns,
-              usage: r.usage,
-              cost: r.cost,
-            })),
-          }),
+      ...(groupAxis === 'tag'
+        ? { byTag: { key: byTagKey!, rows: groupedRows } }
+        : groupAxis === 'provider'
+          ? { byProvider: groupedRows }
+          : { byModel: groupedRows }),
       fidelity: { summary: fidelity, perCell },
       ...(replacementSavings.calls > 0
         ? { replacementSavings: replacementSavingsToJson(replacementSavings) }
@@ -218,7 +238,8 @@ export async function runSummary(args: ParsedArgs): Promise<number> {
     return 0;
   }
 
-  const header = [byProvider ? 'provider' : 'model', 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
+  const groupHeader = groupAxis === 'tag' ? `tag:${byTagKey}` : groupAxis;
+  const header = [groupHeader, 'turns', 'input', 'output', 'reasoning', 'cacheRead', 'cacheCreate', 'cost'];
   const dataRows: string[][] = [header];
   let anyPartialCell = false;
   for (const r of rows) {
@@ -1046,7 +1067,7 @@ interface PerCellFidelityEntry {
 }
 
 interface PerCellFidelityBlock {
-  groupBy: 'model' | 'provider';
+  groupBy: 'model' | 'provider' | 'tag';
   cells: PerCellFidelityEntry[];
 }
 
@@ -1057,7 +1078,7 @@ interface PerCellFidelityBlock {
 // payload — callers should treat it the same as "every cell is full".
 function buildPerCellFidelity(
   rows: ReadonlyArray<ModelRow>,
-  groupBy: 'model' | 'provider',
+  groupBy: 'model' | 'provider' | 'tag',
 ): PerCellFidelityBlock {
   const cells: PerCellFidelityEntry[] = rows.map((r) => {
     const cacheCreate = mergeCoverage(r.coverage.cacheCreate);
@@ -1212,6 +1233,16 @@ async function loadTurns(q: Query, args: ParsedArgs): Promise<EnrichedTurn[]> {
 
 function aggregateByModel(turns: EnrichedTurn[], pricing: Parameters<typeof costForTurn>[1]): ModelRow[] {
   return aggregateTurns(turns, pricing, (t) => t.model || 'unknown');
+}
+
+const TAG_UNSET_LABEL = '(unset)';
+
+function aggregateByTag(
+  turns: EnrichedTurn[],
+  pricing: Parameters<typeof costForTurn>[1],
+  key: string,
+): ModelRow[] {
+  return aggregateTurns(turns, pricing, (t) => t.enrichment[key] ?? TAG_UNSET_LABEL);
 }
 
 function aggregateTurns(
