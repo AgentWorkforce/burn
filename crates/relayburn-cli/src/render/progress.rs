@@ -71,7 +71,7 @@ impl TaskProgress {
             if self.inner.pretty_warnings {
                 eprintln!("{}", format_warning(body, self.inner.color));
             } else {
-                eprintln!("⚠ {body}");
+                eprintln!("burn: warning: {body}");
             }
         });
     }
