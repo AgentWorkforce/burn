@@ -372,11 +372,113 @@ impl Ledger {
         self.conns.content.execute_batch("VACUUM")?;
         Ok(())
     }
+
+    // --- state reset --------------------------------------------------
+
+    /// Count what a `reset()` would delete without mutating either DB.
+    /// Powers the dry-run path of `burn state reset` (no `--force`).
+    ///
+    /// SQL errors propagate via `Result`. A swallowed `unwrap_or(0)` here
+    /// would silently report a healthy zero-count dry-run on a corrupt
+    /// ledger and mislead operators into treating reset as a safe no-op.
+    pub fn count_reset_targets(&self) -> Result<ResetSummary> {
+        let mut rows_dropped = 0i64;
+        for table in DERIVABLE_TABLES {
+            let count: i64 = self.conns.burn.query_row(
+                &format!("SELECT COUNT(*) FROM {table}"),
+                [],
+                |r| r.get(0),
+            )?;
+            rows_dropped += count;
+        }
+        let stamps_dropped: i64 = self
+            .conns
+            .burn
+            .query_row("SELECT COUNT(*) FROM stamps", [], |r| r.get(0))?;
+        let content_rows_dropped = content::count_content(&self.conns.content)?;
+        Ok(ResetSummary {
+            rows_dropped: rows_dropped as usize,
+            stamps_dropped: stamps_dropped as usize,
+            content_rows_dropped: content_rows_dropped as usize,
+        })
+    }
+
+    /// Wipe **all** derived ledger state, including first-party stamps
+    /// and ingest cursors. Stronger than [`Self::rebuild_derivable`],
+    /// which preserves stamps and cursors so re-ingest is incremental.
+    ///
+    /// After `reset()` runs, both DBs are byte-equivalent to a fresh
+    /// `Ledger::open` against an empty `$RELAYBURN_HOME`: every
+    /// derivable table is empty, `stamps` is empty, `content.sqlite`
+    /// is empty (FTS index included), and `archive_state` is reset to
+    /// the bootstrap row (`schema_version` preserved, cursors blanked,
+    /// `last_built_at` / `last_rebuild_at` cleared).
+    ///
+    /// Re-ingest is the caller's responsibility; the CLI offers
+    /// `burn state reset --force --reingest` as a convenience that
+    /// drives `burn ingest` afterwards.
+    pub fn reset(&mut self) -> Result<ResetSummary> {
+        // Snapshot counts BEFORE we mutate so the returned summary
+        // describes what the call deleted, not what's left.
+        let summary = self.count_reset_targets()?;
+
+        // Wipe derivable + stamps in a single transaction so an early
+        // failure can't leave the events DB half-emptied.
+        let tx = self.conns.burn.transaction()?;
+        for table in DERIVABLE_TABLES {
+            tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        tx.execute("DELETE FROM stamps", [])?;
+        // Reset archive_state to the bootstrap shape: keep the row
+        // (the CHECK constraint pins id=1) and the schema_version, but
+        // blank the cursors + build timestamps so the next ingest walks
+        // every upstream file from offset 0.
+        tx.execute(
+            "UPDATE archive_state \
+             SET upstream_cursors_json = '{}', \
+                 last_built_at = NULL, \
+                 last_rebuild_at = NULL \
+             WHERE id = 1",
+            [],
+        )?;
+        tx.commit()?;
+
+        // Wipe content + the FTS index using the same drop-trigger /
+        // bulk-delete / rebuild dance as `rebuild_derivable`, so the
+        // FTS sync triggers don't pay tokenization cost per row.
+        self.conns.content.execute_batch(
+            "DROP TRIGGER IF EXISTS content_fts_ad;
+             DROP TRIGGER IF EXISTS content_fts_au;
+             DELETE FROM content;
+             CREATE TRIGGER content_fts_ad AFTER DELETE ON content BEGIN
+                 INSERT INTO content_fts(content_fts, rowid, body) VALUES('delete', old.rowid, old.body);
+             END;
+             CREATE TRIGGER content_fts_au AFTER UPDATE ON content BEGIN
+                 INSERT INTO content_fts(content_fts, rowid, body) VALUES('delete', old.rowid, old.body);
+                 INSERT INTO content_fts(rowid, body) VALUES (new.rowid, new.body);
+             END;
+             INSERT INTO content_fts(content_fts) VALUES('rebuild');",
+        )?;
+
+        Ok(summary)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RebuildSummary {
     pub rows_dropped: usize,
+    pub content_rows_dropped: usize,
+}
+
+/// Counts returned by [`Ledger::reset`] (and by the dry-run sibling
+/// [`Ledger::count_reset_targets`]). `rows_dropped` covers the
+/// derivable events tables; `stamps_dropped` is split out because
+/// stamps are first-party data and the CLI surfaces them separately
+/// so callers can see what they're about to lose.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResetSummary {
+    pub rows_dropped: usize,
+    pub stamps_dropped: usize,
     pub content_rows_dropped: usize,
 }
 

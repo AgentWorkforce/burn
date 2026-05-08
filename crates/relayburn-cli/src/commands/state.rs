@@ -17,7 +17,10 @@
 //! tracked under #240 (Rust port epic); golden snapshots for the two
 //! `state-status*` invocations carry the 2.0 shape.
 
-use relayburn_sdk::{Ledger, LedgerOpenOptions, StateStatus};
+use relayburn_sdk::{
+    ingest_all, Ledger, LedgerHandle, LedgerOpenOptions, RawIngestOptions, ResetSummary,
+    StateStatus,
+};
 
 use crate::cli::{
     ArchiveAction, GlobalArgs, StateArgs, StateRebuildArgs, StateRebuildTarget, StateSubcommand,
@@ -460,24 +463,150 @@ fn parse_retention(s: &str) -> Option<relayburn_sdk::Retention> {
 }
 
 // ---------------------------------------------------------------------------
-// reset — stubbed: filed as a follow-up SDK gap (see #240)
+// reset
 // ---------------------------------------------------------------------------
+//
+// Wipes derived state under `$RELAYBURN_HOME`. The 1.x sibling unlinked
+// individual files (`ledger.jsonl`, `archive.sqlite`, `content/`); the
+// 2.0 layout collapses onto two SQLite databases, so the equivalent is
+// to truncate every derivable + first-party table inside `burn.sqlite`
+// and the `content` table inside `content.sqlite`, then blank the
+// ingest cursors so the next `burn ingest` walks every upstream file
+// from offset 0.
+//
+// Without `--force`, this is a dry-run: it opens the ledger, counts
+// what would be dropped, prints the report, and exits 0. With
+// `--force`, the SDK `reset()` actually performs the wipe. With
+// `--force --reingest`, a follow-up `ingest_all` sweep runs on the
+// same handle.
 
 fn run_reset(globals: &GlobalArgs, args: crate::cli::StateResetArgs) -> i32 {
-    let _ = args; // accepted for forward compat
-    let msg = "burn state reset: not yet implemented in the Rust port. The 1.x \
-               implementation walked $RELAYBURN_HOME and unlinked individual \
-               files (ledger.jsonl, archive.sqlite, content/); the 2.0 \
-               equivalent (drop + recreate burn.sqlite/content.sqlite + \
-               re-ingest) is filed for follow-up under #240. As a workaround, \
-               run 'burn state rebuild all' followed by 'burn ingest'.";
-    if globals.json {
-        let envelope = serde_json::json!({ "error": msg });
-        let _ = render_json(&envelope);
-    } else {
-        eprintln!("burn: {msg}");
+    let opts = LedgerOpenOptions {
+        home: globals.ledger_path.clone(),
+        content_home: None,
+    };
+    let mut handle = match Ledger::open(opts) {
+        Ok(h) => h,
+        Err(err) => return report_anyhow(&err, globals),
+    };
+
+    if !args.force {
+        let summary = match handle.raw().count_reset_targets() {
+            Ok(s) => s,
+            Err(err) => return report_ledger_error(&err, globals),
+        };
+        return print_reset_report(globals, &summary, /*executed=*/ false, None);
     }
-    1
+
+    let summary = match handle.raw_mut().reset() {
+        Ok(s) => s,
+        Err(err) => return report_ledger_error(&err, globals),
+    };
+
+    let ingest_report = if args.reingest {
+        match run_reset_reingest(&mut handle, globals.ledger_path.clone()) {
+            Ok(r) => Some(r),
+            Err(err) => return report_error(&err, globals),
+        }
+    } else {
+        None
+    };
+
+    print_reset_report(globals, &summary, /*executed=*/ true, ingest_report.as_ref())
+}
+
+/// Drive a single `ingest_all` sweep on the open handle. Mirrors the
+/// `run_ingest` helper in `commands/summary.rs`: the SDK verb is async,
+/// so we spin a current-thread tokio runtime to drive it from this
+/// otherwise-sync presenter.
+///
+/// `ledger_home` propagates the global `--ledger-path` override into
+/// `RawIngestOptions::ledger_home` so sidecar ingest state (config and
+/// pending-stamp manifests) resolves under the same home as the open
+/// handle. Without this, `burn --ledger-path <custom> state reset
+/// --force --reingest` would write turns into the custom DB while
+/// reading config / pending stamps from `$RELAYBURN_HOME`.
+fn run_reset_reingest(
+    handle: &mut LedgerHandle,
+    ledger_home: Option<std::path::PathBuf>,
+) -> anyhow::Result<relayburn_sdk::IngestReport> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let opts = RawIngestOptions {
+        ledger_home,
+        ..RawIngestOptions::default()
+    };
+    rt.block_on(ingest_all(handle.raw_mut(), &opts))
+}
+
+fn print_reset_report(
+    globals: &GlobalArgs,
+    summary: &ResetSummary,
+    executed: bool,
+    ingest_report: Option<&relayburn_sdk::IngestReport>,
+) -> i32 {
+    if globals.json {
+        let mut payload = serde_json::json!({
+            "executed": executed,
+            "rowsDropped": summary.rows_dropped,
+            "stampsDropped": summary.stamps_dropped,
+            "contentRowsDropped": summary.content_rows_dropped,
+        });
+        if let Some(report) = ingest_report {
+            payload["reingest"] = serde_json::json!({
+                "scannedSessions": report.scanned_sessions,
+                "ingestedSessions": report.ingested_sessions,
+                "appendedTurns": report.appended_turns,
+                "appliedPendingStamps": report.applied_pending_stamps,
+            });
+        }
+        if let Err(err) = render_json(&payload) {
+            return report_error(&err, globals);
+        }
+        return 0;
+    }
+
+    if executed {
+        println!(
+            "reset derived state: dropped {} event row{} + {} stamp{} + {} content row{}",
+            format_int(summary.rows_dropped as u64),
+            if summary.rows_dropped == 1 { "" } else { "s" },
+            format_int(summary.stamps_dropped as u64),
+            if summary.stamps_dropped == 1 { "" } else { "s" },
+            format_int(summary.content_rows_dropped as u64),
+            if summary.content_rows_dropped == 1 { "" } else { "s" },
+        );
+        match ingest_report {
+            Some(report) => {
+                println!(
+                    "  re-ingested {} session{} (+{} turn{}).",
+                    format_int(report.ingested_sessions as u64),
+                    if report.ingested_sessions == 1 { "" } else { "s" },
+                    format_int(report.appended_turns as u64),
+                    if report.appended_turns == 1 { "" } else { "s" },
+                );
+            }
+            None => {
+                println!(
+                    "  re-ingest from upstream session files via 'burn ingest' to \
+                     repopulate (or re-run with --reingest)."
+                );
+            }
+        }
+    } else {
+        println!(
+            "burn state reset (dry run): would drop {} event row{} + {} stamp{} + {} content row{}.",
+            format_int(summary.rows_dropped as u64),
+            if summary.rows_dropped == 1 { "" } else { "s" },
+            format_int(summary.stamps_dropped as u64),
+            if summary.stamps_dropped == 1 { "" } else { "s" },
+            format_int(summary.content_rows_dropped as u64),
+            if summary.content_rows_dropped == 1 { "" } else { "s" },
+        );
+        println!("  re-run with --force to actually wipe (add --reingest to repopulate).");
+    }
+    0
 }
 
 // ---------------------------------------------------------------------------
