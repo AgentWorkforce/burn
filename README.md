@@ -40,7 +40,6 @@ tokens they used, and what they cost.
 | `--session <id>` | Limit to one session. |
 | `--by-provider` | Group totals by provider instead of model. |
 | `--json` | Emit machine-readable output. |
-| `--no-archive` | Accepted for compatibility; the 2.x storage model is SQLite-first. |
 
 | Example | Result |
 |---|---|
@@ -114,7 +113,6 @@ testing, review, exploration, docs, and refactoring.
 | `--include-partial` | Include every turn. Shorthand for `--fidelity partial`. |
 | `--json` | Emit a stable JSON object. |
 | `--csv` | Emit one row per model/activity pair. |
-| `--no-archive` | Accepted for compatibility; the 2.x storage model is SQLite-first. |
 
 | Example | Result |
 |---|---|
@@ -195,9 +193,9 @@ MCP. The server is stdio-only and read-only.
 
 ## `burn state`
 
-Use `burn state` when reports look stale, you upgraded Burn, or you want to
-inspect or rebuild derived storage. Burn 2.x stores events and stamps in
-`burn.sqlite` and content/search data in `content.sqlite`.
+Use `burn state` when reports look stale or you want to inspect or rebuild
+derived storage. Burn stores events and stamps in `burn.sqlite`, and
+content/search data in `content.sqlite`.
 
 | Subcommand or option | What it does |
 |---|---|
@@ -206,8 +204,6 @@ inspect or rebuild derived storage. Burn 2.x stores events and stamps in
 | `rebuild index` | Rebuild derivable SQLite read-model data. |
 | `rebuild content` | Re-parse source session files to backfill content and user turns. |
 | `rebuild archive` | Refresh archive metadata in `burn.sqlite`. |
-| `rebuild archive --full` | Accepted for compatibility; 2.x rebuilds in-place. |
-| `rebuild archive vacuum` or `rebuild archive --vacuum` | Accepted for compatibility; there is no separate `archive.sqlite`. |
 | `rebuild all [--force]` | Rebuild derivable state. |
 | `prune [--days <n>]` | Delete expired content sidecars. Use `forever` to disable. |
 | `prune --force` | Delete recoverable sidecars even if source session files still exist. |
@@ -218,7 +214,6 @@ inspect or rebuild derived storage. Burn 2.x stores events and stamps in
 | `burn state` | Derived artifact status. |
 | `burn state status --json` | Machine-readable status. |
 | `burn state rebuild classify --force` | Reclassify every turn with current rules. |
-| `burn state rebuild archive --full` | Rebuild the SQLite read model from scratch. |
 | `burn state prune --days 30` | Prune content older than 30 days, keeping recoverable sidecars. |
 
 ## Local Data
@@ -258,9 +253,8 @@ pnpm run test
 pnpm run build:napi
 ```
 
-The Rust crates are the implementation source of truth. The npm workspace
-contains the Node SDK facade, the `relayburn` install wrapper, and the
-platform package manifests used by release automation.
+The npm workspace contains the Node SDK facade, the `relayburn` install
+wrapper, and the platform package manifests used by release automation.
 
 ## Pricing
 
@@ -355,7 +349,7 @@ burn run claude --tag workflow=refactor --tag persona=senior-eng -- --resume abc
 ```
 
 Codex and OpenCode do not expose Claude-style hooks or a pre-spawn session ID.
-Their adapters write a v1 pending-stamp manifest under
+Their adapters write a pending-stamp manifest under
 `$RELAYBURN_HOME/pending-stamps/` before spawning, then resolve it against the
 first matching session file before the first turn is appended. They also run
 burn's foreground watch loop for the child process lifetime, so long sessions
@@ -417,5 +411,4 @@ burn ingest --hook claude --quiet
 Hook payloads land on stdin and get forwarded to `burn ingest`. The command is
 safe to re-fire on every hook; the ledger cursor and dedup path keep ingestion
 idempotent, so the hook path and normal session-store path reconcile against
-the same session. The old JavaScript hook-settings helper is not part of the
-2.x Node facade yet; the gap is tracked in `RUST_2X_GAP_CATALOG.md`.
+the same session.

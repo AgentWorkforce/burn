@@ -1,9 +1,9 @@
-# @relayburn/sdk (2.x)
+# @relayburn/sdk
 
-Embeddable Relayburn SDK — napi-rs bindings over the Rust `relayburn-sdk`
-crate.
+Embeddable Relayburn SDK for Node.js. The package is a napi-rs facade over the
+Rust `relayburn-sdk` crate.
 
-The 2.x umbrella resolves the right native binary for your platform via
+The package resolves the native binding for your platform via
 `optionalDependencies`:
 
 | Platform | Package |
@@ -15,19 +15,12 @@ The 2.x umbrella resolves the right native binary for your platform via
 
 Windows (`win32-x64-msvc`) is not yet shipped — see #247 follow-up.
 
-## Migration From 1.x
+## API Notes
 
-Same imports, same option shapes, same return shapes — except:
-
-- **Large u64 token counts may be `bigint`.** napi-rs maps Rust `u64` to
+- Large u64 token counts may be `bigint`. napi-rs maps Rust `u64` to
   JavaScript `BigInt`; the facade downcasts safe-range integers to `number`
   and leaves larger values as `bigint`. The declarations widen these fields
   to `number | bigint`.
-- 2.x also exposes `search()`, `exportLedger()`, and `exportStamps()` as Rust
-  SDK extensions.
-
-## Status
-
-The Rust SDK is the in-repo source of truth. The removed TypeScript 1.x
-package is tracked only by the compatibility notes in
-`RUST_2X_GAP_CATALOG.md`.
+- The SDK exposes read verbs such as `summary()`, `sessionCost()`,
+  `hotspots()`, `compare()`, `search()`, `exportLedger()`, and
+  `exportStamps()`.

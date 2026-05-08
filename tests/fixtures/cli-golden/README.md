@@ -1,9 +1,7 @@
 # CLI golden snapshots
 
-This corpus holds historical 1.x CLI snapshots and a synthetic ledger used by
-the Rust CLI golden test. The TypeScript capture scripts have been removed with
-the 1.x packages, so these files are now fixed parity fixtures rather than a
-regeneratable TS baseline.
+This corpus holds CLI snapshots and a synthetic ledger used by the Rust CLI
+golden test.
 
 ## Layout
 
@@ -12,13 +10,13 @@ tests/fixtures/cli-golden/
 ├── README.md
 ├── invocations.json      — args + sealed env per snapshot.
 ├── ledger/               — committed synthetic ledger fixture.
-│   ├── burn.sqlite       — 2.x events/stamps database.
-│   ├── content.sqlite    — 2.x content/search database.
-│   └── ledger.jsonl      — historical bootstrap source retained for tests.
+│   ├── burn.sqlite       — events/stamps database.
+│   ├── content.sqlite    — content/search database.
+│   └── ledger.jsonl      — bootstrap source retained for tests.
 ├── project/
 │   └── CLAUDE.md         — overhead-eligible file so `burn overhead`
 │                           returns non-empty.
-└── snapshots/            — historical stdout snapshots and optional stderr.
+└── snapshots/            — expected stdout snapshots and optional stderr.
 ```
 
 ## What's snapshotted
@@ -49,10 +47,9 @@ and compare normalized stdout/stderr with `snapshots/`.
 
 ## Updating Fixtures
 
-There is no longer a TypeScript recapture path. For a deliberate 2.x behavior
-change, update the affected snapshot by running the Rust command manually under
-the same sealed environment used by `golden.rs`, then review the diff as a
-fixture change.
+For a deliberate behavior change, update the affected snapshot by running the
+Rust command manually under the same sealed environment used by `golden.rs`,
+then review the diff as a fixture change.
 
 When adding a new snapshot:
 
