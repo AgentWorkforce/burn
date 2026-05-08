@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-05-08
+
 ### Changed
 
 - `relayburn-cli` / `relayburn-sdk`: `burn summary` now accepts repeatable
