@@ -94,16 +94,23 @@ pub struct HotspotsArgs {
     pub explain_drift: bool,
 }
 
+// Detector kinds the SDK's `run_hotspots_findings` filter expects. These are
+// the *finding* kind strings emitted by `WasteFinding.kind` (e.g.
+// `compaction-loss`, `skill-recall-dup`), NOT the detector-input names. The
+// SDK matches `wanted_set.contains(&f.kind)` for pattern-derived findings and
+// also keys `tool-output-bloat` / `ghost-surface` / `tool-call-pattern` off
+// the same set, so this list has to use the finding-kind spelling on every
+// row.
 const PATTERN_KINDS: &[&str] = &[
     "retry-loop",
     "failure-run",
     "cancellation-run",
-    "compaction",
+    "compaction-loss",
     "edit-revert",
     "edit-heavy",
-    "opencode-skill-recall",
-    "opencode-skill-pruning",
-    "opencode-system-prompt",
+    "skill-recall-dup",
+    "skill-pruning-protection",
+    "system-prompt-tax",
     "ghost-surface",
     "tool-output-bloat",
     "tool-call-pattern",

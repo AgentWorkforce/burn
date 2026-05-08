@@ -28,7 +28,7 @@ use crate::analyze::{
     detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
     findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity, load_claude_settings,
     load_overhead_file, load_pricing, project_claude_settings_path,
-    render_unified_diff_for_recommendation, sum_costs, summarize_fidelity,
+    render_unified_diff_for_recommendation, sort_findings, sum_costs, summarize_fidelity,
     summarize_fidelity_from_iter, summarize_replacement_savings, tool_call_pattern_to_finding,
     tool_output_bloat_to_finding, user_claude_settings_path,
 };
@@ -1144,9 +1144,14 @@ fn run_hotspots_attribution(
     }
 
     let session_ids: HashSet<String> = eligible.iter().map(|t| t.session_id.clone()).collect();
+    // Propagate `enrichment` (e.g. workflowId folds) into side queries so a
+    // partial-session workflow stamp doesn't pull unrelated user-turns /
+    // tool-result events into the per-session buckets and skew attribution
+    // outside the requested slice.
     let side_q = Query {
         session_id: q.session_id.clone(),
         since: q.since.clone(),
+        enrichment: q.enrichment.clone(),
         ..Default::default()
     };
     let user_turns_by_session = bucket_user_turns_by_session(handle, &side_q, Some(&session_ids))?;
@@ -1334,9 +1339,14 @@ fn run_hotspots_findings(
     let wanted_set: HashSet<String> = wanted.into_iter().collect();
     let mut findings: Vec<WasteFinding> = Vec::new();
 
+    // Propagate `enrichment` (e.g. workflowId folds) into side queries so a
+    // partial-session workflow stamp doesn't pull unrelated user-turns /
+    // tool-result events into the per-session buckets and skew attribution
+    // outside the requested slice.
     let side_q = Query {
         session_id: q.session_id.clone(),
         since: q.since.clone(),
+        enrichment: q.enrichment.clone(),
         ..Default::default()
     };
 
@@ -1404,6 +1414,12 @@ fn run_hotspots_findings(
             findings.push(tool_call_pattern_to_finding(&p));
         }
     }
+
+    // `findings_from_patterns` already sorts the slice it returns, but the
+    // tool-output-bloat / ghost-surface / tool-call-pattern batches above
+    // are appended afterwards. Re-sort once so the global slice is
+    // severity-descending → usdPerSession-descending end-to-end (TS parity).
+    sort_findings(&mut findings);
 
     Ok(HotspotsResult::Findings {
         findings,
