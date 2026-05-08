@@ -1252,7 +1252,7 @@ fn summary_empty_row(label: &str) -> UsageCostAggregateRow {
         turns: 0,
         usage: Usage::default(),
         cost: CostBreakdown {
-            model: label.to_string(),
+            model: label.to_string().into(),
             total: 0.0,
             input: 0.0,
             output: 0.0,

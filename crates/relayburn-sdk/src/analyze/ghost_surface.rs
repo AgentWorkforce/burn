@@ -36,6 +36,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use regex::Regex;
 use crate::reader::SourceKind;
@@ -295,12 +296,12 @@ fn is_plain_text_surface(name: &str) -> bool {
 // Slash-command observation
 // ---------------------------------------------------------------------------
 
-fn claude_command_name_re() -> Regex {
-    // `<command-name>...</command-name>` — accept optional leading `/` and
-    // trailing whitespace inside the wrapper. Capture the first non-space
-    // chunk inside.
+// `<command-name>...</command-name>` — accept optional leading `/` and
+// trailing whitespace inside the wrapper. Capture the first non-space
+// chunk inside.
+static CLAUDE_COMMAND_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)<command-name>\s*/?([\w./:\-]+?)\s*</command-name>").unwrap()
-}
+});
 
 pub fn mine_claude_command_names(
     user_turn_text_by_session: Option<&HashMap<String, Vec<String>>>,
@@ -310,7 +311,7 @@ pub fn mine_claude_command_names(
         Some(m) if !m.is_empty() => m,
         _ => return out,
     };
-    let re = claude_command_name_re();
+    let re = &*CLAUDE_COMMAND_NAME_RE;
     for texts in map.values() {
         for text in texts {
             if text.is_empty() {

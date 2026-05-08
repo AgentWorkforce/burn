@@ -303,7 +303,7 @@ fn empty_provider_row(provider: &str) -> ProviderAggregateRow {
         turns: 0,
         usage: Usage::default(),
         cost: CostBreakdown {
-            model: provider.to_string(),
+            model: provider.to_string().into(),
             total: 0.0,
             input: 0.0,
             output: 0.0,

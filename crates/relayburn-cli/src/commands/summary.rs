@@ -510,7 +510,7 @@ fn print_json(value: &Value) {
 
 fn cost_breakdown_to_json(c: &CostBreakdown) -> Value {
     json!({
-        "model": c.model,
+        "model": c.model.as_ref(),
         "total": c.total,
         "input": c.input,
         "output": c.output,
@@ -1168,7 +1168,7 @@ mod tests {
             turn_count: 0,
             rows: Vec::new(),
             total_cost: CostBreakdown {
-                model: String::new(),
+                model: String::new().into(),
                 total: 0.0,
                 input: 0.0,
                 output: 0.0,

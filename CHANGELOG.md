@@ -23,6 +23,14 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   same invocation. Replaces the prior "not yet implemented" stub.
   (#341)
 
+### Changed
+
+- `relayburn-sdk` (Rust): reduced hot-path CPU/alloc overhead in pricing and
+  classifier parsing by caching the bundled pricing snapshot and reusing
+  compiled regexes. **Breaking (Rust SDK):** `CostBreakdown::model` is now
+  `Cow<'static, str>`; struct-literal construction must pass a `Cow` (for
+  example, `model: value.into()`).
+
 ## [2.4.0] - 2026-05-08
 
 ### Changed

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -87,10 +88,17 @@ type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
 /// the tarball without network access.
 const BUILTIN_PRICING_JSON: &str = include_str!("../../data/models.dev.json");
 
-/// Load the bundled `models.dev` snapshot. No I/O — the JSON is embedded at
-/// compile time via `include_str!`.
-pub fn load_builtin_pricing() -> PricingTable {
+/// Parsed `BUILTIN_PRICING_JSON`. Parsing the snapshot allocates a
+/// `HashMap` of several hundred entries, and `load_builtin_pricing` is on the
+/// hot path of multiple SDK verbs that each used to re-parse it.
+static BUILTIN_PRICING: LazyLock<PricingTable> = LazyLock::new(|| {
     parse_pricing(BUILTIN_PRICING_JSON).expect("bundled models.dev.json must parse")
+});
+
+/// Load the bundled `models.dev` snapshot. No I/O — the JSON is embedded at
+/// compile time via `include_str!` and parsed once into a `LazyLock` cache.
+pub fn load_builtin_pricing() -> PricingTable {
+    BUILTIN_PRICING.clone()
 }
 
 /// Load pricing, optionally merging an override file over the builtin. When
