@@ -840,6 +840,7 @@ dependencies = [
  "hex",
  "indexmap",
  "libc",
+ "memchr",
  "phf",
  "regex",
  "rusqlite",

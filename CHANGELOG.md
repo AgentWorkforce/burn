@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-sdk` (Rust): reader hot loops in `claude.rs` and `codex.rs` now stream JSONL line-by-line via `BufReader::read_until` instead of pre-allocating a `(size - start_offset)`-byte buffer up front; only the longest single line stays resident. `memchr_newline` in the codex parser now actually uses the `memchr` crate for SIMD-accelerated newline scanning. The main `parse_claude_session` loop also drops `BufReader::lines()` in favor of `read_line` into a reused `String`. (#323)
+
 ## [2.0.0] - 2026-05-07
 
 - `relayburn-sdk` (Rust): default ledger home moves from `~/.relayburn` to `~/.agentworkforce/burn` so the Rust 2.0 port and the TS 1.x package can coexist on disk during the #249 cutover. `RELAYBURN_HOME` (and the per-DB path overrides) continue to override the path; TS 1.x users on `~/.relayburn` are unaffected. Rust-port testers with data under the old path can `mv ~/.relayburn ~/.agentworkforce/burn` to carry it over (formats are not compatible — Rust treats any non-2.0 layout as empty and requires a `burn ingest` re-population).

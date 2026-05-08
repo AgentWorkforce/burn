@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde_json::Value;
@@ -192,17 +192,16 @@ pub fn parse_codex_session_incremental(
             resume: clone_resume(options.resume.as_ref()),
         });
     }
-    let mut buf = vec![0u8; (size - start_offset) as usize];
     file.seek(SeekFrom::Start(start_offset))?;
-    file.read_exact(&mut buf)?;
+    // Stream from `start_offset` line-by-line. The previous implementation
+    // pre-allocated `vec![0u8; (size - start_offset) as usize]` and
+    // `read_exact` into it — for a multi-GB session that was a multi-GB
+    // up-front allocation. With BufReader + `read_until` only the longest
+    // single line stays resident.
+    let reader = BufReader::new(file);
 
     let project_resolver = ProjectResolver::new();
-    Ok(parse_codex_buffer(
-        &buf,
-        start_offset,
-        options,
-        &project_resolver,
-    ))
+    parse_codex_buffer(reader, start_offset, options, &project_resolver)
 }
 
 // ---------------------------------------------------------------------------
@@ -335,12 +334,12 @@ struct Pending<T> {
     record: T,
 }
 
-fn parse_codex_buffer(
-    buf: &[u8],
+fn parse_codex_buffer<R: BufRead>(
+    mut reader: R,
     start_offset: u64,
     options: &ParseCodexIncrementalOptions,
     project_resolver: &ProjectResolver,
-) -> ParseCodexIncrementalResult {
+) -> std::io::Result<ParseCodexIncrementalResult> {
     let capture_content = matches!(options.content_mode, Some(ContentStoreMode::Full));
     // Validated by `resolve_token_counter` at the public entry point.
     let counter = HeuristicCounter;
@@ -392,16 +391,24 @@ fn parse_codex_buffer(
     let mut committed_tool_result_counters = tool_result_counters.clone();
     let mut committed_last_completed_turn = last_completed_turn.clone();
 
-    let mut p: usize = 0;
-    while p < buf.len() {
-        let nl_idx = match find_newline(&buf[p..]) {
-            Some(idx) => p + idx,
-            None => break,
-        };
-        let line_end_offset = start_offset + (nl_idx as u64) + 1;
-        let raw = &buf[p..nl_idx];
-        p = nl_idx + 1;
-        let text = std::str::from_utf8(raw).unwrap_or("").trim();
+    let mut line_buf: Vec<u8> = Vec::new();
+    let mut current_offset: u64 = start_offset;
+    loop {
+        line_buf.clear();
+        let n = reader.read_until(b'\n', &mut line_buf)?;
+        if n == 0 {
+            break;
+        }
+        // Drop trailing partial lines — the next incremental call resumes
+        // from the committed end offset, which only advances past `\n`.
+        if line_buf.last() != Some(&b'\n') {
+            break;
+        }
+        let line_end_offset = current_offset + n as u64;
+        current_offset = line_end_offset;
+        let text = std::str::from_utf8(&line_buf[..n - 1])
+            .unwrap_or("")
+            .trim();
         if text.is_empty() {
             continue;
         }
@@ -1185,7 +1192,19 @@ fn parse_codex_buffer(
         }
     }
 
-    ParseCodexIncrementalResult {
+    // Silence unused-mutable warnings for snapshot mirrors that are written
+    // but only read indirectly.
+    let _ = (
+        cumulative,
+        session_id,
+        session_cwd,
+        turn_contexts,
+        seen_session_meta_keys,
+        root_session_emitted,
+        last_completed_turn,
+    );
+
+    Ok(ParseCodexIncrementalResult {
         turns,
         content: content_out,
         events: events_out,
@@ -1194,7 +1213,7 @@ fn parse_codex_buffer(
         tool_result_events: tool_events_out,
         end_offset: committed_end_offset,
         resume,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,10 +1234,6 @@ fn resolve_token_counter(
              omit `tokenizer` or pass `Some(Heuristic)` (see AgentWorkforce/burn#246)",
         )),
     }
-}
-
-fn find_newline(buf: &[u8]) -> Option<usize> {
-    buf.iter().position(|&b| b == b'\n')
 }
 
 fn session_meta_payload_id(payload: &Value) -> Option<String> {
