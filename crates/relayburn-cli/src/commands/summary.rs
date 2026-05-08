@@ -246,7 +246,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         agent: args.agent,
         providers: provider_filter.map(|providers| providers.into_iter().collect()),
         mode,
-        include_quality: args.quality && !globals.json,
+        include_quality: args.quality,
         ledger_home: None,
     })?;
 
@@ -394,6 +394,14 @@ fn emit_grouped(
 }
 
 fn emit_json(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::IngestReport) {
+    let value = grouped_json_value(report, ingest_report);
+    print_json(&value);
+}
+
+fn grouped_json_value(
+    report: &SummaryGroupedReport,
+    ingest_report: &relayburn_sdk::IngestReport,
+) -> Value {
     let key = report.group_by.json_key();
     let label_key = report.group_by.wire_str();
 
@@ -457,10 +465,13 @@ fn emit_json(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::Inges
             summary_replacement_savings_to_value(&report.replacement_savings),
         );
     }
+    if let Some(quality) = report.quality.as_ref() {
+        payload.insert("quality".into(), json!(quality));
+    }
 
     let mut value = Value::Object(payload);
     coerce_whole_f64_to_int(&mut value);
-    print_json(&value);
+    value
 }
 
 fn print_json(value: &Value) {
@@ -1128,5 +1139,33 @@ mod tests {
         ])
         .unwrap_err();
         assert!(format!("{duplicate}").contains("duplicate --tag filter"));
+    }
+
+    #[test]
+    fn grouped_json_includes_quality_when_report_has_it() {
+        let report = SummaryGroupedReport {
+            group_by: SummaryGroupBy::Model,
+            tag_key: None,
+            tag_values: Vec::new(),
+            turn_count: 0,
+            rows: Vec::new(),
+            total_cost: CostBreakdown {
+                model: String::new(),
+                total: 0.0,
+                input: 0.0,
+                output: 0.0,
+                reasoning: 0.0,
+                cache_read: 0.0,
+                cache_create: 0.0,
+            },
+            fidelity: relayburn_sdk::summarize_fidelity(&[]),
+            per_cell_fidelity: json!({"groupBy": "model"}),
+            replacement_savings: relayburn_sdk::ReplacementSavingsSummary::default(),
+            quality: Some(QualityResult::default()),
+        };
+
+        let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
+
+        assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
     }
 }
