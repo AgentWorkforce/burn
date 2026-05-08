@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the TypeScript 1.x deep-conformance test with native 2.x smoke
+  coverage against the committed fixture ledger.
+
+### Added
+
+- Exported `computeCompareExcluded()` from the Node facade for callers that
+  need the same fidelity-exclusion breakdown used by `compare()`.
+
 ## [2.1.0] - 2026-05-07
 
 ### Added
@@ -30,8 +40,5 @@
   outside that range stay `BigInt` to avoid silent precision loss.
 - Conformance suite is now wired into CI: `napi build` writes its outputs
   (`.node`, `binding.cjs`, `binding.d.ts`) into `src/` so the generated
-  loader's local-file branch resolves; the suite seeds a deterministic
-  ledger via `tests/fixtures/cli-golden/scripts/build-ledger.mjs` and
-  flips `RELAYBURN_SDK_NAPI_BUILT=1` to enable the `deepStrictEqual` gate
-  against TS `@relayburn/sdk@1.x`. (#247 part d)
-
+  loader's local-file branch resolves; the suite was originally wired as a
+  deep-equality gate against TS `@relayburn/sdk@1.x`. (#247 part d)

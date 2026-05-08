@@ -31,6 +31,10 @@ import {
   overheadTrim,
   hotspots,
   compare,
+  computeCompareExcluded,
+  search,
+  exportLedger,
+  exportStamps,
 } from '@relayburn/sdk';
 
 // Reference each export so esbuild can't tree-shake them away — keeps the
@@ -44,6 +48,10 @@ export const refs = {
   overheadTrim,
   hotspots,
   compare,
+  computeCompareExcluded,
+  search,
+  exportLedger,
+  exportStamps,
 };
 `;
 
@@ -80,8 +88,7 @@ test('esbuild bundles the @relayburn/sdk umbrella facade cleanly', async (t) => 
         '@relayburn/sdk-linux-arm64-gnu',
         '@relayburn/sdk-linux-x64-gnu',
       ],
-      // Resolve `@relayburn/sdk` to the in-tree umbrella, bypassing the
-      // possible 1.x SDK in workspace `node_modules`.
+      // Resolve `@relayburn/sdk` to the in-tree umbrella.
       alias: {
         '@relayburn/sdk': resolve(SDK_NODE_ROOT, 'src/index.js'),
       },

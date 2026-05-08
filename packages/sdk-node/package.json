@@ -1,7 +1,7 @@
 {
   "name": "@relayburn/sdk",
   "version": "2.1.0",
-  "description": "Embeddable Relayburn SDK — napi-rs bindings over the Rust relayburn-sdk crate (2.x). Drop-in replacement for the TS @relayburn/sdk@1.x.",
+  "description": "Embeddable Relayburn SDK — Node facade over the Rust relayburn-sdk crate (2.x).",
   "type": "module",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",

@@ -1,4 +1,4 @@
-//! TS-CLI vs Rust-CLI golden-output diff runner.
+//! CLI golden-output diff runner.
 //!
 //! For each invocation listed in `tests/fixtures/cli-golden/invocations.json`,
 //! this test:
@@ -6,8 +6,8 @@
 //!      with the same sealed env the TS capture used (`HOME` pointed at an
 //!      empty tmp dir, `RELAYBURN_HOME` at the fixture, `RELAYBURN_ARCHIVE=0`,
 //!      `NO_COLOR=1`).
-//!   2. Reads the captured TS stdout snapshot (and stderr if present).
-//!   3. Normalizes the live Rust output the same way the capture script does
+//!   2. Reads the historical stdout snapshot (and stderr if present).
+//!   3. Normalizes the live Rust output the same way the fixture does
 //!      (absolute fixture paths → `${RELAYBURN_HOME}` / `${PROJECT}`,
 //!      wall-clock millisecond fields → `${MTIME}` / `${TS}`).
 //!   4. Asserts the normalized Rust output matches the snapshot byte-for-byte
@@ -15,21 +15,14 @@
 //!
 //! ## Why this is `#[ignore]`d on `main`
 //!
-//! Today the Rust CLI is a `eprintln!("not yet implemented") + exit(1)` stub
-//! — every snapshot will fail. That's deliberate: this PR (#248-c) ships the
-//! *target* the Wave 2 fan-out PRs (#248 D1–D8 in `RUST_PORT_WAVE_PLAN.md`)
-//! get to assert against. As each command lands its Rust implementation,
-//! the matching invocation in `invocations.json` flips its `enabled` flag
-//! to `true` and the test starts enforcing parity.
+//! The fixture retains per-invocation `enabled` flags so partially ported
+//! command surfaces can be staged deliberately. Enabled entries enforce the
+//! Rust output against the committed snapshot.
 //!
 //! Run the full enforced suite locally with:
 //!   BURN_GOLDEN=1 cargo test --test golden -- --include-ignored
 //!
-//! Refresh the TS snapshots after a CLI behavior change with:
-//!   pnpm run build && \
-//!   node tests/fixtures/cli-golden/scripts/capture-snapshots.mjs
-//!
-//! See `tests/fixtures/cli-golden/README.md` for the full Wave 2 contract.
+//! See `tests/fixtures/cli-golden/README.md` for fixture maintenance notes.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -41,12 +34,9 @@ use serde::Deserialize;
 /// Wipe any prior `burn.sqlite` / `content.sqlite` so the next
 /// `Ledger::open` deterministically rebuilds from `ledger.jsonl`.
 ///
-/// The CLI-golden fixture's source of truth is `ledger.jsonl` (the
-/// SQLite counterparts are gitignored because they're rematerialized
-/// on demand; see `tests/fixtures/cli-golden/ledger/.gitignore`). The
-/// TS CLI reads JSONL natively via its `file` storage adapter; the Rust
-/// SDK is sqlite-only and bootstraps `burn.sqlite` from the JSONL on
-/// open (see `relayburn_sdk::ledger::bootstrap`).
+/// The CLI-golden fixture keeps `ledger.jsonl` as a historical bootstrap
+/// source. The Rust SDK is sqlite-first and bootstraps `burn.sqlite` from
+/// the JSONL on open when the JSONL is newer or the sqlite DB is missing.
 ///
 /// We could rely on the SDK's mtime check to do this for free, but a
 /// stale sqlite from a prior run with a *newer* mtime than the JSONL
@@ -84,15 +74,13 @@ struct Invocation {
     /// runner reports "skipped: not yet enabled" rather than failing).
     #[serde(default)]
     enabled: bool,
-    /// Optional extra env to set for this specific invocation. Mirrors
-    /// `inv.env` in the JSON contract so capture-snapshots.mjs and
-    /// golden.rs stay aligned.
+    /// Optional extra env to set for this specific invocation.
     #[serde(default)]
     env: BTreeMap<String, String>,
 }
 
 #[test]
-fn golden_diff_against_ts_cli_snapshots() {
+fn golden_diff_against_cli_snapshots() {
     if std::env::var("BURN_GOLDEN").ok().as_deref() != Some("1") {
         // CI runs `cargo test --workspace` without BURN_GOLDEN set, so the
         // diff runner is silent there. Local devs run `BURN_GOLDEN=1
@@ -266,9 +254,8 @@ fn burn_binary_path() -> PathBuf {
         .join(if cfg!(windows) { "burn.exe" } else { "burn" })
 }
 
-/// Apply the same path / mtime placeholders the capture script uses so the
-/// snapshot stays portable across machines. Keep this in sync with
-/// `tests/fixtures/cli-golden/scripts/capture-snapshots.mjs::normalize`.
+/// Apply path / mtime placeholders so the snapshot stays portable across
+/// machines.
 ///
 /// The synthetic ledger embeds `/tmp/golden-project` as a fake project /
 /// tool-target path; we substitute it here too so the Rust binary's output

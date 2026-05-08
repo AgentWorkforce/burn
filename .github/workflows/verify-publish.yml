@@ -3,7 +3,7 @@ name: Verify Publish
 # Manually triggered smoke test against the npm registry — run after a
 # Publish Packages workflow completes. Installs the just-published package into
 # a clean environment and exercises it enough to catch "published but broken"
-# failures (bin missing +x, workspace:* deps not rewritten, missing exports,
+# failures (bin missing +x, missing exports, optional dependency resolution,
 # etc.).
 
 on:
@@ -17,7 +17,6 @@ on:
         options:
           - 'relayburn'
           - '@relayburn/sdk'
-          - '@relayburn/mcp'
       version:
         description: 'Version to verify (defaults to the "latest" dist-tag)'
         required: false

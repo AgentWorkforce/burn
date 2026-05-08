@@ -1,7 +1,7 @@
 name: cli build
 
 # Build prebuilt `burn` binaries for every platform we publish to npm under
-# `@relayburn/cli-*`. PRs validate the matrix; the cutover publish workflow
+# `@relayburn/cli-*`. PRs validate the matrix; the publish workflow
 # (`.github/workflows/publish.yml`) calls this workflow via `workflow_call`
 # to produce the binaries it then stages into per-platform packages.
 #

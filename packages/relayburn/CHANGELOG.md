@@ -4,6 +4,11 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the fallback to the old TypeScript `@relayburn/cli`; `relayburn`
+  now resolves only the Rust prebuilt platform packages.
+
 ## [2.0.0] - 2026-05-07
 
 ### Changed

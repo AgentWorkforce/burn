@@ -48,22 +48,19 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
-# 2.0 cutover (epic #240) target shape:
+# Publish target shape:
 #
-#   TS-only umbrellas (3):
+#   npm umbrellas (2):
 #     - relayburn                    packages/relayburn/
 #     - @relayburn/sdk (napi)        packages/sdk-node/
-#     - @relayburn/mcp               packages/mcp/
 #
 #   Per-platform binary packages (8):
 #     - @relayburn/cli-<short>       packages/relayburn/npm/<short>/  (Rust burn binary)
 #     - @relayburn/sdk-<short>       packages/sdk-node/npm/<short>/   (napi-rs .node)
 #
-# Total: 11 npm packages. The five legacy TS packages
-# (`@relayburn/{reader,ledger,analyze,ingest,cli}`) are intentionally not
-# in the publish loop — `npm deprecate` for those is a manual post-cutover
-# step. Their source dirs stay (they back the conformance fixture seeder
-# and the cli-golden suite).
+# Total: 10 npm packages. The legacy TypeScript implementation packages are
+# intentionally not in the publish loop; deprecating old npm names is a
+# manual post-cutover task.
 #
 # crates.io still ships exactly two crates (`relayburn-sdk` + `relayburn-cli`).
 
@@ -107,18 +104,14 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # Packages publish in lockstep. Build + test the whole workspace so every
-      # package's dist/ is fresh before `pnpm pack` rewrites workspace:* deps
-      # to concrete versions at pack time.
-      - name: Build workspace
-        run: pnpm -r run build
+      - name: Build npm wrappers
+        run: pnpm -r --if-present run build
 
-      - name: Run tests
+      - name: Run npm tests
         run: pnpm run test
 
-      # Rust port build + test gates the whole publish job. If the Rust
-      # tree is red at this commit, abort before npm ships anything so the
-      # release tag points at a commit where both trees pass.
+      # Rust build + test gates the whole publish job. If the Rust workspace
+      # is red at this commit, abort before npm ships anything.
       #
       # `rustup toolchain install` (no args) reads rust-toolchain.toml and
       # installs both the channel and the listed components — no explicit
@@ -131,10 +124,10 @@ jobs:
           cargo build --workspace --all-targets
           cargo test --workspace
 
-      # The 11-package target table. Each entry is `key:dir` where:
+      # The 10-package target table. Each entry is `key:dir` where:
       #   - `key` is the suffix used for git tags and changelog identifiers
-      #     (so `mcp` → tag `mcp-v<ver>`, `relayburn` → `relayburn-v<ver>`,
-      #     `sdk` → `sdk-v<ver>`, platform packages → `cli-darwin-arm64-v<ver>`
+      #     (so `relayburn` → `relayburn-v<ver>`, `sdk` → `sdk-v<ver>`,
+      #     platform packages → `cli-darwin-arm64-v<ver>`
       #     etc.). Distinct from the npm package name (read from each
       #     directory's `package.json`).
       #   - `dir` is the relative path to the package directory.
@@ -162,7 +155,6 @@ jobs:
             echo 'sdk-linux-arm64-gnu:packages/sdk-node/npm/linux-arm64-gnu'
             echo 'sdk-linux-x64-gnu:packages/sdk-node/npm/linux-x64-gnu'
             echo 'sdk:packages/sdk-node'
-            echo 'mcp:packages/mcp'
             echo 'relayburn:packages/relayburn'
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
@@ -378,8 +370,8 @@ jobs:
             echo "$NPM_NAME@$ver: unpublished — OK"
           done
 
-      # Per-package CHANGELOG.md generation. For each TS-only package being
-      # published (mcp, relayburn umbrella, @relayburn/sdk napi umbrella):
+      # Per-package CHANGELOG.md generation. For each umbrella package being
+      # published (relayburn and @relayburn/sdk):
       #
       #   1. If `## [Unreleased]` contains hand-curated content, promote it
       #      verbatim into the new `## [x.y.z] - DATE` block, then reset
@@ -691,8 +683,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/mcp/package.json packages/mcp/CHANGELOG.md \
-                  packages/relayburn/package.json packages/relayburn/CHANGELOG.md \
+          git add packages/relayburn/package.json packages/relayburn/CHANGELOG.md \
                   packages/sdk-node/package.json packages/sdk-node/CHANGELOG.md \
                   packages/relayburn/npm/*/package.json \
                   packages/sdk-node/npm/*/package.json \
@@ -889,18 +880,8 @@ jobs:
       # registered as a trusted publisher on npmjs.com under this
       # repo/workflow path for the first publish.
       #
-      # Pipeline:
-      #   - For workspace packages (mcp): `pnpm pack` rewrites `workspace:*`
-      #     deps to concrete versions inside the tarball's package.json.
-      #   - For non-workspace packages (relayburn umbrella, sdk-node
-      #     umbrella, 8 platform packages): `npm pack` from the package's
-      #     own directory. These packages live OUTSIDE the pnpm workspace
-      #     (see pnpm-workspace.yaml's `!packages/{relayburn,sdk-node}`
-      #     excludes, plus the platform packages are subdirs that pnpm
-      #     doesn't auto-include) so `pnpm pack` from the workspace root
-      #     can't resolve them by name.
-      #
-      # Then `npm publish <tarball>` uploads with `--provenance` (triggers
+      # Pipeline: `npm pack` from each package directory, then
+      # `npm publish <tarball>` uploads with `--provenance` (triggers
       # OIDC) on real runs, or `--dry-run` on dry runs.
       #
       # Publish order: platform packages first, then their umbrellas. This
@@ -928,32 +909,18 @@ jobs:
             DIRS[$key]="$dir"
           done <<< "$TARGETS"
 
-          # Order matches `targets` output (platform packages → sdk umbrella
-          # → mcp → relayburn umbrella).
+          # Order matches `targets` output: platform packages first, then
+          # their umbrellas.
           for entry in ${{ steps.bump.outputs.versions }}; do
             key="${entry%%:*}"
             version="${entry##*:}"
             dir="${DIRS[$key]}"
             NPM_NAME=$(node -p "require('./$dir/package.json').name")
 
-            # Workspace-aware packing only for workspace packages. The mcp
-            # package is the only entry that lives inside the pnpm
-            # workspace (umbrellas + platform packages are excluded). Use
-            # `pnpm pack` for it (rewrites `workspace:*` → concrete versions
-            # at pack time); use `npm pack` from the package directory for
-            # everyone else.
-            if [ "$key" = "mcp" ]; then
-              echo "==> Packing $NPM_NAME (pnpm)"
-              # pnpm writes <name-without-@>-<ver>.tgz with `/` → `-`.
-              # @relayburn/mcp@2.0.0 → relayburn-mcp-2.0.0.tgz
-              TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${version}.tgz"
-              pnpm --filter "$NPM_NAME" pack --pack-destination "$PACK_DIR"
-            else
-              echo "==> Packing $NPM_NAME (npm, dir=$dir)"
-              # `npm pack` writes <name-without-@>-<ver>.tgz with `/` → `-`.
-              TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${version}.tgz"
-              (cd "$dir" && npm pack --pack-destination "$PACK_DIR")
-            fi
+            echo "==> Packing $NPM_NAME (npm, dir=$dir)"
+            # `npm pack` writes <name-without-@>-<ver>.tgz with `/` → `-`.
+            TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${version}.tgz"
+            (cd "$dir" && npm pack --pack-destination "$PACK_DIR")
 
             TARBALL="$PACK_DIR/$TARBALL_BASENAME"
             if [ ! -f "$TARBALL" ]; then
@@ -970,8 +937,8 @@ jobs:
       # lightweight tags are skipped by --follow-tags.
       #
       # Tag scheme:
-      #   - `<key>-v<ver>` for each of the 11 npm targets (mcp-v…,
-      #     relayburn-v…, sdk-v…, cli-darwin-arm64-v…, sdk-linux-x64-gnu-v…,
+      #   - `<key>-v<ver>` for each of the 10 npm targets
+      #     (relayburn-v…, sdk-v…, cli-darwin-arm64-v…, sdk-linux-x64-gnu-v…,
       #     etc.). The canonical release tag is `relayburn-v<ver>` — the
       #     create-release job below anchors the GitHub Release on it.
       #   - `relayburn-{sdk,cli}-v<ver>` for the two crates.io crates,
@@ -1095,7 +1062,6 @@ jobs:
           const keyOrder = [
             'relayburn',
             'sdk',
-            'mcp',
             'cli-darwin-arm64',
             'cli-darwin-x64',
             'cli-linux-arm64-gnu',
@@ -1109,7 +1075,6 @@ jobs:
           // Mirror the targets table from publish.yml so we can resolve
           // package directories for changelog extraction.
           const dirByKey = new Map([
-            ['mcp', 'packages/mcp'],
             ['relayburn', 'packages/relayburn'],
             ['sdk', 'packages/sdk-node'],
             ['cli-darwin-arm64', 'packages/relayburn/npm/darwin-arm64'],
@@ -1179,10 +1144,9 @@ jobs:
           lines.push(`- \`relayburn-cli@${releaseVersion}\` (tag: \`relayburn-cli-v${releaseVersion}\`) — https://crates.io/crates/relayburn-cli/${releaseVersion}`);
 
           const rootNotes = extractChangelogBody('CHANGELOG.md', releaseVersion);
-          // Only the umbrellas + mcp ship hand-curated changelogs; platform
-          // packages don't (they're implementation detail tracking the
-          // umbrella version).
-          const narrativeKeys = new Set(['relayburn', 'sdk', 'mcp']);
+          // Only the umbrellas ship hand-curated changelogs; platform packages
+          // don't (they're implementation detail tracking the umbrella version).
+          const narrativeKeys = new Set(['relayburn', 'sdk']);
           const packageNotes = packageInfo
             .filter((entry) => narrativeKeys.has(entry.key))
             .map((entry) => ({
