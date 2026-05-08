@@ -201,12 +201,7 @@ pub fn parse_codex_session_incremental(
     let reader = BufReader::new(file);
 
     let project_resolver = ProjectResolver::new();
-    Ok(parse_codex_buffer(
-        reader,
-        start_offset,
-        options,
-        &project_resolver,
-    ))
+    parse_codex_buffer(reader, start_offset, options, &project_resolver)
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +339,7 @@ fn parse_codex_buffer<R: BufRead>(
     start_offset: u64,
     options: &ParseCodexIncrementalOptions,
     project_resolver: &ProjectResolver,
-) -> ParseCodexIncrementalResult {
+) -> std::io::Result<ParseCodexIncrementalResult> {
     let capture_content = matches!(options.content_mode, Some(ContentStoreMode::Full));
     // Validated by `resolve_token_counter` at the public entry point.
     let counter = HeuristicCounter;
@@ -400,11 +395,10 @@ fn parse_codex_buffer<R: BufRead>(
     let mut current_offset: u64 = start_offset;
     loop {
         line_buf.clear();
-        let n = match reader.read_until(b'\n', &mut line_buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => break,
-        };
+        let n = reader.read_until(b'\n', &mut line_buf)?;
+        if n == 0 {
+            break;
+        }
         // Drop trailing partial lines — the next incremental call resumes
         // from the committed end offset, which only advances past `\n`.
         if line_buf.last() != Some(&b'\n') {
@@ -1198,7 +1192,19 @@ fn parse_codex_buffer<R: BufRead>(
         }
     }
 
-    ParseCodexIncrementalResult {
+    // Silence unused-mutable warnings for snapshot mirrors that are written
+    // but only read indirectly.
+    let _ = (
+        cumulative,
+        session_id,
+        session_cwd,
+        turn_contexts,
+        seen_session_meta_keys,
+        root_session_emitted,
+        last_completed_turn,
+    );
+
+    Ok(ParseCodexIncrementalResult {
         turns,
         content: content_out,
         events: events_out,
@@ -1207,7 +1213,7 @@ fn parse_codex_buffer<R: BufRead>(
         tool_result_events: tool_events_out,
         end_offset: committed_end_offset,
         resume,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
