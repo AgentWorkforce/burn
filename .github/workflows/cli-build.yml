@@ -35,6 +35,15 @@ on:
     # caller downloads the uploaded `relayburn-cli-<short>` artifacts and
     # stages them into `packages/relayburn/npm/<short>/bin/` before
     # `npm pack` + `npm publish`.
+    inputs:
+      release_version:
+        description: >-
+          Post-bump release version (e.g. "2.1.0") to bake into the
+          binary via CARGO_PKG_VERSION. Optional — when empty (PR/push
+          runs) we skip the lockstep sed and build with the on-disk
+          workspace version unchanged.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -94,6 +103,28 @@ jobs:
             cargo-cli-${{ runner.os }}-${{ matrix.target }}-
             cargo-cli-${{ runner.os }}-
 
+      - name: Lockstep Cargo.toml to release version
+        # When invoked via the publish workflow, sed the workspace
+        # `[workspace.package].version` (and the path-dep `version = "X.Y"`
+        # pin in `crates/relayburn-cli/Cargo.toml`) so the `burn` binary
+        # built below carries the post-bump `CARGO_PKG_VERSION`. Without
+        # this, clap's `version,` directive bakes the pre-bump version
+        # into the binary and `burn --version` reports the previous
+        # release. Mirrors the regex used in publish.yml's "Lockstep the
+        # Rust workspace" step that runs against the published commit.
+        #
+        # Skipped when `release_version` is empty (PR/push runs) — the
+        # on-disk workspace version is correct in that case.
+        if: inputs.release_version != ''
+        run: |
+          set -euo pipefail
+          RUST_VER="${{ inputs.release_version }}"
+          RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}')
+          echo "Rust workspace lockstep: $RUST_VER (minor pin: $RUST_MINOR)"
+          sed -i.bak -E "s/^version = \"[^\"]+\"$/version = \"$RUST_VER\"/" Cargo.toml
+          sed -i.bak -E "s|(relayburn-sdk = \\{ path = \"\\.\\./relayburn-sdk\", version = \")[^\"]+(\" \\})|\\1$RUST_MINOR\\2|" crates/relayburn-cli/Cargo.toml
+          rm -f Cargo.toml.bak crates/relayburn-cli/Cargo.toml.bak
+
       - name: Build burn binary for ${{ matrix.target }}
         # The binary name is `burn` (the `[[bin]]` rename in
         # `crates/relayburn-cli/Cargo.toml`); the crate is `relayburn-cli`.
@@ -149,11 +180,35 @@ jobs:
       - name: Smoke test (`burn --help`)
         # Native legs only. The aarch64-linux leg cross-compiles on an x64
         # host so the runner's interpreter cannot execute the binary.
+        #
+        # When `release_version` is supplied (publish-workflow caller), we
+        # also assert that `burn --version` reports the expected version.
+        # This catches the regression where the binary was built with a
+        # stale `CARGO_PKG_VERSION` (the 2026-05-04 incident — 2.1.0
+        # platform package shipping a 2.0.0 binary).
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: |
           set -euo pipefail
+          EXPECTED_VERSION='${{ inputs.release_version }}'
+
+          assert_version() {
+            local label="$1"
+            local actual="$2"
+            if [ -z "$EXPECTED_VERSION" ]; then
+              echo "$label: $actual (no expected version supplied; skipping assertion)"
+              return 0
+            fi
+            local expected="burn $EXPECTED_VERSION"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error title=Version mismatch::$label reported '$actual', expected '$expected'. The binary was likely built with a stale CARGO_PKG_VERSION — the publish workflow should have lockstepped Cargo.toml before this build."
+              exit 1
+            fi
+            echo "$label: $actual (matches expected)"
+          }
+
           packages/relayburn/npm/${{ matrix.short }}/bin/burn --help
-          packages/relayburn/npm/${{ matrix.short }}/bin/burn --version
+          direct_version=$(packages/relayburn/npm/${{ matrix.short }}/bin/burn --version)
+          assert_version "direct binary" "$direct_version"
 
           smoke_dir="$(mktemp -d)"
           umbrella_dir="$(mktemp -d)"
@@ -162,10 +217,12 @@ jobs:
             --ignore-scripts --no-audit --no-fund \
             ./packages/relayburn/npm/${{ matrix.short }}
           "$smoke_dir/node_modules/.bin/burn" --help
-          "$smoke_dir/node_modules/.bin/burn" --version
+          platform_version=$("$smoke_dir/node_modules/.bin/burn" --version)
+          assert_version "platform package" "$platform_version"
 
           npm install --prefix "$umbrella_dir" --no-save --omit=optional \
             --ignore-scripts --no-audit --no-fund \
             ./packages/relayburn
           NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --help
-          NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --version
+          umbrella_version=$(NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --version)
+          assert_version "umbrella package" "$umbrella_version"
