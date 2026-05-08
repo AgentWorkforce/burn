@@ -18,16 +18,16 @@
 //!    the SDK-owned `summary_report` verb.
 //! 4. Render the typed report as JSON or human output.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use clap::Args;
 use relayburn_sdk::{
     ingest_all, summary_fidelity_summary_to_value, summary_replacement_savings_to_value,
-    CostBreakdown, CoverageField, FidelityClass, FidelitySummary, Ledger, LedgerHandle,
+    CostBreakdown, CoverageField, Enrichment, FidelityClass, FidelitySummary, Ledger, LedgerHandle,
     LedgerOpenOptions, OutcomeLabel, QualityResult, RelationshipType, SubagentTreeNode,
-    SubagentTypeStats, SummaryByToolReport, SummaryGroupedReport, SummaryRelationshipReport,
-    SummaryReport, SummaryReportMode, SummaryReportOptions, SummarySubagentTreeReport,
-    UsageCostAggregateRow,
+    SubagentTypeStats, SummaryByToolReport, SummaryGroupBy, SummaryGroupedReport,
+    SummaryRelationshipReport, SummaryReport, SummaryReportMode, SummaryReportOptions,
+    SummarySubagentTreeReport, UsageCostAggregateRow,
 };
 use serde_json::{json, Map, Value};
 
@@ -88,6 +88,14 @@ pub struct SummaryArgs {
     #[arg(long, value_name = "WORKFLOW_ID")]
     pub workflow: Option<String>,
 
+    /// Filter by folded enrichment tag. Repeatable; every tag must match.
+    #[arg(long = "tag", value_name = "K=V")]
+    pub tag: Vec<String>,
+
+    /// Group totals by a folded enrichment tag value.
+    #[arg(long = "group-by-tag", value_name = "KEY")]
+    pub group_by_tag: Option<String>,
+
     /// Provider filter (CSV of provider names; case-insensitive).
     #[arg(long, value_name = "PROVIDERS")]
     pub provider: Option<String>,
@@ -118,29 +126,43 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         && (args.by_provider
             || args.by_subagent_type
             || args.by_relationship.is_some()
-            || args.subagent_tree.is_some())
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some())
     {
         eprintln!(
-            "burn: --by-tool cannot be combined with --by-provider/--by-subagent-type/--by-relationship/--subagent-tree"
+            "burn: --by-tool cannot be combined with --by-provider/--by-subagent-type/--by-relationship/--subagent-tree/--group-by-tag"
         );
         return Ok(2);
     }
     if args.by_provider
-        && (args.by_subagent_type || args.by_relationship.is_some() || args.subagent_tree.is_some())
+        && (args.by_subagent_type
+            || args.by_relationship.is_some()
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some())
     {
         eprintln!(
-            "burn: --by-provider cannot be combined with --by-subagent-type/--by-relationship/--subagent-tree"
+            "burn: --by-provider cannot be combined with --by-subagent-type/--by-relationship/--subagent-tree/--group-by-tag"
         );
         return Ok(2);
     }
-    if args.by_subagent_type && (args.by_relationship.is_some() || args.subagent_tree.is_some()) {
+    if args.by_subagent_type
+        && (args.by_relationship.is_some()
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some())
+    {
         eprintln!(
-            "burn: --by-subagent-type cannot be combined with --by-relationship/--subagent-tree"
+            "burn: --by-subagent-type cannot be combined with --by-relationship/--subagent-tree/--group-by-tag"
         );
         return Ok(2);
     }
-    if args.by_relationship.is_some() && args.subagent_tree.is_some() {
-        eprintln!("burn: --by-relationship cannot be combined with --subagent-tree");
+    if args.by_relationship.is_some()
+        && (args.subagent_tree.is_some() || args.group_by_tag.is_some())
+    {
+        eprintln!("burn: --by-relationship cannot be combined with --subagent-tree/--group-by-tag");
+        return Ok(2);
+    }
+    if args.subagent_tree.is_some() && args.group_by_tag.is_some() {
+        eprintln!("burn: --subagent-tree cannot be combined with --group-by-tag");
         return Ok(2);
     }
     if let Some(rel) = &args.by_relationship {
@@ -149,11 +171,24 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
             return Ok(2);
         }
     }
+    if let Some(tag_key) = args.group_by_tag.as_deref() {
+        if tag_key.is_empty() {
+            eprintln!("burn: --group-by-tag requires a non-empty key");
+            return Ok(2);
+        }
+    }
 
     let provider_filter = match parse_provider_filter(args.provider.as_deref()) {
         Ok(filter) => filter,
         Err(msg) => {
             eprintln!("{msg}");
+            return Ok(2);
+        }
+    };
+    let tag_filter: Enrichment = match parse_tag_filters(&args.tag) {
+        Ok(filter) => filter,
+        Err(err) => {
+            eprintln!("{err}");
             return Ok(2);
         }
     };
@@ -199,6 +234,12 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         project: args.project,
         since: args.since,
         workflow: args.workflow,
+        tags: if tag_filter.is_empty() {
+            None
+        } else {
+            Some(tag_filter)
+        },
+        group_by_tag: args.group_by_tag,
         agent: args.agent,
         providers: provider_filter.map(|providers| providers.into_iter().collect()),
         mode,
@@ -239,6 +280,25 @@ fn parse_provider_filter(raw: Option<&str>) -> Result<Option<BTreeSet<String>>, 
         return Err("burn: --provider requires a value");
     }
     Ok(Some(providers))
+}
+
+fn parse_tag_filters(tags: &[String]) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for raw in tags {
+        let (key, value) = raw
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("burn: --tag expects k=v, got \"{raw}\""))?;
+        if key.is_empty() {
+            anyhow::bail!("burn: --tag key must be non-empty (got \"{raw}\")");
+        }
+        if let Some(existing) = out.get(key) {
+            anyhow::bail!(
+                "burn: duplicate --tag filter for key \"{key}\" ({existing:?} vs {value:?})"
+            );
+        }
+        out.insert(key.to_string(), value.to_string());
+    }
+    Ok(out)
 }
 
 /// Run an ingest sweep on the open handle. Builds a current-thread tokio
@@ -337,20 +397,33 @@ fn emit_json(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::Inges
     let group_rows: Vec<Value> = report
         .rows
         .iter()
-        .map(|r| {
-            json!({
-                label_key: r.label,
-                "turns": r.turns,
-                "usage": {
+        .enumerate()
+        .map(|(idx, r)| {
+            let mut row = if report.group_by == SummaryGroupBy::Tag {
+                json!({
+                    "tag": report.tag_key.as_deref().unwrap_or(""),
+                    "value": report.tag_values.get(idx).cloned().flatten(),
+                })
+            } else {
+                json!({
+                    label_key: r.label,
+                })
+            };
+            let obj = row.as_object_mut().unwrap();
+            obj.insert("turns".into(), json!(r.turns));
+            obj.insert(
+                "usage".into(),
+                json!({
                     "input": r.usage.input,
                     "output": r.usage.output,
                     "reasoning": r.usage.reasoning,
                     "cacheRead": r.usage.cache_read,
                     "cacheCreate5m": r.usage.cache_create_5m,
                     "cacheCreate1h": r.usage.cache_create_1h,
-                },
-                "cost": cost_breakdown_to_json(&r.cost),
-            })
+                }),
+            );
+            obj.insert("cost".into(), cost_breakdown_to_json(&r.cost));
+            row
         })
         .collect();
 
@@ -801,7 +874,11 @@ fn emit_human(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::Inge
         return;
     }
 
-    let header_label = report.group_by.wire_str();
+    let header_label = if report.group_by == SummaryGroupBy::Tag {
+        "value"
+    } else {
+        report.group_by.wire_str()
+    };
     let header = vec![
         header_label.to_string(),
         "turns".into(),
@@ -1016,5 +1093,27 @@ mod tests {
             parse_provider_filter(Some(" , ")),
             Err("burn: --provider requires a value"),
         );
+    }
+
+    #[test]
+    fn parse_tag_filters_requires_kv_with_non_empty_key() {
+        let got = parse_tag_filters(&["persona=code-reviewer".to_string()]).unwrap();
+        assert_eq!(
+            got.get("persona").map(String::as_str),
+            Some("code-reviewer")
+        );
+
+        let missing_eq = parse_tag_filters(&["persona".to_string()]).unwrap_err();
+        assert!(format!("{missing_eq}").contains("--tag expects k=v"));
+
+        let empty_key = parse_tag_filters(&["=value".to_string()]).unwrap_err();
+        assert!(format!("{empty_key}").contains("--tag key must be non-empty"));
+
+        let duplicate = parse_tag_filters(&[
+            "persona=code-reviewer".to_string(),
+            "persona=builder".to_string(),
+        ])
+        .unwrap_err();
+        assert!(format!("{duplicate}").contains("duplicate --tag filter"));
     }
 }

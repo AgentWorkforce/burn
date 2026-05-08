@@ -11,11 +11,10 @@ description = "The `burn` CLI — published to crates.io. Crate name is relaybur
 name = "burn"
 path = "src/main.rs"
 
-# A library target is added alongside the `burn` binary so the harness
-# substrate (`HarnessAdapter` trait, registry, pending-stamp factory)
-# under `src/harnesses/` can be unit-tested with `cargo test -p
-# relayburn-cli` and so future integration tests under `tests/` can
-# reach it without re-declaring the module tree. The binary path
+# A library target is added alongside the `burn` binary so internal
+# modules can be unit-tested with `cargo test -p relayburn-cli` and so
+# future integration tests under `tests/` can reach them without
+# re-declaring the module tree. The binary path
 # (`src/main.rs`) and the library path (`src/lib.rs`) live side-by-side
 # — cargo treats them as two separate compile units that share the
 # same package metadata.
@@ -66,25 +65,17 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 
-# Harness substrate (#248-b): the `HarnessAdapter` trait under `harnesses/`
-# uses `async fn` in trait — `async-trait` desugars to `Pin<Box<…>>` futures
-# without forcing every adapter to spell that out. `phf` macros give us a
-# perfect-hash registry that's evaluated at compile time, so harness lookup
-# costs nothing at startup. `tokio::sync` is needed for the watch controller
-# wiring exposed by `relayburn-sdk` (`WatchController` holds a `Mutex`).
-# `rt` is required by Wave 2 read-path commands so they can drive
-# `relayburn_sdk::ingest_all` (async) from the otherwise-sync presenter
-# bodies via a current-thread runtime.
+# Harness substrate unit tests still use `async-trait` and `phf`. `tokio::sync`
+# is needed by MCP / ingest presenters, and `rt` is required by read-path
+# commands so they can drive `relayburn_sdk::ingest_all` from otherwise-sync
+# presenter bodies via a current-thread runtime.
 async-trait = "0.1"
 phf = { version = "0.11", features = ["macros"] }
-# `process` is needed by `commands/run.rs` so the `burn run` driver can
-# `await` the child via `tokio::process::Command::status()` rather than
-# blocking the current-thread runtime with `std::process::Command::status()`.
 # `signal` is needed for the `burn ingest --watch` SIGINT/SIGTERM trap
 # (#248 D8); the watch loop blocks the foreground until a stop signal
 # comes in. `rt` drives the current-thread runtime that wraps the SDK's
 # async ingest verb from otherwise-sync presenter bodies.
-tokio = { workspace = true, features = ["sync", "rt", "process", "signal"] }
+tokio = { workspace = true, features = ["sync", "rt", "signal"] }
 
 # `IndexMap` preserves first-seen iteration order, which matters for the
 # Wave 2 read-path commands so their grouped output (`summary --by-model`,

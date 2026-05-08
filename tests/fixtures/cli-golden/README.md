@@ -24,8 +24,8 @@ tests/fixtures/cli-golden/
 `invocations.json` lists the CLI surfaces the diff runner knows about. The set
 covers read-path commands (`summary`, `hotspots`, `overhead`, `overhead trim`,
 `compare`, `state status`) in human and JSON forms, plus help text for
-action-path commands (`burn ingest --help`, `burn run --help`,
-`burn mcp-server --help`) and top-level `burn --help`.
+action-path commands (`burn ingest --help`, `burn mcp-server --help`) and
+top-level `burn --help`.
 
 Action-path commands themselves are deliberately not snapshotted: their output
 depends on a real spawn lifecycle or watch loop, which cannot be reproduced

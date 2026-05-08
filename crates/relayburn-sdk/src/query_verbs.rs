@@ -38,7 +38,7 @@ use crate::analyze::{
     RowCoverage, SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
     ToolSavingsAggregate, UsageCostAggregateRow, WasteFinding,
 };
-use crate::ledger::{EnrichedTurn, Query};
+use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
     parse_bash_command, resolve_project, BashParse, ContentRecord, Coverage, FidelityClass,
     RelationshipType, SessionRelationshipRecord, SourceKind, TurnRecord, Usage, UsageGranularity,
@@ -216,6 +216,10 @@ pub struct SummaryOptions {
     pub session: Option<String>,
     pub project: Option<String>,
     pub since: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Enrichment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by_tag: Option<String>,
     pub ledger_home: Option<PathBuf>,
 }
 
@@ -238,6 +242,17 @@ pub struct SummaryModelRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SummaryTagRow {
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    pub tokens: u64,
+    pub cost: f64,
+    pub turn_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub total_tokens: u64,
     pub total_cost: f64,
@@ -245,19 +260,36 @@ pub struct Summary {
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_tag: Option<Vec<SummaryTagRow>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_savings: Option<ReplacementSavingsSummary>,
 }
 
 impl LedgerHandle {
     pub fn summary(&self, opts: SummaryOptions) -> Result<Summary> {
-        let q = build_query(
+        let mut q = build_query(
             opts.session.as_deref(),
             opts.project.as_deref(),
             opts.since.as_deref(),
         )?;
-        let turns = collect_turns(self, &q)?;
+        if let Some(tags) = opts.tags.clone() {
+            validate_tags(&tags)?;
+            if !tags.is_empty() {
+                q.enrichment = Some(tags);
+            }
+        }
+        let group_by_tag = opts.group_by_tag.clone();
+        if let Some(tag) = group_by_tag.as_deref() {
+            validate_tag_key(tag, "groupByTag")?;
+        }
+        let enriched = self.inner.query_turns(&q)?;
+        let turns: Vec<TurnRecord> = enriched.iter().map(|e| e.turn.clone()).collect();
         let pricing = load_pricing(None);
-        Ok(compute_summary(&turns, &pricing))
+        let mut summary = compute_summary(&turns, &pricing);
+        if let Some(tag) = group_by_tag {
+            summary.by_tag = Some(compute_summary_by_tag(&enriched, &tag, &pricing));
+        }
+        Ok(summary)
     }
 }
 
@@ -267,6 +299,20 @@ pub fn summary(opts: SummaryOptions) -> Result<Summary> {
         ledger_home: None,
         ..opts
     })
+}
+
+fn validate_tags(tags: &Enrichment) -> Result<()> {
+    for key in tags.keys() {
+        validate_tag_key(key, "tag")?;
+    }
+    Ok(())
+}
+
+fn validate_tag_key(key: &str, label: &str) -> Result<()> {
+    if key.is_empty() {
+        anyhow::bail!("{label} key must be non-empty");
+    }
+    Ok(())
 }
 
 fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
@@ -335,8 +381,59 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
             .into_iter()
             .map(|k| by_model.remove(&k).unwrap())
             .collect(),
+        by_tag: None,
         replacement_savings,
     }
+}
+
+fn compute_summary_by_tag(
+    enriched: &[EnrichedTurn],
+    tag: &str,
+    pricing: &PricingTable,
+) -> Vec<SummaryTagRow> {
+    let mut order: Vec<Option<String>> = Vec::new();
+    let mut rows: HashMap<Option<String>, SummaryTagRow> = HashMap::new();
+
+    for e in enriched {
+        let value = e.enrichment.get(tag).cloned();
+        let tokens = total_tokens_for_turn(&e.turn);
+        let cost = cost_for_turn(&e.turn, pricing)
+            .map(|c| c.total)
+            .unwrap_or(0.0);
+        let row = rows.entry(value.clone()).or_insert_with(|| {
+            order.push(value.clone());
+            SummaryTagRow {
+                tag: tag.to_string(),
+                value,
+                tokens: 0,
+                cost: 0.0,
+                turn_count: 0,
+            }
+        });
+        row.tokens += tokens;
+        row.cost += cost;
+        row.turn_count += 1;
+    }
+
+    let mut out: Vec<SummaryTagRow> = order
+        .into_iter()
+        .map(|k| rows.remove(&k).unwrap())
+        .collect();
+    out.sort_by(|a, b| {
+        b.cost
+            .partial_cmp(&a.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+fn total_tokens_for_turn(t: &TurnRecord) -> u64 {
+    t.usage.input
+        + t.usage.output
+        + t.usage.reasoning
+        + t.usage.cache_read
+        + t.usage.cache_create_5m
+        + t.usage.cache_create_1h
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +447,10 @@ pub struct SummaryReportOptions {
     pub project: Option<String>,
     pub since: Option<String>,
     pub workflow: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Enrichment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by_tag: Option<String>,
     pub agent: Option<String>,
     /// Provider labels to keep. Values are trimmed and matched
     /// case-insensitively against the SDK's effective provider resolver.
@@ -369,6 +470,8 @@ impl Default for SummaryReportOptions {
             project: None,
             since: None,
             workflow: None,
+            tags: None,
+            group_by_tag: None,
             agent: None,
             providers: None,
             mode: SummaryReportMode::default(),
@@ -408,6 +511,7 @@ impl Default for SummaryReportMode {
 pub enum SummaryGroupBy {
     Model,
     Provider,
+    Tag,
 }
 
 impl SummaryGroupBy {
@@ -415,6 +519,7 @@ impl SummaryGroupBy {
         match self {
             Self::Model => "model",
             Self::Provider => "provider",
+            Self::Tag => "tag",
         }
     }
 
@@ -422,6 +527,7 @@ impl SummaryGroupBy {
         match self {
             Self::Model => "byModel",
             Self::Provider => "byProvider",
+            Self::Tag => "byTag",
         }
     }
 }
@@ -440,6 +546,10 @@ pub enum SummaryReport {
 #[serde(rename_all = "camelCase")]
 pub struct SummaryGroupedReport {
     pub group_by: SummaryGroupBy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag_values: Vec<Option<String>>,
     pub turn_count: u64,
     pub rows: Vec<UsageCostAggregateRow>,
     pub total_cost: CostBreakdown,
@@ -590,18 +700,32 @@ impl LedgerHandle {
 
         match opts.mode {
             SummaryReportMode::Grouped { by_provider } => {
-                let rows = if by_provider {
-                    aggregate_by_provider(&turns, AggregateByProviderOptions::new(&pricing))
-                        .into_iter()
-                        .map(summary_provider_to_aggregate_row)
-                        .collect()
+                let (group_by, tag_key, tag_values, rows) = if let Some(tag_key) =
+                    opts.group_by_tag.as_deref()
+                {
+                    let (rows, values) = summary_aggregate_by_tag(&enriched, tag_key, &pricing);
+                    (SummaryGroupBy::Tag, Some(tag_key.to_string()), values, rows)
+                } else if by_provider {
+                    (
+                        SummaryGroupBy::Provider,
+                        None,
+                        Vec::new(),
+                        aggregate_by_provider(&turns, AggregateByProviderOptions::new(&pricing))
+                            .into_iter()
+                            .map(summary_provider_to_aggregate_row)
+                            .collect(),
+                    )
                 } else {
-                    summary_aggregate_by_model(&turns, &pricing)
+                    (
+                        SummaryGroupBy::Model,
+                        None,
+                        Vec::new(),
+                        summary_aggregate_by_model(&turns, &pricing),
+                    )
                 };
                 let total_cost = sum_costs(rows.iter().map(|r| &r.cost));
                 let fidelity = summarize_fidelity(&turns);
-                let per_cell_fidelity =
-                    summary_per_cell_fidelity_to_value(&rows, summary_group_by(by_provider));
+                let per_cell_fidelity = summary_per_cell_fidelity_to_value(&rows, group_by);
                 let replacement_savings = summarize_replacement_savings(&turns, None);
                 let quality = if opts.include_quality {
                     Some(compute_summary_quality_for_turns(&self.inner, &turns)?)
@@ -609,7 +733,9 @@ impl LedgerHandle {
                     None
                 };
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
-                    group_by: summary_group_by(by_provider),
+                    group_by,
+                    tag_key,
+                    tag_values,
                     turn_count: turns.len() as u64,
                     rows,
                     total_cost,
@@ -821,9 +947,27 @@ fn build_summary_report_query(opts: &SummaryReportOptions) -> Result<Query> {
         opts.project.as_deref(),
         opts.since.as_deref(),
     )?;
+    if let Some(tag) = opts.group_by_tag.as_deref() {
+        validate_tag_key(tag, "groupByTag")?;
+    }
+    let mut enrichment = BTreeMap::new();
     if let Some(workflow) = &opts.workflow {
-        let mut enrichment = BTreeMap::new();
         enrichment.insert("workflowId".to_string(), workflow.clone());
+    }
+    if let Some(tags) = opts.tags.as_ref() {
+        validate_tags(tags)?;
+        for (key, value) in tags {
+            if let Some(existing) = enrichment.get(key) {
+                if existing != value {
+                    anyhow::bail!(
+                        "conflicting filters for tag \"{key}\" ({existing:?} vs {value:?})"
+                    );
+                }
+            }
+            enrichment.insert(key.clone(), value.clone());
+        }
+    }
+    if !enrichment.is_empty() {
         q.enrichment = Some(enrichment);
     }
     Ok(q)
@@ -970,12 +1114,57 @@ fn load_summary_content_for_quality(
     Ok(out)
 }
 
-fn summary_group_by(by_provider: bool) -> SummaryGroupBy {
-    if by_provider {
-        SummaryGroupBy::Provider
-    } else {
-        SummaryGroupBy::Model
+fn summary_aggregate_by_tag(
+    enriched: &[EnrichedTurn],
+    tag_key: &str,
+    pricing: &PricingTable,
+) -> (Vec<UsageCostAggregateRow>, Vec<Option<String>>) {
+    let mut by_value: HashMap<Option<String>, UsageCostAggregateRow> = HashMap::new();
+    let mut order: Vec<Option<String>> = Vec::new();
+    for enriched in enriched {
+        let value = enriched.enrichment.get(tag_key).cloned();
+        let label = value.clone().unwrap_or_else(|| "(untagged)".to_string());
+        let row = by_value.entry(value.clone()).or_insert_with(|| {
+            order.push(value.clone());
+            summary_empty_row(&label)
+        });
+        row.turns += 1;
+        row.usage.input += enriched.turn.usage.input;
+        row.usage.output += enriched.turn.usage.output;
+        row.usage.reasoning += enriched.turn.usage.reasoning;
+        row.usage.cache_read += enriched.turn.usage.cache_read;
+        row.usage.cache_create_5m += enriched.turn.usage.cache_create_5m;
+        row.usage.cache_create_1h += enriched.turn.usage.cache_create_1h;
+        summary_accumulate_coverage(
+            &mut row.coverage,
+            enriched.turn.fidelity.as_ref().map(|f| &f.coverage),
+        );
+        if let Some(c) = cost_for_turn(&enriched.turn, pricing) {
+            row.cost.total += c.total;
+            row.cost.input += c.input;
+            row.cost.output += c.output;
+            row.cost.reasoning += c.reasoning;
+            row.cost.cache_read += c.cache_read;
+            row.cost.cache_create += c.cache_create;
+        }
     }
+
+    let mut pairs: Vec<(Option<String>, UsageCostAggregateRow)> = order
+        .into_iter()
+        .map(|value| {
+            let row = by_value.remove(&value).unwrap();
+            (value, row)
+        })
+        .collect();
+    pairs.sort_by(|a, b| {
+        b.1.cost
+            .total
+            .partial_cmp(&a.1.cost.total)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let (values, rows): (Vec<Option<String>>, Vec<UsageCostAggregateRow>) =
+        pairs.into_iter().unzip();
+    (rows, values)
 }
 
 fn summary_aggregate_by_model(

@@ -23,7 +23,6 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, and subagents. |
 | [`burn overhead`](#burn-overhead) | Attribute cached prompt cost to `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. |
 | [`burn compare`](#burn-compare) | Compare observed model performance by activity: cost per turn, one-shot rate, and sample size. |
-| [`burn run`](#burn-run) | Spawn Claude, Codex, or OpenCode with attribution tags and automatic ingest. |
 | [`burn ingest`](#burn-ingest) | Import existing or live session logs without wrapping the harness. |
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
 | [`burn state`](#burn-state) | Inspect, rebuild, and prune derived ledger artifacts. |
@@ -38,6 +37,8 @@ tokens they used, and what they cost.
 | `--since <range>` | Limit to a relative range like `24h`, `7d`, or `4w`, or an ISO timestamp. |
 | `--project <path>` | Limit to a project path or git-canonical project key. |
 | `--session <id>` | Limit to one session. |
+| `--tag k=v` | Filter by folded enrichment tag. Repeatable; all tags must match. |
+| `--group-by-tag <key>` | Group totals by a folded enrichment tag value. |
 | `--by-provider` | Group totals by provider instead of model. |
 | `--json` | Emit machine-readable output. |
 
@@ -46,6 +47,8 @@ tokens they used, and what they cost.
 | `burn summary` | All-time cost by model. |
 | `burn summary --since 24h` | Cost from the last 24 hours. |
 | `burn summary --by-provider` | Cost grouped by effective provider. |
+| `burn summary --tag persona=code-reviewer` | Cost for sessions stamped with that persona tag. |
+| `burn summary --group-by-tag persona` | Cost grouped by persona value. |
 
 Synthetic-routed models are recognized from `hf:*`,
 `accounts/fireworks/models/*`, and `synthetic/*`.
@@ -123,38 +126,6 @@ testing, review, exploration, docs, and refactoring.
 
 Run `burn summary --by-provider` to discover model IDs present in your ledger.
 
-## `burn run`
-
-Use `burn run` when you want Burn to launch the harness, stamp metadata, watch
-for session logs, and ingest turns as the child exits. Supported harnesses:
-`claude`, `codex`, and `opencode`.
-
-| Option | What it does |
-|---|---|
-| `<harness>` | Required harness: `claude`, `codex`, or `opencode`. |
-| `--tag k=v` | Stamp metadata onto the session. Repeatable. |
-| `-- <harness args>` | Pass everything after `--` to the underlying harness. |
-
-| Example | Result |
-|---|---|
-| `burn run claude --tag workflow=refactor -- --resume` | Resume Claude and stamp `workflow=refactor`. |
-| `burn run codex --tag workflow=refactor` | Run Codex with workflow attribution. |
-| `burn run opencode --tag agentId=ag-42 --tag tier=best` | Run OpenCode with agent and tier tags. |
-
-Burn also reads these attribution environment variables and re-exports them to
-the child process:
-
-| Env var | Stamp key |
-|---|---|
-| `RELAYBURN_WORKFLOW_ID` | `workflowId` |
-| `RELAYBURN_STEP_ID` | `stepId` |
-| `RELAYBURN_AGENT_ID` | `agentId` |
-| `RELAYBURN_PARENT_AGENT_ID` | `parentAgentId` |
-| `RELAYBURN_PERSONA` | `persona` |
-| `RELAYBURN_TIER` | `tier` |
-
-Explicit `--tag k=v` values win over environment-derived tags.
-
 ## `burn ingest`
 
 Use `burn ingest` when sessions already exist, or when another process owns the
@@ -223,7 +194,7 @@ content/search data in `content.sqlite`.
 | `~/.agentworkforce/burn/burn.sqlite` | Events, stamps, sessions, relationships, and archive metadata. |
 | `~/.agentworkforce/burn/content.sqlite` | Content blobs and the FTS5 search index. |
 | `~/.agentworkforce/burn/config.json` | Content-storage and retention configuration. |
-| `~/.agentworkforce/burn/pending-stamps/` | Temporary manifests used by harnesses that do not expose a session ID before spawn. |
+| `~/.agentworkforce/burn/pending-stamps/` | Temporary manifests used by launchers that do not expose a session ID before spawn. |
 | `RELAYBURN_HOME` | Override the whole Burn data directory. |
 | `RELAYBURN_SQLITE_PATH` | Override the events database path. |
 | `RELAYBURN_CONTENT_PATH` | Override the content database path. |
@@ -311,9 +282,12 @@ ID, and the tier. Burn accepts that context, attaches it to the session, and
 makes it queryable later alongside the usage data from the session log.
 
 The primitive is **stamping**: attach metadata to a session by ID, before or
-after any turns have been recorded. For command-line use, prefer `burn run
-<harness> --tag k=v`; direct Rust embedders can use `relayburn_sdk::Stamp`
-and `relayburn_sdk::StampSelector` against a `LedgerHandle`.
+after any turns have been recorded. Launchers that do not know the session ID
+before spawn should call `@relayburn/sdk` `writePendingStamp()` before
+starting the agent, then run `burn ingest` / `ingest()` to fold the tags onto
+the discovered turns. Direct Rust embedders with an exact session ID can use
+`relayburn_sdk::Stamp` and `relayburn_sdk::StampSelector` against a
+`LedgerHandle`.
 
 Stamp selectors:
 
@@ -330,33 +304,35 @@ context and decides what to attach.
 
 ### Spawner-integrated ingest
 
-All three supported harnesses - Claude, Codex, and OpenCode - ship under one
-verb:
+The recommended launcher integration is the Node SDK pending-stamp primitive:
 
-```bash
-burn run <claude|codex|opencode> [--tag k=v ...] [-- <harness args>]
+```js
+import { writePendingStamp } from "@relayburn/sdk";
+
+await writePendingStamp({
+  harness: "codex",
+  cwd: process.cwd(),
+  enrichment: {
+    persona: "code-reviewer",
+    personaTier: "senior",
+    agentworkforce: "1",
+  },
+});
 ```
 
-For Claude, the adapter generates a session UUID up front so metadata can be
-stamped before the agent starts. It passes `--session-id` to Claude, applies
-any `--tag k=v` pairs as stamps, and ingests the session into the ledger when
-Claude exits. If you are building an orchestrator, the same pattern applies:
-generate the UUID, stamp first, spawn with the UUID, then let burn pick up the
-session log on ingest.
+Then spawn the harness normally and let `burn ingest` or `ingest()` scan the
+session stores. Claude launchers can either preallocate `--session-id` and
+write an exact session stamp from Rust, or use `writePendingStamp({ harness:
+"claude", ... })` when the final session ID is not available before spawn.
 
-```bash
-burn run claude --tag workflow=refactor --tag persona=senior-eng -- --resume abc
-```
+Codex and OpenCode do not expose a pre-spawn session ID. `writePendingStamp()`
+writes a pending-stamp manifest under `$RELAYBURN_HOME/pending-stamps/` before
+the launcher spawns the agent. Ingest resolves the manifest against the first
+matching session file before the first turn is appended. Claude launchers can
+use the same pending-stamp path when the final session ID is not available
+before spawn. Abandoned pending manifests are cleaned up after 24 hours.
 
-Codex and OpenCode do not expose Claude-style hooks or a pre-spawn session ID.
-Their adapters write a pending-stamp manifest under
-`$RELAYBURN_HOME/pending-stamps/` before spawning, then resolve it against the
-first matching session file before the first turn is appended. They also run
-burn's foreground watch loop for the child process lifetime, so long sessions
-become visible incrementally instead of only after exit. Abandoned pending
-manifests are cleaned up after 24 hours.
-
-For passive ingest without a wrapper, run:
+For passive ingest, run:
 
 ```bash
 burn ingest
@@ -366,37 +342,6 @@ burn ingest --watch [--interval <ms>]
 `burn ingest` scans Claude, Codex, and OpenCode stores once and uses the same
 cursor and dedup path as the reporting commands. `burn ingest --watch` keeps
 that scan loop running in the foreground.
-
-### Spawner env-var contract
-
-For orchestrators that spawn many agent sessions, threading `--tag` through
-every wrapper invocation is awkward. All three adapters also read a fixed set
-of `RELAYBURN_*` env vars and fold them into the stamp bag:
-
-| Env var | Stamp key |
-|---|---|
-| `RELAYBURN_WORKFLOW_ID` | `workflowId` |
-| `RELAYBURN_STEP_ID` | `stepId` |
-| `RELAYBURN_AGENT_ID` | `agentId` |
-| `RELAYBURN_PARENT_AGENT_ID` | `parentAgentId` |
-| `RELAYBURN_PERSONA` | `persona` |
-| `RELAYBURN_TIER` | `tier` |
-
-`--tag k=v` flags win on key collision. The merged values are re-exported on
-the child harness environment under their canonical names, so a transitive
-`burn ...` invocation inside the child session inherits the same context
-without the orchestrator having to re-thread it.
-
-```bash
-export RELAYBURN_WORKFLOW_ID=wf-refactor-auth
-export RELAYBURN_AGENT_ID=ag-42
-burn run codex
-burn run opencode --tag agentId=ag-43
-```
-
-Other `RELAYBURN_*` variables (`RELAYBURN_HOME`, `RELAYBURN_SESSION_ID`,
-`RELAYBURN_CONTENT_STORE`, `RELAYBURN_CONTENT_TTL_DAYS`) are burn internals and
-are not treated as stamp tags.
 
 ### Hook-based ingest for orchestrators
 

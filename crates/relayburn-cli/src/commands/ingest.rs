@@ -359,6 +359,7 @@ mod tests {
             scanned_sessions: 1,
             ingested_sessions: 1,
             appended_turns: 1,
+            applied_pending_stamps: 0,
         });
         assert_eq!(one, "[burn] ingest: ingested 1 session (+1 turn)\n");
 
@@ -366,6 +367,7 @@ mod tests {
             scanned_sessions: 3,
             ingested_sessions: 2,
             appended_turns: 5,
+            applied_pending_stamps: 0,
         });
         assert_eq!(many, "[burn] ingest: ingested 2 sessions (+5 turns)\n");
 

@@ -134,6 +134,43 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     })
     .expect("free summary_report");
     assert!(matches!(sr2, SummaryReport::Grouped(_)));
+    let tagged = handle
+        .summary(SummaryOptions {
+            tags: Some(Enrichment::from([(
+                "role".to_string(),
+                "integration-test".to_string(),
+            )])),
+            group_by_tag: Some("role".to_string()),
+            ..Default::default()
+        })
+        .expect("tagged summary");
+    assert_eq!(tagged.turn_count, 1);
+    let by_tag = tagged.by_tag.expect("byTag rows");
+    assert_eq!(by_tag.len(), 1);
+    assert_eq!(by_tag[0].tag, "role");
+    assert_eq!(by_tag[0].value.as_deref(), Some("integration-test"));
+    assert_eq!(by_tag[0].turn_count, 1);
+    let tagged_report = handle
+        .summary_report(SummaryReportOptions {
+            tags: Some(Enrichment::from([(
+                "role".to_string(),
+                "integration-test".to_string(),
+            )])),
+            group_by_tag: Some("role".to_string()),
+            ..Default::default()
+        })
+        .expect("tagged summary_report");
+    let SummaryReport::Grouped(tagged_report) = tagged_report else {
+        panic!("expected grouped tagged summary report");
+    };
+    assert_eq!(tagged_report.group_by, relayburn_sdk::SummaryGroupBy::Tag);
+    assert_eq!(tagged_report.tag_key.as_deref(), Some("role"));
+    assert_eq!(
+        tagged_report.tag_values,
+        vec![Some("integration-test".into())]
+    );
+    assert_eq!(tagged_report.rows.len(), 1);
+    assert_eq!(tagged_report.rows[0].turns, 1);
 
     // 2. session_cost — handle + free
     let sc = handle

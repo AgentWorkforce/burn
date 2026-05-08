@@ -6,7 +6,8 @@
 //!
 //! `ingest_all_walks_each_harness_root_once` exercises the unified verb
 //! across all three harnesses simultaneously. `ingest_claude_session_*`
-//! covers the per-session fast-path used by the `burn run claude` adapter.
+//! covers the per-session fast-path used when the caller already knows the
+//! Claude session id.
 //!
 //! ## Concurrency note
 //!
@@ -32,10 +33,11 @@ use std::path::{Path, PathBuf};
 
 use crate::ingest::{
     ingest_all, ingest_claude_projects, ingest_claude_session, ingest_codex_sessions,
-    ingest_opencode_sessions, IngestOptions, IngestRoots,
+    ingest_opencode_sessions, write_pending_stamp, IngestOptions, IngestRoots, PendingStampHarness,
+    WriteOptions,
 };
 use crate::ingest::{load_cursors, ClaudeCursor, FileCursor};
-use crate::ledger::{Ledger, LedgerLayout, Query};
+use crate::ledger::{Enrichment, Ledger, LedgerLayout, Query};
 use tempfile::TempDir;
 
 // Shared with gap_warning_tests / watch_loop_tests so that
@@ -72,6 +74,10 @@ fn isolated_relayburn_home<'a>(tmp: &TempDir) -> std::sync::MutexGuard<'a, ()> {
 /// `sessionId` baked into every event so the parser doesn't depend on the
 /// filename to derive it.
 fn claude_minimal_session(session_id: &str) -> String {
+    claude_minimal_session_with_cwd(session_id, "/tmp/project")
+}
+
+fn claude_minimal_session_with_cwd(session_id: &str, cwd: &str) -> String {
     let user = serde_json::json!({
         "parentUuid": null,
         "isSidechain": false,
@@ -79,7 +85,7 @@ fn claude_minimal_session(session_id: &str) -> String {
         "message": {"role": "user", "content": "hi"},
         "uuid": "u-user-1",
         "timestamp": "2026-04-22T00:00:00.000Z",
-        "cwd": "/tmp/project",
+        "cwd": cwd,
         "sessionId": session_id,
     });
     let assistant = serde_json::json!({
@@ -106,7 +112,7 @@ fn claude_minimal_session(session_id: &str) -> String {
         "type": "assistant",
         "uuid": "u-asst-1",
         "timestamp": "2026-04-22T00:00:01.000Z",
-        "cwd": "/tmp/project",
+        "cwd": cwd,
         "sessionId": session_id,
     });
     format!("{}\n{}\n", user, assistant)
@@ -159,6 +165,54 @@ async fn ingest_claude_projects_round_trips_a_fixture_session() {
         Some(FileCursor::Claude(_)) => {}
         other => panic!("expected ClaudeCursor for {key}, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn ingest_claude_projects_resolves_pending_stamp_tags() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let mut enrichment = Enrichment::new();
+    enrichment.insert("persona".to_string(), "code-reviewer".to_string());
+    let cwd = tmp.path().join("project");
+    fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.to_string_lossy().into_owned();
+    write_pending_stamp(WriteOptions {
+        harness: PendingStampHarness::Claude,
+        cwd: cwd.clone(),
+        enrichment: enrichment.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let sid = "33333333-3333-3333-3333-333333333333";
+    let session_file = project_dir.join(format!("{sid}.jsonl"));
+    fs::write(&session_file, claude_minimal_session_with_cwd(sid, &cwd)).unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+    let report = ingest_claude_projects(&mut ledger, &opts).await.unwrap();
+
+    assert!(report.appended_turns >= 1, "expected >=1 turn ingested");
+    assert_eq!(report.applied_pending_stamps, 1);
+    let turns = ledger
+        .query_turns(&Query {
+            enrichment: Some(enrichment),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].turn.session_id, sid);
 }
 
 #[tokio::test]
