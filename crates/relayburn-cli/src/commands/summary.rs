@@ -214,9 +214,16 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         None => LedgerOpenOptions::default(),
     };
     progress.set_task("opening ledger");
-    let mut handle = Ledger::open(opts)?;
+    let mut handle = Ledger::open(opts).map_err(|err| {
+        progress.finish_and_clear();
+        err
+    })?;
 
-    let ingest_report = run_ingest(&mut handle, &progress, globals.ledger_path.clone())?;
+    let ingest_report =
+        run_ingest(&mut handle, &progress, globals.ledger_path.clone()).map_err(|err| {
+            progress.finish_and_clear();
+            err
+        })?;
 
     let mode = if let Some(session_id) = subagent_tree_session_id {
         SummaryReportMode::SubagentTree { session_id }
@@ -251,6 +258,10 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         mode,
         include_quality: args.quality,
         ledger_home: None,
+    })
+    .map_err(|err| {
+        progress.finish_and_clear();
+        err
     })?;
     progress.finish_and_clear();
 
@@ -321,10 +332,18 @@ fn run_ingest(
 ) -> anyhow::Result<relayburn_sdk::IngestReport> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?;
+        .build()
+        .map_err(|err| {
+            progress.finish_and_clear();
+            err
+        })?;
     progress.set_task("refreshing ledger");
     let opts = progress.ingest_options(ledger_home);
     rt.block_on(ingest_all(handle.raw_mut(), &opts))
+        .map_err(|err| {
+            progress.finish_and_clear();
+            err
+        })
 }
 
 /// Drop-in for `RELAYBURN_ARCHIVE=0`. The Rust SDK is already SQLite-native,
