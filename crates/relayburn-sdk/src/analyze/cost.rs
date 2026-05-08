@@ -6,6 +6,8 @@
 //! drift stays bounded by the documented 1e-9 USD precision contract that the
 //! later overhead sub-issue depends on.
 
+use std::borrow::Cow;
+
 use crate::reader::{SourceKind, TurnRecord, Usage};
 
 use crate::analyze::pricing::{ModelCost, PricingTable, ReasoningMode};
@@ -13,7 +15,11 @@ use crate::analyze::provider_reattribution::resolve_provider;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CostBreakdown {
-    pub model: String,
+    /// Model identifier this breakdown is attributed to. Uses
+    /// `Cow<'static, str>` so common labels like `"aggregate"` (from
+    /// [`sum_costs`]) can be carried as a `'static` borrow with no allocation,
+    /// while per-turn breakdowns can still own a `String`.
+    pub model: Cow<'static, str>,
     pub total: f64,
     pub input: f64,
     pub output: f64,
@@ -50,7 +56,7 @@ pub fn cost_for_usage(
         / PER_MILLION)
         * rate.cache_write;
     Some(CostBreakdown {
-        model: model.to_string(),
+        model: Cow::Owned(model.to_string()),
         total: input + output + reasoning + cache_read + cache_create,
         input,
         output,
@@ -129,7 +135,7 @@ where
     B: std::borrow::Borrow<CostBreakdown>,
 {
     let mut acc = CostBreakdown {
-        model: "aggregate".to_string(),
+        model: Cow::Borrowed("aggregate"),
         total: 0.0,
         input: 0.0,
         output: 0.0,

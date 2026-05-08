@@ -150,6 +150,11 @@ static BRAINSTORM_RE: LazyLock<Regex> = LazyLock::new(|| {
 static PLANNING_RE: LazyLock<Regex> =
     LazyLock::new(|| build_re(r"(?i)\b(plan(?:ning)?|outline|roadmap|strategy)\b"));
 
+/// Matches a leading `KEY=` shell env-assignment token. Shared between
+/// `skip_env_assignments` and `env_command_args` so the same compiled regex
+/// is reused.
+static ENV_ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"^[A-Za-z_][A-Za-z0-9_]*="));
+
 // ---------------------------------------------------------------------------
 // BashRule — pattern plus optional `forbid` clause that emulates the TS
 // negative-lookahead idioms (e.g. `(?!.*--check\b)`). Encodes intent as data
@@ -675,9 +680,8 @@ fn shell_words(segment: &str) -> Option<Vec<String>> {
 }
 
 fn skip_env_assignments(tokens: &[String], start: usize) -> usize {
-    static RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"^[A-Za-z_][A-Za-z0-9_]*="));
     let mut i = start;
-    while i < tokens.len() && RE.is_match(&tokens[i]) {
+    while i < tokens.len() && ENV_ASSIGN_RE.is_match(&tokens[i]) {
         i += 1;
     }
     i
@@ -720,7 +724,6 @@ fn shell_command_arg(tokens: &[String], start: usize) -> Option<String> {
 }
 
 fn env_command_args(tokens: &[String], start: usize) -> Vec<String> {
-    static RE: LazyLock<Regex> = LazyLock::new(|| build_re(r"^[A-Za-z_][A-Za-z0-9_]*="));
     let mut i = start;
     while i < tokens.len() {
         let token = &tokens[i];
@@ -728,7 +731,7 @@ fn env_command_args(tokens: &[String], start: usize) -> Vec<String> {
             i += 1;
             break;
         }
-        if RE.is_match(token) {
+        if ENV_ASSIGN_RE.is_match(token) {
             i += 1;
             continue;
         }

@@ -656,7 +656,7 @@ fn empty_row(label: &str) -> UsageCostAggregateRow {
         turns: 0,
         usage: relayburn_sdk::Usage::default(),
         cost: CostBreakdown {
-            model: label.to_string(),
+            model: label.to_string().into(),
             total: 0.0,
             input: 0.0,
             output: 0.0,
@@ -873,7 +873,7 @@ fn print_json(value: &Value) {
 
 fn cost_breakdown_to_json(c: &CostBreakdown) -> Value {
     json!({
-        "model": c.model,
+        "model": c.model.as_ref(),
         "total": c.total,
         "input": c.input,
         "output": c.output,

@@ -4,6 +4,13 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-sdk` (Rust): cache the bundled `models.dev` pricing snapshot
+  behind a `LazyLock` so the JSON parses once, hoist per-call regexes in
+  `analyze::ghost_surface`, `analyze::claude_md`, and `reader::classifier`
+  to module-scope statics (deduplicating the two `KEY=` cells in
+  `classifier`), and switch `CostBreakdown::model` to `Cow<'static, str>` so
+  `sum_costs` no longer allocates `"aggregate"` per call. (#344)
+
 ## [2.4.0] - 2026-05-08
 
 ### Changed

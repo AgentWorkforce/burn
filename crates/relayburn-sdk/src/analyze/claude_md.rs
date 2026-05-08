@@ -12,6 +12,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use indexmap::IndexMap;
 use regex::Regex;
@@ -245,9 +246,13 @@ struct HeadingInfo {
     text: String,
 }
 
+static OPEN_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(`{3,}|~{3,})").unwrap());
+static HEADING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(#{1,6})\s+(.*\S)\s*$").unwrap());
+
 fn find_headings(lines: &[&str]) -> Vec<HeadingInfo> {
-    let open_re = Regex::new(r"^(`{3,}|~{3,})").unwrap();
-    let heading_re = Regex::new(r"^(#{1,6})\s+(.*\S)\s*$").unwrap();
+    let open_re = &*OPEN_FENCE_RE;
+    let heading_re = &*HEADING_RE;
     let mut out = Vec::new();
     let mut fence_char: Option<char> = None;
     let mut fence_len: usize = 0;
