@@ -13,6 +13,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-sdk`: `HotspotsOptions` gains `workflow` and `provider` filter
   fields, matching the shape `compare()` already exposes.
 
+## [2.4.0] - 2026-05-08
+
 ### Changed
 
 - `relayburn-cli` / `relayburn-sdk`: `burn summary` now accepts repeatable

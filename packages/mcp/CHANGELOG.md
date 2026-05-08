@@ -4,6 +4,12 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-05-08
+
+### Changed
+
+- Remove legacy TypeScript 1.x packages (#383)
+
 ## [2.0.0] - 2026-05-07
 
 ### Changed
