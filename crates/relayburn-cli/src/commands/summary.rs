@@ -255,15 +255,19 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
             emit_grouped(globals, &report, &ingest_report);
         }
         SummaryReport::ByTool(report) => {
+            emit_ingest_prelude(globals, &ingest_report);
             return render_by_tool_report(globals, &report, &ingest_report);
         }
         SummaryReport::BySubagentType(report) => {
+            emit_ingest_prelude(globals, &ingest_report);
             return render_subagent_type_report(globals, &report.stats);
         }
         SummaryReport::Relationship(report) => {
+            emit_ingest_prelude(globals, &ingest_report);
             return render_relationship_report(globals, &report);
         }
         SummaryReport::SubagentTree(report) => {
+            emit_ingest_prelude(globals, &ingest_report);
             return render_subagent_tree_report(globals, &report);
         }
     }
@@ -391,6 +395,30 @@ fn emit_grouped(
         return;
     }
     emit_human(report, ingest_report);
+}
+
+fn emit_ingest_prelude(globals: &GlobalArgs, ingest_report: &relayburn_sdk::IngestReport) {
+    if globals.json {
+        return;
+    }
+    emit_human_ingest_prelude(ingest_report);
+}
+
+fn emit_human_ingest_prelude(ingest_report: &relayburn_sdk::IngestReport) {
+    print!("{}", ingest_prelude_text(ingest_report));
+}
+
+fn ingest_prelude_text(ingest_report: &relayburn_sdk::IngestReport) -> String {
+    format!(
+        "\ningested {} new session{} (+{} turns)",
+        ingest_report.ingested_sessions,
+        if ingest_report.ingested_sessions == 1 {
+            ""
+        } else {
+            "s"
+        },
+        format_uint(ingest_report.appended_turns as u64),
+    ) + "\n"
 }
 
 fn emit_json(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::IngestReport) {
@@ -871,17 +899,7 @@ fn render_node_line(node: &SubagentTreeNode, indent: &str) -> String {
 
 fn emit_human(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::IngestReport) {
     let mut lines: Vec<String> = Vec::new();
-    lines.push(String::new());
-    lines.push(format!(
-        "ingested {} new session{} (+{} turns)",
-        ingest_report.ingested_sessions,
-        if ingest_report.ingested_sessions == 1 {
-            ""
-        } else {
-            "s"
-        },
-        format_uint(ingest_report.appended_turns as u64),
-    ));
+    emit_human_ingest_prelude(ingest_report);
     lines.push(String::new());
 
     lines.push(format!(
@@ -1167,5 +1185,19 @@ mod tests {
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
         assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
+    }
+
+    #[test]
+    fn ingest_prelude_text_matches_human_banner() {
+        let report = relayburn_sdk::IngestReport {
+            ingested_sessions: 1,
+            appended_turns: 2_000,
+            ..relayburn_sdk::IngestReport::empty()
+        };
+
+        assert_eq!(
+            ingest_prelude_text(&report),
+            "\ningested 1 new session (+2,000 turns)\n",
+        );
     }
 }
