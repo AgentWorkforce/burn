@@ -11,12 +11,12 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use relayburn_sdk::{
-    CompareOptions, ContentKind, ContentRecord, ContentRole, Enrichment, ExportLedgerOptions,
-    ExportStampsOptions, HotspotsOptions, HotspotsResult, IngestOptions, IngestRoots, Ledger,
-    LedgerOpenOptions, OverheadOptions, OverheadTrimOptions, SearchQueryOptions,
-    SessionCostOptions, SourceKind, Stamp, StampSelector, SummaryOptions, ToolCall, TurnRecord,
-    Usage, compare, export_ledger, export_stamps, hotspots, ingest, overhead, overhead_trim,
-    search, session_cost, summary,
+    compare, export_ledger, export_stamps, hotspots, ingest, overhead, overhead_trim, search,
+    session_cost, summary, CompareOptions, ContentKind, ContentRecord, ContentRole, Enrichment,
+    ExportLedgerOptions, ExportStampsOptions, HotspotsOptions, HotspotsResult, IngestOptions,
+    IngestRoots, Ledger, LedgerOpenOptions, OverheadOptions, OverheadTrimOptions,
+    SearchQueryOptions, SessionCostOptions, SourceKind, Stamp, StampSelector, SummaryOptions,
+    ToolCall, TurnRecord, Usage,
 };
 
 const SESSION_ID: &str = "ses_integration_001";
@@ -124,6 +124,22 @@ fn all_ten_verbs_round_trip_against_a_fixture_ledger() {
     })
     .expect("free summary");
     assert_eq!(s2.turn_count, 1);
+    let tagged = handle
+        .summary(SummaryOptions {
+            tags: Some(Enrichment::from([(
+                "role".to_string(),
+                "integration-test".to_string(),
+            )])),
+            group_by_tag: Some("role".to_string()),
+            ..Default::default()
+        })
+        .expect("tagged summary");
+    assert_eq!(tagged.turn_count, 1);
+    let by_tag = tagged.by_tag.expect("byTag rows");
+    assert_eq!(by_tag.len(), 1);
+    assert_eq!(by_tag[0].tag, "role");
+    assert_eq!(by_tag[0].value.as_deref(), Some("integration-test"));
+    assert_eq!(by_tag[0].turn_count, 1);
 
     // 2. session_cost — handle + free
     let sc = handle

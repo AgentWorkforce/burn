@@ -78,12 +78,6 @@
     "enabled": false
   },
   {
-    "name": "run-help",
-    "args": ["run", "--help"],
-    "expectStatus": 0,
-    "enabled": false
-  },
-  {
     "name": "mcp-server-help",
     "args": ["mcp-server", "--help"],
     "expectStatus": 0,

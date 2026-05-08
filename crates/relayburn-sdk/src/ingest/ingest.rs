@@ -54,6 +54,8 @@ pub struct IngestReport {
     pub scanned_sessions: usize,
     pub ingested_sessions: usize,
     pub appended_turns: usize,
+    #[serde(default)]
+    pub applied_pending_stamps: usize,
 }
 
 impl IngestReport {
@@ -65,6 +67,7 @@ impl IngestReport {
         self.scanned_sessions += other.scanned_sessions;
         self.ingested_sessions += other.ingested_sessions;
         self.appended_turns += other.appended_turns;
+        self.applied_pending_stamps += other.applied_pending_stamps;
     }
 }
 
@@ -179,7 +182,13 @@ pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Re
     // returning Err does not swallow a gap the earlier adapter already
     // recorded against work that was already appended.
     progress(opts, "scanning Claude Code sessions");
-    let r = ingest_claude_into(ledger, &mut after, &opts.roots, content_mode)?;
+    let r = ingest_claude_into(
+        ledger,
+        &mut after,
+        &opts.roots,
+        content_mode,
+        opts.ledger_home.as_deref(),
+    )?;
     report.merge(&r);
     emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
 
@@ -219,7 +228,13 @@ pub async fn ingest_claude_projects(
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
     let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
-    let report = ingest_claude_into(ledger, &mut after, &opts.roots, content_mode)?;
+    let report = ingest_claude_into(
+        ledger,
+        &mut after,
+        &opts.roots,
+        content_mode,
+        opts.ledger_home.as_deref(),
+    )?;
     emit_gap_warning(
         AdapterName::Claude,
         content_mode,
@@ -279,10 +294,9 @@ pub async fn ingest_opencode_sessions(
     Ok(report)
 }
 
-/// Per-session fast-path used by the claude harness adapter after a
-/// `burn run` exits. Caller already knows the sessionId from the spawn
-/// plan, so we go straight to the one JSONL file and persist a cursor at
-/// EOF — a later `ingest_all` sweep then skips it.
+/// Per-session fast-path used when a Claude launcher already knows the
+/// sessionId from the spawn plan. We go straight to the one JSONL file and
+/// persist a cursor at EOF — a later `ingest_all` sweep then skips it.
 pub async fn ingest_claude_session(
     ledger: &mut Ledger,
     cwd: &str,
@@ -318,6 +332,7 @@ pub async fn ingest_claude_session(
             scanned_sessions: 1,
             ingested_sessions: 0,
             appended_turns: 0,
+            applied_pending_stamps: 0,
         });
     }
 
@@ -361,6 +376,7 @@ pub async fn ingest_claude_session(
         scanned_sessions: 1,
         ingested_sessions: 1,
         appended_turns,
+        applied_pending_stamps: 0,
     })
 }
 
@@ -376,6 +392,7 @@ fn ingest_claude_into(
     cursors: &mut Cursors,
     roots: &IngestRoots,
     content_mode: ContentStoreMode,
+    ledger_home: Option<&Path>,
 ) -> anyhow::Result<IngestReport> {
     let mut report = IngestReport::empty();
     let projects_root = claude_projects_dir(roots);
@@ -445,6 +462,17 @@ fn ingest_claude_into(
             };
 
             if !parsed.turns.is_empty() {
+                let session_id = parsed.turns[0].session_id.clone();
+                let cwd = parsed.turns.first().and_then(|t| t.project.clone());
+                let candidate = PendingStampSessionCandidate {
+                    harness: PendingStampHarness::Claude,
+                    session_id,
+                    session_path: Some(file.clone()),
+                    session_mtime_ms: Some(mtime),
+                    cwd,
+                };
+                resolve_pending_stamps_for_report(ledger, &candidate, ledger_home, &mut report);
+
                 report.appended_turns += parsed.turns.len();
                 report.ingested_sessions += 1;
                 ledger.append_turns(&parsed.turns)?;
@@ -618,7 +646,7 @@ fn ingest_codex_into(
                     session_mtime_ms: Some(mtime),
                     cwd,
                 };
-                let _ = resolve_pending_stamps_for_session_in(ledger, &candidate, ledger_home);
+                resolve_pending_stamps_for_report(ledger, &candidate, ledger_home, &mut report);
             }
             report.appended_turns += parsed.turns.len();
             report.ingested_sessions += 1;
@@ -737,7 +765,7 @@ fn ingest_opencode_into(
                 session_mtime_ms: Some(session_mtime_ms),
                 cwd,
             };
-            let _ = resolve_pending_stamps_for_session_in(ledger, &candidate, ledger_home);
+            resolve_pending_stamps_for_report(ledger, &candidate, ledger_home, &mut report);
             report.appended_turns += parsed.turns.len();
             report.ingested_sessions += 1;
             ledger.append_turns(&parsed.turns)?;
@@ -946,6 +974,25 @@ fn last_completed_turn_to_value(t: &CodexLastCompletedTurn) -> Value {
     Value::Object(m)
 }
 
+fn resolve_pending_stamps_for_report(
+    ledger: &mut Ledger,
+    candidate: &PendingStampSessionCandidate,
+    ledger_home: Option<&Path>,
+    report: &mut IngestReport,
+) {
+    match resolve_pending_stamps_for_session_in(ledger, candidate, ledger_home) {
+        Ok(resolved) => {
+            report.applied_pending_stamps += resolved.applied;
+        }
+        Err(err) => {
+            let home = ledger_home
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<default>".to_string());
+            eprintln!("[burn] pending stamp resolution failed for {candidate:?} in {home}: {err}");
+        }
+    }
+}
+
 // --- filesystem helpers --------------------------------------------------
 
 fn list_dirs(parent: &Path) -> Vec<PathBuf> {
@@ -1021,16 +1068,19 @@ mod tests {
             scanned_sessions: 1,
             ingested_sessions: 2,
             appended_turns: 3,
+            applied_pending_stamps: 4,
         };
         let b = IngestReport {
             scanned_sessions: 10,
             ingested_sessions: 20,
             appended_turns: 30,
+            applied_pending_stamps: 40,
         };
         a.merge(&b);
         assert_eq!(a.scanned_sessions, 11);
         assert_eq!(a.ingested_sessions, 22);
         assert_eq!(a.appended_turns, 33);
+        assert_eq!(a.applied_pending_stamps, 44);
     }
 
     #[test]

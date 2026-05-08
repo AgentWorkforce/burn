@@ -32,10 +32,9 @@
 //! fires `ingest_all` repeatedly and relies on this).
 //!
 //! Tying the state to a `Ledger` handle would force callers to thread
-//! the same handle through every ingest call to get suppression — the
-//! `burn run` path uses two distinct handles (per-session pre-spawn,
-//! sweep post-spawn) and would lose suppression. Process-global keeps
-//! the behaviour byte-equivalent to TS without burdening callers.
+//! the same handle through every ingest call to get suppression. Launchers
+//! can use distinct handles for per-session ingest and later sweeps; a
+//! process-global tracker keeps suppression stable without burdening callers.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};

@@ -4,7 +4,7 @@
 //! through `assert_cmd` to prove that:
 //!
 //! 1. `burn --help` exits 0 and emits non-empty stdout listing all
-//!    eight subcommands (the contract Wave 2 fan-out PRs depend on).
+//!    registered subcommands.
 //! 2. `burn <subcommand> --help` exits 0 for every subcommand we have a
 //!    stub for. clap auto-generates the help block from the `Command`
 //!    enum's doc comments, so a regression in the derive layer would
@@ -28,7 +28,6 @@ const SUBCOMMANDS: &[&str] = &[
     "hotspots",
     "overhead",
     "compare",
-    "run",
     "state",
     "ingest",
     "mcp-server",
@@ -36,8 +35,8 @@ const SUBCOMMANDS: &[&str] = &[
 
 /// Subcommands that still print "not yet implemented" when invoked
 /// without args. Wave 2 D1 wired up `summary` and `hotspots`, D2 wired
-/// up `overhead`, D3 wired up `compare`, D4 wired up `state`, D5 wired
-/// up `run`, and D8 wired up `ingest` + `mcp-server` as real
+/// up `overhead`, D3 wired up `compare`, D4 wired up `state`, and D8 wired
+/// up `ingest` + `mcp-server` as real
 /// presenters — every subcommand is now wired, so this list is empty
 /// and `each_stub_exits_one_with_not_yet_implemented_message` becomes
 /// a no-op iteration. The constant is retained so a future scaffold
@@ -61,6 +60,12 @@ fn top_level_help_lists_every_subcommand() {
             "expected `--help` to mention subcommand `{sub}`; got:\n{stdout}",
         );
     }
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("run ")),
+        "`burn --help` must not advertise removed `run` command; got:\n{stdout}",
+    );
 }
 
 #[test]
@@ -157,44 +162,6 @@ fn json_mode_emits_error_envelope_on_argument_failure() {
 }
 
 #[test]
-fn run_command_lists_known_harnesses_when_invoked_without_args() {
-    // `burn run` (Wave 2 D5) prints help + exits 2 when no harness
-    // positional is supplied — the same shape as the TS sibling.
-    let output = burn().arg("run").assert().code(2).get_output().clone();
-    let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
-    assert!(
-        stdout.contains("Known harnesses:"),
-        "expected `burn run` to list known harnesses; got:\n{stdout}",
-    );
-    assert!(
-        stdout.contains("claude"),
-        "expected `burn run` help to mention claude; got:\n{stdout}",
-    );
-}
-
-#[test]
-fn run_command_rejects_unknown_harness() {
-    // Unknown harness must exit non-zero with a typed error mentioning
-    // both the bogus name and the known set. Driver maps this through
-    // `report_error`, which lands at exit code 2 in human mode.
-    let output = burn()
-        .args(["run", "definitely-not-a-real-harness"])
-        .assert()
-        .code(2)
-        .get_output()
-        .clone();
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be valid UTF-8");
-    assert!(
-        stderr.contains("definitely-not-a-real-harness"),
-        "expected stderr to echo the unknown harness name; got:\n{stderr}",
-    );
-    assert!(
-        stderr.contains("claude"),
-        "expected stderr to list claude as a known harness; got:\n{stderr}",
-    );
-}
-
-#[test]
 fn version_flag_exits_zero() {
     burn()
         .arg("--version")
@@ -209,4 +176,9 @@ fn unknown_subcommand_exits_non_zero() {
         .arg("definitely-not-a-real-subcommand")
         .assert()
         .failure();
+}
+
+#[test]
+fn run_subcommand_is_not_registered() {
+    burn().args(["run", "--help"]).assert().failure();
 }

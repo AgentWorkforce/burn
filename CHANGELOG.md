@@ -6,10 +6,17 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
+- `relayburn-cli` / `relayburn-sdk`: `burn summary` now accepts repeatable
+  `--tag k=v` filters and `--group-by-tag <key>` to report cost/tokens by
+  generic folded enrichment tags; Claude, Codex, and OpenCode pending stamps
+  can now be written by external launchers.
 - `relayburn-sdk` (Rust): reader hot loops in `claude.rs` and `codex.rs` now stream JSONL line-by-line via `BufReader::read_until` instead of pre-allocating a `(size - start_offset)`-byte buffer up front; only the longest single line stays resident. `memchr_newline` in the codex parser now actually uses the `memchr` crate for SIMD-accelerated newline scanning. The main `parse_claude_session` loop also drops `BufReader::lines()` in favor of `read_line` into a reused `String`. (#323)
 
 ### Removed
 
+- `relayburn-cli`: removed the `burn run` launcher wrapper from the CLI
+  surface. Launchers should write attribution with `writePendingStamp()` and
+  ingest through `burn ingest` / SDK `ingest()`.
 - Removed the old TypeScript implementation packages from the workspace. The
   Rust crates now own the SDK and CLI implementation, with npm packages kept
   for the Node SDK facade, MCP server, and prebuilt CLI wrappers.

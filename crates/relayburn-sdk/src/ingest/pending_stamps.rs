@@ -1,7 +1,7 @@
 //! Pending-stamp coordination — Rust port of `packages/ingest/src/pending-stamps.ts`.
 //!
-//! Wrapper harnesses (`burn run codex`, `burn run opencode`) that spawn a
-//! child process before the session id is known drop a JSON manifest into
+//! Launchers that spawn a child process before the session id is known drop a
+//! JSON manifest into
 //! `$RELAYBURN_HOME/pending-stamps/` (or an explicitly supplied ledger home).
 //! After the child exits, the next ingest pass tries to match each manifest
 //! against a freshly-discovered session and folds the manifest's enrichment
@@ -9,9 +9,8 @@
 //!
 //! ## Wire-format compatibility
 //!
-//! The on-disk JSON shape is binary-compatible with the TS adapter so a
-//! Rust-resident watch loop and a TS-resident `burn run` wrapper can coexist
-//! during the migration. Specifically:
+//! The on-disk JSON shape is stable so external launchers and Rust ingest can
+//! coordinate through the same pending-stamp directory. Specifically:
 //!
 //! * Object keys are emitted in insertion order: `v`, `harness`, `spawnerPid`,
 //!   `spawnStartTs`, `cwd`, `enrichment`, then optional `sessionDirHint`.
@@ -29,7 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::ledger::{Enrichment, Ledger, Stamp, StampSelector, ledger_home};
+use crate::ledger::{ledger_home, Enrichment, Ledger, Stamp, StampSelector};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -48,6 +47,7 @@ const MTIME_SLOP_MS: i64 = 1;
 pub enum PendingStampHarness {
     #[default]
     Codex,
+    Claude,
     Opencode,
 }
 
@@ -55,6 +55,7 @@ impl PendingStampHarness {
     fn as_str(self) -> &'static str {
         match self {
             PendingStampHarness::Codex => "codex",
+            PendingStampHarness::Claude => "claude",
             PendingStampHarness::Opencode => "opencode",
         }
     }
@@ -410,6 +411,7 @@ pub fn parse_pending_stamp(raw: &str) -> Option<PendingStamp> {
         return None;
     }
     let harness = match obj.get("harness").and_then(Value::as_str)? {
+        "claude" => PendingStampHarness::Claude,
         "codex" => PendingStampHarness::Codex,
         "opencode" => PendingStampHarness::Opencode,
         _ => return None,

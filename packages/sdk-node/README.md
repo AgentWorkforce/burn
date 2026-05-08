@@ -24,3 +24,6 @@ Windows (`win32-x64-msvc`) is not yet shipped — see #247 follow-up.
 - The SDK exposes read verbs such as `summary()`, `sessionCost()`,
   `hotspots()`, `compare()`, `search()`, `exportLedger()`, and
   `exportStamps()`.
+- Launchers can call `writePendingStamp({ harness, cwd, enrichment })`
+  before spawning Claude, Codex, or OpenCode, then run `ingest()` to fold
+  those generic enrichment tags onto the discovered turns.

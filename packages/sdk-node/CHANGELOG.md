@@ -8,6 +8,10 @@
 
 ### Added
 
+- Exported `writePendingStamp()` so Node launchers can write generic
+  enrichment tags before spawning Claude, Codex, or OpenCode directly.
+- `summary()` options now accept `tags` and `groupByTag` for generic
+  enrichment filtering and cost/token grouping.
 - Exported `computeCompareExcluded()` from the Node facade for callers that
   need the same fidelity-exclusion breakdown used by `compare()`.
 

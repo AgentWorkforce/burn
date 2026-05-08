@@ -115,8 +115,8 @@ static RUNTIME_ADAPTER_NAMES: &[&str] = &[
 ];
 
 /// Look up an adapter by name. Returns `None` for unknown names; the
-/// `burn run` driver maps `None` to a "did you mean …?" diagnostic
-/// using [`list_harness_names`].
+/// Callers can map `None` to a "did you mean …?" diagnostic using
+/// [`list_harness_names`].
 ///
 /// Eager adapters (single perfect-hash probe) are checked first; the
 /// runtime map is consulted only on a miss so common-case lookups

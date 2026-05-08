@@ -1,5 +1,5 @@
-//! Tiny time helpers shared by the harness adapter ([`super::super::harnesses::claude`])
-//! and the `burn run` driver ([`super::super::commands::run`]).
+//! Tiny time helpers shared by the harness adapter
+//! ([`super::super::harnesses::claude`]).
 //!
 //! Both call sites need the same two operations:
 //!

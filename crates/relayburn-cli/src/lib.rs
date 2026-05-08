@@ -5,11 +5,10 @@
 //! test -p relayburn-cli` and so future integration tests under `tests/`
 //! can reach the harness substrate without re-declaring the module tree.
 //!
-//! Today the only public surface here is [`harnesses`] — the `HarnessAdapter`
-//! trait, the lazy registry, and the shared pending-stamp adapter factory
-//! introduced in #248-b. Wave 2 PRs (claude / codex / opencode) will plug
-//! their adapters in via [`harnesses::registry`]; the CLI binary will reach
-//! them through `lookup` / `list_harness_names`.
+//! Today the only public surface here is [`harnesses`] — legacy adapter
+//! reference code plus the shared pending-stamp adapter factory introduced
+//! in #248-b. Runtime launcher integrations should prefer the public
+//! `relayburn-sdk` / `@relayburn/sdk` pending-stamp APIs.
 //!
 //! Keeping this surface as a library crate alongside the binary lets the
 //! Wave 2 fan-out PRs add per-adapter modules and unit tests without

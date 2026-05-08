@@ -23,7 +23,7 @@
 //!    [`relayburn_sdk::summarize_replacement_savings`].
 //! 5. Render JSON or human format.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use clap::Args;
 use indexmap::IndexMap;
@@ -97,6 +97,14 @@ pub struct SummaryArgs {
     #[arg(long, value_name = "WORKFLOW_ID")]
     pub workflow: Option<String>,
 
+    /// Filter by folded enrichment tag. Repeatable; every tag must match.
+    #[arg(long = "tag", value_name = "K=V")]
+    pub tag: Vec<String>,
+
+    /// Group totals by a folded enrichment tag value.
+    #[arg(long = "group-by-tag", value_name = "KEY")]
+    pub group_by_tag: Option<String>,
+
     /// Provider filter (CSV of provider names; case-insensitive).
     #[arg(long, value_name = "PROVIDERS")]
     pub provider: Option<String>,
@@ -127,29 +135,43 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         && (args.by_provider
             || args.by_subagent_type
             || args.by_relationship.is_some()
-            || args.subagent_tree.is_some())
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some())
     {
         eprintln!(
-            "burn: --by-tool cannot be combined with --by-provider/--by-subagent-type/--by-relationship/--subagent-tree"
+            "burn: --by-tool cannot be combined with --by-provider/--by-subagent-type/--by-relationship/--subagent-tree/--group-by-tag"
         );
         return Ok(2);
     }
     if args.by_provider
-        && (args.by_subagent_type || args.by_relationship.is_some() || args.subagent_tree.is_some())
+        && (args.by_subagent_type
+            || args.by_relationship.is_some()
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some())
     {
         eprintln!(
-            "burn: --by-provider cannot be combined with --by-subagent-type/--by-relationship/--subagent-tree"
+            "burn: --by-provider cannot be combined with --by-subagent-type/--by-relationship/--subagent-tree/--group-by-tag"
         );
         return Ok(2);
     }
-    if args.by_subagent_type && (args.by_relationship.is_some() || args.subagent_tree.is_some()) {
+    if args.by_subagent_type
+        && (args.by_relationship.is_some()
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some())
+    {
         eprintln!(
-            "burn: --by-subagent-type cannot be combined with --by-relationship/--subagent-tree"
+            "burn: --by-subagent-type cannot be combined with --by-relationship/--subagent-tree/--group-by-tag"
         );
         return Ok(2);
     }
-    if args.by_relationship.is_some() && args.subagent_tree.is_some() {
-        eprintln!("burn: --by-relationship cannot be combined with --subagent-tree");
+    if args.by_relationship.is_some()
+        && (args.subagent_tree.is_some() || args.group_by_tag.is_some())
+    {
+        eprintln!("burn: --by-relationship cannot be combined with --subagent-tree/--group-by-tag");
+        return Ok(2);
+    }
+    if args.subagent_tree.is_some() && args.group_by_tag.is_some() {
+        eprintln!("burn: --subagent-tree cannot be combined with --group-by-tag");
         return Ok(2);
     }
     if let Some(rel) = &args.by_relationship {
@@ -233,13 +255,28 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         None
     };
 
-    if args.by_provider {
+    if let Some(tag_key) = args.group_by_tag.as_deref() {
+        let (rows, values) = aggregate_by_tag(&enriched, tag_key, &pricing);
+        emit_grouped(
+            globals,
+            SummaryGroup::Tag {
+                key: tag_key,
+                values: &values,
+            },
+            &rows,
+            &turns,
+            &ingest_report,
+            &fidelity,
+            &savings,
+            quality.as_ref(),
+        );
+    } else if args.by_provider {
         let rows = aggregate_by_provider(&turns, AggregateByProviderOptions::new(&pricing));
         let provider_rows: Vec<UsageCostAggregateRow> =
             rows.into_iter().map(provider_to_aggregate_row).collect();
         emit_grouped(
             globals,
-            true,
+            SummaryGroup::Provider,
             &provider_rows,
             &turns,
             &ingest_report,
@@ -251,7 +288,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         let rows = aggregate_by_model(&turns, &pricing);
         emit_grouped(
             globals,
-            false,
+            SummaryGroup::Model,
             &rows,
             &turns,
             &ingest_report,
@@ -416,12 +453,48 @@ fn build_query(args: &SummaryArgs) -> anyhow::Result<Query> {
     if let Some(since) = normalize_since(args.since.as_deref())? {
         q.since = Some(since);
     }
+    if let Some(tag_key) = args.group_by_tag.as_deref() {
+        if tag_key.is_empty() {
+            anyhow::bail!("burn: --group-by-tag requires a non-empty key");
+        }
+    }
+    let mut enrichment = BTreeMap::new();
     if let Some(workflow) = &args.workflow {
-        let mut enrichment = std::collections::BTreeMap::new();
         enrichment.insert("workflowId".to_string(), workflow.clone());
+    }
+    for (key, value) in parse_tag_filters(&args.tag)? {
+        if let Some(existing) = enrichment.get(&key) {
+            if existing != &value {
+                anyhow::bail!(
+                    "burn: conflicting filters for tag \"{key}\" ({existing:?} vs {value:?})"
+                );
+            }
+        }
+        enrichment.insert(key, value);
+    }
+    if !enrichment.is_empty() {
         q.enrichment = Some(enrichment);
     }
     Ok(q)
+}
+
+fn parse_tag_filters(tags: &[String]) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for raw in tags {
+        let (key, value) = raw
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("burn: --tag expects k=v, got \"{raw}\""))?;
+        if key.is_empty() {
+            anyhow::bail!("burn: --tag key must be non-empty (got \"{raw}\")");
+        }
+        if let Some(existing) = out.get(key) {
+            anyhow::bail!(
+                "burn: duplicate --tag filter for key \"{key}\" ({existing:?} vs {value:?})"
+            );
+        }
+        out.insert(key.to_string(), value.to_string());
+    }
+    Ok(out)
 }
 
 /// Run an ingest sweep on the open handle. Builds a current-thread tokio
@@ -515,6 +588,58 @@ fn aggregate_by_model(
     rows
 }
 
+fn aggregate_by_tag(
+    turns: &[EnrichedTurn],
+    tag_key: &str,
+    pricing: &relayburn_sdk::PricingTable,
+) -> (Vec<UsageCostAggregateRow>, Vec<Option<String>>) {
+    let mut by_value: HashMap<Option<String>, UsageCostAggregateRow> = HashMap::new();
+    let mut order: Vec<Option<String>> = Vec::new();
+    for enriched in turns {
+        let value = enriched.enrichment.get(tag_key).cloned();
+        let label = value.clone().unwrap_or_else(|| "(untagged)".to_string());
+        let row = by_value.entry(value.clone()).or_insert_with(|| {
+            order.push(value.clone());
+            empty_row(&label)
+        });
+        row.turns += 1;
+        row.usage.input += enriched.turn.usage.input;
+        row.usage.output += enriched.turn.usage.output;
+        row.usage.reasoning += enriched.turn.usage.reasoning;
+        row.usage.cache_read += enriched.turn.usage.cache_read;
+        row.usage.cache_create_5m += enriched.turn.usage.cache_create_5m;
+        row.usage.cache_create_1h += enriched.turn.usage.cache_create_1h;
+        accumulate_coverage(
+            &mut row.coverage,
+            enriched.turn.fidelity.as_ref().map(|f| &f.coverage),
+        );
+        if let Some(c) = cost_for_turn(&enriched.turn, pricing) {
+            row.cost.total += c.total;
+            row.cost.input += c.input;
+            row.cost.output += c.output;
+            row.cost.reasoning += c.reasoning;
+            row.cost.cache_read += c.cache_read;
+            row.cost.cache_create += c.cache_create;
+        }
+    }
+
+    let mut pairs: Vec<(Option<String>, UsageCostAggregateRow)> = order
+        .into_iter()
+        .map(|value| {
+            let row = by_value.remove(&value).unwrap();
+            (value, row)
+        })
+        .collect();
+    pairs.sort_by(|a, b| {
+        b.1.cost
+            .total
+            .partial_cmp(&a.1.cost.total)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let (values, rows): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+    (rows, values)
+}
+
 fn provider_to_aggregate_row(p: ProviderAggregateRow) -> UsageCostAggregateRow {
     UsageCostAggregateRow {
         label: p.label,
@@ -594,10 +719,45 @@ fn coverage_cell(value: u64, c: &relayburn_sdk::FieldCoverage) -> String {
     format_uint(value)
 }
 
+enum SummaryGroup<'a> {
+    Model,
+    Provider,
+    Tag {
+        key: &'a str,
+        values: &'a [Option<String>],
+    },
+}
+
+impl<'a> SummaryGroup<'a> {
+    fn json_key(&self) -> &'static str {
+        match self {
+            SummaryGroup::Model => "byModel",
+            SummaryGroup::Provider => "byProvider",
+            SummaryGroup::Tag { .. } => "byTag",
+        }
+    }
+
+    fn human_label(&self) -> &'static str {
+        match self {
+            SummaryGroup::Model => "model",
+            SummaryGroup::Provider => "provider",
+            SummaryGroup::Tag { .. } => "value",
+        }
+    }
+
+    fn per_cell_group_by(&self) -> &'static str {
+        match self {
+            SummaryGroup::Model => "model",
+            SummaryGroup::Provider => "provider",
+            SummaryGroup::Tag { .. } => "tag",
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_grouped(
     globals: &GlobalArgs,
-    by_provider: bool,
+    group: SummaryGroup<'_>,
     rows: &[UsageCostAggregateRow],
     turns: &[TurnRecord],
     ingest_report: &relayburn_sdk::IngestReport,
@@ -609,7 +769,7 @@ fn emit_grouped(
 
     if globals.json {
         emit_json(
-            by_provider,
+            group,
             rows,
             turns,
             ingest_report,
@@ -620,7 +780,7 @@ fn emit_grouped(
         return;
     }
     emit_human(
-        by_provider,
+        &group,
         rows,
         ingest_report,
         &total_cost,
@@ -631,7 +791,7 @@ fn emit_grouped(
 }
 
 fn emit_json(
-    by_provider: bool,
+    group: SummaryGroup<'_>,
     rows: &[UsageCostAggregateRow],
     turns: &[TurnRecord],
     ingest_report: &relayburn_sdk::IngestReport,
@@ -639,29 +799,41 @@ fn emit_json(
     fidelity: &FidelitySummary,
     savings: &relayburn_sdk::ReplacementSavingsSummary,
 ) {
-    let key = if by_provider { "byProvider" } else { "byModel" };
-    let label_key = if by_provider { "provider" } else { "model" };
-
     let group_rows: Vec<Value> = rows
         .iter()
-        .map(|r| {
-            json!({
-                label_key: r.label,
-                "turns": r.turns,
-                "usage": {
+        .enumerate()
+        .map(|(idx, r)| {
+            let mut row = match &group {
+                SummaryGroup::Model => json!({
+                    "model": r.label,
+                }),
+                SummaryGroup::Provider => json!({
+                    "provider": r.label,
+                }),
+                SummaryGroup::Tag { key, values } => json!({
+                    "tag": key,
+                    "value": values.get(idx).cloned().flatten(),
+                }),
+            };
+            let obj = row.as_object_mut().unwrap();
+            obj.insert("turns".into(), json!(r.turns));
+            obj.insert(
+                "usage".into(),
+                json!({
                     "input": r.usage.input,
                     "output": r.usage.output,
                     "reasoning": r.usage.reasoning,
                     "cacheRead": r.usage.cache_read,
                     "cacheCreate5m": r.usage.cache_create_5m,
                     "cacheCreate1h": r.usage.cache_create_1h,
-                },
-                "cost": cost_breakdown_to_json(&r.cost),
-            })
+                }),
+            );
+            obj.insert("cost".into(), cost_breakdown_to_json(&r.cost));
+            row
         })
         .collect();
 
-    let per_cell = build_per_cell_fidelity(rows, by_provider);
+    let per_cell = build_per_cell_fidelity(rows, group.per_cell_group_by());
 
     let mut payload = Map::new();
     payload.insert(
@@ -673,7 +845,7 @@ fn emit_json(
     );
     payload.insert("turns".into(), json!(turns.len()));
     payload.insert("totalCost".into(), cost_breakdown_to_json(total_cost));
-    payload.insert(key.into(), Value::Array(group_rows));
+    payload.insert(group.json_key().into(), Value::Array(group_rows));
     payload.insert(
         "fidelity".into(),
         json!({
@@ -1817,7 +1989,7 @@ fn fidelity_summary_to_json(s: &FidelitySummary) -> Value {
     Value::Object(out)
 }
 
-fn build_per_cell_fidelity(rows: &[UsageCostAggregateRow], by_provider: bool) -> Value {
+fn build_per_cell_fidelity(rows: &[UsageCostAggregateRow], group_by: &str) -> Value {
     let cells: Vec<Value> = rows
         .iter()
         .map(|r| {
@@ -1851,7 +2023,7 @@ fn build_per_cell_fidelity(rows: &[UsageCostAggregateRow], by_provider: bool) ->
         })
         .collect();
     json!({
-        "groupBy": if by_provider { "provider" } else { "model" },
+        "groupBy": group_by,
         "cells": cells,
     })
 }
@@ -1889,7 +2061,7 @@ fn replacement_savings_to_json(savings: &relayburn_sdk::ReplacementSavingsSummar
 }
 
 fn emit_human(
-    by_provider: bool,
+    group: &SummaryGroup<'_>,
     rows: &[UsageCostAggregateRow],
     ingest_report: &relayburn_sdk::IngestReport,
     total_cost: &CostBreakdown,
@@ -1923,9 +2095,8 @@ fn emit_human(
         return;
     }
 
-    let header_label = if by_provider { "provider" } else { "model" };
     let header = vec![
-        header_label.to_string(),
+        group.human_label().to_string(),
         "turns".into(),
         "input".into(),
         "output".into(),
@@ -2136,6 +2307,68 @@ mod tests {
             parse_provider_filter(Some(" , ")),
             Err("burn: --provider requires a value"),
         );
+    }
+
+    #[test]
+    fn parse_tag_filters_requires_kv_with_non_empty_key() {
+        let got = parse_tag_filters(&["persona=code-reviewer".to_string()]).unwrap();
+        assert_eq!(
+            got.get("persona").map(String::as_str),
+            Some("code-reviewer")
+        );
+
+        let missing_eq = parse_tag_filters(&["persona".to_string()]).unwrap_err();
+        assert!(format!("{missing_eq}").contains("--tag expects k=v"));
+
+        let empty_key = parse_tag_filters(&["=value".to_string()]).unwrap_err();
+        assert!(format!("{empty_key}").contains("--tag key must be non-empty"));
+
+        let duplicate = parse_tag_filters(&[
+            "persona=code-reviewer".to_string(),
+            "persona=qa".to_string(),
+        ])
+        .unwrap_err();
+        assert!(format!("{duplicate}").contains("duplicate --tag filter"));
+    }
+
+    #[test]
+    fn aggregate_by_tag_groups_missing_and_present_values() {
+        let pricing = load_pricing(None);
+        let mut tagged_enrichment = BTreeMap::new();
+        tagged_enrichment.insert("persona".to_string(), "code-reviewer".to_string());
+        let rows = vec![
+            EnrichedTurn {
+                turn: turn(
+                    0,
+                    "assistant-1",
+                    Usage {
+                        input: 100,
+                        ..Usage::default()
+                    },
+                    vec![],
+                ),
+                enrichment: tagged_enrichment,
+            },
+            EnrichedTurn {
+                turn: turn(
+                    1,
+                    "assistant-2",
+                    Usage {
+                        input: 50,
+                        ..Usage::default()
+                    },
+                    vec![],
+                ),
+                enrichment: BTreeMap::new(),
+            },
+        ];
+
+        let (groups, values) = aggregate_by_tag(&rows, "persona", &pricing);
+
+        assert_eq!(groups.len(), 2);
+        assert!(values.contains(&Some("code-reviewer".to_string())));
+        assert!(values.contains(&None));
+        assert_eq!(groups.iter().map(|r| r.turns).sum::<u64>(), 2);
     }
 
     #[test]

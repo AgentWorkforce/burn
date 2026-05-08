@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, cpSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +67,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'overheadTrim',
     'hotspots',
     'compare',
+    'writePendingStamp',
     'computeCompareExcluded',
     'search',
     'exportLedger',
@@ -86,6 +87,15 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
     assert.equal(typeof summary.totalCost, 'number');
     assert.ok(Array.isArray(summary.byModel));
     assert.ok(Array.isArray(summary.byTool));
+
+    const taggedSummary = await sdk.summary({
+      ledgerHome,
+      tags: { workflowId: 'wf-golden' },
+      groupByTag: 'workflowId',
+    });
+    assert.equal(taggedSummary.turnCount, 3);
+    assert.equal(taggedSummary.byTag[0].tag, 'workflowId');
+    assert.equal(taggedSummary.byTag[0].value, 'wf-golden');
 
     const session = await sdk.sessionCost({
       ledgerHome,
@@ -165,6 +175,36 @@ test('2.x extension verbs return stable shapes against the fixture ledger', asyn
   }
 });
 
+test('writePendingStamp writes a launcher-safe manifest', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-sdk-pending-'));
+  try {
+    const result = await sdk.writePendingStamp({
+      ledgerHome,
+      harness: 'claude',
+      cwd: '/tmp/project',
+      enrichment: { persona: 'code-reviewer', agentworkforce: '1' },
+      sessionDirHint: '/tmp/project/sessions',
+      spawnStartTs: '2026-04-23T00:00:00.000Z',
+      spawnerPid: 12345,
+    });
+
+    assert.match(result.file, /pending-stamps[/\\]claude-12345-/);
+    assert.equal(result.stamp.harness, 'claude');
+    assert.equal(result.stamp.enrichment.persona, 'code-reviewer');
+
+    const files = readdirSync(join(ledgerHome, 'pending-stamps'));
+    assert.equal(files.length, 1);
+    const manifest = JSON.parse(readFileSync(join(ledgerHome, 'pending-stamps', files[0]), 'utf8'));
+    assert.equal(manifest.harness, 'claude');
+    assert.equal(manifest.enrichment.agentworkforce, '1');
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
 test('ingest scans an isolated empty home', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;
@@ -180,6 +220,7 @@ test('ingest scans an isolated empty home', async (t) => {
     assert.equal(typeof report.scannedSessions, 'number');
     assert.equal(typeof report.ingestedSessions, 'number');
     assert.equal(typeof report.appendedTurns, 'number');
+    assert.equal(typeof report.appliedPendingStamps, 'number');
   } finally {
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;

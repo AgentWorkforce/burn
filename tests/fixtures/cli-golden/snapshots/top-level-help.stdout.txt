@@ -1,15 +1,14 @@
 burn — token usage & cost attribution for agent CLIs
 
 Usage:
-  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--provider <p>] [--quality]
-                     [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id>] [--no-archive]
+  burn summary       [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--tag k=v] [--agent <id>] [--provider <p>] [--quality]
+                     [--by-provider | --by-tool | --by-subagent-type | --by-relationship[=subagent] | --subagent-tree <session-id> | --group-by-tag <key>] [--no-archive]
                      (mode flags are mutually exclusive; --by-tool emits tool | calls | attributedCost)
   burn hotspots      [--since 7d] [--project <path>] [--workflow <id>] [--provider <p>] [--all] [--json]
                      [--session [id]] [--explain-drift]
                      [--patterns[=retries,failures,compaction,reverts]] [--findings]
   burn overhead      [trim] [--project <path>] [--since 7d] [--kind <k>] [--top <n>] [--json]
   burn compare       <model_a,model_b[,...]> [--since 7d] [--project <path>] [--session <id>] [--workflow <id>] [--agent <id>] [--min-sample <n>] [--json|--csv]
-  burn run <claude|codex|opencode>  [--tag k=v ...] [-- <harness args>]
   burn ingest        [--watch|--hook <name>] [--interval <ms>] [--quiet]
   burn mcp-server    [--session-id <uuid>]          (stdio MCP server for in-session self-query)
   burn state         [status] [--json]
@@ -20,6 +19,8 @@ Usage:
 Examples:
   burn summary --since 24h
   burn summary --by-provider --provider synthetic
+  burn summary --tag persona=code-reviewer
+  burn summary --group-by-tag persona
   burn summary --subagent-tree <session-id>
   burn summary --by-subagent-type --since 7d
   burn summary --by-relationship --since 7d
@@ -33,9 +34,6 @@ Examples:
   burn overhead trim --top 3
   burn overhead trim --json
   burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 30d
-  burn run claude   --tag workflow=refactor -- --resume
-  burn run codex    --tag workflow=refactor
-  burn run opencode --tag workflow=refactor
   burn ingest
   burn ingest --watch
   burn ingest --watch --opencode-stream
