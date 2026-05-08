@@ -8,7 +8,20 @@ importers:
 
   .: {}
 
-  packages/relayburn: {}
+  packages/relayburn:
+    optionalDependencies:
+      '@relayburn/cli-darwin-arm64':
+        specifier: 2.1.0
+        version: link:npm/darwin-arm64
+      '@relayburn/cli-darwin-x64':
+        specifier: 2.1.0
+        version: link:npm/darwin-x64
+      '@relayburn/cli-linux-arm64-gnu':
+        specifier: 2.1.0
+        version: link:npm/linux-arm64-gnu
+      '@relayburn/cli-linux-x64-gnu':
+        specifier: 2.1.0
+        version: link:npm/linux-x64-gnu
 
   packages/relayburn/npm/darwin-arm64: {}
 
@@ -19,6 +32,19 @@ importers:
   packages/relayburn/npm/linux-x64-gnu: {}
 
   packages/sdk-node:
+    optionalDependencies:
+      '@relayburn/sdk-darwin-arm64':
+        specifier: 2.1.0
+        version: link:npm/darwin-arm64
+      '@relayburn/sdk-darwin-x64':
+        specifier: 2.1.0
+        version: link:npm/darwin-x64
+      '@relayburn/sdk-linux-arm64-gnu':
+        specifier: 2.1.0
+        version: link:npm/linux-arm64-gnu
+      '@relayburn/sdk-linux-x64-gnu':
+        specifier: 2.1.0
+        version: link:npm/linux-x64-gnu
     devDependencies:
       '@napi-rs/cli':
         specifier: ^2.18.4
