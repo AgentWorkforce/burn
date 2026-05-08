@@ -38,8 +38,6 @@ export interface SummaryOptions {
   /** ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range (`24h`, `7d`, `4w`, `2m`). */
   since?: string;
   ledgerHome?: string;
-  /** Optional logger invoked when the SQLite archive read fails and the SDK falls back to a full ledger walk. */
-  onLog?: (msg: string) => void;
 }
 export declare function summary(opts?: SummaryOptions): Promise<{
   totalTokens: number | bigint;
@@ -64,7 +62,6 @@ export interface SessionCostOptions {
   /** Session id to total. Omit for `{ note: 'no session id provided' }`. */
   session?: string;
   ledgerHome?: string;
-  onLog?: (msg: string) => void;
 }
 export interface SessionCostResult {
   sessionId: string | null;
@@ -85,7 +82,6 @@ export interface OverheadOptions {
   since?: string;
   kind?: OverheadFileKind;
   ledgerHome?: string;
-  onLog?: (msg: string) => void;
 }
 
 export interface OverheadSection {
@@ -183,7 +179,6 @@ export interface HotspotsOptions {
   groupBy?: HotspotsGroupBy;
   patterns?: string[];
   ledgerHome?: string;
-  onLog?: (msg: string) => void;
 }
 
 export interface HotspotsFileRow {
@@ -333,7 +328,6 @@ export interface CompareOptions {
   minSample?: number;
   minFidelity?: FidelityClass;
   ledgerHome?: string;
-  onLog?: (msg: string) => void;
 }
 
 export interface CompareResult {
@@ -356,9 +350,10 @@ export declare function compare(opts: CompareOptions): Promise<CompareResult>
 // ---------------------------------------------------------------------------
 // 2.x extensions — surfaces present in `relayburn-sdk` (the Rust crate)
 // but not in the TS 1.x `packages/sdk/index.d.ts`. Pre-1.0 widening per
-// the SDK shape rule; embedders that pinned to 1.x won't see these names
-// (the missing `onLog` etc. plus the absence of these is the only TS-vs-
-// napi gap the conformance gate measures).
+// the SDK shape rule; embedders that pinned to 1.x won't see these names.
+// The 1.x `onLog` callback is intentionally omitted: it surfaced the
+// archive-fallback path that no longer exists in the SQLite-native 2.x
+// stack (see issue #374), so there is nothing to log.
 // ---------------------------------------------------------------------------
 
 export interface SearchQueryOptions {
