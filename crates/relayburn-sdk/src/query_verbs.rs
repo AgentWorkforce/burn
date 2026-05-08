@@ -689,7 +689,6 @@ impl LedgerHandle {
         }
 
         let enriched = self.inner.query_turns(&q)?;
-        let attribution_turns = summary_turns_from_enriched(&enriched);
         let enriched = filter_summary_enriched_turns(
             enriched,
             opts.agent.as_deref(),
@@ -746,6 +745,8 @@ impl LedgerHandle {
                 }))
             }
             SummaryReportMode::ByTool => {
+                let attribution_turns =
+                    load_summary_by_tool_attribution_turns(&self.inner, &enriched, &q)?;
                 let report = compute_summary_by_tool_report(
                     &self.inner,
                     &turns,
@@ -1029,6 +1030,33 @@ fn summary_provider_passes(t: &TurnRecord, provider_filter: Option<&ProviderFilt
 
 fn summary_turns_from_enriched(enriched: &[EnrichedTurn]) -> Vec<TurnRecord> {
     enriched.iter().map(|e| e.turn.clone()).collect()
+}
+
+fn load_summary_by_tool_attribution_turns(
+    ledger: &crate::ledger::Ledger,
+    selected: &[EnrichedTurn],
+    q: &Query,
+) -> Result<Vec<TurnRecord>> {
+    let session_ids: BTreeSet<String> =
+        selected.iter().map(|e| e.turn.session_id.clone()).collect();
+    let mut by_key: IndexMap<String, EnrichedTurn> = IndexMap::new();
+    for session_id in session_ids {
+        let turns = ledger.query_turns(&Query {
+            session_id: Some(session_id),
+            source: q.source,
+            ..Default::default()
+        })?;
+        for t in turns {
+            let key = format!(
+                "{}|{}|{}",
+                t.turn.source.wire_str(),
+                t.turn.session_id,
+                t.turn.message_id,
+            );
+            by_key.insert(key, t);
+        }
+    }
+    Ok(by_key.into_values().map(|e| e.turn).collect())
 }
 
 fn resolve_summary_agent_session_tree(
@@ -3597,6 +3625,31 @@ mod tests {
         assert_eq!(grouped.rows[0].label, "claude-sonnet-4-6");
         assert_eq!(grouped.per_cell_fidelity["groupBy"], "model");
         assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
+    }
+
+    #[test]
+    fn summary_report_by_tool_uses_predecessor_before_since_boundary() {
+        let (_dir, handle) = fixture_handle();
+        let report = handle
+            .summary_report(SummaryReportOptions {
+                since: Some("2026-04-23T00:00:30.000Z".to_string()),
+                mode: SummaryReportMode::ByTool,
+                ..SummaryReportOptions::default()
+            })
+            .expect("summary report");
+        let SummaryReport::ByTool(report) = report else {
+            panic!("expected by-tool report");
+        };
+
+        let read = report
+            .rows
+            .iter()
+            .find(|row| row.tool == "Read")
+            .expect("read row");
+        assert_eq!(report.turn_count, 1);
+        assert_eq!(read.calls, 1);
+        assert!(read.attributed_cost > 0.0);
+        assert_eq!(report.unattributed_cost, 0.0);
     }
 
     #[test]

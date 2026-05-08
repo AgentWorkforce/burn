@@ -192,6 +192,19 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
             return Ok(2);
         }
     };
+    let subagent_tree_session_id = if let Some(tree_flag) = args.subagent_tree.as_deref() {
+        if tree_flag.is_empty() && args.session.is_none() {
+            eprintln!("burn: --subagent-tree requires a session id (positional or --session)");
+            return Ok(2);
+        }
+        Some(if tree_flag.is_empty() {
+            None
+        } else {
+            Some(tree_flag.to_string())
+        })
+    } else {
+        None
+    };
 
     let _archive_guard = ArchiveOverride::activate(args.no_archive);
 
@@ -203,18 +216,8 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
 
     let ingest_report = run_ingest(&mut handle)?;
 
-    let mode = if let Some(tree_flag) = args.subagent_tree.as_deref() {
-        if tree_flag.is_empty() && args.session.is_none() {
-            eprintln!("burn: --subagent-tree requires a session id (positional or --session)");
-            return Ok(2);
-        }
-        SummaryReportMode::SubagentTree {
-            session_id: if tree_flag.is_empty() {
-                None
-            } else {
-                Some(tree_flag.to_string())
-            },
-        }
+    let mode = if let Some(session_id) = subagent_tree_session_id {
+        SummaryReportMode::SubagentTree { session_id }
     } else if args.by_tool {
         SummaryReportMode::ByTool
     } else if args.by_subagent_type {
@@ -702,6 +705,16 @@ fn render_relationship_subagent_report(
     report: &SummaryRelationshipReport,
 ) -> anyhow::Result<i32> {
     if report.subagent_types.is_empty() {
+        if globals.json {
+            let mut value = json!({
+                "relationships": [],
+                "subagentTypes": [],
+                "message": NO_RELATIONSHIPS_MESSAGE,
+            });
+            coerce_whole_f64_to_int(&mut value);
+            print_json(&value);
+            return Ok(0);
+        }
         return Ok(render_no_relationships(globals));
     }
     if globals.json {
