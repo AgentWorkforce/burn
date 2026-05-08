@@ -19,6 +19,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
+- `relayburn-sdk` (Rust): `summary_report` now exposes the richer summary result
+  used by `burn summary`, so presenters can render one SDK-owned aggregate
+  shape.
 - `relayburn-cli` / `relayburn-sdk`: `burn summary` now accepts repeatable
   `--tag k=v` filters and `--group-by-tag <key>` to report cost/tokens by
   generic folded enrichment tags; Claude, Codex, and OpenCode pending stamps

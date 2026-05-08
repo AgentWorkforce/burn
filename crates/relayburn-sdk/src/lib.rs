@@ -10,8 +10,8 @@
 //!
 //! # Surface at a glance
 //!
-//! Ten verbs, each callable two ways: as a free function or as a method
-//! on [`LedgerHandle`].
+//! Verbs are callable two ways: as a free function or as a method on
+//! [`LedgerHandle`].
 //!
 //! `ingest` is async (tokio); the query/compute verbs are sync
 //! (CPU-bound). Callers running them from an async context — the typical

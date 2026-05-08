@@ -6,12 +6,15 @@
 //! drift stays bounded by the documented 1e-9 USD precision contract that the
 //! later overhead sub-issue depends on.
 
+use serde::{Deserialize, Serialize};
+
 use crate::reader::{SourceKind, TurnRecord, Usage};
 
 use crate::analyze::pricing::{ModelCost, PricingTable, ReasoningMode};
 use crate::analyze::provider_reattribution::resolve_provider;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CostBreakdown {
     pub model: String,
     pub total: f64,
