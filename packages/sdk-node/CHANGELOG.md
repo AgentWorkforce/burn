@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- `hotspots()` options now accept `workflow` (folded `workflowId` enrichment
+  filter) and `provider` (case-insensitive provider allow-list) — same shape
+  the `compare()` options expose.
+
 ## [2.4.0] - 2026-05-08
 
 ### Breaking Changes

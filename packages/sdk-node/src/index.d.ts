@@ -215,6 +215,10 @@ export interface HotspotsOptions {
   since?: string;
   groupBy?: HotspotsGroupBy;
   patterns?: string[];
+  /** Restrict to turns folded under a `workflowId` enrichment stamp. */
+  workflow?: string;
+  /** Provider allow-list (case-insensitive). */
+  provider?: string[];
   ledgerHome?: string;
 }
 

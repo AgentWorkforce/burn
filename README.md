@@ -63,8 +63,13 @@ subagents.
 |---|---|
 | `--since <range>` | Limit to a relative range or ISO timestamp. |
 | `--project <path>` | Limit to a project. |
+| `--session <id>` | Limit to a single session id. |
+| `--workflow <id>` | Limit to turns folded under a `workflowId` enrichment stamp. |
+| `--provider <csv>` | Restrict to providers (case-insensitive CSV — e.g. `anthropic,openai`). |
 | `--all` | Show every row instead of the top 10. |
 | `--group-by <dim>` | Focus one rollup: `attribution`, `bash`, `bash-verb`, `file`, or `subagent`. |
+| `--patterns [csv]` | Run waste-pattern detectors instead of the attribution view. Pass without a value to enable every detector, or pass a CSV (e.g. `retry-loop,failure-run`). |
+| `--findings` | Emit the unified findings table instead of the per-detector grouping. Implies `--patterns` if not already set. |
 | `--json` | Emit machine-readable output. |
 
 | Example | Result |
@@ -72,6 +77,13 @@ subagents.
 | `burn hotspots --since 7d` | Top costly files, bash commands, and subagents for the week. |
 | `burn hotspots --all --project .` | Full project hotspot list. |
 | `burn hotspots --group-by bash-verb --since 7d` | Bash verbs ranked by cost. |
+| `burn hotspots --session <uuid>` | Restrict the standard attribution view to one session. |
+| `burn hotspots --patterns retry-loop,failure-run` | Surface retry/failure waste-pattern findings only. |
+| `burn hotspots --findings --since 7d` | Unified severity-ranked findings list across every detector. |
+| `burn hotspots --provider anthropic` | Restrict attribution to Anthropic-served turns. |
+
+The per-session aggregate view (`--session` with no id) and `--explain-drift`
+are not yet ported — passing them exits 2 with a directed message.
 
 ## `burn overhead`
 

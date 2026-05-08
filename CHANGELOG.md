@@ -6,6 +6,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Added
 
+- `relayburn-cli`: `burn hotspots` accepts `--session <id>`, `--workflow <id>`,
+  `--provider <csv>`, `--patterns [csv]`, and `--findings`. The per-session
+  aggregate view (`--session` with no id) and `--explain-drift` remain
+  explicit stubs that exit 2.
+- `relayburn-sdk`: `HotspotsOptions` gains `workflow` and `provider` filter
+  fields, matching the shape `compare()` already exposes.
 - `relayburn-cli` / `relayburn-sdk`: `burn state reset` is now a real
   presenter over the new SDK `Ledger::reset()` verb. Without flags it
   dry-runs (counts derivable rows, stamps, and content rows that would
