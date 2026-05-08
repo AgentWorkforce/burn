@@ -4,6 +4,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-sdk` (Rust): refresh the bundled `models.dev` pricing snapshot so
+  GPT-5.5 and current model metadata are available for cost lookups.
+
 ## [2.5.0] - 2026-05-08
 
 ### Added

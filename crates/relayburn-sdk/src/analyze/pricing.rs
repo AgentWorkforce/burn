@@ -190,6 +190,15 @@ mod tests {
     }
 
     #[test]
+    fn builtin_snapshot_has_gpt_5_5_pricing() {
+        let table = load_builtin_pricing();
+        let cost = table.get("gpt-5.5").expect("gpt-5.5 present");
+        assert_eq!(cost.input, 5.0);
+        assert_eq!(cost.cache_read, 0.5);
+        assert_eq!(cost.output, 30.0);
+    }
+
+    #[test]
     fn flatten_preserves_separate_reasoning_tariff() {
         let raw = r#"{
             "acme": {
