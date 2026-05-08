@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-05-08
+
 ### Breaking Changes
 
 - Removed the `onLog` option from `summary`, `sessionCost`, `overhead`, `overheadTrim`, `hotspots`, and `compare` option types. The 2.x stack is SQLite-native and has no archive-fallback path to surface, so the callback was already a no-op at the napi boundary. (#374)

@@ -4,6 +4,8 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-05-08
+
 ### Removed
 
 - Removed the `burn run` launcher wrapper from the CLI surface. Launchers
