@@ -1,5 +1,4 @@
-//! Per-million-token pricing tables — Rust port of
-//! `packages/analyze/src/pricing.ts`.
+//! Per-million-token pricing tables.
 //!
 //! The bundled `models.dev.json` snapshot ships embedded via `include_str!` so
 //! the binary stays self-contained and `load_builtin_pricing` performs no I/O.
@@ -83,10 +82,9 @@ struct ModelsDevProvider {
 type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
 
 /// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`,
-/// which writes through to both the SDK crate's `data/` copy and the TS tree's
-/// `packages/analyze/pricing/` copy (kept in lockstep). Vendoring inside the
+/// which writes through to the SDK crate's `data/` copy. Vendoring inside the
 /// crate is required so `cargo package` / `cargo publish --dry-run` can verify
-/// the tarball without reaching back into the TS tree.
+/// the tarball without network access.
 const BUILTIN_PRICING_JSON: &str = include_str!("../../data/models.dev.json");
 
 /// Load the bundled `models.dev` snapshot. No I/O — the JSON is embedded at

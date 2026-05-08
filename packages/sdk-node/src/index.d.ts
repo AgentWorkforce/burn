@@ -1,23 +1,20 @@
 // Type surface for `@relayburn/sdk@2.x`.
 //
-// Mirrors `packages/sdk/index.d.ts` (the TS 1.x SDK) byte-for-byte modulo:
+// Mirrors the Rust SDK verb surface through the napi-rs facade, with
+// compatibility affordances for callers migrating from the 1.x JS SDK:
 //   - `bigint` is allowed alongside `number` for u64-typed token counts (the
-//     napi-rs binding emits `BigInt` for `u64`; the TS shape is widened so
-//     existing callers that pass through `number` keep type-checking once
-//     bound to the Rust impl).
+//     napi-rs binding emits `BigInt` for `u64`; the facade downcasts safe-range
+//     values at runtime).
 //   - Async fns return `Promise<T>` — the napi-rs binding uses `async fn`
 //     where the Rust SDK does, which is everywhere except the `Ledger.open`
 //     constructor.
-//
-// Source-of-truth comment: track `packages/sdk/index.d.ts`. Whenever a verb
-// shape changes in TS, mirror it here AND in the Rust napi-rs binding (#247-a).
 
 export interface LedgerOpenOptions { home?: string; contentHome?: string }
 /**
- * Stateful ledger handle. The 1.x TS class only exposes the static
- * `open()` constructor; instances are placeholders today, with `home`
- * exposed for callers that want to confirm which ledger they attached
- * to. Verb methods are a future PR.
+ * Stateful ledger handle. The Node facade exposes the static `open()`
+ * constructor; instances carry the resolved home for callers that want
+ * to confirm which ledger they attached to. Verb methods are reserved
+ * for a future facade expansion.
  */
 export declare class Ledger {
   readonly home: string;
@@ -346,6 +343,10 @@ export interface CompareResult {
 
 /** Per-(model, activity) comparison shape. Powers `burn compare`. */
 export declare function compare(opts: CompareOptions): Promise<CompareResult>
+export declare function computeCompareExcluded(
+  summary: FidelitySummaryShape,
+  minimum: FidelityClass
+): CompareExcludedBreakdown
 
 // ---------------------------------------------------------------------------
 // 2.x extensions — surfaces present in `relayburn-sdk` (the Rust crate)

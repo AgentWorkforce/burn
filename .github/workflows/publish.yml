@@ -48,9 +48,9 @@ concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
-# 2.0 cutover (epic #240) target shape:
+# Publish target shape:
 #
-#   TS-only umbrellas (3):
+#   npm umbrellas (3):
 #     - relayburn                    packages/relayburn/
 #     - @relayburn/sdk (napi)        packages/sdk-node/
 #     - @relayburn/mcp               packages/mcp/
@@ -59,11 +59,10 @@ concurrency:
 #     - @relayburn/cli-<short>       packages/relayburn/npm/<short>/  (Rust burn binary)
 #     - @relayburn/sdk-<short>       packages/sdk-node/npm/<short>/   (napi-rs .node)
 #
-# Total: 11 npm packages. The five legacy TS packages
+# Total: 11 npm packages. The five legacy TypeScript implementation packages
 # (`@relayburn/{reader,ledger,analyze,ingest,cli}`) are intentionally not
 # in the publish loop — `npm deprecate` for those is a manual post-cutover
-# step. Their source dirs stay (they back the conformance fixture seeder
-# and the cli-golden suite).
+# step.
 #
 # crates.io still ships exactly two crates (`relayburn-sdk` + `relayburn-cli`).
 

@@ -1,10 +1,9 @@
-# @relayburn/sdk (2.x)
+# @relayburn/sdk
 
-Embeddable Relayburn SDK — napi-rs bindings over the Rust `relayburn-sdk`
-crate. Drop-in replacement for the TS `@relayburn/sdk@1.x` published from
-`packages/sdk/`.
+Embeddable Relayburn SDK for Node.js. The package is a napi-rs facade over the
+Rust `relayburn-sdk` crate.
 
-The 2.x umbrella resolves the right native binary for your platform via
+The package resolves the native binding for your platform via
 `optionalDependencies`:
 
 | Platform | Package |
@@ -16,21 +15,12 @@ The 2.x umbrella resolves the right native binary for your platform via
 
 Windows (`win32-x64-msvc`) is not yet shipped — see #247 follow-up.
 
-## Migration from 1.x
+## API Notes
 
-Same imports, same option shapes, same return shapes — except:
-
-- **u64 token counts are `bigint`.** napi-rs maps Rust `u64` to JavaScript
-  `BigInt`. Code that does arithmetic on `summary().totalTokens` (and
-  similar fields on `hotspots`, `overhead`, `sessionCost`) needs to either
-  use `BigInt` literals (`100n`) or coerce with `Number(x)`. The TS
-  declarations widen these fields to `number | bigint` to keep existing
-  callers compiling.
-- Otherwise byte-for-byte compatible. Run your test suite — the conformance
-  test in `test/conformance.test.js` is what we use to validate.
-
-## Status
-
-This is a `2.0.0-pre` build published to npm under the `next` tag while
-the rest of the Rust port lands. Until the lockstep 2.0 cutover ships, the
-1.x TS SDK at `packages/sdk/` is still the source of truth.
+- Large u64 token counts may be `bigint`. napi-rs maps Rust `u64` to
+  JavaScript `BigInt`; the facade downcasts safe-range integers to `number`
+  and leaves larger values as `bigint`. The declarations widen these fields
+  to `number | bigint`.
+- The SDK exposes read verbs such as `summary()`, `sessionCost()`,
+  `hotspots()`, `compare()`, `search()`, `exportLedger()`, and
+  `exportStamps()`.

@@ -1,10 +1,7 @@
 name: CI
 
-# Build + test the full workspace on every PR and on every push to main.
-# Catches the failure mode where a syntactically-broken file lands on main
-# undetected because publish.yml only runs on workflow_dispatch — e.g. the
-# unescaped backticks in archive.ts's SCHEMA_SQL template literal that
-# slipped past review and broke `tsc` for everyone downstream.
+# Build + test the Rust workspace and remaining npm wrappers on every PR and
+# on every push to main.
 
 on:
   pull_request:
@@ -37,20 +34,13 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # `tsc --build` walks every package in the workspace and is the gate
-      # for parse-level failures. Run it as its own step so a syntax error
-      # surfaces clearly in the failure summary instead of being lumped in
-      # with test output.
-      - name: Build workspace
-        run: pnpm -r run build
+      - name: Build npm wrappers
+        run: pnpm -r --if-present run build
 
-      - name: Run tests
+      - name: Run npm tests
         run: pnpm run test
 
   cargo-build-and-test:
-    # Sibling job to build-and-test: as the Rust port (#240) lands crate by
-    # crate, the Cargo workspace lives alongside the TS workspace. Run this
-    # job in parallel with the TS job so neither tree blocks the other.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

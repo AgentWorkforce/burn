@@ -1,7 +1,7 @@
 // Thin ESM facade over the napi-rs binding. The verbs here re-export the
 // matching `#[napi]` exports from the platform package resolved by
-// `./binding.cjs`, with two adjustments to match the TS 1.x contract at
-// `packages/sdk/index.d.ts`:
+// `./binding.cjs`, with two compatibility adjustments carried forward from
+// the 1.x SDK contract:
 //
 //   1. The sync `#[napi]` verbs (`summary`, `sessionCost`, `overhead`,
 //      `overheadTrim`, `hotspots`, `compare`) are re-exported as `async`
@@ -23,18 +23,13 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const binding = require('./binding.cjs');
 
-// napi-rs serializes Rust `u64` / `i64` as JS `BigInt`, but the TS 1.x
-// `@relayburn/sdk` shape (mirrored in `src/index.d.ts`) emits plain
-// `Number` for the same fields. To keep the conformance gate's
-// `deepStrictEqual` checks honest — and to match the runtime shape that
-// 1.x callers expect (e.g. `result.turnCount === 0`, not `=== 0n`) — we
-// downcast every `BigInt` in a verb's return value to `Number` when it
-// fits in `[Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]`. Values
-// outside that range are left as `BigInt`: realistic burn ledgers won't
-// hit 2^53 tokens, but if one ever does, leaking a `BigInt` that crashes
-// a `===` check is strictly safer than silently rounding to the nearest
-// 1024. The TS shape declares `number | bigint` everywhere this matters
-// so the type stays sound either way.
+// napi-rs serializes Rust `u64` / `i64` as JS `BigInt`, while 1.x emitted
+// plain `Number` for the same fields. To keep common caller expectations
+// intact (e.g. `result.turnCount === 0`, not `=== 0n`), downcast every
+// `BigInt` in a verb's return value to `Number` when it fits in
+// `[Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]`. Values outside that
+// range are left as `BigInt`; leaking a `BigInt` is safer than silently
+// rounding a very large ledger.
 const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
@@ -63,12 +58,20 @@ function coerceBigInts(value) {
   return value;
 }
 
+function normalizeSearchOptions(opts) {
+  if (!opts || typeof opts !== 'object' || typeof opts.limit !== 'number') {
+    return opts;
+  }
+  if (!Number.isSafeInteger(opts.limit) || opts.limit < 0) {
+    throw new RangeError('search limit must be a non-negative safe integer');
+  }
+  return { ...opts, limit: BigInt(opts.limit) };
+}
+
 /**
- * Stateful ledger handle. Mirrors the TS 1.x `Ledger` class shape from
- * `packages/sdk/index.d.ts`. The 1.x version only exposes the static
- * `open(opts)` constructor — instance methods are reserved for a future
- * PR — so we replicate that surface and stash the resolved home for
- * introspection.
+ * Stateful ledger handle. The 1.x SDK only exposed the static `open(opts)`
+ * constructor; instance methods are reserved for a future PR. Keep that shape
+ * and stash the resolved home for introspection.
  */
 export class Ledger {
   constructor(home) {
@@ -117,13 +120,35 @@ export async function compare(opts) {
   return coerceBigInts(await binding.compare(opts));
 }
 
+export function computeCompareExcluded(summary, minimum) {
+  const out = { total: 0, aggregateOnly: 0, costOnly: 0, partial: 0, usageOnly: 0 };
+  if (minimum === 'partial') return out;
+  const order = ['cost-only', 'aggregate-only', 'partial', 'usage-only', 'full'];
+  const need = order.indexOf(minimum);
+  if (need < 0) {
+    throw new Error(
+      `invalid minimum fidelity: ${minimum} (expected one of ${order.join(', ')})`,
+    );
+  }
+  const byClass = summary?.byClass ?? {};
+  for (const cls of order) {
+    if (order.indexOf(cls) >= need) continue;
+    const n = Number(byClass[cls] ?? 0);
+    if (!n) continue;
+    out.total += n;
+    if (cls === 'aggregate-only') out.aggregateOnly += n;
+    else if (cls === 'cost-only') out.costOnly += n;
+    else if (cls === 'partial') out.partial += n;
+    else if (cls === 'usage-only') out.usageOnly += n;
+  }
+  return out;
+}
+
 // 2.x extensions — exposed by the Rust SDK but not declared in
-// `packages/sdk/index.d.ts` (the 1.x TS surface). Per the SDK shape rule,
-// pre-1.0 widening is allowed; these are surfaced here so embedders can
-// reach the FTS5 search index and the JSONL export iterators without
-// dropping into the binding directly.
+// the 1.x SDK surface. These let embedders reach the FTS5 search index and
+// JSONL export iterators without dropping into the binding directly.
 export async function search(opts) {
-  return coerceBigInts(await binding.search(opts));
+  return coerceBigInts(await binding.search(normalizeSearchOptions(opts)));
 }
 
 export async function exportLedger(opts) {

@@ -9,15 +9,12 @@
   },
   "packageManager": "pnpm@10.17.1",
   "scripts": {
-    "build": "tsc --build",
-    "dev": "tsc --build --watch --preserveWatchOutput",
-    "dev:cli": "node packages/cli/dist/cli.js",
-    "test": "node --test --test-reporter=spec 'packages/*/dist/**/*.test.js'",
-    "test:ts": "tsc --build && pnpm run test",
-    "clean": "tsc --build --clean",
-    "tokenizer:measure": "pnpm run build && node scripts/measure-user-turn-tokenizer.mjs",
-    "pricing:update": "node scripts/update-pricing.mjs",
-    "golden:capture": "pnpm run build && node tests/fixtures/cli-golden/scripts/capture-snapshots.mjs"
+    "build": "pnpm --filter @relayburn/sdk build && pnpm --filter @relayburn/mcp build && pnpm --filter relayburn build",
+    "build:napi": "pnpm --filter @relayburn/sdk build:napi",
+    "build:napi:debug": "pnpm --filter @relayburn/sdk build:napi:debug",
+    "test": "pnpm --filter @relayburn/sdk test && pnpm --filter @relayburn/mcp test",
+    "test:bundle": "pnpm --filter @relayburn/sdk test:bundle",
+    "pricing:update": "node scripts/update-pricing.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

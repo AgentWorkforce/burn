@@ -1,7 +1,7 @@
 {
   "name": "relayburn",
   "version": "2.3.0",
-  "description": "Token usage & cost attribution for agent CLIs (installs the `burn` command). Resolves a prebuilt Rust binary from the `@relayburn/cli-<platform>` packages with a TypeScript CLI fallback.",
+  "description": "Token usage & cost attribution for agent CLIs (installs the `burn` command). Resolves a prebuilt Rust binary from the `@relayburn/cli-<platform>` packages.",
   "type": "module",
   "bin": {
     "burn": "./bin/burn.js"

@@ -4,7 +4,15 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
 - `relayburn-sdk` (Rust): reader hot loops in `claude.rs` and `codex.rs` now stream JSONL line-by-line via `BufReader::read_until` instead of pre-allocating a `(size - start_offset)`-byte buffer up front; only the longest single line stays resident. `memchr_newline` in the codex parser now actually uses the `memchr` crate for SIMD-accelerated newline scanning. The main `parse_claude_session` loop also drops `BufReader::lines()` in favor of `read_line` into a reused `String`. (#323)
+
+### Removed
+
+- Removed the old TypeScript implementation packages from the workspace. The
+  Rust crates now own the SDK and CLI implementation, with npm packages kept
+  for the Node SDK facade, MCP server, and prebuilt CLI wrappers.
 
 ## [2.0.0] - 2026-05-07
 

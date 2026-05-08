@@ -120,16 +120,6 @@ jobs:
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile
 
-      - name: Install packages/sdk-node deps
-        # `packages/sdk-node` is intentionally excluded from the pnpm
-        # workspace until the 2.0 cutover (see pnpm-workspace.yaml), so
-        # `pnpm install` at the root won't pull its devDependencies
-        # (`@napi-rs/cli`, `esbuild`). `--ignore-workspace` makes pnpm
-        # treat this directory as a standalone project and install into
-        # `packages/sdk-node/node_modules/` directly.
-        working-directory: packages/sdk-node
-        run: pnpm install --ignore-workspace --no-frozen-lockfile
-
       - name: Lockstep Cargo.toml to release version
         # When invoked via the publish workflow, sed the workspace
         # `[workspace.package].version` (and the path-dep `version = "X.Y"`
@@ -204,28 +194,9 @@ jobs:
         working-directory: packages/sdk-node
         run: node --test 'test/esbuild-smoke.test.js'
 
-      - name: Build TS workspace (for conformance step)
-        # Conformance imports `packages/sdk/index.js` (the TS 1.x SDK), which
-        # imports `@relayburn/{ledger,analyze,ingest,reader}`. Those packages
-        # ship as `dist/index.js` so they need a `tsc --build` pass before
-        # they can be required at runtime. The matrix runs `pnpm install` at
-        # the root above, but no build — flip that here so the conformance
-        # step's TS-side import resolves cleanly.
-        #
-        # Skipped on the aarch64-linux leg: that leg cross-compiles on an
-        # x64 host, so `node` (the runner's interpreter) cannot load the
-        # arm64 `.node` artifact we just built. Building the TS workspace
-        # is wasted work on that leg too — the conformance step below is
-        # also gated off there.
-        if: matrix.target != 'aarch64-unknown-linux-gnu'
-        run: pnpm run build
-
-      - name: Conformance test (TS @relayburn/sdk@1.x vs napi-rs @2.0.0-pre)
-        # The conformance suite seeds a deterministic ledger via
-        # `tests/fixtures/cli-golden/scripts/build-ledger.mjs`, runs each of
-        # the 7 verbs against both impls into matched tmp homes, and asserts
-        # `deepStrictEqual`. With α (#354) shape-conformant, this gate is
-        # the acceptance test for #247.
+      - name: Native SDK smoke test
+        # The suite runs the Node facade against the committed cli-golden
+        # ledger and checks stable result shapes for the exported verbs.
         #
         # Skipped on the aarch64-linux leg: that leg is a CROSS-COMPILE
         # (host=ubuntu-latest x64, target=aarch64-unknown-linux-gnu), so
@@ -239,10 +210,6 @@ jobs:
         # and exercise the same conformance contract; this leg's job is
         # purely to validate the cross-compile build + artifact upload.
         #
-        # If conformance fails on a verb, the failure is α follow-up scope —
-        # see the test header for the seeding strategy and the
-        # `tests/fixtures/cli-golden/ledger/.gitignore` note about the
-        # JSONL→SQLite replay the Rust SDK requires.
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         working-directory: packages/sdk-node
         env:

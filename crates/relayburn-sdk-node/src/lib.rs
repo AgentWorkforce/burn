@@ -32,7 +32,7 @@
 //! - **Timestamps → ISO-8601 `String`.** The SDK already speaks ISO
 //!   strings (`turn.ts`, `since` parameters); we keep that wire format
 //!   rather than dragging `chrono::DateTime` or `Date` through the FFI.
-//!   Matches the existing `packages/sdk/index.d.ts` byte-for-byte.
+//!   Matches the public Node facade types.
 //! - **`async fn` SDK verbs → `Promise<T>` on the JS side.** napi-rs's
 //!   `tokio_rt` feature drives this; we mark `ingest` `async fn` and the
 //!   sync verbs (`summary`, `sessionCost`, …) as plain `fn` returning
@@ -77,10 +77,8 @@
 //!
 //! Every public verb in `relayburn-sdk` (free-function form) is bound
 //! here. The `Ledger` / `LedgerHandle` method form is omitted from the JS
-//! surface for v1 — the TS sibling `@relayburn/sdk@1.x` only exposes the
-//! free-function shape, and a future PR can add a `Ledger` JS class
-//! without breaking compatibility. The deferred D9 PR (Wave 2) checks in a
-//! `.d.ts` snapshot test against `packages/sdk/index.d.ts`.
+//! surface for now — the Node facade exposes the free-function shape, and a
+//! future PR can add a `Ledger` JS class without breaking compatibility.
 //!
 //! See `RUST_PORT_WAVE_PLAN.md` section 3 for how this fits the larger
 //! port.
@@ -273,7 +271,7 @@ fn is_bigint_field(name: &str) -> bool {
 /// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
 /// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
 /// `hotspots`, `compare`, `exportLedger`, and `exportStamps` verbs whose
-/// result shapes are documented in `packages/sdk/index.d.ts`.
+/// result shapes are documented in `packages/sdk-node/src/index.d.ts`.
 pub struct BigIntPromoting(JsonValue);
 
 impl ToNapiValue for BigIntPromoting {
@@ -507,8 +505,8 @@ pub struct SessionCostOptions {
 pub struct SessionCostResult {
     pub session_id: Option<String>,
     /// Total cost in USD, rounded to 6 decimal places. Surfaced as
-    /// `totalUSD` (screaming USD) to match `packages/sdk/index.d.ts`'s
-    /// 1.x contract — napi-rs would otherwise camelCase it to
+    /// `totalUSD` (screaming USD) to match the Node facade contract —
+    /// napi-rs would otherwise camelCase it to
     /// `totalUsd`.
     #[napi(js_name = "totalUSD")]
     pub total_usd: f64,
@@ -554,7 +552,7 @@ pub fn session_cost(opts: Option<SessionCostOptions>) -> Result<SessionCostResul
 // ---------------------------------------------------------------------------
 
 /// Mirror of `sdk::OverheadFileKind`. Wire values match
-/// `packages/sdk/index.d.ts`'s `'claude-md' | 'agents-md'` literal union.
+/// The Node facade's `'claude-md' | 'agents-md'` literal union.
 #[napi(string_enum = "kebab-case")]
 pub enum OverheadFileKind {
     ClaudeMd,
@@ -582,7 +580,7 @@ pub struct OverheadOptions {
 /// Per-file + per-section overhead cost attribution. Powers `burn overhead`.
 ///
 /// Returns the attribution result as an `OverheadResult` (see
-/// `packages/sdk/index.d.ts`). Numeric u64 fields (`tokens`, `bytes`,
+/// `packages/sdk-node/src/index.d.ts`). Numeric u64 fields (`tokens`, `bytes`,
 /// `totalLines`, `sessionCount`, `startLine`, `endLine`) cross the
 /// boundary as `BigInt`; everything else is plain JS `number` / string.
 #[napi(ts_return_type = "import('./index').OverheadResult")]
@@ -613,7 +611,7 @@ pub struct OverheadTrimOptions {
     pub ledger_home: Option<String>,
     /// Recommendations per file. Default 3. Plain `u32` rather than
     /// `BigInt` — `top` is a small recommendation cap, never near 2^32,
-    /// and TS `packages/sdk/index.d.ts` types it as `number`.
+    /// and the Node facade types it as `number`.
     pub top: Option<u32>,
     /// Include the unified-diff text per recommendation. Default true.
     pub include_diff: Option<bool>,
@@ -656,7 +654,7 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
 // ---------------------------------------------------------------------------
 
 /// Mirror of `sdk::HotspotsGroupBy`. Wire values match
-/// `packages/sdk/index.d.ts`'s
+/// The Node facade's
 /// `'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent'` literal
 /// union.
 #[napi(string_enum = "kebab-case")]
@@ -692,7 +690,7 @@ pub struct HotspotsOptions {
 
 /// Per-axis hotspot attribution + pattern-finding queries. Returns a
 /// JSON-shaped discriminated union — see `HotspotsResult` in
-/// `packages/sdk/index.d.ts`. u64 row counts (`callCount`,
+/// `packages/sdk-node/src/index.d.ts`. u64 row counts (`callCount`,
 /// `distinctCommands`, `ridingTurns`, `firstEmitTurnIndex`,
 /// `toolCallCount`, `turnsAnalyzed`, `analyzed`, `excluded`) cross as
 /// `BigInt` per the file header rule.
@@ -736,7 +734,7 @@ pub struct CompareOptions {
     pub provider: Option<Vec<String>>,
     /// Insufficient-sample threshold. Default 5. Plain `u32` — a turn
     /// count never approaches 2^32, and TS
-    /// `packages/sdk/index.d.ts` types it as `number`.
+    /// the Node facade types it as `number`.
     pub min_sample: Option<u32>,
     /// One of `full`, `usage-only`, `aggregate-only`, `cost-only`, `partial`.
     pub min_fidelity: Option<String>,
@@ -912,14 +910,14 @@ pub fn export_stamps(opts: Option<ExportStampsOptions>) -> Result<BigIntPromotin
 // ingest — async; returns a Promise<IngestReport> on the JS side.
 // ---------------------------------------------------------------------------
 
-/// Mirror of `packages/sdk/index.d.ts`'s
+/// Mirror of the Node facade's
 /// `'claude-code' | 'codex' | 'opencode'` literal union. Surfaced as a
 /// `string_enum` so TS callers get the same string contract without a
 /// stringly-typed `harness: string` field.
 ///
 /// Note: the SDK's `ingest_all` does not currently accept a per-harness
 /// filter — passing this is a forward-compat hook that mirrors the TS
-/// shape (`packages/sdk/index.js`'s `ingest()` likewise takes the option
+/// shape (`packages/sdk-node/src/index.js`'s `ingest()` likewise takes the option
 /// today and routes to `ingestAll()` without filtering).
 #[napi(string_enum = "kebab-case")]
 pub enum IngestHarness {
@@ -928,17 +926,17 @@ pub enum IngestHarness {
     Opencode,
 }
 
-/// Mirrors `packages/sdk/index.d.ts`'s `IngestOptions` shape. The field
-/// set matches TS 1.x byte-for-byte; the binding routes to the SDK's
+/// Mirrors `packages/sdk-node/src/index.d.ts`'s `IngestOptions` shape. The field
+/// set is kept intentionally narrow; the binding routes to the SDK's
 /// fuller `sdk::IngestOptions` shape (with default `IngestRoots`) at the
 /// boundary.
 #[napi(object)]
 pub struct IngestOptions {
-    /// Reserved — TS 1.x accepts this option but `ingestAll()` ignores
+    /// Reserved for compatibility; `ingestAll()` ignores
     /// it; mirrored here so the napi binding accepts the same caller
     /// shape without a TypeError.
     pub session_id: Option<String>,
-    /// Reserved — TS 1.x accepts this option but `ingestAll()` ignores
+    /// Reserved for compatibility; `ingestAll()` ignores
     /// it; mirrored here for shape parity.
     pub harness: Option<IngestHarness>,
     pub ledger_home: Option<String>,
@@ -989,7 +987,7 @@ pub async fn ingest(opts: Option<IngestOptions>) -> Result<IngestReport, NapiErr
     // session_id / harness are TS-shape mirror fields; the SDK's
     // `ingest_all` takes neither, so we drop them here and rely on the
     // SDK's discovery to pick up every session under the configured
-    // roots. Matches TS 1.x's behavior at packages/sdk/index.js's
+    // roots. Matches the Node facade's behavior at packages/sdk-node/src/index.js's
     // `ingest()`.
     let _ = opts.session_id;
     let _ = opts.harness;
@@ -1014,7 +1012,7 @@ pub async fn ingest(opts: Option<IngestOptions>) -> Result<IngestReport, NapiErr
 
 /// Synchronously open and immediately close a ledger to validate the
 /// configured paths. Returns the resolved `home` path. Mirrors the
-/// `Ledger.open()` smoke-call shape from `packages/sdk/index.d.ts`; a
+/// `Ledger.open()` smoke-call shape from `packages/sdk-node/src/index.d.ts`; a
 /// future PR can add a stateful `Ledger` JS class that holds a handle.
 #[napi(js_name = "ledgerOpen")]
 pub fn ledger_open(opts: Option<LedgerOpenOptions>) -> Result<String, BurnError> {

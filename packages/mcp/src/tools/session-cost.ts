@@ -15,12 +15,7 @@ export interface SessionCostDeps {
    * Override for the SDK's `sessionCost(...)` call. Tests inject a fake to
    * exercise the tool surface without touching the on-disk ledger.
    */
-  sessionCost?: (opts: { session?: string; onLog?: (msg: string) => void }) => Promise<SdkSessionCostResult>;
-  /**
-   * Forwarded to `@relayburn/sdk` so archive-fallback log lines surface in
-   * whatever channel the host wired up (CLI server uses stderr).
-   */
-  onLog?: (msg: string) => void;
+  sessionCost?: (opts: { session?: string }) => Promise<SdkSessionCostResult>;
 }
 
 export function createSessionCostTool(deps: SessionCostDeps): ToolDefinition {
@@ -46,9 +41,8 @@ export function createSessionCostTool(deps: SessionCostDeps): ToolDefinition {
     handler: async (raw) => {
       const input = raw as SessionCostInput;
       const sessionId = input.sessionId ?? deps.defaultSessionId;
-      const opts: { session?: string; onLog?: (msg: string) => void } = {};
+      const opts: { session?: string } = {};
       if (sessionId !== undefined) opts.session = sessionId;
-      if (deps.onLog !== undefined) opts.onLog = deps.onLog;
       const result = await callSessionCost(opts);
       // The SDK's "no session id" note is generic ("no session id provided");
       // keep the more descriptive variant the MCP tool used to surface so the

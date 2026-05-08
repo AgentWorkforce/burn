@@ -4,11 +4,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Two vendored copies are kept in lockstep: the TS analyze package reads from
-// the packages/ copy, and the Rust SDK crate `include_str!`s the crates/
-// copy (required for `cargo package` to bundle it cleanly).
 const OUTS = [
-  path.resolve(__dirname, '..', 'packages', 'analyze', 'pricing', 'models.dev.json'),
   path.resolve(__dirname, '..', 'crates', 'relayburn-sdk', 'data', 'models.dev.json'),
 ];
 

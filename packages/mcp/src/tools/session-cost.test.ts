@@ -81,27 +81,6 @@ describe('createSessionCostTool', () => {
     assert.equal(result.note, undefined);
   });
 
-  it('passes the host onLog through to the SDK so archive-fallback messages surface', async () => {
-    let captured: ((msg: string) => void) | undefined;
-    const tool = createSessionCostTool({
-      defaultSessionId: 's1',
-      onLog: () => {},
-      sessionCost: async (opts) => {
-        captured = opts.onLog;
-        return {
-          sessionId: opts.session ?? null,
-          totalUSD: 0,
-          totalTokens: 0,
-          turnCount: 0,
-          models: [],
-          note: 'no turns recorded for this session yet',
-        };
-      },
-    });
-    await tool.handler({});
-    assert.equal(typeof captured, 'function');
-  });
-
   it('declares its tool surface (name, description, schema)', () => {
     const tool = createSessionCostTool({ defaultSessionId: undefined });
     assert.equal(tool.name, 'burn__sessionCost');

@@ -1,26 +1,6 @@
 packages:
-  - packages/*
-  # Exclude `packages/sdk-node` until the 2.0 cutover (#249). It declares
-  # `@relayburn/sdk` at version `2.0.0-pre.x`, which pnpm would prefer
-  # over the 1.x package at `packages/sdk` when resolving `workspace:*`
-  # dependencies in `cli` / `mcp` — flipping every consumer onto the
-  # not-yet-built napi-rs umbrella mid-port. Keeping it out of the
-  # workspace means the 1.x SDK stays the source of truth for in-repo
-  # consumers; the napi-rs CI matrix and conformance test scaffolding
-  # operate on `packages/sdk-node` directly via path.
-  - '!packages/sdk-node'
-  # Exclude `packages/relayburn` from the workspace for the same shape of
-  # reason as `sdk-node` above: it declares the per-platform Rust binary
-  # packages (`@relayburn/cli-darwin-arm64`, `@relayburn/cli-linux-x64-gnu`,
-  # …) plus the generic `@relayburn/cli` fallback as `optionalDependencies`,
-  # and the platform packages don't exist on npm until the
-  # cutover publish workflow ships them. With the package in the workspace,
-  # `pnpm install --frozen-lockfile` in CI rejects the lockfile because the
-  # optional specifiers in `package.json` aren't represented (pnpm 10 drops
-  # unresolvable optional deps from the lockfile silently, then frozen-mode
-  # complains they were "added"). Nothing in-repo consumes `relayburn` (it's
-  # a thin install wrapper that spawns the Rust binary), so dropping it from
-  # the workspace is a no-op for everyone except the install-time path. The
-  # cli-build CI matrix and the cutover publish workflow operate on
-  # `packages/relayburn` directly via path.
-  - '!packages/relayburn'
+  - packages/sdk-node
+  - packages/sdk-node/npm/*
+  - packages/mcp
+  - packages/relayburn
+  - packages/relayburn/npm/*

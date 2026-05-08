@@ -1,173 +1,151 @@
 # Agent guide for relayburn
 
 Conventions an agent (or human) needs to know to work productively in this repo.
-Pairs with [`README.md`](./README.md) — README is what burn does, this file is how to work on it.
+Pairs with [`README.md`](./README.md) — README is what burn does, this file is
+how to work on it.
 
 ## Layout
 
-The repo is a **dual tree** while the Rust port (epic #240) is in flight:
-
-- `packages/` — pnpm workspace, the eight published TS packages. Source of truth today.
-- `crates/` — Cargo workspace, the Rust port that will become the source of truth at the 2.0 cutover. Empty stubs until each crate's port issue lands (#242–#248).
-
-Both trees coexist on `main` until the cutover; CI builds and tests both. Don't edit one tree as a substitute for the other — each has its own port issue.
-
-### TS packages (`packages/`)
-
-pnpm workspace, eight published packages in dependency order:
-
-```
-@relayburn/reader   — pure parsers (Claude Code / Codex / OpenCode session logs → TurnRecord)
-@relayburn/ledger   — append-only JSONL ledger + content sidecar at ~/.relayburn/
-@relayburn/analyze  — pricing + per-record cost derivation + comparison aggregator
-@relayburn/ingest   — session-store discovery + parse-and-append orchestration + pending stamps + watch loop
-@relayburn/sdk      — embeddable Node API (`ingest`, `summary`, `sessionCost`, `hotspots`); source of truth for the in-process query surface
-@relayburn/mcp      — stdio MCP server exposing read-only ledger queries for in-session self-query (thin wrappers over `@relayburn/sdk`)
-@relayburn/cli      — `burn` binary (summary, hotspots, overhead, compare, `burn run <harness>` wrapper, mcp-server, …)
-relayburn           — thin install-wrapper so `npm i -g relayburn` exposes the same `burn` bin as `@relayburn/cli`
-```
-
-`reader → ledger → analyze → ingest → sdk → mcp → cli → relayburn`. Always build the whole workspace; never touch a single package's `tsconfig.tsbuildinfo` to "skip" a dep.
+The repo is Rust-first. The old TypeScript 1.x implementation packages have
+been removed; `crates/` is the source of truth.
 
 ### Rust crates (`crates/`)
 
-The Rust tree is a **monolith**: only `relayburn-sdk` and `relayburn-cli` are published to crates.io. Crate names are prefixed `relayburn-*` because `burn` is taken on crates.io; the binary keeps the `burn` invocation via `[[bin]] name = "burn"` in `relayburn-cli`.
+Only `relayburn-sdk` and `relayburn-cli` are published to crates.io. Crate
+names are prefixed `relayburn-*` because `burn` is taken on crates.io; the
+binary keeps the `burn` invocation via `[[bin]] name = "burn"` in
+`relayburn-cli`.
 
 ```
-relayburn-sdk         — PUBLISHED to crates.io; embedding API mirroring @relayburn/sdk (#246)
-                          src/{reader,ledger,analyze,ingest}/ are internal modules
-                          (formerly the four lower crates from #242–#245; absorbed
-                          when keeping them as separate crates would have forced a
-                          public crates.io contract for what is really a single
-                          implementation)
-relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary via [[bin]] rename (#248).
+relayburn-sdk         — PUBLISHED to crates.io; embedding API.
+                          src/{reader,ledger,analyze,ingest}/ are internal modules.
+                          The public verb surface lives in
+                          src/{query_verbs,export_verbs,ingest_verb}.rs.
+relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary.
                           Consumes the SDK as an external embedder would.
-relayburn-sdk-node    — napi-rs bindings; built in CI to produce @relayburn/sdk@2.0 .node artifacts (#247).
-                          Not published to crates.io.
+relayburn-sdk-node    — napi-rs bindings; built in CI to produce
+                          @relayburn/sdk .node artifacts. Not published to crates.io.
 ```
 
-Three crates total. Build order is `relayburn-sdk → relayburn-cli`, with `relayburn-sdk-node` also depending on `relayburn-sdk`. Toolchain pinned in `rust-toolchain.toml` at the repo root.
+Build order is `relayburn-sdk -> relayburn-cli`, with `relayburn-sdk-node` also
+depending on `relayburn-sdk`. Toolchain is pinned in `rust-toolchain.toml` at
+the repo root.
 
-Inside `relayburn-sdk`, the absorbed modules build in dependency order `reader → ledger → analyze → ingest`; each module's source-of-truth comment still points back to the TS sibling under `packages/<name>`. The verb surface lives in `src/{query_verbs,export_verbs,ingest_verb}.rs` at the SDK crate root and pulls from those modules.
+Every new read verb should land first in `relayburn-sdk` as a pure function or
+`LedgerHandle` method. The CLI and MCP presenter surfaces should wrap SDK calls
+rather than duplicating query logic.
 
-`@relayburn/sdk` owns the canonical query/compute surface — every new read verb should land there first as a pure function. `@relayburn/mcp` and `@relayburn/cli` are presenters: MCP wraps SDK calls in tool definitions, CLI wraps them in flag parsing + table rendering. Don't duplicate query logic across CLI/MCP — extract it into SDK.
+### npm packages (`packages/`)
+
+The npm workspace now contains wrappers and platform package manifests only:
+
+```
+packages/sdk-node          — @relayburn/sdk Node facade over relayburn-sdk-node.
+packages/sdk-node/npm/*    — @relayburn/sdk-<platform> prebuilt native packages.
+packages/mcp               — @relayburn/mcp stdio MCP presenter over @relayburn/sdk.
+packages/relayburn         — unscoped npm install wrapper exposing `burn`.
+packages/relayburn/npm/*   — @relayburn/cli-<platform> prebuilt binary packages.
+```
+
+Do not recreate the old standalone reader/ledger/analyze/ingest/cli TypeScript
+packages. If a 1.x feature is missing from 2.x, add it to the Rust SDK/CLI/MCP
+presenter surface as appropriate and record the gap in `RUST_2X_GAP_CATALOG.md`
+until it lands.
 
 ## Common commands
 
 ```bash
-pnpm install              # frozen-lockfile install
-pnpm run build            # tsc --build across the workspace
-pnpm run test             # node --test against built dist/
-pnpm run test:ts          # build + test in one shot
-pnpm dev:cli <args>       # run the local CLI against a built dist/
+cargo build --workspace    # Build all Rust crates.
+cargo test --workspace     # Rust unit/integration tests.
 
-pnpm run pricing:update   # refresh the vendored models.dev snapshot
+pnpm install               # Workspace install for npm wrappers.
+pnpm run test              # Node SDK facade + MCP tests.
+pnpm run test:bundle       # esbuild smoke test for @relayburn/sdk.
+pnpm run build:napi        # Local napi-rs build for @relayburn/sdk.
 
-cargo build --workspace   # Rust port skeleton (no runtime code yet; #242–#248 fill it in)
-cargo test --workspace    # Rust port tests
+pnpm run pricing:update    # Refresh the vendored models.dev snapshot.
 ```
 
-Tests run from `dist/` so a stale build will lie. If a test fails unexpectedly, rebuild before debugging.
+When debugging CLI behavior locally, prefer the Rust binary:
 
-Terminology note: the old `waste` / `diagnose` CLI and analyze API names are now `hotspots`, and the old `context` / `context advise` surface is now `overhead` / `overhead trim`. Do not add compatibility aliases for the old names.
+```bash
+cargo run -p relayburn-cli -- summary --since 24h
+```
+
+Terminology note: the old `waste` / `diagnose` names are now `hotspots`, and
+the old `context` / `context advise` surface is now `overhead` /
+`overhead trim`. Do not add compatibility aliases for the old names.
 
 ## Changelog
 
-Curate `[Unreleased]` in the relevant per-package `packages/*/CHANGELOG.md` as you land PRs — write the entry the way you'd want it to read in a release note. At publish time, the workflow (`.github/workflows/publish.yml`) **promotes** your `[Unreleased]` block verbatim into `## [x.y.z] - DATE` and resets `[Unreleased]` to empty. No double-writing, no post-release hand-editing.
+Curate `[Unreleased]` in the relevant changelog as you land PRs:
 
-Changelog entries should be concise and impact-first. Prefer one short bullet per user-visible change: name the command/API/schema touched and the practical effect. Drop issue/PR links, internal review notes, implementation backstory, and "foundation for..." phrasing unless that text clearly explains the shipped impact. Less detail is better when the detail belongs in the PR, commit, or code.
+- `CHANGELOG.md` for cross-package or user-facing release narrative.
+- `packages/sdk-node/CHANGELOG.md` for the Node SDK facade.
+- `packages/mcp/CHANGELOG.md` for the MCP package.
+- `packages/relayburn/CHANGELOG.md` for the npm CLI install wrapper.
 
-The root `CHANGELOG.md` is the cross-package narrative. Packages release in lockstep, so each release in the root file is a single `## [x.y.z] - YYYY-MM-DD` header that applies to all eight packages — no `**Versions:** ...` lines, no per-bullet `[reader, cli]` tags. Update `[Unreleased]` only when the work spans packages or warrants a top-level summary; single-package work belongs only in that package's CHANGELOG.
-
-The publish workflow promotes the root `[Unreleased]` block the same way it does per-package files: at release time it stamps `## [x.y.z] - DATE` (using `max` of the versions bumped in the run) and resets `[Unreleased]` to empty. **No git-log fallback for the root file** — an empty `[Unreleased]` at release time means "no narrative-worthy changes this release" and the file is left alone. So if you want the root to record a release, write the bullet under `[Unreleased]` *before* the publish run.
-
-**Fallback — git-log inference (per-package CHANGELOGs only).** If a package's `[Unreleased]` block is empty at release time, the workflow reconstructs an entry for `packages/<pkg>/CHANGELOG.md` from `git log` subjects since the last `<pkg>-v*` tag. This is only a safety net; prefer hand-curated entries. **The root `CHANGELOG.md` does not get this fallback** — see the previous paragraph. The inference buckets by leading verb:
-
-| Subject starts with… | Lands in section |
-|---|---|
-| `Add`, `Implement`, `Introduce`, `Create`, `Support`, `Enable`, `Expose`, `Wire`, `Allow` | **Added** |
-| `Fix`, `Resolve`, `Correct`, `Patch`, `Prevent`, `Guard`, `Stop` | **Fixed** |
-| `Refactor`, `Rename`, `Extract`, `Reorganize`, `Restructure`, `Simplify`, `Move`, `Split`, `Consolidate`, `Rewrite`, `Replace`, `Update`, `Bump`, `Upgrade`, `Migrate`, `Switch`, `Tighten`, `Loosen`, `Tweak`, `Adjust`, `Improve`, `Clarify`, `Polish`, `Cleanup`, `Harden` | **Changed** |
-| `Test`, `Cover`, `Verify` | **Reliability** |
-| `Document`, `Docs`, `Readme` | **Documentation** |
-| anything else | **Changed** (catch-all so nothing is silently dropped) |
-
-Conventional Commits (`feat:`, `fix:`, `refactor:`, `chore(release):`, etc.) also work and take precedence over verb inference. Either style is fine; mixing is fine.
-
-Breaking changes: append `!` to a Conventional Commits prefix (e.g. `feat!:`) to land under **Breaking Changes** (fallback path only — for curated entries, write the section yourself).
+Changelog entries should be concise and impact-first. Prefer one short bullet
+per user-visible change: name the command/API/schema touched and the practical
+effect. Drop issue/PR links, internal review notes, implementation backstory,
+and "foundation for..." phrasing unless that text clearly explains the shipped
+impact.
 
 ## Releases
 
 ```bash
-# from GitHub Actions: workflow_dispatch → "Publish Packages"
-#   always releases all packages in lockstep
+# from GitHub Actions: workflow_dispatch -> "Publish Packages"
 #   version: patch | minor | major | prepatch | … | none (re-publish current)
 #   custom_version: 0.3.1 (overrides version type)
 #   tag: latest | next | beta | alpha
 #   dry_run: true to skip publish + tag + git push
 ```
 
-The workflow:
-1. Builds + tests the whole workspace.
-2. Bumps `package.json` versions in dep order (reader → ledger → analyze → ingest → sdk → mcp → cli → relayburn).
-3. Generates changelog entries from `git log <pkg>-v<last>..HEAD -- packages/<pkg>`.
-4. Publishes via `pnpm pack` + `npm publish` using OIDC trusted-publisher auth (no `NPM_TOKEN`).
-5. Tags `<pkg>-v<version>` and creates a GitHub Release with the changelog body.
-
-A separate `Verify Publish` workflow smoke-tests installs from npm afterward.
+The workflow builds and tests the Rust workspace, builds native artifacts for
+the npm platform packages, publishes the umbrellas (`relayburn`,
+`@relayburn/sdk`, `@relayburn/mcp`) and their optional dependencies, then tags
+each published target.
 
 ## Adding a harness
 
-`burn run <harness>` dispatches through a `HarnessAdapter` registered in `packages/cli/src/harnesses/registry.ts`. Adding a new harness is a one-file addition + one-line registration:
+`burn run <harness>` dispatches through a `HarnessAdapter` registered in
+`crates/relayburn-cli/src/harnesses/registry.rs`. Adding a new harness is a
+new adapter module plus a registration entry.
 
-```ts
-// packages/cli/src/harnesses/cursor.ts
-import type { HarnessAdapter } from './types.js';
+Key files:
 
-export const cursorAdapter: HarnessAdapter = {
-  name: 'cursor',
-  sessionRoot: () => '/path/to/cursor/sessions',
+- `crates/relayburn-cli/src/harnesses/mod.rs` — trait definitions and shared
+  harness types.
+- `crates/relayburn-cli/src/harnesses/registry.rs` — lazy adapter lookup and
+  `list_harness_names()`.
+- `crates/relayburn-cli/src/harnesses/pending_stamp.rs` — shared shape for
+  harnesses that need pending-stamp manifests and a watch loop.
 
-  // Compute the spawn plan. Inject session ids or transport-level args here;
-  // populate `sessionId` on the returned plan so beforeSpawn / afterExit can
-  // see it (claude path).
-  async plan(ctx) {
-    return { binary: 'cursor', args: [...ctx.passthrough] };
-  },
+The CLI help block reads `list_harness_names()` so it updates automatically.
 
-  // Pre-spawn side effects. Stamp now if the session id is known up front;
-  // otherwise drop a pending-stamp manifest the post-spawn ingest can resolve.
-  async beforeSpawn(ctx, plan) {},
-
-  // Optional. Return a controller from `startWatchLoop` to drain a session
-  // store while the child runs; omit for adapters that ingest a single
-  // pre-known file at exit.
-  startWatcher(ctx, onReport) { return null; },
-
-  // Final ingest pass after child exits. Return an IngestReport so the driver
-  // can fold it into the unified `[burn] <name> ingest: ...` line.
-  async afterExit(ctx, plan) {
-    return { scannedSessions: 0, ingestedSessions: 0, appendedTurns: 0 };
-  },
-};
-```
-
-Then add it to the lazy registry object in `harnesses/registry.ts`:
-
-```ts
-cursor: async () => (await import('./cursor.js')).cursorAdapter,
-```
-
-The CLI help block reads `listHarnessNames()` so it updates automatically.
-
-The codex / opencode adapters share the pending-stamp + watch-loop shape; both are constructed via `createPendingStampAdapter` in `harnesses/pending-stamp.ts`. New harnesses with the same shape can reuse it.
-
-`burn ingest` owns passive ingest modes: no flags scans all session stores once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven Claude hook path. The reusable polling controller lives in `packages/ingest/src/watch-loop.ts`; import `startWatchLoop` from `@relayburn/ingest` for adapters.
+`burn ingest` owns passive ingest modes: no flags scans all session stores
+once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven
+Claude hook path. The reusable polling controller lives at
+`crates/relayburn-sdk/src/ingest/watch_loop.rs`.
 
 ## When in doubt
 
-- **Architecture / API surface:** read `README.md` first, then the package's `src/index.ts` for exports (TS) or `crates/relayburn-sdk/src/lib.rs` for the Rust public surface.
-- **Activity classifier rules:** the rule tables (`TEST_PATTERNS`, `EDIT_TOOLS`, `TOOL_ALIASES`, etc.) live at `packages/reader/src/classifier.ts` (TS) and `crates/relayburn-sdk/src/reader/classifier.rs` (Rust). They're the source of truth for what `burn compare` buckets each turn into. Adding a new harness = adding entries to `TOOL_ALIASES`; adding a new category = updating `ActivityCategory` in `packages/reader/src/types.ts` (and the Rust mirror at `crates/relayburn-sdk/src/reader/types.rs`) and adding its rule + a test.
-- **Derived state commands:** status, rebuild targets, and content pruning live under `burn state` in `packages/cli/src/commands/state.ts`. Keep maintenance verbs there rather than adding new top-level CLI dispatch.
-- **Ledger schema:** `packages/reader/src/types.ts` (`TurnRecord`, `ContentRecord`) and `packages/ledger/src/schema.ts` (`LedgerLine`, `TurnLine`, `StampLine`); Rust mirrors at `crates/relayburn-sdk/src/reader/types.rs` and `crates/relayburn-sdk/src/ledger/schema.rs`. Bump `v` if the on-disk shape changes.
-- **Concurrency:** any read-modify-write on the ledger MUST hold `withLock('ledger', …)` from `@relayburn/ledger`. Append-only writes use the same lock to avoid racing reclassify-style rewrites.
+- **Architecture / API surface:** read `README.md`, then
+  `crates/relayburn-sdk/src/lib.rs` for the Rust public surface and
+  `packages/sdk-node/src/index.d.ts` for the Node facade.
+- **Activity classifier rules:** the rule tables (`TEST_PATTERNS`,
+  `EDIT_TOOLS`, `TOOL_ALIASES`, etc.) live at
+  `crates/relayburn-sdk/src/reader/classifier.rs`. Adding a new harness means
+  adding entries to `TOOL_ALIASES`; adding a new category means updating
+  `ActivityCategory` in `crates/relayburn-sdk/src/reader/types.rs` and adding
+  its rule plus tests.
+- **Derived state commands:** status, rebuild targets, and content pruning live
+  under `burn state` in `crates/relayburn-cli/src/commands/state.rs`. Keep
+  maintenance verbs there rather than adding new top-level CLI dispatch.
+- **Ledger schema:** `crates/relayburn-sdk/src/reader/types.rs` defines
+  `TurnRecord` / content record shapes and
+  `crates/relayburn-sdk/src/ledger/schema.rs` defines the SQLite layout. Bump
+  schema/versioning deliberately when the on-disk shape changes.
+- **Concurrency:** use the SDK ledger APIs and SQLite transactions. The 2.x
+  steady-state layout is `burn.sqlite` plus `content.sqlite` in WAL mode; do
+  not reintroduce JSONL file-lock write paths.

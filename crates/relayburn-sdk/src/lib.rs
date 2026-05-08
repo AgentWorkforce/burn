@@ -3,11 +3,10 @@
 //! a Rust consumer needs to read or compute against a relayburn ledger
 //! lives behind this surface.
 //!
-//! The crate is mostly a thin re-export over `relayburn-reader`,
-//! `relayburn-ledger`, `relayburn-analyze`, and `relayburn-ingest`. The
-//! public API mirrors `@relayburn/sdk` (the TS package) so cross-language
-//! consumers ask the same questions, but uses Rust types directly rather
-//! than going through a JS bridge.
+//! The crate owns the internal reader, ledger, analyze, and ingest modules.
+//! The public API is mirrored by the `@relayburn/sdk` Node facade so
+//! cross-language consumers ask the same questions, while Rust callers use
+//! native types directly rather than going through a JS bridge.
 //!
 //! # Surface at a glance
 //!
@@ -34,13 +33,10 @@
 
 use std::path::PathBuf;
 
-// Absorbed lower-stack modules. Order matches the dependency graph
-// (reader → ledger → analyze → ingest); the verb modules below pull from
-// them. These were standalone crates (#242–#245) until the monolith
-// restructure; collapsing them removed a lockstep-publish requirement
-// against crates.io that bought us nothing for ~3s of incremental rebuild
-// tax. Each module's source-of-truth comment still points back to the TS
-// sibling under `packages/<name>`.
+// Internal lower-stack modules. Order matches the dependency graph
+// (reader -> ledger -> analyze -> ingest); the verb modules below pull from
+// them. These stay private so the published SDK owns one coherent public
+// contract.
 mod analyze;
 mod ingest;
 mod ledger;

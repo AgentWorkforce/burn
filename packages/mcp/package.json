@@ -17,7 +17,8 @@
   ],
   "scripts": {
     "build": "tsc --build",
-    "clean": "tsc --build --clean"
+    "clean": "tsc --build --clean",
+    "test": "node --test 'dist/**/*.test.js'"
   },
   "engines": {
     "node": ">=22"
