@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-05-08
+
 ### Changed
 
 - `relayburn-sdk` (Rust): refresh the bundled `models.dev` pricing snapshot so
