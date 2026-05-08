@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/cli-linux-x64-gnu",
-  "version": "2.5.2",
+  "version": "2.6.0",
   "description": "Prebuilt `burn` binary for linux-x64-gnu (glibc).",
   "bin": {
     "burn": "./bin/burn"

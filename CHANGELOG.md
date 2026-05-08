@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-05-08
+
 ### Added
 
 - `relayburn-cli`: new `burn sessions list` subcommand that enumerates
