@@ -17,6 +17,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   truncated }`. Derived from the `turns` table so older ledgers with an
   empty `sessions` table still enumerate correctly.
 
+### Changed
+
+- `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
+  shows a single human-readable last-seen date column, and truncates long
+  project paths from the beginning.
+
 ## [2.5.1] - 2026-05-08
 
 ### Changed
