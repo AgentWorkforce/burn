@@ -4,6 +4,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-cli`: `burn summary` partial-coverage footers now name the
+  token field with the largest gap and clarify that totals still include all
+  matched turns.
+
 ## [2.6.0] - 2026-05-08
 
 ### Added
