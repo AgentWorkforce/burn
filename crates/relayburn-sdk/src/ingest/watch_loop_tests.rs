@@ -30,6 +30,7 @@ async fn watch_loop_drains_pending_work_within_two_ticks() {
                 scanned_sessions: p,
                 ingested_sessions: p,
                 appended_turns: p,
+                applied_pending_stamps: 0,
             })
         })
     });

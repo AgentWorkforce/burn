@@ -19,3 +19,4 @@ export declare function overhead(opts?: unknown): Promise<unknown>;
 export declare function overheadTrim(opts?: unknown): Promise<unknown>;
 export declare function hotspots(opts?: unknown): Promise<unknown>;
 export declare function compare(opts: unknown): Promise<unknown>;
+export declare function writePendingStamp(opts: unknown): unknown;

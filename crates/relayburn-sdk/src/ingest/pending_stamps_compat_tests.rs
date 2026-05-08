@@ -76,6 +76,27 @@ fn rust_written_stamp_round_trips_through_parser() {
 }
 
 #[test]
+fn claude_pending_stamp_round_trips_through_parser() {
+    use crate::ingest::pending_stamps::{parse_pending_stamp, serialize_stamp};
+    use crate::ingest::{PendingStamp, PendingStampHarness};
+
+    let mut enrichment = std::collections::BTreeMap::new();
+    enrichment.insert("persona".into(), "code-reviewer".into());
+    let original = PendingStamp {
+        v: 1,
+        harness: PendingStampHarness::Claude,
+        spawner_pid: 42,
+        spawn_start_ts: "2026-04-23T08:09:10.011Z".into(),
+        cwd: "/var/tmp/work".into(),
+        enrichment,
+        session_dir_hint: None,
+    };
+    let serialized = serialize_stamp(&original);
+    let reparsed = parse_pending_stamp(&serialized).unwrap();
+    assert_eq!(reparsed, original);
+}
+
+#[test]
 fn rejects_wrong_version() {
     let raw = r#"{"v":2,"harness":"codex","spawnerPid":1,"spawnStartTs":"2025-05-01T00:00:00.000Z","cwd":"/x","enrichment":{}}"#;
     assert!(

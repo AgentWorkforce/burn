@@ -1,10 +1,10 @@
-//! Harness substrate — Rust port of `packages/cli/src/harnesses/types.ts`
+//! Legacy harness substrate — Rust port of `packages/cli/src/harnesses/types.ts`
 //! and friends.
 //!
-//! `burn run <harness>` is a wrapper that spawns a coding-agent process
-//! (Claude Code, Codex, OpenCode, …), babysits its session log while it
-//! runs, and feeds the resulting turns into the relayburn ledger. Every
-//! adapter contributes the same five-step shape:
+//! The CLI no longer exposes a command that launches agent processes, but
+//! these adapters remain as unit-tested reference code for launcher
+//! integrations built on the SDK pending-stamp primitives. Every adapter
+//! contributes the same five-step shape:
 //!
 //! 1. **`plan`** — compute the spawn plan (binary + args + env). Per-harness
 //!    transports inject session ids or hook arguments here.
@@ -17,27 +17,18 @@
 //!    adapters that share the pending-stamp shape (codex, opencode) wire
 //!    the watch loop through [`pending_stamp::adapter`].
 //! 4. **`after_exit`** — run a final ingest pass after the child exits and
-//!    return an [`IngestReport`] so the driver can fold it into the unified
-//!    `[burn] <name> ingest: …` line.
-//! 5. The driver itself owns step zero — collecting `cwd`, passthrough
+//!    return an [`IngestReport`] for the launcher to report.
+//! 5. The launcher itself owns step zero — collecting `cwd`, passthrough
 //!    args, and any user-provided enrichment tags into a [`PlanCtx`] —
 //!    and step six — joining the watcher and reporting summary stats.
-//!
-//! ## Where this fits
-//!
-//! This PR (#248 part b) is the substrate. The Wave 2 PRs (#248-d/e/f)
-//! plug the three concrete adapters into [`registry`] and the
-//! `burn run` driver in `commands::run` consumes them. The CLI scaffold
-//! (#248 part a, sibling worktree) lands the clap entrypoint independently.
 //!
 //! ## Trait shape vs the TS sibling
 //!
 //! `HarnessAdapter` is a `Send + Sync` trait object so the registry can
 //! hand out `&'static dyn HarnessAdapter` references. `async fn` in trait
 //! is mediated by `async_trait::async_trait` to keep adapter impls
-//! ergonomic; the desugared `Pin<Box<dyn Future + Send>>` matches the
-//! shape expected by the `burn run` driver, which `tokio::spawn`s the
-//! result of `plan` / `after_exit` and joins them at the top level.
+//! ergonomic; the desugared `Pin<Box<dyn Future + Send>>` is easy for
+//! launcher code to spawn and join at the top level.
 
 use std::path::PathBuf;
 
@@ -64,16 +55,14 @@ pub use registry::{list_harness_names, lookup};
 /// stamp record — the pending-stamp serializer canonicalizes ordering.
 #[derive(Debug, Clone)]
 pub struct PlanCtx {
-    /// Working directory the user invoked `burn run` from. Forwarded to
-    /// the spawned harness so it picks up project-local config.
+    /// Working directory for the spawned harness so it picks up
+    /// project-local config.
     pub cwd: PathBuf,
-    /// Argv tail after the subcommand boundary, e.g. `burn run claude --
-    /// "explain this"` ⇒ `["explain this"]`. Adapters splice this into
-    /// their generated argv via [`SpawnPlan::args`].
+    /// Argv tail the launcher wants to pass through. Adapters splice
+    /// this into their generated argv via [`SpawnPlan::args`].
     pub passthrough: Vec<String>,
     /// User-supplied enrichment that will be merged onto the resulting
-    /// stamp. Keys are free-form (`task`, `pr`, …); the Wave 2 driver
-    /// translates `--tag k=v` flags into entries here.
+    /// stamp. Keys are free-form (`task`, `pr`, …).
     pub tags: Enrichment,
     /// Optional ledger home selected by `--ledger-path`. Pending-stamp
     /// adapters use this for both manifest writes and ingest passes so
@@ -86,9 +75,9 @@ pub struct PlanCtx {
     pub spawn_start_ts: std::time::SystemTime,
 }
 
-/// Spawn plan returned by [`HarnessAdapter::plan`]. The `burn run`
-/// driver owns the actual `tokio::process::Command` construction; this
-/// struct is the per-adapter contribution to it.
+/// Spawn plan returned by [`HarnessAdapter::plan`]. Launcher code owns
+/// the actual process construction; this struct is the per-adapter
+/// contribution to it.
 ///
 /// `session_id` is filled in by adapters that know the session id up
 /// front (claude can mint one and inject it via `--session-id` so the
@@ -200,7 +189,7 @@ impl WatcherController {
     }
 
     /// Stop the periodic loop and await any in-flight tick. Idempotent.
-    /// `burn run` calls this once the spawned child exits.
+    /// Call this once the spawned child exits.
     pub async fn stop(&self) {
         self.inner.stop().await;
     }
@@ -216,8 +205,7 @@ impl WatcherController {
 mod tests {
     use super::*;
 
-    /// Smoke test: `SpawnPlan::new` produces an inherit-env plan the
-    /// driver can hand straight to `tokio::process::Command`. Catches
+    /// Smoke test: `SpawnPlan::new` produces an inherit-env plan. Catches
     /// accidental shape changes on the struct.
     #[test]
     fn spawn_plan_new_minimal_shape() {

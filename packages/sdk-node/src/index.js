@@ -120,6 +120,10 @@ export async function compare(opts) {
   return coerceBigInts(await binding.compare(opts));
 }
 
+export async function writePendingStamp(opts) {
+  return coerceBigInts(await binding.writePendingStamp(opts));
+}
+
 export function computeCompareExcluded(summary, minimum) {
   const out = { total: 0, aggregateOnly: 0, costOnly: 0, partial: 0, usageOnly: 0 };
   if (minimum === 'partial') return out;

@@ -26,14 +26,47 @@ export interface IngestReport {
   scannedSessions: number | bigint;
   ingestedSessions: number | bigint;
   appendedTurns: number | bigint;
+  appliedPendingStamps: number | bigint;
 }
 export declare function ingest(opts?: IngestOptions): Promise<IngestReport>
+
+export type PendingStampHarness = 'claude' | 'codex' | 'opencode';
+export interface WritePendingStampOptions {
+  harness: PendingStampHarness;
+  cwd: string;
+  enrichment: Record<string, string>;
+  sessionDirHint?: string;
+  /** ISO timestamp, e.g. `2026-04-23T00:00:00.000Z`. Defaults to now. */
+  spawnStartTs?: string;
+  spawnerPid?: number;
+  ledgerHome?: string;
+}
+export interface PendingStamp {
+  v: number;
+  harness: PendingStampHarness;
+  spawnerPid: number;
+  spawnStartTs: string;
+  cwd: string;
+  enrichment: Record<string, string>;
+  sessionDirHint?: string;
+}
+export interface PendingStampWriteResult {
+  file: string;
+  stamp: PendingStamp;
+}
+export declare function writePendingStamp(
+  opts: WritePendingStampOptions,
+): Promise<PendingStampWriteResult>
 
 export interface SummaryOptions {
   session?: string;
   project?: string;
   /** ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range (`24h`, `7d`, `4w`, `2m`). */
   since?: string;
+  /** Folded enrichment tag filters; every key/value pair must match. */
+  tags?: Record<string, string>;
+  /** Group summary costs/tokens by this folded enrichment tag key. */
+  groupByTag?: string;
   ledgerHome?: string;
 }
 export declare function summary(opts?: SummaryOptions): Promise<{
@@ -42,6 +75,13 @@ export declare function summary(opts?: SummaryOptions): Promise<{
   turnCount: number;
   byTool: Array<{ tool: string; tokens: number | bigint; cost: number; count: number }>;
   byModel: Array<{ model: string; tokens: number | bigint; cost: number }>;
+  byTag?: Array<{
+    tag: string;
+    value?: string;
+    tokens: number | bigint;
+    cost: number;
+    turnCount: number | bigint;
+  }>;
   replacementSavings?: {
     calls: number | bigint;
     collapsedCalls: number | bigint;

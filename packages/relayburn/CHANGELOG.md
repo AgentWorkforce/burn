@@ -6,6 +6,9 @@ All notable changes to `relayburn`.
 
 ### Removed
 
+- Removed the `burn run` launcher wrapper from the CLI surface. Launchers
+  should write attribution with `writePendingStamp()` and ingest through
+  `burn ingest` / SDK `ingest()`.
 - Removed the fallback to the old TypeScript `@relayburn/cli`; `relayburn`
   now resolves only the Rust prebuilt platform packages.
 

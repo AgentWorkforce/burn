@@ -11,7 +11,6 @@
 //! - `hotspots`    — wraps `relayburn_sdk::hotspots`
 //! - `overhead`    — wraps `relayburn_sdk::overhead` (+ `overhead trim`)
 //! - `compare`     — wraps `relayburn_sdk::compare`
-//! - `run`         — driver around `HarnessAdapter` (added in #248-b)
 //! - `state`       — status / rebuild / prune / reset
 //! - `ingest`      — no-flag, `--watch`, `--hook claude --quiet`
 //! - `mcp_server`  — rmcp wrapper around the SDK query verbs
@@ -24,6 +23,5 @@ pub mod hotspots;
 pub mod ingest;
 pub mod mcp_server;
 pub mod overhead;
-pub mod run;
 pub mod state;
 pub mod summary;

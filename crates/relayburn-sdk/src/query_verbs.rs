@@ -32,7 +32,7 @@ use crate::analyze::{
     summarize_fidelity_from_iter, summarize_replacement_savings, tool_call_pattern_to_finding,
     tool_output_bloat_to_finding, user_claude_settings_path,
 };
-use crate::ledger::Query;
+use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
     BashParse, FidelityClass, SourceKind, TurnRecord, UserTurnRecord, parse_bash_command,
     resolve_project,
@@ -209,6 +209,10 @@ pub struct SummaryOptions {
     pub session: Option<String>,
     pub project: Option<String>,
     pub since: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Enrichment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by_tag: Option<String>,
     pub ledger_home: Option<PathBuf>,
 }
 
@@ -231,6 +235,17 @@ pub struct SummaryModelRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SummaryTagRow {
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    pub tokens: u64,
+    pub cost: f64,
+    pub turn_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub total_tokens: u64,
     pub total_cost: f64,
@@ -238,19 +253,36 @@ pub struct Summary {
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_tag: Option<Vec<SummaryTagRow>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_savings: Option<ReplacementSavingsSummary>,
 }
 
 impl LedgerHandle {
     pub fn summary(&self, opts: SummaryOptions) -> Result<Summary> {
-        let q = build_query(
+        let mut q = build_query(
             opts.session.as_deref(),
             opts.project.as_deref(),
             opts.since.as_deref(),
         )?;
-        let turns = collect_turns(self, &q)?;
+        if let Some(tags) = opts.tags.clone() {
+            validate_tags(&tags)?;
+            if !tags.is_empty() {
+                q.enrichment = Some(tags);
+            }
+        }
+        let group_by_tag = opts.group_by_tag.clone();
+        if let Some(tag) = group_by_tag.as_deref() {
+            validate_tag_key(tag, "groupByTag")?;
+        }
+        let enriched = self.inner.query_turns(&q)?;
+        let turns: Vec<TurnRecord> = enriched.iter().map(|e| e.turn.clone()).collect();
         let pricing = load_pricing(None);
-        Ok(compute_summary(&turns, &pricing))
+        let mut summary = compute_summary(&turns, &pricing);
+        if let Some(tag) = group_by_tag {
+            summary.by_tag = Some(compute_summary_by_tag(&enriched, &tag, &pricing));
+        }
+        Ok(summary)
     }
 }
 
@@ -260,6 +292,20 @@ pub fn summary(opts: SummaryOptions) -> Result<Summary> {
         ledger_home: None,
         ..opts
     })
+}
+
+fn validate_tags(tags: &Enrichment) -> Result<()> {
+    for key in tags.keys() {
+        validate_tag_key(key, "tag")?;
+    }
+    Ok(())
+}
+
+fn validate_tag_key(key: &str, label: &str) -> Result<()> {
+    if key.is_empty() {
+        anyhow::bail!("{label} key must be non-empty");
+    }
+    Ok(())
 }
 
 fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
@@ -310,7 +356,11 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
     }
 
     let savings = summarize_replacement_savings(turns, None);
-    let replacement_savings = if savings.calls > 0 { Some(savings) } else { None };
+    let replacement_savings = if savings.calls > 0 {
+        Some(savings)
+    } else {
+        None
+    };
 
     Summary {
         total_tokens,
@@ -324,8 +374,59 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
             .into_iter()
             .map(|k| by_model.remove(&k).unwrap())
             .collect(),
+        by_tag: None,
         replacement_savings,
     }
+}
+
+fn compute_summary_by_tag(
+    enriched: &[EnrichedTurn],
+    tag: &str,
+    pricing: &PricingTable,
+) -> Vec<SummaryTagRow> {
+    let mut order: Vec<Option<String>> = Vec::new();
+    let mut rows: HashMap<Option<String>, SummaryTagRow> = HashMap::new();
+
+    for e in enriched {
+        let value = e.enrichment.get(tag).cloned();
+        let tokens = total_tokens_for_turn(&e.turn);
+        let cost = cost_for_turn(&e.turn, pricing)
+            .map(|c| c.total)
+            .unwrap_or(0.0);
+        let row = rows.entry(value.clone()).or_insert_with(|| {
+            order.push(value.clone());
+            SummaryTagRow {
+                tag: tag.to_string(),
+                value,
+                tokens: 0,
+                cost: 0.0,
+                turn_count: 0,
+            }
+        });
+        row.tokens += tokens;
+        row.cost += cost;
+        row.turn_count += 1;
+    }
+
+    let mut out: Vec<SummaryTagRow> = order
+        .into_iter()
+        .map(|k| rows.remove(&k).unwrap())
+        .collect();
+    out.sort_by(|a, b| {
+        b.cost
+            .partial_cmp(&a.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+fn total_tokens_for_turn(t: &TurnRecord) -> u64 {
+    t.usage.input
+        + t.usage.output
+        + t.usage.reasoning
+        + t.usage.cache_read
+        + t.usage.cache_create_5m
+        + t.usage.cache_create_1h
 }
 
 // ---------------------------------------------------------------------------
@@ -2162,11 +2263,10 @@ mod tests {
         assert_eq!(r.min_sample, 5);
         assert!(r.models.contains(&"claude-sonnet-4-6".to_string()));
         assert!(r.models.contains(&"claude-haiku-4-5".to_string()));
-        assert!(
-            r.cells
-                .iter()
-                .any(|c| c.model == "claude-sonnet-4-6" && c.turns == 2)
-        );
+        assert!(r
+            .cells
+            .iter()
+            .any(|c| c.model == "claude-sonnet-4-6" && c.turns == 2));
         assert_eq!(r.fidelity.minimum, FidelityClass::Partial);
         assert_eq!(r.fidelity.excluded.total, 0);
 
@@ -2537,7 +2637,9 @@ mod tests {
         let turns = vec![make_turn_with_calls(vec![tc])];
         let pricing = load_pricing(None);
         let result = compute_summary(&turns, &pricing);
-        let savings = result.replacement_savings.expect("should have replacement_savings");
+        let savings = result
+            .replacement_savings
+            .expect("should have replacement_savings");
         assert_eq!(savings.calls, 1);
         assert_eq!(savings.collapsed_calls, 9);
         assert!(!savings.by_tool.is_empty());

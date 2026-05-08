@@ -92,6 +92,7 @@ module.exports = {
   overheadTrim: async (opts) => coerceBigInts(await binding.overheadTrim(opts)),
   hotspots: async (opts) => coerceBigInts(await binding.hotspots(opts)),
   compare: async (opts) => coerceBigInts(await binding.compare(opts)),
+  writePendingStamp: async (opts) => coerceBigInts(await binding.writePendingStamp(opts)),
   computeCompareExcluded,
   search: async (opts) => coerceBigInts(await binding.search(normalizeSearchOptions(opts))),
   exportLedger: async (opts) => coerceBigInts(await binding.exportLedger(opts)),

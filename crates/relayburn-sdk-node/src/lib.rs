@@ -85,8 +85,10 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::ptr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use napi::bindgen_prelude::{BigInt, Error as NapiError, Result as NapiResult, ToNapiValue};
 use napi::sys;
@@ -155,6 +157,10 @@ fn sdk_err(e: anyhow::Error) -> NapiError<&'static str> {
 
 fn invalid_arg(msg: impl Into<String>) -> NapiError<&'static str> {
     NapiError::new(INVALID_ARGUMENT_ERROR_CODE, msg.into())
+}
+
+fn io_err(e: std::io::Error) -> NapiError<&'static str> {
+    NapiError::new(IO_ERROR_CODE, e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +375,227 @@ fn open_options(home: Option<String>, content_home: Option<String>) -> sdk::Ledg
 }
 
 // ---------------------------------------------------------------------------
+// writePendingStamp
+// ---------------------------------------------------------------------------
+
+#[napi(string_enum)]
+pub enum PendingStampHarness {
+    #[napi(value = "claude")]
+    Claude,
+    #[napi(value = "codex")]
+    Codex,
+    #[napi(value = "opencode")]
+    Opencode,
+}
+
+impl From<PendingStampHarness> for sdk::PendingStampHarness {
+    fn from(h: PendingStampHarness) -> Self {
+        match h {
+            PendingStampHarness::Claude => sdk::PendingStampHarness::Claude,
+            PendingStampHarness::Codex => sdk::PendingStampHarness::Codex,
+            PendingStampHarness::Opencode => sdk::PendingStampHarness::Opencode,
+        }
+    }
+}
+
+fn harness_to_string(h: sdk::PendingStampHarness) -> String {
+    match h {
+        sdk::PendingStampHarness::Claude => "claude",
+        sdk::PendingStampHarness::Codex => "codex",
+        sdk::PendingStampHarness::Opencode => "opencode",
+    }
+    .to_string()
+}
+
+#[napi(object)]
+pub struct WritePendingStampOptions {
+    pub harness: PendingStampHarness,
+    pub cwd: String,
+    pub enrichment: HashMap<String, String>,
+    pub session_dir_hint: Option<String>,
+    pub spawn_start_ts: Option<String>,
+    pub spawner_pid: Option<u32>,
+    pub ledger_home: Option<String>,
+}
+
+#[napi(object)]
+pub struct PendingStamp {
+    pub v: u32,
+    pub harness: String,
+    pub spawner_pid: u32,
+    pub spawn_start_ts: String,
+    pub cwd: String,
+    pub enrichment: HashMap<String, String>,
+    pub session_dir_hint: Option<String>,
+}
+
+#[napi(object)]
+pub struct PendingStampWriteResult {
+    pub file: String,
+    pub stamp: PendingStamp,
+}
+
+impl From<sdk::PendingStamp> for PendingStamp {
+    fn from(stamp: sdk::PendingStamp) -> Self {
+        PendingStamp {
+            v: stamp.v as u32,
+            harness: harness_to_string(stamp.harness),
+            spawner_pid: stamp.spawner_pid,
+            spawn_start_ts: stamp.spawn_start_ts,
+            cwd: stamp.cwd,
+            enrichment: stamp.enrichment.into_iter().collect(),
+            session_dir_hint: stamp.session_dir_hint,
+        }
+    }
+}
+
+impl From<sdk::PendingStampWriteResult> for PendingStampWriteResult {
+    fn from(result: sdk::PendingStampWriteResult) -> Self {
+        PendingStampWriteResult {
+            file: result.file.to_string_lossy().into_owned(),
+            stamp: PendingStamp::from(result.stamp),
+        }
+    }
+}
+
+#[napi]
+pub fn write_pending_stamp(
+    opts: WritePendingStampOptions,
+) -> Result<PendingStampWriteResult, BurnError> {
+    if opts.cwd.is_empty() {
+        return Err(invalid_arg("cwd must be non-empty"));
+    }
+    if opts.enrichment.is_empty() {
+        return Err(invalid_arg("enrichment must contain at least one tag"));
+    }
+    for key in opts.enrichment.keys() {
+        if key.is_empty() {
+            return Err(invalid_arg("enrichment keys must be non-empty"));
+        }
+    }
+    let spawn_start_ts = opts
+        .spawn_start_ts
+        .as_deref()
+        .map(parse_iso_system_time)
+        .transpose()?;
+    let raw = sdk::PendingStampWriteOptions {
+        harness: opts.harness.into(),
+        ledger_home: maybe_path(opts.ledger_home),
+        cwd: opts.cwd,
+        enrichment: opts.enrichment.into_iter().collect::<BTreeMap<_, _>>(),
+        session_dir_hint: opts.session_dir_hint,
+        spawn_start_ts,
+        spawner_pid: opts.spawner_pid,
+    };
+    sdk::write_pending_stamp(raw)
+        .map(PendingStampWriteResult::from)
+        .map_err(io_err)
+}
+
+fn parse_iso_system_time(s: &str) -> std::result::Result<SystemTime, BurnError> {
+    let Some(raw) = s.strip_suffix('Z') else {
+        return Err(invalid_arg("spawnStartTs must be an ISO-8601 Z timestamp"));
+    };
+    let Some((date, time)) = raw.split_once('T') else {
+        return Err(invalid_arg("spawnStartTs must contain a T separator"));
+    };
+    let mut date_parts = date.split('-');
+    let year: i64 = parse_i64_part(date_parts.next(), "year")?;
+    let month: u32 = parse_u32_part(date_parts.next(), "month")?;
+    let day: u32 = parse_u32_part(date_parts.next(), "day")?;
+    if date_parts.next().is_some() {
+        return Err(invalid_arg("spawnStartTs date has too many fields"));
+    }
+
+    let mut time_parts = time.split(':');
+    let hour: u32 = parse_u32_part(time_parts.next(), "hour")?;
+    let minute: u32 = parse_u32_part(time_parts.next(), "minute")?;
+    let second_raw = time_parts
+        .next()
+        .ok_or_else(|| invalid_arg("spawnStartTs missing seconds"))?;
+    if time_parts.next().is_some() {
+        return Err(invalid_arg("spawnStartTs time has too many fields"));
+    }
+    let (second_part, frac_part) = second_raw
+        .split_once('.')
+        .map(|(sec, frac)| (sec, Some(frac)))
+        .unwrap_or((second_raw, None));
+    let second: u32 = second_part
+        .parse()
+        .map_err(|_| invalid_arg("spawnStartTs second is invalid"))?;
+    let nanos = parse_fractional_nanos(frac_part)?;
+
+    let max_day = days_in_month(year, month);
+    if max_day == 0
+        || day == 0
+        || day > max_day
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return Err(invalid_arg("spawnStartTs is outside the supported range"));
+    }
+    let days = days_from_civil(year, month, day);
+    if days < 0 {
+        return Err(invalid_arg("spawnStartTs must be at or after 1970-01-01"));
+    }
+    let secs = days as u64 * 86_400 + hour as u64 * 3_600 + minute as u64 * 60 + second as u64;
+    Ok(UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_nanos(nanos as u64))
+}
+
+fn parse_i64_part(part: Option<&str>, name: &str) -> std::result::Result<i64, BurnError> {
+    part.ok_or_else(|| invalid_arg(format!("spawnStartTs missing {name}")))?
+        .parse()
+        .map_err(|_| invalid_arg(format!("spawnStartTs {name} is invalid")))
+}
+
+fn parse_u32_part(part: Option<&str>, name: &str) -> std::result::Result<u32, BurnError> {
+    part.ok_or_else(|| invalid_arg(format!("spawnStartTs missing {name}")))?
+        .parse()
+        .map_err(|_| invalid_arg(format!("spawnStartTs {name} is invalid")))
+}
+
+fn parse_fractional_nanos(part: Option<&str>) -> std::result::Result<u32, BurnError> {
+    let Some(part) = part else {
+        return Ok(0);
+    };
+    if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid_arg("spawnStartTs fractional seconds are invalid"));
+    }
+    let mut nanos = 0u32;
+    let mut scale = 100_000_000u32;
+    for b in part.bytes().take(9) {
+        nanos += ((b - b'0') as u32) * scale;
+        scale /= 10;
+    }
+    Ok(nanos)
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let y = year - i64::from(month <= 2);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = month as i64 + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+// ---------------------------------------------------------------------------
 // summary
 // ---------------------------------------------------------------------------
 
@@ -379,6 +606,8 @@ pub struct SummaryOptions {
     /// ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range
     /// (`24h`, `7d`, `4w`, `2m`).
     pub since: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
+    pub group_by_tag: Option<String>,
     pub ledger_home: Option<String>,
 }
 
@@ -395,6 +624,15 @@ pub struct SummaryModelRow {
     pub model: String,
     pub tokens: BigInt,
     pub cost: f64,
+}
+
+#[napi(object)]
+pub struct SummaryTagRow {
+    pub tag: String,
+    pub value: Option<String>,
+    pub tokens: BigInt,
+    pub cost: f64,
+    pub turn_count: BigInt,
 }
 
 #[napi(object)]
@@ -440,6 +678,7 @@ pub struct Summary {
     pub turn_count: BigInt,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
+    pub by_tag: Option<Vec<SummaryTagRow>>,
     pub replacement_savings: Option<ReplacementSavingsSummary>,
 }
 
@@ -468,6 +707,17 @@ impl From<sdk::Summary> for Summary {
                     cost: r.cost,
                 })
                 .collect(),
+            by_tag: s.by_tag.map(|rows| {
+                rows.into_iter()
+                    .map(|r| SummaryTagRow {
+                        tag: r.tag,
+                        value: r.value,
+                        tokens: u64_to_bigint(r.tokens),
+                        cost: r.cost,
+                        turn_count: u64_to_bigint(r.turn_count),
+                    })
+                    .collect()
+            }),
             replacement_savings: s.replacement_savings.map(ReplacementSavingsSummary::from),
         }
     }
@@ -479,12 +729,18 @@ pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
         session: None,
         project: None,
         since: None,
+        tags: None,
+        group_by_tag: None,
         ledger_home: None,
     });
     let raw = sdk::SummaryOptions {
         session: opts.session,
         project: opts.project,
         since: opts.since,
+        tags: opts
+            .tags
+            .map(|tags| tags.into_iter().collect::<BTreeMap<_, _>>()),
+        group_by_tag: opts.group_by_tag,
         ledger_home: maybe_path(opts.ledger_home),
     };
     sdk::summary(raw).map(Summary::from).map_err(sdk_err)
@@ -947,6 +1203,7 @@ pub struct IngestReport {
     pub scanned_sessions: BigInt,
     pub ingested_sessions: BigInt,
     pub appended_turns: BigInt,
+    pub applied_pending_stamps: BigInt,
 }
 
 impl From<sdk::IngestReport> for IngestReport {
@@ -955,6 +1212,7 @@ impl From<sdk::IngestReport> for IngestReport {
             scanned_sessions: u64_to_bigint(r.scanned_sessions as u64),
             ingested_sessions: u64_to_bigint(r.ingested_sessions as u64),
             appended_turns: u64_to_bigint(r.appended_turns as u64),
+            applied_pending_stamps: u64_to_bigint(r.applied_pending_stamps as u64),
         }
     }
 }
@@ -1071,6 +1329,27 @@ mod tests {
             words: vec![0, 1],
         };
         assert!(bigint_to_u64(two_words).is_err());
+    }
+
+    #[test]
+    fn parse_iso_system_time_accepts_pending_stamp_timestamp_shape() {
+        let parsed = parse_iso_system_time("2026-04-23T00:00:00.123Z").unwrap();
+        let elapsed = parsed.duration_since(UNIX_EPOCH).unwrap();
+        assert_eq!(elapsed.subsec_millis(), 123);
+    }
+
+    #[test]
+    fn parse_iso_system_time_rejects_non_zulu_values() {
+        let err = parse_iso_system_time("2026-04-23T00:00:00").unwrap_err();
+        assert!(err.reason.contains("ISO-8601 Z timestamp"));
+    }
+
+    #[test]
+    fn parse_iso_system_time_rejects_impossible_dates() {
+        let err = parse_iso_system_time("2026-02-31T00:00:00Z").unwrap_err();
+        assert!(err.reason.contains("outside the supported range"));
+        assert!(parse_iso_system_time("2024-02-29T00:00:00Z").is_ok());
+        assert!(parse_iso_system_time("2025-02-29T00:00:00Z").is_err());
     }
 
     #[test]
