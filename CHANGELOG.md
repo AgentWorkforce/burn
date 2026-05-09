@@ -9,10 +9,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
   shows a single human-readable last-seen date column, and truncates long
   project paths from the beginning.
-- `relayburn-sdk`: drop the `let _ = (...)` warning-silencing block at the tail
-  of `parse_codex_buffer` (re-introduced by the JSONL streaming refactor). The
-  `committed_*` snapshots are read by either the resume state or the emitted
-  records, and modern rustc no longer flags the live mirrors.
+- `relayburn-sdk`: `parse_codex_buffer` no longer carries a trailing
+  warning-silencing `let _ = (...)` tail block.
 
 ## [2.7.0] - 2026-05-09
 
