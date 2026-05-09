@@ -28,6 +28,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
+use time::OffsetDateTime;
+
 use crate::ledger::{ledger_home, Enrichment, Ledger, Stamp, StampSelector};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -481,54 +485,21 @@ fn format_iso_8601(t: SystemTime) -> String {
     let dur = t
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0));
-    let secs = dur.as_secs() as i64;
-    let ms = dur.subsec_millis();
-    let (year, month, day, hour, minute, second) = civil_from_unix_seconds(secs);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        year, month, day, hour, minute, second, ms
-    )
+    let nanos = dur.as_nanos() as i128;
+    let dt =
+        OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let fmt = format_description!(
+        "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
+    );
+    dt.format(&fmt).expect("format ms iso")
 }
 
 fn parse_iso_ms(s: &str) -> Option<i64> {
     // Accept the JS `Date.parse` shapes we actually emit:
-    // `YYYY-MM-DDTHH:MM:SS[.fff]Z`. Anything more exotic was never written
-    // by the TS adapter so we don't need to round-trip it.
-    let bytes = s.as_bytes();
-    if bytes.len() < 20 || bytes[bytes.len() - 1] != b'Z' {
-        return None;
-    }
-    let year: i64 = s.get(0..4)?.parse().ok()?;
-    if s.as_bytes().get(4) != Some(&b'-') {
-        return None;
-    }
-    let month: u32 = s.get(5..7)?.parse().ok()?;
-    if s.as_bytes().get(7) != Some(&b'-') {
-        return None;
-    }
-    let day: u32 = s.get(8..10)?.parse().ok()?;
-    if s.as_bytes().get(10) != Some(&b'T') {
-        return None;
-    }
-    let hour: u32 = s.get(11..13)?.parse().ok()?;
-    let minute: u32 = s.get(14..16)?.parse().ok()?;
-    let second: u32 = s.get(17..19)?.parse().ok()?;
-    let mut ms: i64 = 0;
-    if s.as_bytes().get(19) == Some(&b'.') {
-        let frac_end = s.len() - 1;
-        let frac = s.get(20..frac_end)?;
-        if !frac.is_empty() {
-            let mut padded = String::from(frac);
-            while padded.len() < 3 {
-                padded.push('0');
-            }
-            ms = padded.get(0..3)?.parse().ok()?;
-        }
-    } else if s.as_bytes().get(19) != Some(&b'Z') {
-        return None;
-    }
-    let secs = unix_seconds_from_civil(year, month, day, hour, minute, second);
-    Some(secs * 1000 + ms)
+    // `YYYY-MM-DDTHH:MM:SS[.fff]Z`. RFC3339 covers both — variable
+    // subsecond precision plus a `Z` suffix.
+    let dt = OffsetDateTime::parse(s, &Rfc3339).ok()?;
+    Some((dt.unix_timestamp_nanos() / 1_000_000) as i64)
 }
 
 fn system_time_ms(t: SystemTime) -> i64 {
@@ -653,41 +624,6 @@ fn fill_random_pid_time_fallback(buf: &mut [u8]) {
             .wrapping_add(1442695040888963407);
         *b = (seed >> 33) as u8;
     }
-}
-
-// --- Civil ↔ Unix-seconds conversions (proleptic Gregorian, no chrono dep) -
-
-/// Days since 1970-01-01 for the start of `year-month-day`. Algorithm from
-/// Howard Hinnant's "date" library.
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let doy = ((153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1) as u64;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe as i64 - 719468
-}
-
-fn unix_seconds_from_civil(y: i64, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> i64 {
-    days_from_civil(y, m, d) * 86400 + (hh as i64) * 3600 + (mm as i64) * 60 + ss as i64
-}
-
-fn civil_from_unix_seconds(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
-    let z = secs.div_euclid(86400) + 719468;
-    let sod = secs.rem_euclid(86400);
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    let hh = (sod / 3600) as u32;
-    let mm = ((sod % 3600) / 60) as u32;
-    let ss = (sod % 60) as u32;
-    (y, m, d, hh, mm, ss)
 }
 
 #[cfg(test)]
