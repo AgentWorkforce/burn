@@ -354,8 +354,7 @@ pub enum StateSubcommand {
 #[derive(Debug, Clone, ClapArgs, Default)]
 pub struct StateStatusArgs {}
 
-/// `burn state rebuild` — target + flags. Mirrors the TS surface:
-/// `index | classify | content | archive [--full|--vacuum] | all`.
+/// `burn state rebuild` — drop and replay derivable artifacts.
 #[derive(Debug, Clone, ClapArgs)]
 pub struct StateRebuildArgs {
     #[command(subcommand)]
@@ -367,74 +366,20 @@ pub enum StateRebuildTarget {
     /// Rebuild the derivable tables from upstream session logs.
     /// In the 2.0 SQLite layout there is one rebuild path
     /// (`rebuild_derivable`) which drops + replays every derivable
-    /// table. The TS subtargets (index / classify / content / archive)
-    /// existed because each artifact lived in a separate file; in 2.0
-    /// they collapse onto the same SQL transaction.
+    /// table — `index`, `classify`, `content`, `archive`, and `all`
+    /// all collapse onto the same SQL transaction.
     Index,
-    /// Drop every derivable table and stage them for re-ingest. In 2.0
-    /// classification happens at ingest time (see
-    /// `reader/classifier.rs`), so a standalone classify-only replay
-    /// would be a no-op against an unchanged corpus. This target runs
-    /// the same full `rebuild_derivable` drop-and-rebuild path as the
-    /// other targets; follow with `burn ingest` to repopulate the
-    /// derivable tables with fresh classifications.
-    Classify(StateRebuildClassifyArgs),
+    /// Drop every derivable table and stage them for re-ingest.
+    /// Classification happens at ingest time
+    /// (`reader/classifier.rs`), so follow with `burn ingest` to
+    /// repopulate the derivable tables with fresh classifications.
+    Classify,
     /// Re-derive content rows from source session files.
     Content,
     /// Apply / rebuild the archive_state metadata.
-    Archive(StateRebuildArchiveArgs),
+    Archive,
     /// Run content + index + classify + archive in one pass.
-    All(StateRebuildAllArgs),
-}
-
-#[derive(Debug, Clone, ClapArgs, Default)]
-pub struct StateRebuildClassifyArgs {
-    /// Accepted for 1.x script compatibility. In 2.0 classification
-    /// runs at ingest time, so --force is a no-op (an advisory prints
-    /// when set).
-    #[arg(long)]
-    pub force: bool,
-}
-
-#[derive(Debug, Clone, ClapArgs, Default)]
-pub struct StateRebuildArchiveArgs {
-    /// Legacy positional from the TS CLI: `burn state rebuild archive
-    /// vacuum`. Equivalent to `--vacuum`; kept so existing scripts that
-    /// target the 1.x surface keep parsing. In 2.0 there is no separate
-    /// archive.sqlite to vacuum, so this is a no-op (advisory prints).
-    #[arg(value_name = "ACTION")]
-    pub action: Option<ArchiveAction>,
-    /// 1.x-compat flag: drop archive state and rebuild from zero. In 2.0
-    /// every rebuild already replays from zero, so this is a no-op
-    /// (advisory prints when set).
-    #[arg(long)]
-    pub full: bool,
-    /// 1.x-compat flag: reclaim unused SQLite pages after the apply. In
-    /// 2.0 archive_state lives inside burn.sqlite, so there is nothing
-    /// to vacuum; no-op (advisory prints when set).
-    #[arg(long)]
-    pub vacuum: bool,
-}
-
-/// Legacy positional action for `burn state rebuild archive`. Today
-/// `vacuum` is the only accepted value; both the positional and
-/// `--vacuum` flag route through the same `rebuild_derivable` path
-/// in 2.0 (there's no separate `archive.sqlite` to vacuum), but the
-/// surface stays so 1.x automation doesn't error out.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-#[value(rename_all = "lower")]
-pub enum ArchiveAction {
-    Vacuum,
-}
-
-#[derive(Debug, Clone, ClapArgs, Default)]
-pub struct StateRebuildAllArgs {
-    /// 1.x-compat flag: in 1.x this forwarded to `rebuild classify
-    /// --force`. In 2.0 classification happens at ingest time and
-    /// rebuild collapses onto a single transaction, so --force is a
-    /// no-op (advisory prints when set).
-    #[arg(long)]
-    pub force: bool,
+    All,
 }
 
 #[derive(Debug, Clone, ClapArgs, Default)]
@@ -443,13 +388,6 @@ pub struct StatePruneArgs {
     /// (days) or the literal `forever`.
     #[arg(long)]
     pub days: Option<String>,
-    /// 1.x-compat flag: in 1.x this skipped the "is the source session
-    /// file still present?" guard before unlinking content sidecars. In
-    /// 2.0 prune is purely TTL-based against `content.sqlite` (no
-    /// recoverable on-disk sidecars to skip), so --force is a no-op
-    /// (advisory prints when set).
-    #[arg(long)]
-    pub force: bool,
 }
 
 #[derive(Debug, Clone, ClapArgs, Default)]

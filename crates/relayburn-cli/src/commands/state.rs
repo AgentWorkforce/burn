@@ -2,29 +2,19 @@
 //! `$RELAYBURN_HOME` (status, rebuild index | classify | content |
 //! archive, prune, reset).
 //!
-//! Thin presenter over the maintenance verbs on `relayburn-sdk`.
-//! TS source of truth: `packages/cli/src/commands/state.ts`.
-//!
-//! ## 2.0 vs 1.x
-//!
-//! The TS sibling reports against the 1.x JSONL ledger layout
-//! (`ledger.jsonl`, `ledger.idx`, `ledger.content.idx`, `archive.sqlite`).
-//! The Rust port targets the 2.0 SQLite layout — two databases
-//! (`burn.sqlite` + `content.sqlite`) — so the status report here is
-//! shaped to the 2.0 reality: per-table row counts in the events DB,
-//! a row count + size for the content DB, and the `archive_state`
-//! metadata embedded in `burn.sqlite`. The deliberate divergence is
-//! tracked under #240 (Rust port epic); golden snapshots for the two
-//! `state-status*` invocations carry the 2.0 shape.
+//! Thin presenter over the maintenance verbs on `relayburn-sdk`. The
+//! status report walks `burn.sqlite` (per-table row counts in the
+//! events DB), `content.sqlite` (row count + size), and the embedded
+//! `archive_state` metadata.
 
 use relayburn_sdk::{
     ingest_all, Ledger, LedgerHandle, LedgerOpenOptions, ResetSummary, StateStatus,
 };
 
 use crate::cli::{
-    ArchiveAction, GlobalArgs, StateArgs, StateRebuildArgs, StateRebuildTarget, StateSubcommand,
+    GlobalArgs, StateArgs, StateRebuildArgs, StateRebuildTarget, StateSubcommand,
 };
-use crate::render::error::{report_advisory, report_error, report_ledger_error};
+use crate::render::error::{report_error, report_ledger_error};
 use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
@@ -227,75 +217,17 @@ fn format_retention_days(d: f64) -> String {
 // ---------------------------------------------------------------------------
 
 fn run_rebuild(globals: &GlobalArgs, args: StateRebuildArgs) -> i32 {
+    // Every rebuild target (index / classify / content / archive /
+    // all) collapses onto a single `rebuild_derivable` SQL
+    // transaction in the 2.0 SQLite layout. The per-target arms are
+    // kept so `burn state rebuild --help` lists meaningful targets
+    // and scripts that select a specific artifact still parse.
     match args.target {
-        StateRebuildTarget::Index | StateRebuildTarget::Content => run_rebuild_derivable(globals),
-        StateRebuildTarget::All(all_args) => {
-            // 2.0 collapses index/classify/content/archive onto a single
-            // `rebuild_derivable` SQL transaction. `--force` was only
-            // meaningful in 1.x when `rebuild all` forwarded to a
-            // separate `rebuild classify --force` pass; in 2.0 the
-            // shared rebuild already drops every derivable row, so
-            // re-ingest reclassifies unconditionally. The flag is
-            // accepted-but-inert. Surface the no-op so scripts that
-            // pass `--force` see a breadcrumb rather than a silent
-            // success.
-            if all_args.force {
-                report_advisory(
-                    "state rebuild all --force: in 2.0 rebuild already drops every \
-                     derivable row in one transaction, so --force is a no-op \
-                     (kept for 1.x script compatibility)",
-                    globals,
-                );
-            }
-            run_rebuild_derivable(globals)
-        }
-        StateRebuildTarget::Archive(archive_args) => {
-            // 2.0 doesn't have a separate archive.sqlite — the
-            // archive_state row lives inside burn.sqlite and is
-            // refreshed on every rebuild_derivable. Treat
-            // `rebuild archive` as an alias. Both `--full` and
-            // `--vacuum` (and the legacy `vacuum` positional) are
-            // surface-compatible with 1.x scripts but inert in 2.0;
-            // print a stderr breadcrumb so the no-op is honest.
-            if archive_args.full {
-                report_advisory(
-                    "state rebuild archive --full: in 2.0 every rebuild replays \
-                     from zero, so --full is a no-op",
-                    globals,
-                );
-            }
-            if archive_args.vacuum || matches!(archive_args.action, Some(ArchiveAction::Vacuum)) {
-                report_advisory(
-                    "state rebuild archive --vacuum: 2.0 collapses archive.sqlite \
-                     into burn.sqlite, so --vacuum is a no-op (kept for 1.x \
-                     script compatibility, including the legacy positional)",
-                    globals,
-                );
-            }
-            run_rebuild_derivable(globals)
-        }
-        StateRebuildTarget::Classify(classify_args) => {
-            // 2.0 classifies at append time inside the ingest pipeline
-            // (see `relayburn-sdk/src/reader/classifier.rs`). There is no
-            // standalone reclassify pass because every classify-affected
-            // table is derivable: drop + re-ingest reclassifies as a
-            // side effect. Route `rebuild classify` to the same
-            // `rebuild_derivable` transaction every other target uses,
-            // so scripts that call `burn state rebuild classify` keep
-            // working and the surface stays uniform with 1.x. `--force`
-            // was only meaningful when a separate pass could re-run
-            // classification in place; it's inert here for the same
-            // reason `rebuild all --force` is.
-            if classify_args.force {
-                report_advisory(
-                    "state rebuild classify --force: in 2.0 classification \
-                     happens at ingest time, so --force is a no-op (re-ingest \
-                     after rebuild to reclassify)",
-                    globals,
-                );
-            }
-            run_rebuild_derivable(globals)
-        }
+        StateRebuildTarget::Index
+        | StateRebuildTarget::Classify
+        | StateRebuildTarget::Content
+        | StateRebuildTarget::Archive
+        | StateRebuildTarget::All => run_rebuild_derivable(globals),
     }
 }
 
@@ -350,20 +282,6 @@ fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
 
 fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
     use relayburn_sdk::{load_config_with_home, Retention};
-    // Surface the `--force` no-op breadcrumb up-front so it fires
-    // unconditionally — the retention-based early returns below
-    // would otherwise swallow it for `retention=forever`, which is
-    // a valid (and common) configuration. 2.0 prune is purely
-    // TTL-based against `content.sqlite`; in 1.x `--force` skipped
-    // the "is the source session file still present?" guard, but
-    // 2.0 has no recoverable on-disk sidecars to skip.
-    if args.force {
-        report_advisory(
-            "state prune --force: in 2.0 prune is purely TTL-based, so \
-             --force is a no-op (kept for 1.x script compatibility)",
-            globals,
-        );
-    }
     let progress = TaskProgress::new(globals, "state");
     // Load retention config from the same home the ledger will be
     // opened under below, so `--ledger-path /foo` reads
@@ -519,13 +437,10 @@ fn parse_retention(s: &str) -> Option<relayburn_sdk::Retention> {
 // reset
 // ---------------------------------------------------------------------------
 //
-// Wipes derived state under `$RELAYBURN_HOME`. The 1.x sibling unlinked
-// individual files (`ledger.jsonl`, `archive.sqlite`, `content/`); the
-// 2.0 layout collapses onto two SQLite databases, so the equivalent is
-// to truncate every derivable + first-party table inside `burn.sqlite`
-// and the `content` table inside `content.sqlite`, then blank the
-// ingest cursors so the next `burn ingest` walks every upstream file
-// from offset 0.
+// Wipes derived state under `$RELAYBURN_HOME`: truncate every derivable
+// + first-party table inside `burn.sqlite` and the `content` table
+// inside `content.sqlite`, then blank the ingest cursors so the next
+// `burn ingest` walks every upstream file from offset 0.
 //
 // Without `--force`, this is a dry-run: it opens the ledger, counts
 // what would be dropped, prints the report, and exits 0. With
