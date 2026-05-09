@@ -4,6 +4,18 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-cli`: `burn summary` partial-coverage footers now name the
+  token field with the largest gap and clarify that totals still include all
+  matched turns.
+
+- `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
+  shows a single human-readable last-seen date column, and truncates long
+  project paths from the beginning.
+
+## [2.6.0] - 2026-05-08
+
 ### Added
 
 - `relayburn-cli`: new `burn sessions list` subcommand that enumerates
@@ -17,11 +29,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   truncated }`. Derived from the `turns` table so older ledgers with an
   empty `sessions` table still enumerate correctly.
 
-### Changed
+### Fixed
 
-- `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
-  shows a single human-readable last-seen date column, and truncates long
-  project paths from the beginning.
+- `relayburn-sdk`: price Codex `codex-auto-review` judge turns using the
+  GPT-5.2 Codex tariff so auto-approval review spend is no longer reported as
+  zero-cost.
 
 ## [2.5.1] - 2026-05-08
 

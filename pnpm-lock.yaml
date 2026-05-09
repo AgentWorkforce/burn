@@ -24,17 +24,17 @@ importers:
   packages/relayburn:
     optionalDependencies:
       '@relayburn/cli-darwin-arm64':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
       '@relayburn/cli-darwin-x64':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
       '@relayburn/cli-linux-arm64-gnu':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
       '@relayburn/cli-linux-x64-gnu':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
 
   packages/relayburn/npm/darwin-arm64: {}
 
@@ -54,17 +54,17 @@ importers:
         version: 0.25.12
     optionalDependencies:
       '@relayburn/sdk-darwin-arm64':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
       '@relayburn/sdk-darwin-x64':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
       '@relayburn/sdk-linux-arm64-gnu':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
       '@relayburn/sdk-linux-x64-gnu':
-        specifier: 2.5.2
-        version: 2.5.2
+        specifier: 2.6.0
+        version: 2.6.0
 
   packages/sdk-node/npm/darwin-arm64: {}
 
@@ -237,54 +237,54 @@ packages:
     engines: {node: '>= 10'}
     hasBin: true
 
-  '@relayburn/cli-darwin-arm64@2.5.2':
-    resolution: {integrity: sha512-BQAtBDdxcCi65LjWwJks1rWzZZP7+RYcO5LX3KlpXo1Hqo1ibo4zGBUZ6FSSRiUlNyUuKyfwJ2Vwf/nuqXNjPA==}
+  '@relayburn/cli-darwin-arm64@2.6.0':
+    resolution: {integrity: sha512-suU3ZDEyI5zZucXL1PJ3prEqB0yfTOqvR7scTwMx7vavol0MtruHGdtWo3BYckTpAp5ZZif3wM4UrGXELtGHCA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
     hasBin: true
 
-  '@relayburn/cli-darwin-x64@2.5.2':
-    resolution: {integrity: sha512-MGdC7SJs0S3mFkjbcfQut6Til045BuaUnWguHRHpbn70jGYryyqitz6q7AImEhsvZZUEpEciw+MSE5IIXq0FyA==}
+  '@relayburn/cli-darwin-x64@2.6.0':
+    resolution: {integrity: sha512-/q69kaCIHWO7C/AO7bt3EoxielxxaqS26DS7j/1LTy0j03yGfhZs2ysBtDFqI/ptOh8Ky0dY16VOyzBaloEqPg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
     hasBin: true
 
-  '@relayburn/cli-linux-arm64-gnu@2.5.2':
-    resolution: {integrity: sha512-LGyZwnhW24DhQXo4iYMs/Lym/UAESxJoZv62wiP3sDaiZV7nnN13Y5CKbVtUvFpTV9hGae9y99ZRF8WDXrrwEA==}
+  '@relayburn/cli-linux-arm64-gnu@2.6.0':
+    resolution: {integrity: sha512-xMiljFrTK8BTJh/DlFKniCYee8CPR3vkHysI0q6NmgsZIWoKRuWwk+AFxwLJhcfqEJ38kjQKCC9XHVzuREb5Jg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
     hasBin: true
 
-  '@relayburn/cli-linux-x64-gnu@2.5.2':
-    resolution: {integrity: sha512-qepni4L0G+HtqtoG1BwHQkaQR54txKuPPmkVAAFrWa+3ThB2CvXxMymlHUanWD/Tq08WxVdcPMTNIN9gzLYISw==}
+  '@relayburn/cli-linux-x64-gnu@2.6.0':
+    resolution: {integrity: sha512-rFC4/XyVv+PukTmyR0/ua6xlGMBzFRbKoPL3ndGDWccprt+r3uOZW1pEnG0snNNq3Etf+hY+ZpauhmT6ChHo7w==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@relayburn/sdk-darwin-arm64@2.5.2':
-    resolution: {integrity: sha512-OSoUGplSTaoDgfM46r0u198IHEvZFPSvDDfv+FMOXy+TEaloqK/M1iDOy9sY/TWjNCRY/gvILp5fcFwYcuCdIg==}
+  '@relayburn/sdk-darwin-arm64@2.6.0':
+    resolution: {integrity: sha512-YLf9Xt33UJHGua07aQLbl8l8KlHWI4PtIixBEMJdiuYHpbf803gK1cxVP1JmFGp2xBQXvcluDQt7IAQRkjxHtA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
 
-  '@relayburn/sdk-darwin-x64@2.5.2':
-    resolution: {integrity: sha512-/I7LPeBTYzqL0pvZxTcF6siBZKeR6qgc/R8JhkdoxEpTGa27TprpJm17ilAkvaseWFmkzsr3uhLvRoDg/FBA5w==}
+  '@relayburn/sdk-darwin-x64@2.6.0':
+    resolution: {integrity: sha512-KXEGQAckXrAhZqrQdaXCFUzLHuMki2gaNNU70GttIlXwxpn5ZBE+zat1LNNJeqFejlsTdzuJm0Ty45kAfo3FjA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
 
-  '@relayburn/sdk-linux-arm64-gnu@2.5.2':
-    resolution: {integrity: sha512-X62wiYsFO/rlTo6zl8mARasrqEdHE0ap2SwFrsVBMNavCj2HwWuQzC0F80qGGI9Vp3gZ9X0wpJFaw/d5ZWNqTQ==}
+  '@relayburn/sdk-linux-arm64-gnu@2.6.0':
+    resolution: {integrity: sha512-QEE+h+47rOw1gMTVaWBt+dQnwqf69Lrc8ddtKDu26P9if5+l33zS/qeA5rEnajcQqIySFsnr2TwChuPf5xYYEA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
 
-  '@relayburn/sdk-linux-x64-gnu@2.5.2':
-    resolution: {integrity: sha512-AuXsygyOGy2Vy+p/bcXVKwEMX91Ua8ayMdOF7nZfMe8aLW/EPkPYCgi2Wv+QIjYALljZd1DrdoHEEx3ceNBswg==}
+  '@relayburn/sdk-linux-x64-gnu@2.6.0':
+    resolution: {integrity: sha512-62ohzOuKxvqwI4IPQe/EO5WKta/RSGTfRiWgZI1Lqry9pZOwnDH0ABASpO7lpFhGjowakbEcLcHHtY4RzVQeAQ==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -387,28 +387,28 @@ snapshots:
 
   '@napi-rs/cli@2.18.4': {}
 
-  '@relayburn/cli-darwin-arm64@2.5.2':
+  '@relayburn/cli-darwin-arm64@2.6.0':
     optional: true
 
-  '@relayburn/cli-darwin-x64@2.5.2':
+  '@relayburn/cli-darwin-x64@2.6.0':
     optional: true
 
-  '@relayburn/cli-linux-arm64-gnu@2.5.2':
+  '@relayburn/cli-linux-arm64-gnu@2.6.0':
     optional: true
 
-  '@relayburn/cli-linux-x64-gnu@2.5.2':
+  '@relayburn/cli-linux-x64-gnu@2.6.0':
     optional: true
 
-  '@relayburn/sdk-darwin-arm64@2.5.2':
+  '@relayburn/sdk-darwin-arm64@2.6.0':
     optional: true
 
-  '@relayburn/sdk-darwin-x64@2.5.2':
+  '@relayburn/sdk-darwin-x64@2.6.0':
     optional: true
 
-  '@relayburn/sdk-linux-arm64-gnu@2.5.2':
+  '@relayburn/sdk-linux-arm64-gnu@2.6.0':
     optional: true
 
-  '@relayburn/sdk-linux-x64-gnu@2.5.2':
+  '@relayburn/sdk-linux-x64-gnu@2.6.0':
     optional: true
 
   '@types/node@22.19.18':
