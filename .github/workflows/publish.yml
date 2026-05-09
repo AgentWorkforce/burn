@@ -1149,8 +1149,19 @@ jobs:
           fi
 
           # The "Commit version bumps" step runs under the same condition
-          # as this step, so a release commit is guaranteed to exist at
-          # HEAD when we get here. Amend the lockfile into it.
+          # as this step, but it no-ops if `git diff --cached --quiet` is
+          # true (e.g. the heal step already brought every package to the
+          # release version, so `npm version --allow-same-version` rewrote
+          # the files identically). In that case HEAD is some unrelated
+          # prior commit, and amending the lockfile into it would rewrite
+          # someone else's history. Guard by requiring the HEAD subject to
+          # match the release commit format ("chore(release):") that the
+          # version commit step produces; bail out cleanly otherwise.
+          HEAD_SUBJECT=$(git log -1 --format=%s)
+          if [[ "$HEAD_SUBJECT" != chore\(release\):* ]]; then
+            echo "::warning title=Skipped lockfile amend::HEAD is not a release commit (\"$HEAD_SUBJECT\") — the version bump produced no diff to commit, so there is nothing to amend the lockfile into. Skipping."
+            exit 0
+          fi
           git add pnpm-lock.yaml
           git commit --amend --no-edit
 
