@@ -6,15 +6,24 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
-- `relayburn-cli`: `burn summary` partial-coverage footers now name the
-  token field with the largest gap and clarify that totals still include all
-  matched turns.
 - `relayburn-cli`: `burn state rebuild classify` now exits 0 and runs
   the rebuild instead of erroring with "not yet implemented".
 - `relayburn-cli`: `burn state prune --force`, `burn state rebuild
   archive --full`/`--vacuum`, `burn state rebuild all --force`, and
   `burn state rebuild classify --force` now print a stderr advisory
   flagging the flag as a no-op; help text documents the no-op.
+
+## [2.6.1] - 2026-05-09
+
+### Changed
+
+- `relayburn-cli`: `burn summary` partial-coverage footers now name the
+  token field with the largest gap and clarify that totals still include all
+  matched turns.
+- `relayburn-sdk`: `ingest::pending_stamps` and `query_verbs` now use the
+  `time` crate for ISO-8601 formatting/parsing (`format_iso_8601`,
+  `format_iso_z`, `parse_iso_ms`). Output and the pending-stamp on-disk wire
+  format are unchanged.
 
 ## [2.6.0] - 2026-05-08
 
