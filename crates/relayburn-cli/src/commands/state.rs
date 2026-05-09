@@ -266,8 +266,9 @@ fn run_rebuild(globals: &GlobalArgs, args: StateRebuildArgs) -> i32 {
             }
             if archive_args.vacuum || matches!(archive_args.action, Some(ArchiveAction::Vacuum)) {
                 report_advisory(
-                    "state rebuild archive vacuum: 2.0 collapses archive.sqlite \
-                     into burn.sqlite, so there is nothing to vacuum",
+                    "state rebuild archive --vacuum: 2.0 collapses archive.sqlite \
+                     into burn.sqlite, so --vacuum is a no-op (kept for 1.x \
+                     script compatibility, including the legacy positional)",
                     globals,
                 );
             }

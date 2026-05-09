@@ -487,7 +487,7 @@ fn state_rebuild_archive_no_op_flags_warn() {
         "expected --full advisory; got stderr:\n{stderr}",
     );
     assert!(
-        stderr.contains("nothing to vacuum"),
-        "expected vacuum advisory; got stderr:\n{stderr}",
+        stderr.contains("--vacuum is a no-op"),
+        "expected --vacuum advisory; got stderr:\n{stderr}",
     );
 }
