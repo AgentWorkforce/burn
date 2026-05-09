@@ -388,15 +388,13 @@ async fn run_fs_event_driver(
             break;
         }
         tokio::select! {
-            burst_result = burst.wait_for_burst(debounce) => {
-                if burst_result.is_none() {
-                    // Watcher channel closed unexpectedly — fall back
-                    // to slow polling alone for the rest of the loop.
-                    // We don't try to rebuild it because the OS-level
-                    // backend is presumed broken at this point.
-                    break;
-                }
-            }
+            // `wait_for_burst` always resolves to `Some(())` once its
+            // debounce window elapses; under sustained writes that's
+            // every ~debounce, under bursts it coalesces. We don't
+            // pattern-match the Option because the Notify-backed
+            // channel can't close without dropping `_watcher`, which
+            // would have already torn down this task.
+            _ = burst.wait_for_burst(debounce) => {}
             _ = slow.tick() => {}
             _ = ticker.stop_signal.notified() => break,
         }
@@ -404,14 +402,6 @@ async fn run_fs_event_driver(
             break;
         }
         ticker.run_tick_skip_if_busy().await;
-    }
-    // If we broke out because the FS-event channel closed, finish the
-    // controller's contract by polling at the slow cadence so the loop
-    // still makes forward progress until `stop()` is called. Without
-    // this, a transient watcher failure would silently turn the watch
-    // into a no-op.
-    if !ticker.stopped.load(Ordering::SeqCst) {
-        run_polling_driver(ticker, slow_fallback).await;
     }
 }
 
