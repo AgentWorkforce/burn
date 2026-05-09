@@ -49,8 +49,7 @@ packages/relayburn/npm/*   — @relayburn/cli-<platform> prebuilt binary package
 
 Do not recreate the old standalone reader/ledger/analyze/ingest/cli TypeScript
 packages. If a 1.x feature is missing from 2.x, add it to the Rust SDK/CLI/MCP
-presenter surface as appropriate and record the gap in `RUST_2X_GAP_CATALOG.md`
-until it lands.
+presenter surface as appropriate.
 
 ## Common commands
 
