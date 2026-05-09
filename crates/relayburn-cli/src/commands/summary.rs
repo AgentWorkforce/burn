@@ -398,6 +398,16 @@ fn cell_is_partial(c: &relayburn_sdk::FieldCoverage) -> bool {
 const PARTIAL_MARK: &str = "*";
 const DASH: &str = "—";
 
+fn coverage_field_label(field: CoverageField) -> &'static str {
+    match field {
+        CoverageField::Input => "input",
+        CoverageField::Output => "output",
+        CoverageField::Reasoning => "reasoning",
+        CoverageField::CacheRead => "cacheRead",
+        CoverageField::CacheCreate => "cacheCreate",
+    }
+}
+
 /// Render one token-field cell. Three cases:
 ///   - every contributing turn reported the field → numeric value, no marker
 ///   - some turns reported, some didn't           → numeric value + `*`
@@ -1084,29 +1094,40 @@ fn format_replacement_savings_line(s: &relayburn_sdk::ReplacementSavingsSummary)
     )
 }
 
-/// Footer note explaining the `*` marker. Numerator is the worst-covered
-/// axis: for each coverage field, sum its `missing` across every row, then
-/// take the max. Denominator is the cross-row sum of `known + missing` for
-/// `input` (the canonical token field; if a record has any per-turn
-/// coverage at all, it carries input).
+/// Footer note explaining the `*` marker. Numerator is the token field with
+/// the largest missing count: for each coverage field, sum its `missing`
+/// across every row, then take the max. Denominator is the cross-row sum of
+/// `known + missing` for `input` (the canonical token field; if a record has
+/// any per-turn coverage at all, it carries input).
 fn format_partial_footer(rows: &[UsageCostAggregateRow]) -> String {
     let mut total: u64 = 0;
     for r in rows {
         total += r.coverage.input.known + r.coverage.input.missing;
     }
     let mut missing: u64 = 0;
+    let mut fields: Vec<&'static str> = Vec::new();
     for f in COVERAGE_FIELDS {
         let mut field_missing: u64 = 0;
         for r in rows {
             field_missing += r.coverage.field(f).missing;
         }
-        if field_missing > missing {
-            missing = field_missing;
+        match field_missing.cmp(&missing) {
+            std::cmp::Ordering::Greater => {
+                missing = field_missing;
+                fields.clear();
+                fields.push(coverage_field_label(f));
+            }
+            std::cmp::Ordering::Equal if field_missing > 0 => {
+                fields.push(coverage_field_label(f));
+            }
+            _ => {}
         }
     }
+    let field = fields.join("/");
     format!(
-        "{} partial coverage: {} of {} turns omitted per-turn token data",
+        "{} partial token coverage: largest gap is {} (missing on {} of {} turns); totals still include all turns",
         PARTIAL_MARK,
+        field,
         format_uint(missing),
         format_uint(total),
     )
@@ -1213,6 +1234,45 @@ mod tests {
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
         assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
+    }
+
+    #[test]
+    fn partial_footer_names_gap_and_says_totals_include_all_turns() {
+        fn row(label: &str, coverage: relayburn_sdk::RowCoverage) -> UsageCostAggregateRow {
+            UsageCostAggregateRow {
+                label: label.to_string(),
+                turns: 0,
+                usage: relayburn_sdk::Usage::default(),
+                cost: CostBreakdown {
+                    model: String::new().into(),
+                    total: 0.0,
+                    input: 0.0,
+                    output: 0.0,
+                    reasoning: 0.0,
+                    cache_read: 0.0,
+                    cache_create: 0.0,
+                },
+                coverage,
+            }
+        }
+
+        let mut claude_coverage = relayburn_sdk::RowCoverage::default();
+        claude_coverage.input.known = 3;
+        claude_coverage.output.known = 3;
+        claude_coverage.reasoning.missing = 3;
+
+        let mut codex_coverage = relayburn_sdk::RowCoverage::default();
+        codex_coverage.input.known = 1;
+        codex_coverage.output.known = 1;
+        codex_coverage.reasoning.known = 1;
+
+        assert_eq!(
+            format_partial_footer(&[
+                row("claude-sonnet-4-6", claude_coverage),
+                row("gpt-5-codex", codex_coverage),
+            ]),
+            "* partial token coverage: largest gap is reasoning (missing on 3 of 4 turns); totals still include all turns",
+        );
     }
 
     #[test]
