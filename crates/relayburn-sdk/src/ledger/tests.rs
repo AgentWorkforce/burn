@@ -949,11 +949,13 @@ fn query_turns_filters_pushed_to_sql_match_legacy_semantics() {
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
 
+    // Asymmetric project / project_key seeding so the regression
+    // catches a SQL change that only checks one of the two columns.
     let mut t_a = make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10);
     t_a.project = Some("burn".into());
-    t_a.project_key = Some("burn".into());
+    t_a.project_key = None;
     let mut t_b = make_turn("s1", "m2", "2025-01-02T00:00:00Z", 20);
-    t_b.project = Some("burn".into());
+    t_b.project = None;
     t_b.project_key = Some("burn".into());
     let mut t_c = make_turn("s2", "m3", "2025-01-03T00:00:00Z", 30);
     t_c.source = SourceKind::Codex;
