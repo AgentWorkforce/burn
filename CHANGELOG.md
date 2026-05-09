@@ -9,10 +9,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
   shows a single human-readable last-seen date column, and truncates long
   project paths from the beginning.
-- `relayburn-sdk` / `relayburn-cli`: `burn ingest --watch` now drives ticks
-  from `notify` (FSEvents / inotify / RDCW) with burst coalescing and a 30s
-  polling backstop, replacing the 1s polling loop. Pass `--no-fsevents` to
-  force the polling driver. Closes #250.
+- `relayburn-sdk` / `relayburn-cli`: `burn ingest --watch` now wakes on
+  filesystem events (with burst coalescing and a 30s polling backstop),
+  reducing steady-state polling; pass `--no-fsevents` to force polling.
 
 ## [2.7.0] - 2026-05-09
 

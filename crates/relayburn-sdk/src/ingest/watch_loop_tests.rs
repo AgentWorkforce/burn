@@ -6,7 +6,6 @@
 //! poll-based watcher actually drains its source on schedule and that
 //! `stop()` waits for any in-flight tick before returning.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -181,12 +180,16 @@ async fn fs_events_fall_back_to_polling_when_no_path_exists() {
         })
     });
 
+    // Build a guaranteed-missing child of a fresh tempdir so the
+    // `FsBurst::new -> Err -> polling` demotion is deterministic
+    // across environments (a hardcoded absolute path could collide
+    // with an unusual filesystem layout).
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("definitely-missing-child");
     let opts = StartWatchLoopOptions::new(ingest)
         .with_immediate(false)
         .with_interval(Duration::from_millis(100))
-        .with_watch_paths(vec![PathBuf::from(
-            "/definitely/not/a/real/relayburn/test/path",
-        )]);
+        .with_watch_paths(vec![missing]);
     let ctrl = start_watch_loop(opts);
 
     // If the FS-event driver were active, the loop would idle until a

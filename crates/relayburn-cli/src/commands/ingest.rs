@@ -159,10 +159,14 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
 
     let quiet = args.quiet;
     let no_fsevents = args.no_fsevents;
+    // The FS-event driver may silently demote to polling at startup
+    // (no watchable path yet) or mid-run (notify channel closes), so
+    // the banner doesn't assert which driver is live — only that the
+    // user opted out of the FS-event attempt.
     let watch_message = if no_fsevents {
         format!("watching (polling every {interval_ms}ms); Ctrl-C to stop")
     } else {
-        "watching (FS events; Ctrl-C to stop)".to_string()
+        "watching (FS events with polling fallback); Ctrl-C to stop".to_string()
     };
     if !quiet {
         if progress.is_visible() {
@@ -172,7 +176,9 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
                 "[burn] ingest: foreground ingest polling every {interval_ms}ms; Ctrl-C to stop",
             );
         } else {
-            eprintln!("[burn] ingest: foreground ingest on FS events; Ctrl-C to stop");
+            eprintln!(
+                "[burn] ingest: foreground ingest on FS events (polling fallback); Ctrl-C to stop",
+            );
         }
     }
 
