@@ -232,9 +232,16 @@ impl HarnessAdapter for PendingStampAdapterImpl {
         // child has barely started; let the periodic interval drive the
         // first scan so we don't spawn an ingest pass that races the
         // freshly-written pending stamp.
+        //
+        // Watch the per-harness session root with `notify` so the loop
+        // wakes on session writes instead of polling every second
+        // (#250). `watch_interval` becomes the polling fallback cadence
+        // when `notify` cannot attach (fresh install with no session
+        // dir yet, network mount, etc.).
         let opts = StartWatchLoopOptions::new(self.ingest_fn(ctx.ledger_home.clone()))
             .with_immediate(false)
             .with_interval(self.watch_interval)
+            .with_watch_paths(vec![(self.session_root)()])
             .with_on_report(on_report);
         Some(WatcherController::new(start_watch_loop(opts)))
     }

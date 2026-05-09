@@ -107,11 +107,12 @@ pub use crate::analyze::{
 };
 
 pub use crate::ingest::{
-    cleanup_stale_pending_stamps, ingest_all, ingest_claude_session, ingest_codex_sessions,
-    ingest_opencode_sessions, run_ingest_tick, start_watch_loop, write_pending_stamp, ErrorSink,
-    IngestFn, IngestOptions as RawIngestOptions, IngestReport, IngestRoots, PendingStamp,
-    PendingStampHarness, PendingStampWriteResult, ReportSink, StartWatchLoopOptions,
-    WatchController, WriteOptions as PendingStampWriteOptions,
+    cleanup_stale_pending_stamps, default_session_roots, ingest_all, ingest_claude_session,
+    ingest_codex_sessions, ingest_opencode_sessions, run_ingest_tick, start_watch_loop,
+    write_pending_stamp, ErrorSink, IngestFn, IngestOptions as RawIngestOptions, IngestReport,
+    IngestRoots, PendingStamp, PendingStampHarness, PendingStampWriteResult, ReportSink,
+    StartWatchLoopOptions, WatchController, WriteOptions as PendingStampWriteOptions,
+    DEFAULT_FS_DEBOUNCE, DEFAULT_SLOW_FALLBACK,
 };
 
 // --- LedgerOpenOptions -----------------------------------------------------

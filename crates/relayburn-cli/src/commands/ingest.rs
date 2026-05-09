@@ -37,8 +37,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use relayburn_sdk::{
-    ingest_all, start_watch_loop, IngestReport, Ledger, LedgerHandle, LedgerOpenOptions,
-    StartWatchLoopOptions,
+    default_session_roots, ingest_all, start_watch_loop, IngestReport, IngestRoots, Ledger,
+    LedgerHandle, LedgerOpenOptions, StartWatchLoopOptions,
 };
 
 use crate::cli::{GlobalArgs, IngestArgs};
@@ -158,12 +158,21 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
     };
 
     let quiet = args.quiet;
-    let watch_message = format!("watching every {interval_ms}ms; Ctrl-C to stop");
+    let no_fsevents = args.no_fsevents;
+    let watch_message = if no_fsevents {
+        format!("watching (polling every {interval_ms}ms); Ctrl-C to stop")
+    } else {
+        "watching (FS events; Ctrl-C to stop)".to_string()
+    };
     if !quiet {
         if progress.is_visible() {
             progress.set_task(watch_message.clone());
+        } else if no_fsevents {
+            eprintln!(
+                "[burn] ingest: foreground ingest polling every {interval_ms}ms; Ctrl-C to stop",
+            );
         } else {
-            eprintln!("[burn] ingest: foreground ingest every {interval_ms}ms; Ctrl-C to stop",);
+            eprintln!("[burn] ingest: foreground ingest on FS events; Ctrl-C to stop");
         }
     }
 
@@ -213,9 +222,18 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
             });
         });
 
+        // Default to the `notify`-backed FS-event driver against the
+        // three session-store roots ingest scans. Falls back to polling
+        // automatically when no path exists yet (fresh install) or
+        // when the user passes `--no-fsevents`. The slow polling
+        // backstop in the SDK keeps progress on filesystems where FS
+        // events are unreliable. Closes #250.
+        let watch_paths = default_session_roots(&IngestRoots::default());
         let opts = StartWatchLoopOptions::new(ingest_fn)
             .with_interval(Duration::from_millis(interval_ms))
             .with_immediate(true)
+            .with_watch_paths(watch_paths)
+            .with_disable_fsevents(no_fsevents)
             .with_on_report(on_report)
             .with_on_error(on_error);
         let controller = start_watch_loop(opts);

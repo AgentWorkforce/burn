@@ -52,6 +52,13 @@ time = { version = "0.3", default-features = false, features = ["formatting", "p
 # matching the TS `Object.values` / `Object.entries` iteration semantics.
 indexmap = { version = "2", features = ["serde"] }
 
+# ingest: filesystem event watcher for the watch loop. Drives the
+# `notify`-backed driver in `ingest/watch_loop.rs` (FSEvents on macOS,
+# inotify on Linux, ReadDirectoryChangesW on Windows) with a slow
+# polling fallback when FS events are unavailable (network filesystems,
+# unsupported targets, or `--no-fsevents`). Closes #250.
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
 [target.'cfg(unix)'.dependencies]
 # ingest: pid-liveness probe in the pending-stamp resolver
 libc = "0.2"

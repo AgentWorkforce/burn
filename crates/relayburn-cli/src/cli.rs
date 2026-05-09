@@ -156,6 +156,13 @@ pub struct IngestArgs {
     /// on its own (or with `--watch`) so a typo can't silently no-op.
     #[arg(long, requires = "hook")]
     pub quiet: bool,
+
+    /// Force the polling driver in `--watch` mode instead of the
+    /// default `notify`-backed FS-event driver. Use this on
+    /// filesystems where FS events are unreliable (network mounts,
+    /// some Docker setups). Ignored without `--watch`.
+    #[arg(long, requires = "watch")]
+    pub no_fsevents: bool,
 }
 
 /// Per-command flags for `burn mcp-server`. The stdio MCP server speaks

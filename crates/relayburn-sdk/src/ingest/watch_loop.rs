@@ -1,10 +1,23 @@
-//! Watch loop — Rust port of `packages/ingest/src/watch-loop.ts`.
+//! Watch loop — Rust port of `packages/ingest/src/watch-loop.ts`,
+//! upgraded with a `notify`-backed FS-event driver per #250.
 //!
 //! Drives a periodic `ingest` callable, drains the report through an
-//! optional `on_report` sink, and routes errors through `on_error`. The TS
-//! adapter uses `setInterval` + a `running` guard to prevent overlapping
-//! ticks; the Rust port uses `tokio::time::interval` and a `Mutex` over an
-//! in-flight future, with the same skip-if-running invariant.
+//! optional `on_report` sink, and routes errors through `on_error`. Two
+//! drivers wake the loop:
+//!
+//! * **FS events** (preferred): `notify::recommended_watcher` watches the
+//!   session-store roots passed in [`StartWatchLoopOptions::watch_paths`]
+//!   and wakes the loop on writes. Bursts are coalesced via the debounce
+//!   window so 100 inotify events from a single tool dump produce one
+//!   ingest tick, not 100. A slow polling backstop
+//!   ([`StartWatchLoopOptions::slow_fallback_interval`], default 30s)
+//!   covers the platforms where `notify` reports unsupported events
+//!   silently (network filesystems, some Docker setups).
+//! * **Pure polling** (fallback): when no `watch_paths` are supplied,
+//!   when [`StartWatchLoopOptions::disable_fsevents`] is set, or when
+//!   `notify` cannot attach to any path, the loop falls back to the
+//!   original `tokio::time::interval` cadence at
+//!   [`StartWatchLoopOptions::interval`].
 //!
 //! Concurrency model:
 //!
@@ -18,6 +31,7 @@
 //!   landed before they tear down state.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -26,6 +40,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 
+use crate::ingest::fs_events::FsBurst;
 use crate::ingest::ingest::IngestReport;
 
 pub type IngestFn = Arc<
@@ -35,6 +50,19 @@ pub type IngestFn = Arc<
 pub type ReportSink = Arc<dyn Fn(&IngestReport) + Send + Sync>;
 pub type ErrorSink = Arc<dyn Fn(&anyhow::Error) + Send + Sync>;
 
+/// Default debounce window for the FS-event driver. 200ms is short
+/// enough that an interactive Claude / Codex pause feels live and long
+/// enough to coalesce the inotify burst from a single tool result
+/// dumping a multi-line transcript update. Tuned alongside the burst
+/// test in `watch_loop_tests::burst_writes_coalesce_into_one_tick`.
+pub const DEFAULT_FS_DEBOUNCE: Duration = Duration::from_millis(200);
+
+/// Default slow polling backstop when the FS-event driver is active.
+/// Covers `notify` silently reporting "no events" on filesystems where
+/// FSEvents / inotify are unreliable (network mounts, some Docker
+/// setups). 30s matches the issue #250 acceptance shape.
+pub const DEFAULT_SLOW_FALLBACK: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 pub struct StartWatchLoopOptions {
     pub interval: Duration,
@@ -42,12 +70,33 @@ pub struct StartWatchLoopOptions {
     pub ingest: IngestFn,
     pub on_report: Option<ReportSink>,
     pub on_error: Option<ErrorSink>,
+    /// Session-store roots to monitor with `notify`. Empty disables
+    /// the FS-event driver (the loop polls at `interval`).
+    pub watch_paths: Vec<PathBuf>,
+    /// Coalescing window for bursty FS events. After the first event
+    /// wakes the loop, further events landing within this window roll
+    /// into the same tick.
+    pub debounce: Duration,
+    /// Slow polling cadence used as a backstop *while the FS-event
+    /// driver is active*. When the driver is inactive (no watch paths,
+    /// `disable_fsevents`, or notify couldn't attach), the loop uses
+    /// `interval` instead.
+    pub slow_fallback_interval: Duration,
+    /// Force the polling driver even when `watch_paths` is non-empty.
+    /// Surfaced to the CLI as `burn ingest --watch --no-fsevents` so a
+    /// user on a filesystem where `notify` misbehaves can opt out.
+    pub disable_fsevents: bool,
 }
 
 impl StartWatchLoopOptions {
     /// Build options around `ingest`. Defaults: 1000ms interval, immediate
     /// first tick, stderr error sink, no report sink. Mirrors the TS
     /// defaults so existing CLI wrappers keep their behavior on port.
+    /// Defaults: 1000ms polling fallback interval, immediate first tick,
+    /// FS-event driver enabled (but inert until `with_watch_paths` is
+    /// called), 30s slow polling backstop, 200ms burst debounce.
+    /// Mirrors the TS defaults so existing CLI wrappers keep their
+    /// behavior on port.
     pub fn new(ingest: IngestFn) -> Self {
         Self {
             interval: Duration::from_millis(1000),
@@ -55,6 +104,10 @@ impl StartWatchLoopOptions {
             ingest,
             on_report: None,
             on_error: None,
+            watch_paths: Vec::new(),
+            debounce: DEFAULT_FS_DEBOUNCE,
+            slow_fallback_interval: DEFAULT_SLOW_FALLBACK,
+            disable_fsevents: false,
         }
     }
 
@@ -75,6 +128,30 @@ impl StartWatchLoopOptions {
 
     pub fn with_on_error(mut self, sink: ErrorSink) -> Self {
         self.on_error = Some(sink);
+        self
+    }
+
+    /// Enable the FS-event driver against the given session-store
+    /// roots. Pass the harness-default paths from
+    /// [`crate::default_session_roots`] for the CLI wide-scan, or a
+    /// single-harness root for adapter watchers.
+    pub fn with_watch_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.watch_paths = paths;
+        self
+    }
+
+    pub fn with_debounce(mut self, debounce: Duration) -> Self {
+        self.debounce = debounce;
+        self
+    }
+
+    pub fn with_slow_fallback_interval(mut self, interval: Duration) -> Self {
+        self.slow_fallback_interval = interval;
+        self
+    }
+
+    pub fn with_disable_fsevents(mut self, disable: bool) -> Self {
+        self.disable_fsevents = disable;
         self
     }
 }
@@ -202,9 +279,18 @@ where
     ingest().await
 }
 
-/// Spawn a background ticker that calls `opts.ingest` every `opts.interval`,
-/// skipping ticks while one is in flight. Returns a [`WatchController`] the
-/// caller uses to invoke an extra tick on demand or stop the loop.
+/// Spawn a background ticker that calls `opts.ingest` whenever the
+/// active driver fires, skipping ticks while one is in flight. Returns
+/// a [`WatchController`] the caller uses to invoke an extra tick on
+/// demand or stop the loop.
+///
+/// Driver selection (see module docs for the full rationale):
+///
+/// * If `watch_paths` is non-empty, `disable_fsevents` is false, and
+///   `notify` can attach to at least one path → FS-event driver with a
+///   slow polling backstop at `slow_fallback_interval`.
+/// * Otherwise → polling driver at `interval`, matching the legacy
+///   1.x `setInterval` cadence.
 pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
     let inner = Arc::new(WatchInner {
         stopped: AtomicBool::new(false),
@@ -217,43 +303,115 @@ pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
     });
     let interval = opts.interval;
     let immediate = opts.immediate;
+    let watch_paths = opts.watch_paths;
+    let debounce = opts.debounce;
+    let slow_fallback = opts.slow_fallback_interval;
+    let disable_fsevents = opts.disable_fsevents;
     let ticker = inner.clone();
     let handle = tokio::spawn(async move {
+        // Try to bring up the FS-event driver. Failure (no path exists,
+        // notify backend errors) silently demotes us to the polling
+        // driver — that's the slow-fallback acceptance criterion from
+        // #250.
+        let burst = if !disable_fsevents && !watch_paths.is_empty() {
+            FsBurst::new(&watch_paths).ok()
+        } else {
+            None
+        };
+
         if immediate {
             ticker.run_tick_skip_if_busy().await;
         }
-        // Schedule the periodic ticker to first fire `interval` from now.
-        // `tokio::time::interval` fires immediately on the first `tick()`,
-        // so for the immediate path we'd want to skip that first tick;
-        // for the non-immediate path we'd want to wait `interval` before
-        // the first periodic run. `interval_at(now + interval, …)` covers
-        // both: the next tick lands `interval` after start in either case.
-        let start_at = tokio::time::Instant::now() + interval;
-        let mut iv = tokio::time::interval_at(start_at, interval);
-        // Default `MissedTickBehavior::Burst` would fire catch-up ticks
-        // back-to-back after a slow ingest pass, which can spike CPU/IO
-        // exactly when the system is already under load. `Delay` schedules
-        // the next tick `interval` after the previous fires, preserving
-        // stable polling cadence — closer to TS `setInterval` pacing under
-        // a single-threaded runner.
-        iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            if ticker.stopped.load(Ordering::SeqCst) {
-                break;
+
+        match burst {
+            Some(mut burst) => {
+                run_fs_event_driver(&ticker, &mut burst, debounce, slow_fallback).await;
             }
-            tokio::select! {
-                _ = iv.tick() => {}
-                _ = ticker.stop_signal.notified() => break,
+            None => {
+                run_polling_driver(&ticker, interval).await;
             }
-            if ticker.stopped.load(Ordering::SeqCst) {
-                break;
-            }
-            ticker.run_tick_skip_if_busy().await;
         }
     });
     WatchController {
         inner,
         handle: Mutex::new(Some(handle)),
+    }
+}
+
+/// Pure-polling driver — matches the pre-#250 behaviour exactly. Used
+/// when no `watch_paths` are configured, when `disable_fsevents` is
+/// set, or when `FsBurst` couldn't attach (network mount, etc.).
+async fn run_polling_driver(ticker: &Arc<WatchInner>, interval: Duration) {
+    // Schedule the periodic ticker to first fire `interval` from now.
+    // `tokio::time::interval` fires immediately on the first `tick()`,
+    // so for the immediate path we'd want to skip that first tick;
+    // for the non-immediate path we'd want to wait `interval` before
+    // the first periodic run. `interval_at(now + interval, …)` covers
+    // both: the next tick lands `interval` after start in either case.
+    let start_at = tokio::time::Instant::now() + interval;
+    let mut iv = tokio::time::interval_at(start_at, interval);
+    // Default `MissedTickBehavior::Burst` would fire catch-up ticks
+    // back-to-back after a slow ingest pass, which can spike CPU/IO
+    // exactly when the system is already under load. `Delay` schedules
+    // the next tick `interval` after the previous fires, preserving
+    // stable polling cadence — closer to TS `setInterval` pacing under
+    // a single-threaded runner.
+    iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        if ticker.stopped.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::select! {
+            _ = iv.tick() => {}
+            _ = ticker.stop_signal.notified() => break,
+        }
+        if ticker.stopped.load(Ordering::SeqCst) {
+            break;
+        }
+        ticker.run_tick_skip_if_busy().await;
+    }
+}
+
+/// FS-event driver — sleep until either the burst receiver fires (and
+/// the burst window settles) or the slow polling backstop ticks.
+async fn run_fs_event_driver(
+    ticker: &Arc<WatchInner>,
+    burst: &mut FsBurst,
+    debounce: Duration,
+    slow_fallback: Duration,
+) {
+    let start_at = tokio::time::Instant::now() + slow_fallback;
+    let mut slow = tokio::time::interval_at(start_at, slow_fallback);
+    slow.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        if ticker.stopped.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::select! {
+            burst_result = burst.wait_for_burst(debounce) => {
+                if burst_result.is_none() {
+                    // Watcher channel closed unexpectedly — fall back
+                    // to slow polling alone for the rest of the loop.
+                    // We don't try to rebuild it because the OS-level
+                    // backend is presumed broken at this point.
+                    break;
+                }
+            }
+            _ = slow.tick() => {}
+            _ = ticker.stop_signal.notified() => break,
+        }
+        if ticker.stopped.load(Ordering::SeqCst) {
+            break;
+        }
+        ticker.run_tick_skip_if_busy().await;
+    }
+    // If we broke out because the FS-event channel closed, finish the
+    // controller's contract by polling at the slow cadence so the loop
+    // still makes forward progress until `stop()` is called. Without
+    // this, a transient watcher failure would silently turn the watch
+    // into a no-op.
+    if !ticker.stopped.load(Ordering::SeqCst) {
+        run_polling_driver(ticker, slow_fallback).await;
     }
 }
 
