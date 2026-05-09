@@ -371,10 +371,11 @@ pub enum StateRebuildTarget {
     /// existed because each artifact lived in a separate file; in 2.0
     /// they collapse onto the same SQL transaction.
     Index,
-    /// Re-run activity classification on existing turns. Today this
-    /// is a no-op stub — the Rust ingest classifier writes the
-    /// `activity` field at append time (#274). A standalone reclassify
-    /// pass is filed for follow-up.
+    /// Drop + replay the classify-affected derivable tables. In 2.0
+    /// classification happens at ingest time (see
+    /// `reader/classifier.rs`), so this collapses onto the same
+    /// `rebuild_derivable` transaction as the other targets — a
+    /// follow-up `burn ingest` repopulates with fresh classifications.
     Classify(StateRebuildClassifyArgs),
     /// Re-derive content rows from source session files.
     Content,
@@ -386,8 +387,9 @@ pub enum StateRebuildTarget {
 
 #[derive(Debug, Clone, ClapArgs, Default)]
 pub struct StateRebuildClassifyArgs {
-    /// Force reclassification of every turn even when `activity` is
-    /// already populated.
+    /// Accepted for 1.x script compatibility. In 2.0 classification
+    /// runs at ingest time, so --force is a no-op (an advisory prints
+    /// when set).
     #[arg(long)]
     pub force: bool,
 }
@@ -396,13 +398,18 @@ pub struct StateRebuildClassifyArgs {
 pub struct StateRebuildArchiveArgs {
     /// Legacy positional from the TS CLI: `burn state rebuild archive
     /// vacuum`. Equivalent to `--vacuum`; kept so existing scripts that
-    /// target the 1.x surface keep parsing.
+    /// target the 1.x surface keep parsing. In 2.0 there is no separate
+    /// archive.sqlite to vacuum, so this is a no-op (advisory prints).
     #[arg(value_name = "ACTION")]
     pub action: Option<ArchiveAction>,
-    /// Drop archive state and rebuild from zero.
+    /// 1.x-compat flag: drop archive state and rebuild from zero. In 2.0
+    /// every rebuild already replays from zero, so this is a no-op
+    /// (advisory prints when set).
     #[arg(long)]
     pub full: bool,
-    /// Reclaim unused SQLite pages after the apply.
+    /// 1.x-compat flag: reclaim unused SQLite pages after the apply. In
+    /// 2.0 archive_state lives inside burn.sqlite, so there is nothing
+    /// to vacuum; no-op (advisory prints when set).
     #[arg(long)]
     pub vacuum: bool,
 }
@@ -420,7 +427,10 @@ pub enum ArchiveAction {
 
 #[derive(Debug, Clone, ClapArgs, Default)]
 pub struct StateRebuildAllArgs {
-    /// Forwarded to `rebuild classify --force` when bundling.
+    /// 1.x-compat flag: in 1.x this forwarded to `rebuild classify
+    /// --force`. In 2.0 classification happens at ingest time and
+    /// rebuild collapses onto a single transaction, so --force is a
+    /// no-op (advisory prints when set).
     #[arg(long)]
     pub force: bool,
 }
@@ -431,7 +441,11 @@ pub struct StatePruneArgs {
     /// (days) or the literal `forever`.
     #[arg(long)]
     pub days: Option<String>,
-    /// Delete sidecars even when the source session file still exists.
+    /// 1.x-compat flag: in 1.x this skipped the "is the source session
+    /// file still present?" guard before unlinking content sidecars. In
+    /// 2.0 prune is purely TTL-based against `content.sqlite` (no
+    /// recoverable on-disk sidecars to skip), so --force is a no-op
+    /// (advisory prints when set).
     #[arg(long)]
     pub force: bool,
 }

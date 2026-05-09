@@ -272,22 +272,27 @@ fn run_rebuild(globals: &GlobalArgs, args: StateRebuildArgs) -> i32 {
             }
             run_rebuild_derivable(globals)
         }
-        StateRebuildTarget::Classify(_) => {
-            // Standalone reclassify pass is filed for follow-up; the
-            // 2.0 ingest path classifies at append time. Stub with a
-            // typed message so callers that wire this into automation
-            // know to expect it.
-            let msg = "burn state rebuild classify: standalone reclassify is not yet \
-                       implemented in the Rust port (filed as a follow-up under #240). \
-                       Today the ingest pipeline classifies at append time; run \
-                       `burn state rebuild all` to drop + replay derivable tables.";
-            if globals.json {
-                let envelope = serde_json::json!({ "error": msg });
-                let _ = render_json(&envelope);
-            } else {
-                eprintln!("burn: {msg}");
+        StateRebuildTarget::Classify(classify_args) => {
+            // 2.0 classifies at append time inside the ingest pipeline
+            // (see `relayburn-sdk/src/reader/classifier.rs`). There is no
+            // standalone reclassify pass because every classify-affected
+            // table is derivable: drop + re-ingest reclassifies as a
+            // side effect. Route `rebuild classify` to the same
+            // `rebuild_derivable` transaction every other target uses,
+            // so scripts that call `burn state rebuild classify` keep
+            // working and the surface stays uniform with 1.x. `--force`
+            // was only meaningful when a separate pass could re-run
+            // classification in place; it's inert here for the same
+            // reason `rebuild all --force` is.
+            if classify_args.force {
+                report_advisory(
+                    "state rebuild classify --force: in 2.0 classification \
+                     happens at ingest time, so --force is a no-op (re-ingest \
+                     after rebuild to reclassify)",
+                    globals,
+                );
             }
-            1
+            run_rebuild_derivable(globals)
         }
     }
 }
@@ -444,10 +449,18 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
     };
     progress.finish_and_clear();
 
-    let _ = args.force; // 2.0 prune is purely TTL-based; --force is a no-op
-                        // because there are no recoverable on-disk sidecars to
-                        // skip. Documented; left in the flag set so existing
-                        // automation doesn't break.
+    if args.force {
+        // 2.0 prune is purely TTL-based against `content.sqlite`; in 1.x
+        // `--force` skipped the "is the source session file still
+        // present?" guard, but 2.0 has no recoverable on-disk sidecars
+        // to skip. Surface the no-op so scripts that pass `--force`
+        // see a breadcrumb rather than a silent success.
+        report_advisory(
+            "state prune --force: in 2.0 prune is purely TTL-based, so \
+             --force is a no-op (kept for 1.x script compatibility)",
+            globals,
+        );
+    }
 
     if globals.json {
         let payload = serde_json::json!({

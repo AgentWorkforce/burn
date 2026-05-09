@@ -358,3 +358,97 @@ fn sessions_list_json_envelope_shape() {
     );
     assert_eq!(value["filters"]["since"], serde_json::Value::from("7d"));
 }
+
+/// `burn state rebuild classify` is wired in 2.0 as an alias of the
+/// shared `rebuild_derivable` transaction (every other rebuild target
+/// already collapses onto it). Against an empty ledger this should
+/// open cleanly, drop zero rows, and exit 0 — `--json` carries the
+/// envelope shape so callers can structure-match without depending on
+/// the human-readable form.
+#[test]
+fn state_rebuild_classify_emits_drop_envelope() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    let output = burn()
+        .args(["--json", "state", "rebuild", "classify"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json output is valid JSON");
+    assert_eq!(value["rowsDropped"], serde_json::Value::from(0));
+    assert_eq!(value["contentRowsDropped"], serde_json::Value::from(0));
+}
+
+/// `burn state rebuild classify --force` carries an inert flag in 2.0
+/// (classification runs at ingest time). The presenter must honor the
+/// flag with a stderr advisory so scripts that pass it see a
+/// breadcrumb rather than a silent success — and the command must
+/// still exit 0.
+#[test]
+fn state_rebuild_classify_force_warns_and_succeeds() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["state", "rebuild", "classify", "--force"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("--force is a no-op"));
+}
+
+/// `burn state prune --force` is accepted for 1.x script compatibility
+/// but a no-op in 2.0 (prune is purely TTL-based against
+/// `content.sqlite`). The presenter emits an advisory on stderr; the
+/// command itself must still exit 0 with the empty-ledger "nothing to
+/// prune" path.
+#[test]
+fn state_prune_force_warns_and_succeeds() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["state", "prune", "--days", "7", "--force"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("--force is a no-op"));
+}
+
+/// `burn state rebuild archive --full --vacuum` carries two inert
+/// flags in 2.0 (the archive metadata lives inside `burn.sqlite`).
+/// Both should fire stderr advisories; the underlying rebuild still
+/// has to run to completion.
+#[test]
+fn state_rebuild_archive_no_op_flags_warn() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    let output = burn()
+        .args(["state", "rebuild", "archive", "--full", "--vacuum"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    assert!(
+        stderr.contains("--full is a no-op"),
+        "expected --full advisory; got stderr:\n{stderr}",
+    );
+    assert!(
+        stderr.contains("nothing to vacuum"),
+        "expected vacuum advisory; got stderr:\n{stderr}",
+    );
+}
