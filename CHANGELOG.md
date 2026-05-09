@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-05-09
+
 ### Changed
 
 - `relayburn-cli`: `burn state rebuild classify` now exits 0 and runs
