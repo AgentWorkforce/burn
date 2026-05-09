@@ -6,15 +6,39 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
-- `relayburn-cli`: `burn summary` partial-coverage footers now name the
-  token field with the largest gap and clarify that totals still include all
-  matched turns.
 - `relayburn-sdk`: ledger query verbs (`query_turns`, `query_compactions`,
   `query_relationships`, `query_tool_result_events`, `query_user_turns`)
   now push `since` / `until` / `session_id` / `source` / `project` filters
   into SQL and reuse compiled statements via `prepare_cached`. Cuts the
   per-call cost of `burn ingest --watch` and any verb that drives a
   filtered query against a multi-month ledger.
+
+## [2.7.0] - 2026-05-09
+
+### Changed
+
+- `relayburn-cli`: `burn state rebuild classify` now exits 0 and runs
+  the rebuild instead of erroring with "not yet implemented".
+
+### Removed
+
+- `relayburn-cli`: dropped the no-op flags `burn state prune --force`,
+  `burn state rebuild archive --full`/`--vacuum` (and the legacy
+  `vacuum` positional), `burn state rebuild all --force`, and `burn
+  state rebuild classify --force`. They had no effect against the
+  SQLite layout; passing them now fails at parse time.
+
+## [2.6.1] - 2026-05-09
+
+### Changed
+
+- `relayburn-cli`: `burn summary` partial-coverage footers now name the
+  token field with the largest gap and clarify that totals still include all
+  matched turns.
+- `relayburn-sdk`: `ingest::pending_stamps` and `query_verbs` now use the
+  `time` crate for ISO-8601 formatting/parsing (`format_iso_8601`,
+  `format_iso_z`, `parse_iso_ms`). Output and the pending-stamp on-disk wire
+  format are unchanged.
 
 ## [2.6.0] - 2026-05-08
 
