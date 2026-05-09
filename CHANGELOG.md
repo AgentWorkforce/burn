@@ -9,6 +9,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: `burn summary` partial-coverage footers now name the
   token field with the largest gap and clarify that totals still include all
   matched turns.
+- `relayburn-cli`: drop the `RELAYBURN_ARCHIVE` env mutation in `burn compare`
+  and `burn summary`. The Rust SDK never read the variable, and `set_var` is
+  unsafe under Rust 1.84+. `--no-archive` is now an explicit no-op.
 
 ## [2.6.0] - 2026-05-08
 

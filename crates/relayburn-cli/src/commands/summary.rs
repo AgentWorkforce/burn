@@ -206,7 +206,9 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         None
     };
 
-    let _archive_guard = ArchiveOverride::activate(args.no_archive);
+    // `--no-archive` is accepted for TS CLI flag parity but is a no-op:
+    // the Rust SDK is SQLite-native and has no archive layer to bypass.
+    let _ = args.no_archive;
     let progress = TaskProgress::new(globals, "summary");
 
     let opts = match globals.ledger_path.as_deref() {
@@ -344,43 +346,6 @@ fn run_ingest(
             progress.finish_and_clear();
             err
         })
-}
-
-/// Drop-in for `RELAYBURN_ARCHIVE=0`. The Rust SDK is already SQLite-native,
-/// but this preserves the TS CLI flag contract for any lower layer that checks
-/// the env escape hatch.
-struct ArchiveOverride {
-    previous: Option<String>,
-    activated: bool,
-}
-
-impl ArchiveOverride {
-    fn activate(no_archive: bool) -> Self {
-        if !no_archive {
-            return Self {
-                previous: None,
-                activated: false,
-            };
-        }
-        let previous = std::env::var("RELAYBURN_ARCHIVE").ok();
-        std::env::set_var("RELAYBURN_ARCHIVE", "0");
-        Self {
-            previous,
-            activated: true,
-        }
-    }
-}
-
-impl Drop for ArchiveOverride {
-    fn drop(&mut self) {
-        if !self.activated {
-            return;
-        }
-        match self.previous.take() {
-            Some(v) => std::env::set_var("RELAYBURN_ARCHIVE", v),
-            None => std::env::remove_var("RELAYBURN_ARCHIVE"),
-        }
-    }
 }
 
 const COVERAGE_FIELDS: [CoverageField; 5] = [
