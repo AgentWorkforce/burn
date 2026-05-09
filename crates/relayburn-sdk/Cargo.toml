@@ -41,6 +41,10 @@ memchr = { workspace = true }
 # ledger: SQLite events + content store
 rusqlite = { workspace = true }
 
+# ingest + query_verbs: civil-date arithmetic / ISO-8601 formatting.
+# Replaces three hand-rolled Howard Hinnant implementations.
+time = { version = "0.3", default-features = false, features = ["formatting", "parsing", "macros"] }
+
 # analyze: order-preserving pricing table.
 # `IndexMap` preserves JSON insertion order so duplicate model IDs in
 # `models.dev.json` (e.g. `claude-sonnet-4-6` under both `anthropic` and
