@@ -371,11 +371,13 @@ pub enum StateRebuildTarget {
     /// existed because each artifact lived in a separate file; in 2.0
     /// they collapse onto the same SQL transaction.
     Index,
-    /// Drop + replay the classify-affected derivable tables. In 2.0
+    /// Drop every derivable table and stage them for re-ingest. In 2.0
     /// classification happens at ingest time (see
-    /// `reader/classifier.rs`), so this collapses onto the same
-    /// `rebuild_derivable` transaction as the other targets — a
-    /// follow-up `burn ingest` repopulates with fresh classifications.
+    /// `reader/classifier.rs`), so a standalone classify-only replay
+    /// would be a no-op against an unchanged corpus. This target runs
+    /// the same full `rebuild_derivable` drop-and-rebuild path as the
+    /// other targets; follow with `burn ingest` to repopulate the
+    /// derivable tables with fresh classifications.
     Classify(StateRebuildClassifyArgs),
     /// Re-derive content rows from source session files.
     Content,

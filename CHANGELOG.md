@@ -9,16 +9,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: `burn summary` partial-coverage footers now name the
   token field with the largest gap and clarify that totals still include all
   matched turns.
-- `relayburn-cli`: `burn state rebuild classify` is now a real verb,
-  routing to the same `rebuild_derivable` transaction every other
-  rebuild target uses (2.0 classifies at ingest time). Exits 0 instead
-  of returning a "not yet implemented" error.
+- `relayburn-cli`: `burn state rebuild classify` now exits 0 and runs
+  the rebuild instead of erroring with "not yet implemented".
 - `relayburn-cli`: `burn state prune --force`, `burn state rebuild
   archive --full`/`--vacuum`, `burn state rebuild all --force`, and
-  `burn state rebuild classify --force` now print stderr advisories
-  flagging that they are accepted-but-inert in the 2.0 SQLite layout
-  (kept for 1.x script compatibility). Help text on each flag spells
-  out the no-op contract.
+  `burn state rebuild classify --force` now print a stderr advisory
+  flagging the flag as a no-op; help text documents the no-op.
 
 ## [2.6.0] - 2026-05-08
 

@@ -232,17 +232,18 @@ fn run_rebuild(globals: &GlobalArgs, args: StateRebuildArgs) -> i32 {
         StateRebuildTarget::All(all_args) => {
             // 2.0 collapses index/classify/content/archive onto a single
             // `rebuild_derivable` SQL transaction. `--force` was only
-            // meaningful when `rebuild all` forwarded to a separate
-            // `rebuild classify --force` pass; the standalone reclassify
-            // is still unimplemented in the Rust port (#240 follow-up),
-            // so the flag is currently accepted-but-inert. Surface the
-            // no-op so scripts that pass `--force` see a breadcrumb
-            // rather than a silent success.
+            // meaningful in 1.x when `rebuild all` forwarded to a
+            // separate `rebuild classify --force` pass; in 2.0 the
+            // shared rebuild already drops every derivable row, so
+            // re-ingest reclassifies unconditionally. The flag is
+            // accepted-but-inert. Surface the no-op so scripts that
+            // pass `--force` see a breadcrumb rather than a silent
+            // success.
             if all_args.force {
                 report_advisory(
-                    "state rebuild all --force: standalone reclassify is not yet \
-                     implemented in the Rust port (#240 follow-up); --force will \
-                     apply once classify is wired",
+                    "state rebuild all --force: in 2.0 rebuild already drops every \
+                     derivable row in one transaction, so --force is a no-op \
+                     (kept for 1.x script compatibility)",
                     globals,
                 );
             }
@@ -348,6 +349,20 @@ fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
 
 fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
     use relayburn_sdk::{load_config_with_home, Retention};
+    // Surface the `--force` no-op breadcrumb up-front so it fires
+    // unconditionally — the retention-based early returns below
+    // would otherwise swallow it for `retention=forever`, which is
+    // a valid (and common) configuration. 2.0 prune is purely
+    // TTL-based against `content.sqlite`; in 1.x `--force` skipped
+    // the "is the source session file still present?" guard, but
+    // 2.0 has no recoverable on-disk sidecars to skip.
+    if args.force {
+        report_advisory(
+            "state prune --force: in 2.0 prune is purely TTL-based, so \
+             --force is a no-op (kept for 1.x script compatibility)",
+            globals,
+        );
+    }
     let progress = TaskProgress::new(globals, "state");
     // Load retention config from the same home the ledger will be
     // opened under below, so `--ledger-path /foo` reads
@@ -448,19 +463,6 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
         }
     };
     progress.finish_and_clear();
-
-    if args.force {
-        // 2.0 prune is purely TTL-based against `content.sqlite`; in 1.x
-        // `--force` skipped the "is the source session file still
-        // present?" guard, but 2.0 has no recoverable on-disk sidecars
-        // to skip. Surface the no-op so scripts that pass `--force`
-        // see a breadcrumb rather than a silent success.
-        report_advisory(
-            "state prune --force: in 2.0 prune is purely TTL-based, so \
-             --force is a no-op (kept for 1.x script compatibility)",
-            globals,
-        );
-    }
 
     if globals.json {
         let payload = serde_json::json!({

@@ -424,6 +424,45 @@ fn state_prune_force_warns_and_succeeds() {
         .stderr(predicate::str::contains("--force is a no-op"));
 }
 
+/// `burn state rebuild all --force` is the same accepted-but-inert
+/// 1.x-compat flag pattern as `rebuild classify --force`. Pin the
+/// advisory + exit-0 contract so a future refactor can't silently turn
+/// the breadcrumb off.
+#[test]
+fn state_rebuild_all_force_warns_and_succeeds() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["state", "rebuild", "all", "--force"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("--force is a no-op"));
+}
+
+/// The `prune --force` advisory must fire BEFORE the `retention=forever`
+/// early-return. With the default config (retention=forever) the
+/// command short-circuits without touching the ledger; if the
+/// breadcrumb sat after the early-return, callers running the most
+/// common retention setting would never see the no-op warning. Pin the
+/// always-warn contract here.
+#[test]
+fn state_prune_force_warns_when_retention_is_forever() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["state", "prune", "--days", "forever", "--force"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to prune"))
+        .stderr(predicate::str::contains("--force is a no-op"));
+}
+
 /// `burn state rebuild archive --full --vacuum` carries two inert
 /// flags in 2.0 (the archive metadata lives inside `burn.sqlite`).
 /// Both should fire stderr advisories; the underlying rebuild still
