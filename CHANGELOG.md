@@ -4,6 +4,19 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-cli`: `burn state rebuild classify` now exits 0 and runs
+  the rebuild instead of erroring with "not yet implemented".
+
+### Removed
+
+- `relayburn-cli`: dropped the no-op flags `burn state prune --force`,
+  `burn state rebuild archive --full`/`--vacuum` (and the legacy
+  `vacuum` positional), `burn state rebuild all --force`, and `burn
+  state rebuild classify --force`. They had no effect against the
+  SQLite layout; passing them now fails at parse time.
+
 ## [2.6.1] - 2026-05-09
 
 ### Changed

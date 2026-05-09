@@ -354,8 +354,7 @@ pub enum StateSubcommand {
 #[derive(Debug, Clone, ClapArgs, Default)]
 pub struct StateStatusArgs {}
 
-/// `burn state rebuild` — target + flags. Mirrors the TS surface:
-/// `index | classify | content | archive [--full|--vacuum] | all`.
+/// `burn state rebuild` — drop and replay derivable artifacts.
 #[derive(Debug, Clone, ClapArgs)]
 pub struct StateRebuildArgs {
     #[command(subcommand)]
@@ -367,62 +366,20 @@ pub enum StateRebuildTarget {
     /// Rebuild the derivable tables from upstream session logs.
     /// In the 2.0 SQLite layout there is one rebuild path
     /// (`rebuild_derivable`) which drops + replays every derivable
-    /// table. The TS subtargets (index / classify / content / archive)
-    /// existed because each artifact lived in a separate file; in 2.0
-    /// they collapse onto the same SQL transaction.
+    /// table — `index`, `classify`, `content`, `archive`, and `all`
+    /// all collapse onto the same SQL transaction.
     Index,
-    /// Re-run activity classification on existing turns. Today this
-    /// is a no-op stub — the Rust ingest classifier writes the
-    /// `activity` field at append time (#274). A standalone reclassify
-    /// pass is filed for follow-up.
-    Classify(StateRebuildClassifyArgs),
+    /// Drop every derivable table and stage them for re-ingest.
+    /// Classification happens at ingest time
+    /// (`reader/classifier.rs`), so follow with `burn ingest` to
+    /// repopulate the derivable tables with fresh classifications.
+    Classify,
     /// Re-derive content rows from source session files.
     Content,
     /// Apply / rebuild the archive_state metadata.
-    Archive(StateRebuildArchiveArgs),
+    Archive,
     /// Run content + index + classify + archive in one pass.
-    All(StateRebuildAllArgs),
-}
-
-#[derive(Debug, Clone, ClapArgs, Default)]
-pub struct StateRebuildClassifyArgs {
-    /// Force reclassification of every turn even when `activity` is
-    /// already populated.
-    #[arg(long)]
-    pub force: bool,
-}
-
-#[derive(Debug, Clone, ClapArgs, Default)]
-pub struct StateRebuildArchiveArgs {
-    /// Legacy positional from the TS CLI: `burn state rebuild archive
-    /// vacuum`. Equivalent to `--vacuum`; kept so existing scripts that
-    /// target the 1.x surface keep parsing.
-    #[arg(value_name = "ACTION")]
-    pub action: Option<ArchiveAction>,
-    /// Drop archive state and rebuild from zero.
-    #[arg(long)]
-    pub full: bool,
-    /// Reclaim unused SQLite pages after the apply.
-    #[arg(long)]
-    pub vacuum: bool,
-}
-
-/// Legacy positional action for `burn state rebuild archive`. Today
-/// `vacuum` is the only accepted value; both the positional and
-/// `--vacuum` flag route through the same `rebuild_derivable` path
-/// in 2.0 (there's no separate `archive.sqlite` to vacuum), but the
-/// surface stays so 1.x automation doesn't error out.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-#[value(rename_all = "lower")]
-pub enum ArchiveAction {
-    Vacuum,
-}
-
-#[derive(Debug, Clone, ClapArgs, Default)]
-pub struct StateRebuildAllArgs {
-    /// Forwarded to `rebuild classify --force` when bundling.
-    #[arg(long)]
-    pub force: bool,
+    All,
 }
 
 #[derive(Debug, Clone, ClapArgs, Default)]
@@ -431,9 +388,6 @@ pub struct StatePruneArgs {
     /// (days) or the literal `forever`.
     #[arg(long)]
     pub days: Option<String>,
-    /// Delete sidecars even when the source session file still exists.
-    #[arg(long)]
-    pub force: bool,
 }
 
 #[derive(Debug, Clone, ClapArgs, Default)]

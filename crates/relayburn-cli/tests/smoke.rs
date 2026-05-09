@@ -358,3 +358,29 @@ fn sessions_list_json_envelope_shape() {
     );
     assert_eq!(value["filters"]["since"], serde_json::Value::from("7d"));
 }
+
+/// `burn state rebuild classify` collapses onto the shared
+/// `rebuild_derivable` transaction every other target uses. Against an
+/// empty ledger this should open cleanly, drop zero rows, and exit 0;
+/// `--json` carries the envelope shape so callers can structure-match
+/// without depending on the human-readable form.
+#[test]
+fn state_rebuild_classify_emits_drop_envelope() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    let output = burn()
+        .args(["--json", "state", "rebuild", "classify"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json output is valid JSON");
+    assert_eq!(value["rowsDropped"], serde_json::Value::from(0));
+    assert_eq!(value["contentRowsDropped"], serde_json::Value::from(0));
+}
