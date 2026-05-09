@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-05-09
+
 ### Changed
 
 - `relayburn-cli`: `burn summary` partial-coverage footers now name the
