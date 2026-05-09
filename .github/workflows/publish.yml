@@ -434,6 +434,15 @@ jobs:
           # Refresh Cargo.lock to reflect the new workspace version.
           cargo update --workspace
 
+          # Refresh pnpm-lock.yaml so the workspace specifiers + optional
+          # platform dep versions match the bumped package.json files. Without
+          # this, the lock file lags one release behind every publish run
+          # (e.g. 2.7.0 ships, but the lock still pins 2.6.1 for
+          # `@relayburn/{cli,sdk}-<short>`), and the next `pnpm install
+          # --frozen-lockfile` on `main` fails. `--lockfile-only` skips
+          # node_modules churn — we already installed dependencies above.
+          pnpm install --lockfile-only
+
       # Belt-and-suspenders alongside the precursor's heal: even if the
       # local→npm baseline was in sync there, the computed release
       # version might collide with an existing version (e.g. someone
@@ -783,6 +792,7 @@ jobs:
                   packages/relayburn/npm/*/package.json \
                   packages/sdk-node/npm/*/package.json \
                   CHANGELOG.md \
+                  pnpm-lock.yaml \
                   Cargo.toml Cargo.lock \
                   crates/relayburn-cli/Cargo.toml crates/relayburn-sdk-node/Cargo.toml
           if git diff --cached --quiet; then
