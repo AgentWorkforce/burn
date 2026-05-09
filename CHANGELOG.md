@@ -4,6 +4,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
+  shows a single human-readable last-seen date column, and truncates long
+  project paths from the beginning.
+
 ## [2.7.0] - 2026-05-09
 
 ### Changed
