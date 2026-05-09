@@ -104,9 +104,8 @@ pub struct SummaryArgs {
     #[arg(long)]
     pub quality: bool,
 
-    /// Bypass the archive sidecar and stream the ledger. Kept for parity
-    /// with the TS CLI and as an escape hatch for archive-corruption
-    /// debugging.
+    /// Accepted for TS CLI flag parity; a no-op against the Rust SDK,
+    /// which is SQLite-native and has no archive layer to bypass.
     #[arg(long = "no-archive")]
     pub no_archive: bool,
 }
