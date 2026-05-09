@@ -9,8 +9,6 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
   shows a single human-readable last-seen date column, and truncates long
   project paths from the beginning.
-- `relayburn-sdk`: `parse_codex_buffer` no longer carries a trailing
-  warning-silencing `let _ = (...)` tail block.
 
 ## [2.7.0] - 2026-05-09
 
