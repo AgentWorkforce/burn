@@ -46,12 +46,6 @@ static EDIT_TOOLS: phf::Set<&'static str> = phf_set! {
 
 static DELEGATION_TOOLS: phf::Set<&'static str> = phf_set! { "Agent", "Task" };
 
-// READ_ONLY_TOOLS lived in the TS classifier as commentary on the priority-6
-// branch, but both arms of that branch return `exploration` (see
-// `pick_category` priority 6 below), so the set is unreferenced. Tracked in
-// AgentWorkforce/burn#254 — keeping it out of the Rust port avoids a dead-code
-// warning while preserving identical behavior.
-
 /// Harness-specific tool names mapped to the canonical (Claude Code) names the
 /// rule tables are written against. Adding a new harness is a one-line change
 /// here.
