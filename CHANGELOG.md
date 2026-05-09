@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.7.2] - 2026-05-09
+
 ### Changed
 
 - `relayburn-cli`: `burn sessions list` human output now keeps full session ids,
