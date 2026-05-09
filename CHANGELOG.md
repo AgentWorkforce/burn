@@ -9,10 +9,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: `burn summary` partial-coverage footers now name the
   token field with the largest gap and clarify that totals still include all
   matched turns.
-- `relayburn-sdk`: replace hand-rolled Howard Hinnant civil-date math in
-  `ingest::pending_stamps` and `query_verbs` with the `time` crate. ISO-8601
-  output (`format_iso_8601`, `format_iso_z`) and parsing (`parse_iso_ms`)
-  remain byte-identical; on-disk pending-stamp wire format is unchanged.
+- `relayburn-sdk`: `ingest::pending_stamps` and `query_verbs` now use the
+  `time` crate for ISO-8601 formatting/parsing (`format_iso_8601`,
+  `format_iso_z`, `parse_iso_ms`). Output and the pending-stamp on-disk wire
+  format are unchanged.
 
 ## [2.6.0] - 2026-05-08
 
