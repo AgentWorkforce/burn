@@ -33,6 +33,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::GlobalArgs;
 use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
+use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
 /// Per-command flags for `burn summary`. Mirrors the TS surface in
@@ -425,7 +426,7 @@ fn ingest_prelude_text(ingest_report: &relayburn_sdk::IngestReport) -> String {
 
 fn emit_json(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::IngestReport) {
     let value = grouped_json_value(report, ingest_report);
-    print_json(&value);
+    let _ = render_json(&value);
 }
 
 fn grouped_json_value(
@@ -504,12 +505,6 @@ fn grouped_json_value(
     value
 }
 
-fn print_json(value: &Value) {
-    let mut out = serde_json::to_string_pretty(value).unwrap_or_default();
-    out.push('\n');
-    print!("{}", out);
-}
-
 fn cost_breakdown_to_json(c: &CostBreakdown) -> Value {
     json!({
         "model": c.model.as_ref(),
@@ -570,7 +565,7 @@ fn render_by_tool_report(
             );
         }
         coerce_whole_f64_to_int(&mut payload);
-        print_json(&payload);
+        let _ = render_json(&payload);
         return Ok(0);
     }
 
@@ -640,7 +635,7 @@ fn render_subagent_type_report(
     if globals.json {
         let mut value = serde_json::to_value(stats)?;
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        let _ = render_json(&value);
         return Ok(0);
     }
 
@@ -704,7 +699,7 @@ fn render_relationship_report(
     if globals.json {
         let mut value = json!({ "relationships": report.relationships });
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        let _ = render_json(&value);
         return Ok(0);
     }
 
@@ -753,7 +748,7 @@ fn render_relationship_subagent_report(
                 "message": NO_RELATIONSHIPS_MESSAGE,
             });
             coerce_whole_f64_to_int(&mut value);
-            print_json(&value);
+            let _ = render_json(&value);
             return Ok(0);
         }
         return Ok(render_no_relationships(globals));
@@ -764,7 +759,7 @@ fn render_relationship_subagent_report(
             "subagentTypes": report.subagent_types,
         });
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        let _ = render_json(&value);
         return Ok(0);
     }
 
@@ -803,7 +798,7 @@ fn render_relationship_subagent_report(
 
 fn render_no_relationships(globals: &GlobalArgs) -> i32 {
     if globals.json {
-        print_json(&json!({
+        let _ = render_json(&json!({
             "relationships": [],
             "message": NO_RELATIONSHIPS_MESSAGE,
         }));
@@ -827,7 +822,7 @@ fn render_subagent_tree_report(
             "root": root,
         });
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        let _ = render_json(&value);
         return Ok(0);
     }
 

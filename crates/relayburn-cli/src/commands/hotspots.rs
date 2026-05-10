@@ -36,6 +36,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::GlobalArgs;
 use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
+use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
 const DEFAULT_TOP_N: usize = 10;
@@ -265,9 +266,7 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
 fn emit_json(result: &HotspotsResult) {
     let mut value = hotspots_result_to_json(result);
     coerce_whole_f64_to_int(&mut value);
-    let mut out = serde_json::to_string_pretty(&value).unwrap_or_default();
-    out.push('\n');
-    print!("{}", out);
+    let _ = render_json(&value);
 }
 
 fn hotspots_result_to_json(result: &HotspotsResult) -> Value {
