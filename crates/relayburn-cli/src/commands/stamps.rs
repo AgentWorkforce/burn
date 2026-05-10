@@ -8,6 +8,9 @@
 //! {"v":1,"kind":"stamp","ts":"2025-01-01T00:00:00Z","selector":{"sessionId":"..."},"enrichment":{"role":"..."}}
 //! ```
 
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+
 use relayburn_sdk::{ExportStampsOptions, Ledger, LedgerOpenOptions};
 
 use crate::cli::{GlobalArgs, StampsArgs};
@@ -26,7 +29,6 @@ pub fn run(globals: &GlobalArgs, args: StampsArgs) -> i32 {
 fn run_export(globals: &GlobalArgs, args: crate::cli::StampsExportArgs) -> i32 {
     let progress = TaskProgress::new(globals, "stamps export");
 
-    // Open the ledger
     let opts = LedgerOpenOptions {
         home: globals.ledger_path.clone(),
         content_home: None,
@@ -40,46 +42,57 @@ fn run_export(globals: &GlobalArgs, args: crate::cli::StampsExportArgs) -> i32 {
         }
     };
 
-    // Export stamps
     progress.set_task("exporting stamps");
-    let values: Vec<serde_json::Value> = match handle
-        .export_stamps(ExportStampsOptions::default())
-    {
-        Ok(iter) => iter.collect(),
+    let iter = match handle.export_stamps(ExportStampsOptions::default()) {
+        Ok(iter) => iter,
         Err(err) => {
             progress.finish_and_clear();
             return report_error(&err, globals);
         }
     };
+
+    let out_path = args.out.as_deref().unwrap_or(DEFAULT_OUT);
+    let result = if out_path == "-" {
+        let stdout = io::stdout();
+        write_jsonl(&mut BufWriter::new(stdout.lock()), iter)
+    } else {
+        match File::create(out_path) {
+            Ok(file) => write_jsonl(&mut BufWriter::new(file), iter),
+            Err(err) => Err(anyhow::anyhow!("failed to open output file: {}", err)),
+        }
+    };
     progress.finish_and_clear();
 
-    // Determine output destination
-    let out_path = args.out.as_deref().unwrap_or(DEFAULT_OUT);
-
-    // Serialize output
-    let stamp_count = values.len();
-    let mut output = String::new();
-    for val in &values {
-        if let Ok(line) = serde_json::to_string(val) {
-            output.push_str(&line);
-            output.push('\n');
-        }
-    }
-
-    // Write to stdout or file
-    if out_path == "-" {
-        print!("{}", output);
-        0
-    } else {
-        match std::fs::write(out_path, output) {
-            Ok(()) => {
+    match result {
+        Ok(stamp_count) => {
+            if out_path != "-" {
                 eprintln!("Exported {} stamp(s) to {}", stamp_count, out_path);
-                0
             }
-            Err(err) => {
-                let err = anyhow::anyhow!("failed to write output file: {}", err);
-                report_error(&err, globals)
-            }
+            0
         }
+        Err(err) => report_error(&err, globals),
     }
+}
+
+/// Serialize each stamp directly to `writer` as a JSONL line. Returns the
+/// number of records written. Any serialization or I/O error aborts the
+/// export and is propagated — partial files are surfaced as failures so a
+/// `stamps export` user never silently loses records.
+fn write_jsonl<W: Write, I: IntoIterator<Item = serde_json::Value>>(
+    writer: &mut W,
+    iter: I,
+) -> anyhow::Result<usize> {
+    let mut count: usize = 0;
+    for val in iter {
+        serde_json::to_writer(&mut *writer, &val)
+            .map_err(|err| anyhow::anyhow!("failed to serialize stamp: {}", err))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|err| anyhow::anyhow!("failed to write stamp: {}", err))?;
+        count += 1;
+    }
+    writer
+        .flush()
+        .map_err(|err| anyhow::anyhow!("failed to flush output: {}", err))?;
+    Ok(count)
 }
