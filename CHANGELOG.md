@@ -6,6 +6,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
+- `relayburn-cli`: `burn compare` now honors `--provider`, `--workflow`, and
+  `--agent` (previously rejected at runtime). Provider is a CSV allow-list
+  resolved via `provider_for`; `--workflow` / `--agent` fold through stamp
+  enrichment (`workflowId` / `agentId`). The command intentionally still does
+  not run a pre-query ingest sweep — chain `burn ingest && burn compare`
+  for the freshest data.
 - `relayburn-sdk`: ledger query verbs (`query_turns`, `query_compactions`,
   `query_relationships`, `query_tool_result_events`, `query_user_turns`)
   now push `since` / `until` / `session_id` / `source` / `project` filters

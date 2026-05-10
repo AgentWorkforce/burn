@@ -123,11 +123,18 @@ testing, review, exploration, docs, and refactoring.
 | `--since <range>` | Limit to a relative range or ISO timestamp. |
 | `--project <path>` | Limit to a project. |
 | `--session <id>` | Limit to one session. |
+| `--workflow <id>` | Limit to turns folded with stamp `workflowId=<id>`. |
+| `--agent <id>` | Limit to turns folded with stamp `agentId=<id>`. |
+| `--provider <list>` | Comma-separated effective providers (case-insensitive). |
 | `--min-sample <n>` | Flag cells below the sample threshold. Default: `5`. |
 | `--fidelity <class>` | Minimum data quality: `full`, `usage-only`, `aggregate-only`, `cost-only`, or `partial`. |
 | `--include-partial` | Include every turn. Shorthand for `--fidelity partial`. |
 | `--json` | Emit a stable JSON object. |
 | `--csv` | Emit one row per model/activity pair. |
+
+`burn compare` reads the ledger as-is — it does NOT run an ingest sweep
+first. Chain `burn ingest && burn compare …` (or run `burn ingest --watch`
+in the background) when you need the freshest data.
 
 | Example | Result |
 |---|---|
