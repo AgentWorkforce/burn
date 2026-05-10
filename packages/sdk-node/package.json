@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/sdk",
-  "version": "2.7.3",
+  "version": "2.7.4",
   "description": "Embeddable Relayburn SDK — napi-rs bindings over the Rust relayburn-sdk crate (2.x). Drop-in replacement for the TS @relayburn/sdk@1.x.",
   "type": "module",
   "main": "./src/index.js",
@@ -43,10 +43,10 @@
     ]
   },
   "optionalDependencies": {
-    "@relayburn/sdk-darwin-arm64": "2.7.3",
-    "@relayburn/sdk-darwin-x64": "2.7.3",
-    "@relayburn/sdk-linux-arm64-gnu": "2.7.3",
-    "@relayburn/sdk-linux-x64-gnu": "2.7.3"
+    "@relayburn/sdk-darwin-arm64": "2.7.4",
+    "@relayburn/sdk-darwin-x64": "2.7.4",
+    "@relayburn/sdk-linux-arm64-gnu": "2.7.4",
+    "@relayburn/sdk-linux-x64-gnu": "2.7.4"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.4",

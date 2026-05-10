@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.7.4] - 2026-05-10
+
 ### Changed
 
 - `relayburn-cli`: `--no-archive` on `burn compare` and `burn summary` is now
