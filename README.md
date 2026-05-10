@@ -125,7 +125,7 @@ testing, review, exploration, docs, and refactoring.
 | `--session <id>` | Limit to one session. |
 | `--workflow <id>` | Limit to turns folded with stamp `workflowId=<id>`. |
 | `--agent <id>` | Limit to turns folded with stamp `agentId=<id>`. |
-| `--provider <list>` | Comma-separated effective providers (case-insensitive). |
+| `--provider <csv>` | Comma-separated effective providers (case-insensitive). |
 | `--min-sample <n>` | Flag cells below the sample threshold. Default: `5`. |
 | `--fidelity <class>` | Minimum data quality: `full`, `usage-only`, `aggregate-only`, `cost-only`, or `partial`. |
 | `--include-partial` | Include every turn. Shorthand for `--fidelity partial`. |

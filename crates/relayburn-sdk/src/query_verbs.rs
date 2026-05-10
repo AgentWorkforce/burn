@@ -4534,6 +4534,62 @@ mod tests {
     }
 
     #[test]
+    fn compare_filters_by_workflow_and_agent_intersection() {
+        // `Query.enrichment` is AND-semantics: every key/value pair must
+        // match. Pin that here so a future drift to OR-semantics regresses
+        // visibly. Stamp folds both keys onto sess-a's two turns.
+        let (_dir, mut handle) = fixture_handle();
+        let mut enrichment = crate::Enrichment::new();
+        enrichment.insert("workflowId".into(), "wf-1".into());
+        enrichment.insert("agentId".into(), "agent-7".into());
+        let stamp = crate::Stamp::new(
+            "2026-04-22T00:00:00.000Z",
+            crate::StampSelector {
+                session_id: Some("sess-a".into()),
+                ..Default::default()
+            },
+            enrichment,
+        )
+        .unwrap();
+        handle.raw_mut().append_stamp(&stamp).unwrap();
+
+        let matched = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                workflow: Some("wf-1".into()),
+                agent: Some("agent-7".into()),
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+        assert_eq!(matched.analyzed_turns, 2);
+
+        // Workflow matches but agent does not → 0.
+        let agent_missing = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                workflow: Some("wf-1".into()),
+                agent: Some("agent-missing".into()),
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+        assert_eq!(agent_missing.analyzed_turns, 0);
+
+        // Agent matches but workflow does not → 0.
+        let workflow_missing = handle
+            .compare(CompareOptions {
+                models: vec!["claude-sonnet-4-6".into(), "claude-haiku-4-5".into()],
+                workflow: Some("wf-missing".into()),
+                agent: Some("agent-7".into()),
+                min_fidelity: Some(FidelityClass::Partial),
+                ..CompareOptions::default()
+            })
+            .unwrap();
+        assert_eq!(workflow_missing.analyzed_turns, 0);
+    }
+
+    #[test]
     fn free_function_summary_round_trips_through_ledger_home() {
         let dir = tempfile::tempdir().unwrap();
         {
