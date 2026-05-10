@@ -4,6 +4,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-cli`: `--no-archive` on `burn compare` and `burn summary` is now
+  an explicit no-op (accepted for TS CLI flag parity).
+
 ## [2.7.2] - 2026-05-09
 
 ### Changed

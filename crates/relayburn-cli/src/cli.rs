@@ -244,8 +244,8 @@ pub struct CompareArgs {
     #[arg(long)]
     pub csv: bool,
 
-    /// Bypass the SQLite archive and stream the ledger directly.
-    /// Honored when env `RELAYBURN_ARCHIVE=0`.
+    /// Accepted for TS CLI flag parity; a no-op against the Rust SDK,
+    /// which is SQLite-native and has no archive layer to bypass.
     #[arg(long = "no-archive")]
     pub no_archive: bool,
 }
