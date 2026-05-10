@@ -11,4 +11,5 @@
 // surface (`relayburn_cli::util::time::*`). The library crate is consumed
 // only by the in-repo binary + tests, so `pub` here is still effectively
 // crate-private from a published-API standpoint.
+pub mod home;
 pub mod time;

@@ -434,6 +434,16 @@ jobs:
           # Refresh Cargo.lock to reflect the new workspace version.
           cargo update --workspace
 
+          # Note: pnpm-lock.yaml is refreshed AFTER the npm publish loop
+          # below — see the "Refresh pnpm-lock.yaml" step. Doing it here
+          # would fail because the umbrella optionalDeps pin exact
+          # RELEASE_VER specs against `@relayburn/{cli,sdk}-<short>`, but
+          # those versions don't exist on the npm registry yet (the
+          # "Verify new versions are not yet published" step right below
+          # explicitly asserts that). pnpm 10's default
+          # `link-workspace-packages=false` means it would try to fetch
+          # those unpublished versions from the registry and abort.
+
       # Belt-and-suspenders alongside the precursor's heal: even if the
       # local→npm baseline was in sync there, the computed release
       # version might collide with an existing version (e.g. someone
@@ -783,6 +793,7 @@ jobs:
                   packages/relayburn/npm/*/package.json \
                   packages/sdk-node/npm/*/package.json \
                   CHANGELOG.md \
+                  pnpm-lock.yaml \
                   Cargo.toml Cargo.lock \
                   crates/relayburn-cli/Cargo.toml crates/relayburn-sdk-node/Cargo.toml
           if git diff --cached --quiet; then
@@ -1101,6 +1112,58 @@ jobs:
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
             npm publish "$TARBALL" $COMMON_FLAGS
           done
+
+      # Refresh pnpm-lock.yaml AFTER the publish loop so the umbrella
+      # `optionalDependencies` (`@relayburn/{cli,sdk}-<short>`) resolve
+      # against the now-published RELEASE_VER tarballs on the npm
+      # registry. Doing this before publish would fail under pnpm 10's
+      # default `link-workspace-packages=false` because the new versions
+      # don't exist on the registry yet (see the comment in the "Apply
+      # release version" step above).
+      #
+      # Without this refresh, the lock file lags one release behind every
+      # publish run (e.g. 2.7.0 ships, but the lock still pins 2.6.1 for
+      # `@relayburn/{cli,sdk}-<short>`), and the next
+      # `pnpm install --frozen-lockfile` on `main` fails.
+      #
+      # The lockfile change is amended into the version commit created by
+      # the "Commit version bumps" step earlier so the release is one
+      # atomic commit on `main`. The amend is safe because nothing has
+      # been pushed yet (the "Tag + push" step below pushes both the
+      # amended commit and the tags created against it).
+      #
+      # `--lockfile-only` skips node_modules churn — we already installed
+      # dependencies near the top of the job. On dry runs there's nothing
+      # to amend (the version commit step is skipped) and there are no
+      # newly-published versions on the registry, so we skip the refresh
+      # entirely.
+      - name: Refresh pnpm-lock.yaml against published versions
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        run: |
+          set -euo pipefail
+          pnpm install --lockfile-only
+
+          if git diff --quiet -- pnpm-lock.yaml; then
+            echo "pnpm-lock.yaml unchanged after refresh — nothing to amend."
+            exit 0
+          fi
+
+          # The "Commit version bumps" step runs under the same condition
+          # as this step, but it no-ops if `git diff --cached --quiet` is
+          # true (e.g. the heal step already brought every package to the
+          # release version, so `npm version --allow-same-version` rewrote
+          # the files identically). In that case HEAD is some unrelated
+          # prior commit, and amending the lockfile into it would rewrite
+          # someone else's history. Guard by requiring the HEAD subject to
+          # match the release commit format ("chore(release):") that the
+          # version commit step produces; bail out cleanly otherwise.
+          HEAD_SUBJECT=$(git log -1 --format=%s)
+          if [[ "$HEAD_SUBJECT" != chore\(release\):* ]]; then
+            echo "::warning title=Skipped lockfile amend::HEAD is not a release commit (\"$HEAD_SUBJECT\") — the version bump produced no diff to commit, so there is nothing to amend the lockfile into. Skipping."
+            exit 0
+          fi
+          git add pnpm-lock.yaml
+          git commit --amend --no-edit
 
       # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
       # lightweight tags are skipped by --follow-tags.

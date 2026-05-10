@@ -34,6 +34,7 @@ use relayburn_sdk::{
 };
 
 use super::{HarnessAdapter, PlanCtx, SpawnPlan};
+use crate::util::home::home_dir;
 use crate::util::time::iso_now;
 
 /// Public unit-struct adapter for `claude`. Held as `&'static
@@ -47,10 +48,7 @@ pub static CLAUDE_ADAPTER: ClaudeAdapter = ClaudeAdapter;
 
 /// Default Claude session-store root: `$HOME/.claude/projects`.
 fn claude_projects_root() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".claude").join("projects")
+    home_dir().join(".claude").join("projects")
 }
 
 /// Mint a v4 UUID using the current SystemTime + process id as a weak
