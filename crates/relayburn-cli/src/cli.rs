@@ -159,6 +159,13 @@ pub struct IngestArgs {
     /// on its own (or with `--watch`) so a typo can't silently no-op.
     #[arg(long, requires = "hook")]
     pub quiet: bool,
+
+    /// Force the polling driver in `--watch` mode instead of the
+    /// default `notify`-backed FS-event driver. Use this on
+    /// filesystems where FS events are unreliable (network mounts,
+    /// some Docker setups). Ignored without `--watch`.
+    #[arg(long, requires = "watch")]
+    pub no_fsevents: bool,
 }
 
 /// Per-command flags for `burn mcp-server`. The stdio MCP server speaks
@@ -247,8 +254,8 @@ pub struct CompareArgs {
     #[arg(long)]
     pub csv: bool,
 
-    /// Bypass the SQLite archive and stream the ledger directly.
-    /// Honored when env `RELAYBURN_ARCHIVE=0`.
+    /// Accepted for TS CLI flag parity; a no-op against the Rust SDK,
+    /// which is SQLite-native and has no archive layer to bypass.
     #[arg(long = "no-archive")]
     pub no_archive: bool,
 }

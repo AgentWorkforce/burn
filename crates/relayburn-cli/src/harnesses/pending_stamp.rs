@@ -41,11 +41,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use relayburn_sdk::{
-    start_watch_loop, write_pending_stamp, IngestFn, IngestReport, PendingStampHarness,
-    PendingStampWriteOptions, ReportSink, StartWatchLoopOptions,
+    start_watch_loop, write_pending_stamp, IngestFn, IngestReport, Ledger, LedgerOpenOptions,
+    PendingStampHarness, PendingStampWriteOptions, RawIngestOptions, RawLedger, ReportSink,
+    StartWatchLoopOptions, WatchController,
 };
 
-use super::{HarnessAdapter, PlanCtx, SpawnPlan, WatcherController};
+use super::{HarnessAdapter, PlanCtx, SpawnPlan};
 
 /// Async ingest callback supplied by the caller. Returns the report the
 /// watch loop and `after_exit` hand back to the driver.
@@ -128,6 +129,55 @@ pub fn adapter(config: PendingStampAdapter) -> Box<dyn HarnessAdapter> {
 /// should use [`adapter`] instead.
 pub fn adapter_static(config: PendingStampAdapter) -> &'static dyn HarnessAdapter {
     Box::leak(Box::new(PendingStampAdapterImpl::new(config)))
+}
+
+/// Async fn pointer for an SDK session ingestor (`ingest_codex_sessions`,
+/// `ingest_opencode_sessions`). The shape matches both per-harness ingest
+/// passes verbatim — they live in `relayburn_sdk` as `async fn`, and the
+/// per-call `Box::pin` adaptation happens at the call site so the helper
+/// stays a fn pointer (no per-tick closure allocation).
+pub type SessionIngestor = for<'a> fn(
+    &'a mut RawLedger,
+    &'a RawIngestOptions,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send + 'a>>;
+
+/// One-call factory for pending-stamp adapters whose only differences are
+/// the harness name, the session-root resolver, and which SDK ingest pass
+/// they call. Codex and OpenCode share the entire wrapper shape — opening
+/// a fresh ledger handle per tick, threading the active ledger home
+/// through `RawIngestOptions`, deferring to an SDK ingest function — so
+/// this helper folds that boilerplate behind a single line per harness.
+///
+/// Returns the same `&'static dyn HarnessAdapter` form as
+/// [`adapter_static`] so the result drops directly into the runtime
+/// registry. See [`adapter_static`] for the leak rationale; this helper
+/// has the same per-process bytes-not-megabytes footprint.
+pub fn session_store_adapter(
+    name: &'static str,
+    session_root: fn() -> PathBuf,
+    ingestor: SessionIngestor,
+) -> &'static dyn HarnessAdapter {
+    let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> = Arc::new(session_root);
+    let ingest_sessions: IngestSessionsFn = Arc::new(move |ledger_home| {
+        Box::pin(async move {
+            // Per-tick ledger open mirrors the TS sibling's
+            // `withLock('ledger', …)` pattern. SQLite WAL keeps the open
+            // cheap (no DDL after first open). Use the typed ledger home
+            // so explicit `--ledger-path` runs keep manifest writes and
+            // resolution scoped to the same home the writer used.
+            let ledger_opts = match ledger_home.as_deref() {
+                Some(home) => LedgerOpenOptions::with_home(home),
+                None => LedgerOpenOptions::default(),
+            };
+            let mut handle = Ledger::open(ledger_opts)?;
+            let opts = RawIngestOptions {
+                ledger_home,
+                ..RawIngestOptions::default()
+            };
+            ingestor(handle.raw_mut(), &opts).await
+        })
+    });
+    adapter_static(PendingStampAdapter::new(name, session_root, ingest_sessions))
 }
 
 /// `HarnessAdapter` implementation backing the [`adapter`] factory. Kept
@@ -227,16 +277,23 @@ impl HarnessAdapter for PendingStampAdapterImpl {
         &self,
         ctx: &PlanCtx,
         on_report: ReportSink,
-    ) -> Option<WatcherController> {
+    ) -> Option<WatchController> {
         // Match the TS adapter: do not run an immediate first tick. The
         // child has barely started; let the periodic interval drive the
         // first scan so we don't spawn an ingest pass that races the
         // freshly-written pending stamp.
+        //
+        // Watch the per-harness session root with `notify` so the loop
+        // wakes on session writes instead of polling every second
+        // (#250). `watch_interval` becomes the polling fallback cadence
+        // when `notify` cannot attach (fresh install with no session
+        // dir yet, network mount, etc.).
         let opts = StartWatchLoopOptions::new(self.ingest_fn(ctx.ledger_home.clone()))
             .with_immediate(false)
             .with_interval(self.watch_interval)
+            .with_watch_paths(vec![(self.session_root)()])
             .with_on_report(on_report);
-        Some(WatcherController::new(start_watch_loop(opts)))
+        Some(start_watch_loop(opts))
     }
 
     async fn after_exit(&self, ctx: &PlanCtx, _plan: &SpawnPlan) -> anyhow::Result<IngestReport> {

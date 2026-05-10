@@ -1165,6 +1165,44 @@ jobs:
           git add pnpm-lock.yaml
           git commit --amend --no-edit
 
+      # Sanity-check the refreshed lockfile before pushing. `pnpm install
+      # --lockfile-only` has a known regression where it can silently drop
+      # the host-platform optionalDependency entry for an umbrella that
+      # has a same-named workspace package (e.g. the linux-x64-gnu leg
+      # was dropped from `@relayburn/sdk`'s importer in the 2.7.3 release,
+      # breaking the next `pnpm install --frozen-lockfile` on main and
+      # blocking the napi-build job in the following publish run). Running
+      # `--frozen-lockfile` here surfaces that regression while we still
+      # control the refs — the amended release commit hasn't been pushed
+      # yet, so failing here aborts the tag push and keeps a broken
+      # lockfile off `main`. The npm packages are already published at
+      # this point, but that's recoverable; a broken lockfile on main
+      # blocks every downstream PR.
+      - name: Verify refreshed lockfile is consistent
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        # pnpm's `--frozen-lockfile` first does the deterministic local check
+        # we care about (lockfile vs package.json specifiers), then proceeds
+        # to actually install the deps. The install half hits the npm
+        # registry, which can flake transiently right after we just pushed
+        # 11 packages to it — retry a handful of times with backoff before
+        # treating the failure as a real lockfile regression. Mirrors the
+        # sparse-index wait loop earlier in this job.
+        run: |
+          set -euo pipefail
+          attempts=6
+          for i in $(seq 1 "$attempts"); do
+            if pnpm install --frozen-lockfile; then
+              echo "frozen-lockfile check passed (attempt $i/$attempts)"
+              exit 0
+            fi
+            if [ "$i" -eq "$attempts" ]; then
+              echo "::error title=Frozen lockfile verification failed::pnpm install --frozen-lockfile failed after $attempts attempts."
+              exit 1
+            fi
+            echo "frozen-lockfile attempt $i/$attempts failed, retrying in 10s..."
+            sleep 10
+          done
+
       # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
       # lightweight tags are skipped by --follow-tags.
       #

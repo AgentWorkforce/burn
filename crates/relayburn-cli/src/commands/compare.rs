@@ -128,11 +128,9 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         return Err(anyhow!("invalid --min-sample: {min_sample}"));
     }
 
-    // 6. Honor --no-archive by exporting RELAYBURN_ARCHIVE=0 for the
-    //    duration of this call. The Rust SDK doesn't read RELAYBURN_ARCHIVE
-    //    today (it's SQLite-only), but we set the env so any future archive
-    //    layer behaves identically to the TS CLI's `--no-archive`.
-    let _archive_guard = ArchiveOverride::activate(args.no_archive);
+    // 6. `--no-archive` is accepted for TS CLI flag parity but is a no-op:
+    //    the Rust SDK is SQLite-native and has no archive layer to bypass.
+    let _ = args.no_archive;
 
     // 7. Build the Query.
     let mut q = Query::default();
@@ -488,42 +486,6 @@ fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
     (year, m as u32, d as u32)
-}
-
-/// Drop-in for `RELAYBURN_ARCHIVE=0`. Restores the previous value on
-/// drop so a panic part-way through doesn't leak the override.
-struct ArchiveOverride {
-    previous: Option<String>,
-    activated: bool,
-}
-
-impl ArchiveOverride {
-    fn activate(no_archive: bool) -> Self {
-        if !no_archive {
-            return Self {
-                previous: None,
-                activated: false,
-            };
-        }
-        let previous = std::env::var("RELAYBURN_ARCHIVE").ok();
-        std::env::set_var("RELAYBURN_ARCHIVE", "0");
-        Self {
-            previous,
-            activated: true,
-        }
-    }
-}
-
-impl Drop for ArchiveOverride {
-    fn drop(&mut self) {
-        if !self.activated {
-            return;
-        }
-        match self.previous.take() {
-            Some(v) => std::env::set_var("RELAYBURN_ARCHIVE", v),
-            None => std::env::remove_var("RELAYBURN_ARCHIVE"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

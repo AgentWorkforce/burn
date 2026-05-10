@@ -160,3 +160,140 @@ async fn stop_awaits_in_flight_tick() {
         "stop() returned before the in-flight tick completed"
     );
 }
+
+/// `with_watch_paths` pointing at a non-existent path must demote
+/// silently to the polling driver — that's the slow-fallback acceptance
+/// criterion from #250 ("when `notify` reports unsupported, the loop
+/// falls back to polling cleanly"). Reproduces the network-mount
+/// scenario without needing a real network mount: a path that doesn't
+/// exist exercises the same `FsBurst::new -> Err -> polling driver`
+/// branch.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn fs_events_fall_back_to_polling_when_no_path_exists() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let runs_for_ingest = runs.clone();
+    let ingest: IngestFn = Arc::new(move || {
+        let runs = runs_for_ingest.clone();
+        Box::pin(async move {
+            runs.fetch_add(1, Ordering::SeqCst);
+            Ok(IngestReport::default())
+        })
+    });
+
+    // Build a guaranteed-missing child of a fresh tempdir so the
+    // `FsBurst::new -> Err -> polling` demotion is deterministic
+    // across environments (a hardcoded absolute path could collide
+    // with an unusual filesystem layout).
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("definitely-missing-child");
+    let opts = StartWatchLoopOptions::new(ingest)
+        .with_immediate(false)
+        .with_interval(Duration::from_millis(100))
+        .with_watch_paths(vec![missing]);
+    let ctrl = start_watch_loop(opts);
+
+    // If the FS-event driver were active, the loop would idle until a
+    // notify event landed (and none ever will here). The polling
+    // fallback must drive at least one tick within the polling
+    // interval. We yield + advance virtual time across two intervals
+    // to give the spawned task room to run.
+    for _ in 0..6 {
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+    }
+    ctrl.stop().await;
+
+    let n = runs.load(Ordering::SeqCst);
+    assert!(
+        n >= 1,
+        "polling fallback did not fire after FS-event driver demotion (runs={n})"
+    );
+}
+
+/// `disable_fsevents = true` must take the polling path even when
+/// `watch_paths` references a real, watchable directory. Mirrors the
+/// `--no-fsevents` opt-out in the CLI.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn disable_fsevents_forces_polling_driver() {
+    let dir = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let runs_for_ingest = runs.clone();
+    let ingest: IngestFn = Arc::new(move || {
+        let runs = runs_for_ingest.clone();
+        Box::pin(async move {
+            runs.fetch_add(1, Ordering::SeqCst);
+            Ok(IngestReport::default())
+        })
+    });
+
+    let opts = StartWatchLoopOptions::new(ingest)
+        .with_immediate(false)
+        .with_interval(Duration::from_millis(50))
+        .with_watch_paths(vec![dir.path().to_path_buf()])
+        .with_disable_fsevents(true);
+    let ctrl = start_watch_loop(opts);
+
+    // Polling cadence is 50ms; advance 4 intervals.
+    for _ in 0..6 {
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(50)).await;
+    }
+    ctrl.stop().await;
+
+    assert!(
+        runs.load(Ordering::SeqCst) >= 1,
+        "polling driver did not fire under disable_fsevents=true"
+    );
+}
+
+/// Burst test: a flood of FS writes inside the debounce window must
+/// produce a single ingest tick, not one per write. Acceptance
+/// criterion from #250 ("rapid-fire 100 session writes within 100ms
+/// produces ≤ 5 ingest cycles, not 100"). Uses real time because the
+/// `notify` driver runs on its own OS thread and doesn't observe
+/// `tokio::time::pause`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "FS-event delivery is platform-dependent; run via cargo test -- --ignored"]
+async fn burst_writes_coalesce_into_one_tick() {
+    let dir = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let runs_for_ingest = runs.clone();
+    let ingest: IngestFn = Arc::new(move || {
+        let runs = runs_for_ingest.clone();
+        Box::pin(async move {
+            runs.fetch_add(1, Ordering::SeqCst);
+            Ok(IngestReport::default())
+        })
+    });
+
+    let opts = StartWatchLoopOptions::new(ingest)
+        .with_immediate(false)
+        .with_interval(Duration::from_secs(60))
+        .with_slow_fallback_interval(Duration::from_secs(60))
+        .with_debounce(Duration::from_millis(150))
+        .with_watch_paths(vec![dir.path().to_path_buf()]);
+    let ctrl = start_watch_loop(opts);
+
+    // Give the watcher a moment to attach.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 100 writes in rapid succession.
+    for i in 0..100 {
+        std::fs::write(dir.path().join(format!("burst-{i}.jsonl")), b"{}\n").unwrap();
+    }
+    // Wait for the debounce window plus generous slack for the OS
+    // event-delivery latency.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    ctrl.stop().await;
+
+    let n = runs.load(Ordering::SeqCst);
+    assert!(
+        n <= 5,
+        "100 burst writes within 150ms debounce should coalesce to ≤ 5 ticks, got {n}"
+    );
+    assert!(
+        n >= 1,
+        "100 burst writes should still wake the loop at least once, got {n}"
+    );
+}
