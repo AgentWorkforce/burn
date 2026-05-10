@@ -11,11 +11,12 @@
 //! 2. **`before_spawn`** — fire any pre-spawn side effect: stamp now if the
 //!    session id is known up front (claude path), or drop a pending-stamp
 //!    manifest the post-spawn ingest pass will resolve (codex / opencode).
-//! 3. **`start_watcher`** *(optional)* — return a [`WatchController`] that
-//!    drains a session-store directory while the child runs. Adapters that
-//!    ingest a single pre-known session file (claude) return `None` here;
-//!    adapters that share the pending-stamp shape (codex, opencode) wire
-//!    the watch loop through [`pending_stamp::adapter`].
+//! 3. **`start_watcher`** *(optional)* — return a [`WatchController`]
+//!    (re-exported from `relayburn_sdk`) that drains a session-store
+//!    directory while the child runs. Adapters that ingest a single
+//!    pre-known session file (claude) return `None` here; adapters that
+//!    share the pending-stamp shape (codex, opencode) wire the watch loop
+//!    through [`pending_stamp::adapter`].
 //! 4. **`after_exit`** — run a final ingest pass after the child exits and
 //!    return an [`IngestReport`] for the launcher to report.
 //! 5. The launcher itself owns step zero — collecting `cwd`, passthrough
@@ -42,7 +43,7 @@ pub mod pending_stamp;
 pub mod registry;
 
 #[cfg(test)]
-mod test_env;
+pub(crate) mod test_env;
 
 pub use registry::{list_harness_names, lookup};
 
@@ -144,7 +145,7 @@ pub trait HarnessAdapter: Send + Sync {
         Ok(())
     }
 
-    /// Optional. Return a [`WatcherController`] from
+    /// Optional. Return a [`WatchController`] from
     /// [`relayburn_sdk::start_watch_loop`] to drain a session store
     /// while the child runs; return `None` for adapters that ingest a
     /// single pre-known file at exit.
@@ -156,49 +157,13 @@ pub trait HarnessAdapter: Send + Sync {
         &self,
         _ctx: &PlanCtx,
         _on_report: relayburn_sdk::ReportSink,
-    ) -> Option<WatcherController> {
+    ) -> Option<WatchController> {
         None
     }
 
     /// Final ingest pass after the child exits. Returns an
     /// [`IngestReport`] the driver folds into its summary line.
     async fn after_exit(&self, ctx: &PlanCtx, plan: &SpawnPlan) -> anyhow::Result<IngestReport>;
-}
-
-/// Wrapper around the SDK's [`WatchController`]. Today this is just a
-/// newtype so callers don't have to import `relayburn_sdk` directly to
-/// construct or stop a watcher; tomorrow it gives us a stable boundary
-/// to attach harness-side observability (e.g. a `name`, a per-adapter
-/// metric counter) without leaking through to the SDK.
-pub struct WatcherController {
-    inner: WatchController,
-}
-
-impl WatcherController {
-    /// Wrap a raw SDK controller. `pending_stamp::adapter` is the
-    /// canonical caller; bespoke adapters that build their own watch
-    /// loop also funnel through here.
-    pub fn new(inner: WatchController) -> Self {
-        Self { inner }
-    }
-
-    /// Run a single tick on demand. Forwards to
-    /// [`WatchController::tick`].
-    pub async fn tick(&self) {
-        self.inner.tick().await;
-    }
-
-    /// Stop the periodic loop and await any in-flight tick. Idempotent.
-    /// Call this once the spawned child exits.
-    pub async fn stop(&self) {
-        self.inner.stop().await;
-    }
-
-    /// Borrow the wrapped controller for callers that need the raw
-    /// SDK type (e.g. integration tests parking on `tick_done`).
-    pub fn raw(&self) -> &WatchController {
-        &self.inner
-    }
 }
 
 #[cfg(test)]
