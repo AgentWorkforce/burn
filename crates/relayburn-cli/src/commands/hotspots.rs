@@ -255,7 +255,7 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
     progress.finish_and_clear();
 
     if globals.json {
-        emit_json(&result);
+        emit_json(&result)?;
         return Ok(0);
     }
     let limit = if args.all { usize::MAX } else { DEFAULT_TOP_N };
@@ -263,10 +263,10 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-fn emit_json(result: &HotspotsResult) {
+fn emit_json(result: &HotspotsResult) -> std::io::Result<()> {
     let mut value = hotspots_result_to_json(result);
     coerce_whole_f64_to_int(&mut value);
-    let _ = render_json(&value);
+    render_json(&value)
 }
 
 fn hotspots_result_to_json(result: &HotspotsResult) -> Value {

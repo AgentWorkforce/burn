@@ -81,14 +81,19 @@ fn run_list_inner(globals: &GlobalArgs, args: SessionsListArgs) -> anyhow::Resul
             &since,
             args.project.as_deref(),
             args.grep.as_deref(),
-        );
+        )?;
     } else {
         emit_human(&result, &since, args.grep.as_deref());
     }
     Ok(0)
 }
 
-fn emit_json(result: &SessionsListResult, since: &str, project: Option<&str>, grep: Option<&str>) {
+fn emit_json(
+    result: &SessionsListResult,
+    since: &str,
+    project: Option<&str>,
+    grep: Option<&str>,
+) -> std::io::Result<()> {
     let mut filters = json!({ "since": since });
     if let Some(p) = project {
         filters
@@ -110,7 +115,7 @@ fn emit_json(result: &SessionsListResult, since: &str, project: Option<&str>, gr
         "sessions": result.sessions,
     });
     coerce_whole_f64_to_int(&mut payload);
-    let _ = render_json(&payload);
+    render_json(&payload)
 }
 
 fn emit_human(result: &SessionsListResult, since: &str, grep: Option<&str>) {
