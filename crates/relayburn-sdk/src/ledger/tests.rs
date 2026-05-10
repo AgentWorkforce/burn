@@ -939,3 +939,177 @@ fn pruning_content_does_not_lock_events_db() {
     }
     prune_thread.join().unwrap();
 }
+
+#[test]
+fn query_turns_filters_pushed_to_sql_match_legacy_semantics() {
+    // Regression: #324 pushed `since` / `until` / `session_id` /
+    // `source` / `project` from a Rust post-filter into the SQL
+    // `WHERE` clause. Pin the result-set parity against a hand-built
+    // matrix so a future SQL change can't silently regress.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    // Asymmetric project / project_key seeding so the regression
+    // catches a SQL change that only checks one of the two columns.
+    let mut t_a = make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10);
+    t_a.project = Some("burn".into());
+    t_a.project_key = None;
+    let mut t_b = make_turn("s1", "m2", "2025-01-02T00:00:00Z", 20);
+    t_b.project = None;
+    t_b.project_key = Some("burn".into());
+    let mut t_c = make_turn("s2", "m3", "2025-01-03T00:00:00Z", 30);
+    t_c.source = SourceKind::Codex;
+    t_c.project = Some("other".into());
+    t_c.project_key = Some("other".into());
+    l.append_turns(&[t_a, t_b, t_c]).unwrap();
+
+    // since: drops 2025-01-01, keeps later two.
+    let r = l
+        .query_turns(&Query {
+            since: Some("2025-01-02T00:00:00Z".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(r.len(), 2);
+
+    // until: drops 2025-01-03, keeps earlier two.
+    let r = l
+        .query_turns(&Query {
+            until: Some("2025-01-02T00:00:00Z".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(r.len(), 2);
+
+    // session_id: only s1's two turns.
+    let r = l.query_turns(&Query::for_session("s1")).unwrap();
+    assert_eq!(r.len(), 2);
+    assert!(r.iter().all(|et| et.turn.session_id == "s1"));
+
+    // source: only the codex row.
+    let r = l
+        .query_turns(&Query {
+            source: Some(SourceKind::Codex),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].turn.source, SourceKind::Codex);
+
+    // project: matches against project OR project_key.
+    let r = l
+        .query_turns(&Query {
+            project: Some("burn".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(r.len(), 2);
+
+    // Combined since+source: AND-composed.
+    let r = l
+        .query_turns(&Query {
+            since: Some("2025-01-02T00:00:00Z".into()),
+            source: Some(SourceKind::ClaudeCode),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].turn.message_id, "m2");
+}
+
+#[test]
+fn query_relationships_session_filter_matches_either_endpoint() {
+    // The `session_id` filter on relationships must match either
+    // `session_id` or `related_session_id` — same semantics the Rust
+    // post-filter implemented and the SQL clause now upholds.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let parent_edge = SessionRelationshipRecord {
+        v: 1,
+        source: RelationshipSourceKind::ClaudeCode,
+        session_id: "child".into(),
+        related_session_id: Some("parent".into()),
+        relationship_type: RelationshipType::Continuation,
+        ts: Some("2025-01-01T00:00:00Z".into()),
+        source_session_id: None,
+        source_version: None,
+        parent_tool_use_id: None,
+        agent_id: None,
+        subagent_type: None,
+        description: None,
+    };
+    let unrelated = SessionRelationshipRecord {
+        v: 1,
+        source: RelationshipSourceKind::ClaudeCode,
+        session_id: "other".into(),
+        related_session_id: Some("third".into()),
+        relationship_type: RelationshipType::Continuation,
+        ts: Some("2025-01-02T00:00:00Z".into()),
+        source_session_id: None,
+        source_version: None,
+        parent_tool_use_id: None,
+        agent_id: None,
+        subagent_type: None,
+        description: None,
+    };
+    l.append_relationships(&[parent_edge, unrelated]).unwrap();
+
+    let by_child = l
+        .query_relationships(&Query::for_session("child"))
+        .unwrap();
+    assert_eq!(by_child.len(), 1);
+
+    let by_parent = l
+        .query_relationships(&Query::for_session("parent"))
+        .unwrap();
+    assert_eq!(by_parent.len(), 1, "filter matches related_session_id too");
+}
+
+#[test]
+fn query_tool_result_events_keeps_null_ts_rows_under_since_filter() {
+    // tool_result_events.ts is nullable, and the legacy Rust filter
+    // skipped the since/until check entirely when ts was None. The
+    // SQL pushdown mirrors that with `(ts IS NULL OR ts >= ?)` so a
+    // null-ts row still surfaces under a filtered query.
+    use crate::reader::{ToolResultEventRecord, ToolResultEventSource, ToolResultStatus};
+
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let make = |tool_use_id: &str, event_index: u64, ts: Option<&str>| ToolResultEventRecord {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: "s1".into(),
+        message_id: None,
+        tool_use_id: tool_use_id.into(),
+        call_index: None,
+        event_index,
+        ts: ts.map(Into::into),
+        status: ToolResultStatus::Completed,
+        event_source: ToolResultEventSource::ToolResult,
+        content_length: None,
+        content_hash: None,
+        is_error: None,
+        usage: None,
+        usage_attribution: None,
+        subagent_session_id: None,
+        agent_id: None,
+        replaced_tools: None,
+        collapsed_calls: None,
+    };
+    let with_ts = make("tu1", 0, Some("2025-01-01T00:00:00Z"));
+    let null_ts = make("tu2", 1, None);
+    l.append_tool_result_events(&[with_ts, null_ts]).unwrap();
+
+    let r = l
+        .query_tool_result_events(&Query {
+            since: Some("2030-01-01T00:00:00Z".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    // The dated row is excluded by the `since` bound; the null-ts row
+    // survives because it carries no timestamp to compare against.
+    assert_eq!(r.len(), 1);
+    assert!(r[0].ts.is_none());
+}

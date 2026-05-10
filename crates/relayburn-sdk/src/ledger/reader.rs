@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use crate::reader::{
@@ -31,9 +31,20 @@ pub struct EnrichedTurn {
 
 pub(crate) fn query_turns(conn: &Connection, q: &Query) -> Result<Vec<EnrichedTurn>> {
     let stamps = collect_stamps(conn)?;
-    let mut stmt = conn.prepare("SELECT record_json FROM turns ORDER BY rowid")?;
+    let (sql, bound) = build_select_sql(
+        "turns",
+        q,
+        TableFilters {
+            ts_nullable: false,
+            session_id_or_related: false,
+            project_columns: true,
+        },
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
+        .query_map(params_from_iter(bound.iter()), |row| {
+            row.get::<_, String>(0)
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
     for json in rows {
@@ -42,7 +53,7 @@ pub(crate) fn query_turns(conn: &Connection, q: &Query) -> Result<Vec<EnrichedTu
             Err(_) => continue,
         };
         let enrichment = fold_stamps(&turn, &stamps);
-        if !turn_passes(&turn, q, &enrichment) {
+        if !enrichment_filter_passes(&enrichment, q) {
             continue;
         }
         out.push(EnrichedTurn { turn, enrichment });
@@ -51,33 +62,61 @@ pub(crate) fn query_turns(conn: &Connection, q: &Query) -> Result<Vec<EnrichedTu
 }
 
 pub(crate) fn query_compactions(conn: &Connection, q: &Query) -> Result<Vec<CompactionEvent>> {
-    select_records(conn, "compactions", |r: CompactionEvent| {
-        compaction_passes(&r, q).then_some(r)
-    })
+    select_filtered_records(
+        conn,
+        "compactions",
+        q,
+        TableFilters {
+            ts_nullable: false,
+            session_id_or_related: false,
+            project_columns: false,
+        },
+    )
 }
 
 pub(crate) fn query_relationships(
     conn: &Connection,
     q: &Query,
 ) -> Result<Vec<SessionRelationshipRecord>> {
-    select_records(conn, "relationships", |r: SessionRelationshipRecord| {
-        relationship_passes(&r, q).then_some(r)
-    })
+    select_filtered_records(
+        conn,
+        "relationships",
+        q,
+        TableFilters {
+            ts_nullable: true,
+            session_id_or_related: true,
+            project_columns: false,
+        },
+    )
 }
 
 pub(crate) fn query_tool_result_events(
     conn: &Connection,
     q: &Query,
 ) -> Result<Vec<ToolResultEventRecord>> {
-    select_records(conn, "tool_result_events", |r: ToolResultEventRecord| {
-        tool_result_event_passes(&r, q).then_some(r)
-    })
+    select_filtered_records(
+        conn,
+        "tool_result_events",
+        q,
+        TableFilters {
+            ts_nullable: true,
+            session_id_or_related: false,
+            project_columns: false,
+        },
+    )
 }
 
 pub(crate) fn query_user_turns(conn: &Connection, q: &Query) -> Result<Vec<UserTurnRecord>> {
-    select_records(conn, "user_turns", |r: UserTurnRecord| {
-        user_turn_passes(&r, q).then_some(r)
-    })
+    select_filtered_records(
+        conn,
+        "user_turns",
+        q,
+        TableFilters {
+            ts_nullable: false,
+            session_id_or_related: false,
+            project_columns: false,
+        },
+    )
 }
 
 pub(crate) fn list_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
@@ -96,7 +135,7 @@ pub(crate) fn list_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
 /// session_id should never reach us, but the extra guard keeps the
 /// surface symmetric.
 pub(crate) fn list_user_turn_session_ids(conn: &Connection) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare("SELECT DISTINCT session_id FROM user_turns")?;
+    let mut stmt = conn.prepare_cached("SELECT DISTINCT session_id FROM user_turns")?;
     let mut rows = stmt.query([])?;
     let mut out = HashSet::new();
     while let Some(row) = rows.next()? {
@@ -110,31 +149,107 @@ pub(crate) fn list_user_turn_session_ids(conn: &Connection) -> Result<HashSet<St
     Ok(out)
 }
 
-fn select_records<T, F>(conn: &Connection, table: &str, mut filter: F) -> Result<Vec<T>>
+/// Per-table column shape used to build the SQL `WHERE` clause from a
+/// [`Query`]. Each table has the same logical filters, but their column
+/// shapes differ:
+///
+/// - `ts_nullable`: relationships and tool_result_events store `ts` as
+///   nullable, and the historical Rust filter passed rows whose `ts` was
+///   `NULL` regardless of `since`/`until`. Mirror that with
+///   `(ts IS NULL OR ts >= ?)`.
+/// - `session_id_or_related`: relationships match the filter against
+///   either `session_id` or `related_session_id`.
+/// - `project_columns`: only `turns` carries the `project` /
+///   `project_key` columns surfaced via `Query::project`.
+#[derive(Clone, Copy)]
+struct TableFilters {
+    ts_nullable: bool,
+    session_id_or_related: bool,
+    project_columns: bool,
+}
+
+/// Build a `SELECT record_json FROM <table> WHERE … ORDER BY rowid`
+/// statement that pushes every supported [`Query`] predicate into SQL,
+/// alongside the parameter list to bind. Generates a stable SQL string
+/// per filter combination so [`Connection::prepare_cached`] can reuse the
+/// compiled statement across calls.
+fn build_select_sql(table: &str, q: &Query, shape: TableFilters) -> (String, Vec<String>) {
+    let mut sql = format!("SELECT record_json FROM {table}");
+    let mut clauses: Vec<&'static str> = Vec::new();
+    let mut bound: Vec<String> = Vec::new();
+
+    if let Some(since) = &q.since {
+        if shape.ts_nullable {
+            clauses.push("(ts IS NULL OR ts >= ?)");
+        } else {
+            clauses.push("ts >= ?");
+        }
+        bound.push(since.clone());
+    }
+    if let Some(until) = &q.until {
+        if shape.ts_nullable {
+            clauses.push("(ts IS NULL OR ts <= ?)");
+        } else {
+            clauses.push("ts <= ?");
+        }
+        bound.push(until.clone());
+    }
+    if let Some(sid) = &q.session_id {
+        if shape.session_id_or_related {
+            clauses.push("(session_id = ? OR related_session_id = ?)");
+            bound.push(sid.clone());
+            bound.push(sid.clone());
+        } else {
+            clauses.push("session_id = ?");
+            bound.push(sid.clone());
+        }
+    }
+    if let Some(source) = q.source {
+        clauses.push("source = ?");
+        bound.push(source.wire_str().to_string());
+    }
+    if shape.project_columns {
+        if let Some(project) = &q.project {
+            clauses.push("(project = ? OR project_key = ?)");
+            bound.push(project.clone());
+            bound.push(project.clone());
+        }
+    }
+
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY rowid");
+    (sql, bound)
+}
+
+fn select_filtered_records<T>(
+    conn: &Connection,
+    table: &str,
+    q: &Query,
+    shape: TableFilters,
+) -> Result<Vec<T>>
 where
     T: for<'de> Deserialize<'de>,
-    F: FnMut(T) -> Option<T>,
 {
-    let sql = format!("SELECT record_json FROM {table} ORDER BY rowid");
-    let mut stmt = conn.prepare(&sql)?;
+    let (sql, bound) = build_select_sql(table, q, shape);
+    let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))?
+        .query_map(params_from_iter(bound.iter()), |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
     for json in rows {
-        let record: T = match serde_json::from_str(&json) {
-            Ok(r) => r,
+        match serde_json::from_str::<T>(&json) {
+            Ok(record) => out.push(record),
             Err(_) => continue,
-        };
-        if let Some(kept) = filter(record) {
-            out.push(kept);
         }
     }
     Ok(out)
 }
 
 fn collect_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT ts, selector_json, enrichment_json
          FROM stamps
          ORDER BY ts, written_at",
@@ -179,144 +294,17 @@ fn fold_stamps(turn: &TurnRecord, stamps: &[Stamp]) -> Enrichment {
     out
 }
 
-fn turn_passes(turn: &TurnRecord, q: &Query, enrichment: &Enrichment) -> bool {
-    if let Some(ref since) = q.since {
-        if &turn.ts < since {
-            return false;
-        }
-    }
-    if let Some(ref until) = q.until {
-        if &turn.ts > until {
-            return false;
-        }
-    }
-    if let Some(ref project) = q.project {
-        let matches_project = turn.project.as_deref() == Some(project)
-            || turn.project_key.as_deref() == Some(project);
-        if !matches_project {
-            return false;
-        }
-    }
-    if let Some(ref sid) = q.session_id {
-        if &turn.session_id != sid {
-            return false;
-        }
-    }
-    if let Some(source) = q.source {
-        if turn.source != source {
-            return false;
-        }
-    }
-    if let Some(ref wanted) = q.enrichment {
-        for (key, value) in wanted {
-            if enrichment.get(key) != Some(value) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-fn compaction_passes(e: &CompactionEvent, q: &Query) -> bool {
-    if let Some(ref since) = q.since {
-        if &e.ts < since {
-            return false;
-        }
-    }
-    if let Some(ref until) = q.until {
-        if &e.ts > until {
-            return false;
-        }
-    }
-    if let Some(ref sid) = q.session_id {
-        if &e.session_id != sid {
-            return false;
-        }
-    }
-    if let Some(source) = q.source {
-        if e.source != source {
-            return false;
-        }
-    }
-    true
-}
-
-fn relationship_passes(r: &SessionRelationshipRecord, q: &Query) -> bool {
-    if let (Some(ref since), Some(ref ts)) = (&q.since, &r.ts) {
-        if ts < since {
-            return false;
-        }
-    }
-    if let (Some(ref until), Some(ref ts)) = (&q.until, &r.ts) {
-        if ts > until {
-            return false;
-        }
-    }
-    if let Some(ref sid) = q.session_id {
-        if &r.session_id != sid && r.related_session_id.as_ref() != Some(sid) {
-            return false;
-        }
-    }
-    if let Some(source) = q.source {
-        // `Query.source` is a `SourceKind` (the harness identity);
-        // `r.source` is a `RelationshipSourceKind` (a superset that
-        // also covers `spawn-env`, `native-claude`, etc.). Compare via
-        // their kebab-case wire labels so a `source = "claude-code"`
-        // filter matches both enums identically — same semantics as the
-        // TS adapter, which compared the raw strings.
-        if source.wire_str() != r.source.wire_str() {
-            return false;
-        }
-    }
-    true
-}
-
-fn tool_result_event_passes(r: &ToolResultEventRecord, q: &Query) -> bool {
-    if let (Some(ref since), Some(ref ts)) = (&q.since, &r.ts) {
-        if ts < since {
-            return false;
-        }
-    }
-    if let (Some(ref until), Some(ref ts)) = (&q.until, &r.ts) {
-        if ts > until {
-            return false;
-        }
-    }
-    if let Some(ref sid) = q.session_id {
-        if &r.session_id != sid {
-            return false;
-        }
-    }
-    if let Some(source) = q.source {
-        if r.source != source {
-            return false;
-        }
-    }
-    true
-}
-
-fn user_turn_passes(r: &UserTurnRecord, q: &Query) -> bool {
-    if let Some(ref since) = q.since {
-        if &r.ts < since {
-            return false;
-        }
-    }
-    if let Some(ref until) = q.until {
-        if &r.ts > until {
-            return false;
-        }
-    }
-    if let Some(ref sid) = q.session_id {
-        if &r.session_id != sid {
-            return false;
-        }
-    }
-    if let Some(source) = q.source {
-        if r.source != source {
-            return false;
-        }
-    }
-    true
+/// Folded-stamp enrichment is the only [`Query`] predicate that can't be
+/// pushed into SQL — stamps live in their own table and the match logic
+/// runs in Rust. SQL handles `since` / `until` / `session_id` / `source`
+/// / `project` for us, so this is the last gate before yielding a turn.
+fn enrichment_filter_passes(enrichment: &Enrichment, q: &Query) -> bool {
+    let Some(ref wanted) = q.enrichment else {
+        return true;
+    };
+    wanted
+        .iter()
+        .all(|(key, value)| enrichment.get(key) == Some(value))
 }
 
 /// Tables `count_table` and `raw_record_jsons` are allowed to address.
@@ -354,7 +342,7 @@ pub(crate) fn count_table(conn: &Connection, table: &str) -> Result<i64> {
 pub(crate) fn raw_record_jsons(conn: &Connection, table: &str) -> Result<Vec<String>> {
     validate_table(table)?;
     let sql = format!("SELECT record_json FROM {table} ORDER BY rowid");
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;

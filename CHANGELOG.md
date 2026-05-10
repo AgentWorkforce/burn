@@ -4,6 +4,15 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-sdk`: ledger query verbs (`query_turns`, `query_compactions`,
+  `query_relationships`, `query_tool_result_events`, `query_user_turns`)
+  now push `since` / `until` / `session_id` / `source` / `project` filters
+  into SQL and reuse compiled statements via `prepare_cached`. Cuts the
+  per-call cost of `burn ingest --watch` and any verb that drives a
+  filtered query against a multi-month ledger.
+
 ## [2.7.4] - 2026-05-10
 
 ### Changed
