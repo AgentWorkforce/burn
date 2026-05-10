@@ -1180,7 +1180,28 @@ jobs:
       # blocks every downstream PR.
       - name: Verify refreshed lockfile is consistent
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
-        run: pnpm install --frozen-lockfile
+        # pnpm's `--frozen-lockfile` first does the deterministic local check
+        # we care about (lockfile vs package.json specifiers), then proceeds
+        # to actually install the deps. The install half hits the npm
+        # registry, which can flake transiently right after we just pushed
+        # 11 packages to it — retry a handful of times with backoff before
+        # treating the failure as a real lockfile regression. Mirrors the
+        # sparse-index wait loop earlier in this job.
+        run: |
+          set -euo pipefail
+          attempts=6
+          for i in $(seq 1 "$attempts"); do
+            if pnpm install --frozen-lockfile; then
+              echo "frozen-lockfile check passed (attempt $i/$attempts)"
+              exit 0
+            fi
+            if [ "$i" -eq "$attempts" ]; then
+              echo "::error title=Frozen lockfile verification failed::pnpm install --frozen-lockfile failed after $attempts attempts."
+              exit 1
+            fi
+            echo "frozen-lockfile attempt $i/$attempts failed, retrying in 10s..."
+            sleep 10
+          done
 
       # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
       # lightweight tags are skipped by --follow-tags.
