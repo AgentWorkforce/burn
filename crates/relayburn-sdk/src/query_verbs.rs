@@ -2056,7 +2056,7 @@ pub struct SessionsListOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionListEntry {
-    /// Full session id. Renderers may truncate for human display.
+    /// Full session id. Renderers should preserve this exactly.
     pub session_id: String,
     /// Project label (`project` if present, falling back to `projectKey`).
     /// `None` when neither field was recorded.
