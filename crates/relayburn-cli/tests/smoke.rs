@@ -431,7 +431,20 @@ fn stamps_export_to_file_against_empty_ledger() {
         .env("NO_COLOR", "1")
         .assert()
         .success()
+        .stdout("")
         .stderr(predicate::str::contains("Exported 0 stamp(s)"));
+
+    assert!(
+        out_path.is_file(),
+        "expected output file to be created at {}",
+        out_path.display()
+    );
+    let content = std::fs::read_to_string(&out_path).expect("read exported file");
+    assert!(
+        content.is_empty(),
+        "expected empty JSONL for empty ledger, got {:?}",
+        content
+    );
 }
 
 /// `burn stamps export --json` against an empty ledger should still only
