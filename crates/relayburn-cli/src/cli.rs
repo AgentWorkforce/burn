@@ -107,6 +107,9 @@ pub enum Command {
     /// Enumerate sessions in the ledger.
     Sessions(SessionsArgs),
 
+    /// Inspect or export stamps in the ledger.
+    Stamps(StampsArgs),
+
     /// Scan harness session stores and append new turns to the ledger.
     Ingest(IngestArgs),
 
@@ -459,4 +462,39 @@ pub struct SessionsListArgs {
     /// Row cap. Defaults to 20.
     #[arg(long, value_name = "N")]
     pub limit: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// `burn stamps` — typed args + nested subcommand
+// ---------------------------------------------------------------------------
+
+/// `burn stamps [...]` — stamp inspection / export verbs.
+///
+/// Today the only nested verb is `export`, which dumps the stamps table
+/// as JSONL to stdout or a file for backup / version-control workflows.
+/// The args struct exists so future verbs (`import`, `show`, …) can land
+/// without churning the dispatcher.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct StampsArgs {
+    #[command(subcommand)]
+    pub command: StampsSubcommand,
+}
+
+/// Nested subcommand for `burn stamps`. Required (no positional default)
+/// — the subcommand surface is small enough that `burn stamps` on its
+/// own is more confusing than `burn stamps export` would be helpful.
+#[derive(Debug, Clone, Subcommand)]
+pub enum StampsSubcommand {
+    /// Export the stamps table as JSONL to stdout (default) or a file.
+    Export(StampsExportArgs),
+}
+
+/// `burn stamps export` — flags. `--json`, `--ledger-path`, `--no-color`
+/// are inherited via [`Args`].
+#[derive(Debug, Clone, ClapArgs)]
+pub struct StampsExportArgs {
+    /// Output file path. If `-` (default) or omitted, streams JSONL to stdout.
+    /// Otherwise, writes to the specified file.
+    #[arg(short, long, value_name = "PATH")]
+    pub out: Option<String>,
 }

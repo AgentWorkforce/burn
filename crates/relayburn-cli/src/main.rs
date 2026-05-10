@@ -44,6 +44,7 @@ fn dispatch(args: Args) -> i32 {
         Command::Compare(args) => commands::compare::run(&globals, args),
         Command::State(args) => commands::state::run(&globals, args),
         Command::Sessions(args) => commands::sessions::run(&globals, args),
+        Command::Stamps(args) => commands::stamps::run(&globals, args),
         Command::Ingest(args) => commands::ingest::run(&globals, args),
         Command::McpServer(args) => commands::mcp_server::run(&globals, args),
     }
@@ -57,6 +58,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::Compare(_) => "compare",
         Command::State(_) => "state",
         Command::Sessions(_) => "sessions",
+        Command::Stamps(_) => "stamps",
         Command::Ingest(_) => "ingest",
         Command::McpServer(_) => "mcp-server",
     }
