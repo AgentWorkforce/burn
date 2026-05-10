@@ -30,6 +30,7 @@ const SUBCOMMANDS: &[&str] = &[
     "compare",
     "state",
     "sessions",
+    "stamps",
     "ingest",
     "mcp-server",
 ];
@@ -383,4 +384,69 @@ fn state_rebuild_classify_emits_drop_envelope() {
         serde_json::from_str(stdout.trim()).expect("--json output is valid JSON");
     assert_eq!(value["rowsDropped"], serde_json::Value::from(0));
     assert_eq!(value["contentRowsDropped"], serde_json::Value::from(0));
+}
+
+// ---------------------------------------------------------------------------
+// `burn stamps` — stamps export tests
+// ---------------------------------------------------------------------------
+
+/// `burn stamps` is a parent verb that requires a nested subcommand;
+/// invoking it bare should fail (clap's required-subcommand check) so a
+/// future PR adding a sibling verb can't accidentally regress to a
+/// silent no-op default.
+#[test]
+fn stamps_without_subcommand_fails() {
+    burn().arg("stamps").assert().failure();
+}
+
+/// `burn stamps export` against an empty isolated ledger should open
+/// cleanly, export zero stamps, and produce an empty output with exit 0.
+#[test]
+fn stamps_export_against_empty_ledger_produces_empty_output() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["stamps", "export"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+}
+
+/// `burn stamps export --out <path>` against an empty isolated ledger should
+/// write an empty file and report success. Pins the file output path separate
+/// from the stdout default.
+#[test]
+fn stamps_export_to_file_against_empty_ledger() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    let out_path = home.path().join("stamps.jsonl");
+
+    burn()
+        .args(["stamps", "export", "--out", out_path.to_str().unwrap()])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Exported 0 stamp(s)"));
+}
+
+/// `burn stamps export --json` against an empty ledger should still only
+/// emit JSONL on stdout (--json is not yet implemented for this verb,
+/// but the command should still succeed).
+#[test]
+fn stamps_export_json_flag_succeeds() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["--json", "stamps", "export"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout("");
 }
