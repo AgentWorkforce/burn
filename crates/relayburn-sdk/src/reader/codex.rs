@@ -1192,18 +1192,6 @@ fn parse_codex_buffer<R: BufRead>(
         }
     }
 
-    // Silence unused-mutable warnings for snapshot mirrors that are written
-    // but only read indirectly.
-    let _ = (
-        cumulative,
-        session_id,
-        session_cwd,
-        turn_contexts,
-        seen_session_meta_keys,
-        root_session_emitted,
-        last_completed_turn,
-    );
-
     Ok(ParseCodexIncrementalResult {
         turns,
         content: content_out,
