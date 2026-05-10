@@ -36,14 +36,6 @@ importers:
         specifier: 2.7.6
         version: 2.7.6
 
-  packages/relayburn/npm/darwin-arm64: {}
-
-  packages/relayburn/npm/darwin-x64: {}
-
-  packages/relayburn/npm/linux-arm64-gnu: {}
-
-  packages/relayburn/npm/linux-x64-gnu: {}
-
   packages/sdk-node:
     devDependencies:
       '@napi-rs/cli':
@@ -65,14 +57,6 @@ importers:
       '@relayburn/sdk-linux-x64-gnu':
         specifier: 2.7.6
         version: 2.7.6
-
-  packages/sdk-node/npm/darwin-arm64: {}
-
-  packages/sdk-node/npm/darwin-x64: {}
-
-  packages/sdk-node/npm/linux-arm64-gnu: {}
-
-  packages/sdk-node/npm/linux-x64-gnu: {}
 
 packages:
 

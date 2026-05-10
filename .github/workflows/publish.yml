@@ -1137,11 +1137,19 @@ jobs:
       # to amend (the version commit step is skipped) and there are no
       # newly-published versions on the registry, so we skip the refresh
       # entirely.
+      #
+      # `--force` makes pnpm re-resolve every importer instead of trusting
+      # its "this importer block already looks fine" heuristic. Without it,
+      # `--lockfile-only` has been observed to leave the `packages/sdk-node`
+      # importer's optionalDependency block pinned to the previous release
+      # (e.g. 2.7.4) even after the version bump rewrote sdk-node's
+      # package.json to 2.7.5 — the verify step below catches that and
+      # aborts the publish, but we want the refresh to actually do its job.
       - name: Refresh pnpm-lock.yaml against published versions
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
           set -euo pipefail
-          pnpm install --lockfile-only
+          pnpm install --lockfile-only --force
 
           if git diff --quiet -- pnpm-lock.yaml; then
             echo "pnpm-lock.yaml unchanged after refresh — nothing to amend."
@@ -1166,14 +1174,13 @@ jobs:
           git commit --amend --no-edit
 
       # Sanity-check the refreshed lockfile before pushing. `pnpm install
-      # --lockfile-only` has a known regression where it can silently drop
-      # the host-platform optionalDependency entry for an umbrella that
-      # has a same-named workspace package (e.g. the linux-x64-gnu leg
-      # was dropped from `@relayburn/sdk`'s importer in the 2.7.3 release,
-      # breaking the next `pnpm install --frozen-lockfile` on main and
-      # blocking the napi-build job in the following publish run). Running
-      # `--frozen-lockfile` here surfaces that regression while we still
-      # control the refs — the amended release commit hasn't been pushed
+      # --lockfile-only` has historically had quirks where the importer
+      # block doesn't get rewritten after a version bump (the
+      # `packages/sdk-node` block staying at the previous release was the
+      # symptom that motivated this verify step in PR #413). The `--force`
+      # in the refresh step above should prevent that, but we still run
+      # `--frozen-lockfile` here as a belt-and-braces check while we
+      # control the refs: the amended release commit hasn't been pushed
       # yet, so failing here aborts the tag push and keeps a broken
       # lockfile off `main`. The npm packages are already published at
       # this point, but that's recoverable; a broken lockfile on main
