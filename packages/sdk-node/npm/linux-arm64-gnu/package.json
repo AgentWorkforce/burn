@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/sdk-linux-arm64-gnu",
-  "version": "2.7.5",
+  "version": "2.7.6",
   "description": "Prebuilt napi-rs binding for @relayburn/sdk on linux-arm64-gnu (glibc).",
   "main": "relayburn-sdk.linux-arm64-gnu.node",
   "files": [
