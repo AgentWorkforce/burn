@@ -24,26 +24,26 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::ledger::{Ledger, load_config};
+use crate::ledger::{load_config, Ledger};
 use crate::reader::{
+    parse_claude_session, parse_claude_session_incremental, parse_codex_session_incremental,
+    parse_opencode_session_incremental, reconcile_claude_session_relationships,
     ClaudeParseIncrementalOptions, ClaudeParseOptions, CodexLastCompletedTurn, CodexResumeState,
     CodexTurnContext, ContentStoreMode, CumulativeUsage as ReaderCumulativeUsage,
     ParseCodexIncrementalOptions, ParseOpencodeIncrementalOptions, PersistedUserTurnSlot,
-    ReconcileClaudeRelationshipsInput, parse_claude_session, parse_claude_session_incremental,
-    parse_codex_session_incremental, parse_opencode_session_incremental,
-    reconcile_claude_session_relationships,
+    ReconcileClaudeRelationshipsInput,
 };
 
 use crate::ingest::cursors::{
-    ClaudeCursor, CodexCumulative, CodexCursor, Cursors, FileCursor, OpencodeCursor, load_cursors,
-    save_cursors_if_changed,
+    load_cursors, save_cursors_if_changed, ClaudeCursor, CodexCumulative, CodexCursor, Cursors,
+    FileCursor, OpencodeCursor,
 };
 use crate::ingest::gap::{
-    AdapterName, count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap,
+    count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap, AdapterName,
 };
 use crate::ingest::pending_stamps::{
-    PendingStampHarness, PendingStampSessionCandidate, cleanup_stale_pending_stamps_in,
-    resolve_pending_stamps_for_session_in,
+    cleanup_stale_pending_stamps_in, resolve_pending_stamps_for_session_in, PendingStampHarness,
+    PendingStampSessionCandidate,
 };
 use crate::ingest::reingest::derive_codex_session_id;
 use crate::ingest::walk::{walk_jsonl, walk_opencode_sessions};
@@ -137,6 +137,24 @@ pub(crate) fn opencode_storage_dir(roots: &IngestRoots) -> PathBuf {
 
 pub(crate) fn opencode_session_root(roots: &IngestRoots) -> PathBuf {
     opencode_storage_dir(roots).join("session")
+}
+
+/// Resolve the default session-store roots ingest scans, in the same
+/// order `ingest_all` walks them. Used by the watch loop to drive its
+/// `notify`-backed FS-event driver against the harness home dirs the
+/// SDK already owns. Test injection: pass an explicit
+/// [`IngestRoots`] to override individual paths; defaults still come
+/// from `$HOME` for fields left `None`.
+///
+/// Returns the Claude / Codex / OpenCode roots in that order — the
+/// caller doesn't have to filter for existence; the FS-event driver
+/// silently skips any path that doesn't yet exist.
+pub fn default_session_roots(roots: &IngestRoots) -> Vec<PathBuf> {
+    vec![
+        claude_projects_dir(roots),
+        codex_sessions_dir(roots),
+        opencode_storage_dir(roots),
+    ]
 }
 
 pub(crate) fn opencode_message_root(roots: &IngestRoots) -> PathBuf {
