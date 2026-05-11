@@ -7,15 +7,35 @@
 //! TS source of truth: `packages/cli/src/commands/compare.ts`. The wire
 //! shape (cells ordering, rounding rules, fidelity-summary key order)
 //! mirrors that file byte-for-byte against the cli-golden snapshot.
+//!
+//! ## Pre-query ingest decision
+//!
+//! Unlike `burn summary` and `burn hotspots`, this command intentionally does
+//! NOT run a pre-query `ingest_all` sweep. Two reasons:
+//!
+//! 1. The JSON envelope above (`analyzedTurns`, `models`, `categories`,
+//!    `cells`, `fidelity`) is byte-equivalent with the TS golden snapshot;
+//!    bolting on an `ingest` block to mirror summary would break that.
+//! 2. Compare is a presenter verb — answering "given my ledger, which model
+//!    won?". Callers who want the freshest answer can chain
+//!    `burn ingest && burn compare`; the steady-state setup is to run
+//!    `burn ingest --watch` once per host so every read verb sees current data.
+//!
+//! Filter wiring: `--project` / `--session` / `--since` lower into the
+//! `Query` struct directly; `--workflow` / `--agent` fold through
+//! `Query.enrichment` (`workflowId` / `agentId` keys, both required when
+//! both flags are passed); `--provider` is a post-query CSV allow-list
+//! resolved via `provider_for`, matching `summary --by-provider`'s
+//! synthetic-rule-aware classification.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, Result};
 use relayburn_sdk::{
-    build_compare_table, has_minimum_fidelity, load_pricing, summarize_fidelity,
+    build_compare_table, has_minimum_fidelity, load_pricing, provider_for, summarize_fidelity,
     AnalyzeCompareOptions as CompareOptions, CompareCell, CompareTable, EnrichedTurn,
-    FidelityClass, FidelitySummary, Ledger, LedgerOpenOptions, Query, UsageGranularity,
-    DEFAULT_MIN_SAMPLE,
+    FidelityClass, FidelitySummary, Ledger, LedgerOpenOptions, ProviderFilter, Query,
+    UsageGranularity, DEFAULT_MIN_SAMPLE,
 };
 use serde_json::{json, Value};
 
@@ -111,17 +131,10 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         return Err(anyhow!("--json and --csv are mutually exclusive; pick one."));
     }
 
-    // 4. Provider filter. Surfaced as an explicit "not yet wired" error
-    //    rather than a silent no-op — the SDK's provider filter is private
-    //    to the analyze module today, and exposing it through a typed
-    //    top-level surface is part of the broader provider-classifier
-    //    follow-up. The cli-golden corpus exercises compare without a
-    //    provider filter, so this is unblocked for parity.
-    if args.provider.is_some() {
-        return Err(anyhow!(
-            "burn compare: --provider filter is not yet wired through the Rust SDK (#246 follow-up)"
-        ));
-    }
+    // 4. Provider filter. Lower-cased CSV; turns whose effective provider
+    //    (per `provider_for`) isn't in the set get dropped after the ledger
+    //    query but before the fidelity gate, matching the TS pipeline order.
+    let provider_filter = parse_provider_filter(args.provider.as_deref())?;
 
     // 5. min-sample.
     let min_sample = args.min_sample.unwrap_or(DEFAULT_MIN_SAMPLE);
@@ -144,14 +157,19 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     if let Some(s) = args.session.as_deref() {
         q.session_id = Some(s.to_string());
     }
-    // `workflow` / `agent` flow through the stamp-based enrichment filter
-    // which the Rust ledger query layer doesn't yet expose. Surface the
-    // gap explicitly rather than silently dropping the flag — when the
-    // ledger gains enrichment-filter support, this branch comes out.
-    if args.workflow.is_some() || args.agent.is_some() {
-        return Err(anyhow!(
-            "burn compare: --workflow / --agent filters are not yet wired through the Rust ledger query (#246 follow-up)"
-        ));
+    // `workflow` / `agent` fold through stamp enrichment. Both keys live in
+    // the same `Enrichment` map (`workflowId`, `agentId`), and the ledger's
+    // `Query.enrichment` predicate requires every key/value pair to match —
+    // so passing both narrows to the intersection.
+    let mut enrichment = BTreeMap::new();
+    if let Some(workflow) = args.workflow.as_deref() {
+        enrichment.insert("workflowId".to_string(), workflow.to_string());
+    }
+    if let Some(agent) = args.agent.as_deref() {
+        enrichment.insert("agentId".to_string(), agent.to_string());
+    }
+    if !enrichment.is_empty() {
+        q.enrichment = Some(enrichment);
     }
 
     // 8. Open ledger and walk turns.
@@ -165,9 +183,20 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     progress.set_task("loading turns");
     let queried_turns: Vec<EnrichedTurn> = handle.raw().query_turns(&q)?;
 
-    // 9. Provider filter is rejected up-front (see step 4). Pipeline
-    //    treats every queried turn as eligible.
-    let filtered_by_provider: Vec<EnrichedTurn> = queried_turns;
+    // 9. Drop turns whose effective provider isn't in the allow-list. The
+    //    provider is resolved via `provider_for` (synthetic-rule first,
+    //    then `provider/model` prefix, then collector-implied) so the CLI
+    //    matches `summary --by-provider` semantics 1:1.
+    let filtered_by_provider: Vec<EnrichedTurn> = match provider_filter.as_ref() {
+        Some(filter) => queried_turns
+            .into_iter()
+            .filter(|et| {
+                let provider = provider_for(&et.turn).provider;
+                filter.contains(&provider.to_ascii_lowercase())
+            })
+            .collect(),
+        None => queried_turns,
+    };
 
     // 10. Fidelity summary is computed BEFORE the fidelity gate so the
     //     `summary` block in the JSON envelope reflects the queried slice.
@@ -222,6 +251,26 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/// Parse `--provider` CSV → lower-cased `ProviderFilter`. Mirrors the
+/// `summary --provider` parser: trim entries, drop empties, lower-case for
+/// case-insensitive matches, and reject an all-empty list with the same
+/// error shape (`burn: --provider requires a value`). Returns `Ok(None)`
+/// when the flag wasn't passed.
+fn parse_provider_filter(raw: Option<&str>) -> Result<Option<ProviderFilter>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let providers: ProviderFilter = raw
+        .split(',')
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if providers.is_empty() {
+        return Err(anyhow!("--provider requires a value"));
+    }
+    Ok(Some(providers))
+}
 
 fn parse_fidelity(s: &str) -> Result<FidelityClass> {
     match s {
@@ -1112,6 +1161,27 @@ mod tests {
         // Rounds to 6 digits.
         let v = round_json(0.0112499999, 6);
         assert_eq!(v.to_string(), "0.01125");
+    }
+
+    #[test]
+    fn parse_provider_filter_trims_lowercases_and_dedupes() {
+        let got = parse_provider_filter(Some(" Anthropic,OPENAI ,, anthropic"))
+            .unwrap()
+            .unwrap();
+        assert!(got.contains("anthropic"));
+        assert!(got.contains("openai"));
+        assert_eq!(got.len(), 2, "duplicates should collapse: got {got:?}");
+    }
+
+    #[test]
+    fn parse_provider_filter_returns_none_when_flag_absent() {
+        assert!(parse_provider_filter(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_provider_filter_rejects_all_empty_input() {
+        let err = parse_provider_filter(Some(" , ,, ")).unwrap_err();
+        assert!(format!("{err}").contains("--provider requires a value"));
     }
 
     #[test]

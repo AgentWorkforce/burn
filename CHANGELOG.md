@@ -4,6 +4,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-cli`: `burn compare` now applies `--provider`, `--workflow`, and
+  `--agent` filters at runtime. It still reads the current ledger snapshot
+  (no pre-query ingest); run `burn ingest` first for freshest data.
+
 ## [2.8.1] - 2026-05-11
 
 ### Changed
