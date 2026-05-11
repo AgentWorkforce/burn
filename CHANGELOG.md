@@ -8,6 +8,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
+- `relayburn-cli`: stdout-write failures in `--json` mode now surface as a
+  non-zero exit instead of being silently dropped.
 - `relayburn-sdk`: ledger query verbs (`query_turns`, `query_compactions`,
   `query_relationships`, `query_tool_result_events`, `query_user_turns`)
   now push `since` / `until` / `session_id` / `source` / `project` filters

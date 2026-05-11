@@ -33,6 +33,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::GlobalArgs;
 use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
+use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
 /// Per-command flags for `burn summary`. Mirrors the TS surface in
@@ -268,7 +269,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
 
     match report {
         SummaryReport::Grouped(report) => {
-            emit_grouped(globals, &report, &ingest_report);
+            emit_grouped(globals, &report, &ingest_report)?;
         }
         SummaryReport::ByTool(report) => {
             emit_ingest_prelude(globals, &ingest_report);
@@ -391,12 +392,12 @@ fn emit_grouped(
     globals: &GlobalArgs,
     report: &SummaryGroupedReport,
     ingest_report: &relayburn_sdk::IngestReport,
-) {
+) -> std::io::Result<()> {
     if globals.json {
-        emit_json(report, ingest_report);
-        return;
+        return emit_json(report, ingest_report);
     }
     emit_human(report, ingest_report);
+    Ok(())
 }
 
 fn emit_ingest_prelude(globals: &GlobalArgs, ingest_report: &relayburn_sdk::IngestReport) {
@@ -423,9 +424,12 @@ fn ingest_prelude_text(ingest_report: &relayburn_sdk::IngestReport) -> String {
     ) + "\n"
 }
 
-fn emit_json(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::IngestReport) {
+fn emit_json(
+    report: &SummaryGroupedReport,
+    ingest_report: &relayburn_sdk::IngestReport,
+) -> std::io::Result<()> {
     let value = grouped_json_value(report, ingest_report);
-    print_json(&value);
+    render_json(&value)
 }
 
 fn grouped_json_value(
@@ -504,12 +508,6 @@ fn grouped_json_value(
     value
 }
 
-fn print_json(value: &Value) {
-    let mut out = serde_json::to_string_pretty(value).unwrap_or_default();
-    out.push('\n');
-    print!("{}", out);
-}
-
 fn cost_breakdown_to_json(c: &CostBreakdown) -> Value {
     json!({
         "model": c.model.as_ref(),
@@ -570,7 +568,7 @@ fn render_by_tool_report(
             );
         }
         coerce_whole_f64_to_int(&mut payload);
-        print_json(&payload);
+        render_json(&payload)?;
         return Ok(0);
     }
 
@@ -640,7 +638,7 @@ fn render_subagent_type_report(
     if globals.json {
         let mut value = serde_json::to_value(stats)?;
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        render_json(&value)?;
         return Ok(0);
     }
 
@@ -698,13 +696,13 @@ fn render_relationship_report(
         return render_relationship_subagent_report(globals, report);
     }
     if report.relationships.is_empty() {
-        return Ok(render_no_relationships(globals));
+        return render_no_relationships(globals);
     }
 
     if globals.json {
         let mut value = json!({ "relationships": report.relationships });
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        render_json(&value)?;
         return Ok(0);
     }
 
@@ -753,10 +751,10 @@ fn render_relationship_subagent_report(
                 "message": NO_RELATIONSHIPS_MESSAGE,
             });
             coerce_whole_f64_to_int(&mut value);
-            print_json(&value);
+            render_json(&value)?;
             return Ok(0);
         }
-        return Ok(render_no_relationships(globals));
+        return render_no_relationships(globals);
     }
     if globals.json {
         let mut value = json!({
@@ -764,7 +762,7 @@ fn render_relationship_subagent_report(
             "subagentTypes": report.subagent_types,
         });
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        render_json(&value)?;
         return Ok(0);
     }
 
@@ -801,16 +799,16 @@ fn render_relationship_subagent_report(
     Ok(0)
 }
 
-fn render_no_relationships(globals: &GlobalArgs) -> i32 {
+fn render_no_relationships(globals: &GlobalArgs) -> anyhow::Result<i32> {
     if globals.json {
-        print_json(&json!({
+        render_json(&json!({
             "relationships": [],
             "message": NO_RELATIONSHIPS_MESSAGE,
-        }));
+        }))?;
     } else {
         println!("{NO_RELATIONSHIPS_MESSAGE}");
     }
-    0
+    Ok(0)
 }
 
 fn render_subagent_tree_report(
@@ -827,7 +825,7 @@ fn render_subagent_tree_report(
             "root": root,
         });
         coerce_whole_f64_to_int(&mut value);
-        print_json(&value);
+        render_json(&value)?;
         return Ok(0);
     }
 

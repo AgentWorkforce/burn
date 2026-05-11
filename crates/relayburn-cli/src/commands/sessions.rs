@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use crate::cli::{GlobalArgs, SessionsArgs, SessionsListArgs, SessionsSubcommand};
 use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
+use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
 const DEFAULT_SINCE: &str = "7d";
@@ -80,14 +81,19 @@ fn run_list_inner(globals: &GlobalArgs, args: SessionsListArgs) -> anyhow::Resul
             &since,
             args.project.as_deref(),
             args.grep.as_deref(),
-        );
+        )?;
     } else {
         emit_human(&result, &since, args.grep.as_deref());
     }
     Ok(0)
 }
 
-fn emit_json(result: &SessionsListResult, since: &str, project: Option<&str>, grep: Option<&str>) {
+fn emit_json(
+    result: &SessionsListResult,
+    since: &str,
+    project: Option<&str>,
+    grep: Option<&str>,
+) -> std::io::Result<()> {
     let mut filters = json!({ "since": since });
     if let Some(p) = project {
         filters
@@ -109,9 +115,7 @@ fn emit_json(result: &SessionsListResult, since: &str, project: Option<&str>, gr
         "sessions": result.sessions,
     });
     coerce_whole_f64_to_int(&mut payload);
-    let mut out = serde_json::to_string_pretty(&payload).unwrap_or_default();
-    out.push('\n');
-    print!("{}", out);
+    render_json(&payload)
 }
 
 fn emit_human(result: &SessionsListResult, since: &str, grep: Option<&str>) {

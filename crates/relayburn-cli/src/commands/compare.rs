@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 
 use crate::cli::{CompareArgs, GlobalArgs};
 use crate::render::error::report_error;
+use crate::render::format::{format_uint, format_usd};
 use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
@@ -492,44 +493,6 @@ fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {
 // number formatting (matches packages/cli/src/format.ts)
 // ---------------------------------------------------------------------------
 
-fn format_usd(n: f64) -> String {
-    if n == 0.0 {
-        return "$0.00".to_string();
-    }
-    if n < 0.01 {
-        return format!("${}", to_fixed_raw(n, 4));
-    }
-    if n < 1.0 {
-        return format!("${}", to_fixed_raw(n, 3));
-    }
-    format!("${}", to_fixed_raw(n, 2))
-}
-
-/// Mirror JS `n.toFixed(d)` — keeps trailing zeros (so 1.5 with digits=2
-/// becomes "1.50"). Use this for human-readable output where the
-/// fixed-width column matters; use [`to_fixed`] for JSON-bound values
-/// that go through `Number(...).toString()` semantics.
-fn to_fixed_raw(n: f64, digits: usize) -> String {
-    format!("{n:.*}", digits)
-}
-
-fn format_int(n: u64) -> String {
-    // `toLocaleString('en-US')` thousands grouping. JS uses `,`. The
-    // golden corpus values are small (≤ 7) so the comma path isn't hit
-    // by the snapshot, but we implement it anyway for parity.
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    let len = bytes.len();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
-
 fn format_pct(rate: f64) -> String {
     // `Math.round(p * 100)` — round half to even on f64; matches JS for
     // the corpus we compare against (the `Math.round` half-to-even
@@ -885,7 +848,7 @@ fn cell_fields(c: &CompareCell) -> [String; 3] {
     if c.no_data {
         return [DASH.to_string(), DASH.to_string(), DASH.to_string()];
     }
-    let turns = format_int(c.turns);
+    let turns = format_uint(c.turns);
     let cost = c
         .cost_per_turn
         .map(format_usd)
@@ -905,7 +868,7 @@ fn render_tty(
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push(String::new());
-    lines.push(format!("turns analyzed: {}", format_int(analyzed_turns as u64)));
+    lines.push(format!("turns analyzed: {}", format_uint(analyzed_turns as u64)));
 
     let excluded = compute_excluded(summary, minimum);
     if excluded.total > 0 {
@@ -1044,7 +1007,7 @@ fn render_tty(
         lines.push(format!(
             "{}: {} turns, {} total",
             display_model_name(m),
-            format_int(tot.turns),
+            format_uint(tot.turns),
             total_cost
         ));
     }
@@ -1121,7 +1084,7 @@ fn format_excluded_note(excluded: &ExcludedBreakdown, minimum: FidelityClass) ->
     let noun = if excluded.total == 1 { "turn" } else { "turns" };
     format!(
         "excluded {} {noun} below {} fidelity{breakdown}",
-        format_int(excluded.total),
+        format_uint(excluded.total),
         minimum.wire_str()
     )
 }
@@ -1129,22 +1092,6 @@ fn format_excluded_note(excluded: &ExcludedBreakdown, minimum: FidelityClass) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn format_usd_buckets() {
-        assert_eq!(format_usd(0.0), "$0.00");
-        assert_eq!(format_usd(0.0017), "$0.0017");
-        assert_eq!(format_usd(0.011), "$0.011");
-        assert_eq!(format_usd(0.034), "$0.034");
-        assert_eq!(format_usd(1.5), "$1.50");
-    }
-
-    #[test]
-    fn format_int_groups_thousands() {
-        assert_eq!(format_int(7), "7");
-        assert_eq!(format_int(1_500), "1,500");
-        assert_eq!(format_int(1_000_000), "1,000,000");
-    }
 
     #[test]
     fn format_pct_rounds_to_int() {

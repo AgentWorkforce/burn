@@ -15,6 +15,7 @@ use crate::cli::{
     GlobalArgs, StateArgs, StateRebuildArgs, StateRebuildTarget, StateSubcommand,
 };
 use crate::render::error::{report_error, report_ledger_error};
+use crate::render::format::format_uint;
 use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
@@ -82,35 +83,35 @@ fn format_status(s: &StateStatus) -> String {
     }
     out.push_str(&format!(
         "  tracked rows: {}\n",
-        format_int(s.burn.tracked_rows)
+        format_uint(s.burn.tracked_rows)
     ));
     out.push_str(&format!(
         "    turns:              {}\n",
-        format_int(s.burn.rows.turns)
+        format_uint(s.burn.rows.turns)
     ));
     out.push_str(&format!(
         "    user_turns:         {}\n",
-        format_int(s.burn.rows.user_turns)
+        format_uint(s.burn.rows.user_turns)
     ));
     out.push_str(&format!(
         "    compactions:        {}\n",
-        format_int(s.burn.rows.compactions)
+        format_uint(s.burn.rows.compactions)
     ));
     out.push_str(&format!(
         "    relationships:      {}\n",
-        format_int(s.burn.rows.relationships)
+        format_uint(s.burn.rows.relationships)
     ));
     out.push_str(&format!(
         "    tool_result_events: {}\n",
-        format_int(s.burn.rows.tool_result_events)
+        format_uint(s.burn.rows.tool_result_events)
     ));
     out.push_str(&format!(
         "    sessions:           {}\n",
-        format_int(s.burn.rows.sessions)
+        format_uint(s.burn.rows.sessions)
     ));
     out.push_str(&format!(
         "    stamps:             {}\n",
-        format_int(s.burn.rows.stamps)
+        format_uint(s.burn.rows.stamps)
     ));
     out.push_str("content DB (content.sqlite):\n");
     out.push_str(&format!(
@@ -120,7 +121,7 @@ fn format_status(s: &StateStatus) -> String {
     if !s.content.exists {
         out.push_str("  status: not built yet\n");
     }
-    out.push_str(&format!("  rows: {}\n", format_int(s.content.rows)));
+    out.push_str(&format!("  rows: {}\n", format_uint(s.content.rows)));
     out.push_str("archive state:\n");
     out.push_str(&format!("  schema version: {}\n", s.archive.schema_version));
     out.push_str(&format!(
@@ -167,20 +168,6 @@ fn rel_to_home(path: &str, home: &str) -> String {
         _ => return path.to_string(),
     };
     format!("${{RELAYBURN_HOME}}/{}", rest)
-}
-
-fn format_int(n: u64) -> String {
-    // Insert thousands separators with commas; matches the TS
-    // `formatInt`'s `Intl.NumberFormat('en-US')` output.
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out.chars().rev().collect()
 }
 
 fn format_bytes(n: u64) -> String {
@@ -265,8 +252,8 @@ fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
     } else {
         println!(
             "rebuilt derivable state: dropped {} event rows + {} content rows",
-            format_int(summary.rows_dropped as u64),
-            format_int(summary.content_rows_dropped as u64),
+            format_uint(summary.rows_dropped as u64),
+            format_uint(summary.content_rows_dropped as u64),
         );
         println!(
             "  re-ingest from upstream session files via 'burn ingest' to \
@@ -395,7 +382,7 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
     } else {
         println!(
             "pruned {} content row{} ({})",
-            format_int(stats.rows_deleted as u64),
+            format_uint(stats.rows_deleted as u64),
             if stats.rows_deleted == 1 { "" } else { "s" },
             format_bytes(stats.bytes_freed.max(0) as u64)
         );
@@ -555,20 +542,20 @@ fn print_reset_report(
     if executed {
         println!(
             "reset derived state: dropped {} event row{} + {} stamp{} + {} content row{}",
-            format_int(summary.rows_dropped as u64),
+            format_uint(summary.rows_dropped as u64),
             if summary.rows_dropped == 1 { "" } else { "s" },
-            format_int(summary.stamps_dropped as u64),
+            format_uint(summary.stamps_dropped as u64),
             if summary.stamps_dropped == 1 { "" } else { "s" },
-            format_int(summary.content_rows_dropped as u64),
+            format_uint(summary.content_rows_dropped as u64),
             if summary.content_rows_dropped == 1 { "" } else { "s" },
         );
         match ingest_report {
             Some(report) => {
                 println!(
                     "  re-ingested {} session{} (+{} turn{}).",
-                    format_int(report.ingested_sessions as u64),
+                    format_uint(report.ingested_sessions as u64),
                     if report.ingested_sessions == 1 { "" } else { "s" },
-                    format_int(report.appended_turns as u64),
+                    format_uint(report.appended_turns as u64),
                     if report.appended_turns == 1 { "" } else { "s" },
                 );
             }
@@ -582,11 +569,11 @@ fn print_reset_report(
     } else {
         println!(
             "burn state reset (dry run): would drop {} event row{} + {} stamp{} + {} content row{}.",
-            format_int(summary.rows_dropped as u64),
+            format_uint(summary.rows_dropped as u64),
             if summary.rows_dropped == 1 { "" } else { "s" },
-            format_int(summary.stamps_dropped as u64),
+            format_uint(summary.stamps_dropped as u64),
             if summary.stamps_dropped == 1 { "" } else { "s" },
-            format_int(summary.content_rows_dropped as u64),
+            format_uint(summary.content_rows_dropped as u64),
             if summary.content_rows_dropped == 1 { "" } else { "s" },
         );
         println!("  re-run with --force to actually wipe (add --reingest to repopulate).");
