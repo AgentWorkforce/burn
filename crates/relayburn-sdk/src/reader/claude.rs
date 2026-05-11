@@ -2168,13 +2168,26 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         }
         // Drop trailing partial lines — the next incremental call resumes
         // from `cursor_offset`, which we only advance past complete `\n`.
-        if line_buf.last() != Some(&b'\n') {
+        // `emit_in_progress` runs from the single-shot full-parse entry where
+        // there is no next call, so a final line without a trailing `\n`
+        // (truncated write, unflushed `\n`) must still be processed; the old
+        // `ParseState` path used `read_line` and surfaced it.
+        let has_newline = line_buf.last() == Some(&b'\n');
+        if !has_newline && !emit_in_progress {
             break;
         }
         let line_start_offset = cursor_offset;
         let line_end_offset = cursor_offset + n as u64;
-        let trimmed = std::str::from_utf8(&line_buf[..n - 1]).unwrap_or("").trim();
-        cursor_offset = line_end_offset;
+        let body_end = if has_newline { n - 1 } else { n };
+        let trimmed = std::str::from_utf8(&line_buf[..body_end])
+            .unwrap_or("")
+            .trim();
+        // Single-shot callers have no next pass, so a final partial line still
+        // needs to bump the cursor past its body — `end_offset = cursor_offset`
+        // is what the per-record offset filters compare against below.
+        if has_newline || emit_in_progress {
+            cursor_offset = line_end_offset;
+        }
         if trimmed.is_empty() {
             continue;
         }
@@ -2604,6 +2617,22 @@ mod tests {
         assert_eq!(t.usage.cache_create_1h, 20);
         assert_eq!(t.tool_calls.len(), 0);
         assert!(t.files_touched.is_none());
+    }
+
+    #[test]
+    fn full_parse_emits_final_line_without_trailing_newline() {
+        // Mid-write truncation / unflushed writer: the final JSON line is
+        // syntactically complete but missing `\n`. The single-shot parse must
+        // still surface it — matching the prior `BufReader::read_line` path.
+        let src = std::fs::read_to_string(fixture("simple-turn.jsonl")).unwrap();
+        let no_trailing = src.trim_end_matches('\n');
+        assert!(!no_trailing.ends_with('\n'));
+        let dir = tempfile::tempdir().unwrap();
+        let working = dir.path().join("session.jsonl");
+        std::fs::write(&working, no_trailing).unwrap();
+        let res = parse_claude_session(&working, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 1, "final line without \\n must still emit");
+        assert_eq!(res.turns[0].message_id, "msg_simple_1");
     }
 
     #[test]
