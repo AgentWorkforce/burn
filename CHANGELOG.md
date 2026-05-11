@@ -8,6 +8,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - `relayburn-sdk`: ingest verbs are now synchronous; async callers should
   run them via `tokio::task::spawn_blocking`.
+- `relayburn-sdk`: `parse_claude_session` now delegates to the incremental
+  parser with `start_offset = 0`, dropping the duplicate `ParseState`
+  codepath. Behavior is unchanged — trailing in-progress turns and final
+  JSON lines lacking a trailing newline still surface in the single-shot
+  output.
 
 ### Removed
 
