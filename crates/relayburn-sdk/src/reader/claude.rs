@@ -86,34 +86,39 @@ pub fn parse_claude_session<P: AsRef<Path>>(
 /// TS port is async because the cl100k tokenizer ships as an async-loaded
 /// WASM module; in Rust we let the caller choose whether to take that
 /// dependency, so the entry point stays synchronous.
+///
+/// Implementation: delegate to `run_incremental` with `start_offset = 0` and
+/// `emit_in_progress = true` so trailing assistants without a `stop_reason`
+/// still surface, matching the single-shot ParseResult contract callers rely
+/// on. The mirrored ParseState codepath was retired in favor of one parser.
 pub fn parse_claude_session_with_counter<P: AsRef<Path>, C: TokenCounter + ?Sized>(
     path: P,
     options: &ParseOptions,
     counter: &C,
 ) -> std::io::Result<ParseResult> {
-    let path = path.as_ref();
-    let content_mode = options.content_mode.unwrap_or(ContentStoreMode::Off);
-    let capture_content = matches!(content_mode, ContentStoreMode::Full);
+    let inc_opts = ParseIncrementalOptions {
+        session_path: options.session_path.clone(),
+        content_mode: options.content_mode,
+        tokenizer: options.tokenizer,
+        file_session_id: options.file_session_id.clone(),
+        start_offset: Some(0),
+        last_user_text: None,
+    };
+    run_incremental(path.as_ref(), &inc_opts, counter, true).map(ParseResult::from)
+}
 
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-
-    let mut state = ParseState::new(options, path);
-
-    // `BufReader::lines()` allocates a fresh `String` per line; for sessions
-    // with tens of thousands of turns that's pure churn. `read_line` into a
-    // single reused buffer keeps allocation bounded by the longest line.
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => state.ingest_line(&line, counter, capture_content),
-            Err(err) => return Err(err),
+impl From<ParseIncrementalResult> for ParseResult {
+    fn from(r: ParseIncrementalResult) -> Self {
+        Self {
+            turns: r.turns,
+            content: r.content,
+            events: r.events,
+            relationships: r.relationships,
+            tool_result_events: r.tool_result_events,
+            user_turns: r.user_turns,
+            evidence: r.evidence,
         }
     }
-
-    Ok(state.finish(options, capture_content))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -166,7 +171,7 @@ pub fn parse_claude_session_incremental_with_counter<P: AsRef<Path>, C: TokenCou
     options: &ParseIncrementalOptions,
     counter: &C,
 ) -> std::io::Result<ParseIncrementalResult> {
-    run_incremental(path.as_ref(), options, counter)
+    run_incremental(path.as_ref(), options, counter, false)
 }
 
 // ---------------------------------------------------------------------------
@@ -234,340 +239,6 @@ struct InvocationInfo {
 struct ReplacementMeta {
     replaced_tools: Option<Vec<String>>,
     collapsed_calls: Option<u64>,
-}
-
-struct ParseState {
-    /// messageId -> working assistant record. Ordered iteration uses `order`.
-    working: HashMap<String, WorkingRecord>,
-    order: Vec<String>,
-    nodes_by_uuid: HashMap<String, LineNode>,
-    invocation_cache: HashMap<String, Option<InvocationInfo>>,
-    user_pending: Vec<(usize, ContentRecord)>,
-    first_seq: HashMap<String, usize>,
-    user_text_by_message_id: HashMap<String, String>,
-    errored_tool_use_ids: HashSet<String>,
-    replacement_meta_by_tool_use_id: HashMap<String, ReplacementMeta>,
-    events: Vec<CompactionEvent>,
-    user_turns: Vec<UserTurnRecord>,
-    pending_user_turn_index: Option<usize>,
-    last_assistant_message_id: Option<String>,
-    current_user_text: String,
-    seq: usize,
-    tool_result_events: Vec<ToolResultEventRecord>,
-    tool_result_counters: HashMap<String, u64>,
-    next_event_index: u64,
-    relationships: Vec<SessionRelationshipRecord>,
-    seen_root_session_ids: HashSet<String>,
-    seen_explicit_relationship_ids: HashSet<String>,
-    file_session_id: Option<String>,
-    evidence: ClaudeRelationshipEvidence,
-}
-
-impl ParseState {
-    fn new(options: &ParseOptions, path: &Path) -> Self {
-        let file_session_id = derive_file_session_id(options, path);
-        let evidence = new_evidence(file_session_id.clone());
-        Self {
-            working: HashMap::new(),
-            order: Vec::new(),
-            nodes_by_uuid: HashMap::new(),
-            invocation_cache: HashMap::new(),
-            user_pending: Vec::new(),
-            first_seq: HashMap::new(),
-            user_text_by_message_id: HashMap::new(),
-            errored_tool_use_ids: HashSet::new(),
-            replacement_meta_by_tool_use_id: HashMap::new(),
-            events: Vec::new(),
-            user_turns: Vec::new(),
-            pending_user_turn_index: None,
-            last_assistant_message_id: None,
-            current_user_text: String::new(),
-            seq: 0,
-            tool_result_events: Vec::new(),
-            tool_result_counters: HashMap::new(),
-            next_event_index: 0,
-            relationships: Vec::new(),
-            seen_root_session_ids: HashSet::new(),
-            seen_explicit_relationship_ids: HashSet::new(),
-            file_session_id,
-            evidence,
-        }
-    }
-
-    fn ingest_line<C: TokenCounter + ?Sized>(
-        &mut self,
-        raw: &str,
-        counter: &C,
-        capture_content: bool,
-    ) {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        let parsed: Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-        let obj = match parsed.as_object() {
-            Some(o) => o.clone(),
-            None => return,
-        };
-        let line_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
-        match line_type {
-            "assistant" => self.ingest_assistant(&parsed, &obj, capture_content),
-            "user" => self.ingest_user(&parsed, &obj, counter, capture_content),
-            "system" => self.ingest_system(&obj),
-            _ => {}
-        }
-        self.seq += 1;
-    }
-
-    fn ingest_assistant(
-        &mut self,
-        parsed: &Value,
-        obj: &serde_json::Map<String, Value>,
-        capture_content: bool,
-    ) {
-        let mid = obj
-            .get("message")
-            .and_then(|m| m.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-
-        if let Some(mid) = mid.as_ref() {
-            if let Some(idx) = self.pending_user_turn_index {
-                if !self.working.contains_key(mid) {
-                    self.user_turns[idx].following_message_id = Some(mid.clone());
-                    self.pending_user_turn_index = None;
-                }
-            }
-            if capture_content {
-                self.first_seq.entry(mid.clone()).or_insert(self.seq);
-            }
-            self.user_text_by_message_id
-                .entry(mid.clone())
-                .or_insert_with(|| self.current_user_text.clone());
-            self.last_assistant_message_id = Some(mid.clone());
-        }
-
-        let session_id = string_field(obj, SESSION_ID_KEYS, false);
-        let timestamp = string_field(obj, TIMESTAMP_KEYS, false);
-
-        if let Some(ref sid) = session_id {
-            if !sid.is_empty() {
-                record_root(
-                    &mut self.relationships,
-                    &mut self.seen_root_session_ids,
-                    sid,
-                    timestamp.as_deref(),
-                    self.file_session_id.as_deref(),
-                );
-                collect_explicit_claude_relationships(
-                    obj,
-                    &mut self.evidence,
-                    &mut self.relationships,
-                    &mut self.seen_explicit_relationship_ids,
-                    self.file_session_id.as_deref().unwrap_or(sid.as_str()),
-                    timestamp.as_deref(),
-                );
-            }
-        }
-        record_evidence_from_line(&mut self.evidence, parsed);
-        ingest_assistant_record(
-            parsed,
-            obj,
-            &mut self.working,
-            &mut self.order,
-            &mut self.nodes_by_uuid,
-        );
-    }
-
-    fn ingest_user<C: TokenCounter + ?Sized>(
-        &mut self,
-        parsed: &Value,
-        obj: &serde_json::Map<String, Value>,
-        counter: &C,
-        capture_content: bool,
-    ) {
-        register_user_node(parsed, &mut self.nodes_by_uuid);
-        if let Some(text) = extract_plain_user_text_from_obj(obj) {
-            if !text.is_empty() {
-                self.current_user_text = text;
-            }
-        }
-        collect_errored_tool_use_ids(obj, &mut self.errored_tool_use_ids);
-        collect_replacement_meta(obj, &mut self.replacement_meta_by_tool_use_id);
-        let session_id = string_field(obj, SESSION_ID_KEYS, false);
-        let timestamp = string_field(obj, TIMESTAMP_KEYS, false);
-        if let Some(ref sid) = session_id {
-            if !sid.is_empty() {
-                record_root(
-                    &mut self.relationships,
-                    &mut self.seen_root_session_ids,
-                    sid,
-                    timestamp.as_deref(),
-                    self.file_session_id.as_deref(),
-                );
-                collect_explicit_claude_relationships(
-                    obj,
-                    &mut self.evidence,
-                    &mut self.relationships,
-                    &mut self.seen_explicit_relationship_ids,
-                    self.file_session_id.as_deref().unwrap_or(sid.as_str()),
-                    timestamp.as_deref(),
-                );
-            }
-        }
-        record_evidence_from_line(&mut self.evidence, parsed);
-        record_resume_marker(&mut self.evidence, obj);
-        self.next_event_index = collect_tool_result_events(
-            obj,
-            &mut self.tool_result_events,
-            &mut self.tool_result_counters,
-            self.next_event_index,
-        );
-        if let Some(record) =
-            build_user_turn_record(obj, self.last_assistant_message_id.as_deref(), counter)
-        {
-            let idx = self.user_turns.len();
-            self.user_turns.push(record);
-            self.pending_user_turn_index = Some(idx);
-        }
-        if capture_content {
-            for c in extract_user_content(obj) {
-                self.user_pending.push((self.seq, c));
-            }
-        }
-    }
-
-    fn ingest_system(&mut self, obj: &serde_json::Map<String, Value>) {
-        if obj.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
-            let session_id = string_field(obj, SESSION_ID_KEYS, false).unwrap_or_default();
-            let ts = string_field(obj, TIMESTAMP_KEYS, false).unwrap_or_default();
-            if !session_id.is_empty() {
-                let mut ev = CompactionEvent {
-                    v: 1,
-                    source: SourceKind::ClaudeCode,
-                    session_id,
-                    ts,
-                    preceding_message_id: None,
-                    tokens_before_compact: None,
-                };
-                if let Some(ref last) = self.last_assistant_message_id {
-                    ev.preceding_message_id = Some(last.clone());
-                }
-                self.events.push(ev);
-            }
-        }
-        if let Some(ev) = build_claude_system_tool_result_event(
-            obj,
-            &mut self.tool_result_counters,
-            self.next_event_index,
-        ) {
-            self.tool_result_events.push(ev);
-            self.next_event_index += 1;
-        }
-    }
-
-    fn finish(self, options: &ParseOptions, capture_content: bool) -> ParseResult {
-        let ParseState {
-            working,
-            order,
-            nodes_by_uuid,
-            mut invocation_cache,
-            user_pending,
-            first_seq,
-            user_text_by_message_id,
-            errored_tool_use_ids,
-            replacement_meta_by_tool_use_id,
-            mut events,
-            user_turns,
-            mut tool_result_events,
-            mut relationships,
-            evidence,
-            ..
-        } = self;
-
-        let mut turns: Vec<TurnRecord> = Vec::new();
-        let mut assistant_pending: Vec<(usize, usize, ContentRecord)> = Vec::new();
-        for (i, id) in order.iter().enumerate() {
-            let w = match working.get(id) {
-                Some(w) => w,
-                None => continue,
-            };
-            let tool_calls = extract_tool_calls(
-                &w.blocks,
-                &errored_tool_use_ids,
-                Some(&replacement_meta_by_tool_use_id),
-            );
-            let files_touched = extract_files_touched(&tool_calls);
-            let subagent = resolve_subagent(w, &nodes_by_uuid, &mut invocation_cache);
-
-            let mut record = TurnRecord {
-                v: 1,
-                source: SourceKind::ClaudeCode,
-                session_id: w.session_id.clone(),
-                session_path: options.session_path.clone(),
-                message_id: w.message_id.clone(),
-                turn_index: i as u64,
-                ts: w.first_ts.clone(),
-                model: w.model.clone(),
-                project: None,
-                project_key: None,
-                usage: w.usage.clone(),
-                tool_calls: tool_calls.clone(),
-                files_touched: if files_touched.is_empty() {
-                    None
-                } else {
-                    Some(files_touched)
-                },
-                subagent,
-                stop_reason: w.stop_reason.clone(),
-                activity: None,
-                retries: None,
-                has_edits: None,
-                fidelity: Some(build_claude_fidelity(&w.usage_coverage)),
-            };
-
-            if let Some(ref cwd) = w.cwd {
-                let resolved = resolve_project(cwd);
-                record.project = Some(resolved.project);
-                record.project_key = resolved.project_key;
-            }
-
-            apply_classification(&mut record, w, &user_text_by_message_id, &errored_tool_use_ids);
-            turns.push(record);
-
-            if capture_content {
-                let seq_for_msg = *first_seq.get(&w.message_id).unwrap_or(&0);
-                for (sub, r) in extract_assistant_content(w).into_iter().enumerate() {
-                    assistant_pending.push((seq_for_msg, sub + 1, r));
-                }
-            }
-        }
-
-        annotate_compaction_events(&mut events, &turns);
-        collect_subagent_relationships(&turns, &mut relationships);
-        annotate_spawn_events(&mut tool_result_events, &turns);
-        emit_local_continuation_from_resume(&mut relationships, &evidence);
-        annotate_relationships_with_evidence(&mut relationships, &evidence);
-
-        let content: Vec<ContentRecord> = if capture_content {
-            merge_content_by_order(user_pending, assistant_pending)
-        } else {
-            Vec::new()
-        };
-
-        ParseResult {
-            turns,
-            content,
-            events,
-            relationships,
-            tool_result_events,
-            user_turns,
-            evidence,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,13 +1136,17 @@ fn build_claude_system_tool_result_event(
     event_index: u64,
 ) -> Option<ToolResultEventRecord> {
     let session_id = string_field(line, SESSION_ID_KEYS, true)?;
-    let tool_use_id = string_field(line, &[
+    let tool_use_id = string_field(
+        line,
+        &[
             "parent_tool_use_id",
             "parentToolUseId",
             "parentToolUseID",
             "tool_use_id",
             "toolUseId",
-        ], true)?;
+        ],
+        true,
+    )?;
     let agent_id = string_field(line, &["agent_id", "agentId"], true);
     let subagent_session_id =
         string_field(line, &["subagent_session_id", "subagentSessionId"], true);
@@ -1520,7 +1195,17 @@ fn claude_system_event_status(line: &serde_json::Map<String, Value>) -> ToolResu
     {
         return ToolResultStatus::Errored;
     }
-    let raw = string_field(line, &["status", "state", "result", "terminal_status", "terminalStatus"], true);
+    let raw = string_field(
+        line,
+        &[
+            "status",
+            "state",
+            "result",
+            "terminal_status",
+            "terminalStatus",
+        ],
+        true,
+    );
     if let Some(s) = normalize_tool_result_status(raw.as_deref()) {
         return s;
     }
@@ -1669,10 +1354,7 @@ fn extract_plain_user_text_from_obj(line: &serde_json::Map<String, Value>) -> Op
     }
 }
 
-fn collect_errored_tool_use_ids(
-    line: &serde_json::Map<String, Value>,
-    into: &mut HashSet<String>,
-) {
+fn collect_errored_tool_use_ids(line: &serde_json::Map<String, Value>, into: &mut HashSet<String>) {
     let arr = match line
         .get("message")
         .and_then(|m| m.get("content"))
@@ -1751,57 +1433,6 @@ fn extract_assistant_text_for_classification(blocks: &[Value]) -> String {
 // Relationships.
 // ---------------------------------------------------------------------------
 
-fn record_root(
-    out: &mut Vec<SessionRelationshipRecord>,
-    seen: &mut HashSet<String>,
-    session_id: &str,
-    ts: Option<&str>,
-    file_session_id: Option<&str>,
-) {
-    let canonical = file_session_id.unwrap_or(session_id).to_string();
-    if !seen.insert(canonical.clone()) {
-        return;
-    }
-    let mut row = SessionRelationshipRecord {
-        v: 1,
-        source: RelationshipSourceKind::ClaudeCode,
-        session_id: canonical,
-        related_session_id: None,
-        relationship_type: RelationshipType::Root,
-        ts: None,
-        source_session_id: None,
-        source_version: None,
-        parent_tool_use_id: None,
-        agent_id: None,
-        subagent_type: None,
-        description: None,
-    };
-    if let Some(t) = ts {
-        if !t.is_empty() {
-            row.ts = Some(t.to_string());
-        }
-    }
-    out.push(row);
-}
-
-fn collect_explicit_claude_relationships(
-    line: &serde_json::Map<String, Value>,
-    evidence: &mut ClaudeRelationshipEvidence,
-    out: &mut Vec<SessionRelationshipRecord>,
-    seen: &mut HashSet<String>,
-    session_id: &str,
-    fallback_ts: Option<&str>,
-) {
-    record_explicit_relationship_evidence(evidence, line);
-    for row in build_explicit_claude_relationships(line, session_id, fallback_ts) {
-        let key = relationship_key(&row);
-        if !seen.insert(key) {
-            continue;
-        }
-        out.push(row);
-    }
-}
-
 fn build_explicit_claude_relationships(
     line: &serde_json::Map<String, Value>,
     session_id: &str,
@@ -1820,7 +1451,11 @@ fn build_explicit_claude_relationships(
             ));
         }
     }
-    let cont = string_field(line, &["continuedFromSessionId", "continued_from_session_id"], true);
+    let cont = string_field(
+        line,
+        &["continuedFromSessionId", "continued_from_session_id"],
+        true,
+    );
     if let Some(ref c) = cont {
         if c != session_id {
             rows.push(build_explicit_claude_relationship(
@@ -1873,9 +1508,11 @@ fn record_explicit_relationship_evidence(
     evidence: &mut ClaudeRelationshipEvidence,
     line: &serde_json::Map<String, Value>,
 ) {
-    if let Some(c) =
-        string_field(line, &["continuedFromSessionId", "continued_from_session_id"], true)
-    {
+    if let Some(c) = string_field(
+        line,
+        &["continuedFromSessionId", "continued_from_session_id"],
+        true,
+    ) {
         evidence.explicit_continuation_target_session_ids = Some(append_unique(
             evidence.explicit_continuation_target_session_ids.clone(),
             c,
@@ -2026,9 +1663,7 @@ fn record_resume_marker(
     evidence.has_resume_marker = true;
     let rest = after_slash[cmd_end..].trim_start();
     if !rest.is_empty() && evidence.resume_target_session_id.is_none() {
-        let token_end = rest
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(rest.len());
+        let token_end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
         let token = &rest[..token_end];
         if !token.is_empty() {
             evidence.resume_target_session_id = Some(token.to_string());
@@ -2327,9 +1962,7 @@ fn prescan_nodes(
         if line_buf.last() != Some(&b'\n') {
             break;
         }
-        let raw = std::str::from_utf8(&line_buf[..n - 1])
-            .unwrap_or("")
-            .trim();
+        let raw = std::str::from_utf8(&line_buf[..n - 1]).unwrap_or("").trim();
         if raw.is_empty() {
             continue;
         }
@@ -2445,6 +2078,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
     path: &Path,
     options: &ParseIncrementalOptions,
     counter: &C,
+    emit_in_progress: bool,
 ) -> std::io::Result<ParseIncrementalResult> {
     let start_offset = options.start_offset.unwrap_or(0);
     let content_mode = options.content_mode.unwrap_or(ContentStoreMode::Off);
@@ -2539,9 +2173,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         }
         let line_start_offset = cursor_offset;
         let line_end_offset = cursor_offset + n as u64;
-        let trimmed = std::str::from_utf8(&line_buf[..n - 1])
-            .unwrap_or("")
-            .trim();
+        let trimmed = std::str::from_utf8(&line_buf[..n - 1]).unwrap_or("").trim();
         cursor_offset = line_end_offset;
         if trimmed.is_empty() {
             continue;
@@ -2565,8 +2197,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 if let Some(ref mid_str) = mid {
                     if let Some(idx) = pending_user_turn_inc_idx {
                         if !message_id_first_offset.contains_key(mid_str) {
-                            pending_user_turns[idx].1.following_message_id =
-                                Some(mid_str.clone());
+                            pending_user_turns[idx].1.following_message_id = Some(mid_str.clone());
                             pending_user_turn_inc_idx = None;
                         }
                     }
@@ -2658,11 +2289,9 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 for ev in harvested {
                     pending_tool_result_events.push((line_start_offset, ev));
                 }
-                if let Some(record) = build_user_turn_record(
-                    &obj,
-                    last_assistant_message_id.as_deref(),
-                    counter,
-                ) {
+                if let Some(record) =
+                    build_user_turn_record(&obj, last_assistant_message_id.as_deref(), counter)
+                {
                     let idx = pending_user_turns.len();
                     pending_user_turns.push((line_start_offset, record));
                     pending_user_turn_inc_idx = Some(idx);
@@ -2707,26 +2336,34 @@ fn run_incremental<C: TokenCounter + ?Sized>(
 
     // end_offset = byte position of the earliest in-progress messageId, or
     // cursor_offset (= position past the last complete newline) when all
-    // messages are complete.
-    let mut earliest_incomplete: Option<u64> = None;
-    for id in &order {
-        let w = match working.get(id) {
-            Some(w) => w,
-            None => continue,
-        };
-        if w.stop_reason.is_none() {
-            if let Some(off) = message_id_first_offset.get(id) {
-                if earliest_incomplete.is_none_or(|e| *off < e) {
-                    earliest_incomplete = Some(*off);
+    // messages are complete. In `emit_in_progress` mode (the full
+    // non-incremental parse) we keep cursor_offset and emit every turn so the
+    // result matches the single-shot ParseResult contract: callers want every
+    // record we saw, including trailing in-progress assistants.
+    let end_offset = if emit_in_progress {
+        cursor_offset
+    } else {
+        let mut earliest_incomplete: Option<u64> = None;
+        for id in &order {
+            let w = match working.get(id) {
+                Some(w) => w,
+                None => continue,
+            };
+            if w.stop_reason.is_none() {
+                if let Some(off) = message_id_first_offset.get(id) {
+                    if earliest_incomplete.is_none_or(|e| *off < e) {
+                        earliest_incomplete = Some(*off);
+                    }
                 }
             }
         }
-    }
-    let end_offset = earliest_incomplete.unwrap_or(cursor_offset);
+        earliest_incomplete.unwrap_or(cursor_offset)
+    };
 
     // Emit completed turns. In-progress messages (no stop_reason) are deferred
     // — `end_offset` already backs up to before their first byte so the next
-    // call re-reads them.
+    // call re-reads them. `emit_in_progress` opts the non-incremental path out
+    // of that skip so it emits every working record.
     let mut turns: Vec<TurnRecord> = Vec::new();
     let mut assistant_pending: Vec<(u64, usize, ContentRecord)> = Vec::new();
     for (i, id) in order.iter().enumerate() {
@@ -2734,7 +2371,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             Some(w) => w,
             None => continue,
         };
-        if w.stop_reason.is_none() {
+        if !emit_in_progress && w.stop_reason.is_none() {
             continue;
         }
         let tool_calls = extract_tool_calls(
@@ -2775,7 +2412,12 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             record.project = Some(resolved.project);
             record.project_key = resolved.project_key;
         }
-        apply_classification(&mut record, w, &user_text_by_message_id, &errored_tool_use_ids);
+        apply_classification(
+            &mut record,
+            w,
+            &user_text_by_message_id,
+            &errored_tool_use_ids,
+        );
         turns.push(record);
 
         if capture_content {
@@ -2853,13 +2495,6 @@ fn run_incremental<C: TokenCounter + ?Sized>(
 // ---------------------------------------------------------------------------
 // Misc helpers.
 // ---------------------------------------------------------------------------
-
-fn derive_file_session_id(options: &ParseOptions, _path: &Path) -> Option<String> {
-    derive_file_session_id_from_parts(
-        options.file_session_id.as_deref(),
-        options.session_path.as_deref(),
-    )
-}
 
 fn derive_file_session_id_from_parts(
     file_session_id: Option<&str>,
@@ -3330,9 +2965,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let working = dir.path().join("session.jsonl");
         std::fs::copy(&src, &working).unwrap();
-        let first =
-            parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
-                .unwrap();
+        let first = parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
+            .unwrap();
         assert_eq!(first.turns.len(), 1);
 
         let appended = serde_json::json!({
@@ -3409,9 +3043,7 @@ mod tests {
             .iter()
             .filter(|c| matches!(c.role, ContentRole::Assistant))
             .collect();
-        assert!(asst_first
-            .iter()
-            .all(|c| c.message_id == "msg_done_1"));
+        assert!(asst_first.iter().all(|c| c.message_id == "msg_done_1"));
 
         let tail = serde_json::json!({
             "parentUuid": "u-asst-1",
@@ -3454,11 +3086,10 @@ mod tests {
             .filter(|c| matches!(c.role, ContentRole::Assistant))
             .collect();
         assert!(!asst_second.is_empty());
+        assert!(asst_second.iter().all(|c| c.message_id == "msg_inprog_1"));
         assert!(asst_second
             .iter()
-            .all(|c| c.message_id == "msg_inprog_1"));
-        assert!(asst_second.iter().any(|c| matches!(c.kind, ContentKind::Text)
-            && c.text.as_deref() == Some("done now")));
+            .any(|c| matches!(c.kind, ContentKind::Text) && c.text.as_deref() == Some("done now")));
     }
 
     #[test]
@@ -3567,9 +3198,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let working = dir.path().join("session.jsonl");
         std::fs::copy(&src, &working).unwrap();
-        let first =
-            parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
-                .unwrap();
+        let first = parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
+            .unwrap();
         assert_eq!(first.turns.len(), 1);
 
         // Append a completion line for msg_inprog_1 (same id, but stop_reason set).
@@ -3659,9 +3289,8 @@ mod tests {
             + "\n";
         write_bytes(&working, body.as_bytes());
 
-        let first =
-            parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
-                .unwrap();
+        let first = parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
+            .unwrap();
         assert_eq!(first.turns.len(), 0, "incomplete turn is deferred");
         assert_eq!(first.last_user_text, "fix the bug in auth.ts");
 
@@ -3731,9 +3360,8 @@ mod tests {
         let lines: Vec<&str> = full.split('\n').filter(|l| !l.is_empty()).collect();
         let prefix = lines[..4].join("\n") + "\n";
         write_bytes(&working, prefix.as_bytes());
-        let first =
-            parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
-                .unwrap();
+        let first = parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
+            .unwrap();
         let first_ids: Vec<&str> = first
             .user_turns
             .iter()
@@ -3818,9 +3446,8 @@ mod tests {
             + "\n";
         write_bytes(&working, body.as_bytes());
 
-        let first =
-            parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
-                .unwrap();
+        let first = parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
+            .unwrap();
         assert_eq!(first.tool_result_events.len(), 1);
         assert_eq!(
             first.tool_result_events[0].event_source,
@@ -3886,9 +3513,8 @@ mod tests {
         // Write only through the outer Agent spawn line on pass 1.
         let prefix = lines[..2].join("\n") + "\n";
         write_bytes(&working, prefix.as_bytes());
-        let first =
-            parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
-                .unwrap();
+        let first = parse_claude_session_incremental(&working, &ParseIncrementalOptions::default())
+            .unwrap();
         assert!(!first.turns.is_empty());
 
         write_bytes(&working, full.as_bytes());
