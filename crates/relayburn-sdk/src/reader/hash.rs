@@ -21,7 +21,9 @@ use sha2::{Digest, Sha256};
 /// `stableStringify` so hash inputs are byte-identical across the two ports.
 pub fn stable_stringify<T: Serialize + ?Sized>(value: &T) -> String {
     let mut out = String::new();
-    let _ = value.serialize(StableSerializer { out: &mut out });
+    value
+        .serialize(StableSerializer { out: &mut out })
+        .expect("stable_stringify only supports JSON-serializable values");
     out
 }
 
@@ -212,21 +214,21 @@ impl<'a> Serializer for StableSerializer<'a> {
             first: true,
         })
     }
-    fn serialize_map(self, _: Option<usize>) -> Result<StableMap<'a>, StableError> {
+    fn serialize_map(self, len: Option<usize>) -> Result<StableMap<'a>, StableError> {
         Ok(StableMap {
             out: self.out,
-            entries: Vec::new(),
+            entries: Vec::with_capacity(len.unwrap_or(0)),
             current_key: None,
         })
     }
     fn serialize_struct(
         self,
         _: &'static str,
-        _: usize,
+        len: usize,
     ) -> Result<StableMap<'a>, StableError> {
         Ok(StableMap {
             out: self.out,
-            entries: Vec::new(),
+            entries: Vec::with_capacity(len),
             current_key: None,
         })
     }
@@ -235,14 +237,14 @@ impl<'a> Serializer for StableSerializer<'a> {
         _: &'static str,
         _: u32,
         variant: &'static str,
-        _: usize,
+        len: usize,
     ) -> Result<StableStructVariant<'a>, StableError> {
         self.out.push('{');
         write_primitive(self.out, variant)?;
         self.out.push(':');
         Ok(StableStructVariant {
             out: self.out,
-            entries: Vec::new(),
+            entries: Vec::with_capacity(len),
         })
     }
 }
