@@ -8,51 +8,21 @@
 //! [`args_hash`] / [`content_hash`] mirrors the TS slice so detector output
 //! stays visually consistent.
 
-use serde::Serialize;
-use serde_json::Value;
+use std::fmt;
+
+use serde::ser::{
+    self, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant,
+    SerializeTuple, SerializeTupleStruct, SerializeTupleVariant, Serializer,
+};
 use sha2::{Digest, Sha256};
 
 /// Stable JSON stringification: object keys are sorted, arrays keep order,
 /// primitives serialize the way `serde_json` does. Mirrors the TS
 /// `stableStringify` so hash inputs are byte-identical across the two ports.
 pub fn stable_stringify<T: Serialize + ?Sized>(value: &T) -> String {
-    let v = serde_json::to_value(value).unwrap_or(Value::Null);
     let mut out = String::new();
-    write_stable(&v, &mut out);
+    let _ = value.serialize(StableSerializer { out: &mut out });
     out
-}
-
-fn write_stable(value: &Value, out: &mut String) {
-    match value {
-        Value::Null => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => out.push_str(&n.to_string()),
-        Value::String(s) => out.push_str(&serde_json::to_string(s).unwrap()),
-        Value::Array(arr) => {
-            out.push('[');
-            for (i, v) in arr.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_stable(v, out);
-            }
-            out.push(']');
-        }
-        Value::Object(obj) => {
-            let mut keys: Vec<&String> = obj.keys().collect();
-            keys.sort();
-            out.push('{');
-            for (i, k) in keys.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push_str(&serde_json::to_string(k).unwrap());
-                out.push(':');
-                write_stable(&obj[*k], out);
-            }
-            out.push('}');
-        }
-    }
 }
 
 /// Short hash of any serializable value. Mirrors TS `argsHash`: sha256 over
@@ -70,9 +40,366 @@ pub fn content_hash(s: impl AsRef<[u8]>) -> String {
 fn short_sha256(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    let mut hex = hex::encode(hasher.finalize());
-    hex.truncate(16);
-    hex
+    hex::encode(&hasher.finalize()[..8])
+}
+
+#[derive(Debug)]
+struct StableError(String);
+
+impl fmt::Display for StableError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for StableError {}
+
+impl ser::Error for StableError {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Self(msg.to_string())
+    }
+}
+
+/// Custom serializer that writes JSON directly into a `String` buffer with
+/// sorted object keys. Avoids materializing an intermediate `serde_json::Value`
+/// tree for every hash input. Primitive formatting (numbers, escaped strings)
+/// is delegated to `serde_json` so the output is byte-identical to a Value
+/// roundtrip.
+struct StableSerializer<'a> {
+    out: &'a mut String,
+}
+
+fn write_primitive<T: Serialize + ?Sized>(out: &mut String, value: &T) -> Result<(), StableError> {
+    let s = serde_json::to_string(value).map_err(|e| StableError(e.to_string()))?;
+    out.push_str(&s);
+    Ok(())
+}
+
+impl<'a> Serializer for StableSerializer<'a> {
+    type Ok = ();
+    type Error = StableError;
+    type SerializeSeq = StableSeq<'a>;
+    type SerializeTuple = StableSeq<'a>;
+    type SerializeTupleStruct = StableSeq<'a>;
+    type SerializeTupleVariant = StableTupleVariant<'a>;
+    type SerializeMap = StableMap<'a>;
+    type SerializeStruct = StableMap<'a>;
+    type SerializeStructVariant = StableStructVariant<'a>;
+
+    fn serialize_bool(self, v: bool) -> Result<(), StableError> {
+        self.out.push_str(if v { "true" } else { "false" });
+        Ok(())
+    }
+    fn serialize_i8(self, v: i8) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_i16(self, v: i16) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_i32(self, v: i32) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_i64(self, v: i64) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_i128(self, v: i128) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_u8(self, v: u8) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_u16(self, v: u16) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_u32(self, v: u32) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_u64(self, v: u64) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_u128(self, v: u128) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_f32(self, v: f32) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_f64(self, v: f64) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_char(self, v: char) -> Result<(), StableError> {
+        write_primitive(self.out, &v)
+    }
+    fn serialize_str(self, v: &str) -> Result<(), StableError> {
+        write_primitive(self.out, v)
+    }
+    fn serialize_bytes(self, v: &[u8]) -> Result<(), StableError> {
+        write_primitive(self.out, v)
+    }
+    fn serialize_none(self) -> Result<(), StableError> {
+        self.out.push_str("null");
+        Ok(())
+    }
+    fn serialize_some<T: Serialize + ?Sized>(self, v: &T) -> Result<(), StableError> {
+        v.serialize(self)
+    }
+    fn serialize_unit(self) -> Result<(), StableError> {
+        self.out.push_str("null");
+        Ok(())
+    }
+    fn serialize_unit_struct(self, _: &'static str) -> Result<(), StableError> {
+        self.out.push_str("null");
+        Ok(())
+    }
+    fn serialize_unit_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+    ) -> Result<(), StableError> {
+        write_primitive(self.out, variant)
+    }
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        v: &T,
+    ) -> Result<(), StableError> {
+        v.serialize(self)
+    }
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+        v: &T,
+    ) -> Result<(), StableError> {
+        self.out.push('{');
+        write_primitive(self.out, variant)?;
+        self.out.push(':');
+        v.serialize(StableSerializer { out: self.out })?;
+        self.out.push('}');
+        Ok(())
+    }
+    fn serialize_seq(self, _: Option<usize>) -> Result<StableSeq<'a>, StableError> {
+        self.out.push('[');
+        Ok(StableSeq {
+            out: self.out,
+            first: true,
+        })
+    }
+    fn serialize_tuple(self, len: usize) -> Result<StableSeq<'a>, StableError> {
+        self.serialize_seq(Some(len))
+    }
+    fn serialize_tuple_struct(
+        self,
+        _: &'static str,
+        len: usize,
+    ) -> Result<StableSeq<'a>, StableError> {
+        self.serialize_seq(Some(len))
+    }
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+        _: usize,
+    ) -> Result<StableTupleVariant<'a>, StableError> {
+        self.out.push('{');
+        write_primitive(self.out, variant)?;
+        self.out.push(':');
+        self.out.push('[');
+        Ok(StableTupleVariant {
+            out: self.out,
+            first: true,
+        })
+    }
+    fn serialize_map(self, _: Option<usize>) -> Result<StableMap<'a>, StableError> {
+        Ok(StableMap {
+            out: self.out,
+            entries: Vec::new(),
+            current_key: None,
+        })
+    }
+    fn serialize_struct(
+        self,
+        _: &'static str,
+        _: usize,
+    ) -> Result<StableMap<'a>, StableError> {
+        Ok(StableMap {
+            out: self.out,
+            entries: Vec::new(),
+            current_key: None,
+        })
+    }
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+        _: usize,
+    ) -> Result<StableStructVariant<'a>, StableError> {
+        self.out.push('{');
+        write_primitive(self.out, variant)?;
+        self.out.push(':');
+        Ok(StableStructVariant {
+            out: self.out,
+            entries: Vec::new(),
+        })
+    }
+}
+
+struct StableSeq<'a> {
+    out: &'a mut String,
+    first: bool,
+}
+
+impl<'a> SerializeSeq for StableSeq<'a> {
+    type Ok = ();
+    type Error = StableError;
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<(), StableError> {
+        if !self.first {
+            self.out.push(',');
+        }
+        self.first = false;
+        v.serialize(StableSerializer { out: self.out })
+    }
+    fn end(self) -> Result<(), StableError> {
+        self.out.push(']');
+        Ok(())
+    }
+}
+
+impl<'a> SerializeTuple for StableSeq<'a> {
+    type Ok = ();
+    type Error = StableError;
+    fn serialize_element<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<(), StableError> {
+        SerializeSeq::serialize_element(self, v)
+    }
+    fn end(self) -> Result<(), StableError> {
+        SerializeSeq::end(self)
+    }
+}
+
+impl<'a> SerializeTupleStruct for StableSeq<'a> {
+    type Ok = ();
+    type Error = StableError;
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<(), StableError> {
+        SerializeSeq::serialize_element(self, v)
+    }
+    fn end(self) -> Result<(), StableError> {
+        SerializeSeq::end(self)
+    }
+}
+
+struct StableTupleVariant<'a> {
+    out: &'a mut String,
+    first: bool,
+}
+
+impl<'a> SerializeTupleVariant for StableTupleVariant<'a> {
+    type Ok = ();
+    type Error = StableError;
+    fn serialize_field<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<(), StableError> {
+        if !self.first {
+            self.out.push(',');
+        }
+        self.first = false;
+        v.serialize(StableSerializer { out: self.out })
+    }
+    fn end(self) -> Result<(), StableError> {
+        self.out.push_str("]}");
+        Ok(())
+    }
+}
+
+struct StableMap<'a> {
+    out: &'a mut String,
+    entries: Vec<(String, String)>,
+    current_key: Option<String>,
+}
+
+fn finalize_object(out: &mut String, entries: &mut [(String, String)]) {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    out.push('{');
+    for (i, (k, v)) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(k);
+        out.push(':');
+        out.push_str(v);
+    }
+    out.push('}');
+}
+
+impl<'a> SerializeMap for StableMap<'a> {
+    type Ok = ();
+    type Error = StableError;
+    fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), StableError> {
+        let mut buf = String::new();
+        key.serialize(StableSerializer { out: &mut buf })?;
+        self.current_key = Some(buf);
+        Ok(())
+    }
+    fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), StableError> {
+        let mut buf = String::new();
+        value.serialize(StableSerializer { out: &mut buf })?;
+        let k = self
+            .current_key
+            .take()
+            .ok_or_else(|| StableError("value before key".into()))?;
+        self.entries.push((k, buf));
+        Ok(())
+    }
+    fn end(mut self) -> Result<(), StableError> {
+        finalize_object(self.out, &mut self.entries);
+        Ok(())
+    }
+}
+
+impl<'a> SerializeStruct for StableMap<'a> {
+    type Ok = ();
+    type Error = StableError;
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<(), StableError> {
+        let mut vbuf = String::new();
+        value.serialize(StableSerializer { out: &mut vbuf })?;
+        let kbuf = serde_json::to_string(key).map_err(|e| StableError(e.to_string()))?;
+        self.entries.push((kbuf, vbuf));
+        Ok(())
+    }
+    fn end(mut self) -> Result<(), StableError> {
+        finalize_object(self.out, &mut self.entries);
+        Ok(())
+    }
+}
+
+struct StableStructVariant<'a> {
+    out: &'a mut String,
+    entries: Vec<(String, String)>,
+}
+
+impl<'a> SerializeStructVariant for StableStructVariant<'a> {
+    type Ok = ();
+    type Error = StableError;
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<(), StableError> {
+        let mut vbuf = String::new();
+        value.serialize(StableSerializer { out: &mut vbuf })?;
+        let kbuf = serde_json::to_string(key).map_err(|e| StableError(e.to_string()))?;
+        self.entries.push((kbuf, vbuf));
+        Ok(())
+    }
+    fn end(mut self) -> Result<(), StableError> {
+        finalize_object(self.out, &mut self.entries);
+        self.out.push('}');
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +440,20 @@ mod tests {
         }
         let s = stable_stringify(&Args { a: 1, b: "two" });
         assert_eq!(s, r#"{"a":1,"b":"two"}"#);
+    }
+
+    #[test]
+    fn stable_stringify_sorts_struct_fields() {
+        #[derive(serde::Serialize)]
+        struct Args {
+            zebra: u32,
+            apple: u32,
+        }
+        let s = stable_stringify(&Args {
+            zebra: 1,
+            apple: 2,
+        });
+        assert_eq!(s, r#"{"apple":2,"zebra":1}"#);
     }
 
     #[test]

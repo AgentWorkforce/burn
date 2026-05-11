@@ -258,7 +258,7 @@ struct ParseState {
     next_event_index: u64,
     relationships: Vec<SessionRelationshipRecord>,
     seen_root_session_ids: HashSet<String>,
-    seen_explicit_relationship_ids: HashSet<String>,
+    seen_explicit_relationship_ids: HashSet<RelationshipKey>,
     file_session_id: Option<String>,
     evidence: ClaudeRelationshipEvidence,
 }
@@ -1379,8 +1379,9 @@ fn collect_tool_result_events(
             Some(s) if !s.is_empty() => s.to_string(),
             _ => continue,
         };
-        let call_index = *counters.get(&tu).unwrap_or(&0);
-        counters.insert(tu.clone(), call_index + 1);
+        let entry = counters.entry(tu.clone()).or_insert(0);
+        let call_index = *entry;
+        *entry += 1;
         let is_error = bo.get("is_error").and_then(Value::as_bool) == Some(true);
         let mut record = ToolResultEventRecord {
             v: 1,
@@ -1478,8 +1479,9 @@ fn build_claude_system_tool_result_event(
     if agent_id.is_none() && subagent_session_id.is_none() {
         return None;
     }
-    let call_index = *counters.get(&tool_use_id).unwrap_or(&0);
-    counters.insert(tool_use_id.clone(), call_index + 1);
+    let entry = counters.entry(tool_use_id.clone()).or_insert(0);
+    let call_index = *entry;
+    *entry += 1;
     let status = claude_system_event_status(line);
     let mut record = ToolResultEventRecord {
         v: 1,
@@ -1788,7 +1790,7 @@ fn collect_explicit_claude_relationships(
     line: &serde_json::Map<String, Value>,
     evidence: &mut ClaudeRelationshipEvidence,
     out: &mut Vec<SessionRelationshipRecord>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<RelationshipKey>,
     session_id: &str,
     fallback_ts: Option<&str>,
 ) {
@@ -1897,38 +1899,40 @@ fn append_unique(values: Option<Vec<String>>, value: String) -> Vec<String> {
     v
 }
 
-fn relationship_key(row: &SessionRelationshipRecord) -> String {
-    let source = match row.source {
-        RelationshipSourceKind::ClaudeCode => "claude-code",
-        RelationshipSourceKind::Codex => "codex",
-        RelationshipSourceKind::Opencode => "opencode",
-        RelationshipSourceKind::AnthropicApi => "anthropic-api",
-        RelationshipSourceKind::OpenaiApi => "openai-api",
-        RelationshipSourceKind::GeminiApi => "gemini-api",
-        RelationshipSourceKind::SpawnEnv => "spawn-env",
-        RelationshipSourceKind::NativeClaude => "native-claude",
-        RelationshipSourceKind::NativeOpencode => "native-opencode",
-    };
-    let rt = match row.relationship_type {
-        RelationshipType::Root => "root",
-        RelationshipType::Continuation => "continuation",
-        RelationshipType::Fork => "fork",
-        RelationshipType::Subagent => "subagent",
-    };
-    format!(
-        "{}|{}|{}|{}|{}|{}",
-        source,
-        row.session_id,
-        rt,
+/// Owned, hashable identity for a relationship row. Used as a `HashSet` key
+/// for cross-line dedup; cheap because the original `relationship_key` did one
+/// `format!`-driven allocation per call but had to be re-run for every
+/// candidate during `has_relationship`.
+type RelationshipKey = (
+    &'static str,
+    String,
+    &'static str,
+    String,
+    String,
+    String,
+);
+
+fn relationship_key_borrowed<'a>(
+    row: &'a SessionRelationshipRecord,
+) -> (&'static str, &'a str, &'static str, &'a str, &'a str, &'a str) {
+    (
+        row.source.wire_str(),
+        row.session_id.as_str(),
+        row.relationship_type.wire_str(),
         row.related_session_id.as_deref().unwrap_or(""),
         row.agent_id.as_deref().unwrap_or(""),
         row.parent_tool_use_id.as_deref().unwrap_or(""),
     )
 }
 
+fn relationship_key(row: &SessionRelationshipRecord) -> RelationshipKey {
+    let b = relationship_key_borrowed(row);
+    (b.0, b.1.to_string(), b.2, b.3.to_string(), b.4.to_string(), b.5.to_string())
+}
+
 fn has_relationship(rows: &[SessionRelationshipRecord], row: &SessionRelationshipRecord) -> bool {
-    let key = relationship_key(row);
-    rows.iter().any(|r| relationship_key(r) == key)
+    let key = relationship_key_borrowed(row);
+    rows.iter().any(|r| relationship_key_borrowed(r) == key)
 }
 
 fn collect_subagent_relationships(turns: &[TurnRecord], out: &mut Vec<SessionRelationshipRecord>) {
@@ -2426,7 +2430,7 @@ fn collect_explicit_claude_relationships_incremental(
     line: &serde_json::Map<String, Value>,
     evidence: &mut ClaudeRelationshipEvidence,
     out: &mut Vec<(u64, SessionRelationshipRecord)>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<RelationshipKey>,
     session_id: &str,
     fallback_ts: Option<&str>,
     line_offset: u64,
@@ -2513,7 +2517,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
     let mut pending_relationships: Vec<(u64, SessionRelationshipRecord)> = Vec::new();
     let mut pending_user_turns: Vec<(u64, UserTurnRecord)> = Vec::new();
     let mut seen_root_session_ids: HashSet<String> = HashSet::new();
-    let mut seen_explicit_relationship_ids: HashSet<String> = HashSet::new();
+    let mut seen_explicit_relationship_ids: HashSet<RelationshipKey> = HashSet::new();
     let mut pending_user_turn_inc_idx: Option<usize> = None;
 
     let mut file = File::open(path)?;

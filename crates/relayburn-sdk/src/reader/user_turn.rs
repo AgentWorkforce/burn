@@ -79,7 +79,35 @@ impl UserTurnBlock {
 }
 
 pub fn measure_content_bytes(content: &Value) -> u64 {
-    stringify_measured_content(content).len() as u64
+    match content {
+        Value::Null => 0,
+        Value::String(s) => s.len() as u64,
+        other => {
+            // Counting writer: tallies bytes serde_json would emit without
+            // materializing the JSON string. For tool results this avoids
+            // allocating an entire payload-sized String just to read `.len()`.
+            let mut counter = ByteCountWriter::default();
+            if serde_json::to_writer(&mut counter, other).is_err() {
+                return 0;
+            }
+            counter.count
+        }
+    }
+}
+
+#[derive(Default)]
+struct ByteCountWriter {
+    count: u64,
+}
+
+impl std::io::Write for ByteCountWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.count += buf.len() as u64;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub fn stringify_measured_content(content: &Value) -> String {
