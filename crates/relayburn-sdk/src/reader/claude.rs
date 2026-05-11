@@ -2604,6 +2604,184 @@ mod tests {
     }
 
     #[test]
+    fn parse_result_from_incremental_result_copies_all_fields() {
+        let turn = TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "session-1".to_string(),
+            session_path: Some("/tmp/session.jsonl".to_string()),
+            message_id: "msg-1".to_string(),
+            turn_index: 7,
+            ts: "2026-05-11T00:00:00.000Z".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            project: Some("/tmp/project".to_string()),
+            project_key: Some("project-key".to_string()),
+            usage: Usage {
+                input: 1,
+                output: 2,
+                reasoning: 3,
+                cache_read: 4,
+                cache_create_5m: 5,
+                cache_create_1h: 6,
+            },
+            tool_calls: vec![],
+            files_touched: Some(vec!["/tmp/project/src/lib.rs".to_string()]),
+            subagent: Some(Subagent {
+                is_sidechain: false,
+                parent_tool_use_id: Some("tool-1".to_string()),
+                agent_id: Some("agent-1".to_string()),
+                parent_agent_id: Some("parent-agent".to_string()),
+                subagent_type: Some("general-purpose".to_string()),
+                description: Some("delegate".to_string()),
+            }),
+            stop_reason: Some("end_turn".to_string()),
+            activity: Some(crate::reader::types::ActivityCategory::Coding),
+            retries: Some(1),
+            has_edits: Some(true),
+            fidelity: Some(Fidelity {
+                granularity: UsageGranularity::PerTurn,
+                coverage: Coverage {
+                    has_input_tokens: true,
+                    has_output_tokens: true,
+                    has_reasoning_tokens: true,
+                    has_cache_read_tokens: true,
+                    has_cache_create_tokens: true,
+                    has_tool_calls: true,
+                    has_tool_result_events: true,
+                    has_session_relationships: true,
+                    has_raw_content: true,
+                },
+                class: crate::reader::types::FidelityClass::Full,
+            }),
+        };
+        let content = ContentRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "session-1".to_string(),
+            message_id: "msg-1".to_string(),
+            ts: "2026-05-11T00:00:00.000Z".to_string(),
+            role: ContentRole::Assistant,
+            kind: ContentKind::Text,
+            text: Some("hello".to_string()),
+            tool_use: None,
+            tool_result: None,
+        };
+        let event = CompactionEvent {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "session-1".to_string(),
+            ts: "2026-05-11T00:01:00.000Z".to_string(),
+            preceding_message_id: Some("msg-0".to_string()),
+            tokens_before_compact: Some(42),
+        };
+        let relationship = SessionRelationshipRecord {
+            v: 1,
+            source: RelationshipSourceKind::ClaudeCode,
+            session_id: "session-1".to_string(),
+            related_session_id: Some("session-0".to_string()),
+            relationship_type: RelationshipType::Continuation,
+            ts: Some("2026-05-11T00:02:00.000Z".to_string()),
+            source_session_id: Some("source-session".to_string()),
+            source_version: Some("1.2.3".to_string()),
+            parent_tool_use_id: Some("tool-1".to_string()),
+            agent_id: Some("agent-1".to_string()),
+            subagent_type: Some("general-purpose".to_string()),
+            description: Some("continued".to_string()),
+        };
+        let tool_result_event = ToolResultEventRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "session-1".to_string(),
+            message_id: Some("msg-1".to_string()),
+            tool_use_id: "tool-1".to_string(),
+            call_index: Some(0),
+            event_index: 9,
+            ts: Some("2026-05-11T00:03:00.000Z".to_string()),
+            status: ToolResultStatus::Completed,
+            event_source: ToolResultEventSource::ToolResult,
+            content_length: Some(5),
+            content_hash: Some("abc123".to_string()),
+            is_error: Some(false),
+            usage: Some(Usage::default()),
+            usage_attribution: Some(crate::reader::types::UsageAttribution::SingleToolTurn),
+            subagent_session_id: Some("sub-session".to_string()),
+            agent_id: Some("agent-1".to_string()),
+            replaced_tools: Some(vec!["old-tool".to_string()]),
+            collapsed_calls: Some(2),
+        };
+        let user_turn = UserTurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "session-1".to_string(),
+            user_uuid: "user-1".to_string(),
+            ts: "2026-05-11T00:04:00.000Z".to_string(),
+            preceding_message_id: Some("msg-0".to_string()),
+            following_message_id: Some("msg-1".to_string()),
+            blocks: vec![UserTurnBlock {
+                kind: crate::reader::types::UserTurnBlockKind::Text,
+                tool_use_id: None,
+                byte_len: 5,
+                approx_tokens: 1,
+                is_error: None,
+            }],
+        };
+        let evidence = ClaudeRelationshipEvidence {
+            file_session_id: Some("session-1".to_string()),
+            first_ts: Some("2026-05-11T00:00:00.000Z".to_string()),
+            in_log_session_ids: vec!["session-1".to_string()],
+            source_version: Some("1.2.3".to_string()),
+            first_parent_uuid: Some("parent-1".to_string()),
+            seen_uuids: vec!["uuid-1".to_string()],
+            has_resume_marker: true,
+            resume_target_session_id: Some("session-0".to_string()),
+            explicit_continuation_target_session_ids: Some(vec!["session-0".to_string()]),
+            explicit_fork_target_session_ids: Some(vec!["session-2".to_string()]),
+            user_seen: true,
+        };
+
+        let incremental = ParseIncrementalResult {
+            turns: vec![turn.clone()],
+            content: vec![content.clone()],
+            events: vec![event.clone()],
+            relationships: vec![relationship.clone()],
+            tool_result_events: vec![tool_result_event.clone()],
+            user_turns: vec![user_turn.clone()],
+            end_offset: 123,
+            last_user_text: "latest user turn".to_string(),
+            evidence: evidence.clone(),
+        };
+
+        let full = ParseResult::from(incremental);
+
+        assert_eq!(full.turns, vec![turn]);
+        assert_eq!(full.content, vec![content]);
+        assert_eq!(full.events, vec![event]);
+        assert_eq!(full.relationships, vec![relationship]);
+        assert_eq!(full.tool_result_events, vec![tool_result_event]);
+        assert_eq!(full.user_turns, vec![user_turn]);
+        assert_eq!(full.evidence.file_session_id, evidence.file_session_id);
+        assert_eq!(full.evidence.first_ts, evidence.first_ts);
+        assert_eq!(full.evidence.in_log_session_ids, evidence.in_log_session_ids);
+        assert_eq!(full.evidence.source_version, evidence.source_version);
+        assert_eq!(full.evidence.first_parent_uuid, evidence.first_parent_uuid);
+        assert_eq!(full.evidence.seen_uuids, evidence.seen_uuids);
+        assert_eq!(full.evidence.has_resume_marker, evidence.has_resume_marker);
+        assert_eq!(
+            full.evidence.resume_target_session_id,
+            evidence.resume_target_session_id
+        );
+        assert_eq!(
+            full.evidence.explicit_continuation_target_session_ids,
+            evidence.explicit_continuation_target_session_ids
+        );
+        assert_eq!(
+            full.evidence.explicit_fork_target_session_ids,
+            evidence.explicit_fork_target_session_ids
+        );
+        assert_eq!(full.evidence.user_seen, evidence.user_seen);
+    }
+
+    #[test]
     fn simple_turn_parses() {
         let path = fixture("simple-turn.jsonl");
         let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
