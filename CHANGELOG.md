@@ -6,17 +6,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
-- `relayburn-sdk`: ingest verbs (`ingest_all`, `ingest_claude_projects`,
-  `ingest_codex_sessions`, `ingest_opencode_sessions`, `ingest_claude_session`,
-  `reingest_missing_content`, `LedgerHandle::ingest`, free `ingest`) are now
-  `fn` instead of `async fn` — bodies are sync filesystem walks and rusqlite
-  writes that never yielded. Embedders running these from an async context
-  should wrap them in `tokio::task::spawn_blocking`.
+- `relayburn-sdk`: ingest verbs are now synchronous; async callers should
+  run them via `tokio::task::spawn_blocking`.
 
 ### Removed
 
-- `relayburn-sdk`: dropped `run_ingest_tick`; callers can call the ingest
-  verb directly.
+- `relayburn-sdk`: removed `run_ingest_tick`.
 
 ## [2.8.3] - 2026-05-11
 
