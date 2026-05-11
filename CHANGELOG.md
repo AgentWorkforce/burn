@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.8.3] - 2026-05-11
+
 ### Changed
 
 - `relayburn-cli`: `burn compare` now applies `--provider`, `--workflow`, and
