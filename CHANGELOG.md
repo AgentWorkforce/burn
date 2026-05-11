@@ -4,6 +4,14 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-sdk`: `parse_claude_session` now delegates to the incremental
+  parser with `start_offset = 0`, dropping the duplicate `ParseState`
+  codepath. Behavior is unchanged — trailing in-progress turns and final
+  JSON lines lacking a trailing newline still surface in the single-shot
+  output.
+
 ## [2.8.3] - 2026-05-11
 
 ### Changed
