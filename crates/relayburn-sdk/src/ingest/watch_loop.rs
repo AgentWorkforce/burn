@@ -256,15 +256,19 @@ impl WatchController {
     /// We do NOT `abort()` the spawned task — that would cut a tick off
     /// mid-write. The stop is two-phased: set the atomic flag (covers a
     /// notify lost between loop iterations), then notify the parked waiter.
-    /// Awaiting the spawned task handle covers any in-flight tick: the
-    /// runner holds `in_flight` for the duration of the run and the task
-    /// only returns after dropping the guard.
+    /// The trailing `in_flight.lock().await` covers a concurrent `tick()`
+    /// call from outside the loop: `tick()` doesn't check `stopped`, so
+    /// it can still acquire `in_flight` and run an ingest after the loop
+    /// task has exited. Waiting on the guard here guarantees no tick is
+    /// mid-write when `stop` returns, so callers can tear down state
+    /// safely.
     pub async fn stop(&self) {
         self.inner.stopped.store(true, Ordering::SeqCst);
         self.inner.stop_signal.notify_waiters();
         if let Some(handle) = self.handle.lock().await.take() {
             let _ = handle.await;
         }
+        let _ = self.inner.in_flight.lock().await;
     }
 }
 
