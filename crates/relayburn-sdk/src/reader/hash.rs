@@ -332,7 +332,7 @@ fn finalize_object(out: &mut String, entries: &mut [(String, String)]) {
         // JSON-encode the key at write time. Using `to_string` here matches
         // `serde_json::to_string` for string values — i.e. the exact same
         // escaping the previous `Value::String(s) => to_string(s)` path used.
-        let encoded = serde_json::to_string(k).unwrap_or_else(|_| String::from("\"\""));
+        let encoded = serde_json::to_string(k).expect("string is always JSON-encodable");
         out.push_str(&encoded);
         out.push(':');
         out.push_str(v);
