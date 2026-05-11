@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-05-11
+
 ### Changed
 
 - `relayburn-sdk`: ledger query verbs (`query_turns`, `query_compactions`,
