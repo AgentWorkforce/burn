@@ -6,12 +6,11 @@
 //! module mirrors them in Rust.
 //!
 //! - [`format_usd`] — money rendering with three rate-tier precisions.
-//! - [`format_int`] — `toLocaleString('en-US')` thousands-separator output.
+//! - [`format_uint`] — `toLocaleString('en-US')` thousands-separator output.
+//! - [`format_tokens`] — collapse 1k+ values to `<n>.<d>k`.
 //! - [`render_table`] — pad-end columns separated by `"  "` (two spaces),
 //!   `trim_end` each row, `\n`-joined. NOT the comfy-table preset; this
 //!   is the spartan layout the TS CLI snapshots assume.
-
-#![allow(dead_code)]
 
 /// `formatUsd` from `packages/cli/src/format.ts`. Three rate tiers:
 /// - `0`           → `$0.00`
@@ -31,22 +30,11 @@ pub fn format_usd(n: f64) -> String {
     format!("${:.2}", n)
 }
 
-/// `formatInt` from `packages/cli/src/format.ts`. JS `Number.toLocaleString('en-US')`
-/// uses thousands separators (`,`) for non-negative integers and a leading `-`
-/// for negatives. We mirror that without pulling in a locale dep.
-pub fn format_int(n: i64) -> String {
-    if n < 0 {
-        return format!("-{}", format_int_unsigned(n.unsigned_abs()));
-    }
-    format_int_unsigned(n as u64)
-}
-
-/// Convenience wrapper for unsigned token / count fields.
+/// `formatInt` from `packages/cli/src/format.ts`. JS
+/// `Number.toLocaleString('en-US')` uses thousands separators (`,`)
+/// for non-negative integers. Token counts and row counts are all
+/// unsigned, so we expose just the `u64` form.
 pub fn format_uint(n: u64) -> String {
-    format_int_unsigned(n)
-}
-
-fn format_int_unsigned(n: u64) -> String {
     let raw = n.to_string();
     let bytes = raw.as_bytes();
     let len = bytes.len();
@@ -70,6 +58,17 @@ fn format_int_unsigned(n: u64) -> String {
         i += 3;
     }
     out
+}
+
+/// Collapse token counts to a compact `<n>.<d>k` form once they reach
+/// 1,000; sub-1k values render as plain integers. Mirrors the TS
+/// `formatTokens` helper used by `burn overhead` output.
+pub fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1000 {
+        let v = tokens as f64 / 1000.0;
+        return format!("{v:.1}k");
+    }
+    tokens.to_string()
 }
 
 /// `table()` from `packages/cli/src/format.ts`. Each column gets padded to
@@ -197,18 +196,20 @@ mod tests {
     }
 
     #[test]
-    fn format_int_thousands() {
-        assert_eq!(format_int(0), "0");
-        assert_eq!(format_int(999), "999");
-        assert_eq!(format_int(1_000), "1,000");
-        assert_eq!(format_int(5_100), "5,100");
-        assert_eq!(format_int(19_500), "19,500");
-        assert_eq!(format_int(1_000_000), "1,000,000");
+    fn format_uint_thousands() {
+        assert_eq!(format_uint(0), "0");
+        assert_eq!(format_uint(999), "999");
+        assert_eq!(format_uint(1_000), "1,000");
+        assert_eq!(format_uint(5_100), "5,100");
+        assert_eq!(format_uint(19_500), "19,500");
+        assert_eq!(format_uint(1_000_000), "1,000,000");
     }
 
     #[test]
-    fn format_int_negative() {
-        assert_eq!(format_int(-1_500), "-1,500");
+    fn format_tokens_collapses_kilos() {
+        assert_eq!(format_tokens(999), "999");
+        assert_eq!(format_tokens(1_000), "1.0k");
+        assert_eq!(format_tokens(2_500), "2.5k");
     }
 
     #[test]

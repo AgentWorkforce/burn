@@ -16,6 +16,10 @@ use relayburn_sdk::{
 
 use crate::cli::{GlobalArgs, OverheadAction, OverheadArgs};
 use crate::render::error::report_error;
+use crate::render::format::{
+    coerce_whole_f64_to_int, format_tokens, format_uint, format_usd, render_table,
+};
+use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
 
 pub fn run(globals: &GlobalArgs, args: OverheadArgs) -> i32 {
@@ -68,7 +72,12 @@ fn run_report(
     }
 
     if globals.json {
-        if let Err(err) = render_json_ts_compatible(&result) {
+        let mut value = match serde_json::to_value(&result) {
+            Ok(v) => v,
+            Err(err) => return report_error(&io::Error::other(err), globals),
+        };
+        coerce_whole_f64_to_int(&mut value);
+        if let Err(err) = render_json(&value) {
             return report_error(&err, globals);
         }
         return 0;
@@ -124,7 +133,12 @@ fn run_trim(
     }
 
     if globals.json {
-        if let Err(err) = render_json_ts_compatible(&result) {
+        let mut value = match serde_json::to_value(&result) {
+            Ok(v) => v,
+            Err(err) => return report_error(&io::Error::other(err), globals),
+        };
+        coerce_whole_f64_to_int(&mut value);
+        if let Err(err) = render_json(&value) {
             return report_error(&err, globals);
         }
         return 0;
@@ -134,69 +148,6 @@ fn run_trim(
         return report_error(&err, globals);
     }
     0
-}
-
-/// Serialize `value` as pretty-printed JSON with TS-compatible numeric output:
-/// integer-valued `f64`s print as bare integers (`0` not `0.0`), matching
-/// `JSON.stringify` semantics so the golden snapshots stay byte-equivalent.
-fn render_json_ts_compatible<T: serde::Serialize + ?Sized>(value: &T) -> io::Result<()> {
-    let mut json = serde_json::to_value(value).map_err(io::Error::other)?;
-    coerce_integer_floats(&mut json);
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
-    serde_json::to_writer_pretty(&mut handle, &json).map_err(io::Error::other)?;
-    handle.write_all(b"\n")?;
-    handle.flush()
-}
-
-/// Walk a `serde_json::Value` tree and convert any `Number(f64)` whose value
-/// is finite and exactly representable as `i64`/`u64` into the integer form.
-/// Mirrors JavaScript's `JSON.stringify` numeric output, which always prints
-/// `0` for `0.0_f64`.
-///
-/// `Number::as_f64()` is lossy for exact integers above `2^53`, so the
-/// `is_f64()` guard short-circuits before we ever touch a Number that
-/// already serializes as an integer. Without the guard a u64 like
-/// `9_007_199_254_740_993` (2^53 + 1) would silently become
-/// `9_007_199_254_740_992` after a `to_value` → coerce → `to_writer_pretty`
-/// round-trip.
-fn coerce_integer_floats(v: &mut serde_json::Value) {
-    match v {
-        serde_json::Value::Number(n) => {
-            // Only coerce JSON Numbers that round-tripped as floats.
-            // `is_f64()` returns false for exact-integer Numbers (i64/u64),
-            // which already render without a decimal point and need no work.
-            if !n.is_f64() {
-                return;
-            }
-            if let Some(f) = n.as_f64() {
-                if f.is_finite() && f.fract() == 0.0 {
-                    if f >= 0.0 && f <= u64::MAX as f64 {
-                        let u = f as u64;
-                        if (u as f64) == f {
-                            *n = serde_json::Number::from(u);
-                        }
-                    } else if f >= i64::MIN as f64 && f < 0.0 {
-                        let i = f as i64;
-                        if (i as f64) == f {
-                            *n = serde_json::Number::from(i);
-                        }
-                    }
-                }
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for item in arr.iter_mut() {
-                coerce_integer_floats(item);
-            }
-        }
-        serde_json::Value::Object(obj) => {
-            for (_k, val) in obj.iter_mut() {
-                coerce_integer_floats(val);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn resolve_project(project: Option<&Path>) -> PathBuf {
@@ -272,7 +223,7 @@ fn push_file_block(
     let applies_to = describe_applies_to(&parsed.applies_to);
     lines.push(format!(
         "{display} — {} lines, ~{} tokens — applies to: {applies_to}",
-        format_int(parsed.total_lines),
+        format_uint(parsed.total_lines),
         format_tokens(parsed.tokens),
     ));
     if parsed.tokens == 0 {
@@ -292,7 +243,7 @@ fn push_file_block(
     lines.push(format!(
         "  Cost over {since_label}: {} across {} session{}",
         format_usd(attribution.total_cost),
-        format_int(attribution.session_count),
+        format_uint(attribution.session_count),
         if attribution.session_count == 1 {
             ""
         } else {
@@ -347,50 +298,7 @@ fn render_section_table(rows: &[OverheadSectionCost]) -> String {
             format!("{:.1}%", r.token_share * 100.0),
         ]);
     }
-    table_rows(&data)
-}
-
-/// Mirror of the TS `format.ts::table` helper: pad each cell to the
-/// widest cell in its column with two spaces between columns, trim
-/// trailing whitespace per line.
-fn table_rows(rows: &[Vec<String>]) -> String {
-    if rows.is_empty() {
-        return String::new();
-    }
-    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-    let mut widths = vec![0usize; cols];
-    for row in rows {
-        for (i, cell) in row.iter().enumerate() {
-            if cell.chars().count() > widths[i] {
-                widths[i] = cell.chars().count();
-            }
-        }
-    }
-    let mut out = String::new();
-    for (ridx, row) in rows.iter().enumerate() {
-        let mut line = String::new();
-        for (i, cell) in row.iter().enumerate() {
-            if i > 0 {
-                line.push_str("  ");
-            }
-            line.push_str(cell);
-            // Pad to width if not last cell (so trailing whitespace can be
-            // trimmed away from the rightmost cell).
-            let pad = widths[i].saturating_sub(cell.chars().count());
-            if i < row.len() - 1 {
-                for _ in 0..pad {
-                    line.push(' ');
-                }
-            }
-        }
-        // Match TS `.trimEnd()` — strip trailing whitespace per row.
-        let trimmed = line.trim_end();
-        out.push_str(trimmed);
-        if ridx + 1 < rows.len() {
-            out.push('\n');
-        }
-    }
-    out
+    render_table(&data)
 }
 
 fn render_human_trim(result: &OverheadTrimResult) -> io::Result<()> {
@@ -447,45 +355,6 @@ fn render_human_trim(result: &OverheadTrimResult) -> io::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Number / line-range formatters — mirror packages/cli/src/format.ts.
-// ---------------------------------------------------------------------------
-
-fn format_usd(n: f64) -> String {
-    if n == 0.0 {
-        return "$0.00".to_string();
-    }
-    if n < 0.01 {
-        return format!("${n:.4}");
-    }
-    if n < 1.0 {
-        return format!("${n:.3}");
-    }
-    format!("${n:.2}")
-}
-
-fn format_int(n: u64) -> String {
-    // en-US locale grouping: every three digits separated by `,`.
-    let s = n.to_string();
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
-
-fn format_tokens(tokens: u64) -> String {
-    if tokens >= 1000 {
-        let v = tokens as f64 / 1000.0;
-        return format!("{v:.1}k");
-    }
-    tokens.to_string()
-}
-
 fn format_line_range(start: u64, end: u64) -> String {
     let s = format!("{start:>4}");
     let e = format!("{end:>4}");
@@ -497,101 +366,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_usd_buckets_match_ts() {
-        assert_eq!(format_usd(0.0), "$0.00");
-        assert_eq!(format_usd(0.001), "$0.0010");
-        assert_eq!(format_usd(0.5), "$0.500");
-        assert_eq!(format_usd(12.345), "$12.35");
-    }
-
-    #[test]
-    fn format_int_groups_thousands() {
-        assert_eq!(format_int(0), "0");
-        assert_eq!(format_int(999), "999");
-        assert_eq!(format_int(1_000), "1,000");
-        assert_eq!(format_int(1_234_567), "1,234,567");
-    }
-
-    #[test]
-    fn format_tokens_collapses_kilos() {
-        assert_eq!(format_tokens(999), "999");
-        assert_eq!(format_tokens(1_000), "1.0k");
-        assert_eq!(format_tokens(2_500), "2.5k");
-    }
-
-    #[test]
     fn format_line_range_pads_to_four() {
         assert_eq!(format_line_range(7, 11), "   7-  11");
         assert_eq!(format_line_range(100, 200), " 100- 200");
-    }
-
-    #[test]
-    fn table_rows_pads_columns() {
-        let rendered = table_rows(&[
-            vec!["a".into(), "bb".into()],
-            vec!["ccc".into(), "d".into()],
-        ]);
-        assert_eq!(rendered, "a    bb\nccc  d");
-    }
-
-    // -- coerce_integer_floats ------------------------------------------------
-    //
-    // The helper walks a `serde_json::Value` tree and converts whole-valued
-    // floats (e.g. `0.0`) into their integer forms so the pretty-printed JSON
-    // matches `JSON.stringify`'s "0" not "0.0" rendering. The cases below
-    // pin down its core invariants — the most important one being that it
-    // never lossily coerces an exact-integer JSON Number that happens to be
-    // larger than `2^53`.
-
-    #[test]
-    fn coerce_integer_floats_leaves_exact_integers_untouched() {
-        // `Number::from(u64)` produces an exact-integer Number for which
-        // `is_f64()` returns false. Mutation must short-circuit so a
-        // round-trip through `to_value` is a no-op for integer fields.
-        let mut v = serde_json::json!({ "n": 42_u64 });
-        coerce_integer_floats(&mut v);
-        assert_eq!(v, serde_json::json!({ "n": 42_u64 }));
-    }
-
-    #[test]
-    fn coerce_integer_floats_preserves_large_u64_above_2_pow_53() {
-        // `2^53 + 1 = 9_007_199_254_740_993` — exactly representable as u64
-        // but NOT as f64. Without the `is_f64()` guard the value would round
-        // down to 2^53 = 9_007_199_254_740_992 after a lossy `as_f64()` cast.
-        let huge: u64 = (1u64 << 53) + 1;
-        let mut v = serde_json::json!({ "n": huge });
-        coerce_integer_floats(&mut v);
-        // Round-trip through to_string to assert the byte representation
-        // wasn't truncated by an unguarded f64 coercion.
-        let s = serde_json::to_string(&v).expect("serialize");
-        assert!(
-            s.contains(&huge.to_string()),
-            "expected `{huge}` in `{s}`; large u64 was lossily coerced",
-        );
-    }
-
-    #[test]
-    fn coerce_integer_floats_collapses_whole_valued_floats() {
-        // `42.0_f64` parsed through `serde_json::Number::from_f64` is the
-        // case the helper exists to handle. After coercion the Number must
-        // serialize as the integer form, matching `JSON.stringify`.
-        let n = serde_json::Number::from_f64(42.0).expect("finite");
-        let mut v = serde_json::Value::Number(n);
-        coerce_integer_floats(&mut v);
-        assert_eq!(serde_json::to_string(&v).expect("serialize"), "42");
-    }
-
-    #[test]
-    fn coerce_integer_floats_recurses_into_arrays_and_objects() {
-        // Smoke-cover the recursion arms — a nested whole-valued float
-        // inside an array inside an object should still flatten to its
-        // integer form.
-        let inner = serde_json::Number::from_f64(7.0).expect("finite");
-        let mut v = serde_json::json!({ "outer": [serde_json::Value::Number(inner)] });
-        coerce_integer_floats(&mut v);
-        assert_eq!(
-            serde_json::to_string(&v).expect("serialize"),
-            r#"{"outer":[7]}"#
-        );
     }
 }

@@ -9,6 +9,13 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: `burn compare` now applies `--provider`, `--workflow`, and
   `--agent` filters at runtime. It still reads the current ledger snapshot
   (no pre-query ingest); run `burn ingest` first for freshest data.
+
+## [2.8.1] - 2026-05-11
+
+### Changed
+
+- `relayburn-cli`: stdout-write failures in `--json` mode now surface as a
+  non-zero exit instead of being silently dropped.
 - `relayburn-sdk`: ledger query verbs (`query_turns`, `query_compactions`,
   `query_relationships`, `query_tool_result_events`, `query_user_turns`)
   now push `since` / `until` / `session_id` / `source` / `project` filters
