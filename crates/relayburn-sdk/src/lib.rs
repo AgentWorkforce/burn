@@ -13,9 +13,11 @@
 //! Verbs are callable two ways: as a free function or as a method on
 //! [`LedgerHandle`].
 //!
-//! `ingest` is async (tokio); the query/compute verbs are sync
-//! (CPU-bound). Callers running them from an async context — the typical
-//! pattern in the MCP server — should wrap them in `tokio::task::spawn_blocking`.
+//! Every verb is synchronous: ingest is filesystem walks plus rusqlite
+//! writes, and the query/compute verbs are CPU-bound. Callers running
+//! these from an async context — the typical pattern in the MCP server,
+//! the napi binding, or the watch loop — should wrap them in
+//! `tokio::task::spawn_blocking` so they don't stall the runtime.
 //!
 //! # Opening a ledger
 //!
@@ -110,11 +112,11 @@ pub use crate::analyze::{
 
 pub use crate::ingest::{
     cleanup_stale_pending_stamps, default_session_roots, ingest_all, ingest_claude_session,
-    ingest_codex_sessions, ingest_opencode_sessions, run_ingest_tick, start_watch_loop,
-    write_pending_stamp, ErrorSink, IngestFn, IngestOptions as RawIngestOptions, IngestReport,
-    IngestRoots, PendingStamp, PendingStampHarness, PendingStampWriteResult, ReportSink,
-    StartWatchLoopOptions, WatchController, WriteOptions as PendingStampWriteOptions,
-    DEFAULT_FS_DEBOUNCE, DEFAULT_SLOW_FALLBACK,
+    ingest_codex_sessions, ingest_opencode_sessions, start_watch_loop, write_pending_stamp,
+    ErrorSink, IngestFn, IngestOptions as RawIngestOptions, IngestReport, IngestRoots,
+    PendingStamp, PendingStampHarness, PendingStampWriteResult, ReportSink, StartWatchLoopOptions,
+    WatchController, WriteOptions as PendingStampWriteOptions, DEFAULT_FS_DEBOUNCE,
+    DEFAULT_SLOW_FALLBACK,
 };
 
 // --- LedgerOpenOptions -----------------------------------------------------

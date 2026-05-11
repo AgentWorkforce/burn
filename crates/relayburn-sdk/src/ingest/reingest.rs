@@ -65,7 +65,7 @@ pub struct ReingestContentReport {
 /// cursors, ledger turns, or compaction events.
 ///
 /// Mirrors TS `reingestMissingContent`.
-pub async fn reingest_missing_content(
+pub fn reingest_missing_content(
     ledger: &mut Ledger,
     opts: &IngestOptions,
 ) -> anyhow::Result<ReingestContentReport> {
@@ -502,8 +502,8 @@ mod tests {
         file
     }
 
-    #[tokio::test]
-    async fn skips_session_with_both_content_and_user_turn_already_present() {
+    #[test]
+    fn skips_session_with_both_content_and_user_turn_already_present() {
         let tmp = TempDir::new().unwrap();
         let mut ledger = open_ledger(&tmp);
 
@@ -528,7 +528,7 @@ mod tests {
             opencode_storage_dir: Some(home.path().join(".local/share/opencode/storage")),
         });
 
-        let report = reingest_missing_content(&mut ledger, &opts).await.unwrap();
+        let report = reingest_missing_content(&mut ledger, &opts).unwrap();
         assert_eq!(report.scanned_files, 1);
         assert_eq!(report.skipped_existing, 1);
         assert_eq!(report.reingested_sessions, 0);
@@ -536,8 +536,8 @@ mod tests {
         assert_eq!(report.appended_user_turns, 0);
     }
 
-    #[tokio::test]
-    async fn reparses_session_with_no_existing_records() {
+    #[test]
+    fn reparses_session_with_no_existing_records() {
         let tmp = TempDir::new().unwrap();
         let mut ledger = open_ledger(&tmp);
 
@@ -553,7 +553,7 @@ mod tests {
             opencode_storage_dir: Some(home.path().join(".local/share/opencode/storage")),
         });
 
-        let report = reingest_missing_content(&mut ledger, &opts).await.unwrap();
+        let report = reingest_missing_content(&mut ledger, &opts).unwrap();
         assert_eq!(report.scanned_files, 1);
         assert_eq!(report.skipped_existing, 0);
         assert!(report.appended_user_turns >= 1);
@@ -561,15 +561,15 @@ mod tests {
 
         // After the run, the AND-skip filter sees both sides covered, so
         // a re-run skips the same file.
-        let report2 = reingest_missing_content(&mut ledger, &opts).await.unwrap();
+        let report2 = reingest_missing_content(&mut ledger, &opts).unwrap();
         assert_eq!(report2.scanned_files, 1);
         assert_eq!(report2.skipped_existing, 1);
         assert_eq!(report2.appended_content, 0);
         assert_eq!(report2.appended_user_turns, 0);
     }
 
-    #[tokio::test]
-    async fn backfills_user_turn_when_only_content_exists() {
+    #[test]
+    fn backfills_user_turn_when_only_content_exists() {
         // Mirrors the TS "rebuild content backfills user-turn rows even
         // when content already exists" case: pre-seed the content side
         // only and verify the verb appends a user-turn row even though
@@ -594,7 +594,7 @@ mod tests {
             opencode_storage_dir: Some(home.path().join(".local/share/opencode/storage")),
         });
 
-        let report = reingest_missing_content(&mut ledger, &opts).await.unwrap();
+        let report = reingest_missing_content(&mut ledger, &opts).unwrap();
         assert_eq!(report.scanned_files, 1);
         assert_eq!(report.skipped_existing, 0);
         // Content appended should be 0 (existing_content has the
@@ -604,8 +604,8 @@ mod tests {
         assert!(report.appended_user_turns >= 1);
     }
 
-    #[tokio::test]
-    async fn missing_session_dirs_are_silently_skipped() {
+    #[test]
+    fn missing_session_dirs_are_silently_skipped() {
         let tmp = TempDir::new().unwrap();
         let mut ledger = open_ledger(&tmp);
 
@@ -616,7 +616,7 @@ mod tests {
             opencode_storage_dir: Some(home.path().join(".local/share/opencode/storage")),
         });
 
-        let report = reingest_missing_content(&mut ledger, &opts).await.unwrap();
+        let report = reingest_missing_content(&mut ledger, &opts).unwrap();
         assert_eq!(report, ReingestContentReport::default());
     }
 

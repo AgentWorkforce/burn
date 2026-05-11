@@ -325,27 +325,18 @@ fn parse_tag_filters(tags: &[String]) -> anyhow::Result<BTreeMap<String, String>
     Ok(out)
 }
 
-/// Run an ingest sweep on the open handle. Builds a current-thread tokio
-/// runtime so the otherwise-sync presenter can drive the async verb.
+/// Run an ingest sweep on the open handle.
 fn run_ingest(
     handle: &mut LedgerHandle,
     progress: &TaskProgress,
     ledger_home: Option<std::path::PathBuf>,
 ) -> anyhow::Result<relayburn_sdk::IngestReport> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| {
-            progress.finish_and_clear();
-            err
-        })?;
     progress.set_task("refreshing ledger");
     let opts = progress.ingest_options(ledger_home);
-    rt.block_on(ingest_all(handle.raw_mut(), &opts))
-        .map_err(|err| {
-            progress.finish_and_clear();
-            err
-        })
+    ingest_all(handle.raw_mut(), &opts).map_err(|err| {
+        progress.finish_and_clear();
+        err
+    })
 }
 
 const COVERAGE_FIELDS: [CoverageField; 5] = [

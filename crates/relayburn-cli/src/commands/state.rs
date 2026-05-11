@@ -488,10 +488,7 @@ fn run_reset(globals: &GlobalArgs, args: crate::cli::StateResetArgs) -> i32 {
     print_reset_report(globals, &summary, /*executed=*/ true, ingest_report.as_ref())
 }
 
-/// Drive a single `ingest_all` sweep on the open handle. Mirrors the
-/// `run_ingest` helper in `commands/summary.rs`: the SDK verb is async,
-/// so we spin a current-thread tokio runtime to drive it from this
-/// otherwise-sync presenter.
+/// Drive a single `ingest_all` sweep on the open handle.
 ///
 /// `ledger_home` propagates the global `--ledger-path` override into
 /// `RawIngestOptions::ledger_home` so sidecar ingest state (config and
@@ -504,12 +501,9 @@ fn run_reset_reingest(
     ledger_home: Option<std::path::PathBuf>,
     progress: &TaskProgress,
 ) -> anyhow::Result<relayburn_sdk::IngestReport> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
     progress.set_task("re-ingesting sessions");
     let opts = progress.ingest_options(ledger_home);
-    rt.block_on(ingest_all(handle.raw_mut(), &opts))
+    ingest_all(handle.raw_mut(), &opts)
 }
 
 fn print_reset_report(

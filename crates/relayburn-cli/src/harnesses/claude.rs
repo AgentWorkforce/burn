@@ -146,7 +146,7 @@ impl HarnessAdapter for ClaudeAdapter {
         let mut handle = Ledger::open(LedgerOpenOptions::default())?;
         let cwd_str = ctx.cwd.to_string_lossy().into_owned();
         let opts = RawIngestOptions::default();
-        ingest_claude_session(handle.raw_mut(), &cwd_str, session_id, &opts).await
+        ingest_claude_session(handle.raw_mut(), &cwd_str, session_id, &opts)
     }
 }
 

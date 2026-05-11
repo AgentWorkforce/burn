@@ -318,8 +318,8 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     .collect();
 }
 
-#[tokio::test]
-async fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
+#[test]
+fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
     // 10. ingest — handle + free. Both forms must accept empty roots and
     // return an all-zero report without scanning the developer's HOME.
     let home = TempDir::new().expect("home tmp");
@@ -338,7 +338,6 @@ async fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
             },
             ..Default::default()
         })
-        .await
         .expect("handle ingest");
     assert_eq!(report.scanned_sessions, 0);
     assert_eq!(report.appended_turns, 0);
@@ -352,7 +351,6 @@ async fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
         },
         ..Default::default()
     })
-    .await
     .expect("free ingest");
     assert_eq!(report2.scanned_sessions, 0);
     assert_eq!(report2.appended_turns, 0);

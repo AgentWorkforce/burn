@@ -228,12 +228,9 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
     progress.set_task("opening ledger");
     let mut handle = Ledger::open(opts)?;
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
     progress.set_task("refreshing ledger");
     let raw_opts = progress.ingest_options(ledger_home.clone());
-    rt.block_on(ingest_all(handle.raw_mut(), &raw_opts))?;
+    ingest_all(handle.raw_mut(), &raw_opts)?;
     drop(handle);
 
     let session_filter = match args.session.as_deref() {

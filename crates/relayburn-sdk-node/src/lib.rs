@@ -1261,8 +1261,12 @@ pub async fn ingest(opts: Option<IngestOptions>) -> Result<IngestReport, NapiErr
         on_progress: None,
         on_warn: None,
     };
-    let report = sdk::ingest(raw)
+    // SDK ingest is sync (filesystem walks + rusqlite writes). Run it on
+    // tokio's blocking pool so the napi runtime stays responsive while the
+    // sweep is in flight.
+    let report = tokio::task::spawn_blocking(move || sdk::ingest(raw))
         .await
+        .map_err(|e| NapiError::from_reason(format!("ingest task panicked: {e}")))?
         .map_err(|e| NapiError::from_reason(format!("{e:#}")))?;
     Ok(report.into())
 }

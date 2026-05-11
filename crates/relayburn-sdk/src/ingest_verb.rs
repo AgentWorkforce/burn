@@ -1,9 +1,14 @@
-//! Ingest verb — async wrapper over [`crate::ingest::ingest_all`].
+//! Ingest verb — wrapper over [`crate::ingest::ingest_all`].
 //!
 //! Mirrors the TS `ingest` verb in `packages/sdk/index.js`. The Rust port
 //! threads the ledger location through [`crate::Ledger::open`] explicitly
 //! instead of swapping `RELAYBURN_HOME`, so embeddings can run against
 //! multiple ledgers in the same process.
+//!
+//! Sync by design: the body is filesystem walks plus rusqlite writes, none
+//! of which yield to the tokio runtime. Callers running this from an async
+//! context (the napi binding, MCP server) should wrap the call in
+//! `tokio::task::spawn_blocking`.
 
 use std::path::PathBuf;
 
@@ -56,23 +61,23 @@ impl IngestOptions {
 impl LedgerHandle {
     /// Run [`ingest_all`] against this ledger handle. Returns the merged
     /// per-harness report.
-    pub async fn ingest(&mut self, mut opts: IngestOptions) -> anyhow::Result<IngestReport> {
+    pub fn ingest(&mut self, mut opts: IngestOptions) -> anyhow::Result<IngestReport> {
         if opts.ledger_home.is_none() {
             opts.ledger_home = self.inner.burn_path().parent().map(|p| p.to_path_buf());
         }
         let raw = opts.into_raw();
-        ingest_all(&mut self.inner, &raw).await
+        ingest_all(&mut self.inner, &raw)
     }
 }
 
 /// Free-function form of the ingest verb. Opens a fresh ledger using
 /// `opts.ledger_home`, runs [`ingest_all`], and returns the report.
-pub async fn ingest(opts: IngestOptions) -> anyhow::Result<IngestReport> {
+pub fn ingest(opts: IngestOptions) -> anyhow::Result<IngestReport> {
     let mut handle = Ledger::open(LedgerOpenOptions {
         home: opts.ledger_home.clone(),
         ..Default::default()
     })?;
-    handle.ingest(opts).await
+    handle.ingest(opts)
 }
 
 #[cfg(test)]
@@ -80,8 +85,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[tokio::test]
-    async fn ingest_with_empty_roots_returns_zero_report() {
+    #[test]
+    fn ingest_with_empty_roots_returns_zero_report() {
         let home = TempDir::new().expect("home tmp");
         let claude = TempDir::new().expect("claude tmp");
         let codex = TempDir::new().expect("codex tmp");
@@ -98,7 +103,7 @@ mod tests {
             on_warn: None,
         };
 
-        let report = ingest(opts).await.expect("ingest");
+        let report = ingest(opts).expect("ingest");
         assert_eq!(report.scanned_sessions, 0);
         assert_eq!(report.ingested_sessions, 0);
         assert_eq!(report.appended_turns, 0);
