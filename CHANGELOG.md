@@ -6,14 +6,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
-- `relayburn-sdk`: reader allocation hotspots trimmed — `stable_stringify` now
-  writes JSON directly via a custom `Serializer` (no intermediate `Value`
-  tree), `measure_content_bytes` uses a counting writer instead of
-  materializing the JSON string, `short_sha256` hex-encodes only the 8 bytes
-  it keeps, relationship dedup uses an owned-tuple `HashSet` key, tool-result
-  counter increments use the `entry` API, and `ProjectResolver::resolve`
-  holds the cache lock across `resolve_uncached` so concurrent callers don't
-  duplicate the filesystem walk. (#345)
+- `relayburn-sdk`: lower per-record allocations in reader hashing, tool-result
+  sizing, relationship dedup, and project resolution. Cuts overhead during
+  large session imports and concurrent `resolve_project` calls.
 
 ## [2.8.3] - 2026-05-11
 

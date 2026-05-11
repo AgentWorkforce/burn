@@ -318,13 +318,20 @@ struct StableMap<'a> {
 }
 
 fn finalize_object(out: &mut String, entries: &mut [(String, String)]) {
+    // Sort by the raw (unescaped) key so the order matches serde_json's
+    // BTreeMap-backed Value path. Sorting by JSON-encoded keys diverges for
+    // keys containing characters that JSON escapes (control chars, quotes).
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     out.push('{');
     for (i, (k, v)) in entries.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(k);
+        // JSON-encode the key at write time. Using `to_string` here matches
+        // `serde_json::to_string` for string values — i.e. the exact same
+        // escaping the previous `Value::String(s) => to_string(s)` path used.
+        let encoded = serde_json::to_string(k).unwrap_or_else(|_| String::from("\"\""));
+        out.push_str(&encoded);
         out.push(':');
         out.push_str(v);
     }
@@ -335,9 +342,11 @@ impl<'a> SerializeMap for StableMap<'a> {
     type Ok = ();
     type Error = StableError;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), StableError> {
-        let mut buf = String::new();
-        key.serialize(StableSerializer { out: &mut buf })?;
-        self.current_key = Some(buf);
+        // JSON requires object keys to be strings. Mirror `serde_json`'s
+        // `MapKeySerializer`: accept &str, coerce primitive numeric/bool keys
+        // to their string form, reject anything else.
+        let raw = key.serialize(MapKeyCollector)?;
+        self.current_key = Some(raw);
         Ok(())
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), StableError> {
@@ -366,8 +375,9 @@ impl<'a> SerializeStruct for StableMap<'a> {
     ) -> Result<(), StableError> {
         let mut vbuf = String::new();
         value.serialize(StableSerializer { out: &mut vbuf })?;
-        let kbuf = serde_json::to_string(key).map_err(|e| StableError(e.to_string()))?;
-        self.entries.push((kbuf, vbuf));
+        // Store the raw key; `finalize_object` JSON-encodes it. Lets us sort
+        // by raw value to match the previous Value-roundtrip path.
+        self.entries.push((key.to_string(), vbuf));
         Ok(())
     }
     fn end(mut self) -> Result<(), StableError> {
@@ -391,14 +401,158 @@ impl<'a> SerializeStructVariant for StableStructVariant<'a> {
     ) -> Result<(), StableError> {
         let mut vbuf = String::new();
         value.serialize(StableSerializer { out: &mut vbuf })?;
-        let kbuf = serde_json::to_string(key).map_err(|e| StableError(e.to_string()))?;
-        self.entries.push((kbuf, vbuf));
+        self.entries.push((key.to_string(), vbuf));
         Ok(())
     }
     fn end(mut self) -> Result<(), StableError> {
         finalize_object(self.out, &mut self.entries);
         self.out.push('}');
         Ok(())
+    }
+}
+
+/// Serializer for map keys. JSON requires object keys to be strings, so this
+/// mirrors `serde_json`'s `MapKeySerializer`: accept strings as-is, coerce
+/// primitive numeric/bool keys to their string form, error on composite types.
+/// Returns the raw key string (without JSON quoting/escaping) so callers can
+/// sort by raw value and encode at write time.
+struct MapKeyCollector;
+
+impl Serializer for MapKeyCollector {
+    type Ok = String;
+    type Error = StableError;
+    type SerializeSeq = ser::Impossible<String, StableError>;
+    type SerializeTuple = ser::Impossible<String, StableError>;
+    type SerializeTupleStruct = ser::Impossible<String, StableError>;
+    type SerializeTupleVariant = ser::Impossible<String, StableError>;
+    type SerializeMap = ser::Impossible<String, StableError>;
+    type SerializeStruct = ser::Impossible<String, StableError>;
+    type SerializeStructVariant = ser::Impossible<String, StableError>;
+
+    fn serialize_str(self, v: &str) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_char(self, v: char) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_bool(self, v: bool) -> Result<String, StableError> {
+        Ok(if v { "true".into() } else { "false".into() })
+    }
+    fn serialize_i8(self, v: i8) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_i16(self, v: i16) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_i32(self, v: i32) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_i64(self, v: i64) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_i128(self, v: i128) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_u8(self, v: u8) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_u16(self, v: u16) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_u32(self, v: u32) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_u64(self, v: u64) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_u128(self, v: u128) -> Result<String, StableError> {
+        Ok(v.to_string())
+    }
+    fn serialize_f32(self, _: f32) -> Result<String, StableError> {
+        Err(StableError("float map key not supported".into()))
+    }
+    fn serialize_f64(self, _: f64) -> Result<String, StableError> {
+        Err(StableError("float map key not supported".into()))
+    }
+    fn serialize_bytes(self, _: &[u8]) -> Result<String, StableError> {
+        Err(StableError("bytes map key not supported".into()))
+    }
+    fn serialize_none(self) -> Result<String, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_some<T: Serialize + ?Sized>(self, v: &T) -> Result<String, StableError> {
+        v.serialize(self)
+    }
+    fn serialize_unit(self) -> Result<String, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_unit_struct(self, _: &'static str) -> Result<String, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_unit_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+    ) -> Result<String, StableError> {
+        Ok(variant.to_string())
+    }
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        v: &T,
+    ) -> Result<String, StableError> {
+        v.serialize(self)
+    }
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: &T,
+    ) -> Result<String, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_tuple_struct(
+        self,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeTupleStruct, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeTupleVariant, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_struct(
+        self,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeStruct, StableError> {
+        Err(StableError("map key must be a string".into()))
+    }
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+        _: usize,
+    ) -> Result<Self::SerializeStructVariant, StableError> {
+        Err(StableError("map key must be a string".into()))
     }
 }
 
@@ -454,6 +608,27 @@ mod tests {
             apple: 2,
         });
         assert_eq!(s, r#"{"apple":2,"zebra":1}"#);
+    }
+
+    #[test]
+    fn stable_stringify_sorts_keys_by_raw_value_not_json_encoded() {
+        // `!` is raw 0x21; `\n` is raw 0x0a. Raw sort: \n < !. JSON-encoded
+        // sort (after the surrounding quote): `\\` (0x5c) > `!` (0x21), so
+        // encoded order would be !, \n — the opposite. The previous
+        // Value-roundtrip impl sorted by raw value; assert we still do.
+        let v = json!({ "!": 1, "\n": 2 });
+        assert_eq!(stable_stringify(&v), "{\"\\n\":2,\"!\":1}");
+    }
+
+    #[test]
+    fn stable_stringify_coerces_numeric_map_keys_to_strings() {
+        use std::collections::BTreeMap;
+        let mut m: BTreeMap<u32, u32> = BTreeMap::new();
+        m.insert(10, 1);
+        m.insert(2, 2);
+        // Numeric keys get coerced to their string form, like `serde_json`.
+        // Sorted by raw string value, so "10" < "2" lexicographically.
+        assert_eq!(stable_stringify(&m), r#"{"10":1,"2":2}"#);
     }
 
     #[test]
