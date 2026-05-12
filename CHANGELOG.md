@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.8.6] - 2026-05-12
+
 ### Changed
 
 - `relayburn-cli`: `burn compare --since` now uses the same normalization path
