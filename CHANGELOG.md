@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.8.5] - 2026-05-12
+
 ### Changed
 
 - `relayburn-sdk`: ingest verbs are now synchronous; async callers should
