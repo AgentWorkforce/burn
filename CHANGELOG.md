@@ -6,9 +6,15 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
-- `relayburn-cli`: `burn compare` now uses `relayburn_sdk::normalize_since`
-  instead of a local civil-date implementation, matching `summary` and
-  `hotspots`. Drops ~250 LOC of duplicated date math.
+- `relayburn-cli`: `burn compare --since` now uses the same normalization path
+  as `burn summary` and `burn hotspots`, keeping date-filter behavior
+  consistent across commands.
+- `relayburn-sdk`: `normalize_since` now canonicalizes outputs to UTC
+  `YYYY-MM-DDTHH:MM:SS.mmmZ`. Relative ranges (`7d`, `24h`) emit `.000Z`
+  instead of `Z`, and ISO inputs with offsets (e.g. `...-07:00`) are
+  converted to UTC. This fixes `burn summary` / `burn hotspots` /
+  `burn compare --since` silently dropping same-second turns and misordering
+  offset cutoffs against the ledger's `ts >= ?` lex compare.
 
 ## [2.8.5] - 2026-05-12
 
