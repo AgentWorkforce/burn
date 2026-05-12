@@ -313,25 +313,22 @@ fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
     }
 
     // Validate the payload shape. The TS hook ignores payloads missing
-    // `session_id` / `transcript_path`; mirror that. We also pull
-    // `transcript_path` out so we can drive the single-transcript
-    // fast-path below.
+    // `session_id`; mirror that. `transcript_path` is optional — when
+    // present we drive the single-transcript fast-path, when absent we
+    // fall back to `ingest_all` so older Claude Code releases that
+    // elide the field still make forward progress.
     let transcript_path = match serde_json::from_str::<serde_json::Value>(&raw) {
         Ok(v) => {
             let has_session = v.get("session_id").and_then(|x| x.as_str()).is_some();
-            let transcript = v
-                .get("transcript_path")
-                .and_then(|x| x.as_str())
-                .map(PathBuf::from);
-            if !has_session || transcript.is_none() {
+            if !has_session {
                 if !quiet {
-                    eprintln!(
-                        "[burn] ingest: payload missing session_id or transcript_path; ignoring",
-                    );
+                    eprintln!("[burn] ingest: payload missing session_id; ignoring");
                 }
                 return 0;
             }
-            transcript
+            v.get("transcript_path")
+                .and_then(|x| x.as_str())
+                .map(PathBuf::from)
         }
         Err(err) => {
             eprintln!("[burn] ingest: invalid JSON payload: {err}");

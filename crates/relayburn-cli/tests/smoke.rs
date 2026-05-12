@@ -581,6 +581,26 @@ fn ingest_hook_claude_quiet_suppresses_payload_warning() {
         .stderr("");
 }
 
+/// Older Claude Code hook payloads carry `session_id` without
+/// `transcript_path`; the hook must still make forward progress by
+/// falling back to a full sweep (`ingest_all`) rather than ignoring
+/// the payload. Pin the contract: well-formed JSON with session_id
+/// but no transcript_path exits 0 quietly under `--quiet`.
+#[test]
+fn ingest_hook_claude_session_id_without_transcript_falls_back() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["ingest", "--hook", "claude", "--quiet"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .write_stdin(r#"{"session_id": "00000000-0000-0000-0000-000000000000"}"#)
+        .assert()
+        .success()
+        .stderr("");
+}
+
 /// `--watch` and `--hook` remain mutually exclusive at clap parse
 /// time. Pin the exit code so a future refactor can't silently relax
 /// the contract.
