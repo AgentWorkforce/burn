@@ -4,6 +4,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-cli`: `burn compare` now uses `relayburn_sdk::normalize_since`
+  instead of a local civil-date implementation, matching `summary` and
+  `hotspots`. Drops ~250 LOC of duplicated date math.
+
 ## [2.8.5] - 2026-05-12
 
 ### Changed
