@@ -19,6 +19,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   (one-shot) and `--watch` modes (no longer hook-only). Suppresses the
   progress spinner, watch banner, and per-tick summaries; one-shot mode
   still writes its final summary line to stdout for pipeline capture.
+
+## [2.8.5] - 2026-05-12
+
+### Changed
+
 - `relayburn-sdk`: ingest verbs are now synchronous; async callers should
   run them via `tokio::task::spawn_blocking`.
 - `relayburn-sdk`: lower per-record allocations in reader hashing, tool-result
