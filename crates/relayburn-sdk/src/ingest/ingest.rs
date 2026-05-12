@@ -329,7 +329,22 @@ pub async fn ingest_claude_session(
     let file = claude_projects_dir(&opts.roots)
         .join(&encoded)
         .join(format!("{session_id}.jsonl"));
-    match fs::metadata(&file) {
+    ingest_claude_transcript_path(ledger, &file, opts).await
+}
+
+/// Path-based Claude fast-path used by hook callers that already know the
+/// transcript path (e.g. the Claude Code `Stop` hook payload). Parses the
+/// single JSONL file, appends turns/content/events/relationships/etc., and
+/// persists an EOF cursor so a follow-up `ingest_all` skips it. Missing
+/// files or non-files return an empty report (and log on stderr for the
+/// missing case) so hook orchestrators don't fail the parent invocation.
+pub async fn ingest_claude_transcript_path(
+    ledger: &mut Ledger,
+    transcript_path: &Path,
+    opts: &IngestOptions,
+) -> anyhow::Result<IngestReport> {
+    let file = transcript_path;
+    match fs::metadata(file) {
         Ok(m) if m.is_file() => {}
         Ok(_) => return Ok(IngestReport::empty()),
         Err(_) => {
@@ -344,7 +359,7 @@ pub async fn ingest_claude_session(
         content_mode: Some(content_mode),
         ..Default::default()
     };
-    let result = parse_claude_session(&file, &parse_opts).map_err(|e| anyhow::anyhow!(e))?;
+    let result = parse_claude_session(file, &parse_opts).map_err(|e| anyhow::anyhow!(e))?;
     if result.turns.is_empty() {
         return Ok(IngestReport {
             scanned_sessions: 1,
@@ -377,7 +392,7 @@ pub async fn ingest_claude_session(
     // and keeps reading past the pre-parse `len()` if the file grew during
     // parse; using the pre-parse size would cause a follow-up `ingest_all`
     // to replay those bytes and emit duplicate turns.
-    let meta = fs::metadata(&file)?;
+    let meta = fs::metadata(file)?;
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
     let cursor = ClaudeCursor {

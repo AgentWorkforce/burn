@@ -4,8 +4,21 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `relayburn-sdk`: `ingest_claude_transcript_path(ledger, path, opts)` —
+  per-transcript Claude fast-path used by `burn ingest --hook claude` so
+  the hook ingests only the one JSONL the payload points at instead of a
+  full sweep. Closes #375.
+
 ### Changed
 
+- `relayburn-cli`: `burn ingest --hook claude` now drives the new
+  single-transcript fast-path, bounding per-hook cost to one JSONL parse.
+- `relayburn-cli`: `burn ingest --quiet` is now accepted in default
+  (one-shot) and `--watch` modes (no longer hook-only). Suppresses the
+  progress spinner, watch banner, and per-tick summaries; one-shot mode
+  still writes its final summary line to stdout for pipeline capture.
 - `relayburn-sdk`: lower per-record allocations in reader hashing, tool-result
   sizing, relationship dedup, and project resolution. Cuts overhead during
   large session imports and concurrent `resolve_project` calls.

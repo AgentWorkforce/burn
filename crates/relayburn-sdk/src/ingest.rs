@@ -78,7 +78,8 @@ pub use crate::reader::ContentStoreMode;
 pub use gap::{restore_ingest_gap_writer, set_ingest_gap_writer};
 pub use ingest::{
     default_session_roots, ingest_all, ingest_claude_projects, ingest_claude_session,
-    ingest_codex_sessions, ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
+    ingest_claude_transcript_path, ingest_codex_sessions, ingest_opencode_sessions, IngestOptions,
+    IngestReport, IngestRoots,
 };
 pub use pending_stamps::{
     cleanup_stale_pending_stamps, cleanup_stale_pending_stamps_at, pending_stamps_dir,

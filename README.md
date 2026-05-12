@@ -154,8 +154,8 @@ harness spawn. Default mode scans Claude Code, Codex, and OpenCode stores once.
 |---|---|
 | `--watch` | Keep polling session stores in the foreground. |
 | `--interval <ms>` | Poll interval in milliseconds. Default: `1000`. |
-| `--quiet` | Suppress normal ingest messages. |
-| `--hook claude` | Read one Claude Code hook payload from stdin and ingest its transcript. |
+| `--quiet` | Suppress stderr progress spinner / breadcrumbs. One-shot mode still writes the final summary on stdout. |
+| `--hook claude` | Read one Claude Code hook payload from stdin and ingest its single transcript via the SDK fast-path. |
 
 | Example | Result |
 |---|---|
