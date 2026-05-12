@@ -40,16 +40,15 @@ impl ProjectResolver {
     }
 
     /// Resolve a project for `cwd`, consulting (and populating) the cache.
+    /// Holds the cache lock across `resolve_uncached` so concurrent callers
+    /// with the same `cwd` only do the filesystem walk once.
     pub fn resolve(&self, cwd: &str) -> ResolvedProject {
-        if let Some(hit) = self.cache.lock().unwrap().get(cwd) {
+        let mut cache = self.cache.lock().unwrap();
+        if let Some(hit) = cache.get(cwd) {
             return hit.clone();
         }
         let result = resolve_uncached(cwd);
-        self.cache
-            .lock()
-            .unwrap()
-            .entry(cwd.to_string())
-            .or_insert_with(|| result.clone());
+        cache.insert(cwd.to_string(), result.clone());
         result
     }
 

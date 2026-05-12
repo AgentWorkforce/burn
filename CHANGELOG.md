@@ -8,6 +8,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - `relayburn-sdk`: ingest verbs are now synchronous; async callers should
   run them via `tokio::task::spawn_blocking`.
+- `relayburn-sdk`: lower per-record allocations in reader hashing, tool-result
+  sizing, relationship dedup, and project resolution. Cuts overhead during
+  large session imports and concurrent `resolve_project` calls.
 - `relayburn-sdk`: `parse_claude_session` now delegates to the incremental
   parser with `start_offset = 0`, dropping the duplicate `ParseState`
   codepath. Behavior is unchanged — trailing in-progress turns and final
