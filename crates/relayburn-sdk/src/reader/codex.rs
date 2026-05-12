@@ -715,8 +715,9 @@ fn parse_codex_buffer<R: BufRead>(
                             Some(c) if !c.is_empty() => c.to_string(),
                             _ => continue,
                         };
-                        let call_index = *tool_result_counters.get(&call_id).unwrap_or(&0);
-                        tool_result_counters.insert(call_id.clone(), call_index + 1);
+                        let entry = tool_result_counters.entry(call_id.clone()).or_insert(0);
+                        let call_index = *entry;
+                        *entry += 1;
                         let status = subagent_notification_status(payload);
                         let mut ev = ToolResultEventRecord {
                             v: 1,
@@ -879,8 +880,9 @@ fn parse_codex_buffer<R: BufRead>(
                         if user_turn_slot.ts.is_empty() && !item_ts.is_empty() {
                             user_turn_slot.ts = item_ts.to_string();
                         }
-                        let call_index = *tool_result_counters.get(&call_id).unwrap_or(&0);
-                        tool_result_counters.insert(call_id.clone(), call_index + 1);
+                        let entry = tool_result_counters.entry(call_id.clone()).or_insert(0);
+                        let call_index = *entry;
+                        *entry += 1;
                         let initial_status = if open_turn
                             .as_ref()
                             .map(|o| o.errored_call_ids.contains(&call_id))
