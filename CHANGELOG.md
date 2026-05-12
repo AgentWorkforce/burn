@@ -6,6 +6,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Changed
 
+- `relayburn-sdk`: ingest verbs are now synchronous; async callers should
+  run them via `tokio::task::spawn_blocking`.
 - `relayburn-sdk`: lower per-record allocations in reader hashing, tool-result
   sizing, relationship dedup, and project resolution. Cuts overhead during
   large session imports and concurrent `resolve_project` calls.
@@ -14,6 +16,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   codepath. Behavior is unchanged — trailing in-progress turns and final
   JSON lines lacking a trailing newline still surface in the single-shot
   output.
+
+### Removed
+
+- `relayburn-sdk`: removed `run_ingest_tick`.
 
 ## [2.8.3] - 2026-05-11
 

@@ -20,12 +20,9 @@
 //! per-harness roots in [`IngestRoots`] so a stray `~/.claude/projects/`
 //! on the developer's machine can't be picked up.
 //!
-//! `#[tokio::test]` defaults to `current_thread`, so the `std::sync::Mutex`
-//! guard held across an `.await` is sound (no other task can run on the
-//! same thread). Clippy's `await_holding_lock` warns by default; we silence
-//! it at module level rather than per-test.
-
-#![allow(clippy::await_holding_lock)]
+//! Synchronous `#[test]` runners, so a `std::sync::Mutex` guard held for
+//! the duration of a test body is sound — no other test runs concurrently
+//! against the same process env.
 
 use std::collections::HashSet;
 use std::fs;
@@ -128,8 +125,8 @@ fn pinned_roots(tmp: &TempDir) -> IngestRoots {
     }
 }
 
-#[tokio::test]
-async fn ingest_claude_projects_round_trips_a_fixture_session() {
+#[test]
+fn ingest_claude_projects_round_trips_a_fixture_session() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);
     let roots = pinned_roots(&tmp);
@@ -149,7 +146,7 @@ async fn ingest_claude_projects_round_trips_a_fixture_session() {
         roots,
         ..Default::default()
     };
-    let report = ingest_claude_projects(&mut ledger, &opts).await.unwrap();
+    let report = ingest_claude_projects(&mut ledger, &opts).unwrap();
 
     assert!(report.appended_turns >= 1, "expected ≥1 turn ingested");
     assert!(report.ingested_sessions >= 1);
@@ -167,8 +164,8 @@ async fn ingest_claude_projects_round_trips_a_fixture_session() {
     }
 }
 
-#[tokio::test]
-async fn ingest_claude_projects_resolves_pending_stamp_tags() {
+#[test]
+fn ingest_claude_projects_resolves_pending_stamp_tags() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);
     let roots = pinned_roots(&tmp);
@@ -201,7 +198,7 @@ async fn ingest_claude_projects_resolves_pending_stamp_tags() {
         roots,
         ..Default::default()
     };
-    let report = ingest_claude_projects(&mut ledger, &opts).await.unwrap();
+    let report = ingest_claude_projects(&mut ledger, &opts).unwrap();
 
     assert!(report.appended_turns >= 1, "expected >=1 turn ingested");
     assert_eq!(report.applied_pending_stamps, 1);
@@ -215,8 +212,8 @@ async fn ingest_claude_projects_resolves_pending_stamp_tags() {
     assert_eq!(turns[0].turn.session_id, sid);
 }
 
-#[tokio::test]
-async fn ingest_codex_sessions_round_trips_a_fixture_session() {
+#[test]
+fn ingest_codex_sessions_round_trips_a_fixture_session() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);
     let roots = pinned_roots(&tmp);
@@ -232,7 +229,7 @@ async fn ingest_codex_sessions_round_trips_a_fixture_session() {
         roots,
         ..Default::default()
     };
-    let report = ingest_codex_sessions(&mut ledger, &opts).await.unwrap();
+    let report = ingest_codex_sessions(&mut ledger, &opts).unwrap();
     assert!(report.appended_turns >= 1, "expected ≥1 codex turn");
     let turns = ledger
         .query_turns(&Query::for_session("sess_simple_1"))
@@ -247,8 +244,8 @@ async fn ingest_codex_sessions_round_trips_a_fixture_session() {
     }
 }
 
-#[tokio::test]
-async fn ingest_opencode_sessions_round_trips_a_fixture_session() {
+#[test]
+fn ingest_opencode_sessions_round_trips_a_fixture_session() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);
     let roots = pinned_roots(&tmp);
@@ -265,7 +262,7 @@ async fn ingest_opencode_sessions_round_trips_a_fixture_session() {
         roots,
         ..Default::default()
     };
-    let report = ingest_opencode_sessions(&mut ledger, &opts).await.unwrap();
+    let report = ingest_opencode_sessions(&mut ledger, &opts).unwrap();
     assert!(
         report.appended_turns >= 1,
         "expected ≥1 opencode turn (got {})",
@@ -284,8 +281,8 @@ async fn ingest_opencode_sessions_round_trips_a_fixture_session() {
     }
 }
 
-#[tokio::test]
-async fn ingest_all_walks_each_harness_root_once() {
+#[test]
+fn ingest_all_walks_each_harness_root_once() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);
     let roots = pinned_roots(&tmp);
@@ -326,7 +323,7 @@ async fn ingest_all_walks_each_harness_root_once() {
         roots,
         ..Default::default()
     };
-    let report = ingest_all(&mut ledger, &opts).await.unwrap();
+    let report = ingest_all(&mut ledger, &opts).unwrap();
     assert!(
         report.appended_turns >= 3,
         "expected ≥3 turns total across the three harnesses (got {})",
@@ -353,8 +350,8 @@ async fn ingest_all_walks_each_harness_root_once() {
     );
 }
 
-#[tokio::test]
-async fn ingest_claude_session_writes_eof_cursor_so_followup_skips_file() {
+#[test]
+fn ingest_claude_session_writes_eof_cursor_so_followup_skips_file() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);
     let roots = pinned_roots(&tmp);
@@ -377,9 +374,7 @@ async fn ingest_claude_session_writes_eof_cursor_so_followup_skips_file() {
         ..Default::default()
     };
 
-    let r = ingest_claude_session(&mut ledger, cwd, sid, &opts)
-        .await
-        .unwrap();
+    let r = ingest_claude_session(&mut ledger, cwd, sid, &opts).unwrap();
     assert!(r.appended_turns >= 1, "expected ≥1 turn appended");
     assert_eq!(r.ingested_sessions, 1);
 
@@ -396,7 +391,7 @@ async fn ingest_claude_session_writes_eof_cursor_so_followup_skips_file() {
     // A subsequent ingest_all sweep with the same file content must skip
     // it — appendedTurns should not go up.
     let before_count = ledger.query_turns(&Query::for_session(sid)).unwrap().len();
-    let r2 = ingest_all(&mut ledger, &opts).await.unwrap();
+    let r2 = ingest_all(&mut ledger, &opts).unwrap();
     let after_count = ledger.query_turns(&Query::for_session(sid)).unwrap().len();
     assert_eq!(
         before_count, after_count,

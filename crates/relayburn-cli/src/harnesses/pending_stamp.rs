@@ -131,15 +131,13 @@ pub fn adapter_static(config: PendingStampAdapter) -> &'static dyn HarnessAdapte
     Box::leak(Box::new(PendingStampAdapterImpl::new(config)))
 }
 
-/// Async fn pointer for an SDK session ingestor (`ingest_codex_sessions`,
-/// `ingest_opencode_sessions`). The shape matches both per-harness ingest
-/// passes verbatim — they live in `relayburn_sdk` as `async fn`, and the
-/// per-call `Box::pin` adaptation happens at the call site so the helper
+/// Fn pointer for an SDK session ingestor (`ingest_codex_sessions`,
+/// `ingest_opencode_sessions`). Both verbs are sync in the SDK; the
+/// per-tick `Box::pin` adaptation that drops them into [`IngestSessionsFn`]
+/// happens at the call site in [`session_store_adapter`] so the helper
 /// stays a fn pointer (no per-tick closure allocation).
-pub type SessionIngestor = for<'a> fn(
-    &'a mut RawLedger,
-    &'a RawIngestOptions,
-) -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send + 'a>>;
+pub type SessionIngestor =
+    fn(&mut RawLedger, &RawIngestOptions) -> anyhow::Result<IngestReport>;
 
 /// One-call factory for pending-stamp adapters whose only differences are
 /// the harness name, the session-root resolver, and which SDK ingest pass
@@ -174,7 +172,7 @@ pub fn session_store_adapter(
                 ledger_home,
                 ..RawIngestOptions::default()
             };
-            ingestor(handle.raw_mut(), &opts).await
+            ingestor(handle.raw_mut(), &opts)
         })
     });
     adapter_static(PendingStampAdapter::new(name, session_root, ingest_sessions))

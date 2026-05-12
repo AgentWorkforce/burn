@@ -194,7 +194,7 @@ async fn gap_warning_fires_once_then_suppressed_for_claude() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts_with_warn).await.unwrap();
+        ingest_all(&mut ledger, &opts_with_warn).unwrap();
 
         let first_warnings = warn_log.lock().unwrap().clone();
         assert_eq!(
@@ -224,7 +224,7 @@ async fn gap_warning_fires_once_then_suppressed_for_claude() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts_with_warn2).await.unwrap();
+        ingest_all(&mut ledger, &opts_with_warn2).unwrap();
 
         let second_warnings = warn_log2.lock().unwrap().clone();
         assert!(
@@ -315,7 +315,7 @@ async fn no_gap_warning_for_chat_only_claude_session() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts).await.unwrap();
+        ingest_all(&mut ledger, &opts).unwrap();
     })
     .await;
 
@@ -385,7 +385,7 @@ async fn gap_warning_fires_once_then_suppressed_for_codex() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts1).await.unwrap();
+        ingest_all(&mut ledger, &opts1).unwrap();
         let first = warn1.lock().unwrap().clone();
         assert_eq!(
             first.len(),
@@ -413,7 +413,7 @@ async fn gap_warning_fires_once_then_suppressed_for_codex() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts2).await.unwrap();
+        ingest_all(&mut ledger, &opts2).unwrap();
         assert!(
             warn2.lock().unwrap().is_empty(),
             "second ingest must stay silent for unchanged codex set"
@@ -530,7 +530,7 @@ async fn gap_warning_fires_once_then_suppressed_for_opencode() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts1).await.unwrap();
+        ingest_all(&mut ledger, &opts1).unwrap();
         let first = warn1.lock().unwrap().clone();
         assert_eq!(
             first.len(),
@@ -558,7 +558,7 @@ async fn gap_warning_fires_once_then_suppressed_for_opencode() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts2).await.unwrap();
+        ingest_all(&mut ledger, &opts2).unwrap();
         assert!(
             warn2.lock().unwrap().is_empty(),
             "second ingest must stay silent for unchanged opencode set"
@@ -607,9 +607,7 @@ async fn per_harness_then_ingest_all_keeps_each_adapter_isolated() {
             })),
             ..Default::default()
         };
-        ingest_codex_sessions(&mut ledger, &opts_codex)
-            .await
-            .unwrap();
+        ingest_codex_sessions(&mut ledger, &opts_codex).unwrap();
         let after_codex = warn1.lock().unwrap().clone();
         assert_eq!(
             after_codex.len(),
@@ -644,7 +642,7 @@ async fn per_harness_then_ingest_all_keeps_each_adapter_isolated() {
             })),
             ..Default::default()
         };
-        ingest_all(&mut ledger, &opts_all).await.unwrap();
+        ingest_all(&mut ledger, &opts_all).unwrap();
         let after_all = warn2.lock().unwrap().clone();
         let claude_count = after_all
             .iter()
@@ -708,9 +706,7 @@ async fn per_harness_verbs_emit_gap_warnings() {
             })),
             ..Default::default()
         };
-        ingest_claude_projects(&mut ledger, &opts_claude)
-            .await
-            .unwrap();
+        ingest_claude_projects(&mut ledger, &opts_claude).unwrap();
         let claude = warn_claude.lock().unwrap().clone();
         assert_eq!(claude.len(), 1, "claude per-harness verb fires once");
         assert!(claude[0].starts_with("claude:"));
@@ -724,9 +720,7 @@ async fn per_harness_verbs_emit_gap_warnings() {
             })),
             ..Default::default()
         };
-        ingest_opencode_sessions(&mut ledger, &opts_oc)
-            .await
-            .unwrap();
+        ingest_opencode_sessions(&mut ledger, &opts_oc).unwrap();
         let oc = warn_oc.lock().unwrap().clone();
         assert_eq!(oc.len(), 1, "opencode per-harness verb fires once");
         assert!(oc[0].starts_with("opencode:"));

@@ -10,13 +10,12 @@
 //! * `ingest_sessions` — defers to [`relayburn_sdk::ingest_codex_sessions`],
 //!   the codex-only ingest pass. The factory opens a fresh ledger handle
 //!   per call (mirrors the TS lock-then-write-then-close shape; SQLite WAL
-//!   keeps the per-tick open cheap).
+//!   keeps the per-tick open cheap). The SDK verb is sync, so we pass it
+//!   directly as a fn pointer to [`pending_stamp::session_store_adapter`].
 
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 
-use relayburn_sdk::{ingest_codex_sessions, IngestReport, RawIngestOptions, RawLedger};
+use relayburn_sdk::ingest_codex_sessions;
 
 use super::pending_stamp;
 use super::HarnessAdapter;
@@ -29,20 +28,11 @@ fn codex_sessions_dir() -> PathBuf {
     home_dir().join(".codex").join("sessions")
 }
 
-/// Box-pin the SDK's `async fn ingest_codex_sessions` into a fn pointer
-/// the [`pending_stamp::SessionIngestor`] type alias accepts.
-fn codex_ingest<'a>(
-    ledger: &'a mut RawLedger,
-    opts: &'a RawIngestOptions,
-) -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send + 'a>> {
-    Box::pin(ingest_codex_sessions(ledger, opts))
-}
-
 /// Hand out a `&'static dyn HarnessAdapter` for codex. The registry calls
 /// this once at lazy-init time. See
 /// [`pending_stamp::session_store_adapter`] for the leak semantics.
 pub fn adapter() -> &'static dyn HarnessAdapter {
-    pending_stamp::session_store_adapter("codex", codex_sessions_dir, codex_ingest)
+    pending_stamp::session_store_adapter("codex", codex_sessions_dir, ingest_codex_sessions)
 }
 
 #[cfg(test)]
