@@ -9,7 +9,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-sdk`: `ingest_claude_transcript_path(ledger, path, opts)` —
   per-transcript Claude fast-path used by `burn ingest --hook claude` so
   the hook ingests only the one JSONL the payload points at instead of a
-  full sweep. Closes #375.
+  full sweep.
 
 ### Changed
 

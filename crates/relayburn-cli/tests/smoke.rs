@@ -499,7 +499,8 @@ fn ingest_one_shot_quiet_keeps_stdout_summary() {
         .env("NO_COLOR", "1")
         .assert()
         .success()
-        .stdout(predicate::str::contains("[burn] ingest: ingested"));
+        .stdout(predicate::str::contains("[burn] ingest: ingested"))
+        .stderr(predicate::str::is_empty());
 }
 
 /// `burn ingest --hook` only accepts `claude` today; any other value

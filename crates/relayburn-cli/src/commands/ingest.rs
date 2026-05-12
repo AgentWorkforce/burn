@@ -162,29 +162,38 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         None => 1000,
     };
 
-    let progress = TaskProgress::new(globals, "ingest");
-    progress.set_task("opening ledger");
+    let quiet = args.quiet;
+    let progress = (!quiet).then(|| {
+        let p = TaskProgress::new(globals, "ingest");
+        p.set_task("opening ledger");
+        p
+    });
     let handle = match open_handle(globals) {
         Ok(h) => h,
         Err(err) => {
-            progress.finish_and_clear();
+            if let Some(p) = &progress {
+                p.finish_and_clear();
+            }
             return report_error(&err, globals);
         }
     };
 
-    progress.set_task("starting watcher");
+    if let Some(p) = &progress {
+        p.set_task("starting watcher");
+    }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(err) => {
-            progress.finish_and_clear();
+            if let Some(p) = &progress {
+                p.finish_and_clear();
+            }
             return report_error(&err, globals);
         }
     };
 
-    let quiet = args.quiet;
     let no_fsevents = args.no_fsevents;
     // The FS-event driver may silently demote to polling at startup
     // (no watchable path yet) or mid-run (notify channel closes), so
@@ -195,9 +204,9 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
     } else {
         "watching (FS events with polling fallback); Ctrl-C to stop".to_string()
     };
-    if !quiet {
-        if progress.is_visible() {
-            progress.set_task(watch_message.clone());
+    if let Some(p) = &progress {
+        if p.is_visible() {
+            p.set_task(watch_message.clone());
         } else if no_fsevents {
             eprintln!(
                 "[burn] ingest: foreground ingest polling every {interval_ms}ms; Ctrl-C to stop",
@@ -223,15 +232,18 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
             let ledger_home = ledger_home.clone();
             let watch_message = watch_message_for_ingest.clone();
             Box::pin(async move {
-                progress.set_task("scanning sessions");
+                if let Some(p) = &progress {
+                    p.set_task("scanning sessions");
+                }
                 let mut guard = h.lock().await;
-                let opts = if quiet {
-                    TaskProgress::quiet_ingest_options(ledger_home)
-                } else {
-                    progress.ingest_options(ledger_home)
+                let opts = match &progress {
+                    Some(p) => p.ingest_options(ledger_home),
+                    None => TaskProgress::quiet_ingest_options(ledger_home),
                 };
                 let result = ingest_all(guard.raw_mut(), &opts).await;
-                progress.set_task(watch_message);
+                if let Some(p) = &progress {
+                    p.set_task(watch_message);
+                }
                 result
             })
         });
@@ -241,18 +253,21 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
             // Match TS: only log a summary when the tick actually
             // appended turns. Empty ticks would otherwise drown the
             // user with zero-progress lines.
-            if !quiet && report.appended_turns > 0 {
-                progress_for_report.suspend(|| {
-                    eprint!("{}", render_ingest_line(report));
-                });
+            if let Some(p) = &progress_for_report {
+                if report.appended_turns > 0 {
+                    p.suspend(|| {
+                        eprint!("{}", render_ingest_line(report));
+                    });
+                }
             }
         });
 
         let progress_for_error = progress_for_loop.clone();
-        let on_error: relayburn_sdk::ErrorSink = Arc::new(move |err: &anyhow::Error| {
-            progress_for_error.suspend(|| {
+        let on_error: relayburn_sdk::ErrorSink = Arc::new(move |err: &anyhow::Error| match &progress_for_error {
+            Some(p) => p.suspend(|| {
                 eprintln!("[burn] ingest: {err}");
-            });
+            }),
+            None => eprintln!("[burn] ingest: {err}"),
         });
 
         // Default to the `notify`-backed FS-event driver against the
@@ -260,7 +275,7 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         // automatically when no path exists yet (fresh install) or
         // when the user passes `--no-fsevents`. The slow polling
         // backstop in the SDK keeps progress on filesystems where FS
-        // events are unreliable. Closes #250.
+        // events are unreliable.
         let watch_paths = default_session_roots(&IngestRoots::default());
         let opts = StartWatchLoopOptions::new(ingest_fn)
             .with_interval(Duration::from_millis(interval_ms))
@@ -274,7 +289,9 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         wait_for_stop_signal().await;
         controller.stop().await;
     });
-    progress.finish_and_clear();
+    if let Some(p) = &progress {
+        p.finish_and_clear();
+    }
 
     0
 }

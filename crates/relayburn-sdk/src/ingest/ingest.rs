@@ -347,10 +347,14 @@ pub async fn ingest_claude_transcript_path(
     match fs::metadata(file) {
         Ok(m) if m.is_file() => {}
         Ok(_) => return Ok(IngestReport::empty()),
-        Err(_) => {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Hook policy: never break the parent when the transcript
+            // file has rotated or never landed. Permission / IO errors
+            // fall through below so the caller sees them.
             eprintln!("[burn] no session file found at {}", file.display());
             return Ok(IngestReport::empty());
         }
+        Err(err) => return Err(err.into()),
     }
 
     let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
