@@ -207,12 +207,11 @@ static FILE_TOOLS: phf::Set<&'static str> = phf_set! {
 /// charged via Codex `included_in_output`, etc.) lands in `unattributed_*`.
 pub fn attribute_hotspots(turns: &[TurnRecord], opts: &HotspotsOptions<'_>) -> HotspotsResult {
     // First-seen session ordering matches the TS `Map` iteration semantics.
-    let mut by_session: IndexMap<String, Vec<TurnRecord>> = IndexMap::new();
+    // Borrow turns rather than cloning — nothing below mutates them and the
+    // input slice outlives every aggregation step.
+    let mut by_session: IndexMap<String, Vec<&TurnRecord>> = IndexMap::new();
     for t in turns {
-        by_session
-            .entry(t.session_id.clone())
-            .or_default()
-            .push(t.clone());
+        by_session.entry(t.session_id.clone()).or_default().push(t);
     }
 
     let mut attributions: Vec<ToolAttribution> = Vec::new();
@@ -284,7 +283,7 @@ struct SessionAttribution {
 }
 
 fn attribute_session(
-    turns: &[TurnRecord],
+    turns: &[&TurnRecord],
     pricing: &PricingTable,
     tool_results_by_turn: Option<&HashMap<u64, PerTurnContent>>,
     user_turns: &[UserTurnRecord],
@@ -341,7 +340,7 @@ fn attribute_session(
     let mut riding_active: Vec<usize> = Vec::new();
     let mut grand_total = 0.0_f64;
 
-    for turn in turns {
+    for &turn in turns {
         let turn_rate = lookup_model_rate(&turn.model, pricing);
 
         // Accumulate the per-turn grand total in this same pass. Routes
@@ -490,7 +489,7 @@ fn attribute_session(
 
 fn index_tool_results(
     content: &[ContentRecord],
-    turns: &[TurnRecord],
+    turns: &[&TurnRecord],
 ) -> HashMap<u64, PerTurnContent> {
     let mut by_turn: HashMap<u64, PerTurnContent> = HashMap::new();
     let mut turn_index_by_tool_use_id: HashMap<String, u64> = HashMap::new();

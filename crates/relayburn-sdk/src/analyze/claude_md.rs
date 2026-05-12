@@ -306,7 +306,20 @@ fn matches_close_fence(s: &str, ch: char, min_len: usize) -> bool {
 }
 
 pub fn attribute_claude_md(input: &AttributeClaudeMdInput<'_>) -> ClaudeMdAttributionResult {
-    let total_tokens: u64 = input.files.iter().map(|f| f.tokens).sum();
+    let turns: Vec<&TurnRecord> = input.turns.iter().collect();
+    attribute_claude_md_refs(input.files, &turns, input.pricing)
+}
+
+/// Reference-borrow variant of [`attribute_claude_md`] used by callers that
+/// have already pre-filtered turns into a `Vec<&TurnRecord>` (e.g. the
+/// per-file overhead attribution loop). Avoids the per-turn `Vec<TurnRecord>`
+/// clone that the public entry point would otherwise force.
+pub(crate) fn attribute_claude_md_refs(
+    files: &[ParsedClaudeMd],
+    turns: &[&TurnRecord],
+    pricing: &PricingTable,
+) -> ClaudeMdAttributionResult {
+    let total_tokens: u64 = files.iter().map(|f| f.tokens).sum();
     if total_tokens == 0 {
         return ClaudeMdAttributionResult {
             total_tokens: 0,
@@ -320,8 +333,8 @@ pub fn attribute_claude_md(input: &AttributeClaudeMdInput<'_>) -> ClaudeMdAttrib
     }
 
     let mut by_session: IndexMap<String, Vec<&TurnRecord>> = IndexMap::new();
-    for t in input.turns {
-        by_session.entry(t.session_id.clone()).or_default().push(t);
+    for t in turns {
+        by_session.entry(t.session_id.clone()).or_default().push(*t);
     }
 
     let mut session_costs: Vec<SessionClaudeMdCost> = Vec::new();
@@ -333,7 +346,7 @@ pub fn attribute_claude_md(input: &AttributeClaudeMdInput<'_>) -> ClaudeMdAttrib
         let mut riding_turns: u64 = 0;
         let mut model_counts: IndexMap<String, u64> = IndexMap::new();
         for t in &turns {
-            let Some(rate) = lookup_model_rate(&t.model, input.pricing) else {
+            let Some(rate) = lookup_model_rate(&t.model, pricing) else {
                 continue;
             };
             *model_counts.entry(t.model.clone()).or_insert(0) += 1;
@@ -363,9 +376,9 @@ pub fn attribute_claude_md(input: &AttributeClaudeMdInput<'_>) -> ClaudeMdAttrib
     };
     let per_session_p95 = percentile(&session_cost_values, 0.95);
 
-    let total_bytes: u64 = input.files.iter().map(|f| f.bytes).sum();
+    let total_bytes: u64 = files.iter().map(|f| f.bytes).sum();
     let mut section_costs: Vec<SectionCost> = Vec::new();
-    for f in input.files {
+    for f in files {
         for section in &f.sections {
             let token_share = if total_bytes > 0 {
                 section.bytes as f64 / total_bytes as f64

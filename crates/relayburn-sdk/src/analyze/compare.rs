@@ -126,25 +126,38 @@ pub fn build_compare_table(turns: &[EnrichedTurn], opts: &CompareOptions<'_>) ->
 
     for et in turns {
         let t = &et.turn;
-        let model = if t.model.is_empty() {
-            "unknown".to_string()
+        let model: &str = if t.model.is_empty() {
+            "unknown"
         } else {
-            t.model.clone()
+            t.model.as_str()
         };
         if let Some(ref filter) = model_filter {
-            if !filter.iter().any(|m| m == &model) {
+            if !filter.iter().any(|m| m == model) {
                 continue;
             }
         }
         let cat = activity_label(t.activity);
-        model_set.insert(model.clone(), ());
-        category_set.insert(cat.clone(), ());
+        // One clone per *new* model — `by_model_category` is the canonical
+        // per-turn map (the other two may be pre-seeded by the model
+        // filter), so gate on it and reuse the owned key across the three
+        // maps to avoid the four clones the naive form does.
+        if !by_model_category.contains_key(model) {
+            let owned = model.to_string();
+            model_set.insert(owned.clone(), ());
+            model_totals
+                .entry(owned.clone())
+                .or_insert_with(CompareTotals::default);
+            by_model_category.insert(owned, BTreeMap::new());
+        }
+        if !category_set.contains_key(&cat) {
+            category_set.insert(cat.clone(), ());
+        }
 
-        let by_cat = by_model_category.entry(model.clone()).or_default();
+        let by_cat = by_model_category.get_mut(model).expect("model just inserted");
         let acc = by_cat.entry(cat).or_default();
 
         acc.turns += 1;
-        let mt = model_totals.entry(model.clone()).or_default();
+        let mt = model_totals.get_mut(model).expect("model just inserted");
         mt.turns += 1;
         if let Some(c) = cost_for_turn(t, opts.pricing) {
             acc.priced_turns += 1;
