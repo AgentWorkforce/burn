@@ -256,27 +256,20 @@ impl WatchController {
     /// We do NOT `abort()` the spawned task — that would cut a tick off
     /// mid-write. The stop is two-phased: set the atomic flag (covers a
     /// notify lost between loop iterations), then notify the parked waiter.
+    /// The trailing `in_flight.lock().await` covers a concurrent `tick()`
+    /// call from outside the loop: `tick()` doesn't check `stopped`, so
+    /// it can still acquire `in_flight` and run an ingest after the loop
+    /// task has exited. Waiting on the guard here guarantees no tick is
+    /// mid-write when `stop` returns, so callers can tear down state
+    /// safely.
     pub async fn stop(&self) {
         self.inner.stopped.store(true, Ordering::SeqCst);
         self.inner.stop_signal.notify_waiters();
         if let Some(handle) = self.handle.lock().await.take() {
             let _ = handle.await;
         }
-        // Belt-and-braces: even if the handle was already taken (idempotent
-        // calls), make sure no tick is mid-flight before returning.
         let _ = self.inner.in_flight.lock().await;
     }
-}
-
-/// Run a single ingest pass directly. Mirrors TS `runIngestTick(opts)` —
-/// callers that want a one-shot sweep instead of a long-running loop use
-/// this without going through `start_watch_loop`.
-pub async fn run_ingest_tick<F, Fut>(ingest: F) -> anyhow::Result<IngestReport>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = anyhow::Result<IngestReport>>,
-{
-    ingest().await
 }
 
 /// Spawn a background ticker that calls `opts.ingest` whenever the
@@ -418,22 +411,6 @@ mod tests {
                 Ok(IngestReport::default())
             })
         })
-    }
-
-    #[tokio::test]
-    async fn run_ingest_tick_invokes_callable_once() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let report = run_ingest_tick(|| {
-            let counter = counter.clone();
-            async move {
-                counter.fetch_add(1, Ordering::SeqCst);
-                Ok(IngestReport::default())
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        assert_eq!(report.scanned_sessions, 0);
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]

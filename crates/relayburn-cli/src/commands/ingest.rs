@@ -84,8 +84,7 @@ pub fn run(globals: &GlobalArgs, args: IngestArgs) -> i32 {
 }
 
 /// One-shot scan: open the ledger, run a single `ingest_all`, log the
-/// summary, exit. Drives a current-thread tokio runtime so the otherwise
-/// sync presenter can drive the async SDK verb.
+/// summary, exit.
 ///
 /// Summary line is emitted on **stdout** (matching TS `runIngestOnce`
 /// at `packages/cli/src/commands/ingest.ts:121-126`) so callers can
@@ -109,28 +108,13 @@ fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
         }
     };
     if let Some(p) = &progress {
-        p.set_task("starting runtime");
-    }
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(err) => {
-            if let Some(p) = &progress {
-                p.finish_and_clear();
-            }
-            return report_error(&err, globals);
-        }
-    };
-    if let Some(p) = &progress {
         p.set_task("scanning sessions");
     }
     let opts = match &progress {
         Some(p) => p.ingest_options(globals.ledger_path.clone()),
         None => TaskProgress::quiet_ingest_options(globals.ledger_path.clone()),
     };
-    let result = rt.block_on(ingest_all(handle.raw_mut(), &opts));
+    let result = ingest_all(handle.raw_mut(), &opts);
     if let Some(p) = &progress {
         p.finish_and_clear();
     }
@@ -240,7 +224,7 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
                     Some(p) => p.ingest_options(ledger_home),
                     None => TaskProgress::quiet_ingest_options(ledger_home),
                 };
-                let result = ingest_all(guard.raw_mut(), &opts).await;
+                let result = ingest_all(guard.raw_mut(), &opts);
                 if let Some(p) = &progress {
                     p.set_task(watch_message);
                 }
@@ -369,34 +353,16 @@ fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
         }
     };
     if let Some(progress) = &progress {
-        progress.set_task("starting runtime");
-    }
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(err) => {
-            if let Some(progress) = &progress {
-                progress.finish_and_clear();
-            }
-            eprintln!("[burn] ingest: {err}");
-            return 0;
-        }
-    };
-    if let Some(progress) = &progress {
         progress.set_task("ingesting transcript");
     }
     let opts = match &progress {
         Some(progress) => progress.ingest_options(globals.ledger_path.clone()),
         None => TaskProgress::quiet_ingest_options(globals.ledger_path.clone()),
     };
-    let result = rt.block_on(async {
-        match transcript_path.as_deref() {
-            Some(path) => ingest_claude_transcript_path(handle.raw_mut(), path, &opts).await,
-            None => ingest_all(handle.raw_mut(), &opts).await,
-        }
-    });
+    let result = match transcript_path.as_deref() {
+        Some(path) => ingest_claude_transcript_path(handle.raw_mut(), path, &opts),
+        None => ingest_all(handle.raw_mut(), &opts),
+    };
     if let Some(progress) = &progress {
         progress.finish_and_clear();
     }

@@ -184,7 +184,7 @@ fn resolve_content_mode(ledger_home: Option<&Path>) -> ContentStoreMode {
 /// Ingest every known session store once. Cleans stale pending stamps,
 /// loads cursors, walks Claude/Codex/OpenCode in turn, then persists any
 /// cursor mutations. Returns the merged report.
-pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<IngestReport> {
+pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     progress(opts, "loading ingest cursors");
@@ -237,7 +237,7 @@ pub async fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Re
     Ok(report)
 }
 
-pub async fn ingest_claude_projects(
+pub fn ingest_claude_projects(
     ledger: &mut Ledger,
     opts: &IngestOptions,
 ) -> anyhow::Result<IngestReport> {
@@ -262,7 +262,7 @@ pub async fn ingest_claude_projects(
     Ok(report)
 }
 
-pub async fn ingest_codex_sessions(
+pub fn ingest_codex_sessions(
     ledger: &mut Ledger,
     opts: &IngestOptions,
 ) -> anyhow::Result<IngestReport> {
@@ -287,7 +287,7 @@ pub async fn ingest_codex_sessions(
     Ok(report)
 }
 
-pub async fn ingest_opencode_sessions(
+pub fn ingest_opencode_sessions(
     ledger: &mut Ledger,
     opts: &IngestOptions,
 ) -> anyhow::Result<IngestReport> {
@@ -315,7 +315,7 @@ pub async fn ingest_opencode_sessions(
 /// Per-session fast-path used when a Claude launcher already knows the
 /// sessionId from the spawn plan. We go straight to the one JSONL file and
 /// persist a cursor at EOF — a later `ingest_all` sweep then skips it.
-pub async fn ingest_claude_session(
+pub fn ingest_claude_session(
     ledger: &mut Ledger,
     cwd: &str,
     session_id: &str,
@@ -329,7 +329,7 @@ pub async fn ingest_claude_session(
     let file = claude_projects_dir(&opts.roots)
         .join(&encoded)
         .join(format!("{session_id}.jsonl"));
-    ingest_claude_transcript_path(ledger, &file, opts).await
+    ingest_claude_transcript_path(ledger, &file, opts)
 }
 
 /// Path-based Claude fast-path used by hook callers that already know the
@@ -338,7 +338,7 @@ pub async fn ingest_claude_session(
 /// persists an EOF cursor so a follow-up `ingest_all` skips it. Missing
 /// files or non-files return an empty report (and log on stderr for the
 /// missing case) so hook orchestrators don't fail the parent invocation.
-pub async fn ingest_claude_transcript_path(
+pub fn ingest_claude_transcript_path(
     ledger: &mut Ledger,
     transcript_path: &Path,
     opts: &IngestOptions,

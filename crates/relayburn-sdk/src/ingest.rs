@@ -11,9 +11,9 @@
 //!
 //! ```no_run
 //! use relayburn_sdk::{ingest_all, RawIngestOptions, RawLedger};
-//! # async fn run() -> anyhow::Result<()> {
+//! # fn run() -> anyhow::Result<()> {
 //! let mut ledger = RawLedger::open_default()?;
-//! let report = ingest_all(&mut ledger, &RawIngestOptions::default()).await?;
+//! let report = ingest_all(&mut ledger, &RawIngestOptions::default())?;
 //! println!("ingested {} turns", report.appended_turns);
 //! # Ok(()) }
 //! ```
@@ -90,6 +90,6 @@ pub use pending_stamps::{
 pub use reingest::{derive_codex_session_id, reingest_missing_content, ReingestContentReport};
 pub use walk::{walk_jsonl, walk_opencode_sessions};
 pub use watch_loop::{
-    run_ingest_tick, start_watch_loop, ErrorSink, IngestFn, ReportSink, StartWatchLoopOptions,
-    WatchController, DEFAULT_FS_DEBOUNCE, DEFAULT_SLOW_FALLBACK,
+    start_watch_loop, ErrorSink, IngestFn, ReportSink, StartWatchLoopOptions, WatchController,
+    DEFAULT_FS_DEBOUNCE, DEFAULT_SLOW_FALLBACK,
 };

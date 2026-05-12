@@ -13,13 +13,12 @@
 //!   [`relayburn_sdk::ingest_opencode_sessions`], the opencode-only ingest
 //!   pass. The factory opens a fresh ledger handle per call (mirrors the
 //!   TS lock-then-write-then-close shape; SQLite WAL keeps the per-tick
-//!   open cheap).
+//!   open cheap). The SDK verb is sync, so we pass it directly as a fn
+//!   pointer to [`pending_stamp::session_store_adapter`].
 
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 
-use relayburn_sdk::{ingest_opencode_sessions, IngestReport, RawIngestOptions, RawLedger};
+use relayburn_sdk::ingest_opencode_sessions;
 
 use super::pending_stamp;
 use super::HarnessAdapter;
@@ -36,20 +35,11 @@ fn opencode_sessions_dir() -> PathBuf {
         .join("session")
 }
 
-/// Box-pin the SDK's `async fn ingest_opencode_sessions` into a fn
-/// pointer the [`pending_stamp::SessionIngestor`] type alias accepts.
-fn opencode_ingest<'a>(
-    ledger: &'a mut RawLedger,
-    opts: &'a RawIngestOptions,
-) -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send + 'a>> {
-    Box::pin(ingest_opencode_sessions(ledger, opts))
-}
-
 /// Hand out a `&'static dyn HarnessAdapter` for opencode. The registry
 /// calls this once at lazy-init time. See
 /// [`pending_stamp::session_store_adapter`] for the leak semantics.
 pub fn adapter() -> &'static dyn HarnessAdapter {
-    pending_stamp::session_store_adapter("opencode", opencode_sessions_dir, opencode_ingest)
+    pending_stamp::session_store_adapter("opencode", opencode_sessions_dir, ingest_opencode_sessions)
 }
 
 #[cfg(test)]
