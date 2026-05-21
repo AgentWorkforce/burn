@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// subdirectory. Mirrors `walkJsonl` in the TS adapter — used by Codex
 /// rollouts (`~/.codex/sessions/**/*.jsonl`).
 pub fn walk_jsonl<P: AsRef<Path>>(root: P) -> Vec<PathBuf> {
-    walk_files(root.as_ref(), |name| name.ends_with(".jsonl"))
+    walk_files(root.as_ref(), |name| has_extension_ci(name, "jsonl"))
 }
 
 /// Collect every `ses_*.json` file under `root`. Mirrors
@@ -22,6 +22,54 @@ pub fn walk_opencode_sessions<P: AsRef<Path>>(root: P) -> Vec<PathBuf> {
     walk_files(root.as_ref(), |name| {
         name.starts_with("ses_") && name.ends_with(".json")
     })
+}
+
+/// Immediate-children directory list. Unreadable parents yield empty
+/// (silent skip), matching the recursive walkers above.
+pub(crate) fn list_dirs(parent: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(parent) {
+        Ok(it) => it,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        match entry.file_type() {
+            Ok(ft) if ft.is_dir() => out.push(parent.join(entry.file_name())),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Immediate-children `*.jsonl` file list (case-insensitive on the
+/// extension). Unreadable directories yield empty. Used by the Claude
+/// per-project sweep, which never recurses past the project dir.
+pub(crate) fn list_jsonl_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(it) => it,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let Ok(ft) = entry.file_type() else { continue };
+        if !ft.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if has_extension_ci(name_str, "jsonl") {
+            out.push(dir.join(&name));
+        }
+    }
+    out
+}
+
+fn has_extension_ci(name: &str, ext: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
 fn walk_files(root: &Path, accept: impl Fn(&str) -> bool) -> Vec<PathBuf> {
@@ -79,7 +127,21 @@ mod tests {
         let mut got = walk_jsonl(dir.path());
         got.sort();
         assert_eq!(got.len(), 3);
-        assert!(got.iter().all(|p| p.extension().unwrap() == "jsonl"));
+        assert!(got
+            .iter()
+            .all(|p| p.extension().unwrap().eq_ignore_ascii_case("jsonl")));
+    }
+
+    #[test]
+    fn walk_jsonl_matches_uppercase_extension() {
+        let dir = TempDir::new().unwrap();
+        touch(&dir.path().join("a.jsonl"));
+        touch(&dir.path().join("b.JSONL"));
+        touch(&dir.path().join("nested/c.JsonL"));
+
+        let mut got = walk_jsonl(dir.path());
+        got.sort();
+        assert_eq!(got.len(), 3);
     }
 
     #[test]
@@ -100,10 +162,39 @@ mod tests {
     }
 
     #[test]
+    fn list_dirs_returns_immediate_children_only() {
+        let dir = TempDir::new().unwrap();
+        create_dir_all(dir.path().join("a")).unwrap();
+        create_dir_all(dir.path().join("b/nested")).unwrap();
+        touch(&dir.path().join("c.txt"));
+
+        let mut got = list_dirs(dir.path());
+        got.sort();
+        assert_eq!(got.len(), 2);
+        assert!(got[0].ends_with("a"));
+        assert!(got[1].ends_with("b"));
+    }
+
+    #[test]
+    fn list_jsonl_files_is_non_recursive_and_case_insensitive() {
+        let dir = TempDir::new().unwrap();
+        touch(&dir.path().join("a.jsonl"));
+        touch(&dir.path().join("b.JSONL"));
+        touch(&dir.path().join("nested/skip.jsonl"));
+        touch(&dir.path().join("not-this.json"));
+
+        let mut got = list_jsonl_files(dir.path());
+        got.sort();
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
     fn missing_root_returns_empty() {
         let dir = TempDir::new().unwrap();
         let absent = dir.path().join("does-not-exist");
         assert!(walk_jsonl(&absent).is_empty());
         assert!(walk_opencode_sessions(&absent).is_empty());
+        assert!(list_dirs(&absent).is_empty());
+        assert!(list_jsonl_files(&absent).is_empty());
     }
 }
