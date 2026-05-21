@@ -20,6 +20,46 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   progress spinner, watch banner, and per-tick summaries; one-shot mode
   still writes its final summary line to stdout for pipeline capture.
 
+## [2.9.0] - 2026-05-21
+
+### Added
+
+- `@relayburn/sdk`: `writeStamp({ sessionId | messageId, enrichment })` for
+  launchers that know the session id up front (e.g. preallocated Claude
+  `--session-id`), bypassing the sidecar `writePendingStamp` matching path.
+
+### Changed
+
+- `relayburn-sdk`: dedupe ingest filesystem walks (`list_dirs`,
+  `list_jsonl_files`, `walk_jsonl`) into `ingest::walk`, fix the
+  `walk_jsonl` filter to match `.JSONL` case-insensitively, and collapse
+  the per-harness append boilerplate (`apply_parsed_extras`) and the
+  three single-harness verb skeletons (`run_single_harness`). No
+  behavior change beyond the case-sensitivity fix. (#343)
+
+## [2.8.7] - 2026-05-21
+
+### Changed
+
+- `relayburn-sdk`: analyze hot paths (`overhead`, `hotspots`, `quality`,
+  `compare`) now aggregate per-session/per-file groups by reference instead
+  of cloning `TurnRecord`s, cutting working-set memory on the most expensive
+  verbs. Behavior is unchanged.
+
+## [2.8.6] - 2026-05-12
+
+### Changed
+
+- `relayburn-cli`: `burn compare --since` now uses the same normalization path
+  as `burn summary` and `burn hotspots`, keeping date-filter behavior
+  consistent across commands.
+- `relayburn-sdk`: `normalize_since` now canonicalizes outputs to UTC
+  `YYYY-MM-DDTHH:MM:SS.mmmZ`. Relative ranges (`7d`, `24h`) emit `.000Z`
+  instead of `Z`, and ISO inputs with offsets (e.g. `...-07:00`) are
+  converted to UTC. This fixes `burn summary` / `burn hotspots` /
+  `burn compare --since` silently dropping same-second turns and misordering
+  offset cutoffs against the ledger's `ts >= ?` lex compare.
+
 ## [2.8.5] - 2026-05-12
 
 ### Changed

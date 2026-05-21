@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-05-21
+
+### Added
+
+- `writeStamp({ sessionId | messageId, enrichment, ts?, ledgerHome? })` writes
+  a stamp by exact selector — companion to `writePendingStamp` for launchers
+  that preallocate the session id (Claude `--session-id`).
+
 ## [2.5.0] - 2026-05-08
 
 ### Added

@@ -29,13 +29,13 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::ledger::Ledger;
 use crate::reader::{
     parse_claude_session_incremental, parse_codex_session_incremental,
     parse_opencode_session_incremental, read_codex_session_id_hint, ClaudeParseIncrementalOptions,
     ContentRecord, ContentStoreMode, ParseCodexIncrementalOptions, ParseOpencodeIncrementalOptions,
     UserTurnRecord,
 };
-use crate::ledger::Ledger;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
 
@@ -43,7 +43,7 @@ use crate::ingest::ingest::{
     claude_projects_dir, codex_sessions_dir, opencode_message_root, opencode_session_root,
     IngestOptions, IngestRoots,
 };
-use crate::ingest::walk::{walk_jsonl, walk_opencode_sessions};
+use crate::ingest::walk::{list_dirs, list_jsonl_files, walk_jsonl, walk_opencode_sessions};
 
 /// Outcome of [`reingest_missing_content`]. Mirrors the TS
 /// `ReingestContentReport` shape one-to-one.
@@ -333,47 +333,6 @@ fn derive_claude_session_id(file: &Path) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn list_dirs(parent: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let entries = match std::fs::read_dir(parent) {
-        Ok(it) => it,
-        Err(_) => return out,
-    };
-    for entry in entries.flatten() {
-        let Ok(ft) = entry.file_type() else {
-            continue;
-        };
-        if ft.is_dir() {
-            out.push(parent.join(entry.file_name()));
-        }
-    }
-    out
-}
-
-fn list_jsonl_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(it) => it,
-        Err(_) => return out,
-    };
-    for entry in entries.flatten() {
-        let Ok(ft) = entry.file_type() else {
-            continue;
-        };
-        if !ft.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if name_str.ends_with(".jsonl") {
-            out.push(dir.join(&name));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,7 +581,9 @@ mod tests {
 
     #[test]
     fn derive_codex_session_id_recognizes_canonical_filenames() {
-        let p = PathBuf::from("/x/rollout-2026-04-24T00-00-00-000Z-11111111-2222-3333-4444-555555555555.jsonl");
+        let p = PathBuf::from(
+            "/x/rollout-2026-04-24T00-00-00-000Z-11111111-2222-3333-4444-555555555555.jsonl",
+        );
         assert_eq!(
             derive_codex_session_id(&p),
             Some("11111111-2222-3333-4444-555555555555".to_string())

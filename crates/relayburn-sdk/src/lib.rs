@@ -54,6 +54,8 @@ mod export_verbs;
 mod ingest_verb;
 #[allow(unused_imports)]
 mod query_verbs;
+#[allow(unused_imports)]
+mod stamp_verb;
 
 #[allow(unused_imports)]
 pub use export_verbs::*;
@@ -61,6 +63,8 @@ pub use export_verbs::*;
 pub use ingest_verb::*;
 #[allow(unused_imports)]
 pub use query_verbs::*;
+#[allow(unused_imports)]
+pub use stamp_verb::*;
 
 // --- Re-exports ------------------------------------------------------------
 //

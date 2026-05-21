@@ -52,10 +52,21 @@ use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
 // ---------------------------------------------------------------------------
 
 /// Accept either a CLI-style relative range (`24h`, `7d`, `4w`, `2m`) or an
-/// ISO timestamp and return an ISO string the ledger query can compare. The
-/// ledger filter does lexical compare on `turn.ts`, so passing a raw `7d`
-/// would silently filter every turn out — same trap the TS sibling
-/// (`packages/sdk/index.js`) protects against.
+/// ISO timestamp and return a canonical UTC `YYYY-MM-DDTHH:MM:SS.mmmZ`
+/// string the ledger query can lex-compare against stored `ts` values.
+///
+/// Why canonicalize:
+///
+/// - Ledger rows always carry sub-second precision (`...mmmZ`). The SQLite
+///   query filter is `ts >= ?`, which is lex-compared. A cutoff like
+///   `...12Z` would sort *after* `...12.500Z` (because `.` < `Z`), dropping
+///   same-second rows. Emitting `.000Z` makes the cutoff the lower bound
+///   for that second.
+/// - An ISO offset like `2026-05-06T00:00:00-07:00` would otherwise sort
+///   before any UTC ledger row regardless of the actual instant. Re-emitting
+///   as UTC keeps lex order aligned with chronological order.
+///
+/// Garbage inputs error out; `None` / empty inputs return `Ok(None)`.
 pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = since else {
         return Ok(None);
@@ -73,17 +84,14 @@ pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
             _ => unreachable!(),
         };
         let now = system_now_secs();
-        let when = now.saturating_sub(secs_back);
-        return Ok(Some(format_iso_z(when)));
+        let when = now.saturating_sub(secs_back) as i64;
+        return Ok(Some(format_iso_z_ms(when, 0)));
     }
 
-    // ISO-style: validate by checking the leading `YYYY-MM-DD` prefix. A
-    // chrono-grade parser would be heavier than the gate needs — anything
-    // beyond the date prefix the ledger compares lexically.
-    if !looks_like_iso(raw) {
-        anyhow::bail!("invalid since: {raw} (expected ISO timestamp or relative range like 7d)");
+    if let Some(canonical) = normalize_iso_to_utc_z(raw) {
+        return Ok(Some(canonical));
     }
-    Ok(Some(raw.to_string()))
+    anyhow::bail!("invalid since: {raw} (expected ISO timestamp or relative range like 7d)");
 }
 
 fn parse_relative(s: &str) -> Option<(u64, char)> {
@@ -103,16 +111,6 @@ fn parse_relative(s: &str) -> Option<(u64, char)> {
     Some((n, unit))
 }
 
-fn looks_like_iso(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() >= 10
-        && b[0..4].iter().all(|c| c.is_ascii_digit())
-        && b[4] == b'-'
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[7] == b'-'
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
-}
-
 fn system_now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -120,14 +118,173 @@ fn system_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Format Unix-seconds as `YYYY-MM-DDTHH:MM:SSZ`.
-fn format_iso_z(secs: u64) -> String {
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs as i64)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-    let fmt = time::macros::format_description!(
-        "[year]-[month]-[day]T[hour]:[minute]:[second]Z"
-    );
-    dt.format(&fmt).expect("format z iso")
+/// Parse an ISO 8601 / RFC 3339 timestamp and re-emit it as a fully
+/// canonical UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` string. Handles:
+///
+/// - `YYYY-MM-DD` (date-only — assumed midnight UTC).
+/// - `YYYY-MM-DDTHH:MM:SS` (offset-less — assumed UTC).
+/// - `YYYY-MM-DDTHH:MM:SS.fff` (fractional seconds, any width 1–9).
+/// - `Z` suffix (case-insensitive) or `+HH:MM` / `-HH:MM` offsets.
+///
+/// Returns `None` for inputs that don't look ISO-shaped, so the caller can
+/// surface a usage error. Sub-millisecond fractional digits are truncated,
+/// matching JS `Date.toISOString()` rounding closely enough for ledger
+/// `since` lex-ordering. Whole-second inputs widen to `.000Z`.
+fn normalize_iso_to_utc_z(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 {
+        return None;
+    }
+    if !(bytes[0..4].iter().all(|c| c.is_ascii_digit())
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(|c| c.is_ascii_digit())
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(|c| c.is_ascii_digit()))
+    {
+        return None;
+    }
+    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
+    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
+    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    let mut hour: u32 = 0;
+    let mut minute: u32 = 0;
+    let mut second: u32 = 0;
+    let mut millis: u32 = 0;
+    let mut offset_minutes: i32 = 0;
+
+    if bytes.len() > 10 {
+        if !(bytes[10] == b'T' || bytes[10] == b't' || bytes[10] == b' ') {
+            return None;
+        }
+        if bytes.len() < 19 {
+            return None;
+        }
+        if !(bytes[11..13].iter().all(|c| c.is_ascii_digit())
+            && bytes[13] == b':'
+            && bytes[14..16].iter().all(|c| c.is_ascii_digit())
+            && bytes[16] == b':'
+            && bytes[17..19].iter().all(|c| c.is_ascii_digit()))
+        {
+            return None;
+        }
+        hour = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
+        minute = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
+        second = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
+        if hour > 23 || minute > 59 || second > 60 {
+            return None;
+        }
+
+        let mut idx = 19;
+        if idx < bytes.len() && (bytes[idx] == b'.' || bytes[idx] == b',') {
+            idx += 1;
+            let frac_start = idx;
+            while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+                idx += 1;
+            }
+            if idx == frac_start {
+                return None;
+            }
+            let mut frac_str = String::from(std::str::from_utf8(&bytes[frac_start..idx]).ok()?);
+            if frac_str.len() > 3 {
+                frac_str.truncate(3);
+            }
+            while frac_str.len() < 3 {
+                frac_str.push('0');
+            }
+            millis = frac_str.parse().ok()?;
+        }
+
+        if idx < bytes.len() {
+            match bytes[idx] {
+                b'Z' | b'z' => {
+                    if idx + 1 != bytes.len() {
+                        return None;
+                    }
+                }
+                b'+' | b'-' => {
+                    let sign: i32 = if bytes[idx] == b'-' { -1 } else { 1 };
+                    idx += 1;
+                    if bytes.len() < idx + 5 {
+                        return None;
+                    }
+                    if !(bytes[idx..idx + 2].iter().all(|c| c.is_ascii_digit())
+                        && bytes[idx + 2] == b':'
+                        && bytes[idx + 3..idx + 5].iter().all(|c| c.is_ascii_digit()))
+                    {
+                        return None;
+                    }
+                    let oh: i32 = std::str::from_utf8(&bytes[idx..idx + 2])
+                        .ok()?
+                        .parse()
+                        .ok()?;
+                    let om: i32 = std::str::from_utf8(&bytes[idx + 3..idx + 5])
+                        .ok()?
+                        .parse()
+                        .ok()?;
+                    if oh > 23 || om > 59 {
+                        return None;
+                    }
+                    offset_minutes = sign * (oh * 60 + om);
+                    if idx + 5 != bytes.len() {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    let days = ymd_to_days(year, month, day)?;
+    let local_secs: i64 =
+        days * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
+    // `local = utc + offset` → `utc = local - offset` (offset in minutes).
+    let utc_secs: i64 = local_secs - (offset_minutes as i64) * 60;
+    Some(format_iso_z_ms(utc_secs, millis))
+}
+
+fn format_iso_z_ms(secs: i64, millis: u32) -> String {
+    let total_days = secs.div_euclid(86_400);
+    let secs_in_day = secs.rem_euclid(86_400) as u32;
+    let hour = secs_in_day / 3_600;
+    let minute = (secs_in_day / 60) % 60;
+    let second = secs_in_day % 60;
+    let (year, month, day) = days_to_ymd(total_days);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
+}
+
+/// Civil-date → days-from-Unix-epoch (Howard Hinnant's algorithm, proleptic
+/// Gregorian). Inverse of [`days_to_ymd`].
+fn ymd_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let m = month as i64;
+    let d = day as i64;
+    let y = if m <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
+    let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + (doe as i64) - 719_468)
+}
+
+fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {
+    let z = days_from_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    (year, m as u32, d as u32)
 }
 
 // ---------------------------------------------------------------------------
@@ -3741,27 +3898,111 @@ mod tests {
     }
 
     #[test]
-    fn normalize_since_accepts_relative_ranges() {
+    fn normalize_since_relative_emits_canonical_mmm_z() {
+        // Relative ranges must carry the `.000Z` suffix so the cutoff lex-sorts
+        // *before* same-second ledger rows with non-zero millis.
         let v = normalize_since(Some("7d")).unwrap().unwrap();
-        assert_eq!(v.len(), 20);
-        assert!(v.ends_with('Z'));
+        assert_eq!(v.len(), 24, "expected 24-char canonical shape: {v}");
+        assert!(v.ends_with(".000Z"), "expected .000Z suffix in {v}");
     }
 
     #[test]
-    fn normalize_since_passes_iso_through() {
-        let iso = "2026-04-01T00:00:00Z";
-        assert_eq!(normalize_since(Some(iso)).unwrap().as_deref(), Some(iso));
+    fn normalize_since_widens_no_fraction_iso_to_three_zeros() {
+        // Same-second ledger row `...12.500Z` would sort *before* a `--since`
+        // cutoff of `...12Z`, dropping valid turns. Canonicalizing widens to
+        // `.000Z` so the cutoff is the lower bound for that second.
+        assert_eq!(
+            normalize_since(Some("2026-04-01T00:00:00Z")).unwrap().as_deref(),
+            Some("2026-04-01T00:00:00.000Z"),
+        );
+    }
+
+    #[test]
+    fn normalize_since_preserves_millisecond_precision() {
+        assert_eq!(
+            normalize_since(Some("2026-05-06T00:00:00.500Z")).unwrap().as_deref(),
+            Some("2026-05-06T00:00:00.500Z"),
+        );
+        // Sub-millisecond digits are truncated to 3.
+        assert_eq!(
+            normalize_since(Some("2026-05-06T00:00:00.500999Z")).unwrap().as_deref(),
+            Some("2026-05-06T00:00:00.500Z"),
+        );
+        // Shorter fraction is right-padded.
+        assert_eq!(
+            normalize_since(Some("2026-05-06T00:00:00.5Z")).unwrap().as_deref(),
+            Some("2026-05-06T00:00:00.500Z"),
+        );
+    }
+
+    #[test]
+    fn normalize_since_converts_negative_offset_to_utc() {
+        // `-07:00` is 7h behind UTC → same wall-clock corresponds to a UTC
+        // instant 7h later. 2026-05-06T00:00:00-07:00 == 2026-05-06T07:00:00Z.
+        assert_eq!(
+            normalize_since(Some("2026-05-06T00:00:00-07:00")).unwrap().as_deref(),
+            Some("2026-05-06T07:00:00.000Z"),
+        );
+    }
+
+    #[test]
+    fn normalize_since_converts_positive_offset_to_utc() {
+        // 2026-05-06T00:00:00+09:00 == 2026-05-05T15:00:00Z.
+        assert_eq!(
+            normalize_since(Some("2026-05-06T00:00:00+09:00")).unwrap().as_deref(),
+            Some("2026-05-05T15:00:00.000Z"),
+        );
+    }
+
+    #[test]
+    fn normalize_since_accepts_lowercase_z_and_t() {
+        assert_eq!(
+            normalize_since(Some("2026-05-06t00:00:00.500z")).unwrap().as_deref(),
+            Some("2026-05-06T00:00:00.500Z"),
+        );
+    }
+
+    #[test]
+    fn normalize_since_accepts_date_only() {
+        // No time component → midnight UTC.
+        assert_eq!(
+            normalize_since(Some("2026-05-06")).unwrap().as_deref(),
+            Some("2026-05-06T00:00:00.000Z"),
+        );
     }
 
     #[test]
     fn normalize_since_rejects_garbage() {
         assert!(normalize_since(Some("zzz")).is_err());
+        assert!(normalize_since(Some("2026/05/06")).is_err());
+        assert!(normalize_since(Some("2026-13-01T00:00:00Z")).is_err());
+        assert!(normalize_since(Some("2026-05-06T25:00:00Z")).is_err());
+        assert!(normalize_since(Some("2026-05-06T00:00:00+9")).is_err());
     }
 
     #[test]
     fn normalize_since_returns_none_for_empty() {
         assert!(normalize_since(None).unwrap().is_none());
         assert!(normalize_since(Some("")).unwrap().is_none());
+    }
+
+    #[test]
+    fn normalize_since_cutoff_lex_compatible_with_ledger_rows() {
+        // Property: a `.000Z` cutoff must lex-sort at-or-before any same-second
+        // ledger row with non-zero millis. This is the regression that broke
+        // before canonicalization.
+        let cutoff = "2026-05-06T12:00:00.000Z";
+        assert!(cutoff <= "2026-05-06T12:00:00.500Z");
+        assert!(cutoff <= "2026-05-06T12:00:00.001Z");
+    }
+
+    #[test]
+    fn ymd_days_round_trip() {
+        for (y, m, d) in &[(1970, 1, 1), (2026, 5, 6), (2000, 2, 29), (1999, 12, 31)] {
+            let days = ymd_to_days(*y, *m, *d).unwrap();
+            let (ry, rm, rd) = days_to_ymd(days);
+            assert_eq!((*y, *m, *d), (ry, rm, rd));
+        }
     }
 
     #[test]

@@ -58,6 +58,27 @@ export declare function writePendingStamp(
   opts: WritePendingStampOptions,
 ): Promise<PendingStampWriteResult>
 
+export interface WriteStampOptions {
+  /** Target a session by exact id. At least one of `sessionId` or `messageId` must be set. */
+  sessionId?: string;
+  /** Target a single turn by exact message id. At least one of `sessionId` or `messageId` must be set. */
+  messageId?: string;
+  /** Enrichment key/value pairs to fold onto matched turns. Must be non-empty. */
+  enrichment: Record<string, string>;
+  /** ISO timestamp the caller observed, e.g. `2026-05-21T12:00:00Z`. Defaults to now when omitted. */
+  ts?: string;
+  ledgerHome?: string;
+}
+
+/**
+ * Write a stamp targeting an exact session id or message id. Use when the
+ * launcher knows the session id up front — for example, a Claude launcher
+ * that preallocates `--session-id <uuid>` before spawn — so the
+ * enrichment lands by selector without going through the sidecar
+ * `writePendingStamp` manifest matching path.
+ */
+export declare function writeStamp(opts: WriteStampOptions): Promise<void>
+
 export interface SummaryOptions {
   session?: string;
   project?: string;
