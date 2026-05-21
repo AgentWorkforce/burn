@@ -4,6 +4,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `@relayburn/sdk`: `writeStamp({ sessionId | messageId, enrichment })` for
+  launchers that know the session id up front (e.g. preallocated Claude
+  `--session-id`), bypassing the sidecar `writePendingStamp` matching path.
+
 ### Changed
 
 - `relayburn-sdk`: dedupe ingest filesystem walks (`list_dirs`,

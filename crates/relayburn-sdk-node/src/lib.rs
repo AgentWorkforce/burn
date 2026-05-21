@@ -492,6 +492,50 @@ pub fn write_pending_stamp(
         .map_err(io_err)
 }
 
+// ---------------------------------------------------------------------------
+// writeStamp — direct exact-selector stamp write
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct WriteStampOptions {
+    pub session_id: Option<String>,
+    pub message_id: Option<String>,
+    pub enrichment: HashMap<String, String>,
+    /// ISO-8601 timestamp the caller observed. Defaults to "now" when omitted.
+    pub ts: Option<String>,
+    pub ledger_home: Option<String>,
+}
+
+/// Write a stamp targeting an exact session id or message id. Use when the
+/// launcher knows the session id up front (e.g. preallocated a Claude
+/// `--session-id` UUID before spawn). Companion to `writePendingStamp`;
+/// skips the sidecar manifest path entirely. At least one of `sessionId`
+/// or `messageId` must be set.
+#[napi]
+pub fn write_stamp(opts: WriteStampOptions) -> Result<(), BurnError> {
+    if opts.session_id.is_none() && opts.message_id.is_none() {
+        return Err(invalid_arg(
+            "writeStamp requires at least one of sessionId or messageId",
+        ));
+    }
+    if opts.enrichment.is_empty() {
+        return Err(invalid_arg("enrichment must contain at least one tag"));
+    }
+    for key in opts.enrichment.keys() {
+        if key.is_empty() {
+            return Err(invalid_arg("enrichment keys must be non-empty"));
+        }
+    }
+    let raw = sdk::WriteStampOptions {
+        session_id: opts.session_id,
+        message_id: opts.message_id,
+        enrichment: opts.enrichment.into_iter().collect::<BTreeMap<_, _>>(),
+        ts: opts.ts,
+        ledger_home: maybe_path(opts.ledger_home),
+    };
+    sdk::write_stamp(raw).map_err(sdk_err)
+}
+
 fn parse_iso_system_time(s: &str) -> std::result::Result<SystemTime, BurnError> {
     let Some(raw) = s.strip_suffix('Z') else {
         return Err(invalid_arg("spawnStartTs must be an ISO-8601 Z timestamp"));
