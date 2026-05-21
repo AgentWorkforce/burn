@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.8.7] - 2026-05-21
+
 ### Changed
 
 - `relayburn-sdk`: analyze hot paths (`overhead`, `hotspots`, `quality`,
