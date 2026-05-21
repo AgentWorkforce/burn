@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-05-21
+
 ### Added
 
 - `writeStamp({ sessionId | messageId, enrichment, ts?, ledgerHome? })` writes

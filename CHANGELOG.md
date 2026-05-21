@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-05-21
+
 ### Added
 
 - `@relayburn/sdk`: `writeStamp({ sessionId | messageId, enrichment })` for
