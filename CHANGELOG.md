@@ -4,6 +4,15 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-sdk`: dedupe ingest filesystem walks (`list_dirs`,
+  `list_jsonl_files`, `walk_jsonl`) into `ingest::walk`, fix the
+  `walk_jsonl` filter to match `.JSONL` case-insensitively, and collapse
+  the per-harness append boilerplate (`apply_parsed_extras`) and the
+  three single-harness verb skeletons (`run_single_harness`). No
+  behavior change beyond the case-sensitivity fix. (#343)
+
 ## [2.8.7] - 2026-05-21
 
 ### Changed
