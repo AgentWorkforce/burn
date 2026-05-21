@@ -4,6 +4,13 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `relayburn-sdk`: analyze hot paths (`overhead`, `hotspots`, `quality`,
+  `compare`) now aggregate per-session/per-file groups by reference instead
+  of cloning `TurnRecord`s, cutting working-set memory on the most expensive
+  verbs. Behavior is unchanged.
+
 ## [2.8.6] - 2026-05-12
 
 ### Changed

@@ -112,14 +112,16 @@ const FAILURE_STREAK_THRESHOLD: u64 = 3;
 
 pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> QualityResult {
     // Preserve TS Map iteration order: insertion-order across sessionIds.
-    let mut by_session: Vec<(String, Vec<TurnRecord>)> = Vec::new();
+    // Borrow rather than clone — nothing here mutates the turns and the
+    // input slice outlives every per-session aggregation.
+    let mut by_session: Vec<(String, Vec<&TurnRecord>)> = Vec::new();
     let mut idx: HashMap<String, usize> = HashMap::new();
     for t in turns {
         if let Some(&i) = idx.get(&t.session_id) {
-            by_session[i].1.push(t.clone());
+            by_session[i].1.push(t);
         } else {
             idx.insert(t.session_id.clone(), by_session.len());
-            by_session.push((t.session_id.clone(), vec![t.clone()]));
+            by_session.push((t.session_id.clone(), vec![t]));
         }
     }
 
@@ -129,13 +131,13 @@ pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> Qu
     let mut one_shot = Vec::with_capacity(by_session.len());
     for (session_id, mut session_turns) in by_session {
         session_turns.sort_by_key(|t| t.turn_index);
-        outcomes.push(infer_outcome(
+        outcomes.push(infer_outcome_refs(
             &session_id,
             &session_turns,
             opts.content_by_session,
             now,
         ));
-        one_shot.push(compute_one_shot_rate(&session_id, &session_turns));
+        one_shot.push(compute_one_shot_rate_refs(&session_id, &session_turns));
     }
 
     QualityResult { outcomes, one_shot }
@@ -144,6 +146,16 @@ pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> Qu
 pub fn infer_outcome(
     session_id: &str,
     turns: &[TurnRecord],
+    content_by_session: Option<&HashMap<String, Vec<ContentRecord>>>,
+    now_ms: i64,
+) -> SessionOutcome {
+    let refs: Vec<&TurnRecord> = turns.iter().collect();
+    infer_outcome_refs(session_id, &refs, content_by_session, now_ms)
+}
+
+fn infer_outcome_refs(
+    session_id: &str,
+    turns: &[&TurnRecord],
     content_by_session: Option<&HashMap<String, Vec<ContentRecord>>>,
     now_ms: i64,
 ) -> SessionOutcome {
@@ -260,6 +272,11 @@ pub fn infer_outcome(
 }
 
 pub fn compute_one_shot_rate(session_id: &str, turns: &[TurnRecord]) -> OneShotMetrics {
+    let refs: Vec<&TurnRecord> = turns.iter().collect();
+    compute_one_shot_rate_refs(session_id, &refs)
+}
+
+fn compute_one_shot_rate_refs(session_id: &str, turns: &[&TurnRecord]) -> OneShotMetrics {
     let mut edit_turns: u64 = 0;
     let mut one_shot_turns: u64 = 0;
     let mut total_retries: u64 = 0;
@@ -299,7 +316,7 @@ enum EndingRole {
     Unknown,
 }
 
-fn ending_role(turns: &[TurnRecord]) -> EndingRole {
+fn ending_role(turns: &[&TurnRecord]) -> EndingRole {
     // TurnRecord represents assistant turns; "ended-with-assistant" means the
     // final turn reached a natural stop (`end_turn`). A non-`end_turn` stop
     // reason means user-ended (session died after a tool_use). When the
@@ -312,7 +329,7 @@ fn ending_role(turns: &[TurnRecord]) -> EndingRole {
     }
 }
 
-fn trailing_failure_streak(turns: &[TurnRecord]) -> u64 {
+fn trailing_failure_streak(turns: &[&TurnRecord]) -> u64 {
     let mut streak: u64 = 0;
     for t in turns.iter().rev() {
         let calls = &t.tool_calls;

@@ -15,8 +15,7 @@ use crate::reader::{SourceKind, TurnRecord};
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::claude_md::{
-    attribute_claude_md, load_claude_md_file, AttributeClaudeMdInput, ClaudeMdAttributionResult,
-    ParsedClaudeMd,
+    attribute_claude_md_refs, load_claude_md_file, ClaudeMdAttributionResult, ParsedClaudeMd,
 };
 use crate::analyze::pricing::PricingTable;
 
@@ -128,17 +127,16 @@ pub fn attribute_overhead(input: AttributeOverheadInput<'_>) -> OverheadAttribut
         std::collections::HashMap::new();
 
     for pf in input.files {
-        let filtered: Vec<TurnRecord> = input
+        let filtered: Vec<&TurnRecord> = input
             .turns
             .iter()
             .filter(|t| pf.file.applies_to.contains(&t.source))
-            .cloned()
             .collect();
-        let attribution = attribute_claude_md(&AttributeClaudeMdInput {
-            files: std::slice::from_ref(&pf.parsed),
-            turns: &filtered,
-            pricing: input.pricing,
-        });
+        let attribution = attribute_claude_md_refs(
+            std::slice::from_ref(&pf.parsed),
+            &filtered,
+            input.pricing,
+        );
 
         for sc in &attribution.session_costs {
             let prev = max_riding_by_session
