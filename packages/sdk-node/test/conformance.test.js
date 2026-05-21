@@ -68,6 +68,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'hotspots',
     'compare',
     'writePendingStamp',
+    'writeStamp',
     'computeCompareExcluded',
     'search',
     'exportLedger',
@@ -200,6 +201,57 @@ test('writePendingStamp writes a launcher-safe manifest', async (t) => {
     const manifest = JSON.parse(readFileSync(join(ledgerHome, 'pending-stamps', files[0]), 'utf8'));
     assert.equal(manifest.harness, 'claude');
     assert.equal(manifest.enrichment.agentworkforce, '1');
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
+test('writeStamp folds enrichment onto an exact session id', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-sdk-stamp-'));
+  try {
+    await sdk.writeStamp({
+      ledgerHome,
+      sessionId: 'pear-session-7f3b9b4c',
+      enrichment: { spawner: 'pear', on_relay: 'true', spawned_by: 'direct' },
+    });
+    const stamps = await sdk.exportStamps({ ledgerHome });
+    assert.equal(stamps.length, 1, 'expected one stamp row');
+    const record = stamps[0].record ?? stamps[0];
+    assert.equal(record.selector.sessionId, 'pear-session-7f3b9b4c');
+    assert.equal(record.enrichment.spawner, 'pear');
+    assert.equal(record.enrichment.spawned_by, 'direct');
+    assert.equal(record.enrichment.on_relay, 'true');
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
+test('writeStamp rejects empty selector', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+  const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-sdk-stamp-empty-'));
+  try {
+    await assert.rejects(
+      sdk.writeStamp({ ledgerHome, enrichment: { k: 'v' } }),
+      /sessionId or messageId/,
+    );
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
+test('writeStamp rejects empty enrichment', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+  const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-sdk-stamp-noenrich-'));
+  try {
+    await assert.rejects(
+      sdk.writeStamp({ ledgerHome, sessionId: 's', enrichment: {} }),
+      /enrichment must contain at least one tag/,
+    );
   } finally {
     rmSync(ledgerHome, { recursive: true, force: true });
   }
