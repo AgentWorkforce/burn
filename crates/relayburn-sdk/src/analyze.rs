@@ -86,9 +86,10 @@ pub use ghost_surface_inputs::{
     pick_representative_cache_read_rate,
 };
 pub use hotspots::{
-    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_subagent,
-    attribute_hotspots, AttributionMethod, BashAggregation, BashVerbAggregation, FileAggregation,
-    HotspotsOptions, HotspotsResult, SessionTotals, SubagentAggregation, ToolAttribution,
+    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
+    aggregate_by_subagent, attribute_hotspots, AttributionMethod, BashAggregation,
+    BashVerbAggregation, FileAggregation, HotspotsOptions, HotspotsResult, McpServerAggregation,
+    SessionTotals, SubagentAggregation, ToolAttribution,
 };
 pub use pricing::{
     flatten_value, load_builtin_pricing, load_pricing, ModelCost, PricingTable, ReasoningMode,

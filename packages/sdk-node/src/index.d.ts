@@ -280,6 +280,18 @@ export interface HotspotsSubagentRow {
   totalCost: number;
 }
 
+export interface HotspotsMcpServerRow {
+  /** MCP server name (the `<server>` segment of `mcp__<server>__<tool>`). */
+  server: string;
+  callCount: number;
+  initialTokens: number | bigint;
+  persistenceTokens: number | bigint;
+  ridingTurns: number;
+  totalCost: number;
+  /** Up to three representative tool basenames (cost desc, then name asc). */
+  topTools: string[];
+}
+
 export interface HotspotsSessionTotal {
   sessionId: string;
   grandCost: number;
@@ -307,6 +319,7 @@ export interface HotspotsAttributionResult {
   bashVerbs: HotspotsBashVerbRow[];
   bash: HotspotsBashRow[];
   subagents: HotspotsSubagentRow[];
+  mcpServers: HotspotsMcpServerRow[];
   fidelity: HotspotsFidelityBlock;
   refused?: boolean;
   refusalReason?: string;
