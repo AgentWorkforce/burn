@@ -316,10 +316,12 @@ pub fn ingest_claude_session(
 
 /// Path-based Claude fast-path used by hook callers that already know the
 /// transcript path (e.g. the Claude Code `Stop` hook payload). Parses the
-/// single JSONL file, appends turns/content/events/relationships/etc., and
-/// persists an EOF cursor so a follow-up `ingest_all` skips it. Missing
-/// files or non-files return an empty report (and log on stderr for the
-/// missing case) so hook orchestrators don't fail the parent invocation.
+/// single JSONL file, appends turns/content/events/relationships/etc.,
+/// resolves any pending stamps for the session, then persists an EOF
+/// cursor so a follow-up `ingest_all` skips it. Missing files or
+/// non-files return an empty report silently so hook orchestrators
+/// don't fail the parent invocation — the caller decides whether to
+/// surface the rotation/missing condition.
 pub fn ingest_claude_transcript_path(
     ledger: &mut Ledger,
     transcript_path: &Path,
@@ -331,9 +333,9 @@ pub fn ingest_claude_transcript_path(
         Ok(_) => return Ok(IngestReport::empty()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             // Hook policy: never break the parent when the transcript
-            // file has rotated or never landed. Permission / IO errors
-            // fall through below so the caller sees them.
-            eprintln!("[burn] no session file found at {}", file.display());
+            // file has rotated or never landed. Stay silent so the
+            // caller decides whether to surface this. Permission / IO
+            // errors fall through below so the caller sees them.
             return Ok(IngestReport::empty());
         }
         Err(err) => return Err(err.into()),
@@ -359,6 +361,33 @@ pub fn ingest_claude_transcript_path(
     ledger.append_turns(&result.turns)?;
     apply_parsed_extras(ledger, &result)?;
 
+    // Resolve pending stamps for the session before marking the file
+    // fully ingested — same shape as the per-harness sweep at
+    // `ingest_claude_into`, just scoped to the one session this
+    // fast-path handles.
+    let mut report = IngestReport {
+        scanned_sessions: 1,
+        ingested_sessions: 1,
+        appended_turns,
+        applied_pending_stamps: 0,
+    };
+    let pre_cursor_meta = fs::metadata(file)?;
+    let session_id = result.turns[0].session_id.clone();
+    let cwd = result.turns.first().and_then(|t| t.project.clone());
+    let candidate = PendingStampSessionCandidate {
+        harness: PendingStampHarness::Claude,
+        session_id,
+        session_path: Some(file.to_path_buf()),
+        session_mtime_ms: Some(mtime_ms(&pre_cursor_meta)),
+        cwd,
+    };
+    resolve_pending_stamps_for_report(
+        ledger,
+        &candidate,
+        opts.ledger_home.as_deref(),
+        &mut report,
+    );
+
     // Re-stat after parsing so the cursor reflects the byte position the
     // parser actually read to. `parse_claude_session` uses BufReader::lines()
     // and keeps reading past the pre-parse `len()` if the file grew during
@@ -377,12 +406,7 @@ pub fn ingest_claude_transcript_path(
     after.insert(key, FileCursor::Claude(cursor));
     save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
 
-    Ok(IngestReport {
-        scanned_sessions: 1,
-        ingested_sessions: 1,
-        appended_turns,
-        applied_pending_stamps: 0,
-    })
+    Ok(report)
 }
 
 // --- per-harness orchestration -----------------------------------------
