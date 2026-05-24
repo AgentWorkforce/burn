@@ -143,6 +143,7 @@ pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> Qu
     QualityResult { outcomes, one_shot }
 }
 
+#[cfg(test)]
 pub fn infer_outcome(
     session_id: &str,
     turns: &[TurnRecord],
@@ -271,6 +272,7 @@ fn infer_outcome_refs(
     }
 }
 
+#[cfg(test)]
 pub fn compute_one_shot_rate(session_id: &str, turns: &[TurnRecord]) -> OneShotMetrics {
     let refs: Vec<&TurnRecord> = turns.iter().collect();
     compute_one_shot_rate_refs(session_id, &refs)

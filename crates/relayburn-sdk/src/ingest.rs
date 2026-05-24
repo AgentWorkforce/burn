@@ -55,33 +55,20 @@ pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 #[cfg(test)]
 pub(crate) static TEST_GAP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub use cursors::{
-    load_cursors, save_cursors, save_cursors_if_changed, ClaudeCursor, CodexCumulative,
-    CodexCursor, Cursors, FileCursor, OpencodeCursor, OpencodeStreamCursor,
-};
-pub use gap::{
-    count_new_tool_calls, count_new_tool_results, count_tool_call_gaps, emit_gap_warning,
-    record_session_gap, reset_ingest_gap_warnings, AdapterName, ToolCallGapCounts,
-};
 // Test-only writer-override hooks. Gated to `cfg(test)` for in-crate
 // tests and to the `test-utils` feature for downstream integration
 // tests; deliberately NOT part of the default SDK surface so embedders
 // can't hijack the global gap-warning writer for the whole process.
-pub use crate::reader::ContentStoreMode;
 #[cfg(any(test, feature = "test-utils"))]
 pub use gap::{restore_ingest_gap_writer, set_ingest_gap_writer};
 pub use ingest::{
-    default_session_roots, ingest_all, ingest_claude_projects, ingest_claude_session,
-    ingest_codex_sessions, ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
+    default_session_roots, ingest_all, ingest_claude_session, ingest_codex_sessions,
+    ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
 };
 pub use pending_stamps::{
-    cleanup_stale_pending_stamps, cleanup_stale_pending_stamps_at, pending_stamps_dir,
-    resolve_pending_stamps_for_session, write_pending_stamp, PendingStamp,
-    PendingStampCleanupResult, PendingStampHarness, PendingStampResolveResult,
-    PendingStampSessionCandidate, PendingStampWriteResult, WriteOptions, PENDING_STAMP_TTL_MS,
+    cleanup_stale_pending_stamps, write_pending_stamp, PendingStamp, PendingStampHarness,
+    PendingStampWriteResult, WriteOptions,
 };
-pub use reingest::{derive_codex_session_id, reingest_missing_content, ReingestContentReport};
-pub use walk::{walk_jsonl, walk_opencode_sessions};
 pub use watch_loop::{
     start_watch_loop, ErrorSink, IngestFn, ReportSink, StartWatchLoopOptions, WatchController,
     DEFAULT_FS_DEBOUNCE, DEFAULT_SLOW_FALLBACK,

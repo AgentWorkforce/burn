@@ -144,10 +144,6 @@ pub fn provider_for_with_rules(turn: &TurnRecord, rules: &[ProviderRule]) -> Tur
     provider_for_model_with_rules(&turn.model, Some(turn.source), rules)
 }
 
-pub fn provider_for_model(model: &str, source: Option<SourceKind>) -> TurnProvider {
-    provider_for_model_with_rules(model, source, default_rules())
-}
-
 pub fn provider_for_model_with_rules(
     model: &str,
     source: Option<SourceKind>,

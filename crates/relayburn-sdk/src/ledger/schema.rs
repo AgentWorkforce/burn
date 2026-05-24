@@ -24,9 +24,6 @@ pub const DERIVABLE_TABLES: &[&str] = &[
     "sessions",
 ];
 
-/// Tables `burn state rebuild` MUST preserve byte-for-byte.
-pub const FIRST_PARTY_TABLES: &[&str] = &["stamps", "archive_state"];
-
 /// Bumped when on-disk shape changes incompatibly. Stored in
 /// `archive_state.schema_version` after migration.
 pub const SCHEMA_VERSION: u32 = 1;

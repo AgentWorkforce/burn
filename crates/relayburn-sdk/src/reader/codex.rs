@@ -34,6 +34,7 @@ use crate::reader::user_turn::{HeuristicCounter, UserTurnTokenizer};
 // Public surface
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct ParseCodexOptions {
     pub session_path: Option<String>,
@@ -92,6 +93,7 @@ pub struct CodexResumeState {
     pub last_completed_turn: Option<CodexLastCompletedTurn>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct ParseCodexResult {
     pub turns: Vec<TurnRecord>,
@@ -141,6 +143,7 @@ pub fn read_codex_session_id_hint(file_path: impl AsRef<Path>) -> Option<String>
     session_meta_payload_id(payload)
 }
 
+#[cfg(test)]
 pub fn parse_codex_session(
     file_path: impl AsRef<Path>,
     options: &ParseCodexOptions,
@@ -155,6 +158,7 @@ pub fn parse_codex_session(
     parse_codex_session_incremental(file_path, &inc_opts).map(ParseCodexResult::from)
 }
 
+#[cfg(test)]
 impl From<ParseCodexIncrementalResult> for ParseCodexResult {
     fn from(r: ParseCodexIncrementalResult) -> Self {
         Self {

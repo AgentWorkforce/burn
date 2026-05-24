@@ -25,11 +25,12 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::ingest::{
+use crate::ingest::gap::reset_ingest_gap_warnings;
+use crate::ingest::ingest::{
     ingest_all, ingest_claude_projects, ingest_codex_sessions, ingest_opencode_sessions,
-    reset_ingest_gap_warnings, restore_ingest_gap_writer, set_ingest_gap_writer, IngestOptions,
-    IngestRoots,
+    IngestOptions, IngestRoots,
 };
+use crate::ingest::{restore_ingest_gap_writer, set_ingest_gap_writer};
 use crate::ledger::{Ledger, LedgerLayout};
 use tempfile::TempDir;
 

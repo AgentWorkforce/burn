@@ -84,6 +84,7 @@ pub struct ClaudeMdAttributionResult {
     pub session_count: u64,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct AttributeClaudeMdInput<'a> {
     pub files: &'a [ParsedClaudeMd],
@@ -91,6 +92,7 @@ pub struct AttributeClaudeMdInput<'a> {
     pub pricing: &'a PricingTable,
 }
 
+#[cfg(test)]
 pub fn find_claude_md_files(project_path: &Path) -> io::Result<Vec<PathBuf>> {
     let candidates = [
         project_path.join("CLAUDE.md"),
@@ -305,6 +307,7 @@ fn matches_close_fence(s: &str, ch: char, min_len: usize) -> bool {
     chars.all(|c| c.is_whitespace())
 }
 
+#[cfg(test)]
 pub fn attribute_claude_md(input: &AttributeClaudeMdInput<'_>) -> ClaudeMdAttributionResult {
     let turns: Vec<&TurnRecord> = input.turns.iter().collect();
     attribute_claude_md_refs(input.files, &turns, input.pricing)

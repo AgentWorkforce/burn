@@ -130,6 +130,7 @@ pub fn default_rules() -> &'static [ProviderRule] {
 /// Convenience helper: returns a fresh `Vec<ProviderRule>` containing the
 /// defaults followed by `extra`. Mirrors the TS spread idiom
 /// `[...DEFAULT_RULES, customRule]` used by callers extending the rule set.
+#[cfg(test)]
 pub fn extend_default_rules<I>(extra: I) -> Vec<ProviderRule>
 where
     I: IntoIterator<Item = ProviderRule>,
