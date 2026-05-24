@@ -22,7 +22,6 @@
 //! * Claimed manifests are renamed to `<file>.claimed-<pid>-<uuid>` before the
 //!   ledger append, then unlinked on success or restored on failure.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,10 +30,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::ledger::{ledger_home, Enrichment, Ledger, Stamp, StampSelector};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 /// 24h — manifests older than this are presumed orphaned (the spawner died
 /// before its child wrote a session log) and get garbage-collected on the
@@ -67,7 +66,8 @@ impl PendingStampHarness {
 
 /// Parsed manifest. Fields are ordered to match the TS object-literal
 /// insertion order so re-serialisation is byte-identical.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PendingStamp {
     pub v: u8,
     pub harness: PendingStampHarness,
@@ -75,6 +75,7 @@ pub struct PendingStamp {
     pub spawn_start_ts: String,
     pub cwd: String,
     pub enrichment: Enrichment,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_dir_hint: Option<String>,
 }
 
@@ -159,7 +160,7 @@ pub fn write_pending_stamp(opts: WriteOptions) -> std::io::Result<PendingStampWr
     let dir = pending_stamps_dir_for(opts.ledger_home.as_deref());
     fs::create_dir_all(&dir)?;
     let spawn_ms = system_time_ms(spawn_start);
-    let uuid = uuid_v4();
+    let uuid = Uuid::new_v4();
     let base = format!(
         "{}-{}-{}-{}",
         stamp.harness.as_str(),
@@ -168,7 +169,11 @@ pub fn write_pending_stamp(opts: WriteOptions) -> std::io::Result<PendingStampWr
         uuid
     );
     let final_path = dir.join(format!("{base}.json"));
-    let tmp_path = dir.join(format!("{base}.tmp-{}-{}", std::process::id(), uuid_v4()));
+    let tmp_path = dir.join(format!(
+        "{base}.tmp-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
 
     let payload = serialize_stamp(&stamp);
     {
@@ -371,7 +376,7 @@ fn pending_stamp_matches(record: &PendingStamp, candidate: &PendingStampSessionC
 fn claim_pending_stamp(file: &Path) -> std::io::Result<Option<PathBuf>> {
     let claimed = with_suffix(
         file,
-        &format!(".claimed-{}-{}", std::process::id(), uuid_v4()),
+        &format!(".claimed-{}-{}", std::process::id(), Uuid::new_v4()),
     );
     match fs::rename(file, &claimed) {
         Ok(()) => Ok(Some(claimed)),
@@ -409,73 +414,17 @@ fn list_pending_stamp_files_in(dir: &Path, active_only: bool) -> std::io::Result
 /// treat unparseable manifests as cleanup candidates rather than errors so a
 /// single corrupt file can't deadlock the pending-stamp directory.
 pub fn parse_pending_stamp(raw: &str) -> Option<PendingStamp> {
-    let value: Value = serde_json::from_str(raw).ok()?;
-    let obj = value.as_object()?;
-    if obj.get("v").and_then(Value::as_u64) != Some(1) {
+    let stamp: PendingStamp = serde_json::from_str(raw).ok()?;
+    if stamp.v != 1 || parse_iso_ms(&stamp.spawn_start_ts).is_none() || stamp.cwd.is_empty() {
         return None;
     }
-    let harness = match obj.get("harness").and_then(Value::as_str)? {
-        "claude" => PendingStampHarness::Claude,
-        "codex" => PendingStampHarness::Codex,
-        "opencode" => PendingStampHarness::Opencode,
-        _ => return None,
-    };
-    let spawner_pid = obj.get("spawnerPid").and_then(Value::as_u64)? as u32;
-    let spawn_start_ts = obj.get("spawnStartTs").and_then(Value::as_str)?.to_string();
-    parse_iso_ms(&spawn_start_ts)?;
-    let cwd = obj.get("cwd").and_then(Value::as_str)?.to_string();
-    if cwd.is_empty() {
-        return None;
-    }
-    let enrichment_raw = obj.get("enrichment").and_then(Value::as_object)?;
-    let mut enrichment = BTreeMap::new();
-    for (k, v) in enrichment_raw {
-        let s = v.as_str()?;
-        enrichment.insert(k.clone(), s.to_string());
-    }
-    let session_dir_hint = match obj.get("sessionDirHint") {
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(Value::Null) | None => None,
-        _ => return None,
-    };
-    Some(PendingStamp {
-        v: 1,
-        harness,
-        spawner_pid,
-        spawn_start_ts,
-        cwd,
-        enrichment,
-        session_dir_hint,
-    })
+    Some(stamp)
 }
 
 /// Serialize a manifest in the exact wire format the TS adapter writes:
-/// `JSON.stringify(record, null, 2) + '\n'`. We hand-roll the object so the
-/// key order is deterministic (`v`, `harness`, `spawnerPid`, `spawnStartTs`,
-/// `cwd`, `enrichment`, [`sessionDirHint`]) regardless of the runtime
-/// `serde_json` map type.
+/// `JSON.stringify(record, null, 2) + '\n'`.
 pub fn serialize_stamp(stamp: &PendingStamp) -> String {
-    let mut map = Map::new();
-    map.insert("v".into(), Value::Number(1.into()));
-    map.insert(
-        "harness".into(),
-        Value::String(stamp.harness.as_str().to_string()),
-    );
-    map.insert("spawnerPid".into(), Value::Number(stamp.spawner_pid.into()));
-    map.insert(
-        "spawnStartTs".into(),
-        Value::String(stamp.spawn_start_ts.clone()),
-    );
-    map.insert("cwd".into(), Value::String(stamp.cwd.clone()));
-    let mut enrichment = Map::new();
-    for (k, v) in &stamp.enrichment {
-        enrichment.insert(k.clone(), Value::String(v.clone()));
-    }
-    map.insert("enrichment".into(), Value::Object(enrichment));
-    if let Some(hint) = &stamp.session_dir_hint {
-        map.insert("sessionDirHint".into(), Value::String(hint.clone()));
-    }
-    let mut s = serde_json::to_string_pretty(&Value::Object(map)).expect("serializable");
+    let mut s = serde_json::to_string_pretty(stamp).expect("serializable");
     s.push('\n');
     s
 }
@@ -559,71 +508,6 @@ fn with_suffix(p: &Path, suffix: &str) -> PathBuf {
     let mut s = p.as_os_str().to_owned();
     s.push(suffix);
     PathBuf::from(s)
-}
-
-/// Tiny v4-ish UUID generator. We don't need cryptographic strength here —
-/// the only goal is filename uniqueness across concurrent writers in the
-/// same `pending-stamps/` directory. Pulls 16 bytes of entropy from
-/// `getrandom` via /dev/urandom (or the OS equivalent on Windows).
-fn uuid_v4() -> String {
-    let mut bytes = [0u8; 16];
-    fill_random(&mut bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
-    )
-}
-
-#[cfg(unix)]
-fn fill_random(buf: &mut [u8]) {
-    use std::io::Read;
-    if let Ok(mut f) = fs::File::open("/dev/urandom") {
-        if f.read_exact(buf).is_ok() {
-            return;
-        }
-    }
-    fill_random_pid_time_fallback(buf);
-}
-
-#[cfg(not(unix))]
-fn fill_random(buf: &mut [u8]) {
-    fill_random_pid_time_fallback(buf);
-}
-
-fn fill_random_pid_time_fallback(buf: &mut [u8]) {
-    // Last-resort: nanos+pid+counter. Good enough for filename uniqueness.
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let pid = std::process::id() as u64;
-    let c = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let mut seed = n ^ (pid << 32) ^ (c << 17);
-    for b in buf.iter_mut() {
-        seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        *b = (seed >> 33) as u8;
-    }
 }
 
 #[cfg(test)]
