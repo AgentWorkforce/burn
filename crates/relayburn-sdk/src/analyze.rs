@@ -15,12 +15,6 @@
 //! the 1e-9 USD precision contract that `overhead` and `hotspots` gate
 //! against.
 
-// The four absorbed module roots carry the lower crates whole, including
-// items the SDK does not re-export (dead from the SDK perspective). Silence
-// the never-used warnings rather than handpicking re-exports — the next
-// agent absorbing more verbs will need them.
-#![allow(dead_code, unused_imports)]
-
 pub mod claude_md;
 pub mod compare;
 pub mod cost;
@@ -96,10 +90,9 @@ pub use pricing::{
 };
 pub use provider::{
     aggregate_by_provider, filter_turns_by_provider, filter_turns_by_provider_with_rules,
-    provider_for, provider_for_model, provider_for_model_with_rules, provider_for_turn,
-    provider_for_with_rules, resolve_turn_provider, AggregateByProviderOptions, AsTurnLike,
-    CoverageField, FieldCoverage, ProviderAggregateRow, ProviderFilter, RowCoverage, TurnProvider,
-    UsageCostAggregateRow,
+    provider_for, provider_for_model, provider_for_model_with_rules, provider_for_with_rules,
+    AggregateByProviderOptions, AsTurnLike, CoverageField, FieldCoverage, ProviderAggregateRow,
+    ProviderFilter, RowCoverage, TurnProvider, UsageCostAggregateRow,
 };
 pub use provider_reattribution::{
     default_rules, extend_default_rules, resolve_provider, resolve_provider_with_rules,

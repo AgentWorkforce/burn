@@ -1,9 +1,4 @@
 //! Coverage / fidelity helpers — Rust port of `packages/reader/src/fidelity.ts`.
-//!
-//! Construction lives on the types: `Coverage::EMPTY` / `Coverage::is_full()`
-//! ([`crate::types`]) and [`Fidelity::new`] here. `classify_fidelity` is
-//! exposed as a free function and as [`Fidelity::classify`] — same logic,
-//! pick the form that reads better at the call site.
 
 use crate::reader::types::{Coverage, Fidelity, FidelityClass, UsageGranularity};
 
@@ -18,12 +13,6 @@ impl Fidelity {
             coverage,
             class,
         }
-    }
-
-    /// Pure derivation of `FidelityClass` from a granularity + coverage pair.
-    /// Method form of [`classify_fidelity`].
-    pub fn classify(granularity: UsageGranularity, coverage: &Coverage) -> FidelityClass {
-        classify_fidelity(granularity, coverage)
     }
 }
 
@@ -73,11 +62,11 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            Fidelity::classify(UsageGranularity::CostOnly, &all_on),
+            classify_fidelity(UsageGranularity::CostOnly, &all_on),
             FidelityClass::CostOnly,
         );
         assert_eq!(
-            Fidelity::classify(UsageGranularity::CostOnly, &Coverage::EMPTY),
+            classify_fidelity(UsageGranularity::CostOnly, &Coverage::EMPTY),
             FidelityClass::CostOnly,
         );
     }
@@ -89,7 +78,7 @@ mod tests {
             c.has_output_tokens = true;
         });
         assert_eq!(
-            Fidelity::classify(UsageGranularity::PerSessionAggregate, &cov),
+            classify_fidelity(UsageGranularity::PerSessionAggregate, &cov),
             FidelityClass::AggregateOnly,
         );
     }
@@ -105,7 +94,7 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            Fidelity::classify(UsageGranularity::PerTurn, &cov),
+            classify_fidelity(UsageGranularity::PerTurn, &cov),
             FidelityClass::Full,
         );
     }
@@ -119,7 +108,7 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            Fidelity::classify(UsageGranularity::PerTurn, &cov),
+            classify_fidelity(UsageGranularity::PerTurn, &cov),
             FidelityClass::UsageOnly,
         );
     }
@@ -134,7 +123,7 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            Fidelity::classify(UsageGranularity::PerTurn, &cov),
+            classify_fidelity(UsageGranularity::PerTurn, &cov),
             FidelityClass::Partial,
         );
     }
@@ -150,7 +139,7 @@ mod tests {
             c.has_session_relationships = true;
         });
         assert_eq!(
-            Fidelity::classify(UsageGranularity::PerMessage, &cov),
+            classify_fidelity(UsageGranularity::PerMessage, &cov),
             FidelityClass::Full,
         );
     }

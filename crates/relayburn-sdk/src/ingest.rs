@@ -18,12 +18,6 @@
 //! # Ok(()) }
 //! ```
 
-// The four absorbed module roots carry the lower crates whole, including
-// items the SDK does not re-export (dead from the SDK perspective). Silence
-// the never-used warnings rather than handpicking re-exports — the next
-// agent absorbing more verbs will need them.
-#![allow(dead_code, unused_imports)]
-
 pub mod cursors;
 pub(crate) mod fs_events;
 pub mod gap;
