@@ -313,10 +313,9 @@ pub fn attribute_claude_md(input: &AttributeClaudeMdInput<'_>) -> ClaudeMdAttrib
     attribute_claude_md_refs(input.files, &turns, input.pricing)
 }
 
-/// Reference-borrow variant of [`attribute_claude_md`] used by callers that
-/// have already pre-filtered turns into a `Vec<&TurnRecord>` (e.g. the
-/// per-file overhead attribution loop). Avoids the per-turn `Vec<TurnRecord>`
-/// clone that the public entry point would otherwise force.
+/// Per-file CLAUDE.md attribution: borrow-based entry point used by the
+/// per-file overhead attribution loop, which has already pre-filtered turns
+/// into a `Vec<&TurnRecord>` and would otherwise pay a per-turn clone.
 pub(crate) fn attribute_claude_md_refs(
     files: &[ParsedClaudeMd],
     turns: &[&TurnRecord],
