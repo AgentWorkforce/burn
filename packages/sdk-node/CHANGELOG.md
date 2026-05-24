@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- `hotspots()` attribution result carries a new `mcpServers` field —
+  per-server rollup of `mcp__<server>__<tool>` tool calls with summed
+  cost/tokens/ride-turns and top representative tool basenames. (#424)
+
 ## [2.9.0] - 2026-05-21
 
 ### Added

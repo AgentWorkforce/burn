@@ -18,25 +18,25 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::{
-    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_provider,
-    aggregate_by_subagent, aggregate_subagent_type_stats, attribute_hotspots, attribute_overhead,
-    build_compare_table, build_ghost_surface_inputs, build_subagent_tree,
-    build_trim_recommendations, compute_quality, cost_for_turn, detect_ghost_surface,
-    detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
-    findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity, load_claude_settings,
-    load_overhead_file, load_pricing, project_claude_settings_path, provider_for,
-    render_unified_diff_for_recommendation, sort_findings, sum_costs, summarize_fidelity,
-    summarize_fidelity_from_iter, summarize_replacement_savings, tool_call_pattern_to_finding,
-    tool_output_bloat_to_finding, user_claude_settings_path, AggregateByProviderOptions,
-    AttributeOverheadInput, AttributionMethod, BashAggregation, BashVerbAggregation,
-    BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions, CompareTable,
-    ComputeQualityOptions, CostBreakdown, CoverageField, DetectPatternsOptions,
+    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
+    aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
+    attribute_hotspots, attribute_overhead, build_compare_table, build_ghost_surface_inputs,
+    build_subagent_tree, build_trim_recommendations, compute_quality, cost_for_turn,
+    detect_ghost_surface, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
+    find_overhead_files, findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity,
+    load_claude_settings, load_overhead_file, load_pricing, project_claude_settings_path,
+    provider_for, render_unified_diff_for_recommendation, sort_findings, sum_costs,
+    summarize_fidelity, summarize_fidelity_from_iter, summarize_replacement_savings,
+    tool_call_pattern_to_finding, tool_output_bloat_to_finding, user_claude_settings_path,
+    AggregateByProviderOptions, AttributeOverheadInput, AttributionMethod, BashAggregation,
+    BashVerbAggregation, BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions,
+    CompareTable, ComputeQualityOptions, CostBreakdown, CoverageField, DetectPatternsOptions,
     DetectToolCallPatternsOptions, DetectToolOutputBloatOptions, FidelitySummary, FieldCoverage,
     FileAggregation, GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions,
-    LoadedClaudeSettings, MarkdownSection, OverheadFile, OverheadFileKind, ParsedOverheadFile,
-    PricingTable, ProviderAggregateRow, ProviderFilter, QualityResult, ReplacementSavingsSummary,
-    RowCoverage, SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
-    ToolSavingsAggregate, UsageCostAggregateRow, WasteFinding,
+    LoadedClaudeSettings, MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind,
+    ParsedOverheadFile, PricingTable, ProviderAggregateRow, ProviderFilter, QualityResult,
+    ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SubagentAggregation,
+    SubagentTreeNode, SubagentTypeStats, ToolSavingsAggregate, UsageCostAggregateRow, WasteFinding,
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
@@ -2889,6 +2889,7 @@ pub struct HotspotsAttributionResult {
     pub bash_verbs: Vec<BashVerbAggregation>,
     pub bash: Vec<BashAggregation>,
     pub subagents: Vec<SubagentAggregation>,
+    pub mcp_servers: Vec<McpServerAggregation>,
     pub fidelity: HotspotsFidelityBlock,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<bool>,
@@ -3039,6 +3040,7 @@ fn run_hotspots_attribution(
     let bash_verbs = aggregate_by_bash_verb(&result.attributions, parse_bash_verb);
     let bash = aggregate_by_bash(&result.attributions);
     let subagents = aggregate_by_subagent(&result.attributions);
+    let mcp_servers = aggregate_by_mcp_server(&result.attributions);
     let even_split: usize = result
         .session_totals
         .iter()
@@ -3071,6 +3073,7 @@ fn run_hotspots_attribution(
             bash_verbs,
             bash,
             subagents,
+            mcp_servers,
             fidelity: HotspotsFidelityBlock {
                 analyzed: eligible.len() as u64,
                 excluded: excluded.len() as u64,
@@ -3148,6 +3151,7 @@ fn refused_for_group(
                 bash_verbs: Vec::new(),
                 bash: Vec::new(),
                 subagents: Vec::new(),
+                mcp_servers: Vec::new(),
                 fidelity: HotspotsFidelityBlock {
                     analyzed: 0,
                     excluded: excluded_total,

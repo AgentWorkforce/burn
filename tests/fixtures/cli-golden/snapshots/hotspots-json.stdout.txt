@@ -82,6 +82,7 @@
       "persistenceTokens": 0
     }
   ],
+  "mcpServers": [],
   "fidelity": {
     "analyzed": 6,
     "excluded": 1,

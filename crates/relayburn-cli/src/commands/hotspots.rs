@@ -28,8 +28,8 @@ use relayburn_sdk::{
     hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation, BashVerbAggregation,
     FileAggregation, HotspotsAttributionResult, HotspotsExcludedBreakdown,
     HotspotsExcludedSourceRow, HotspotsGroupBy, HotspotsOptions, HotspotsResult,
-    HotspotsSessionTotal, Ledger, LedgerOpenOptions, SubagentAggregation, WasteFinding,
-    WasteSeverity,
+    HotspotsSessionTotal, Ledger, LedgerOpenOptions, McpServerAggregation, SubagentAggregation,
+    WasteFinding, WasteSeverity,
 };
 use serde_json::{json, Map, Value};
 
@@ -340,6 +340,10 @@ fn attribution_to_json(a: &HotspotsAttributionResult) -> Value {
         Value::Array(a.subagents.iter().map(subagent_to_json).collect()),
     );
     out.insert(
+        "mcpServers".into(),
+        Value::Array(a.mcp_servers.iter().map(mcp_server_to_json).collect()),
+    );
+    out.insert(
         "fidelity".into(),
         json!({
             "analyzed": a.fidelity.analyzed,
@@ -498,6 +502,18 @@ fn subagent_to_json(s: &SubagentAggregation) -> Value {
         "totalCost": s.total_cost,
         "initialTokens": s.initial_tokens,
         "persistenceTokens": s.persistence_tokens,
+    })
+}
+
+fn mcp_server_to_json(m: &McpServerAggregation) -> Value {
+    json!({
+        "server": m.server,
+        "callCount": m.call_count,
+        "initialTokens": m.initial_tokens,
+        "persistenceTokens": m.persistence_tokens,
+        "ridingTurns": m.riding_turns,
+        "totalCost": m.total_cost,
+        "topTools": m.top_tools,
     })
 }
 
@@ -871,6 +887,25 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
     }
     out.push(String::new());
 
+    if !a.mcp_servers.is_empty() {
+        out.push(format!("Top MCP servers by cost{}", approx_suffix));
+        let header: Vec<String> = vec![
+            "server".into(),
+            "calls".into(),
+            "initial(tok)".into(),
+            "persist(tok)".into(),
+            "rideTurns".into(),
+            "cost".into(),
+            "topTools".into(),
+        ];
+        let mut rows: Vec<Vec<String>> = vec![header];
+        for m in a.mcp_servers.iter().take(limit) {
+            rows.push(mcp_server_row(m));
+        }
+        out.push(render_table(&rows));
+        out.push(String::new());
+    }
+
     print!("{}", out.join("\n"));
 }
 
@@ -988,6 +1023,25 @@ fn subagent_row(s: &SubagentAggregation) -> Vec<String> {
         format_uint(s.initial_tokens.round() as u64),
         format_uint(s.persistence_tokens.round() as u64),
         format_usd(s.total_cost),
+    ]
+}
+
+fn mcp_server_row(m: &McpServerAggregation) -> Vec<String> {
+    vec![
+        m.server.clone(),
+        format_uint(m.call_count),
+        format_uint(m.initial_tokens.round() as u64),
+        format_uint(m.persistence_tokens.round() as u64),
+        format_uint(m.riding_turns),
+        format_usd(m.total_cost),
+        truncate(
+            &m.top_tools
+                .iter()
+                .map(|t| truncate(t, 40))
+                .collect::<Vec<_>>()
+                .join("; "),
+            90,
+        ),
     ]
 }
 

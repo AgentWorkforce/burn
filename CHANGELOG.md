@@ -4,6 +4,14 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `burn hotspots`: new MCP-server rollup that collapses every
+  `mcp__<server>__<tool>` tool call into one row per server, so a chatty
+  MCP server (e.g. relaycast) shows up as a single line instead of 50+.
+  Surfaced in the human renderer (when non-empty) and as `mcpServers`
+  in `--json`. (#424)
+
 ## [2.9.0] - 2026-05-21
 
 ### Added
