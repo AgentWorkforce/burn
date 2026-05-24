@@ -255,13 +255,6 @@ pub fn cleanup_stale_pending_stamps_in_at(
 /// Side effects: each successfully claimed manifest's enrichment is folded
 /// onto the candidate session via `ledger.append_stamp`. The manifest file is
 /// removed on success and restored if the ledger append errors.
-pub fn resolve_pending_stamps_for_session(
-    ledger: &mut Ledger,
-    candidate: &PendingStampSessionCandidate,
-) -> std::io::Result<PendingStampResolveResult> {
-    resolve_pending_stamps_for_session_in(ledger, candidate, None)
-}
-
 pub fn resolve_pending_stamps_for_session_in(
     ledger: &mut Ledger,
     candidate: &PendingStampSessionCandidate,

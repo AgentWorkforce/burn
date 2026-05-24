@@ -167,13 +167,6 @@ fn flatten(root: &ModelsDevRoot) -> PricingTable {
     out
 }
 
-/// Public flatten helper, useful for callers that already hold a parsed
-/// `models.dev`-shaped JSON value.
-pub fn flatten_value(value: &serde_json::Value) -> serde_json::Result<PricingTable> {
-    let root: ModelsDevRoot = serde_json::from_value(value.clone())?;
-    Ok(flatten(&root))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

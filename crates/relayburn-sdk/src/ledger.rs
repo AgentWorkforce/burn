@@ -11,12 +11,6 @@
 //! // append turns / compactions / stamps / content via Ledger methods.
 //! ```
 
-// The four absorbed module roots carry the lower crates whole, including
-// items the SDK does not re-export (dead from the SDK perspective). Silence
-// the never-used warnings rather than handpicking re-exports — the next
-// agent absorbing more verbs will need them.
-#![allow(dead_code, unused_imports)]
-
 mod bootstrap;
 mod config;
 mod content;
@@ -31,7 +25,9 @@ mod stamp;
 mod writer;
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use rusqlite::params;
 
@@ -41,20 +37,14 @@ pub use crate::ledger::config::{
 };
 pub use crate::ledger::content::{PruneStats, SearchHit, SearchOptions};
 pub use crate::ledger::error::{LedgerError, Result};
-pub use crate::ledger::fingerprint::{
-    compaction_id_fingerprint, content_blob_fingerprint, relationship_id_fingerprint,
-    tool_result_event_id_fingerprint, turn_content_fingerprint, turn_id_fingerprint,
-    user_turn_id_fingerprint,
-};
 pub use crate::ledger::paths::{
     burn_sqlite_path, content_sqlite_path, is_valid_session_id, ledger_home,
 };
 pub use crate::ledger::query::Query;
 pub use crate::ledger::reader::EnrichedTurn;
-pub use crate::ledger::schema::{DERIVABLE_TABLES, FIRST_PARTY_TABLES, SCHEMA_VERSION};
-pub use crate::ledger::stamp::{
-    stamp_matches, Enrichment, MessageRange, Stamp, StampError, StampSelector,
-};
+pub use crate::ledger::stamp::{Enrichment, MessageRange, Stamp, StampError, StampSelector};
+
+use crate::ledger::schema::DERIVABLE_TABLES;
 
 use crate::ledger::db::Connections;
 
@@ -485,12 +475,14 @@ pub struct ResetSummary {
 /// Convenience: layout describing where a `Ledger` will land. Callers
 /// that want test isolation construct one with `under()` and pass the
 /// paths to [`Ledger::open`].
+#[cfg(test)]
 pub struct LedgerLayout {
     pub home: PathBuf,
     pub burn: PathBuf,
     pub content: PathBuf,
 }
 
+#[cfg(test)]
 impl LedgerLayout {
     pub fn under(home: impl Into<PathBuf>) -> Self {
         let home = home.into();

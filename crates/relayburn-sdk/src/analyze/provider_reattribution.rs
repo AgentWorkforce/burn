@@ -11,8 +11,9 @@
 //! string stays revisitable as the rule set evolves.
 //!
 //! This is the extension point for future aggregator detectors (OpenRouter,
-//! etc.). Add a [`ProviderRule`] to a callsite-specific rule set or extend the
-//! defaults via [`extend_default_rules`] and the resolver picks it up.
+//! etc.). Add a [`ProviderRule`] to a callsite-specific rule set — or spread
+//! [`default_rules`] into a `Vec` and append your own — and the resolver
+//! picks it up.
 
 use std::sync::LazyLock;
 
@@ -130,6 +131,7 @@ pub fn default_rules() -> &'static [ProviderRule] {
 /// Convenience helper: returns a fresh `Vec<ProviderRule>` containing the
 /// defaults followed by `extra`. Mirrors the TS spread idiom
 /// `[...DEFAULT_RULES, customRule]` used by callers extending the rule set.
+#[cfg(test)]
 pub fn extend_default_rules<I>(extra: I) -> Vec<ProviderRule>
 where
     I: IntoIterator<Item = ProviderRule>,

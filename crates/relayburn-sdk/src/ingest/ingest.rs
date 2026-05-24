@@ -239,6 +239,7 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
     Ok(report)
 }
 
+#[cfg(test)]
 pub fn ingest_claude_projects(
     ledger: &mut Ledger,
     opts: &IngestOptions,

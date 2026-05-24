@@ -68,13 +68,6 @@ pub struct OpencodeCursor {
     pub seen_message_ids: Vec<String>,
 }
 
-/// Untyped passthrough for `OpencodeStreamCursor` — the stream cursor schema
-/// lives in the reader crate; we round-trip the JSON bytes so a Rust ingest
-/// pass that doesn't yet drive the stream ingestor still preserves any cursor
-/// rows the TS pass wrote.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpencodeStreamCursor(pub Value);
-
 /// Tagged-union cursor variants. The Codex variant is heap-boxed because it
 /// carries a per-turn map and dwarfs the others — keeping the enum payload
 /// size sane keeps `Cursors` cheap to clone in the orchestration hot path.
@@ -107,10 +100,6 @@ impl Cursors {
         Self::default()
     }
 
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.files.get(key)
-    }
-
     pub fn get_typed(&self, key: &str) -> Option<FileCursor> {
         self.files
             .get(key)
@@ -122,12 +111,9 @@ impl Cursors {
         self.files.insert(key, value);
     }
 
+    #[cfg(test)]
     pub fn insert_raw(&mut self, key: String, value: Value) {
         self.files.insert(key, value);
-    }
-
-    pub fn remove(&mut self, key: &str) -> Option<Value> {
-        self.files.remove(key)
     }
 }
 

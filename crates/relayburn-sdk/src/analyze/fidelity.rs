@@ -162,10 +162,8 @@ pub fn has_minimum_fidelity(fidelity: Option<&Fidelity>, minimum: FidelityClass)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reader::{
-        Coverage, Fidelity, FidelityClass, ParseOpencodeOptions, UsageGranularity,
-        parse_opencode_session,
-    };
+    use crate::reader::opencode::{parse_opencode_session, ParseOpencodeOptions};
+    use crate::reader::{Coverage, Fidelity, FidelityClass, UsageGranularity};
     use std::path::PathBuf;
 
     fn full_fidelity() -> Fidelity {

@@ -42,6 +42,7 @@ use crate::reader::user_turn::{HeuristicCounter, TokenCounter, UserTurnTokenizer
 // Public surface
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct ParseOpencodeOptions {
     pub session_path: Option<String>,
@@ -57,6 +58,7 @@ pub struct ParseOpencodeIncrementalOptions {
     pub seen_message_ids: Option<BTreeSet<String>>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct ParseOpencodeResult {
     pub turns: Vec<TurnRecord>,
@@ -78,6 +80,7 @@ pub struct ParseOpencodeIncrementalResult {
     pub seen_message_ids: BTreeSet<String>,
 }
 
+#[cfg(test)]
 pub fn parse_opencode_session(
     session_file_path: impl AsRef<Path>,
     options: &ParseOpencodeOptions,
@@ -91,6 +94,7 @@ pub fn parse_opencode_session(
     parse_opencode_session_incremental(session_file_path, &inc_opts).map(ParseOpencodeResult::from)
 }
 
+#[cfg(test)]
 impl From<ParseOpencodeIncrementalResult> for ParseOpencodeResult {
     fn from(r: ParseOpencodeIncrementalResult) -> Self {
         Self {

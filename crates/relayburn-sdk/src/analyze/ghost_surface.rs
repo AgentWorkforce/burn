@@ -153,13 +153,6 @@ pub trait GhostSurfaceAdapter: Sync {
     }
 }
 
-#[derive(Default)]
-pub struct DetectGhostSurfaceOptions<'a> {
-    /// Custom adapter list — primarily for tests. Production callers should
-    /// leave this `None` to get the default registry.
-    pub adapters: Option<Vec<&'a dyn GhostSurfaceAdapter>>,
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct GhostSurfaceFindingOptions {
     pub archive_dir: Option<PathBuf>,
@@ -883,16 +876,6 @@ pub fn ghost_surface_to_finding(
         actions: vec![action],
         event_source: None,
     }
-}
-
-pub fn ghost_findings_to_waste_findings(
-    ghosts: &[GhostSurfaceFinding],
-    options: &GhostSurfaceFindingOptions,
-) -> Vec<WasteFinding> {
-    ghosts
-        .iter()
-        .map(|g| ghost_surface_to_finding(g, options))
-        .collect()
 }
 
 fn source_kind_str(source: SourceKind) -> &'static str {

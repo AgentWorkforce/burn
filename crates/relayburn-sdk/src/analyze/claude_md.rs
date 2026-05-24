@@ -84,6 +84,7 @@ pub struct ClaudeMdAttributionResult {
     pub session_count: u64,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct AttributeClaudeMdInput<'a> {
     pub files: &'a [ParsedClaudeMd],
@@ -91,6 +92,7 @@ pub struct AttributeClaudeMdInput<'a> {
     pub pricing: &'a PricingTable,
 }
 
+#[cfg(test)]
 pub fn find_claude_md_files(project_path: &Path) -> io::Result<Vec<PathBuf>> {
     let candidates = [
         project_path.join("CLAUDE.md"),
@@ -305,15 +307,15 @@ fn matches_close_fence(s: &str, ch: char, min_len: usize) -> bool {
     chars.all(|c| c.is_whitespace())
 }
 
+#[cfg(test)]
 pub fn attribute_claude_md(input: &AttributeClaudeMdInput<'_>) -> ClaudeMdAttributionResult {
     let turns: Vec<&TurnRecord> = input.turns.iter().collect();
     attribute_claude_md_refs(input.files, &turns, input.pricing)
 }
 
-/// Reference-borrow variant of [`attribute_claude_md`] used by callers that
-/// have already pre-filtered turns into a `Vec<&TurnRecord>` (e.g. the
-/// per-file overhead attribution loop). Avoids the per-turn `Vec<TurnRecord>`
-/// clone that the public entry point would otherwise force.
+/// Per-file CLAUDE.md attribution: borrow-based entry point used by the
+/// per-file overhead attribution loop, which has already pre-filtered turns
+/// into a `Vec<&TurnRecord>` and would otherwise pay a per-turn clone.
 pub(crate) fn attribute_claude_md_refs(
     files: &[ParsedClaudeMd],
     turns: &[&TurnRecord],

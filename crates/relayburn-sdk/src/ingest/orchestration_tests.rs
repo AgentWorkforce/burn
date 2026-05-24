@@ -28,12 +28,12 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::ingest::{
+use crate::ingest::cursors::{load_cursors, ClaudeCursor, FileCursor};
+use crate::ingest::ingest::{
     ingest_all, ingest_claude_projects, ingest_claude_session, ingest_codex_sessions,
-    ingest_opencode_sessions, write_pending_stamp, IngestOptions, IngestRoots, PendingStampHarness,
-    WriteOptions,
+    ingest_opencode_sessions, IngestOptions, IngestRoots,
 };
-use crate::ingest::{load_cursors, ClaudeCursor, FileCursor};
+use crate::ingest::pending_stamps::{write_pending_stamp, PendingStampHarness, WriteOptions};
 use crate::ledger::{Enrichment, Ledger, LedgerLayout, Query};
 use tempfile::TempDir;
 

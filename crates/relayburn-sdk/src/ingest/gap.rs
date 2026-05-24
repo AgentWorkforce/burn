@@ -96,6 +96,7 @@ impl GapState {
         }
     }
 
+    #[cfg(test)]
     fn clear(&mut self) {
         self.affected_sessions.clear();
         self.orphan_calls_per_session.clear();
@@ -123,6 +124,7 @@ fn state_lock() -> MutexGuard<'static, GapState> {
 /// too (it's a no-op when nothing has been observed yet).
 ///
 /// Mirrors the TS `resetIngestGapWarnings()`.
+#[cfg(test)]
 pub fn reset_ingest_gap_warnings() {
     state_lock().clear();
 }
@@ -223,6 +225,7 @@ pub fn record_session_gap(
 
 /// Outcome of [`count_tool_call_gaps`]. Mirrors the TS shape:
 /// `{ sessionAffected: boolean; orphanToolCalls: number }`.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolCallGapCounts {
     pub session_affected: bool,
@@ -237,6 +240,7 @@ pub struct ToolCallGapCounts {
 /// absence is not load-bearing for `burn hotspots` attribution.
 ///
 /// Mirrors the TS `countToolCallGaps`.
+#[cfg(test)]
 pub fn count_tool_call_gaps(
     turns: &[TurnRecord],
     content: &[ContentRecord],

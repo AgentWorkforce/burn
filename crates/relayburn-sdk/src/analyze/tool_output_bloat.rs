@@ -1533,7 +1533,7 @@ mod tests {
 
     #[test]
     fn fixture_codex_oversized_shell_output() {
-        use crate::reader::{parse_codex_session, ParseCodexOptions};
+        use crate::reader::codex::{parse_codex_session, ParseCodexOptions};
         let pricing = load_builtin_pricing();
         let path = workspace_fixture("codex/oversized-shell-output.jsonl");
         let parsed = parse_codex_session(&path, &ParseCodexOptions::default()).expect("parses");
