@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-05-24
+
 ### Added
 
 - `burn hotspots`: new MCP-server rollup that collapses every

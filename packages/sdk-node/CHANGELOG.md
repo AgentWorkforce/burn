@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-05-24
+
 ### Added
 
 - `hotspots()` attribution result carries a new `mcpServers` field —
