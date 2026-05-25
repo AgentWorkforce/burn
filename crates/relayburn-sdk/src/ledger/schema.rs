@@ -26,7 +26,16 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 
 /// Bumped when on-disk shape changes incompatibly. Stored in
 /// `archive_state.schema_version` after migration.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// Version history:
+/// - `1`: initial release; `turns` is `(source, session_id, message_id, ts,
+///   project, project_key, record_json, content_fingerprint)`.
+/// - `2`: 3.0 release — adds the denormalized `turns.stop_reason TEXT` column
+///   so `burn summary` can roll outcome counts without re-deserializing every
+///   `record_json` row. Existing rows are migrated by `ALTER TABLE … ADD
+///   COLUMN` and left `NULL`; new inserts populate the column from
+///   [`crate::reader::StopReason::wire_str`].
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.
@@ -46,6 +55,12 @@ CREATE TABLE IF NOT EXISTS turns (
     project_key         TEXT,
     record_json         TEXT NOT NULL,
     content_fingerprint TEXT NOT NULL,
+    -- Denormalized stop reason for the trailing assistant row (kebab-case
+    -- wire spelling of `crate::reader::StopReason`). Nullable so pre-3.0
+    -- rows and harnesses that don't report one (Codex) survive the schema
+    -- bump without a backfill. New inserts populate this directly from the
+    -- parsed `TurnRecord.stop_reason`. See issue #437.
+    stop_reason         TEXT,
     PRIMARY KEY (source, session_id, message_id)
 ) STRICT;
 
@@ -55,6 +70,10 @@ CREATE INDEX IF NOT EXISTS idx_turns_session
     ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_ts
     ON turns(ts);
+-- `idx_turns_stop_reason` is created from the in-place migration in
+-- `db::migrate_burn_schema` so a legacy v1 table (no `stop_reason` column
+-- yet) doesn't blow up on the DDL pre-pass. Once `ALTER TABLE` adds the
+-- column, the migration runs `CREATE INDEX IF NOT EXISTS` itself.
 
 CREATE TABLE IF NOT EXISTS compactions (
     id_fingerprint TEXT PRIMARY KEY,
@@ -143,7 +162,7 @@ CREATE TABLE IF NOT EXISTS archive_state (
 );
 
 INSERT INTO archive_state (id, schema_version)
-    VALUES (1, 1)
+    VALUES (1, 2)
     ON CONFLICT(id) DO NOTHING;
 "#;
 

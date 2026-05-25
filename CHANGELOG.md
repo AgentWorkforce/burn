@@ -4,9 +4,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-
 ### Added
 
+- `burn summary`: one-line `Turn outcomes: …` breakdown of assistant
+  `stop_reason` counts, plus a `stopReasons` block in `--json`. (#437)
 - Ledger fingerprint primitive (`{count}:{maxMtimeUnix}:{totalBytes}`) for
   cheap "did anything change" polling. Exposed as `LedgerHandle::fingerprint`
   on the Rust SDK, `sdk.fingerprint()` on `@relayburn/sdk`,
@@ -23,7 +24,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   `queued_command` attachment with `commandMode`), so a real prompt that
   literally types `<task-notification>` is not filtered. Drops user-turn
   inflation from background Bash completions.
-
+- **BREAKING** `relayburn-sdk`: `TurnRecord.stop_reason` is now an
+  `Option<StopReason>` enum (kebab-case wire form); deserialization is
+  lenient so pre-3.0 ledgers replay cleanly. (#437)
+- `relayburn-sdk` ledger schema bumps to v2: `turns` gains a
+  `stop_reason TEXT` column, migrated in place on `Ledger::open`. (#437)
 
 ## [2.10.0] - 2026-05-24
 

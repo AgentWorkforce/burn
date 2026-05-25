@@ -10,8 +10,22 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+
+/// Lenient deserializer for `TurnRecord.stop_reason`. Accepts the canonical
+/// kebab-case variant (`end-turn`, `max-tokens`, …) plus the legacy free-text
+/// shapes from upstream harnesses (`end_turn`, `tool_use`, opencode's
+/// `tool-calls`, etc.). An unrecognized string decodes to
+/// [`StopReason::Silent`] instead of an error so a pre-3.0 ledger replays
+/// cleanly through the new column.
+fn deserialize_optional_stop_reason<'de, D>(d: D) -> std::result::Result<Option<StopReason>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(d)?;
+    Ok(opt.map(|s| StopReason::from_wire(&s).unwrap_or(StopReason::Silent)))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -258,6 +272,88 @@ pub struct Fidelity {
     pub class: FidelityClass,
 }
 
+/// Coarse outcome of an assistant turn, derived from the harness-reported
+/// stop reason on the trailing assistant row.
+///
+/// Wire shape is kebab-case (`end-turn`, `max-tokens`, …). On-disk and on the
+/// JSONL surface this is round-trippable as a string; absent rows decode as
+/// `None`. `Silent` is reserved for the "we have an inference but it carries
+/// no stop reason" case (mid-write, sidechain, harness that doesn't report
+/// one in the row we parsed). The lossy mapping for non-Anthropic harnesses
+/// is intentional; downstream presenters consume the variant, not the raw
+/// string. See issue #437.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    PauseTurn,
+    StopSequence,
+    ToolUse,
+    Refusal,
+    Silent,
+}
+
+impl StopReason {
+    /// Kebab-case label as emitted on the wire (matches
+    /// `#[serde(rename_all = "kebab-case")]`).
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            Self::EndTurn => "end-turn",
+            Self::MaxTokens => "max-tokens",
+            Self::PauseTurn => "pause-turn",
+            Self::StopSequence => "stop-sequence",
+            Self::ToolUse => "tool-use",
+            Self::Refusal => "refusal",
+            Self::Silent => "silent",
+        }
+    }
+
+    /// Map a harness-emitted stop-reason string (e.g. Anthropic's
+    /// `end_turn` / `max_tokens` or opencode's `tool-calls`) onto the
+    /// canonical [`StopReason`]. Returns `None` for unrecognized inputs so
+    /// callers can decide whether to fall back to [`StopReason::Silent`]
+    /// or keep `None`.
+    ///
+    /// Matching is case-insensitive and accepts either snake_case or
+    /// kebab-case so the same parser handles Anthropic (`max_tokens`),
+    /// opencode (`tool-calls`), and the kebab-case wire form we emit
+    /// ourselves on round-trip.
+    pub fn from_wire(raw: &str) -> Option<Self> {
+        let normalized: String = raw
+            .trim()
+            .chars()
+            .map(|c| match c {
+                '_' => '-',
+                c => c.to_ascii_lowercase(),
+            })
+            .collect();
+        match normalized.as_str() {
+            // OpenAI / AI-SDK convention emits `"stop"` for ordinary
+            // end-of-turn completions (this is what opencode forwards),
+            // so it maps to `EndTurn`, not `StopSequence`. Anthropic's
+            // actual stop-sequence outcome is the explicit
+            // `"stop_sequence"` / `"stop-sequence"` variant below.
+            "end-turn" | "stop" => Some(Self::EndTurn),
+            "max-tokens" | "length" => Some(Self::MaxTokens),
+            "pause-turn" => Some(Self::PauseTurn),
+            "stop-sequence" => Some(Self::StopSequence),
+            // `tool-calls` is the opencode AI-SDK wire form; `tool-use`
+            // is the Anthropic one and our canonical kebab spelling.
+            "tool-use" | "tool-calls" => Some(Self::ToolUse),
+            "refusal" => Some(Self::Refusal),
+            "silent" => Some(Self::Silent),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for StopReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ActivityCategory {
@@ -303,8 +399,19 @@ pub struct TurnRecord {
     pub files_touched: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<Subagent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<String>,
+    /// Outcome of the assistant inference, as reported by the harness on the
+    /// trailing assistant row (Anthropic `stop_reason`, opencode
+    /// `step-finish.reason`, etc.). `None` means the row carried no field at
+    /// all (e.g. Codex, which doesn't report one); deserialization is
+    /// tolerant of the historical free-text shape — unknown strings decode
+    /// as [`StopReason::Silent`] so a future harness value can't poison
+    /// reads.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_stop_reason"
+    )]
+    pub stop_reason: Option<StopReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<ActivityCategory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -626,6 +733,115 @@ mod tests {
         c.has_tool_result_events = true;
         c.has_session_relationships = true;
         assert!(c.is_full());
+    }
+
+    #[test]
+    fn stop_reason_serializes_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&StopReason::EndTurn).unwrap(),
+            "\"end-turn\"",
+        );
+        assert_eq!(
+            serde_json::to_string(&StopReason::MaxTokens).unwrap(),
+            "\"max-tokens\"",
+        );
+        assert_eq!(
+            serde_json::to_string(&StopReason::ToolUse).unwrap(),
+            "\"tool-use\"",
+        );
+    }
+
+    #[test]
+    fn stop_reason_from_wire_normalizes_underscored_and_legacy_variants() {
+        // Anthropic snake_case.
+        assert_eq!(
+            StopReason::from_wire("end_turn"),
+            Some(StopReason::EndTurn)
+        );
+        assert_eq!(
+            StopReason::from_wire("max_tokens"),
+            Some(StopReason::MaxTokens)
+        );
+        assert_eq!(
+            StopReason::from_wire("tool_use"),
+            Some(StopReason::ToolUse)
+        );
+        // Opencode finish reason for the same outcome ships as `tool-calls`.
+        assert_eq!(
+            StopReason::from_wire("tool-calls"),
+            Some(StopReason::ToolUse)
+        );
+        // Canonical kebab-case round-trips identity.
+        assert_eq!(
+            StopReason::from_wire("pause-turn"),
+            Some(StopReason::PauseTurn)
+        );
+        // OpenAI / AI-SDK (and therefore opencode) emit a bare `"stop"`
+        // for normal end-of-turn completions — that's `EndTurn`, NOT
+        // `StopSequence`. Misclassifying these would skew the
+        // `burn summary` outcome buckets every time opencode wraps an
+        // OpenAI-shaped provider.
+        assert_eq!(StopReason::from_wire("stop"), Some(StopReason::EndTurn));
+        // Anthropic's actual stop-sequence outcome is the explicit
+        // `stop_sequence` (snake) / `stop-sequence` (kebab) variants and
+        // those still resolve to `StopSequence`.
+        assert_eq!(
+            StopReason::from_wire("stop_sequence"),
+            Some(StopReason::StopSequence)
+        );
+        assert_eq!(
+            StopReason::from_wire("stop-sequence"),
+            Some(StopReason::StopSequence)
+        );
+        // Unknown / harness-specific strings don't map.
+        assert_eq!(StopReason::from_wire("magic"), None);
+    }
+
+    #[test]
+    fn turn_record_stop_reason_deserializes_legacy_strings_into_enum() {
+        // Pre-3.0 ledgers stored the raw Anthropic stop_reason on
+        // `TurnRecord.stopReason` as a free-text string. The lenient
+        // deserializer must keep replaying those rows.
+        let raw = serde_json::json!({
+            "v": 1,
+            "source": "claude-code",
+            "sessionId": "s",
+            "messageId": "m",
+            "turnIndex": 0,
+            "ts": "2026-04-20T00:00:00.000Z",
+            "model": "claude-sonnet-4-6",
+            "usage": {
+                "input": 0, "output": 0, "reasoning": 0,
+                "cacheRead": 0, "cacheCreate5m": 0, "cacheCreate1h": 0
+            },
+            "toolCalls": [],
+            "stopReason": "max_tokens"
+        });
+        let rec: TurnRecord = serde_json::from_value(raw).unwrap();
+        assert_eq!(rec.stop_reason, Some(StopReason::MaxTokens));
+    }
+
+    #[test]
+    fn turn_record_stop_reason_unknown_string_falls_back_to_silent() {
+        // A ledger written by a future / unknown harness shouldn't break
+        // reads — the parser maps to `Silent` instead of erroring.
+        let raw = serde_json::json!({
+            "v": 1,
+            "source": "claude-code",
+            "sessionId": "s",
+            "messageId": "m",
+            "turnIndex": 0,
+            "ts": "2026-04-20T00:00:00.000Z",
+            "model": "claude-sonnet-4-6",
+            "usage": {
+                "input": 0, "output": 0, "reasoning": 0,
+                "cacheRead": 0, "cacheCreate5m": 0, "cacheCreate1h": 0
+            },
+            "toolCalls": [],
+            "stopReason": "totally-unknown-future-value"
+        });
+        let rec: TurnRecord = serde_json::from_value(raw).unwrap();
+        assert_eq!(rec.stop_reason, Some(StopReason::Silent));
     }
 
     #[test]

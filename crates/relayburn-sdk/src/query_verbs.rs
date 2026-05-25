@@ -41,8 +41,8 @@ use crate::analyze::{
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
     parse_bash_command, resolve_project, BashParse, ContentRecord, Coverage, FidelityClass,
-    RelationshipType, SessionRelationshipRecord, SourceKind, TurnRecord, Usage, UsageGranularity,
-    UserTurnBlockKind, UserTurnRecord,
+    RelationshipType, SessionRelationshipRecord, SourceKind, StopReason, TurnRecord, Usage,
+    UsageGranularity, UserTurnBlockKind, UserTurnRecord,
 };
 
 use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
@@ -390,6 +390,74 @@ pub struct SummaryTagRow {
     pub turn_count: u64,
 }
 
+/// Per-outcome turn counts, surfaced by `burn summary` for the one-line
+/// outcome breakdown (`142 end_turn, 3 max_tokens, 1 refusal, 0 pause`).
+///
+/// Counts mirror the [`StopReason`] enum variants plus a `none` slot for
+/// turns whose row carried no `stop_reason` field at all — that's Codex
+/// today (no field in the rollout schema) and any pre-3.0 ledger row that
+/// was ingested before the reader started populating the enum.
+///
+/// `Silent` is reserved for "row exists, carries a stop_reason that we
+/// don't recognize" — distinct from `none` so we can spot a future harness
+/// regression rather than silently lumping it with Codex.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopReasonCounts {
+    pub end_turn: u64,
+    pub max_tokens: u64,
+    pub pause_turn: u64,
+    pub stop_sequence: u64,
+    pub tool_use: u64,
+    pub refusal: u64,
+    pub silent: u64,
+    /// Turns whose record carried no `stop_reason` field — e.g. Codex
+    /// rollouts (the harness doesn't report one) or pre-3.0 ledger rows
+    /// from before the reader started parsing the field.
+    pub none: u64,
+}
+
+impl StopReasonCounts {
+    /// Accumulate one turn's outcome into the bucket counts. `None` lands
+    /// in [`Self::none`]; unrecognized variants would already be normalized
+    /// to [`StopReason::Silent`] upstream by the lenient deserializer.
+    pub fn bump(&mut self, reason: Option<StopReason>) {
+        match reason {
+            None => self.none += 1,
+            Some(StopReason::EndTurn) => self.end_turn += 1,
+            Some(StopReason::MaxTokens) => self.max_tokens += 1,
+            Some(StopReason::PauseTurn) => self.pause_turn += 1,
+            Some(StopReason::StopSequence) => self.stop_sequence += 1,
+            Some(StopReason::ToolUse) => self.tool_use += 1,
+            Some(StopReason::Refusal) => self.refusal += 1,
+            Some(StopReason::Silent) => self.silent += 1,
+        }
+    }
+
+    /// Fold every turn's `stop_reason` into a fresh counts struct.
+    pub fn from_turns(turns: &[TurnRecord]) -> Self {
+        let mut out = Self::default();
+        for t in turns {
+            out.bump(t.stop_reason);
+        }
+        out
+    }
+
+    /// True iff every counter is zero — useful for "skip the outcome line
+    /// entirely" presentation logic in summary.
+    pub fn is_empty(&self) -> bool {
+        self.end_turn
+            | self.max_tokens
+            | self.pause_turn
+            | self.stop_sequence
+            | self.tool_use
+            | self.refusal
+            | self.silent
+            | self.none
+            == 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
@@ -402,6 +470,10 @@ pub struct Summary {
     pub by_tag: Option<Vec<SummaryTagRow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_savings: Option<ReplacementSavingsSummary>,
+    /// Per-outcome breakdown — `end_turn` / `max_tokens` / `refusal` / etc.
+    /// Counts roll up the trailing `stop_reason` of every assistant turn
+    /// in the filtered slice. See #437.
+    pub stop_reasons: StopReasonCounts,
 }
 
 impl LedgerHandle {
@@ -522,6 +594,7 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
             .collect(),
         by_tag: None,
         replacement_savings,
+        stop_reasons: StopReasonCounts::from_turns(turns),
     }
 }
 
@@ -697,6 +770,9 @@ pub struct SummaryGroupedReport {
     /// so presenters don't rebuild order-sensitive HashMap projections.
     pub per_cell_fidelity: serde_json::Value,
     pub replacement_savings: ReplacementSavingsSummary,
+    /// Per-outcome turn counts (issue #437). Always populated; presenters
+    /// decide whether to render the line based on `is_empty()`.
+    pub stop_reasons: StopReasonCounts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<QualityResult>,
 }
@@ -870,6 +946,7 @@ impl LedgerHandle {
                 } else {
                     None
                 };
+                let stop_reasons = StopReasonCounts::from_turns(&turns);
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
                     group_by,
                     tag_key,
@@ -880,6 +957,7 @@ impl LedgerHandle {
                     fidelity,
                     per_cell_fidelity,
                     replacement_savings,
+                    stop_reasons,
                     quality,
                 }))
             }
@@ -4157,6 +4235,130 @@ mod tests {
         assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
     }
 
+    /// Acceptance test for issue #437: a turn carrying `stop_reason:
+    /// "max_tokens"` surfaces in the summary outcome counts. Mixes a
+    /// `max_tokens` turn with a `none` turn (no field on the row) to
+    /// confirm both buckets land in the right slot.
+    #[test]
+    fn summary_report_aggregates_stop_reasons_per_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = LedgerOpenOptions::with_home(dir.path());
+        let mut handle = Ledger::open(opts).expect("open ledger");
+
+        let make_turn = |idx: u64,
+                         msg: &str,
+                         stop_reason: Option<StopReason>|
+         -> TurnRecord {
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: "sess-stop".into(),
+                session_path: None,
+                message_id: msg.into(),
+                turn_index: idx,
+                ts: format!("2026-05-25T00:0{idx}:00.000Z"),
+                model: "claude-sonnet-4-6".into(),
+                project: Some("/tmp/proj".into()),
+                project_key: None,
+                usage: Usage {
+                    input: 100 + idx,
+                    output: 50,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: vec![],
+                files_touched: None,
+                subagent: None,
+                stop_reason,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            }
+        };
+
+        handle
+            .raw_mut()
+            .append_turns(&[
+                make_turn(0, "m-max", Some(StopReason::MaxTokens)),
+                make_turn(1, "m-end", Some(StopReason::EndTurn)),
+                make_turn(2, "m-refusal", Some(StopReason::Refusal)),
+                // Codex-style: no field on the row.
+                make_turn(3, "m-none", None),
+            ])
+            .expect("append turns");
+
+        let report = handle
+            .summary_report(SummaryReportOptions::default())
+            .expect("summary report");
+        let SummaryReport::Grouped(grouped) = report else {
+            panic!("expected grouped report");
+        };
+        assert_eq!(grouped.turn_count, 4);
+        assert_eq!(grouped.stop_reasons.max_tokens, 1);
+        assert_eq!(grouped.stop_reasons.end_turn, 1);
+        assert_eq!(grouped.stop_reasons.refusal, 1);
+        assert_eq!(grouped.stop_reasons.none, 1);
+        // Untouched buckets stay at zero.
+        assert_eq!(grouped.stop_reasons.tool_use, 0);
+        assert_eq!(grouped.stop_reasons.pause_turn, 0);
+        assert_eq!(grouped.stop_reasons.silent, 0);
+        assert!(!grouped.stop_reasons.is_empty());
+    }
+
+    /// Acceptance test for issue #437: the legacy `LedgerHandle::summary`
+    /// surface (the slim one) also exposes the new counts. Verifies a turn
+    /// without a stop_reason field round-trips to `None`/`none` rather
+    /// than silently leaking into a real bucket.
+    #[test]
+    fn summary_legacy_surface_includes_stop_reason_counts_with_none_for_missing_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = LedgerOpenOptions::with_home(dir.path());
+        let mut handle = Ledger::open(opts).expect("open ledger");
+
+        let mut turn = TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "sess-legacy".into(),
+            session_path: None,
+            message_id: "m-legacy".into(),
+            turn_index: 0,
+            ts: "2026-05-25T00:00:00.000Z".into(),
+            model: "claude-sonnet-4-6".into(),
+            project: None,
+            project_key: None,
+            usage: Usage::default(),
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        };
+        handle
+            .raw_mut()
+            .append_turns(&[turn.clone()])
+            .expect("append none turn");
+        turn.message_id = "m-pause".into();
+        turn.turn_index = 1;
+        turn.ts = "2026-05-25T00:01:00.000Z".into();
+        turn.stop_reason = Some(StopReason::PauseTurn);
+        handle
+            .raw_mut()
+            .append_turns(&[turn])
+            .expect("append pause turn");
+
+        let s = handle.summary(SummaryOptions::default()).expect("summary");
+        assert_eq!(s.turn_count, 2);
+        assert_eq!(s.stop_reasons.none, 1);
+        assert_eq!(s.stop_reasons.pause_turn, 1);
+        assert_eq!(s.stop_reasons.end_turn, 0);
+    }
+
     #[test]
     fn summary_report_by_tool_uses_predecessor_before_since_boundary() {
         let (_dir, handle) = fixture_handle();
@@ -4997,7 +5199,7 @@ mod tests {
         assert_eq!(s.burn.rows.stamps, 0);
         assert_eq!(s.burn.tracked_rows, 0);
         assert_eq!(s.content.rows, 0);
-        assert_eq!(s.archive.schema_version, 1);
+        assert_eq!(s.archive.schema_version, 2);
         assert!(s.archive.last_built_at.is_none());
         assert!(s.archive.last_rebuild_at.is_none());
     }

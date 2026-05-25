@@ -23,10 +23,10 @@ use clap::Args;
 use relayburn_sdk::{
     ingest_all, summary_fidelity_summary_to_value, summary_replacement_savings_to_value,
     CostBreakdown, CoverageField, Enrichment, FidelityClass, FidelitySummary, Ledger, LedgerHandle,
-    LedgerOpenOptions, OutcomeLabel, QualityResult, RelationshipType, SubagentTreeNode,
-    SubagentTypeStats, SummaryByToolReport, SummaryGroupBy, SummaryGroupedReport,
-    SummaryRelationshipReport, SummaryReport, SummaryReportMode, SummaryReportOptions,
-    SummarySubagentTreeReport, UsageCostAggregateRow,
+    LedgerOpenOptions, OutcomeLabel, QualityResult, RelationshipType, StopReasonCounts,
+    SubagentTreeNode, SubagentTypeStats, SummaryByToolReport, SummaryGroupBy,
+    SummaryGroupedReport, SummaryRelationshipReport, SummaryReport, SummaryReportMode,
+    SummaryReportOptions, SummarySubagentTreeReport, UsageCostAggregateRow,
 };
 use serde_json::{json, Map, Value};
 
@@ -490,6 +490,7 @@ fn grouped_json_value(
             summary_replacement_savings_to_value(&report.replacement_savings),
         );
     }
+    payload.insert("stopReasons".into(), stop_reasons_to_json(&report.stop_reasons));
     if let Some(quality) = report.quality.as_ref() {
         payload.insert("quality".into(), json!(quality));
     }
@@ -968,6 +969,11 @@ fn emit_human(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::Inge
         lines.push(String::new());
     }
 
+    if !report.stop_reasons.is_empty() {
+        lines.push(format_stop_reasons_line(&report.stop_reasons));
+        lines.push(String::new());
+    }
+
     if any_partial {
         lines.push(format_partial_footer(&report.rows));
         lines.push(String::new());
@@ -1034,6 +1040,52 @@ fn render_quality(q: &QualityResult) -> String {
         one_shot_line,
     ]
     .join("\n")
+}
+
+/// Human-readable outcome line for `burn summary`, e.g.
+/// `Turn outcomes: 142 end_turn, 3 max_tokens, 1 refusal, 0 pause`.
+///
+/// Always renders `end_turn` / `max_tokens` / `refusal` / `pause` because
+/// users want to see the zero — "no refusals" is a meaningful signal.
+/// Other buckets (`tool_use`, `stop_sequence`, `silent`, `none`) appear
+/// only when non-zero so the line stays scannable. Labels stay snake_case
+/// to match the historical Anthropic spelling the issue specified.
+fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
+    let mut parts: Vec<String> = vec![
+        format!("{} end_turn", format_uint(s.end_turn)),
+        format!("{} max_tokens", format_uint(s.max_tokens)),
+        format!("{} refusal", format_uint(s.refusal)),
+        format!("{} pause", format_uint(s.pause_turn)),
+    ];
+    if s.tool_use > 0 {
+        parts.push(format!("{} tool_use", format_uint(s.tool_use)));
+    }
+    if s.stop_sequence > 0 {
+        parts.push(format!("{} stop_sequence", format_uint(s.stop_sequence)));
+    }
+    if s.silent > 0 {
+        parts.push(format!("{} silent", format_uint(s.silent)));
+    }
+    if s.none > 0 {
+        parts.push(format!("{} none", format_uint(s.none)));
+    }
+    format!("Turn outcomes: {}", parts.join(", "))
+}
+
+/// JSON shape for the outcome breakdown. Keys are camelCase to match the
+/// rest of the summary surface; every bucket is emitted unconditionally so
+/// downstream consumers can index keys without `?` plumbing.
+fn stop_reasons_to_json(s: &StopReasonCounts) -> Value {
+    json!({
+        "endTurn": s.end_turn,
+        "maxTokens": s.max_tokens,
+        "pauseTurn": s.pause_turn,
+        "stopSequence": s.stop_sequence,
+        "toolUse": s.tool_use,
+        "refusal": s.refusal,
+        "silent": s.silent,
+        "none": s.none,
+    })
 }
 
 fn format_replacement_savings_line(s: &relayburn_sdk::ReplacementSavingsSummary) -> String {
@@ -1181,6 +1233,7 @@ mod tests {
             fidelity: relayburn_sdk::summarize_fidelity(&[]),
             per_cell_fidelity: json!({"groupBy": "model"}),
             replacement_savings: relayburn_sdk::ReplacementSavingsSummary::default(),
+            stop_reasons: relayburn_sdk::StopReasonCounts::default(),
             quality: Some(QualityResult::default()),
         };
 

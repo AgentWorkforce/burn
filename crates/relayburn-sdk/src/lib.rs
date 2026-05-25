@@ -69,7 +69,7 @@ pub use crate::reader::{
     ClassificationResult, CompactionEvent, ContentKind, ContentRecord, ContentRole,
     ContentStoreMode, ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass,
     Harness, ProjectResolver, RelationshipSourceKind, RelationshipType, ResolvedProject,
-    SessionRelationshipRecord, SourceKind, Subagent, ToolCall, ToolResultEventRecord,
+    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
     ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageAttribution, UsageGranularity,
     UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
 };

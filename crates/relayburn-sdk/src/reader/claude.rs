@@ -21,7 +21,7 @@ use crate::reader::hash::{args_hash, content_hash};
 use crate::reader::types::{
     CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
     ContentToolUse, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, Subagent, ToolCall, ToolResultEventRecord,
+    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
     ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageGranularity, UserTurnBlock,
     UserTurnRecord,
 };
@@ -2419,7 +2419,10 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 Some(files_touched)
             },
             subagent,
-            stop_reason: w.stop_reason.clone(),
+            stop_reason: w
+                .stop_reason
+                .as_deref()
+                .map(|s| StopReason::from_wire(s).unwrap_or(StopReason::Silent)),
             activity: None,
             retries: None,
             has_edits: None,
@@ -2635,7 +2638,7 @@ mod tests {
                 subagent_type: Some("general-purpose".to_string()),
                 description: Some("delegate".to_string()),
             }),
-            stop_reason: Some("end_turn".to_string()),
+            stop_reason: Some(StopReason::EndTurn),
             activity: Some(crate::reader::types::ActivityCategory::Coding),
             retries: Some(1),
             has_edits: Some(true),
@@ -2792,7 +2795,7 @@ mod tests {
         assert_eq!(t.source, SourceKind::ClaudeCode);
         assert_eq!(t.message_id, "msg_simple_1");
         assert_eq!(t.model, "claude-sonnet-4-6");
-        assert_eq!(t.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(t.stop_reason, Some(StopReason::EndTurn));
         assert_eq!(t.usage.input, 10);
         assert_eq!(t.usage.output, 5);
         assert_eq!(t.usage.cache_read, 500);
@@ -2837,7 +2840,7 @@ mod tests {
         );
         assert_eq!(t.tool_calls[1].name, "Agent");
         assert_eq!(t.tool_calls[1].target.as_deref(), Some("general-purpose"));
-        assert_eq!(t.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(t.stop_reason, Some(StopReason::ToolUse));
         assert_eq!(t.ts, "2026-04-20T00:00:01.000Z");
     }
 
@@ -3451,7 +3454,7 @@ mod tests {
         .unwrap();
         assert_eq!(second.turns.len(), 1);
         assert_eq!(second.turns[0].message_id, "msg_inprog_1");
-        assert_eq!(second.turns[0].stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(second.turns[0].stop_reason, Some(StopReason::EndTurn));
     }
 
     #[test]

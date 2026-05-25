@@ -10,8 +10,8 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::reader::types::{
-    ContentKind, ContentRole, FidelityClass, RelationshipType, SourceKind, ToolResultEventSource,
-    ToolResultStatus, UsageAttribution, UsageGranularity, UserTurnBlockKind,
+    ContentKind, ContentRole, FidelityClass, RelationshipType, SourceKind, StopReason,
+    ToolResultEventSource, ToolResultStatus, UsageAttribution, UsageGranularity, UserTurnBlockKind,
 };
 
 fn fixtures_root() -> PathBuf {
@@ -60,7 +60,7 @@ fn parses_simple_one_turn_session() {
     assert_eq!(t.model, "anthropic/claude-sonnet-4-5");
     assert_eq!(t.project.as_deref(), Some("/tmp/project"));
     assert_eq!(t.ts, "2026-04-24T00:00:02.000Z");
-    assert_eq!(t.stop_reason.as_deref(), Some("end_turn"));
+    assert_eq!(t.stop_reason, Some(StopReason::EndTurn));
     assert_eq!(
         t.usage,
         Usage {
@@ -98,7 +98,8 @@ fn extracts_tool_calls_and_files_touched_for_file_tools() {
         files,
         vec!["/src/a.ts".to_string(), "/src/b.ts".to_string()]
     );
-    assert_eq!(t.stop_reason.as_deref(), Some("tool-calls"));
+    // opencode emits `tool-calls`; the canonical mapping is `ToolUse`.
+    assert_eq!(t.stop_reason, Some(StopReason::ToolUse));
 }
 
 #[test]

@@ -719,6 +719,100 @@ fn invalid_session_id_in_content_rejected() {
     assert!(matches!(err, LedgerError::InvalidSessionId(_)));
 }
 
+/// Acceptance for issue #437: a v1 `burn.sqlite` (no `stop_reason`
+/// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
+/// against the 3.0 SDK, the column is back-added by the in-place
+/// migration, and the stored version bumps to 2. Existing rows stay
+/// `NULL` until rewritten.
+#[test]
+fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
+    let tmp = TempDir::new().unwrap();
+    let layout = LedgerLayout::under(tmp.path());
+    // Step 1: write a synthetic v1 schema by hand. We bypass
+    // `Ledger::open` so the migration doesn't pre-emptively bump us
+    // past v1.
+    {
+        let conn = rusqlite::Connection::open(&layout.burn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE turns (
+                source              TEXT NOT NULL,
+                session_id          TEXT NOT NULL,
+                message_id          TEXT NOT NULL,
+                ts                  TEXT NOT NULL,
+                project             TEXT,
+                project_key         TEXT,
+                record_json         TEXT NOT NULL,
+                content_fingerprint TEXT NOT NULL,
+                PRIMARY KEY (source, session_id, message_id)
+            ) STRICT;
+            CREATE TABLE archive_state (
+                id                    INTEGER PRIMARY KEY CHECK (id = 1),
+                schema_version        INTEGER NOT NULL,
+                upstream_cursors_json TEXT NOT NULL DEFAULT '{}',
+                last_built_at         TEXT,
+                last_rebuild_at       TEXT
+            );
+            INSERT INTO archive_state (id, schema_version) VALUES (1, 1);
+            -- A single legacy row. The record_json carries no stopReason
+            -- key so the reader's lenient deserializer reproduces None.
+            INSERT INTO turns (source, session_id, message_id, ts,
+                project, project_key, record_json, content_fingerprint)
+            VALUES ('claude-code', 'legacy-sess', 'legacy-msg',
+                '2025-01-01T00:00:00Z', NULL, NULL,
+                '{\"v\":1,\"source\":\"claude-code\",\"sessionId\":\"legacy-sess\",\"messageId\":\"legacy-msg\",\"turnIndex\":0,\"ts\":\"2025-01-01T00:00:00Z\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cacheRead\":0,\"cacheCreate5m\":0,\"cacheCreate1h\":0},\"toolCalls\":[]}',
+                'legacy-fp');
+            ",
+        )
+        .unwrap();
+    }
+
+    // Step 2: open through the SDK. The migration must:
+    //   a) add `turns.stop_reason TEXT`,
+    //   b) bump archive_state.schema_version to 2,
+    //   c) leave the legacy row's stop_reason as NULL.
+    let l = Ledger::open(&layout.burn, &layout.content).unwrap();
+    let version: i64 = l
+        .conns
+        .burn
+        .query_row(
+            "SELECT schema_version FROM archive_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, 2, "open must bump v1 → v2");
+
+    let column_names: Vec<String> = l
+        .conns
+        .burn
+        .prepare("PRAGMA table_info(turns)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(
+        column_names.iter().any(|c| c == "stop_reason"),
+        "post-migration table must carry stop_reason; got: {column_names:?}"
+    );
+
+    let legacy_stop_reason: Option<String> = l
+        .conns
+        .burn
+        .query_row(
+            "SELECT stop_reason FROM turns WHERE message_id = 'legacy-msg'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(legacy_stop_reason.is_none(), "legacy row stays NULL");
+
+    // Re-opening is idempotent: the migration probe sees the column and
+    // skips the ALTER, version stays at 2.
+    drop(l);
+    let _ = Ledger::open(&layout.burn, &layout.content).unwrap();
+}
+
 #[test]
 fn schema_too_new_is_rejected() {
     // Defensive: if a future build wrote a higher schema_version, this
