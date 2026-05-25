@@ -26,6 +26,14 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   `queued_command` attachment with `commandMode`), so a real prompt that
   literally types `<task-notification>` is not filtered. Drops user-turn
   inflation from background Bash completions.
+- `relayburn-sdk`: Claude Code activity classifier now associates each
+  assistant turn with its user prompt by walking the `parentUuid` chain
+  to the nearest user-prompt ancestor, instead of file order. Fixes
+  mis-classification of late-arriving assistant rows under out-of-order
+  JSONL flushes and interrupt + resume sessions. Falls back to the
+  previous file-order map for legacy/malformed rows without UUIDs.
+  Codex and opencode readers are unaffected — their rollouts don't carry
+  an equivalent chain field. (#433)
 - **BREAKING** `relayburn-sdk`: `TurnRecord.stop_reason` is now an
   `Option<StopReason>` enum (kebab-case wire form); deserialization is
   lenient so pre-3.0 ledgers replay cleanly. (#437)
