@@ -148,6 +148,18 @@ pub(crate) fn query_inferences(conn: &Connection, q: &Query) -> Result<Vec<Infer
         clauses.push("source = ?");
         bound.push(source.wire_str().to_string());
     }
+    // The `inferences` table doesn't carry `project` / `project_key`
+    // directly — those live on `turns`. Inferences are derived per
+    // session, so filtering by "session has any turn with this project"
+    // is sufficient. Mirrors the predicate shape used by `query_turns`.
+    if let Some(project) = &q.project {
+        clauses.push(
+            "session_id IN (SELECT DISTINCT session_id FROM turns \
+             WHERE project = ? OR project_key = ?)",
+        );
+        bound.push(project.clone());
+        bound.push(project.clone());
+    }
     if !clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&clauses.join(" AND "));

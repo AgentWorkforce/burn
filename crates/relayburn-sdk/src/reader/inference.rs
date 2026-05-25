@@ -331,23 +331,19 @@ fn merge_turn_into(inf: &mut Inference, turn: &TurnRecord) {
 }
 
 fn classify(tool_uses: &[ToolUseRef], turn: &TurnRecord) -> InferenceKind {
-    // Reasoning detection is intentionally conservative: `TurnRecord`
-    // doesn't surface a per-block content kind, so we proxy "has
-    // reasoning" through `usage.reasoning > 0`. A pure-text turn comes
-    // in with no tool_uses and no reasoning tokens; reasoning + text
-    // (or reasoning + tool_use) lands in `Mixed`.
+    // Coarse 2-axis classification. `TurnRecord` doesn't surface a
+    // per-block content kind, so we can't distinguish "reasoning + text"
+    // from "reasoning only" or "tools + text" from "tools only"; the
+    // former in each pair lumps into `Reasoning` / `ToolUse` respectively.
+    // A finer split would need a parse-time `has_text_block` signal we
+    // don't carry today.
     let has_tools = !tool_uses.is_empty();
     let has_reasoning = turn.usage.reasoning > 0;
-    let has_text = !has_tools; // proxy: a turn with no tool_uses must have produced text
-    match (has_reasoning, has_tools, has_text) {
-        (true, false, false) => InferenceKind::Reasoning,
-        (false, true, false) => InferenceKind::ToolUse,
-        (false, false, true) => InferenceKind::Message,
-        // Anything else is mixed (reasoning + anything, tool_use + text,
-        // …). Note that the `(false, true, true)` arm is unreachable
-        // because `has_text` is derived from `!has_tools`, but the
-        // exhaustive match keeps the intent obvious.
-        _ => InferenceKind::Mixed,
+    match (has_reasoning, has_tools) {
+        (true, false) => InferenceKind::Reasoning,
+        (false, true) => InferenceKind::ToolUse,
+        (false, false) => InferenceKind::Message,
+        (true, true) => InferenceKind::Mixed,
     }
 }
 
@@ -600,6 +596,26 @@ mod tests {
         );
         let infs = build_inferences(&[t], &RequestIdLookup::new());
         assert_eq!(infs[0].kind, InferenceKind::Mixed);
+    }
+
+    #[test]
+    fn reasoning_only_turn_classifies_as_reasoning() {
+        // No tool_uses, reasoning > 0, output = 0: a turn that produced
+        // only a reasoning block. Must classify as `Reasoning`; before
+        // the 2-tuple match this arm was unreachable.
+        let t = turn(
+            "s1",
+            "msg-1",
+            "2026-04-20T00:00:01.000Z",
+            Usage {
+                reasoning: 42,
+                output: 0,
+                ..Usage::default()
+            },
+            vec![],
+        );
+        let infs = build_inferences(&[t], &RequestIdLookup::new());
+        assert_eq!(infs[0].kind, InferenceKind::Reasoning);
     }
 
     #[test]
