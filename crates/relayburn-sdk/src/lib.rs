@@ -65,11 +65,12 @@ pub use stamp_verb::*;
 // their own `Cargo.toml`. The grouping mirrors the four wave-1 crates.
 
 pub use crate::reader::{
-    build_inferences, count_subagents_under, discover_subagents,
-    pair_to_main as pair_subagents_to_main, parse_bash_command, resolve_project, ActivityCategory,
-    BashParse, ClassificationInput, ClassificationResult, CompactionEvent, ContentKind,
-    ContentRecord, ContentRole, ContentStoreMode, ContentToolResult, ContentToolUse, Coverage,
-    Fidelity, FidelityClass, Harness, Inference, InferenceKeySource, InferenceKind,
+    build_claude_span_tree, build_codex_span_tree, build_inferences, count_subagents_under,
+    discover_subagents, pair_to_main as pair_subagents_to_main, parse_bash_command, resolve_project,
+    ActivityCategory, BashParse, ClassificationInput, ClassificationResult, ClaudeSpanTreeInputs,
+    CodexSpanTreeInputs, CompactionEvent,
+    ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult, ContentToolUse,
+    Coverage, Fidelity, FidelityClass, Harness, Inference, InferenceKeySource, InferenceKind,
     ProjectResolver, RelationshipSourceKind, RelationshipType, RequestIdLookup, ResolvedProject,
     SessionRelationshipRecord, SourceKind, StopReason, Subagent, SubagentCounts,
     SubagentTranscript, ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus,
@@ -107,6 +108,13 @@ pub use crate::analyze::{
     ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SessionOutcome, SessionTotals,
     SubagentAggregation, SubagentTreeNode, SubagentTypeStats, ToolAttribution, TrimRecommendation,
     TurnProvider, UsageCostAggregateRow, WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
+};
+
+// Span tree primitives (issue #430). Re-exported at the SDK root so
+// downstream consumers (MCP, future presenters, inference-flow DAG)
+// can import the types without descending into `analyze::span_tree`.
+pub use crate::analyze::{
+    AttrValue as SpanAttrValue, SpanEvent, SpanKind, SpanNode, SpanStatus, TurnSpanTree,
 };
 
 pub use crate::ingest::{

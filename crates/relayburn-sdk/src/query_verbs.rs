@@ -4158,6 +4158,236 @@ pub fn fingerprint(opts: FingerprintOptions) -> Result<Fingerprint> {
 }
 
 // ---------------------------------------------------------------------------
+// Span trees — pure derived view (#430)
+// ---------------------------------------------------------------------------
+//
+// The span tree is the canonical hierarchy for a turn. We derive on
+// every call rather than caching: per the issue, "default position:
+// always derive; cache only if profiling demands it." If a future
+// profile shows hot-path repeat queries against the same turn we'd
+// add a memoization layer here, but the surface stays the same.
+
+impl LedgerHandle {
+    /// Build the [`TurnSpanTree`] for one turn, identified by its
+    /// session + turn id (the `turn_id` matches
+    /// [`crate::reader::TurnRecord::message_id`] for Claude; for Codex
+    /// / opencode it's the harness's per-turn key, also stored on
+    /// `message_id`).
+    ///
+    /// The tree is built by:
+    ///
+    /// 1. Looking up the matching [`TurnRecord`] (one query).
+    /// 2. Pulling the per-session inferences from the
+    ///    [`inferences`](crate::reader::Inference) table — empty on
+    ///    a pre-v5 ledger that hasn't been rebuilt, in which case the
+    ///    builder falls back to a synthetic single-inference shape.
+    /// 3. Pulling the per-session `tool_result_events` and filtering
+    ///    to events for the requested turn's `message_id`.
+    /// 4. Walking the Claude `subagents/` sidecar tree (lazy — short-
+    ///    circuits when the directory is missing) and pairing
+    ///    transcripts against the same session's main JSONL. Codex
+    ///    turns skip this step entirely (no sidecar concept).
+    /// 5. Dispatching to the per-harness builder.
+    ///
+    /// Returns an error when the requested turn isn't on the ledger.
+    pub fn turn_span_tree(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<crate::analyze::span_tree::TurnSpanTree> {
+        let trees = self.session_span_trees(session_id)?;
+        trees
+            .into_iter()
+            .find(|t| t.turn_id == turn_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "turn not found: session_id={session_id} turn_id={turn_id}"
+                )
+            })
+    }
+
+    /// Build a [`TurnSpanTree`] for every turn in a session, in the
+    /// session's stored order.
+    ///
+    /// Loads each underlying table once and slices per turn — cheaper
+    /// than calling [`Self::turn_span_tree`] in a loop when the caller
+    /// wants the whole session. Identical contract otherwise: pure
+    /// derivation, no caching, no writes.
+    pub fn session_span_trees(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::analyze::span_tree::TurnSpanTree>> {
+        let session_q = Query {
+            session_id: Some(session_id.to_string()),
+            ..Default::default()
+        };
+        let enriched_turns = self.inner.query_turns(&session_q)?;
+        let turns: Vec<crate::reader::TurnRecord> =
+            enriched_turns.into_iter().map(|e| e.turn).collect();
+        if turns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Source dispatch: every turn in the session shares the same
+        // `source` (the ledger never mixes harness rows under one
+        // session id), so the first turn's source decides which
+        // builder we route to.
+        let source = turns[0].source;
+
+        // Bulk-load the per-session sidecar tables.
+        let inferences = self.inner.query_inferences(&session_q).unwrap_or_default();
+        let tool_result_events =
+            self.inner.query_tool_result_events(&session_q).unwrap_or_default();
+
+        // Group sidecars by message_id for fast per-turn slicing.
+        let mut infs_by_msg: HashMap<String, Vec<crate::reader::Inference>> = HashMap::new();
+        for inf in inferences {
+            infs_by_msg.entry(inf.turn_id.clone()).or_default().push(inf);
+        }
+        let mut events_by_msg: HashMap<
+            String,
+            Vec<crate::reader::ToolResultEventRecord>,
+        > = HashMap::new();
+        for ev in tool_result_events {
+            if let Some(m) = ev.message_id.clone() {
+                events_by_msg.entry(m).or_default().push(ev);
+            }
+        }
+
+        // Subagent transcripts: Claude-only. Even for Claude, the
+        // discovery walks a session-scoped directory that's missing
+        // for the vast majority of sessions; the lazy stat-check in
+        // `discover_subagents` keeps this near-free on miss.
+        let subagents = if matches!(source, crate::reader::SourceKind::ClaudeCode) {
+            discover_and_pair_subagents(session_id).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let mut out = Vec::with_capacity(turns.len());
+        for turn in &turns {
+            let infs_for_turn = infs_by_msg.get(&turn.message_id).cloned().unwrap_or_default();
+            let events_for_turn =
+                events_by_msg.get(&turn.message_id).cloned().unwrap_or_default();
+            let tree = match source {
+                crate::reader::SourceKind::ClaudeCode => {
+                    crate::reader::build_claude_span_tree(
+                        crate::reader::ClaudeSpanTreeInputs {
+                            turn,
+                            tool_result_events: &events_for_turn,
+                            inferences: &infs_for_turn,
+                            subagents: &subagents,
+                        },
+                    )
+                }
+                _ => crate::reader::build_codex_span_tree(crate::reader::CodexSpanTreeInputs {
+                    turn,
+                    tool_result_events: &events_for_turn,
+                    inferences: &infs_for_turn,
+                }),
+            };
+            out.push(tree);
+        }
+        Ok(out)
+    }
+}
+
+/// Resolve the Claude projects root and discover + pair subagent
+/// sidecars for `session_id`. Returns an empty `Vec` when:
+///
+/// - The projects root doesn't exist (no Claude on this machine).
+/// - The session's sidecar directory doesn't exist (most sessions).
+/// - The parent JSONL is missing (every sidecar surfaces as orphan).
+///
+/// We resolve `BURN_CLAUDE_PROJECTS_DIR` first to mirror what the
+/// summary path does (so the test suite can pin a sandbox); otherwise
+/// fall back to `$HOME/.claude/projects`.
+fn discover_and_pair_subagents(
+    session_id: &str,
+) -> Result<Vec<crate::reader::SubagentTranscript>> {
+    let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
+        std::path::PathBuf::from(p)
+    } else {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        home.join(".claude").join("projects")
+    };
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    // We don't know which project subdir the session lives under
+    // without the ledger storing it explicitly. Walk one level deep
+    // looking for a project that has a matching session dir.
+    let entries = match std::fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(_) => return Ok(Vec::new()),
+    };
+    for entry in entries.flatten() {
+        let project_dir = entry.path();
+        if !project_dir.is_dir() {
+            continue;
+        }
+        let candidate = project_dir.join(session_id).join("subagents");
+        if !candidate.exists() {
+            continue;
+        }
+        let subs = crate::reader::discover_subagents(&project_dir, session_id);
+        if subs.is_empty() {
+            continue;
+        }
+        let parent_jsonl = project_dir.join(format!("{session_id}.jsonl"));
+        let parent_records = read_jsonl_values(&parent_jsonl);
+        return Ok(crate::reader::pair_to_main(&parent_records, subs));
+    }
+    Ok(Vec::new())
+}
+
+/// Load a JSONL file into a `Vec<serde_json::Value>`. Returns empty on
+/// any I/O / parse failure — `pair_subagents_to_main` treats every
+/// sidecar as orphan in that case, which is the right fallback when
+/// the parent transcript is missing or corrupt.
+fn read_jsonl_values(path: &Path) -> Vec<serde_json::Value> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    text.lines()
+        .filter_map(|line| {
+            let t = line.trim();
+            if t.is_empty() {
+                None
+            } else {
+                serde_json::from_str::<serde_json::Value>(t).ok()
+            }
+        })
+        .collect()
+}
+
+/// Free-function form of [`LedgerHandle::turn_span_tree`].
+pub fn turn_span_tree(
+    session_id: &str,
+    turn_id: &str,
+    ledger_home: Option<PathBuf>,
+) -> Result<crate::analyze::span_tree::TurnSpanTree> {
+    let handle = open_with(ledger_home.as_deref())?;
+    handle.turn_span_tree(session_id, turn_id)
+}
+
+/// Free-function form of [`LedgerHandle::session_span_trees`].
+pub fn session_span_trees(
+    session_id: &str,
+    ledger_home: Option<PathBuf>,
+) -> Result<Vec<crate::analyze::span_tree::TurnSpanTree>> {
+    let handle = open_with(ledger_home.as_deref())?;
+    handle.session_span_trees(session_id)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -6122,6 +6352,81 @@ mod tests {
             per_call < std::time::Duration::from_millis(10),
             "fingerprint per call {per_call:?} exceeds the 10ms #440 target"
         );
+    }
+
+    // ----------------------------------------------------------------
+    // Span tree integration tests (#430)
+    // ----------------------------------------------------------------
+
+    /// `session_span_trees` returns one [`TurnSpanTree`] per turn,
+    /// each carrying the right scalars projected off the Inference
+    /// child. Uses the `fixture_handle` fixture which pre-loads two
+    /// Claude turns into the test ledger.
+    #[test]
+    fn session_span_trees_round_trips_two_turn_fixture() {
+        use crate::analyze::span_tree::{SpanKind, SpanStatus};
+
+        let (_dir, handle) = fixture_handle();
+        let trees = handle.session_span_trees("sess-a").expect("trees");
+        assert_eq!(trees.len(), 2, "two turns in fixture");
+        // Turn order matches the ledger row order (turn_index 0, 1).
+        assert_eq!(trees[0].turn_id, "m-1");
+        assert_eq!(trees[1].turn_id, "m-2");
+
+        // Root status is Ok (no stop_reason / no tool_error in
+        // fixture).
+        assert_eq!(trees[0].root.status, SpanStatus::Ok);
+
+        // Each root has UserPrompt + at least one Inference child.
+        let kinds: Vec<SpanKind> =
+            trees[0].root.children.iter().map(|c| c.kind).collect();
+        assert!(kinds.contains(&SpanKind::UserPrompt));
+        assert!(kinds.contains(&SpanKind::Inference));
+
+        // Token scalars project off the tree and match
+        // TurnRecord::usage (1000 input, 500 output for turn 1).
+        assert_eq!(trees[0].sum_attr_int("tokens.input"), 1000);
+        assert_eq!(trees[0].sum_attr_int("tokens.output"), 500);
+        assert_eq!(trees[1].sum_attr_int("tokens.input"), 800);
+        assert_eq!(trees[1].sum_attr_int("tokens.cache_read"), 200);
+    }
+
+    /// `turn_span_tree` returns the same tree as
+    /// `session_span_trees`'s matching entry. Pinning the contract so
+    /// downstream consumers can pick whichever verb suits their
+    /// access pattern without worrying about divergence.
+    #[test]
+    fn turn_span_tree_matches_session_entry() {
+        let (_dir, handle) = fixture_handle();
+        let single = handle.turn_span_tree("sess-a", "m-2").expect("turn");
+        let from_session = handle
+            .session_span_trees("sess-a")
+            .expect("session")
+            .into_iter()
+            .find(|t| t.turn_id == "m-2")
+            .expect("m-2 present");
+        // The structures are deterministic projections of the same
+        // input, so PartialEq passes.
+        assert_eq!(single, from_session);
+    }
+
+    /// Missing turn → error rather than empty / panic.
+    #[test]
+    fn turn_span_tree_missing_turn_errors() {
+        let (_dir, handle) = fixture_handle();
+        let err = handle.turn_span_tree("sess-a", "does-not-exist").unwrap_err();
+        assert!(
+            err.to_string().contains("turn not found"),
+            "got: {err:?}"
+        );
+    }
+
+    /// Unknown session id → no trees, no error.
+    #[test]
+    fn session_span_trees_unknown_session_is_empty() {
+        let (_dir, handle) = fixture_handle();
+        let trees = handle.session_span_trees("not-a-session").expect("ok");
+        assert!(trees.is_empty());
     }
 }
 

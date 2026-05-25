@@ -55,6 +55,11 @@ use crate::reader::user_turn::{HeuristicCounter, TokenCounter};
 // AgentWorkforce/burn#435.
 pub mod subagents;
 
+// Per-turn span tree builder. Pure projection over `TurnRecord` +
+// paired `tool_result_event` rows + optional subagent transcripts.
+// See AgentWorkforce/burn#430.
+pub mod span_tree;
+
 // ---------------------------------------------------------------------------
 // Public surface.
 // ---------------------------------------------------------------------------

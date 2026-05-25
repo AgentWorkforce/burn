@@ -23,6 +23,7 @@ pub use codex::{
     CodexResumeState, CodexTurnContext, CumulativeUsage, ParseCodexIncrementalOptions,
     ParseCodexIncrementalResult, PersistedUserTurnSlot,
 };
+pub use codex::span_tree::{build_codex_span_tree, CodexSpanTreeInputs};
 pub use opencode::{
     parse_opencode_session_incremental, ParseOpencodeIncrementalOptions,
     ParseOpencodeIncrementalResult,
@@ -51,6 +52,7 @@ pub use claude::{
 pub use claude::subagents::{
     count_subagents_under, discover_subagents, pair_to_main, SubagentCounts, SubagentTranscript,
 };
+pub use claude::span_tree::{build_claude_span_tree, ClaudeSpanTreeInputs};
 pub use inference::{
     build_inferences, Inference, InferenceKeySource, InferenceKind, RequestIdLookup, ToolUseRef,
     TurnKey,
