@@ -38,6 +38,7 @@ use self::parent_chain::ChainNode;
 use crate::reader::classifier::{classify_activity, is_task_notification, ClassificationInput};
 use crate::reader::git::resolve_project;
 use crate::reader::hash::{args_hash, content_hash};
+use crate::reader::inference::{RequestIdLookup, TurnKey};
 use crate::reader::types::{
     CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
     ContentToolUse, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
@@ -73,6 +74,13 @@ pub struct ParseResult {
     pub relationships: Vec<SessionRelationshipRecord>,
     pub tool_result_events: Vec<ToolResultEventRecord>,
     pub user_turns: Vec<UserTurnRecord>,
+    /// `(source, session_id, message_id) -> requestId` map for every
+    /// emitted turn whose source row carried an upstream `requestId`.
+    /// Keys are missing for turns whose harness doesn't ship one (Codex,
+    /// opencode, some older Claude versions). Fed to
+    /// [`crate::reader::build_inferences`] to key the per-API-call
+    /// aggregate (issue #434).
+    pub request_id_lookup: RequestIdLookup,
     /// Read by the in-crate test suite to verify the From<ParseIncrementalResult>
     /// conversion preserves evidence. Production callers consume the incremental
     /// result directly and access `evidence` from there.
@@ -145,6 +153,7 @@ impl From<ParseIncrementalResult> for ParseResult {
             relationships: r.relationships,
             tool_result_events: r.tool_result_events,
             user_turns: r.user_turns,
+            request_id_lookup: r.request_id_lookup,
             #[cfg(test)]
             evidence: r.evidence,
         }
@@ -174,6 +183,10 @@ pub struct ParseIncrementalResult {
     pub relationships: Vec<SessionRelationshipRecord>,
     pub tool_result_events: Vec<ToolResultEventRecord>,
     pub user_turns: Vec<UserTurnRecord>,
+    /// `(source, session_id, message_id) -> requestId` map for the
+    /// turns emitted on this incremental pass (see [`ParseResult`] for
+    /// rationale). Issue #434.
+    pub request_id_lookup: RequestIdLookup,
     /// Byte position to pass as `start_offset` on the next call. May back up
     /// past in-progress trailing messages so the next call re-reads them.
     pub end_offset: u64,
@@ -230,6 +243,12 @@ struct WorkingRecord {
     first_assistant_uuid: Option<String>,
     #[allow(dead_code)]
     parent_assistant_uuid: Option<String>,
+    /// Upstream `requestId` field from the first row that carried one
+    /// for this `message_id`. Powers the `Inference` aggregate's
+    /// per-API-call key (see `reader/inference.rs` and issue #434).
+    /// `None` when no row in this group emitted one — the inference
+    /// builder falls back to `message_id`.
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,7 +391,21 @@ fn ingest_assistant_record(
     let uuid = string_field(obj, &["uuid"], false);
     let parent_uuid = string_field(obj, &["parentUuid"], false);
 
+    // `requestId` lives on the outer envelope (sibling of `message`), NOT
+    // inside `message`. Capture from the first row that carries one for
+    // this `message_id`; later rows belonging to the same API call
+    // re-emit the same `requestId` so first-wins is the right merge.
+    let request_id =
+        string_field(obj, &["requestId", "request_id"], true);
     let usage_with_cov = to_usage(msg.get("usage"));
+    // Claude writes one row per content block but only ONE of those rows
+    // carries the `usage` block. The previous merge updated
+    // `usage_coverage` from later carriers but not `usage` itself, so
+    // `usage` could end up as zeros if the carrier wasn't the first row.
+    // We now overwrite `usage` from whichever row owns the field — per
+    // issue #434 the usage block is single-carrier, so "last writer
+    // wins" and "any writer wins" both round-trip to the same value.
+    let has_usage = msg.contains_key("usage");
 
     if let Some(w) = working.get_mut(&message_id) {
         if is_sidechain {
@@ -381,14 +414,22 @@ fn ingest_assistant_record(
         if w.model.is_empty() && !model.is_empty() {
             w.model = model.clone();
         }
-        if msg.contains_key("usage") {
+        if has_usage {
             w.usage_coverage = merge_usage_coverage(&w.usage_coverage, &usage_with_cov.coverage);
+            // Adopt the carrier row's usage. See the comment above the
+            // outer `let has_usage` for why overwrite is safe.
+            w.usage = usage_with_cov.usage.clone();
         }
         if let Some(s) = stop_reason {
             w.stop_reason = Some(s);
         }
         for b in &blocks {
             w.blocks.push(b.clone());
+        }
+        if w.request_id.is_none() {
+            if let Some(req) = request_id.clone() {
+                w.request_id = Some(req);
+            }
         }
     } else {
         let w = WorkingRecord {
@@ -404,6 +445,7 @@ fn ingest_assistant_record(
             stop_reason,
             first_assistant_uuid: uuid,
             parent_assistant_uuid: parent_uuid,
+            request_id,
         };
         working.insert(message_id.clone(), w);
         order.push(message_id);
@@ -2252,6 +2294,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             relationships: Vec::new(),
             tool_result_events: Vec::new(),
             user_turns: Vec::new(),
+            request_id_lookup: RequestIdLookup::new(),
             end_offset: start_offset,
             last_user_text: options.last_user_text.clone().unwrap_or_default(),
             evidence,
@@ -2686,6 +2729,22 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         .map(|(_, ut)| ut)
         .collect();
 
+    // Build the `(source, session_id, message_id) -> requestId` lookup
+    // for every emitted turn. We only walk turns the run actually emits
+    // (in-progress assistant rows are filtered out above) so the lookup
+    // entries always correspond to an outbound `TurnRecord`. See issue
+    // #434.
+    let mut request_id_lookup = RequestIdLookup::new();
+    for t in &turns {
+        if let Some(w) = working.get(&t.message_id) {
+            if let Some(req) = w.request_id.as_ref() {
+                if !req.is_empty() {
+                    request_id_lookup.insert(TurnKey::for_turn(t), req.clone());
+                }
+            }
+        }
+    }
+
     Ok(ParseIncrementalResult {
         turns,
         content,
@@ -2693,6 +2752,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         relationships: emitted_relationships,
         tool_result_events: emitted_tool_result_events,
         user_turns: emitted_user_turns,
+        request_id_lookup,
         end_offset,
         last_user_text: current_user_text,
         evidence,
@@ -2978,6 +3038,7 @@ mod tests {
             relationships: vec![relationship.clone()],
             tool_result_events: vec![tool_result_event.clone()],
             user_turns: vec![user_turn.clone()],
+            request_id_lookup: RequestIdLookup::new(),
             end_offset: 123,
             last_user_text: "latest user turn".to_string(),
             evidence: evidence.clone(),
@@ -3070,6 +3131,82 @@ mod tests {
         assert_eq!(t.tool_calls[1].target.as_deref(), Some("general-purpose"));
         assert_eq!(t.stop_reason, Some(StopReason::ToolUse));
         assert_eq!(t.ts, "2026-04-20T00:00:01.000Z");
+    }
+
+    /// Issue #434 acceptance: the multi-block fixture's four assistant
+    /// rows share `requestId=req_1` and a single `message.id`. The
+    /// parser surfaces that requestId on its `request_id_lookup`, the
+    /// inference builder collapses the four rows into ONE
+    /// `Inference`, and the merged usage matches the carrier row
+    /// (NOT 4× the carrier row, which would be the row-summing
+    /// pathology).
+    #[test]
+    fn multi_block_turn_emits_one_inference_with_merged_usage() {
+        let path = fixture("multi-block-turn.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 1, "one turn (collapsed by message_id)");
+        let t = &res.turns[0];
+        // The reader populated the per-turn lookup with the upstream
+        // requestId. Without this entry, the inference builder would
+        // fall back to `message_id`, which is correct cardinality for
+        // Claude but loses the `request-id` provenance.
+        let req = res
+            .request_id_lookup
+            .get(&crate::reader::TurnKey::for_turn(t))
+            .expect("request_id_lookup must carry every Claude turn");
+        assert_eq!(req, "req_1");
+
+        let infs = crate::reader::build_inferences(&res.turns, &res.request_id_lookup);
+        assert_eq!(
+            infs.len(),
+            1,
+            "four assistant rows sharing requestId collapse to one Inference"
+        );
+        let inf = &infs[0];
+        assert_eq!(inf.request_id, "req_1");
+        assert_eq!(
+            inf.request_id_source,
+            crate::reader::InferenceKeySource::RequestId
+        );
+        assert_eq!(inf.turn_id, "msg_multi_1");
+        // Carrier usage values: input=3, output=43, cache_read=11_496,
+        // cache_create_1h=4_773. The pre-fix bug emitted these multiplied
+        // by row count when usage was on the first row; with the fix the
+        // single inference reports the carrier's values exactly once.
+        assert_eq!(inf.usage.input, 3);
+        assert_eq!(inf.usage.output, 43);
+        assert_eq!(inf.usage.cache_read, 11_496);
+        assert_eq!(inf.usage.cache_create_1h, 4_773);
+        // start_ts / end_ts come from the parent `TurnRecord` (already
+        // collapsed by message_id), so they equal each other here —
+        // `TurnRecord.ts` is the first row's ts. A future surface that
+        // wants per-row spans should reach into the parser's per-row
+        // metadata; the inference summary stays correct for the
+        // "how long did the API call take" case the issue asked about
+        // by giving us the first-row arrival time.
+        assert_eq!(inf.start_ts, "2026-04-20T00:00:01.000Z");
+        assert_eq!(inf.end_ts, "2026-04-20T00:00:01.000Z");
+        assert_eq!(inf.tool_uses.len(), 2);
+        assert_eq!(inf.kind, crate::reader::InferenceKind::ToolUse);
+    }
+
+    /// A turn that the parser parsed without an upstream `requestId`
+    /// (older Claude version, sidechain, or other harness) falls back
+    /// to `message_id` as the inference key. See `RequestIdLookup`
+    /// fallback rules in `reader/inference.rs`.
+    #[test]
+    fn inference_falls_back_to_message_id_when_lookup_empty() {
+        let path = fixture("multi-block-turn.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        // Empty the lookup to simulate a harness that didn't ship one.
+        let empty = crate::reader::RequestIdLookup::new();
+        let infs = crate::reader::build_inferences(&res.turns, &empty);
+        assert_eq!(infs.len(), 1);
+        assert_eq!(infs[0].request_id, "msg_multi_1");
+        assert_eq!(
+            infs[0].request_id_source,
+            crate::reader::InferenceKeySource::MessageId
+        );
     }
 
     #[test]

@@ -33,7 +33,7 @@ use crate::reader::{
     ContentRecord, ContentStoreMode, CumulativeUsage as ReaderCumulativeUsage,
     ParseCodexIncrementalOptions, ParseCodexIncrementalResult, ParseOpencodeIncrementalOptions,
     ParseOpencodeIncrementalResult, PersistedUserTurnSlot, ReconcileClaudeRelationshipsInput,
-    SessionRelationshipRecord, ToolResultEventRecord, UserTurnRecord,
+    SessionRelationshipRecord, ToolResultEventRecord, TurnRecord, UserTurnRecord,
 };
 
 use crate::ingest::cursors::{
@@ -933,9 +933,29 @@ trait DerivedRecords {
     fn relationships(&self) -> &[SessionRelationshipRecord];
     fn tool_result_events(&self) -> &[ToolResultEventRecord];
     fn user_turns(&self) -> &[UserTurnRecord];
+    /// Per-turn upstream-`requestId` lookup, keyed by `(source,
+    /// session_id, message_id)`. Default returns an empty cow; harnesses
+    /// without a `requestId` equivalent (Codex, opencode) accept this
+    /// default and the inference builder falls back to `message_id`. See
+    /// issue #434 and `reader::inference`.
+    fn request_id_lookup(&self) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+        std::borrow::Cow::Owned(crate::reader::RequestIdLookup::new())
+    }
+    /// Turns the parser produced. The trailing-record appenders don't
+    /// strictly need it (the harness orchestrators count + append turns
+    /// themselves before calling [`apply_parsed_extras`]); the
+    /// `apply_parsed_extras` inference materializer uses it to rebuild
+    /// the per-API-call rows in lockstep with the persisted turns.
+    fn turns(&self) -> &[TurnRecord];
 }
 
-macro_rules! impl_derived_records {
+/// Shared accessor body for the four parser-result types. The
+/// `request_id_lookup` override is intentionally NOT in this macro —
+/// Claude's two result types implement it directly below, while Codex /
+/// opencode inherit the trait default empty `RequestIdLookup`. Splitting
+/// the override out keeps the macro single-arm and avoids macro-level
+/// boolean branching that `macro_rules!` doesn't natively support.
+macro_rules! impl_derived_records_common {
     ($ty:ty) => {
         impl DerivedRecords for $ty {
             fn content(&self) -> &[ContentRecord] {
@@ -953,19 +973,66 @@ macro_rules! impl_derived_records {
             fn user_turns(&self) -> &[UserTurnRecord] {
                 &self.user_turns
             }
+            fn turns(&self) -> &[TurnRecord] {
+                &self.turns
+            }
+            fn request_id_lookup(
+                &self,
+            ) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+                // Default: empty lookup (Codex / opencode). Claude
+                // overrides this in the per-impl block below; we can't
+                // express that override via a single macro arm because
+                // `macro_rules!` literals don't dispatch.
+                claude_request_id_lookup_for(self)
+            }
         }
     };
 }
 
-impl_derived_records!(ClaudeParseResult);
-impl_derived_records!(ClaudeParseIncrementalResult);
-impl_derived_records!(ParseCodexIncrementalResult);
-impl_derived_records!(ParseOpencodeIncrementalResult);
+impl_derived_records_common!(ClaudeParseResult);
+impl_derived_records_common!(ClaudeParseIncrementalResult);
+impl_derived_records_common!(ParseCodexIncrementalResult);
+impl_derived_records_common!(ParseOpencodeIncrementalResult);
+
+/// Per-type adapter for the `request_id_lookup` override (issue #434).
+/// Specialized for Claude's two result types so they borrow the parser's
+/// real lookup; the generic fallback returns an empty owned lookup so
+/// Codex / opencode behave as "no requestId".
+trait ClaudeRequestIdSource {
+    fn lookup_cow(&self) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup>;
+}
+
+impl ClaudeRequestIdSource for ClaudeParseResult {
+    fn lookup_cow(&self) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+        std::borrow::Cow::Borrowed(&self.request_id_lookup)
+    }
+}
+impl ClaudeRequestIdSource for ClaudeParseIncrementalResult {
+    fn lookup_cow(&self) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+        std::borrow::Cow::Borrowed(&self.request_id_lookup)
+    }
+}
+impl ClaudeRequestIdSource for ParseCodexIncrementalResult {
+    fn lookup_cow(&self) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+        std::borrow::Cow::Owned(crate::reader::RequestIdLookup::new())
+    }
+}
+impl ClaudeRequestIdSource for ParseOpencodeIncrementalResult {
+    fn lookup_cow(&self) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+        std::borrow::Cow::Owned(crate::reader::RequestIdLookup::new())
+    }
+}
+
+fn claude_request_id_lookup_for<P: ClaudeRequestIdSource + ?Sized>(
+    p: &P,
+) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+    p.lookup_cow()
+}
 
 /// Append the trailing derived-record buckets shared by every parser
-/// result: content, compactions, relationships, tool-result events, and
-/// user-turn rows. Each bucket is gated on non-empty to avoid a no-op
-/// transaction.
+/// result: content, compactions, relationships, tool-result events,
+/// user-turn rows, and (issue #434) per-API-call inferences. Each
+/// bucket is gated on non-empty to avoid a no-op transaction.
 fn apply_parsed_extras<P: DerivedRecords>(ledger: &mut Ledger, p: &P) -> anyhow::Result<()> {
     if !p.content().is_empty() {
         ledger.append_content(p.content())?;
@@ -981,6 +1048,19 @@ fn apply_parsed_extras<P: DerivedRecords>(ledger: &mut Ledger, p: &P) -> anyhow:
     }
     if !p.user_turns().is_empty() {
         ledger.append_user_turns(p.user_turns())?;
+    }
+    // Materialize inferences from the same turn slice the orchestrator
+    // appended. Building here (not in the parser) keeps the inference
+    // table in lockstep with what actually got persisted — if a turn
+    // was deduped at append time by the content-fingerprint check, its
+    // inference will simply re-replace the prior row via the
+    // `INSERT OR REPLACE` writer, which is the correct steady-state.
+    if !p.turns().is_empty() {
+        let lookup = p.request_id_lookup();
+        let inferences = crate::reader::build_inferences(p.turns(), lookup.as_ref());
+        if !inferences.is_empty() {
+            ledger.append_inferences(&inferences)?;
+        }
     }
     Ok(())
 }

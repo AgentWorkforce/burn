@@ -723,7 +723,7 @@ fn invalid_session_id_in_content_rejected() {
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
 /// migration, and the stored version bumps forward to the current
-/// `SCHEMA_VERSION` (4 after #436 + #435 chained on top of #437).
+/// `SCHEMA_VERSION` (5 after #436 + #435 + #434 chained on top of #437).
 /// Existing rows stay `NULL` for every back-added column until rewritten.
 #[test]
 fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
@@ -782,10 +782,11 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    // Current `SCHEMA_VERSION` is 4 (chained #437 v2 + #436 v3 + #435
-    // v4); the migration must walk every step in one open() call.
+    // Current `SCHEMA_VERSION` is 5 (chained #437 v2 + #436 v3 + #435
+    // v4 + #434 v5); the migration must walk every step in one open()
+    // call.
     assert_eq!(
-        version, 4,
+        version, 5,
         "open must bump v1 forward to the current schema version"
     );
 
@@ -829,6 +830,19 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     assert!(
         legacy_subagent_id.is_none(),
         "legacy row's subagent_id stays NULL post-migration"
+    );
+
+    // v5 step (issue #434): the `inferences` derived table must exist
+    // post-migration; pre-v5 ledgers stay empty until `burn state
+    // rebuild` repopulates it from upstream JSONL.
+    let inferences_count: i64 = l
+        .conns
+        .burn
+        .query_row("SELECT COUNT(*) FROM inferences", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        inferences_count, 0,
+        "v5 migration must create the inferences table; legacy ledger starts empty"
     );
 
     // Re-opening is idempotent: the migration probe sees the column and

@@ -12,7 +12,8 @@ use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use crate::reader::{
-    CompactionEvent, SessionRelationshipRecord, ToolResultEventRecord, TurnRecord, UserTurnRecord,
+    CompactionEvent, Inference, SessionRelationshipRecord, ToolResultEventRecord, TurnRecord,
+    UserTurnRecord,
 };
 
 use crate::ledger::error::Result;
@@ -117,6 +118,52 @@ pub(crate) fn query_user_turns(conn: &Connection, q: &Query) -> Result<Vec<UserT
             project_columns: false,
         },
     )
+}
+
+/// Read per-API-call inferences, applying the standard `Query` filters
+/// (since / until / session_id / source). The `inferences` table stores
+/// `start_ts` as `ts` for filter purposes — earliest row in the call
+/// wins for "did anything happen in this window".
+pub(crate) fn query_inferences(conn: &Connection, q: &Query) -> Result<Vec<Inference>> {
+    // The inferences table doesn't carry a `ts` column literally; the
+    // since/until filters route through `start_ts` instead. We reuse the
+    // generic `build_select_sql` by wrapping the SQL ourselves rather
+    // than threading another `TableFilters` knob for a single-table case.
+    let mut sql = String::from("SELECT record_json FROM inferences");
+    let mut clauses: Vec<&'static str> = Vec::new();
+    let mut bound: Vec<String> = Vec::new();
+    if let Some(since) = &q.since {
+        clauses.push("start_ts >= ?");
+        bound.push(since.clone());
+    }
+    if let Some(until) = &q.until {
+        clauses.push("start_ts <= ?");
+        bound.push(until.clone());
+    }
+    if let Some(sid) = &q.session_id {
+        clauses.push("session_id = ?");
+        bound.push(sid.clone());
+    }
+    if let Some(source) = q.source {
+        clauses.push("source = ?");
+        bound.push(source.wire_str().to_string());
+    }
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY rowid");
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(bound.iter()), |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::with_capacity(rows.len());
+    for json in rows {
+        if let Ok(rec) = serde_json::from_str::<Inference>(&json) {
+            out.push(rec);
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn list_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
@@ -317,6 +364,7 @@ const QUERYABLE_TABLES: &[&str] = &[
     "relationships",
     "tool_result_events",
     "user_turns",
+    "inferences",
     "sessions",
     "stamps",
     "archive_state",
