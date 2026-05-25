@@ -1005,12 +1005,9 @@ pub fn count_retries(tool_calls: &[ToolCall]) -> u64 {
 // finishes. They share the envelope shape of queued user prompts, so a
 // text-prefix-only filter (just checking for `<task-notification>` in
 // content) would false-positive on a real user prompt that legitimately
-// types that string. Port of agent-profiler's `isTaskNotification` from
-// `lib/claude-code/trace-filters.js` — each clause AND-checks shape AND
-// purpose so legitimate prompts with the same shape but a different
-// `commandMode` / `origin.kind` survive.
-//
-// See AgentWorkforce/burn#439.
+// types that string. Each clause AND-checks shape AND purpose so
+// legitimate prompts with the same shape but a different `commandMode` /
+// `origin.kind` survive.
 // ---------------------------------------------------------------------------
 
 /// True when a raw JSONL row represents a harness-injected
