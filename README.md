@@ -376,3 +376,65 @@ Hook payloads land on stdin and get forwarded to `burn ingest`. The command is
 safe to re-fire on every hook; the ledger cursor and dedup path keep ingestion
 idempotent, so the hook path and normal session-store path reconcile against
 the same session.
+
+## FAQ
+
+### What does `burn ingest` do?
+
+Each harness (Claude Code, Codex, OpenCode) writes its own session transcripts
+to disk in its own format. `burn ingest` reads those transcripts, normalizes
+them, and writes them into burn's local SQLite ledger so the query commands
+(`summary`, `hotspots`, `overhead`, `compare`) have something to read against.
+Three modes:
+
+- **One-shot** — `burn ingest` scans every known session store once and exits.
+  Good for backfilling or catching up before a query.
+- **Watch** — `burn ingest --watch` keeps a loop running in the foreground and
+  picks up new turns as harnesses write them.
+- **Hook** — `burn ingest --hook claude --quiet` reads a single Claude Code
+  hook payload from stdin and ingests the transcript it points at.
+
+### What is a "hook"?
+
+Claude Code (and similar harnesses) lets users register shell commands that
+fire on lifecycle events — turn start, tool use, session end, etc. When an
+event fires, Claude pipes a JSON payload describing what just happened into
+the registered command's stdin.
+
+`burn ingest --hook claude` is burn registering itself as one of those
+commands. Instead of polling the transcript file looking for new turns, burn
+gets pushed each turn the moment it lands. Lower latency, no missed turns, no
+FS-watching contortions.
+
+### Why both watch and hook?
+
+- **Hook** is the preferred path when the harness supports it: push-based,
+  exact, no polling.
+- **Watch** is the fallback for harnesses without hooks, or when the user
+  hasn't wired one up. It polls the session store directories on an interval.
+- **One-shot** is for backfill, cron, or "just give me numbers now."
+
+For most solo users, `burn ingest --watch` in a background terminal is
+simplest. The hook path matters most when you're building a launcher that
+spawns Claude Code programmatically and wants per-invocation control without
+mutating global config.
+
+### How is the hook installed?
+
+Burn does not ship an auto-installer. There are two integration paths:
+
+**Per-invocation (orchestrators / launchers).** If you control the Claude
+Code spawn, pass `--settings <path>` to Claude with a JSON file that
+registers `burn ingest --hook claude --quiet` against the hook events you
+care about. This is the recommended path because it avoids touching global
+config and stays scoped to the invocation.
+
+**Global (manual).** Edit `~/.claude/settings.json` (or the project-level
+`.claude/settings.json`) and add `burn ingest --hook claude --quiet` to the
+hook events you want to wire. Burn's hook policy is to always exit 0 so it
+can never break the surrounding Claude Code session, and payloads missing
+`session_id` or `transcript_path` are ignored, so wiring it onto extra
+events is safe.
+
+If you don't want to deal with hook config at all, run `burn ingest --watch`
+instead — same data, slightly higher latency.
