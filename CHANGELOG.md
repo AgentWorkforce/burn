@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+
 ### Added
 
 - Ledger fingerprint primitive (`{count}:{maxMtimeUnix}:{totalBytes}`) for
@@ -12,6 +13,17 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   `burn state fingerprint [--session | --project]` on the CLI, and
   `burn__fingerprint` on the MCP server. Optional `Session(id)` /
   `Project(path)` scopes; all-sessions is the default. (#440)
+
+### Changed
+
+- `relayburn-sdk`: Claude Code parser now skips harness-injected
+  `<task-notification>` rows when emitting `UserTurnRecord`s. The detector
+  matches shape AND purpose across three envelope variants
+  (`type: "queue-operation"` + content prefix, `origin.kind`, and
+  `queued_command` attachment with `commandMode`), so a real prompt that
+  literally types `<task-notification>` is not filtered. Drops user-turn
+  inflation from background Bash completions.
+
 
 ## [2.10.0] - 2026-05-24
 

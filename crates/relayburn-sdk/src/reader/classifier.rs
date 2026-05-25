@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 
 use phf::{phf_map, phf_set};
 use regex::Regex;
+use serde_json::{Map, Value};
 
 use crate::reader::types::{ActivityCategory, ToolCall};
 
@@ -998,6 +999,67 @@ pub fn count_retries(tool_calls: &[ToolCall]) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
+// Harness-injected `<task-notification>` row detector.
+//
+// Claude Code's harness writes synthetic rows when a background Bash task
+// finishes. They share the envelope shape of queued user prompts, so a
+// text-prefix-only filter (just checking for `<task-notification>` in
+// content) would false-positive on a real user prompt that legitimately
+// types that string. Port of agent-profiler's `isTaskNotification` from
+// `lib/claude-code/trace-filters.js` — each clause AND-checks shape AND
+// purpose so legitimate prompts with the same shape but a different
+// `commandMode` / `origin.kind` survive.
+//
+// See AgentWorkforce/burn#439.
+// ---------------------------------------------------------------------------
+
+/// True when a raw JSONL row represents a harness-injected
+/// `<task-notification>` synthetic message rather than a real user prompt.
+/// Three clauses, each ANDing a shape check with a purpose check:
+///
+/// 1. `type == "queue-operation"` AND `content` is a string starting with
+///    `<task-notification>`.
+/// 2. `origin.kind == "task-notification"`.
+/// 3. `attachment.type == "queued_command"` AND
+///    `attachment.commandMode == "task-notification"`.
+pub fn is_task_notification(row: &Map<String, Value>) -> bool {
+    // Clause 1: queue-operation row whose top-level content starts with the
+    // `<task-notification>` marker.
+    if row.get("type").and_then(Value::as_str) == Some("queue-operation")
+        && row
+            .get("content")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.starts_with("<task-notification>"))
+    {
+        return true;
+    }
+    // Clause 2: explicit `origin.kind` marker. The shape check is implicit
+    // in dereferencing `origin` as an object; the purpose check is the
+    // `task-notification` string match.
+    if row
+        .get("origin")
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("kind"))
+        .and_then(Value::as_str)
+        == Some("task-notification")
+    {
+        return true;
+    }
+    // Clause 3: queued-command attachment whose `commandMode` is
+    // `task-notification`. Both fields must match — a legitimate queued
+    // user prompt has `attachment.type == "queued_command"` but a different
+    // `commandMode`, and must survive this check.
+    if let Some(att) = row.get("attachment").and_then(Value::as_object) {
+        let ty = att.get("type").and_then(Value::as_str);
+        let mode = att.get("commandMode").and_then(Value::as_str);
+        if ty == Some("queued_command") && mode == Some("task-notification") {
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
 // Tests.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -1268,5 +1330,111 @@ mod tests {
         let rule = BashRule::pattern(r"\bblack\b").forbidding(r"--check\b");
         assert!(rule.matches("black ."));
         assert!(!rule.matches("black --check ."));
+    }
+
+    // ---------------------------------------------------------------------
+    // is_task_notification — see #439.
+    //
+    // Three positive clauses + one false-positive guard. Each positive
+    // exercises one clause in isolation so a regression in any single
+    // branch surfaces as a single failing test rather than a
+    // hard-to-diagnose aggregate.
+    // ---------------------------------------------------------------------
+
+    fn row(json: serde_json::Value) -> Map<String, Value> {
+        json.as_object().expect("fixture must be an object").clone()
+    }
+
+    #[test]
+    fn task_notification_clause_1_queue_operation_with_prefix() {
+        let r = row(serde_json::json!({
+            "type": "queue-operation",
+            "content": "<task-notification>background bash 1 finished</task-notification>",
+        }));
+        assert!(is_task_notification(&r));
+    }
+
+    #[test]
+    fn task_notification_clause_2_origin_kind() {
+        // Envelope looks like a normal user prompt but `origin.kind` marks
+        // it as a synthetic task-notification — purpose check fires.
+        let r = row(serde_json::json!({
+            "type": "user",
+            "origin": { "kind": "task-notification" },
+            "message": { "role": "user", "content": "ignored" },
+        }));
+        assert!(is_task_notification(&r));
+    }
+
+    #[test]
+    fn task_notification_clause_3_queued_command_attachment() {
+        // Queued-command attachment with the task-notification commandMode.
+        let r = row(serde_json::json!({
+            "type": "user",
+            "attachment": {
+                "type": "queued_command",
+                "commandMode": "task-notification",
+            },
+            "message": { "role": "user", "content": "ignored" },
+        }));
+        assert!(is_task_notification(&r));
+    }
+
+    #[test]
+    fn task_notification_does_not_match_user_typed_marker_string() {
+        // False-positive guard: a real user prompt that literally types
+        // `<task-notification>` is NOT filtered, because neither
+        // `origin.kind` nor `attachment.commandMode` is `task-notification`
+        // and `type` is `user`, not `queue-operation`. This is the case
+        // that motivates shape AND purpose matching over a text-prefix
+        // sniff. See #439.
+        let r = row(serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "<task-notification>literal text in a prompt</task-notification>",
+            },
+            "origin": { "kind": "user-prompt" },
+            "attachment": {
+                "type": "queued_command",
+                "commandMode": "user-prompt",
+            },
+        }));
+        assert!(!is_task_notification(&r));
+    }
+
+    #[test]
+    fn task_notification_clause_1_requires_prefix() {
+        // Shape check for clause 1: `type == "queue-operation"` alone is
+        // not enough — the content must start with `<task-notification>`.
+        let r = row(serde_json::json!({
+            "type": "queue-operation",
+            "content": "some other queued payload",
+        }));
+        assert!(!is_task_notification(&r));
+    }
+
+    #[test]
+    fn task_notification_clause_3_requires_both_fields() {
+        // Shape check for clause 3: attachment.type must be `queued_command`
+        // AND attachment.commandMode must be `task-notification`. Either
+        // one alone does not match.
+        let only_type = row(serde_json::json!({
+            "type": "user",
+            "attachment": { "type": "queued_command", "commandMode": "user-prompt" },
+        }));
+        assert!(!is_task_notification(&only_type));
+
+        let only_mode = row(serde_json::json!({
+            "type": "user",
+            "attachment": { "type": "other", "commandMode": "task-notification" },
+        }));
+        assert!(!is_task_notification(&only_mode));
+    }
+
+    #[test]
+    fn task_notification_empty_row_is_false() {
+        let r = row(serde_json::json!({}));
+        assert!(!is_task_notification(&r));
     }
 }
