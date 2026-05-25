@@ -4,6 +4,12 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+### Added
+
+- `createFingerprintTool()` factory + `burn__fingerprint` tool wrapping the
+  SDK's new fingerprint primitive (`{count}:{maxMtimeUnix}:{totalBytes}`).
+  Accepts optional `sessionId` / `project` to scope, mutually exclusive. (#440)
+
 ## [2.4.0] - 2026-05-08
 
 ### Changed

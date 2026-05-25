@@ -846,6 +846,47 @@ pub fn session_cost(opts: Option<SessionCostOptions>) -> Result<SessionCostResul
 }
 
 // ---------------------------------------------------------------------------
+// fingerprint — cheap polling primitive (count:maxMtimeUnix:totalBytes).
+// Mirrors `sdk::fingerprint`. Powers the MCP `burn__fingerprint` tool and
+// is exposed bare on `@relayburn/sdk` for embedders that want to poll.
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct FingerprintOptions {
+    /// Restrict to a single `session_id`. Mutually exclusive with `project`.
+    pub session: Option<String>,
+    /// Restrict to rows whose `project` (or normalized `project_key`)
+    /// matches this path string. Mutually exclusive with `session`.
+    pub project: Option<String>,
+    pub ledger_home: Option<String>,
+}
+
+#[napi(object)]
+pub struct FingerprintResult {
+    /// `{count}:{maxMtimeUnix}:{totalBytes}`. Compare by string equality.
+    pub fingerprint: String,
+}
+
+#[napi]
+pub fn fingerprint(opts: Option<FingerprintOptions>) -> Result<FingerprintResult, BurnError> {
+    let opts = opts.unwrap_or(FingerprintOptions {
+        session: None,
+        project: None,
+        ledger_home: None,
+    });
+    let raw = sdk::FingerprintOptions {
+        session: opts.session,
+        project: maybe_path(opts.project),
+        ledger_home: maybe_path(opts.ledger_home),
+    };
+    sdk::fingerprint(raw)
+        .map(|fp| FingerprintResult {
+            fingerprint: fp.into_inner(),
+        })
+        .map_err(sdk_err)
+}
+
+// ---------------------------------------------------------------------------
 // overhead + overhead_trim — JsonValue passthrough wrapped in
 // BigIntPromoting; see the file header for why we don't mirror these as
 // typed `#[napi(object)]` structs.

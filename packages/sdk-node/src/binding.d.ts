@@ -15,6 +15,7 @@ export declare class Ledger {
 export declare function ingest(opts?: unknown): Promise<unknown>;
 export declare function summary(opts?: unknown): Promise<unknown>;
 export declare function sessionCost(opts?: unknown): Promise<unknown>;
+export declare function fingerprint(opts?: unknown): Promise<unknown>;
 export declare function overhead(opts?: unknown): Promise<unknown>;
 export declare function overheadTrim(opts?: unknown): Promise<unknown>;
 export declare function hotspots(opts?: unknown): Promise<unknown>;

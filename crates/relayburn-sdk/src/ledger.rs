@@ -163,6 +163,76 @@ impl Ledger {
         content::count_content(&self.conns.content)
     }
 
+    // --- ledger fingerprint -----------------------------------------------
+    //
+    // Cheap polling primitive: a `{count}:{max_ts}:{total_bytes}` triple
+    // computed over `turns` in a single SQL roundtrip. Mirrors
+    // agent-profiler's `/api/traces` `version` field — clients store the
+    // last-seen value and skip work when the new fingerprint matches.
+    //
+    // Implementation notes:
+    //
+    // - `turns` is the right table to fingerprint. It captures every new
+    //   turn (count up), every re-ingest of a session that updates a row
+    //   (`ts` up — the upstream session log's monotonic timestamp), and
+    //   every content shape change (sum of `LENGTH(record_json)` up). The
+    //   other derivable tables (`compactions`, `tool_result_events`, …)
+    //   change in lockstep with `turns` during ingest, so fingerprinting
+    //   `turns` is sufficient for the "did anything change" question
+    //   without a multi-table aggregate.
+    //
+    // - We use `ts` (the upstream message timestamp string) rather than
+    //   an `updated_at` row clock because there isn't one — the 2.0
+    //   schema stamps each turn with the externally-visible message
+    //   timestamp, not a write-time clock. For re-ingest-in-place edge
+    //   cases (count unchanged, `ts` unchanged) the `total_bytes` leg
+    //   catches content-shape rewrites; for the strict "did anything
+    //   change since X" check that's the contract callers actually
+    //   want, so we accept the marginal aliasing risk noted in #440.
+    //
+    // - The query runs as a single `SELECT COUNT(*), MAX(ts),
+    //   COALESCE(SUM(LENGTH(record_json)), 0) FROM turns WHERE …` — on
+    //   the canonical `turns` schema, the `COUNT` walks the primary key,
+    //   the `MAX(ts)` rides the `idx_turns_ts` index, and the `SUM` is
+    //   the only full-row scan. Empirically sub-millisecond on the
+    //   benches in `LedgerHandle::fingerprint`.
+
+    /// Compute the ledger fingerprint `{count}:{max_mtime_unix}:{total_bytes}`
+    /// for the given scope. See [`LedgerFingerprintScope`] for the
+    /// filter shapes.
+    ///
+    /// `max_mtime_unix` is `MAX(ts)` translated to Unix-epoch seconds
+    /// via SQLite's `strftime('%s', ts)`. We render epoch seconds
+    /// rather than the raw ISO string so the `:` separator stays
+    /// unambiguous (the stored `ts` is `YYYY-MM-DDTHH:MM:SS.mmmZ`,
+    /// which carries its own colons). Empty ledgers stamp `""` for
+    /// the middle field so the triple still round-trips through
+    /// equality checks.
+    pub fn ledger_fingerprint(&self, scope: &LedgerFingerprintScope) -> Result<String> {
+        let (where_sql, bound): (&str, Vec<String>) = match scope {
+            LedgerFingerprintScope::AllSessions => ("", Vec::new()),
+            LedgerFingerprintScope::Session(s) => ("WHERE session_id = ?", vec![s.clone()]),
+            LedgerFingerprintScope::Project(p) => (
+                "WHERE project = ? OR project_key = ?",
+                vec![p.clone(), p.clone()],
+            ),
+        };
+        let sql = format!(
+            "SELECT COUNT(*), \
+             COALESCE(CAST(strftime('%s', MAX(ts)) AS TEXT), ''), \
+             COALESCE(SUM(LENGTH(record_json)), 0) \
+             FROM turns {where_sql}"
+        );
+        // rusqlite's `params_from_iter` adapter handles the dynamic
+        // binding count — both arms above bind 0, 1, or 2 strings.
+        let params = rusqlite::params_from_iter(bound.iter());
+        let (count, max_mtime, total_bytes): (i64, String, i64) =
+            self.conns
+                .burn
+                .query_row(&sql, params, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(format!("{count}:{max_mtime}:{total_bytes}"))
+    }
+
     pub fn query_content(&self, q: &Query) -> Result<Vec<crate::reader::ContentRecord>> {
         content::query(&self.conns.content, q)
     }
@@ -458,6 +528,22 @@ impl Ledger {
 pub struct RebuildSummary {
     pub rows_dropped: usize,
     pub content_rows_dropped: usize,
+}
+
+/// Scope filter for [`Ledger::ledger_fingerprint`]. Surfaced separately
+/// from the SDK-level [`crate::FingerprintScope`] so the raw ledger
+/// stays decoupled from the path-type-heavy public verb shape.
+#[derive(Debug, Clone)]
+pub enum LedgerFingerprintScope {
+    /// Fingerprint every row in `turns`.
+    AllSessions,
+    /// Fingerprint only rows matching `session_id = ?`.
+    Session(String),
+    /// Fingerprint only rows matching `project = ?` or
+    /// `project_key = ?`. The two columns hold the human-readable path
+    /// and the normalized key respectively; matching either lets
+    /// callers pass whichever they have in hand.
+    Project(String),
 }
 
 /// Counts returned by [`Ledger::reset`] (and by the dry-run sibling

@@ -63,6 +63,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'ingest',
     'summary',
     'sessionCost',
+    'fingerprint',
     'overhead',
     'overheadTrim',
     'hotspots',
@@ -127,6 +128,19 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
     });
     assert.ok(Array.isArray(compare.cells));
     assert.equal(compare.fidelity.minimum, 'partial');
+
+    const fp = await sdk.fingerprint({ ledgerHome });
+    assert.equal(typeof fp.fingerprint, 'string');
+    assert.match(fp.fingerprint, /^\d+:\d*:\d+$/);
+    // Same input → same fingerprint (stability).
+    const fp2 = await sdk.fingerprint({ ledgerHome });
+    assert.equal(fp.fingerprint, fp2.fingerprint);
+    // Per-session scope differs from global.
+    const fpSession = await sdk.fingerprint({
+      ledgerHome,
+      session: '11111111-1111-1111-1111-111111111111',
+    });
+    assert.notEqual(fp.fingerprint, fpSession.fingerprint);
   } finally {
     rmSync(ledgerHome, { recursive: true, force: true });
   }

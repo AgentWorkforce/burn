@@ -4,6 +4,15 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- Ledger fingerprint primitive (`{count}:{maxMtimeUnix}:{totalBytes}`) for
+  cheap "did anything change" polling. Exposed as `LedgerHandle::fingerprint`
+  on the Rust SDK, `sdk.fingerprint()` on `@relayburn/sdk`,
+  `burn state fingerprint [--session | --project]` on the CLI, and
+  `burn__fingerprint` on the MCP server. Optional `Session(id)` /
+  `Project(path)` scopes; all-sessions is the default. (#440)
+
 ## [2.10.0] - 2026-05-24
 
 ### Added
