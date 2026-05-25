@@ -337,6 +337,28 @@ fn bucket_user_turns_by_session(
     Ok(out)
 }
 
+/// Bucket `tool_result_events` rows by `session_id`, optionally filtered
+/// to a `keep` set. Mirrors [`bucket_user_turns_by_session`]; powers the
+/// `output_bytes` plumbing for hotspots (#436) so the SDK can hand the
+/// analyze layer a per-session lookup without re-walking the ledger.
+fn bucket_tool_result_events_by_session(
+    handle: &LedgerHandle,
+    side_q: &Query,
+    keep: Option<&HashSet<String>>,
+) -> Result<HashMap<String, Vec<crate::reader::ToolResultEventRecord>>> {
+    let mut out: HashMap<String, Vec<crate::reader::ToolResultEventRecord>> = HashMap::new();
+    let events = handle.inner.query_tool_result_events(side_q)?;
+    for ev in events {
+        if let Some(set) = keep {
+            if !set.contains(&ev.session_id) {
+                continue;
+            }
+        }
+        out.entry(ev.session_id.clone()).or_default().push(ev);
+    }
+    Ok(out)
+}
+
 fn open_with(ledger_home: Option<&Path>) -> Result<LedgerHandle> {
     let opts = match ledger_home {
         Some(h) => LedgerOpenOptions::with_home(h),
@@ -3071,6 +3093,11 @@ fn run_hotspots_attribution(
         ..Default::default()
     };
     let user_turns_by_session = bucket_user_turns_by_session(handle, &side_q, Some(&session_ids))?;
+    // Bytes plumbing (#436): hand attribute_hotspots a per-session lookup
+    // so it can stamp `output_bytes` / `output_truncated` onto each
+    // attribution row from the matching `ToolResultEventRecord`.
+    let tool_result_events_by_session =
+        bucket_tool_result_events_by_session(handle, &side_q, Some(&session_ids))?;
 
     let result = attribute_hotspots(
         &eligible,
@@ -3078,6 +3105,7 @@ fn run_hotspots_attribution(
             pricing,
             content_by_session: None,
             user_turns_by_session: Some(&user_turns_by_session),
+            tool_result_events_by_session: Some(&tool_result_events_by_session),
         },
     );
 
@@ -5199,7 +5227,9 @@ mod tests {
         assert_eq!(s.burn.rows.stamps, 0);
         assert_eq!(s.burn.tracked_rows, 0);
         assert_eq!(s.content.rows, 0);
-        assert_eq!(s.archive.schema_version, 2);
+        // v3 after #436 chained `tool_result_events.output_bytes` /
+        // `output_truncated` columns onto #437's v2 `turns.stop_reason`.
+        assert_eq!(s.archive.schema_version, 3);
         assert!(s.archive.last_built_at.is_none());
         assert!(s.archive.last_rebuild_at.is_none());
     }

@@ -20,7 +20,7 @@
     "rows": 0
   },
   "archive": {
-    "schemaVersion": 2
+    "schemaVersion": 3
   },
   "config": {
     "store": "off",

@@ -138,10 +138,33 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current_version < 3 {
+        // v2 → v3: add nullable `output_bytes` / `output_truncated` to
+        // `tool_result_events` for hotspots-by-bytes ranking. Same
+        // duplicate-column-only swallow pattern as the v1 → v2 step —
+        // any other `SqliteFailure` (including `(_, None)`) must
+        // propagate rather than silently advance `schema_version`.
+        for ddl in [
+            "ALTER TABLE tool_result_events ADD COLUMN output_bytes INTEGER",
+            "ALTER TABLE tool_result_events ADD COLUMN output_truncated INTEGER",
+        ] {
+            match conn.execute(ddl, []) {
+                Ok(_) => {}
+                Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                    if msg.contains("duplicate column name") => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 3 WHERE id = 1",
+            [],
+        )?;
+    }
+
     // The `idx_turns_stop_reason` index is created here rather than in
     // the static DDL so a legacy v1 table (no `stop_reason` column yet)
     // doesn't fail the DDL pre-pass. By this point the column either
-    // existed all along (fresh v2 DDL) or was just added by the v1 → v2
+    // existed all along (fresh v2+ DDL) or was just added by the v1 → v2
     // step above, so the index is safe to create idempotently every
     // open.
     conn.execute(

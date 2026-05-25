@@ -553,6 +553,22 @@ pub struct ToolResultEventRecord {
     pub event_source: ToolResultEventSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_length: Option<u64>,
+    /// Raw UTF-8 byte length of the tool result payload, computed at ingest
+    /// from `content.as_bytes().len()` (or `serde_json::to_string(...)`'s
+    /// byte length for non-string payloads). Distinct from `content_length`,
+    /// which historically tracked UTF-16 code units / JS `.length` for the
+    /// Claude reader; downstream presenters wanting a portable "raw payload
+    /// size" should prefer `output_bytes`. `None` for events whose payload
+    /// was not measured (e.g. legacy rows backfilled before schema v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_bytes: Option<u64>,
+    /// `Some(true)` when the ingest site detected a truncation marker
+    /// embedded in the tool result content (e.g. Claude Code's
+    /// `<system-truncated>` or `Bash output truncated to ...` suffixes).
+    /// `None` for events where truncation could not be determined or the
+    /// payload was empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_truncated: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
