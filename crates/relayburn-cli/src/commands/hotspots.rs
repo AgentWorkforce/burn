@@ -93,6 +93,22 @@ pub struct HotspotsArgs {
     /// query verb is not yet exposed by the SDK.
     #[arg(long = "explain-drift")]
     pub explain_drift: bool,
+
+    /// Ranking dimension for the per-tool tables (files, bash, bash verbs,
+    /// subagents). `cost` (default) keeps the historical USD-descending
+    /// order; `bytes` sorts by `totalOutputBytes` so blowouts that get
+    /// truncated to ~0 tokens still surface (#436). JSON output is
+    /// unaffected — both rankings ship every field; downstream consumers
+    /// pick their own sort.
+    #[arg(long = "rank-by", value_name = "DIM", default_value = "cost")]
+    pub rank_by: String,
+}
+
+/// Sort dimension for the per-tool human-mode tables. Mirrors `--rank-by`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RankBy {
+    Cost,
+    Bytes,
 }
 
 // Detector kinds the SDK's `run_hotspots_findings` filter expects. These are
@@ -255,8 +271,19 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         emit_json(&result)?;
         return Ok(0);
     }
+    let rank_by = match args.rank_by.as_str() {
+        "cost" => RankBy::Cost,
+        "bytes" => RankBy::Bytes,
+        other => {
+            eprintln!(
+                "burn: unknown --rank-by value \"{}\". Valid: cost, bytes",
+                other
+            );
+            return Ok(2);
+        }
+    };
     let limit = if args.all { usize::MAX } else { DEFAULT_TOP_N };
-    emit_human(&result, limit, args.findings);
+    emit_human(&result, limit, args.findings, rank_by);
     Ok(0)
 }
 
@@ -466,6 +493,9 @@ fn file_to_json(f: &FileAggregation) -> Value {
         "totalCost": f.total_cost,
         "firstEmitTs": f.first_emit_ts,
         "firstEmitTurnIndex": f.first_emit_turn_index,
+        "totalOutputBytes": f.total_output_bytes,
+        "maxOutputBytes": f.max_output_bytes,
+        "truncatedCount": f.truncated_count,
     })
 }
 
@@ -479,6 +509,9 @@ fn bash_to_json(b: &BashAggregation) -> Value {
     out.insert("totalCost".into(), json!(b.total_cost));
     out.insert("initialTokens".into(), json!(b.initial_tokens));
     out.insert("persistenceTokens".into(), json!(b.persistence_tokens));
+    out.insert("totalOutputBytes".into(), json!(b.total_output_bytes));
+    out.insert("maxOutputBytes".into(), json!(b.max_output_bytes));
+    out.insert("truncatedCount".into(), json!(b.truncated_count));
     Value::Object(out)
 }
 
@@ -492,6 +525,9 @@ fn bash_verb_to_json(b: &BashVerbAggregation) -> Value {
         "persistenceTokens": b.persistence_tokens,
         "avgPersistenceTurns": b.avg_persistence_turns,
         "topExamples": b.top_examples,
+        "totalOutputBytes": b.total_output_bytes,
+        "maxOutputBytes": b.max_output_bytes,
+        "truncatedCount": b.truncated_count,
     })
 }
 
@@ -502,6 +538,9 @@ fn subagent_to_json(s: &SubagentAggregation) -> Value {
         "totalCost": s.total_cost,
         "initialTokens": s.initial_tokens,
         "persistenceTokens": s.persistence_tokens,
+        "totalOutputBytes": s.total_output_bytes,
+        "maxOutputBytes": s.max_output_bytes,
+        "truncatedCount": s.truncated_count,
     })
 }
 
@@ -519,9 +558,9 @@ fn mcp_server_to_json(m: &McpServerAggregation) -> Value {
 
 // ---------- human rendering ----------
 
-fn emit_human(result: &HotspotsResult, limit: usize, findings_view: bool) {
+fn emit_human(result: &HotspotsResult, limit: usize, findings_view: bool, rank_by: RankBy) {
     match result {
-        HotspotsResult::Attribution(a) => emit_human_attribution(a, limit),
+        HotspotsResult::Attribution(a) => emit_human_attribution(a, limit, rank_by),
         // The single-axis group_by surfaces aren't yet tied to a golden
         // snapshot (the snapshot covers the default attribution view),
         // so we render their tables on a best-effort basis with the same
@@ -534,12 +573,22 @@ fn emit_human(result: &HotspotsResult, limit: usize, findings_view: bool) {
         } => {
             print_refusal(refusal_reason.as_deref());
         }
-        HotspotsResult::Bash { rows, .. } => print_section_table(
-            "Top exact Bash commands by cost",
-            "(no Bash tool calls)",
-            rows.iter().take(limit).map(bash_row),
-            &["command", "calls", "initial(tok)", "persist(tok)", "cost"],
-        ),
+        HotspotsResult::Bash { rows, .. } => {
+            let (heading, sorted) = sort_bash(rows, rank_by);
+            print_section_table(
+                heading,
+                "(no Bash tool calls)",
+                sorted.into_iter().take(limit).map(bash_row),
+                &[
+                    "command",
+                    "calls",
+                    "initial(tok)",
+                    "persist(tok)",
+                    "bytes",
+                    "cost",
+                ],
+            );
+        }
         HotspotsResult::BashVerb {
             refused: Some(true),
             refusal_reason,
@@ -547,21 +596,25 @@ fn emit_human(result: &HotspotsResult, limit: usize, findings_view: bool) {
         } => {
             print_refusal(refusal_reason.as_deref());
         }
-        HotspotsResult::BashVerb { rows, .. } => print_section_table(
-            "Top Bash verbs by cost",
-            "(no Bash tool calls)",
-            rows.iter().take(limit).map(bash_verb_row),
-            &[
-                "verb",
-                "calls",
-                "commands",
-                "initial(tok)",
-                "persist(tok)",
-                "avgRide",
-                "cost",
-                "examples",
-            ],
-        ),
+        HotspotsResult::BashVerb { rows, .. } => {
+            let (heading, sorted) = sort_bash_verb(rows, rank_by);
+            print_section_table(
+                heading,
+                "(no Bash tool calls)",
+                sorted.into_iter().take(limit).map(bash_verb_row),
+                &[
+                    "verb",
+                    "calls",
+                    "commands",
+                    "initial(tok)",
+                    "persist(tok)",
+                    "avgRide",
+                    "bytes",
+                    "cost",
+                    "examples",
+                ],
+            );
+        }
         HotspotsResult::File {
             refused: Some(true),
             refusal_reason,
@@ -569,20 +622,24 @@ fn emit_human(result: &HotspotsResult, limit: usize, findings_view: bool) {
         } => {
             print_refusal(refusal_reason.as_deref());
         }
-        HotspotsResult::File { rows, .. } => print_section_table(
-            "Top files by cumulative cost",
-            "(no Read/Edit/Write tool calls)",
-            rows.iter().take(limit).map(|f| file_row(f, 0.0)),
-            &[
-                "path",
-                "firstTurn",
-                "initial(tok)",
-                "persist(tok)",
-                "rideTurns",
-                "cost",
-                "%attr",
-            ],
-        ),
+        HotspotsResult::File { rows, .. } => {
+            let (heading, sorted) = sort_file(rows, rank_by);
+            print_section_table(
+                heading,
+                "(no Read/Edit/Write tool calls)",
+                sorted.into_iter().take(limit).map(|f| file_row(f, 0.0)),
+                &[
+                    "path",
+                    "firstTurn",
+                    "initial(tok)",
+                    "persist(tok)",
+                    "rideTurns",
+                    "bytes",
+                    "cost",
+                    "%attr",
+                ],
+            );
+        }
         HotspotsResult::Subagent {
             refused: Some(true),
             refusal_reason,
@@ -590,12 +647,22 @@ fn emit_human(result: &HotspotsResult, limit: usize, findings_view: bool) {
         } => {
             print_refusal(refusal_reason.as_deref());
         }
-        HotspotsResult::Subagent { rows, .. } => print_section_table(
-            "Top subagent calls by cost",
-            "(no Agent/Task tool calls)",
-            rows.iter().take(limit).map(subagent_row),
-            &["subagent", "calls", "initial(tok)", "persist(tok)", "cost"],
-        ),
+        HotspotsResult::Subagent { rows, .. } => {
+            let (heading, sorted) = sort_subagent(rows, rank_by);
+            print_section_table(
+                heading,
+                "(no Agent/Task tool calls)",
+                sorted.into_iter().take(limit).map(subagent_row),
+                &[
+                    "subagent",
+                    "calls",
+                    "initial(tok)",
+                    "persist(tok)",
+                    "bytes",
+                    "cost",
+                ],
+            );
+        }
         HotspotsResult::Findings { findings, .. } => {
             if findings_view {
                 emit_findings_unified(findings);
@@ -729,9 +796,13 @@ where
     print!("{}", lines.join("\n"));
 }
 
-fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
+fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize, rank_by: RankBy) {
     let degraded = a.attribution_degraded;
     let approx_suffix = if degraded { " (approximate)" } else { "" };
+    let rank_suffix = match rank_by {
+        RankBy::Cost => "",
+        RankBy::Bytes => " (ranked by bytes)",
+    };
     let mut out: Vec<String> = Vec::new();
     out.push(String::new());
     out.push(format!("turns analyzed: {}", format_uint(a.turns_analyzed)));
@@ -806,8 +877,9 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
     }
     out.push(String::new());
 
-    out.push(format!("Top files by cumulative cost{}", approx_suffix));
-    if a.files.is_empty() {
+    let (file_heading, files_sorted) = sort_file(&a.files, rank_by);
+    out.push(format!("{}{}{}", file_heading, rank_suffix, approx_suffix));
+    if files_sorted.is_empty() {
         out.push("  (no Read/Edit/Write tool calls)".to_string());
     } else {
         let header: Vec<String> = vec![
@@ -816,19 +888,21 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
             "initial(tok)".into(),
             "persist(tok)".into(),
             "rideTurns".into(),
+            "bytes".into(),
             "cost".into(),
             "%attr".into(),
         ];
         let mut rows: Vec<Vec<String>> = vec![header];
-        for f in a.files.iter().take(limit) {
+        for f in files_sorted.iter().take(limit) {
             rows.push(file_row(f, a.attributed_total));
         }
         out.push(render_table(&rows));
     }
     out.push(String::new());
 
-    out.push(format!("Top Bash verbs by cost{}", approx_suffix));
-    if a.bash_verbs.is_empty() {
+    let (verb_heading, verbs_sorted) = sort_bash_verb(&a.bash_verbs, rank_by);
+    out.push(format!("{}{}{}", verb_heading, rank_suffix, approx_suffix));
+    if verbs_sorted.is_empty() {
         out.push("  (no Bash tool calls)".to_string());
     } else {
         let header: Vec<String> = vec![
@@ -838,19 +912,21 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
             "initial(tok)".into(),
             "persist(tok)".into(),
             "avgRide".into(),
+            "bytes".into(),
             "cost".into(),
             "examples".into(),
         ];
         let mut rows: Vec<Vec<String>> = vec![header];
-        for b in a.bash_verbs.iter().take(limit) {
+        for b in verbs_sorted.iter().take(limit) {
             rows.push(bash_verb_row(b));
         }
         out.push(render_table(&rows));
     }
     out.push(String::new());
 
-    out.push(format!("Top exact Bash commands by cost{}", approx_suffix));
-    if a.bash.is_empty() {
+    let (bash_heading, bash_sorted) = sort_bash(&a.bash, rank_by);
+    out.push(format!("{}{}{}", bash_heading, rank_suffix, approx_suffix));
+    if bash_sorted.is_empty() {
         out.push("  (no Bash tool calls)".to_string());
     } else {
         let header: Vec<String> = vec![
@@ -858,18 +934,20 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
             "calls".into(),
             "initial(tok)".into(),
             "persist(tok)".into(),
+            "bytes".into(),
             "cost".into(),
         ];
         let mut rows: Vec<Vec<String>> = vec![header];
-        for b in a.bash.iter().take(limit) {
+        for b in bash_sorted.iter().take(limit) {
             rows.push(bash_row(b));
         }
         out.push(render_table(&rows));
     }
     out.push(String::new());
 
-    out.push(format!("Top subagent calls by cost{}", approx_suffix));
-    if a.subagents.is_empty() {
+    let (sub_heading, subs_sorted) = sort_subagent(&a.subagents, rank_by);
+    out.push(format!("{}{}{}", sub_heading, rank_suffix, approx_suffix));
+    if subs_sorted.is_empty() {
         out.push("  (no Agent/Task tool calls)".to_string());
     } else {
         let header: Vec<String> = vec![
@@ -877,10 +955,11 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize) {
             "calls".into(),
             "initial(tok)".into(),
             "persist(tok)".into(),
+            "bytes".into(),
             "cost".into(),
         ];
         let mut rows: Vec<Vec<String>> = vec![header];
-        for s in a.subagents.iter().take(limit) {
+        for s in subs_sorted.iter().take(limit) {
             rows.push(subagent_row(s));
         }
         out.push(render_table(&rows));
@@ -977,6 +1056,7 @@ fn file_row(f: &FileAggregation, attributed: f64) -> Vec<String> {
         format_uint(f.initial_tokens.round() as u64),
         format_uint(f.persistence_tokens.round() as u64),
         format_uint(f.riding_turns),
+        format_bytes_cell(f.total_output_bytes, f.truncated_count),
         format_usd(f.total_cost),
         format!("{:.1}%", pct),
     ]
@@ -992,6 +1072,7 @@ fn bash_row(b: &BashAggregation) -> Vec<String> {
         format_uint(b.call_count),
         format_uint(b.initial_tokens.round() as u64),
         format_uint(b.persistence_tokens.round() as u64),
+        format_bytes_cell(b.total_output_bytes, b.truncated_count),
         format_usd(b.total_cost),
     ]
 }
@@ -1004,6 +1085,7 @@ fn bash_verb_row(b: &BashVerbAggregation) -> Vec<String> {
         format_uint(b.initial_tokens.round() as u64),
         format_uint(b.persistence_tokens.round() as u64),
         format!("{:.1}", b.avg_persistence_turns),
+        format_bytes_cell(b.total_output_bytes, b.truncated_count),
         format_usd(b.total_cost),
         truncate(
             &b.top_examples
@@ -1022,6 +1104,7 @@ fn subagent_row(s: &SubagentAggregation) -> Vec<String> {
         format_uint(s.call_count),
         format_uint(s.initial_tokens.round() as u64),
         format_uint(s.persistence_tokens.round() as u64),
+        format_bytes_cell(s.total_output_bytes, s.truncated_count),
         format_usd(s.total_cost),
     ]
 }
@@ -1043,6 +1126,103 @@ fn mcp_server_row(m: &McpServerAggregation) -> Vec<String> {
             90,
         ),
     ]
+}
+
+/// Render a byte count using IEC-style suffixes (KB / MB / GB) so 4 MB
+/// Bash blowouts read as "4 MB" rather than a raw 7-digit integer. Zero
+/// bytes render as `-` to make "no payload measured" visually distinct
+/// from "0 byte payload". A trailing `*` appears when at least one call
+/// in the bucket had a truncation marker.
+fn format_bytes_cell(bytes: u64, truncated_count: u32) -> String {
+    let base = if bytes == 0 {
+        "-".to_string()
+    } else {
+        format_bytes(bytes)
+    };
+    if truncated_count > 0 {
+        format!("{base}*")
+    } else {
+        base
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    // Decimal (SI) units — closer to what JS `humansize` defaults to and
+    // what most CLI users expect for stdout payloads.
+    const KB: u64 = 1_000;
+    const MB: u64 = 1_000_000;
+    const GB: u64 = 1_000_000_000;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+// ---- sort helpers ---------------------------------------------------------
+
+fn sort_file<'a>(
+    rows: &'a [FileAggregation],
+    rank_by: RankBy,
+) -> (&'static str, Vec<&'a FileAggregation>) {
+    let mut out: Vec<&FileAggregation> = rows.iter().collect();
+    match rank_by {
+        RankBy::Cost => (
+            "Top files by cumulative cost",
+            // SDK already returns rows sorted by cost desc; preserve that.
+            out,
+        ),
+        RankBy::Bytes => {
+            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            ("Top files by output bytes", out)
+        }
+    }
+}
+
+fn sort_bash<'a>(
+    rows: &'a [BashAggregation],
+    rank_by: RankBy,
+) -> (&'static str, Vec<&'a BashAggregation>) {
+    let mut out: Vec<&BashAggregation> = rows.iter().collect();
+    match rank_by {
+        RankBy::Cost => ("Top exact Bash commands by cost", out),
+        RankBy::Bytes => {
+            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            ("Top exact Bash commands by output bytes", out)
+        }
+    }
+}
+
+fn sort_bash_verb<'a>(
+    rows: &'a [BashVerbAggregation],
+    rank_by: RankBy,
+) -> (&'static str, Vec<&'a BashVerbAggregation>) {
+    let mut out: Vec<&BashVerbAggregation> = rows.iter().collect();
+    match rank_by {
+        RankBy::Cost => ("Top Bash verbs by cost", out),
+        RankBy::Bytes => {
+            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            ("Top Bash verbs by output bytes", out)
+        }
+    }
+}
+
+fn sort_subagent<'a>(
+    rows: &'a [SubagentAggregation],
+    rank_by: RankBy,
+) -> (&'static str, Vec<&'a SubagentAggregation>) {
+    let mut out: Vec<&SubagentAggregation> = rows.iter().collect();
+    match rank_by {
+        RankBy::Cost => ("Top subagent calls by cost", out),
+        RankBy::Bytes => {
+            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            ("Top subagent calls by output bytes", out)
+        }
+    }
 }
 
 fn truncate(s: &str, n: usize) -> String {

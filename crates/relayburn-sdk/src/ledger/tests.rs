@@ -722,8 +722,9 @@ fn invalid_session_id_in_content_rejected() {
 /// Acceptance for issue #437: a v1 `burn.sqlite` (no `stop_reason`
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
-/// migration, and the stored version bumps to 2. Existing rows stay
-/// `NULL` until rewritten.
+/// migration, and the stored version bumps forward to the current
+/// `SCHEMA_VERSION` (3 after #436 chained on top of #437). Existing
+/// rows stay `NULL` until rewritten.
 #[test]
 fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     let tmp = TempDir::new().unwrap();
@@ -768,7 +769,8 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
 
     // Step 2: open through the SDK. The migration must:
     //   a) add `turns.stop_reason TEXT`,
-    //   b) bump archive_state.schema_version to 2,
+    //   b) bump archive_state.schema_version forward to the current
+    //      `SCHEMA_VERSION` (chained v1 → v2 → v3 once #436 lands),
     //   c) leave the legacy row's stop_reason as NULL.
     let l = Ledger::open(&layout.burn, &layout.content).unwrap();
     let version: i64 = l
@@ -780,7 +782,12 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(version, 2, "open must bump v1 → v2");
+    // Current `SCHEMA_VERSION` is 3 (chained #437 v2 + #436 v3); the
+    // migration must walk every step in one open() call.
+    assert_eq!(
+        version, 3,
+        "open must bump v1 forward to the current schema version"
+    );
 
     let column_names: Vec<String> = l
         .conns
@@ -1183,6 +1190,8 @@ fn query_tool_result_events_keeps_null_ts_rows_under_since_filter() {
         status: ToolResultStatus::Completed,
         event_source: ToolResultEventSource::ToolResult,
         content_length: None,
+        output_bytes: None,
+        output_truncated: None,
         content_hash: None,
         is_error: None,
         usage: None,

@@ -166,12 +166,14 @@ pub(crate) fn append_tool_result_events(
     {
         let mut insert = tx.prepare(
             "INSERT OR IGNORE INTO tool_result_events
-                 (id_fingerprint, source, session_id, tool_use_id, event_index, ts, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (id_fingerprint, source, session_id, tool_use_id, event_index, ts,
+                  record_json, output_bytes, output_truncated)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         for r in records {
             let id = tool_result_event_id_fingerprint(r);
             let json = serde_json::to_string(r)?;
+            let truncated_int: Option<i64> = r.output_truncated.map(|b| if b { 1 } else { 0 });
             let changed = insert.execute(params![
                 id,
                 r.source.wire_str(),
@@ -180,6 +182,8 @@ pub(crate) fn append_tool_result_events(
                 r.event_index as i64,
                 r.ts,
                 json,
+                r.output_bytes.map(|n| n as i64),
+                truncated_int,
             ])?;
             if changed > 0 {
                 appended += 1;

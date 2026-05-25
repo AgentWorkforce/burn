@@ -1057,6 +1057,8 @@ fn collect_tool_result_events(
             },
             event_source: ToolResultEventSource::ToolResult,
             content_length: None,
+            output_bytes: None,
+            output_truncated: None,
             content_hash: None,
             is_error: if is_error { Some(true) } else { None },
             usage: None,
@@ -1071,6 +1073,8 @@ fn collect_tool_result_events(
             let measured = measure_tool_result(content);
             record.content_length = measured.length;
             record.content_hash = measured.hash;
+            record.output_bytes = measured.byte_length;
+            record.output_truncated = measured.truncated;
         }
         if let Some(meta) = extract_replacement_meta_from_tool_result(block) {
             if let Some(ref names) = meta.replaced_tools {
@@ -1093,6 +1097,15 @@ fn collect_tool_result_events(
 struct Measured {
     length: Option<u64>,
     hash: Option<String>,
+    /// Raw UTF-8 byte length of the materialized text (the same string the
+    /// hash is computed against). Added in #436 so hotspots can rank tools
+    /// by raw payload bytes alongside post-truncation tokens.
+    byte_length: Option<u64>,
+    /// `Some(true)` when a recognized truncation marker was detected in
+    /// the payload (see `detect_truncation_marker`). `None` when no
+    /// payload was available; `Some(false)` when payload was inspected
+    /// and looked complete.
+    truncated: Option<bool>,
 }
 
 fn measure_tool_result(content: &Value) -> Measured {
@@ -1104,6 +1117,8 @@ fn measure_tool_result(content: &Value) -> Measured {
         return Measured {
             length: Some(s.chars().count() as u64),
             hash: Some(content_hash(s)),
+            byte_length: Some(s.as_bytes().len() as u64),
+            truncated: Some(detect_truncation_marker(s)),
         };
     }
     if content.is_null() {
@@ -1113,9 +1128,33 @@ fn measure_tool_result(content: &Value) -> Measured {
         Ok(s) => Measured {
             length: Some(s.chars().count() as u64),
             hash: Some(content_hash(&s)),
+            byte_length: Some(s.as_bytes().len() as u64),
+            truncated: Some(detect_truncation_marker(&s)),
         },
         Err(_) => Measured::default(),
     }
+}
+
+/// Detect whether Claude Code embedded a truncation marker in the tool
+/// result payload. Claude truncates large outputs (notably Bash stdout,
+/// long-file reads) before serializing the tool_result block; the
+/// truncated payload is suffixed/prefixed with a recognizable marker so
+/// the assistant model can react. We look for the well-known phrasings
+/// the Claude Code CLI emits as of 2026-Q1; new markers can be added
+/// here without bumping the schema.
+fn detect_truncation_marker(s: &str) -> bool {
+    // Matched case-insensitively to absorb capitalization tweaks. Patterns
+    // are kept short so partial-message previews still trigger.
+    const MARKERS: &[&str] = &[
+        "<system-truncated>",
+        "[truncated]",
+        "output truncated",
+        "result truncated",
+        "response truncated",
+        "truncated to ",
+    ];
+    let lower = s.to_ascii_lowercase();
+    MARKERS.iter().any(|m| lower.contains(m))
 }
 
 fn build_claude_system_tool_result_event(
@@ -1157,6 +1196,8 @@ fn build_claude_system_tool_result_event(
         status,
         event_source: ToolResultEventSource::SubagentNotification,
         content_length: None,
+        output_bytes: None,
+        output_truncated: None,
         content_hash: None,
         is_error: None,
         usage: None,
@@ -1174,6 +1215,8 @@ fn build_claude_system_tool_result_event(
         let measured = measure_tool_result(c);
         record.content_length = measured.length;
         record.content_hash = measured.hash;
+        record.output_bytes = measured.byte_length;
+        record.output_truncated = measured.truncated;
     }
     Some(record)
 }
@@ -2596,6 +2639,46 @@ fn first_present<'a>(obj: &'a serde_json::Map<String, Value>, keys: &[&str]) -> 
 mod tests {
     use super::*;
 
+    /// `measure_tool_result` populates both the legacy char-count
+    /// `length` and the new `byte_length` field added in #436. For
+    /// ASCII fixture content they agree; the byte length is what the
+    /// `tool_result_events.output_bytes` column stores so hotspots can
+    /// rank by raw payload regardless of token truncation downstream.
+    #[test]
+    fn measure_tool_result_populates_byte_length_and_truncation_flag() {
+        let plain = serde_json::json!("hello world");
+        let m = measure_tool_result(&plain);
+        assert_eq!(m.byte_length, Some(11));
+        assert_eq!(m.length, Some(11));
+        assert_eq!(m.truncated, Some(false));
+
+        let truncated = serde_json::json!(
+            "... lots of output ...\n[truncated]\nsystem note: response truncated"
+        );
+        let m = measure_tool_result(&truncated);
+        assert_eq!(m.truncated, Some(true));
+        assert!(m.byte_length.unwrap() > 0);
+
+        let null = serde_json::json!(null);
+        let m = measure_tool_result(&null);
+        assert_eq!(m.byte_length, None);
+        assert_eq!(m.truncated, None);
+    }
+
+    #[test]
+    fn detect_truncation_marker_matches_known_phrasings() {
+        assert!(detect_truncation_marker(
+            "Bash output truncated at 30000 chars"
+        ));
+        assert!(detect_truncation_marker("<system-truncated>"));
+        assert!(detect_truncation_marker(
+            "(...)\n[truncated]\n(end of preview)"
+        ));
+        assert!(detect_truncation_marker("Result Truncated"));
+        assert!(!detect_truncation_marker("hello world"));
+        assert!(!detect_truncation_marker(""));
+    }
+
     fn fixture(name: &str) -> std::path::PathBuf {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         manifest
@@ -2704,6 +2787,8 @@ mod tests {
             status: ToolResultStatus::Completed,
             event_source: ToolResultEventSource::ToolResult,
             content_length: Some(5),
+            output_bytes: Some(5),
+            output_truncated: Some(false),
             content_hash: Some("abc123".to_string()),
             is_error: Some(false),
             usage: Some(Usage::default()),

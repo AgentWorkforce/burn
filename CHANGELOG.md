@@ -14,6 +14,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   `burn state fingerprint [--session | --project]` on the CLI, and
   `burn__fingerprint` on the MCP server. Optional `Session(id)` /
   `Project(path)` scopes; all-sessions is the default. (#440)
+- `burn hotspots`: new `Bytes` column on the per-tool tables and `--rank-by bytes` mode rank tools by raw output payload size, so a 4 MB Bash result that got truncated to a small token count still surfaces alongside small-bytes / large-tokens reads. JSON output gains `totalOutputBytes`, `maxOutputBytes`, and `truncatedCount` on every aggregation row. (#436)
+- `relayburn-sdk`: `ToolResultEventRecord` carries new `outputBytes` and `outputTruncated` fields populated at ingest from `content.as_bytes().len()` plus Claude truncation-marker detection; `ToolAttribution` / `FileAggregation` / `BashAggregation` / `BashVerbAggregation` / `SubagentAggregation` expose the rolled-up `total_output_bytes`, `max_output_bytes`, and `truncated_count`. (#436)
 
 ### Changed
 
@@ -27,8 +29,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - **BREAKING** `relayburn-sdk`: `TurnRecord.stop_reason` is now an
   `Option<StopReason>` enum (kebab-case wire form); deserialization is
   lenient so pre-3.0 ledgers replay cleanly. (#437)
-- `relayburn-sdk` ledger schema bumps to v2: `turns` gains a
-  `stop_reason TEXT` column, migrated in place on `Ledger::open`. (#437)
+- `relayburn-sdk` ledger schema bumps to v3: `turns` gains a `stop_reason
+  TEXT` column (#437) and `tool_result_events` gains nullable `output_bytes`
+  / `output_truncated` columns (#436). Both are migrated in place on
+  `Ledger::open`; existing rows leave the new columns `NULL`. Run `burn
+  state rebuild` to backfill an older ledger.
 
 ## [2.10.0] - 2026-05-24
 
