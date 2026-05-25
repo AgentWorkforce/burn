@@ -65,13 +65,15 @@ pub use stamp_verb::*;
 // their own `Cargo.toml`. The grouping mirrors the four wave-1 crates.
 
 pub use crate::reader::{
+    count_subagents_under, discover_subagents, pair_to_main as pair_subagents_to_main,
     parse_bash_command, resolve_project, ActivityCategory, BashParse, ClassificationInput,
     ClassificationResult, CompactionEvent, ContentKind, ContentRecord, ContentRole,
     ContentStoreMode, ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass,
     Harness, ProjectResolver, RelationshipSourceKind, RelationshipType, ResolvedProject,
-    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
-    ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageAttribution, UsageGranularity,
-    UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
+    SessionRelationshipRecord, SourceKind, StopReason, Subagent, SubagentCounts,
+    SubagentTranscript, ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus,
+    TurnRecord, Usage, UsageAttribution, UsageGranularity, UserTurnBlock, UserTurnBlockKind,
+    UserTurnRecord,
 };
 
 pub use crate::ledger::{

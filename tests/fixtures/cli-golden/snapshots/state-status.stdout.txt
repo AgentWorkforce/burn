@@ -13,7 +13,7 @@ content DB (content.sqlite):
   path: ${RELAYBURN_HOME}/content.sqlite
   rows: 0
 archive state:
-  schema version: 3
+  schema version: 4
   last built:   never
   last rebuild: never
 config:

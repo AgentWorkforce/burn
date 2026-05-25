@@ -24,7 +24,7 @@ use relayburn_sdk::{
     ingest_all, summary_fidelity_summary_to_value, summary_replacement_savings_to_value,
     CostBreakdown, CoverageField, Enrichment, FidelityClass, FidelitySummary, Ledger, LedgerHandle,
     LedgerOpenOptions, OutcomeLabel, QualityResult, RelationshipType, StopReasonCounts,
-    SubagentTreeNode, SubagentTypeStats, SummaryByToolReport, SummaryGroupBy,
+    SubagentCounts, SubagentTreeNode, SubagentTypeStats, SummaryByToolReport, SummaryGroupBy,
     SummaryGroupedReport, SummaryRelationshipReport, SummaryReport, SummaryReportMode,
     SummaryReportOptions, SummarySubagentTreeReport, UsageCostAggregateRow,
 };
@@ -491,6 +491,19 @@ fn grouped_json_value(
         );
     }
     payload.insert("stopReasons".into(), stop_reasons_to_json(&report.stop_reasons));
+    if !report.subagents.is_empty() {
+        // `subagents: {paired, orphan, total}` (issue #435). Skipped
+        // when both buckets are zero so the JSON shape stays compact
+        // for sessions that never spawned a subagent.
+        payload.insert(
+            "subagents".into(),
+            json!({
+                "paired": report.subagents.paired,
+                "orphan": report.subagents.orphan,
+                "total": report.subagents.total(),
+            }),
+        );
+    }
     if let Some(quality) = report.quality.as_ref() {
         payload.insert("quality".into(), json!(quality));
     }
@@ -974,6 +987,15 @@ fn emit_human(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::Inge
         lines.push(String::new());
     }
 
+    if !report.subagents.is_empty() {
+        // `subagents: X paired, Y orphan` — paired sidecars resolved
+        // via `toolUseResult.agentId`; orphans are the `UnattachedGroup`
+        // bucket (slash-command synthetic dispatches and crash-mid-
+        // dispatch sidecars). See AgentWorkforce/burn#435.
+        lines.push(format_subagents_line(&report.subagents));
+        lines.push(String::new());
+    }
+
     if any_partial {
         lines.push(format_partial_footer(&report.rows));
         lines.push(String::new());
@@ -1070,6 +1092,19 @@ fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
         parts.push(format!("{} none", format_uint(s.none)));
     }
     format!("Turn outcomes: {}", parts.join(", "))
+}
+
+/// Human-readable subagent line for `burn summary`, e.g.
+/// `subagents: 2 paired, 1 orphan`. Both counts are rendered so the line
+/// is informative even when one bucket is zero — an orphan-only count
+/// flags slash-command synthetic dispatches as a non-trivial signal.
+/// See AgentWorkforce/burn#435.
+fn format_subagents_line(s: &SubagentCounts) -> String {
+    format!(
+        "subagents: {} paired, {} orphan",
+        format_uint(s.paired),
+        format_uint(s.orphan),
+    )
 }
 
 /// JSON shape for the outcome breakdown. Keys are camelCase to match the
@@ -1234,12 +1269,72 @@ mod tests {
             per_cell_fidelity: json!({"groupBy": "model"}),
             replacement_savings: relayburn_sdk::ReplacementSavingsSummary::default(),
             stop_reasons: relayburn_sdk::StopReasonCounts::default(),
+            subagents: SubagentCounts::default(),
             quality: Some(QualityResult::default()),
         };
 
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
         assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
+    }
+
+    #[test]
+    fn subagents_line_renders_only_when_counts_nonzero() {
+        // Empty bucket → skipped, line absent (so old summaries keep
+        // their byte-identical shape against the existing golden).
+        let empty = SubagentCounts::default();
+        assert!(empty.is_empty());
+
+        // Non-zero bucket → human line includes both paired+orphan
+        // counts. Issue #435 explicitly wants both numbers even when
+        // one is zero, so a slash-command-only session showing only
+        // orphans is still scannable.
+        let counts = SubagentCounts { paired: 2, orphan: 1 };
+        assert_eq!(
+            format_subagents_line(&counts),
+            "subagents: 2 paired, 1 orphan"
+        );
+    }
+
+    #[test]
+    fn subagents_json_payload_includes_total_and_omits_when_empty() {
+        // Empty bucket → key absent in JSON so `summary.json | jq` for
+        // pre-#435 callers still passes without a `?.` guard.
+        let mut report = SummaryGroupedReport {
+            group_by: SummaryGroupBy::Model,
+            tag_key: None,
+            tag_values: Vec::new(),
+            turn_count: 0,
+            rows: Vec::new(),
+            total_cost: CostBreakdown {
+                model: String::new().into(),
+                total: 0.0,
+                input: 0.0,
+                output: 0.0,
+                reasoning: 0.0,
+                cache_read: 0.0,
+                cache_create: 0.0,
+            },
+            fidelity: relayburn_sdk::summarize_fidelity(&[]),
+            per_cell_fidelity: json!({"groupBy": "model"}),
+            replacement_savings: relayburn_sdk::ReplacementSavingsSummary::default(),
+            stop_reasons: relayburn_sdk::StopReasonCounts::default(),
+            subagents: SubagentCounts::default(),
+            quality: None,
+        };
+        let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
+        assert!(
+            value.get("subagents").is_none(),
+            "subagents key must be omitted when counts are zero; got {value}"
+        );
+
+        report.subagents = SubagentCounts { paired: 2, orphan: 1 };
+        let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
+        assert_eq!(
+            value["subagents"],
+            json!({"paired": 2, "orphan": 1, "total": 3}),
+            "non-empty subagent counts must surface `paired`/`orphan`/`total`"
+        );
     }
 
     #[test]

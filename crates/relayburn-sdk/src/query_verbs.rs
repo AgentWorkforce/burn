@@ -795,6 +795,15 @@ pub struct SummaryGroupedReport {
     /// Per-outcome turn counts (issue #437). Always populated; presenters
     /// decide whether to render the line based on `is_empty()`.
     pub stop_reasons: StopReasonCounts,
+    /// Paired / orphan subagent transcript counts (issue #435). Populated
+    /// by a lazy walk over the Claude `~/.claude/projects/` tree at
+    /// summary time — when no sidecars exist anywhere reachable the
+    /// `read_dir` short-circuits and the field stays at
+    /// `SubagentCounts::default()`. Presenters render the
+    /// `subagents: X paired, Y orphan` line only when
+    /// `!subagents.is_empty()`.
+    #[serde(default, skip_serializing_if = "crate::reader::SubagentCounts::is_empty")]
+    pub subagents: crate::reader::SubagentCounts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<QualityResult>,
 }
@@ -969,6 +978,14 @@ impl LedgerHandle {
                     None
                 };
                 let stop_reasons = StopReasonCounts::from_turns(&turns);
+                // Lazy walk over `~/.claude/projects/` (or the configured
+                // override) for the `subagents: X paired, Y orphan`
+                // summary line (issue #435). The walk short-circuits when
+                // the projects root is missing or every session lacks a
+                // `subagents/` subdir — i.e. zero cost on the vast
+                // majority of summaries that don't hit a session with
+                // sidecar transcripts.
+                let subagents = compute_summary_subagent_counts();
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
                     group_by,
                     tag_key,
@@ -980,6 +997,7 @@ impl LedgerHandle {
                     per_cell_fidelity,
                     replacement_savings,
                     stop_reasons,
+                    subagents,
                     quality,
                 }))
             }
@@ -1344,6 +1362,28 @@ fn collect_summary_agent_session_tree(
         }
     }
     sessions
+}
+
+/// Resolve the Claude projects root and run [`count_subagents_under`]
+/// against it for the `subagents: X paired, Y orphan` summary line.
+///
+/// We honor `BURN_CLAUDE_PROJECTS_DIR` so tests (and integration
+/// fixtures) can point at a sandbox without scanning the developer's
+/// `~/.claude`. The env var also lets the CLI summary remain
+/// reproducible against a fixture-only test suite. When unset we fall
+/// back to `$HOME/.claude/projects`; if that doesn't exist the
+/// underlying walk returns `(0, 0)` and the summary line is skipped.
+fn compute_summary_subagent_counts() -> crate::reader::SubagentCounts {
+    use crate::reader::count_subagents_under;
+    let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
+        std::path::PathBuf::from(p)
+    } else {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        home.join(".claude").join("projects")
+    };
+    count_subagents_under(&root)
 }
 
 fn compute_summary_quality_for_turns(
@@ -5227,9 +5267,10 @@ mod tests {
         assert_eq!(s.burn.rows.stamps, 0);
         assert_eq!(s.burn.tracked_rows, 0);
         assert_eq!(s.content.rows, 0);
-        // v3 after #436 chained `tool_result_events.output_bytes` /
-        // `output_truncated` columns onto #437's v2 `turns.stop_reason`.
-        assert_eq!(s.archive.schema_version, 3);
+        // v4 after #435 chained `turns.subagent_id` onto #436's v3
+        // (`tool_result_events.output_bytes` / `output_truncated`) and
+        // #437's v2 (`turns.stop_reason`).
+        assert_eq!(s.archive.schema_version, 4);
         assert!(s.archive.last_built_at.is_none());
         assert!(s.archive.last_rebuild_at.is_none());
     }

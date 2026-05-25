@@ -723,8 +723,8 @@ fn invalid_session_id_in_content_rejected() {
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
 /// migration, and the stored version bumps forward to the current
-/// `SCHEMA_VERSION` (3 after #436 chained on top of #437). Existing
-/// rows stay `NULL` until rewritten.
+/// `SCHEMA_VERSION` (4 after #436 + #435 chained on top of #437).
+/// Existing rows stay `NULL` for every back-added column until rewritten.
 #[test]
 fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     let tmp = TempDir::new().unwrap();
@@ -782,10 +782,10 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    // Current `SCHEMA_VERSION` is 3 (chained #437 v2 + #436 v3); the
-    // migration must walk every step in one open() call.
+    // Current `SCHEMA_VERSION` is 4 (chained #437 v2 + #436 v3 + #435
+    // v4); the migration must walk every step in one open() call.
     assert_eq!(
-        version, 3,
+        version, 4,
         "open must bump v1 forward to the current schema version"
     );
 
@@ -802,6 +802,10 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
         column_names.iter().any(|c| c == "stop_reason"),
         "post-migration table must carry stop_reason; got: {column_names:?}"
     );
+    assert!(
+        column_names.iter().any(|c| c == "subagent_id"),
+        "post-migration table must carry subagent_id (issue #435); got: {column_names:?}"
+    );
 
     let legacy_stop_reason: Option<String> = l
         .conns
@@ -813,9 +817,22 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
         )
         .unwrap();
     assert!(legacy_stop_reason.is_none(), "legacy row stays NULL");
+    let legacy_subagent_id: Option<String> = l
+        .conns
+        .burn
+        .query_row(
+            "SELECT subagent_id FROM turns WHERE message_id = 'legacy-msg'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        legacy_subagent_id.is_none(),
+        "legacy row's subagent_id stays NULL post-migration"
+    );
 
     // Re-opening is idempotent: the migration probe sees the column and
-    // skips the ALTER, version stays at 2.
+    // skips the ALTER, version stays at the current SCHEMA_VERSION.
     drop(l);
     let _ = Ledger::open(&layout.burn, &layout.content).unwrap();
 }

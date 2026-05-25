@@ -53,8 +53,8 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
         let mut insert = tx.prepare(
             "INSERT OR IGNORE INTO turns
                  (source, session_id, message_id, ts, project, project_key,
-                  record_json, content_fingerprint, stop_reason)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  record_json, content_fingerprint, stop_reason, subagent_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         for t in turns {
             let fingerprint = turn_content_fingerprint(t);
@@ -69,6 +69,13 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
             // re-deserialize `record_json`. NULL for Codex (no field) and
             // pre-3.0 imports.
             let stop_reason_str = t.stop_reason.as_ref().map(|s| s.wire_str());
+            // Denormalize `subagent.agent_id` into the v4 `subagent_id`
+            // column so queries can count / filter subagent rows
+            // structurally without deserializing `record_json`. NULL
+            // when the row isn't a subagent or the parser couldn't
+            // resolve the agent id (e.g. sidechain marker without a
+            // chain-walk match). See AgentWorkforce/burn#435.
+            let subagent_id = t.subagent.as_ref().and_then(|s| s.agent_id.as_deref());
             let changed = insert.execute(params![
                 t.source.wire_str(),
                 t.session_id,
@@ -79,6 +86,7 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
                 json,
                 fingerprint,
                 stop_reason_str,
+                subagent_id,
             ])?;
             if changed > 0 {
                 appended += 1;
