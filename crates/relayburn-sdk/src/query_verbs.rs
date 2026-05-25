@@ -2383,6 +2383,51 @@ pub fn session_cost(opts: SessionCostOptions) -> Result<SessionCostResult> {
 }
 
 // ---------------------------------------------------------------------------
+// inferences — per-API-call rollup (#434)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InferencesOptions {
+    /// Restrict to a single session. Required for the typical "show me
+    /// the API-call timeline of session X" use case; cross-session
+    /// fan-outs should call without it.
+    pub session: Option<String>,
+    pub project: Option<String>,
+    pub since: Option<String>,
+    pub ledger_home: Option<PathBuf>,
+}
+
+impl LedgerHandle {
+    /// Read per-API-call inferences (issue #434). One row per
+    /// `(source, session_id, request_id)` triple — the unit a downstream
+    /// "how many API calls" surface should consume rather than counting
+    /// raw assistant turns (a multi-block Claude inference produces one
+    /// `TurnRecord` already, but the inference key is the durable
+    /// per-API-call identity even when the harness changes how it
+    /// chunks rows).
+    pub fn inferences(
+        &self,
+        opts: InferencesOptions,
+    ) -> Result<Vec<crate::reader::Inference>> {
+        let q = build_query(
+            opts.session.as_deref(),
+            opts.project.as_deref(),
+            opts.since.as_deref(),
+        )?;
+        Ok(self.inner.query_inferences(&q)?)
+    }
+}
+
+pub fn inferences(opts: InferencesOptions) -> Result<Vec<crate::reader::Inference>> {
+    let handle = open_with(opts.ledger_home.as_deref())?;
+    handle.inferences(InferencesOptions {
+        ledger_home: None,
+        ..opts
+    })
+}
+
+// ---------------------------------------------------------------------------
 // sessions_list
 // ---------------------------------------------------------------------------
 
@@ -3803,6 +3848,10 @@ pub struct BurnDbRowCounts {
     pub compactions: u64,
     pub relationships: u64,
     pub tool_result_events: u64,
+    /// v5-added per-API-call aggregate (issue #434). Empty until at
+    /// least one `burn ingest` runs against a Claude session; pre-v5
+    /// ledgers stay zero until `burn state rebuild`.
+    pub inferences: u64,
     pub sessions: u64,
     pub stamps: u64,
 }
@@ -3890,6 +3939,7 @@ impl LedgerHandle {
             compactions: self.inner.count_table("compactions")? as u64,
             relationships: self.inner.count_table("relationships")? as u64,
             tool_result_events: self.inner.count_table("tool_result_events")? as u64,
+            inferences: self.inner.count_table("inferences")? as u64,
             sessions: self.inner.count_table("sessions")? as u64,
             stamps: self.inner.count_table("stamps")? as u64,
         };
@@ -3898,6 +3948,7 @@ impl LedgerHandle {
             + rows.compactions
             + rows.relationships
             + rows.tool_result_events
+            + rows.inferences
             + rows.sessions
             + rows.stamps;
 
@@ -5434,14 +5485,16 @@ mod tests {
         assert_eq!(s.burn.rows.compactions, 0);
         assert_eq!(s.burn.rows.relationships, 0);
         assert_eq!(s.burn.rows.tool_result_events, 0);
+        assert_eq!(s.burn.rows.inferences, 0);
         assert_eq!(s.burn.rows.sessions, 0);
         assert_eq!(s.burn.rows.stamps, 0);
         assert_eq!(s.burn.tracked_rows, 0);
         assert_eq!(s.content.rows, 0);
-        // v4 after #435 chained `turns.subagent_id` onto #436's v3
+        // v5 after #434 chained the `inferences` derived table onto
+        // #435's v4 (`turns.subagent_id`), #436's v3
         // (`tool_result_events.output_bytes` / `output_truncated`) and
         // #437's v2 (`turns.stop_reason`).
-        assert_eq!(s.archive.schema_version, 4);
+        assert_eq!(s.archive.schema_version, 5);
         assert!(s.archive.last_built_at.is_none());
         assert!(s.archive.last_rebuild_at.is_none());
     }

@@ -9,6 +9,7 @@
       "compactions": 0,
       "relationships": 4,
       "toolResultEvents": 3,
+      "inferences": 0,
       "sessions": 0,
       "stamps": 1
     },
@@ -20,7 +21,7 @@
     "rows": 0
   },
   "archive": {
-    "schemaVersion": 4
+    "schemaVersion": 5
   },
   "config": {
     "store": "off",

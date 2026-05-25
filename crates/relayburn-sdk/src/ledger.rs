@@ -115,6 +115,18 @@ impl Ledger {
         writer::append_user_turns(&mut self.conns.burn, records)
     }
 
+    /// Append per-API-call inferences (see issue #434). Re-ingest of the
+    /// same `(source, session_id, request_id)` triple replaces the
+    /// existing row — inferences are pure derived state and a re-parse
+    /// can legitimately produce updated `end_ts` / merged `usage`
+    /// values.
+    pub fn append_inferences(
+        &mut self,
+        records: &[crate::reader::Inference],
+    ) -> Result<usize> {
+        writer::append_inferences(&mut self.conns.burn, records)
+    }
+
     pub fn append_stamp(&mut self, stamp: &Stamp) -> Result<()> {
         writer::append_stamp(&mut self.conns.burn, stamp)
     }
@@ -149,6 +161,13 @@ impl Ledger {
 
     pub fn query_user_turns(&self, q: &Query) -> Result<Vec<crate::reader::UserTurnRecord>> {
         reader::query_user_turns(&self.conns.burn, q)
+    }
+
+    /// Read per-API-call inferences for the given query window. See
+    /// [`Self::append_inferences`] for the underlying table semantics
+    /// (issue #434).
+    pub fn query_inferences(&self, q: &Query) -> Result<Vec<crate::reader::Inference>> {
+        reader::query_inferences(&self.conns.burn, q)
     }
 
     pub fn list_stamps(&self) -> Result<Vec<Stamp>> {

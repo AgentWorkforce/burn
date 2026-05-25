@@ -181,6 +181,46 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current_version < 5 {
+        // v4 → v5: add the `inferences` derived table. The full DDL is
+        // baked into `BURN_DDL`'s `CREATE TABLE IF NOT EXISTS` block so a
+        // fresh open is already correct; here we only need to make sure
+        // the table EXISTS on legacy DBs whose `BURN_DDL` pre-pass might
+        // have happened against the pre-v5 schema (e.g. if a future
+        // migration step changes ordering). The CREATE is idempotent on
+        // every open, so re-running this step costs only a catalog
+        // probe. The table is populated by the ingest pipeline; pre-v5
+        // ledgers stay empty until `burn state rebuild`. See issue #434.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS inferences (\
+                 source              TEXT NOT NULL,\
+                 session_id          TEXT NOT NULL,\
+                 request_id          TEXT NOT NULL,\
+                 request_id_source   TEXT NOT NULL,\
+                 turn_id             TEXT NOT NULL,\
+                 model               TEXT NOT NULL,\
+                 kind                TEXT NOT NULL,\
+                 start_ts            TEXT NOT NULL,\
+                 end_ts              TEXT NOT NULL,\
+                 record_json         TEXT NOT NULL,\
+                 PRIMARY KEY (source, session_id, request_id)\
+             ) STRICT",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_inferences_session ON inferences(session_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_inferences_turn ON inferences(turn_id)",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 5 WHERE id = 1",
+            [],
+        )?;
+    }
+
     // The `idx_turns_stop_reason` index is created here rather than in
     // the static DDL so a legacy v1 table (no `stop_reason` column yet)
     // doesn't fail the DDL pre-pass. By this point the column either

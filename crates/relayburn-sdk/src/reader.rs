@@ -10,6 +10,7 @@ pub mod classifier;
 pub mod fidelity;
 pub mod git;
 pub mod hash;
+pub mod inference;
 pub mod types;
 pub mod user_turn;
 
@@ -49,4 +50,8 @@ pub use claude::{
 };
 pub use claude::subagents::{
     count_subagents_under, discover_subagents, pair_to_main, SubagentCounts, SubagentTranscript,
+};
+pub use inference::{
+    build_inferences, Inference, InferenceKeySource, InferenceKind, RequestIdLookup, ToolUseRef,
+    TurnKey,
 };
