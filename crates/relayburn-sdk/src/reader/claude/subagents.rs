@@ -28,6 +28,7 @@
 //!
 //! See AgentWorkforce/burn#435.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -298,13 +299,28 @@ fn extract_agent_id_to_tool_use_id(main: &[Value]) -> std::collections::HashMap<
 /// already covers the structural query path; this helper is for the
 /// presentation count and we want it lazy.
 ///
+/// `session_filter` scopes the count to a specific session-id set so the
+/// summary line reflects the same filter the rest of the report was
+/// computed with. `None` means "no filter, count every session reachable
+/// from `projects_root`" (preserves the original global-summary
+/// behavior); `Some(set)` means "only descend into `<sessionId>/` whose
+/// name is in `set`". The filter check happens *before* the
+/// `subagents/` `read_dir` so it preserves the laziness contract — a
+/// filtered summary never stats sidecar directories for sessions it
+/// doesn't care about.
+///
 /// Laziness contract:
 /// - `projects_root` missing → returns `(0, 0)` without scanning anything.
 /// - Each `<sessionId>` directory missing a `subagents/` child contributes
 ///   nothing (no `read_dir` past the missing-stat guard).
+/// - Session id not in `session_filter` (when `Some`) → directory is
+///   skipped entirely; no `discover_subagents` walk.
 /// - Parent JSONL missing → every sidecar under that session id is
 ///   counted as orphan (we have no main transcript to pair against).
-pub fn count_subagents_under(projects_root: &Path) -> SubagentCounts {
+pub fn count_subagents_under(
+    projects_root: &Path,
+    session_filter: Option<&HashSet<String>>,
+) -> SubagentCounts {
     let mut counts = SubagentCounts::default();
     let entries = match fs::read_dir(projects_root) {
         Ok(e) => e,
@@ -332,6 +348,15 @@ pub fn count_subagents_under(projects_root: &Path) -> SubagentCounts {
             // `<sessionId>.jsonl` siblings) so we don't double-account.
             if !sess_path.is_dir() {
                 continue;
+            }
+            // Filter gate: when the caller pinned the summary to a
+            // specific session set, skip every other session id BEFORE
+            // descending into its `subagents/` tree. Keeps the lazy
+            // walk contract intact for the filtered path too.
+            if let Some(filter) = session_filter {
+                if !filter.contains(&name) {
+                    continue;
+                }
             }
             let subs = discover_subagents(&project_dir, &name);
             if subs.is_empty() {
@@ -647,7 +672,7 @@ mod tests {
         // Hot path: ledger sweep against a non-existent projects root
         // must not panic and must not pay any directory walk.
         let nonexistent = std::path::PathBuf::from("/this/path/does/not/exist-burn-435");
-        let counts = count_subagents_under(&nonexistent);
+        let counts = count_subagents_under(&nonexistent, None);
         assert_eq!(counts, SubagentCounts::default());
         assert!(counts.is_empty());
     }
@@ -686,11 +711,95 @@ mod tests {
         let sub_c = project_c.join("session-c").join("subagents");
         write_sidecar(&sub_c, "lonely", &[json!({"type": "user"})]);
 
-        let counts = count_subagents_under(projects_root);
+        let counts = count_subagents_under(projects_root, None);
         assert_eq!(counts.paired, 2, "got: {:?}", counts);
         assert_eq!(counts.orphan, 2, "got: {:?}", counts);
         assert_eq!(counts.total(), 4);
         assert!(!counts.is_empty());
+    }
+
+    /// Helper: build a `projects_root` with two sessions across two
+    /// projects, each holding subagent sidecars. Returns
+    /// `(tmp, projects_root)` so callers can run filtered counts.
+    fn two_session_subagent_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects_root = tmp.path().to_path_buf();
+        // Project A — session-a has 1 paired + 1 orphan sidecar.
+        let project_a = projects_root.join("project-a");
+        let sub_a = project_a.join("session-a").join("subagents");
+        write_sidecar(&sub_a, "p1", &[json!({"type": "user"})]);
+        write_sidecar(&sub_a, "o1", &[json!({"type": "user"})]);
+        let (asst, res) = task_dispatch_pair("toolu_p1", "p1");
+        let parent_a_body = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&asst).unwrap(),
+            serde_json::to_string(&res).unwrap()
+        );
+        fs::write(project_a.join("session-a.jsonl"), parent_a_body).unwrap();
+        // Project B — session-b has 1 paired sidecar.
+        let project_b = projects_root.join("project-b");
+        let sub_b = project_b.join("session-b").join("subagents");
+        write_sidecar(&sub_b, "p2", &[json!({"type": "user"})]);
+        let (asst2, res2) = task_dispatch_pair("toolu_p2", "p2");
+        let parent_b_body = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&asst2).unwrap(),
+            serde_json::to_string(&res2).unwrap()
+        );
+        fs::write(project_b.join("session-b.jsonl"), parent_b_body).unwrap();
+        (tmp, projects_root)
+    }
+
+    #[test]
+    fn count_subagents_under_filters_to_named_session_only() {
+        // `burn summary --session session-a` must only count subagents
+        // under that session id — sidecars under sibling session ids
+        // (here `session-b`) must not contribute to the line.
+        let (_tmp, projects_root) = two_session_subagent_fixture();
+        let mut filter = HashSet::new();
+        filter.insert("session-a".to_string());
+        let counts = count_subagents_under(&projects_root, Some(&filter));
+        assert_eq!(counts.paired, 1, "only session-a's pair counts");
+        assert_eq!(counts.orphan, 1, "only session-a's orphan counts");
+        assert_eq!(counts.total(), 2);
+    }
+
+    #[test]
+    fn count_subagents_under_no_filter_matches_pre_filter_behavior() {
+        // Sanity guard for the existing global-summary code path: an
+        // unfiltered call against the same fixture must still observe
+        // every reachable sidecar. This pins the "filters never break
+        // the un-filtered call" contract.
+        let (_tmp, projects_root) = two_session_subagent_fixture();
+        let counts = count_subagents_under(&projects_root, None);
+        assert_eq!(counts.paired, 2);
+        assert_eq!(counts.orphan, 1);
+        assert_eq!(counts.total(), 3);
+    }
+
+    #[test]
+    fn count_subagents_under_filter_with_unknown_session_returns_zero() {
+        // Filter contains session ids that are not on disk (e.g. the
+        // ledger has filtered rows for a session whose sidecar tree
+        // was pruned). The walk must skip every existing session,
+        // return zeros, and not panic.
+        let (_tmp, projects_root) = two_session_subagent_fixture();
+        let mut filter = HashSet::new();
+        filter.insert("session-does-not-exist".to_string());
+        let counts = count_subagents_under(&projects_root, Some(&filter));
+        assert_eq!(counts, SubagentCounts::default());
+        assert!(counts.is_empty());
+    }
+
+    #[test]
+    fn count_subagents_under_empty_filter_returns_zero() {
+        // An empty (but `Some`) filter means "no session is in scope"
+        // — counts must come back zero rather than falling through to
+        // the global walk.
+        let (_tmp, projects_root) = two_session_subagent_fixture();
+        let filter = HashSet::new();
+        let counts = count_subagents_under(&projects_root, Some(&filter));
+        assert_eq!(counts, SubagentCounts::default());
     }
 
     #[test]
