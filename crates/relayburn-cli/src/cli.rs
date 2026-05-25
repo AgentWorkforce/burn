@@ -355,6 +355,11 @@ pub enum StateSubcommand {
     /// Wipe derived state under `$RELAYBURN_HOME` (and optionally
     /// re-ingest from upstream session logs).
     Reset(StateResetArgs),
+
+    /// Print a cheap polling fingerprint over `turns`:
+    /// `{count}:{maxMtimeUnix}:{totalBytes}`. Suitable for shell-level
+    /// poll loops — `while [[ $(burn state fingerprint) != $LAST ]]; do …`.
+    Fingerprint(StateFingerprintArgs),
 }
 
 /// `burn state status` — flags. `--json` is global and lives on
@@ -410,6 +415,21 @@ pub struct StateResetArgs {
     /// `--reingest` on its own so a typo can't silently no-op.
     #[arg(long, requires = "force")]
     pub reingest: bool,
+}
+
+/// `burn state fingerprint` — print the polling fingerprint.
+///
+/// At most one of `--session` / `--project` may be passed; pass neither
+/// to fingerprint every session.
+#[derive(Debug, Clone, ClapArgs, Default)]
+pub struct StateFingerprintArgs {
+    /// Restrict to a single `session_id`.
+    #[arg(long, conflicts_with = "project")]
+    pub session: Option<String>,
+    /// Restrict to rows whose `project` (or normalized `project_key`)
+    /// matches this path string.
+    #[arg(long, conflicts_with = "session")]
+    pub project: Option<std::path::PathBuf>,
 }
 
 // ---------------------------------------------------------------------------

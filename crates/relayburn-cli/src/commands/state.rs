@@ -8,11 +8,13 @@
 //! `archive_state` metadata.
 
 use relayburn_sdk::{
-    ingest_all, Ledger, LedgerHandle, LedgerOpenOptions, ResetSummary, StateStatus,
+    ingest_all, FingerprintScope, Ledger, LedgerHandle, LedgerOpenOptions, ResetSummary,
+    StateStatus,
 };
 
 use crate::cli::{
-    GlobalArgs, StateArgs, StateRebuildArgs, StateRebuildTarget, StateSubcommand,
+    GlobalArgs, StateArgs, StateFingerprintArgs, StateRebuildArgs, StateRebuildTarget,
+    StateSubcommand,
 };
 use crate::render::error::{report_error, report_ledger_error};
 use crate::render::format::format_uint;
@@ -28,6 +30,7 @@ pub fn run(globals: &GlobalArgs, args: StateArgs) -> i32 {
         StateSubcommand::Rebuild(rebuild) => run_rebuild(globals, rebuild),
         StateSubcommand::Prune(prune) => run_prune(globals, prune),
         StateSubcommand::Reset(reset) => run_reset(globals, reset),
+        StateSubcommand::Fingerprint(args) => run_fingerprint(globals, args),
     }
 }
 
@@ -571,6 +574,55 @@ fn print_reset_report(
             if summary.content_rows_dropped == 1 { "" } else { "s" },
         );
         println!("  re-run with --force to actually wipe (add --reingest to repopulate).");
+    }
+    0
+}
+
+// ---------------------------------------------------------------------------
+// fingerprint
+// ---------------------------------------------------------------------------
+//
+// Cheap polling primitive over `turns`: `{count}:{maxMtimeUnix}:{totalBytes}`.
+// The CLI prints it bare on stdout so shell loops can do
+// `while [[ $(burn state fingerprint) != $LAST ]]; do …`. The `--json`
+// global wraps the same string under `{"fingerprint": "..."}`.
+fn run_fingerprint(globals: &GlobalArgs, args: StateFingerprintArgs) -> i32 {
+    let opts = LedgerOpenOptions {
+        home: globals.ledger_path.clone(),
+        content_home: None,
+    };
+    let handle = match Ledger::open(opts) {
+        Ok(h) => h,
+        Err(err) => return report_anyhow(&err, globals),
+    };
+    let scope = match (args.session.as_deref(), args.project.as_ref()) {
+        (Some(_), Some(_)) => {
+            // Clap's `conflicts_with` already enforces this at parse
+            // time; the match exists so a future `--session` /
+            // `--project` programmatic caller can't smuggle both
+            // through unchecked.
+            let msg = "burn state fingerprint: pass at most one of --session / --project";
+            if globals.json {
+                let _ = render_json(&serde_json::json!({ "error": msg }));
+            } else {
+                eprintln!("{msg}");
+            }
+            return 2;
+        }
+        (Some(s), None) => FingerprintScope::Session(s.to_string()),
+        (None, Some(p)) => FingerprintScope::Project(p.clone()),
+        (None, None) => FingerprintScope::AllSessions,
+    };
+    let fp = match handle.fingerprint(scope) {
+        Ok(fp) => fp,
+        Err(err) => return report_anyhow(&err, globals),
+    };
+    if globals.json {
+        if let Err(err) = render_json(&serde_json::json!({ "fingerprint": fp.as_str() })) {
+            return report_error(&err, globals);
+        }
+    } else {
+        println!("{fp}");
     }
     0
 }

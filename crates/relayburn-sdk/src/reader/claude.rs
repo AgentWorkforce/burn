@@ -15,7 +15,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::reader::classifier::{classify_activity, ClassificationInput};
+use crate::reader::classifier::{classify_activity, is_task_notification, ClassificationInput};
 use crate::reader::git::resolve_project;
 use crate::reader::hash::{args_hash, content_hash};
 use crate::reader::types::{
@@ -2246,10 +2246,22 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 );
             }
             "user" => {
+                // Harness-injected `<task-notification>` rows share the user
+                // envelope but represent system events, not real prompts.
+                // Detecting them here keeps them out of `current_user_text`
+                // (so the classifier doesn't get task-notification text as
+                // "user intent") and out of `pending_user_turns` (so
+                // user-turn aggregates aren't inflated). Side effects like
+                // session-relationship discovery still run because those
+                // are independent of "is this a real user prompt". See
+                // AgentWorkforce/burn#439.
+                let task_notification = is_task_notification(&obj);
                 register_user_node(&parsed, &mut nodes_by_uuid);
-                if let Some(text) = extract_plain_user_text_from_obj(&obj) {
-                    if !text.is_empty() {
-                        current_user_text = text;
+                if !task_notification {
+                    if let Some(text) = extract_plain_user_text_from_obj(&obj) {
+                        if !text.is_empty() {
+                            current_user_text = text;
+                        }
                     }
                 }
                 collect_errored_tool_use_ids(&obj, &mut errored_tool_use_ids);
@@ -2293,12 +2305,14 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 for ev in harvested {
                     pending_tool_result_events.push((line_start_offset, ev));
                 }
-                if let Some(record) =
-                    build_user_turn_record(&obj, last_assistant_message_id.as_deref(), counter)
-                {
-                    let idx = pending_user_turns.len();
-                    pending_user_turns.push((line_start_offset, record));
-                    pending_user_turn_inc_idx = Some(idx);
+                if !task_notification {
+                    if let Some(record) =
+                        build_user_turn_record(&obj, last_assistant_message_id.as_deref(), counter)
+                    {
+                        let idx = pending_user_turns.len();
+                        pending_user_turns.push((line_start_offset, record));
+                        pending_user_turn_inc_idx = Some(idx);
+                    }
                 }
                 if capture_content {
                     for c in extract_user_content(&obj) {
@@ -4220,6 +4234,32 @@ mod tests {
         assert_eq!(res.user_turns.len(), 1);
         assert_eq!(res.user_turns[0].blocks.len(), 1);
         assert_eq!(res.user_turns[0].blocks[0].kind, UserTurnBlockKind::Text);
+    }
+
+    #[test]
+    fn task_notification_rows_are_excluded_from_user_turns() {
+        // Integration coverage for #439. The fixture interleaves real user
+        // prompts with two synthetic `<task-notification>` rows (one
+        // tagged via `origin.kind`, one via the `queued_command`
+        // attachment). Burn must emit exactly two UserTurnRecords (one
+        // per real prompt) — a regression that re-counts task-notification
+        // rows would emit four.
+        let path = fixture("task-notification.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(
+            res.user_turns.len(),
+            2,
+            "task-notification rows must not count as user turns"
+        );
+        let user_uuids: Vec<&str> = res
+            .user_turns
+            .iter()
+            .map(|u| u.user_uuid.as_str())
+            .collect();
+        assert_eq!(user_uuids, vec!["u-user-1", "u-user-2"]);
+        // Sanity: assistant turns are unaffected — the harness-injected
+        // rows don't suppress real assistant accounting.
+        assert_eq!(res.turns.len(), 2);
     }
 
     // ----- parseClaudeSession content capture -----

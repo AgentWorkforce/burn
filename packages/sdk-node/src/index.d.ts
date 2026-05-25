@@ -132,6 +132,27 @@ export interface SessionCostResult {
 /** Compact session-scoped cost shape; powers the MCP `burn__sessionCost` tool. */
 export declare function sessionCost(opts?: SessionCostOptions): Promise<SessionCostResult>
 
+export interface FingerprintOptions {
+  /** Restrict to a single `session_id`. Mutually exclusive with `project`. */
+  session?: string;
+  /** Restrict to rows whose `project` (or normalized `project_key`) matches. Mutually exclusive with `session`. */
+  project?: string;
+  ledgerHome?: string;
+}
+
+export interface FingerprintResult {
+  /** `{count}:{maxMtimeUnix}:{totalBytes}`. Compare by string equality. */
+  fingerprint: string;
+}
+
+/**
+ * Cheap polling primitive over the burn ledger. Returns
+ * `{count}:{maxMtimeUnix}:{totalBytes}` joined by colons — clients keep
+ * the last-seen value and skip re-querying when it's unchanged.
+ * Powers the MCP `burn__fingerprint` tool.
+ */
+export declare function fingerprint(opts?: FingerprintOptions): Promise<FingerprintResult>
+
 export type OverheadFileKind = 'claude-md' | 'agents-md';
 export type OverheadHarness = 'claude-code' | 'codex' | 'opencode';
 
