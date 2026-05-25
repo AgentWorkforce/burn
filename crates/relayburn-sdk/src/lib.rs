@@ -48,22 +48,14 @@ mod reader;
 // the `LedgerHandle` and `LedgerOpenOptions` types defined here, plus the
 // re-exports below. Keeping them in their own files lets the three
 // implementation PRs land in parallel without touching `lib.rs`.
-#[allow(unused_imports)]
 mod export_verbs;
-#[allow(unused_imports)]
 mod ingest_verb;
-#[allow(unused_imports)]
 mod query_verbs;
-#[allow(unused_imports)]
 mod stamp_verb;
 
-#[allow(unused_imports)]
 pub use export_verbs::*;
-#[allow(unused_imports)]
 pub use ingest_verb::*;
-#[allow(unused_imports)]
 pub use query_verbs::*;
-#[allow(unused_imports)]
 pub use stamp_verb::*;
 
 // --- Re-exports ------------------------------------------------------------
@@ -91,27 +83,27 @@ pub use crate::ledger::{
 };
 
 pub use crate::analyze::{
-    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_provider,
-    aggregate_by_subagent, aggregate_subagent_type_stats, attribute_hotspots, attribute_overhead,
-    build_compare_table, build_subagent_tree, build_trim_recommendations, compare_from_archive,
-    compute_quality, cost_for_turn, cost_for_usage, describe_applies_to, detect_patterns,
-    detect_tool_call_patterns, detect_tool_output_bloat, filter_turns_by_provider,
-    filter_turns_by_provider_with_rules, find_overhead_files, findings_from_patterns,
-    has_minimum_fidelity, load_overhead_file, load_pricing, provider_for, AsTurnLike,
-    ProviderFilter, ProviderRule, render_unified_diff_for_recommendation, sum_costs,
-    summarize_fidelity, summarize_replacement_savings, AggregateByProviderOptions,
-    AttributeOverheadInput,
+    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
+    aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
+    attribute_hotspots, attribute_overhead, build_compare_table, build_subagent_tree,
+    build_trim_recommendations, compare_from_archive, compute_quality, cost_for_turn,
+    cost_for_usage, describe_applies_to, detect_patterns, detect_tool_call_patterns,
+    detect_tool_output_bloat, filter_turns_by_provider, filter_turns_by_provider_with_rules,
+    find_overhead_files, findings_from_patterns, has_minimum_fidelity, load_overhead_file,
+    load_pricing, provider_for, AsTurnLike, ProviderFilter, ProviderRule,
+    render_unified_diff_for_recommendation, sum_costs, summarize_fidelity,
+    summarize_replacement_savings, AggregateByProviderOptions, AttributeOverheadInput,
     AttributionMethod, BashAggregation, BashVerbAggregation, BuildSubagentTreeOptions,
     CompareCategory, CompareCell, CompareFromArchiveResult,
     CompareOptions as AnalyzeCompareOptions, CompareTable, CompareTotals, ComputeQualityOptions,
     CostBreakdown, CoverageField, FidelitySummary, FieldCoverage, FileAggregation,
     HotspotsOptions as AnalyzeHotspotsOptions, HotspotsResult as AnalyzeHotspotsResult,
-    MarkdownSection, ModelCost, OneShotMetrics, OutcomeLabel, OverheadAttribution, OverheadFile,
-    OverheadFileAttribution, OverheadFileKind, ParsedOverheadFile, PricingTable,
-    ProviderAggregateRow, QualityResult, ReasoningMode, ReplacementSavingsSummary, RowCoverage,
-    SessionClaudeMdCost, SessionOutcome, SessionTotals, SubagentAggregation, SubagentTreeNode,
-    SubagentTypeStats, ToolAttribution, TrimRecommendation, TurnProvider, UsageCostAggregateRow,
-    WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
+    MarkdownSection, McpServerAggregation, ModelCost, OneShotMetrics, OutcomeLabel,
+    OverheadAttribution, OverheadFile, OverheadFileAttribution, OverheadFileKind,
+    ParsedOverheadFile, PricingTable, ProviderAggregateRow, QualityResult, ReasoningMode,
+    ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SessionOutcome, SessionTotals,
+    SubagentAggregation, SubagentTreeNode, SubagentTypeStats, ToolAttribution, TrimRecommendation,
+    TurnProvider, UsageCostAggregateRow, WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
 };
 
 pub use crate::ingest::{

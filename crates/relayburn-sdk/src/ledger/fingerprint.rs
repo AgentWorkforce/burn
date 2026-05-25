@@ -35,6 +35,7 @@ fn short_sha256(input: &str) -> String {
 }
 
 /// `sha256("source|sessionId|messageId")[..16]`.
+#[cfg(test)]
 pub fn turn_id_fingerprint(t: &TurnRecord) -> String {
     short_sha256(&format!(
         "{}|{}|{}",

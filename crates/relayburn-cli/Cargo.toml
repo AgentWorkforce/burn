@@ -32,7 +32,7 @@ path = "src/lib.rs"
 # the workspace MAJOR.MINOR on every release so the local workspace
 # path (currently 1.10.0) and the published `relayburn-sdk` on
 # crates.io always satisfy the dep at publish time.
-relayburn-sdk = { path = "../relayburn-sdk", version = "2.9" }
+relayburn-sdk = { path = "../relayburn-sdk", version = "2.10" }
 
 # clap v4 derive — argument parsing root and subcommand dispatch. The
 # scaffold defines globals + subcommand stubs only; per-command flag
@@ -69,6 +69,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # future SDK refactor can't silently regress the golden snapshots.
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
+uuid = { workspace = true }
 
 # `anyhow` for the binary entrypoint; typed errors flow through
 # `relayburn_sdk::LedgerError` and friends. `render::error::report_error`

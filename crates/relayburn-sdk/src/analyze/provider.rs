@@ -144,21 +144,6 @@ pub fn provider_for_with_rules(turn: &TurnRecord, rules: &[ProviderRule]) -> Tur
     provider_for_model_with_rules(&turn.model, Some(turn.source), rules)
 }
 
-/// Alias of [`provider_for`] — TS exports both `providerFor` and
-/// `providerForTurn` so callers can pick the spelling that reads best.
-pub fn provider_for_turn(turn: &TurnRecord) -> TurnProvider {
-    provider_for(turn)
-}
-
-/// Alias of [`provider_for`].
-pub fn resolve_turn_provider(turn: &TurnRecord) -> TurnProvider {
-    provider_for(turn)
-}
-
-pub fn provider_for_model(model: &str, source: Option<SourceKind>) -> TurnProvider {
-    provider_for_model_with_rules(model, source, default_rules())
-}
-
 pub fn provider_for_model_with_rules(
     model: &str,
     source: Option<SourceKind>,

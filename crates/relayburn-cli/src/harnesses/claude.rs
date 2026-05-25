@@ -32,6 +32,7 @@ use relayburn_sdk::{
     ingest_claude_session, Enrichment, IngestReport, Ledger, LedgerOpenOptions, RawIngestOptions,
     Stamp, StampSelector,
 };
+use uuid::Uuid;
 
 use super::{HarnessAdapter, PlanCtx, SpawnPlan};
 use crate::util::home::home_dir;
@@ -51,55 +52,11 @@ fn claude_projects_root() -> PathBuf {
     home_dir().join(".claude").join("projects")
 }
 
-/// Mint a v4 UUID using the current SystemTime + process id as a weak
-/// entropy source. The harness only needs a stable identifier the
-/// child claude binary will adopt; the SDK validates the shape via
-/// [`relayburn_sdk::is_valid_session_id`] when it stamps. We avoid
-/// pulling in the `uuid` crate just for this one call site — the
-/// formatting matches RFC 4122 (variant + version bits set correctly).
+/// Mint a v4 UUID the child Claude binary will adopt as its session id.
+/// The SDK validates the shape via [`relayburn_sdk::is_valid_session_id`]
+/// when it stamps.
 fn mint_session_id() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-
-    // Two 64-bit hash mixes derived from time + pid. This is "weak
-    // randomness" by cryptographic standards but more than adequate
-    // for picking an unused session id; `claude --session-id` accepts
-    // any UUID-shaped string.
-    let mut h1 = DefaultHasher::new();
-    now.hash(&mut h1);
-    pid.hash(&mut h1);
-    let lo = h1.finish();
-
-    let mut h2 = DefaultHasher::new();
-    lo.hash(&mut h2);
-    now.wrapping_mul(0x9e37_79b9_7f4a_7c15).hash(&mut h2);
-    let hi = h2.finish();
-
-    let bytes: [u8; 16] = {
-        let mut b = [0u8; 16];
-        b[..8].copy_from_slice(&lo.to_le_bytes());
-        b[8..].copy_from_slice(&hi.to_le_bytes());
-        // RFC 4122 §4.4: set version = 4 (random) and variant = 10xx.
-        b[6] = (b[6] & 0x0F) | 0x40;
-        b[8] = (b[8] & 0x3F) | 0x80;
-        b
-    };
-
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5],
-        bytes[6], bytes[7],
-        bytes[8], bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    )
+    Uuid::new_v4().to_string()
 }
 
 #[async_trait]

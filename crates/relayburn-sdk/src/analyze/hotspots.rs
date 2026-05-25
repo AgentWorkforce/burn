@@ -187,6 +187,23 @@ pub struct SubagentAggregation {
     pub persistence_tokens: f64,
 }
 
+/// MCP-server rollup: groups any `mcp__<server>__<tool>` tool attribution by
+/// `<server>` so a chatty MCP server (50+ distinct tools, none individually
+/// expensive) shows up as a single row. `top_tools` carries up to three
+/// representative tool basenames (cost desc, then name asc). Sorted by
+/// `total_cost` descending.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerAggregation {
+    pub server: String,
+    pub call_count: u64,
+    pub initial_tokens: f64,
+    pub persistence_tokens: f64,
+    pub riding_turns: u64,
+    pub total_cost: f64,
+    pub top_tools: Vec<String>,
+}
+
 static FILE_TOOLS: phf::Set<&'static str> = phf_set! {
     "Read", "Edit", "Write", "NotebookEdit",
 };
@@ -777,6 +794,21 @@ where
     out
 }
 
+/// Split an `mcp__<server>__<tool>` tool name into `(server, tool)`. Returns
+/// `None` for any name that doesn't carry the `mcp__` prefix, has no server /
+/// tool separator, or has an empty server or tool segment. Tool basenames may
+/// themselves contain underscores; only the *first* `__` after the `mcp__`
+/// prefix separates server from tool.
+fn parse_mcp_tool_name(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix("mcp__")?;
+    let sep = rest.find("__")?;
+    let (server, tool) = (&rest[..sep], &rest[sep + 2..]);
+    if server.is_empty() || tool.is_empty() {
+        return None;
+    }
+    Some((server, tool))
+}
+
 /// Roll up `Agent` / `Task` spawn attributions by `subagent_type`. Spawns
 /// without a resolved type bucket under `"(unknown)"`. Output is sorted by
 /// `total_cost` descending.
@@ -808,6 +840,74 @@ pub fn aggregate_by_subagent(attributions: &[ToolAttribution]) -> Vec<SubagentAg
         },
         |row| row.total_cost,
     )
+}
+
+struct McpServerAccumulator {
+    server: String,
+    call_count: u64,
+    total_cost: f64,
+    initial_tokens: f64,
+    persistence_tokens: f64,
+    riding_turns: u64,
+    /// `tool basename -> (cost, first-seen-order via IndexMap)`. Insertion
+    /// order is the example-sort tiebreaker before we sort by cost desc /
+    /// name asc.
+    tools: IndexMap<String, f64>,
+}
+
+/// Roll up any `mcp__<server>__<tool>` tool attribution by its server
+/// segment so a chatty MCP server collapses into a single row. Non-MCP
+/// tools (and malformed `mcp__…` names that fail to split into a
+/// non-empty server + tool) are skipped. Output is sorted by `total_cost`
+/// desc, then `server` asc as a stable tiebreaker.
+pub fn aggregate_by_mcp_server(attributions: &[ToolAttribution]) -> Vec<McpServerAggregation> {
+    let mut by_server: IndexMap<String, McpServerAccumulator> = IndexMap::new();
+    for a in attributions {
+        let Some((server, tool)) = parse_mcp_tool_name(&a.tool_name) else {
+            continue;
+        };
+        let row = by_server
+            .entry(server.to_string())
+            .or_insert_with(|| McpServerAccumulator {
+                server: server.to_string(),
+                call_count: 0,
+                total_cost: 0.0,
+                initial_tokens: 0.0,
+                persistence_tokens: 0.0,
+                riding_turns: 0,
+                tools: IndexMap::new(),
+            });
+        row.call_count += 1;
+        row.total_cost += a.total_cost;
+        row.initial_tokens += a.initial_tokens;
+        row.persistence_tokens += a.persistence_tokens;
+        row.riding_turns += a.riding_turns;
+        *row.tools.entry(tool.to_string()).or_insert(0.0) += a.total_cost;
+    }
+
+    let mut out: Vec<McpServerAggregation> = by_server
+        .into_values()
+        .map(|row| {
+            let mut tools: Vec<(String, f64)> = row.tools.into_iter().collect();
+            tools.sort_by(|(an, ac), (bn, bc)| bc.total_cmp(ac).then_with(|| an.cmp(bn)));
+            let top_tools: Vec<String> = tools.into_iter().take(3).map(|(n, _)| n).collect();
+            McpServerAggregation {
+                server: row.server,
+                call_count: row.call_count,
+                initial_tokens: row.initial_tokens,
+                persistence_tokens: row.persistence_tokens,
+                riding_turns: row.riding_turns,
+                total_cost: row.total_cost,
+                top_tools,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.total_cost
+            .total_cmp(&a.total_cost)
+            .then_with(|| a.server.cmp(&b.server))
+    });
+    out
 }
 
 #[cfg(test)]
@@ -1357,6 +1457,85 @@ mod tests {
         assert_eq!(subagents[0].subagent_type, "general-purpose");
         assert_eq!(subagents[0].call_count, 1);
         assert!(subagents[0].total_cost > 0.0);
+    }
+
+    fn mcp_attribution(tool_name: &str, total_cost: f64, riding_turns: u64) -> ToolAttribution {
+        ToolAttribution {
+            tool_use_id: format!("tu-{tool_name}"),
+            tool_name: tool_name.into(),
+            target: None,
+            args_hash: format!("{tool_name}:0"),
+            session_id: "s-mcp".into(),
+            emit_turn_index: 0,
+            emit_ts: "2026-04-20T00:00:00.000Z".into(),
+            model: "claude-sonnet-4-6".into(),
+            project: None,
+            project_key: None,
+            subagent_type: None,
+            result_tokens: 0,
+            result_bytes_estimated: true,
+            initial_cost: total_cost,
+            initial_tokens: total_cost * 100.0,
+            persistence_cost: 0.0,
+            persistence_tokens: total_cost * 50.0,
+            riding_turns,
+            total_cost,
+        }
+    }
+
+    #[test]
+    fn aggregates_by_mcp_server_groups_by_server_segment_and_sorts_by_cost() {
+        // Two MCP servers + a non-MCP tool + a malformed mcp__ name. The
+        // non-MCP + malformed rows must NOT show up; the relaycast roll-up
+        // must collapse all three relaycast tools into a single row with
+        // top_tools sorted by cost desc.
+        let attrs = vec![
+            mcp_attribution("mcp__relaycast__send_dm", 2.0, 1),
+            mcp_attribution("mcp__relaycast__send_dm", 1.5, 0),
+            mcp_attribution("mcp__relaycast__list_channels", 0.5, 0),
+            mcp_attribution("mcp__relaycast__react_to_message", 0.25, 0),
+            mcp_attribution("mcp__github__get_file_contents", 1.0, 2),
+            mcp_attribution("mcp__github__create_pull_request", 0.1, 0),
+            // Non-MCP — must be skipped.
+            mcp_attribution("Read", 99.0, 5),
+            // Malformed: missing tool segment.
+            mcp_attribution("mcp__only_server__", 50.0, 0),
+            // Malformed: missing server segment.
+            mcp_attribution("mcp____tool_only", 50.0, 0),
+            // Malformed: not enough separators.
+            mcp_attribution("mcp__no_double_separator", 50.0, 0),
+        ];
+
+        let rows = aggregate_by_mcp_server(&attrs);
+        assert_eq!(
+            rows.len(),
+            2,
+            "only the two well-formed mcp__ servers should aggregate"
+        );
+
+        // relaycast wins on cumulative cost (2.0 + 1.5 + 0.5 + 0.25 = 4.25)
+        // vs github (1.0 + 0.1 = 1.1).
+        let relaycast = &rows[0];
+        assert_eq!(relaycast.server, "relaycast");
+        assert_eq!(relaycast.call_count, 4);
+        assert!((relaycast.total_cost - 4.25).abs() < 1e-9);
+        assert!((relaycast.initial_tokens - 4.25 * 100.0).abs() < 1e-9);
+        assert!((relaycast.persistence_tokens - 4.25 * 50.0).abs() < 1e-9);
+        assert_eq!(relaycast.riding_turns, 1);
+        assert_eq!(
+            relaycast.top_tools,
+            vec!["send_dm", "list_channels", "react_to_message"],
+        );
+
+        let github = &rows[1];
+        assert_eq!(github.server, "github");
+        assert_eq!(github.call_count, 2);
+        assert!((github.total_cost - 1.1).abs() < 1e-9);
+        assert_eq!(github.riding_turns, 2);
+        assert_eq!(
+            github.top_tools,
+            vec!["get_file_contents", "create_pull_request"],
+        );
     }
 
     #[test]

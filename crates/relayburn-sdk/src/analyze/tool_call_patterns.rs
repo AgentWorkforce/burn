@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::lookup_model_rate;
 use crate::analyze::findings::{
-    severity_from_usd_pub as severity_from_usd, EstimatedSavings, WasteAction, WasteFinding,
+    severity_from_usd, EstimatedSavings, WasteAction, WasteFinding,
 };
 use crate::analyze::pricing::PricingTable;
 

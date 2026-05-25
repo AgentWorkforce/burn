@@ -110,17 +110,6 @@ impl std::io::Write for ByteCountWriter {
     }
 }
 
-pub fn stringify_measured_content(content: &Value) -> String {
-    match content {
-        Value::Null => String::new(),
-        Value::String(s) => s.clone(),
-        // Mirrors TS `JSON.stringify`. `serde_json::to_string` emits the same
-        // bytes for the shapes we care about (objects, arrays, numbers,
-        // booleans).
-        other => serde_json::to_string(other).unwrap_or_default(),
-    }
-}
-
 pub fn bytes_to_approx_tokens(byte_len: u64) -> u64 {
     if byte_len == 0 {
         0

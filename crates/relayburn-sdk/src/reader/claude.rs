@@ -25,7 +25,7 @@ use crate::reader::types::{
     ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageGranularity, UserTurnBlock,
     UserTurnRecord,
 };
-use crate::reader::user_turn::{HeuristicCounter, TokenCounter, UserTurnTokenizer};
+use crate::reader::user_turn::{HeuristicCounter, TokenCounter};
 
 // ---------------------------------------------------------------------------
 // Public surface.
@@ -35,7 +35,6 @@ use crate::reader::user_turn::{HeuristicCounter, TokenCounter, UserTurnTokenizer
 pub struct ParseOptions {
     pub session_path: Option<String>,
     pub content_mode: Option<ContentStoreMode>,
-    pub tokenizer: Option<UserTurnTokenizer>,
     pub file_session_id: Option<String>,
 }
 
@@ -47,6 +46,10 @@ pub struct ParseResult {
     pub relationships: Vec<SessionRelationshipRecord>,
     pub tool_result_events: Vec<ToolResultEventRecord>,
     pub user_turns: Vec<UserTurnRecord>,
+    /// Read by the in-crate test suite to verify the From<ParseIncrementalResult>
+    /// conversion preserves evidence. Production callers consume the incremental
+    /// result directly and access `evidence` from there.
+    #[cfg(test)]
     pub evidence: ClaudeRelationshipEvidence,
 }
 
@@ -99,7 +102,6 @@ pub fn parse_claude_session_with_counter<P: AsRef<Path>, C: TokenCounter + ?Size
     let inc_opts = ParseIncrementalOptions {
         session_path: options.session_path.clone(),
         content_mode: options.content_mode,
-        tokenizer: options.tokenizer,
         file_session_id: options.file_session_id.clone(),
         start_offset: Some(0),
         last_user_text: None,
@@ -116,6 +118,7 @@ impl From<ParseIncrementalResult> for ParseResult {
             relationships: r.relationships,
             tool_result_events: r.tool_result_events,
             user_turns: r.user_turns,
+            #[cfg(test)]
             evidence: r.evidence,
         }
     }
@@ -125,7 +128,6 @@ impl From<ParseIncrementalResult> for ParseResult {
 pub struct ParseIncrementalOptions {
     pub session_path: Option<String>,
     pub content_mode: Option<ContentStoreMode>,
-    pub tokenizer: Option<UserTurnTokenizer>,
     pub file_session_id: Option<String>,
     /// Byte offset to resume parsing from. The previous incremental call's
     /// `end_offset` is the right value to pass.
@@ -917,21 +919,6 @@ fn extract_user_content(line: &serde_json::Map<String, Value>) -> Vec<ContentRec
         }
     }
     out
-}
-
-fn merge_content_by_order(
-    user_pending: Vec<(usize, ContentRecord)>,
-    assistant_pending: Vec<(usize, usize, ContentRecord)>,
-) -> Vec<ContentRecord> {
-    let mut merged: Vec<(usize, usize, ContentRecord)> = Vec::new();
-    for (seq, r) in user_pending {
-        merged.push((seq, 0, r));
-    }
-    for (seq, sub, r) in assistant_pending {
-        merged.push((seq, sub, r));
-    }
-    merged.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    merged.into_iter().map(|(_, _, r)| r).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -4210,14 +4197,7 @@ mod tests {
         // also heuristic, but mirroring the TS test means asking for it
         // explicitly so we exercise the option plumbing.
         let path = fixture("user-turn-blocks.jsonl");
-        let res = parse_claude_session(
-            &path,
-            &ParseOptions {
-                tokenizer: Some(UserTurnTokenizer::Heuristic),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
         let first = &res.user_turns[0];
         assert_eq!(
             first.blocks[0].byte_len,
