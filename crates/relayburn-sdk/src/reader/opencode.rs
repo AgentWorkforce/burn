@@ -32,7 +32,7 @@ use crate::reader::hash::{args_hash, content_hash};
 use crate::reader::types::{
     CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
     ContentToolUse, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, Subagent, ToolCall, ToolResultEventRecord,
+    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
     ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageAttribution, UsageGranularity,
     UserTurnBlock, UserTurnRecord,
 };
@@ -224,7 +224,9 @@ pub fn parse_opencode_session_incremental(
                 Some(extracted.files_touched.clone())
             },
             subagent: None,
-            stop_reason: stop_reason.clone(),
+            stop_reason: stop_reason
+                .as_deref()
+                .map(|s| StopReason::from_wire(s).unwrap_or(StopReason::Silent)),
             activity: None,
             retries: None,
             has_edits: None,
@@ -768,6 +770,8 @@ fn collect_opencode_tool_result_events(
             },
             event_source: ToolResultEventSource::ToolResult,
             content_length: measured.length,
+            output_bytes: measured.byte_length,
+            output_truncated: None,
             content_hash: measured.hash,
             is_error: if is_error { Some(true) } else { None },
             usage: None,
@@ -825,6 +829,10 @@ fn split_field(total: u64, n: u64, idx: u64) -> u64 {
 struct Measured {
     length: Option<u64>,
     hash: Option<String>,
+    /// Raw UTF-8 byte length of the materialized payload (#436). Same as
+    /// `length` for opencode (which already measured bytes), tracked
+    /// separately so the `ToolResultEventRecord` shape stays consistent.
+    byte_length: Option<u64>,
 }
 
 fn measure_opencode_tool_output(output: Option<&Value>) -> Measured {
@@ -833,11 +841,13 @@ fn measure_opencode_tool_output(output: Option<&Value>) -> Measured {
         Some(Value::String(s)) => Measured {
             length: Some(s.len() as u64),
             hash: Some(content_hash(s)),
+            byte_length: Some(s.as_bytes().len() as u64),
         },
         Some(other) => match serde_json::to_string(other) {
             Ok(serialized) => Measured {
                 length: Some(serialized.len() as u64),
                 hash: Some(content_hash(&serialized)),
+                byte_length: Some(serialized.as_bytes().len() as u64),
             },
             Err(_) => Measured::default(),
         },

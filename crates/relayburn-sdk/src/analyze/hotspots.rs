@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use phf::phf_set;
 use crate::reader::{
-    BashParse, ContentKind, ContentRecord, TurnRecord, UserTurnBlockKind, UserTurnRecord,
+    BashParse, ContentKind, ContentRecord, ToolResultEventRecord, TurnRecord, UserTurnBlockKind,
+    UserTurnRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,6 +69,18 @@ pub struct ToolAttribution {
     pub subagent_type: Option<String>,
     pub result_tokens: u64,
     pub result_bytes_estimated: bool,
+    /// Raw UTF-8 byte length of the tool result payload at ingest time
+    /// (`as_bytes().len()`), pulled from
+    /// `ToolResultEventRecord::output_bytes`. `None` when the per-call
+    /// tool_result_event row was missing or pre-dates schema v2; the
+    /// downstream aggregations treat `None` as 0 when summing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_bytes: Option<u64>,
+    /// `Some(true)` when the ingest site detected a truncation marker in
+    /// the payload (Claude Code only at the moment). `None` for events
+    /// where truncation could not be determined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_truncated: Option<bool>,
     pub initial_cost: f64,
     pub initial_tokens: f64,
     pub persistence_cost: f64,
@@ -120,6 +133,13 @@ pub struct HotspotsOptions<'a> {
     /// Source-order `UserTurnRecord`s keyed by session id. Preferred sized
     /// source because user turns survive hash-only / off content-capture modes.
     pub user_turns_by_session: Option<&'a HashMap<String, Vec<UserTurnRecord>>>,
+    /// Source-order `ToolResultEventRecord`s keyed by session id. Used to
+    /// thread `output_bytes` / `output_truncated` per tool_use_id onto the
+    /// emitted [`ToolAttribution`] rows so downstream aggregations can
+    /// rank by raw payload size (#436). `None` skips the byte plumbing —
+    /// callers that don't need bytes don't pay for the join.
+    pub tool_result_events_by_session:
+        Option<&'a HashMap<String, Vec<crate::reader::ToolResultEventRecord>>>,
 }
 
 /// File rollup: per-target totals across `Read | Edit | Write | NotebookEdit`
@@ -137,6 +157,16 @@ pub struct FileAggregation {
     pub total_cost: f64,
     pub first_emit_ts: String,
     pub first_emit_turn_index: u64,
+    /// Sum of `ToolAttribution::output_bytes` across calls in this group
+    /// (#436). Calls whose tool_result_event row was missing or
+    /// pre-schema-v2 contribute 0 here.
+    pub total_output_bytes: u64,
+    /// Largest single `output_bytes` value observed in this group. Useful
+    /// for spotting one-shot 4MB Bash blowouts that get amortized away by
+    /// `total_output_bytes / call_count`.
+    pub max_output_bytes: u64,
+    /// Number of calls whose `output_truncated` flag was `Some(true)`.
+    pub truncated_count: u32,
 }
 
 /// Bash rollup: collapses repeated invocations by `args_hash` so identical
@@ -153,6 +183,12 @@ pub struct BashAggregation {
     pub total_cost: f64,
     pub initial_tokens: f64,
     pub persistence_tokens: f64,
+    /// Sum of `ToolAttribution::output_bytes` across calls (#436).
+    pub total_output_bytes: u64,
+    /// Largest single `output_bytes` value observed.
+    pub max_output_bytes: u64,
+    /// Calls whose `output_truncated` flag was `Some(true)`.
+    pub truncated_count: u32,
 }
 
 /// Bash-verb rollup: groups bash invocations by their parsed verb (e.g.
@@ -172,6 +208,13 @@ pub struct BashVerbAggregation {
     pub persistence_tokens: f64,
     pub avg_persistence_turns: f64,
     pub top_examples: Vec<String>,
+    /// Sum of `ToolAttribution::output_bytes` across calls in this verb
+    /// bucket (#436).
+    pub total_output_bytes: u64,
+    /// Largest single `output_bytes` value observed in this bucket.
+    pub max_output_bytes: u64,
+    /// Calls whose `output_truncated` flag was `Some(true)`.
+    pub truncated_count: u32,
 }
 
 /// Subagent rollup: groups `Agent` / `Task` spawns by their `subagent_type`
@@ -185,6 +228,12 @@ pub struct SubagentAggregation {
     pub total_cost: f64,
     pub initial_tokens: f64,
     pub persistence_tokens: f64,
+    /// Sum of `ToolAttribution::output_bytes` across calls (#436).
+    pub total_output_bytes: u64,
+    /// Largest single `output_bytes` value observed.
+    pub max_output_bytes: u64,
+    /// Calls whose `output_truncated` flag was `Some(true)`.
+    pub truncated_count: u32,
 }
 
 /// MCP-server rollup: groups any `mcp__<server>__<tool>` tool attribution by
@@ -250,11 +299,19 @@ pub fn attribute_hotspots(turns: &[TurnRecord], opts: &HotspotsOptions<'_>) -> H
             .map(Vec::as_slice)
             .unwrap_or(&[]);
 
+        let session_events: &[ToolResultEventRecord] = opts
+            .tool_result_events_by_session
+            .and_then(|m| m.get(&session_id))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let bytes_index = build_bytes_index(session_events);
+
         let session_result = attribute_session(
             &session_turns,
             opts.pricing,
             tool_results_by_turn.as_ref(),
             user_turns,
+            &bytes_index,
         );
 
         let session_grand = session_result.grand_total;
@@ -299,11 +356,53 @@ struct SessionAttribution {
     grand_total: f64,
 }
 
+/// Per-tool-use byte-payload metadata, lifted out of the session's
+/// `tool_result_events` so the attribution loop doesn't re-scan that
+/// vector for every tool call. First-write-wins on duplicate
+/// `tool_use_id` keys — `index 0` carries the original payload; later
+/// events on the same id are progress / subagent notifications whose
+/// `output_bytes` would be noise.
+#[derive(Debug, Default, Clone)]
+struct ToolBytesEntry {
+    output_bytes: Option<u64>,
+    output_truncated: Option<bool>,
+}
+
+type ToolBytesIndex = HashMap<String, ToolBytesEntry>;
+
+fn build_bytes_index(events: &[ToolResultEventRecord]) -> ToolBytesIndex {
+    let mut out: ToolBytesIndex = HashMap::new();
+    for ev in events {
+        // Only the primary tool_result row carries the payload we care
+        // about; SubagentNotification / ProgressEvent rows piggyback the
+        // same tool_use_id but their output_bytes refers to the
+        // notification body, not the original tool output. Skip them so
+        // a notification's small payload doesn't overwrite the real one.
+        let primary = matches!(
+            ev.event_source,
+            crate::reader::ToolResultEventSource::ToolResult
+                | crate::reader::ToolResultEventSource::FunctionCallOutput
+        );
+        if !primary {
+            continue;
+        }
+        let entry = out.entry(ev.tool_use_id.clone()).or_default();
+        if entry.output_bytes.is_none() {
+            entry.output_bytes = ev.output_bytes;
+        }
+        if entry.output_truncated.is_none() {
+            entry.output_truncated = ev.output_truncated;
+        }
+    }
+    out
+}
+
 fn attribute_session(
     turns: &[&TurnRecord],
     pricing: &PricingTable,
     tool_results_by_turn: Option<&HashMap<u64, PerTurnContent>>,
     user_turns: &[UserTurnRecord],
+    bytes_by_tool_use_id: &ToolBytesIndex,
 ) -> SessionAttribution {
     if turns.is_empty() {
         return SessionAttribution {
@@ -472,6 +571,7 @@ fn attribute_session(
             } else {
                 None
             };
+            let bytes_entry = bytes_by_tool_use_id.get(&tc.id).cloned().unwrap_or_default();
             attributions.push(ToolAttribution {
                 tool_use_id: tc.id.clone(),
                 tool_name: tc.name.clone(),
@@ -486,6 +586,8 @@ fn attribute_session(
                 subagent_type,
                 result_tokens: size_tokens,
                 result_bytes_estimated: have_any_sizes,
+                output_bytes: bytes_entry.output_bytes,
+                output_truncated: bytes_entry.output_truncated,
                 initial_cost: 0.0,
                 initial_tokens: 0.0,
                 persistence_cost: 0.0,
@@ -634,6 +736,9 @@ pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregatio
             total_cost: 0.0,
             first_emit_ts: a.emit_ts.clone(),
             first_emit_turn_index: a.emit_turn_index,
+            total_output_bytes: 0,
+            max_output_bytes: 0,
+            truncated_count: 0,
         },
         |row, a| {
             row.tool_call_count += 1;
@@ -641,6 +746,14 @@ pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregatio
             row.persistence_tokens += a.persistence_tokens;
             row.riding_turns += a.riding_turns;
             row.total_cost += a.total_cost;
+            let bytes = a.output_bytes.unwrap_or(0);
+            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
+            if bytes > row.max_output_bytes {
+                row.max_output_bytes = bytes;
+            }
+            if a.output_truncated == Some(true) {
+                row.truncated_count = row.truncated_count.saturating_add(1);
+            }
             if a.emit_ts < row.first_emit_ts {
                 row.first_emit_ts = a.emit_ts.clone();
                 row.first_emit_turn_index = a.emit_turn_index;
@@ -665,12 +778,23 @@ pub fn aggregate_by_bash(attributions: &[ToolAttribution]) -> Vec<BashAggregatio
             total_cost: 0.0,
             initial_tokens: 0.0,
             persistence_tokens: 0.0,
+            total_output_bytes: 0,
+            max_output_bytes: 0,
+            truncated_count: 0,
         },
         |row, a| {
             row.call_count += 1;
             row.total_cost += a.total_cost;
             row.initial_tokens += a.initial_tokens;
             row.persistence_tokens += a.persistence_tokens;
+            let bytes = a.output_bytes.unwrap_or(0);
+            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
+            if bytes > row.max_output_bytes {
+                row.max_output_bytes = bytes;
+            }
+            if a.output_truncated == Some(true) {
+                row.truncated_count = row.truncated_count.saturating_add(1);
+            }
         },
         |row| row.total_cost,
     )
@@ -683,6 +807,9 @@ struct BashVerbAccumulator {
     initial_tokens: f64,
     persistence_tokens: f64,
     riding_turns: u64,
+    total_output_bytes: u64,
+    max_output_bytes: u64,
+    truncated_count: u32,
     /// Distinct `args_hash` values seen for this verb. `IndexMap` preserves
     /// first-seen order for the example sort tiebreaker (insertion order
     /// before sorting by cost desc / command asc).
@@ -733,6 +860,9 @@ where
                 initial_tokens: 0.0,
                 persistence_tokens: 0.0,
                 riding_turns: 0,
+                total_output_bytes: 0,
+                max_output_bytes: 0,
+                truncated_count: 0,
                 hashes: IndexMap::new(),
                 examples: IndexMap::new(),
             });
@@ -741,6 +871,14 @@ where
         row.initial_tokens += a.initial_tokens;
         row.persistence_tokens += a.persistence_tokens;
         row.riding_turns += a.riding_turns;
+        let bytes = a.output_bytes.unwrap_or(0);
+        row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
+        if bytes > row.max_output_bytes {
+            row.max_output_bytes = bytes;
+        }
+        if a.output_truncated == Some(true) {
+            row.truncated_count = row.truncated_count.saturating_add(1);
+        }
         row.hashes.insert(a.args_hash.clone(), ());
 
         let example = row
@@ -783,6 +921,9 @@ where
                     0.0
                 },
                 top_examples,
+                total_output_bytes: row.total_output_bytes,
+                max_output_bytes: row.max_output_bytes,
+                truncated_count: row.truncated_count,
             }
         })
         .collect();
@@ -831,12 +972,23 @@ pub fn aggregate_by_subagent(attributions: &[ToolAttribution]) -> Vec<SubagentAg
             total_cost: 0.0,
             initial_tokens: 0.0,
             persistence_tokens: 0.0,
+            total_output_bytes: 0,
+            max_output_bytes: 0,
+            truncated_count: 0,
         },
         |row, a| {
             row.call_count += 1;
             row.total_cost += a.total_cost;
             row.initial_tokens += a.initial_tokens;
             row.persistence_tokens += a.persistence_tokens;
+            let bytes = a.output_bytes.unwrap_or(0);
+            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
+            if bytes > row.max_output_bytes {
+                row.max_output_bytes = bytes;
+            }
+            if a.output_truncated == Some(true) {
+                row.truncated_count = row.truncated_count.saturating_add(1);
+            }
         },
         |row| row.total_cost,
     )
@@ -1068,6 +1220,8 @@ mod tests {
             subagent_type: None,
             result_tokens: 0,
             result_bytes_estimated: true,
+            output_bytes: None,
+            output_truncated: None,
             initial_cost: total_cost,
             initial_tokens,
             persistence_cost: 0.0,
@@ -1163,6 +1317,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         assert_eq!(result.attributions.len(), 1);
@@ -1278,6 +1433,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         let files = aggregate_by_file(&result.attributions);
@@ -1360,6 +1516,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         let bash = aggregate_by_bash(&result.attributions);
@@ -1450,6 +1607,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         let subagents = aggregate_by_subagent(&result.attributions);
@@ -1480,6 +1638,8 @@ mod tests {
             persistence_tokens: total_cost * 50.0,
             riding_turns,
             total_cost,
+            output_bytes: None,
+            output_truncated: None,
         }
     }
 
@@ -1581,6 +1741,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: None,
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         assert_eq!(result.attributions.len(), 2);
@@ -1669,6 +1830,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: None,
                 user_turns_by_session: Some(&user_turns_by_session),
+                tool_result_events_by_session: None,
             },
         );
         let by_id: HashMap<&str, &ToolAttribution> = result
@@ -1746,6 +1908,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: Some(&user_turns_by_session),
+                tool_result_events_by_session: None,
             },
         );
         assert_eq!(
@@ -1815,6 +1978,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         let summed: f64 = result
@@ -1917,6 +2081,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         let summed_persist: f64 = result
@@ -2004,6 +2169,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         let a = &result.attributions[0];
@@ -2060,6 +2226,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: None,
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
 
@@ -2129,6 +2296,7 @@ mod tests {
                 pricing: &pricing,
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
+                tool_result_events_by_session: None,
             },
         );
         assert!(
@@ -2147,6 +2315,179 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&AttributionMethod::EvenSplit).unwrap(),
             "\"even-split\""
+        );
+    }
+
+    /// Regression for #436: a 1 MB Bash result that gets truncated to a
+    /// small token count must rank above a small-bytes / large-tokens
+    /// Read when sorted by `total_output_bytes`. The bash row also has
+    /// to flag `truncated_count > 0` from the propagated
+    /// `output_truncated`.
+    #[test]
+    fn aggregations_track_output_bytes_so_byte_ranking_inverts_token_ranking() {
+        use crate::reader::{ToolResultEventRecord, ToolResultEventSource, ToolResultStatus};
+
+        let pricing = load_builtin_pricing();
+        let session_id = "s-bytes";
+
+        // Emit a Bash call and a Read call on turn 0. Turn 1 pays for
+        // both. The Bash payload is 1 MB raw bytes but the user-turn
+        // block reports a small post-truncation token count; the Read
+        // payload is tiny but the user-turn block reports a large token
+        // count. Token-sort puts Read first; byte-sort must put Bash
+        // first.
+        let turns = vec![
+            turn(
+                session_id,
+                "msg-0",
+                0,
+                "2026-05-25T00:00:00.000Z",
+                "claude-sonnet-4-6",
+                empty_usage(),
+                vec![
+                    tc_with_hash("tu_bash", "Bash", "find / -name foo", "Bash:find"),
+                    tc("tu_read", "Read", Some("/big.ts")),
+                ],
+                SourceKind::ClaudeCode,
+            ),
+            turn(
+                session_id,
+                "msg-1",
+                1,
+                "2026-05-25T00:00:01.000Z",
+                "claude-sonnet-4-6",
+                Usage {
+                    input: 5000,
+                    output: 5,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                vec![],
+                SourceKind::ClaudeCode,
+            ),
+        ];
+
+        // User-turn block sizes drive the token ranking: Read is "big"
+        // in tokens (4000), Bash is "small" in tokens (200) because
+        // Claude truncated it before tokenizing.
+        let mut user_turns_by_session: HashMap<String, Vec<UserTurnRecord>> = HashMap::new();
+        user_turns_by_session.insert(
+            session_id.into(),
+            vec![user_turn(
+                session_id,
+                "u-1",
+                vec![
+                    tool_result_block("tu_bash", 800, 200),
+                    tool_result_block("tu_read", 16_000, 4000),
+                ],
+            )],
+        );
+
+        // Tool-result event payload sizes drive the byte ranking: Bash
+        // is 1 MB (pre-token-truncation raw stdout), Read is 1 KB.
+        const BASH_BYTES: u64 = 1_000_000;
+        const READ_BYTES: u64 = 1_000;
+        let bash_event = ToolResultEventRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: session_id.into(),
+            message_id: Some("msg-0".into()),
+            tool_use_id: "tu_bash".into(),
+            call_index: Some(0),
+            event_index: 0,
+            ts: Some("2026-05-25T00:00:00.500Z".into()),
+            status: ToolResultStatus::Completed,
+            event_source: ToolResultEventSource::ToolResult,
+            content_length: Some(BASH_BYTES),
+            output_bytes: Some(BASH_BYTES),
+            output_truncated: Some(true),
+            content_hash: None,
+            is_error: None,
+            usage: None,
+            usage_attribution: None,
+            subagent_session_id: None,
+            agent_id: None,
+            replaced_tools: None,
+            collapsed_calls: None,
+        };
+        let read_event = ToolResultEventRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: session_id.into(),
+            message_id: Some("msg-0".into()),
+            tool_use_id: "tu_read".into(),
+            call_index: Some(0),
+            event_index: 1,
+            ts: Some("2026-05-25T00:00:00.500Z".into()),
+            status: ToolResultStatus::Completed,
+            event_source: ToolResultEventSource::ToolResult,
+            content_length: Some(READ_BYTES),
+            output_bytes: Some(READ_BYTES),
+            output_truncated: Some(false),
+            content_hash: None,
+            is_error: None,
+            usage: None,
+            usage_attribution: None,
+            subagent_session_id: None,
+            agent_id: None,
+            replaced_tools: None,
+            collapsed_calls: None,
+        };
+        let mut events_by_session: HashMap<String, Vec<ToolResultEventRecord>> = HashMap::new();
+        events_by_session.insert(session_id.into(), vec![bash_event, read_event]);
+
+        let result = attribute_hotspots(
+            &turns,
+            &HotspotsOptions {
+                pricing: &pricing,
+                content_by_session: None,
+                user_turns_by_session: Some(&user_turns_by_session),
+                tool_result_events_by_session: Some(&events_by_session),
+            },
+        );
+
+        // Sanity: bytes / truncation rode through to ToolAttribution.
+        let by_id: HashMap<&str, &ToolAttribution> = result
+            .attributions
+            .iter()
+            .map(|a| (a.tool_use_id.as_str(), a))
+            .collect();
+        assert_eq!(by_id["tu_bash"].output_bytes, Some(BASH_BYTES));
+        assert_eq!(by_id["tu_bash"].output_truncated, Some(true));
+        assert_eq!(by_id["tu_read"].output_bytes, Some(READ_BYTES));
+        assert_eq!(by_id["tu_read"].output_truncated, Some(false));
+
+        // Token-driven cost ranks Read first (4000 tok > 200 tok).
+        let files = aggregate_by_file(&result.attributions);
+        assert_eq!(files.len(), 1, "Read is the only file-touching tool");
+        let bash = aggregate_by_bash(&result.attributions);
+        assert_eq!(bash.len(), 1);
+        let read_file = &files[0];
+        let bash_row = &bash[0];
+        // The Read row out-costs the Bash row (sized attribution).
+        assert!(
+            read_file.total_cost > bash_row.total_cost,
+            "expected Read cost > Bash cost in token-sized attribution; got read={} bash={}",
+            read_file.total_cost,
+            bash_row.total_cost,
+        );
+
+        // Bytes plumbing populated on both aggregations.
+        assert_eq!(read_file.total_output_bytes, READ_BYTES);
+        assert_eq!(read_file.max_output_bytes, READ_BYTES);
+        assert_eq!(read_file.truncated_count, 0);
+        assert_eq!(bash_row.total_output_bytes, BASH_BYTES);
+        assert_eq!(bash_row.max_output_bytes, BASH_BYTES);
+        assert_eq!(bash_row.truncated_count, 1);
+
+        // Byte ranking inverts the cost ranking: Bash should win when
+        // we sort by total_output_bytes. The SDK's default sort is by
+        // cost; we just confirm the underlying counter inverts.
+        assert!(
+            bash_row.total_output_bytes > read_file.total_output_bytes,
+            "byte ranking should put Bash (1 MB) ahead of Read (1 KB)"
         );
     }
 }

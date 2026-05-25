@@ -739,6 +739,8 @@ fn parse_codex_buffer<R: BufRead>(
                             status,
                             event_source: ToolResultEventSource::SubagentNotification,
                             content_length: None,
+                            output_bytes: None,
+                            output_truncated: None,
                             content_hash: None,
                             is_error: matches!(status, ToolResultStatus::Errored).then_some(true),
                             usage: None,
@@ -913,6 +915,11 @@ fn parse_codex_buffer<R: BufRead>(
                             status: initial_status,
                             event_source: ToolResultEventSource::FunctionCallOutput,
                             content_length: measured.length,
+                            output_bytes: measured.byte_length,
+                            // Codex doesn't carry an explicit truncation marker
+                            // distinct from its general output; leave None until
+                            // we have a concrete signal to flip on.
+                            output_truncated: None,
                             content_hash: measured.hash,
                             is_error: matches!(initial_status, ToolResultStatus::Errored)
                                 .then_some(true),
@@ -1411,6 +1418,11 @@ fn extract_spawned_agent_id(output: &Value) -> Option<String> {
 struct Measured {
     length: Option<u64>,
     hash: Option<String>,
+    /// Raw UTF-8 byte length of the materialized payload. Same value as
+    /// `length` for Codex (the legacy `content_length` already counted
+    /// bytes here, not chars), but tracked separately so the
+    /// `ToolResultEventRecord` shape stays consistent across sources.
+    byte_length: Option<u64>,
 }
 
 fn measure_tool_output(output: &Value) -> Measured {
@@ -1419,11 +1431,13 @@ fn measure_tool_output(output: &Value) -> Measured {
         Value::String(s) => Measured {
             length: Some(s.len() as u64),
             hash: Some(content_hash(s)),
+            byte_length: Some(s.as_bytes().len() as u64),
         },
         other => match serde_json::to_string(other) {
             Ok(serialized) => Measured {
                 length: Some(serialized.len() as u64),
                 hash: Some(content_hash(&serialized)),
+                byte_length: Some(serialized.as_bytes().len() as u64),
             },
             Err(_) => Measured::default(),
         },

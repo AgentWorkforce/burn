@@ -19,6 +19,45 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   (one-shot) and `--watch` modes (no longer hook-only). Suppresses the
   progress spinner, watch banner, and per-tick summaries; one-shot mode
   still writes its final summary line to stdout for pipeline capture.
+- `burn summary`: one-line `Turn outcomes: …` breakdown of assistant
+  `stop_reason` counts, plus a `stopReasons` block in `--json`. (#437)
+- Ledger fingerprint primitive (`{count}:{maxMtimeUnix}:{totalBytes}`) for
+  cheap "did anything change" polling. Exposed as `LedgerHandle::fingerprint`
+  on the Rust SDK, `sdk.fingerprint()` on `@relayburn/sdk`,
+  `burn state fingerprint [--session | --project]` on the CLI, and
+  `burn__fingerprint` on the MCP server. Optional `Session(id)` /
+  `Project(path)` scopes; all-sessions is the default. (#440)
+- `burn hotspots`: new `Bytes` column on the per-tool tables and `--rank-by bytes` mode rank tools by raw output payload size, so a 4 MB Bash result that got truncated to a small token count still surfaces alongside small-bytes / large-tokens reads. JSON output gains `totalOutputBytes`, `maxOutputBytes`, and `truncatedCount` on every aggregation row. (#436)
+- `relayburn-sdk`: `ToolResultEventRecord` carries new `outputBytes` and `outputTruncated` fields populated at ingest from `content.as_bytes().len()` plus Claude truncation-marker detection; `ToolAttribution` / `FileAggregation` / `BashAggregation` / `BashVerbAggregation` / `SubagentAggregation` expose the rolled-up `total_output_bytes`, `max_output_bytes`, and `truncated_count`. (#436)
+- `relayburn-sdk`: Claude Task subagent sidecar discovery + pairing. New `discover_subagents` / `pair_to_main` / `count_subagents_under` helpers under `crate::reader::claude::subagents` walk `<sessionId>/subagents/agent-*.jsonl`, pair each sidecar against the parent's `toolUseResult.agentId`, and surface unpaired sidecars (slash-command synthetic dispatches and crash-mid-dispatch) as the `UnattachedGroup` bucket. Discovery is lazy — the directory is only stat'd when something asks for it. (#435)
+- `burn summary`: new `subagents: X paired, Y orphan` line (and matching `subagents` key in `--json`) populated by a lazy walk over `~/.claude/projects/`. Skipped entirely when no sidecars exist anywhere reachable so pre-#435 outputs stay byte-identical. Honors `BURN_CLAUDE_PROJECTS_DIR` for test sandboxing. (#435)
+- Ledger schema bumped to v4 — new nullable `turns.subagent_id TEXT` column denormalizes `TurnRecord.subagent.agent_id` so subagent rows are queryable without re-deserializing `record_json`. Migrated in place by `ALTER TABLE … ADD COLUMN`; pre-v4 rows stay `NULL` and are backfilled by `burn state rebuild`. (#435)
+
+### Changed
+
+- `relayburn-sdk`: Claude Code parser now skips harness-injected
+  `<task-notification>` rows when emitting `UserTurnRecord`s. The detector
+  matches shape AND purpose across three envelope variants
+  (`type: "queue-operation"` + content prefix, `origin.kind`, and
+  `queued_command` attachment with `commandMode`), so a real prompt that
+  literally types `<task-notification>` is not filtered. Drops user-turn
+  inflation from background Bash completions.
+- `relayburn-sdk`: Claude Code activity classifier now associates each
+  assistant turn with its user prompt by walking the `parentUuid` chain
+  to the nearest user-prompt ancestor, instead of file order. Fixes
+  mis-classification of late-arriving assistant rows under out-of-order
+  JSONL flushes and interrupt + resume sessions. Falls back to the
+  previous file-order map for legacy/malformed rows without UUIDs.
+  Codex and opencode readers are unaffected — their rollouts don't carry
+  an equivalent chain field. (#433)
+- **BREAKING** `relayburn-sdk`: `TurnRecord.stop_reason` is now an
+  `Option<StopReason>` enum (kebab-case wire form); deserialization is
+  lenient so pre-3.0 ledgers replay cleanly. (#437)
+- `relayburn-sdk` ledger schema bumps to v3: `turns` gains a `stop_reason
+  TEXT` column (#437) and `tool_result_events` gains nullable `output_bytes`
+  / `output_truncated` columns (#436). Both are migrated in place on
+  `Ledger::open`; existing rows leave the new columns `NULL`. Run `burn
+  state rebuild` to backfill an older ledger.
 
 ## [2.10.0] - 2026-05-24
 

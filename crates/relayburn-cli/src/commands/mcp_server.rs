@@ -10,11 +10,11 @@
 //! protocol evolves, this module is localized enough to update in one
 //! place — same trade-off the TS sibling makes.
 //!
-//! Tool surface for D8 is intentionally minimal: only `burn__sessionCost`
-//! ships in this PR (it is the canonical thin-SDK-wrapper pattern,
-//! mirroring `packages/mcp/src/tools/session-cost.ts` 1:1). Other tools
-//! (`summary`, `hotspots`, …) are tracked as follow-ups so the scope of
-//! D8 stays tight.
+//! Tool surface today: `burn__sessionCost` (compact session cost shape)
+//! and `burn__fingerprint` (cheap polling primitive — see #440). Both
+//! are thin SDK wrappers, mirroring `packages/mcp/src/tools/*.ts` 1:1.
+//! Other tools (`summary`, `hotspots`, …) are tracked as follow-ups so
+//! the scope of D8 stays tight.
 
 use std::io::{BufRead, Write};
 use std::sync::Arc;
@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use relayburn_sdk::{
-    Ledger, LedgerHandle, LedgerOpenOptions, SessionCostOptions, SessionCostResult,
+    FingerprintScope, Ledger, LedgerHandle, LedgerOpenOptions, SessionCostOptions,
+    SessionCostResult,
 };
 
 use crate::cli::{GlobalArgs, McpServerArgs};
@@ -255,6 +256,33 @@ impl Server {
                     "required": [],
                     "additionalProperties": false,
                 },
+            },
+            {
+                "name": "burn__fingerprint",
+                "description":
+                    "Cheap polling primitive over the burn ledger. Returns \
+                     `{count}:{maxMtimeUnix}:{totalBytes}` — three integers \
+                     joined by colons. Clients keep the last-seen value and \
+                     skip re-querying when it's unchanged. Optionally scoped \
+                     to a session id or a project path. Read-only.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sessionId": {
+                            "type": "string",
+                            "description":
+                                "Restrict to a single session_id. Mutually exclusive with project.",
+                        },
+                        "project": {
+                            "type": "string",
+                            "description":
+                                "Restrict to rows whose project path matches. Mutually exclusive \
+                                 with sessionId.",
+                        },
+                    },
+                    "required": [],
+                    "additionalProperties": false,
+                },
             }
         ]);
         write_success(id, json!({ "tools": tools }));
@@ -274,6 +302,7 @@ impl Server {
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
         match name {
             "burn__sessionCost" => self.tool_session_cost(id, &args).await,
+            "burn__fingerprint" => self.tool_fingerprint(id, &args).await,
             other => {
                 write_response(&error_envelope(
                     id,
@@ -283,6 +312,66 @@ impl Server {
                 ));
             }
         }
+    }
+
+    async fn tool_fingerprint(&self, id: &Value, args: &Value) {
+        // Empty / missing args → AllSessions. `sessionId` and `project`
+        // are mutually exclusive; if both are present, fail loud at
+        // tool-error level rather than silently picking one.
+        let session = args
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let project = args
+            .get("project")
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from);
+        let scope = match (session, project) {
+            (Some(_), Some(_)) => {
+                write_success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": "fingerprint: pass at most one of sessionId / project",
+                        }],
+                        "isError": true,
+                    }),
+                );
+                return;
+            }
+            (Some(s), None) => FingerprintScope::Session(s),
+            (None, Some(p)) => FingerprintScope::Project(p),
+            (None, None) => FingerprintScope::AllSessions,
+        };
+
+        let handle_guard = self.handle.lock().await;
+        let result = handle_guard.fingerprint(scope);
+        drop(handle_guard);
+
+        let fp = match result {
+            Ok(fp) => fp,
+            Err(err) => {
+                write_success(
+                    id,
+                    json!({
+                        "content": [{ "type": "text", "text": err.to_string() }],
+                        "isError": true,
+                    }),
+                );
+                return;
+            }
+        };
+
+        let payload = json!({ "fingerprint": fp.as_str() });
+        let text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+        write_success(
+            id,
+            json!({
+                "content": [{ "type": "text", "text": text }],
+                "structuredContent": payload,
+            }),
+        );
     }
 
     async fn tool_session_cost(&self, id: &Value, args: &Value) {

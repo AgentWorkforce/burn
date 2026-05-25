@@ -143,6 +143,8 @@ fn evt(
         status,
         event_source: ToolResultEventSource::ToolResult,
         content_length: None,
+        output_bytes: None,
+        output_truncated: None,
         content_hash: None,
         is_error: None,
         usage: None,

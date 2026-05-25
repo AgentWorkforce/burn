@@ -13,18 +13,18 @@ attributed ≈ $0.0048  (approximate — see above)
 unattributed $0.033  (output, system overhead, untracked)
 
 Top files by cumulative cost (approximate)
-path                            firstTurn  initial(tok)  persist(tok)  rideTurns  cost     %attr
-${FIXTURE_PROJECT}/src/foo.ts  0          1,200         1,000         1          $0.0040  83.2%
-${FIXTURE_PROJECT}/src/bar.ts  0          800           0             0          $0.0008  16.8%
+path                            firstTurn  initial(tok)  persist(tok)  rideTurns  bytes  cost     %attr
+${FIXTURE_PROJECT}/src/foo.ts  0          1,200         1,000         1          -      $0.0040  83.2%
+${FIXTURE_PROJECT}/src/bar.ts  0          800           0             0          -      $0.0008  16.8%
 
 Top Bash verbs by cost (approximate)
-verb      calls  commands  initial(tok)  persist(tok)  avgRide  cost   examples
-npm test  1      1         0             0             0.0      $0.00  npm test
+verb      calls  commands  initial(tok)  persist(tok)  avgRide  bytes  cost   examples
+npm test  1      1         0             0             0.0      -      $0.00  npm test
 
 Top exact Bash commands by cost (approximate)
-command   calls  initial(tok)  persist(tok)  cost
-npm test  1      0             0             $0.00
+command   calls  initial(tok)  persist(tok)  bytes  cost
+npm test  1      0             0             -      $0.00
 
 Top subagent calls by cost (approximate)
-subagent               calls  initial(tok)  persist(tok)  cost
-review the foo module  1      0             0             $0.00
+subagent               calls  initial(tok)  persist(tok)  bytes  cost
+review the foo module  1      0             0             -      $0.00

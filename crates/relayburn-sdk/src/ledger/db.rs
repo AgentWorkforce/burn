@@ -57,6 +57,7 @@ impl Connections {
         let mut burn = Connection::open(burn_path)?;
         configure_pragmas(&burn)?;
         burn.execute_batch(BURN_DDL)?;
+        migrate_burn_schema(&burn)?;
         verify_schema_version(&burn)?;
 
         // Bootstrap from `ledger.jsonl` sibling if the sqlite mirror is
@@ -89,6 +90,121 @@ fn configure_pragmas(conn: &Connection) -> Result<()> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    Ok(())
+}
+
+/// In-place forward migrations for `burn.sqlite`. Re-applying is a no-op so
+/// open is idempotent; called BEFORE [`verify_schema_version`] so the
+/// version we read reflects the post-migration state.
+///
+/// Migrations are tagged by destination schema version; each step is
+/// guarded so re-running `Ledger::open` after a crash mid-migration picks
+/// up where it left off without surfacing `duplicate column name` errors.
+fn migrate_burn_schema(conn: &Connection) -> Result<()> {
+    let current_version: u32 = conn
+        .query_row(
+            "SELECT schema_version FROM archive_state WHERE id = 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|v| v as u32)
+        .unwrap_or(SCHEMA_VERSION);
+
+    if current_version < 2 {
+        // v1 → v2: add the denormalized `turns.stop_reason` column for
+        // outcome aggregation. `CREATE TABLE IF NOT EXISTS` in the DDL
+        // already covers fresh DBs (the column lives in the DDL); this
+        // branch handles existing v1 ledgers whose `turns` table
+        // pre-existed the bump.
+        //
+        // We try the `ALTER TABLE` unconditionally and swallow the
+        // `duplicate column name` failure rather than pre-checking with
+        // `PRAGMA table_info`. The check-then-act sequence is racy under
+        // concurrent ledger opens: two processes can both observe the
+        // column missing, both issue the `ALTER`, and the second loses.
+        // Letting SQLite arbitrate via the duplicate-column error keeps
+        // the migration genuinely idempotent. We deliberately don't
+        // catch the `SqliteFailure(_, None)` shape — that's too broad
+        // and would mask real schema breakage.
+        match conn.execute("ALTER TABLE turns ADD COLUMN stop_reason TEXT", []) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") => {}
+            Err(e) => return Err(e.into()),
+        }
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 2 WHERE id = 1",
+            [],
+        )?;
+    }
+
+    if current_version < 3 {
+        // v2 → v3: add nullable `output_bytes` / `output_truncated` to
+        // `tool_result_events` for hotspots-by-bytes ranking. Same
+        // duplicate-column-only swallow pattern as the v1 → v2 step —
+        // any other `SqliteFailure` (including `(_, None)`) must
+        // propagate rather than silently advance `schema_version`.
+        for ddl in [
+            "ALTER TABLE tool_result_events ADD COLUMN output_bytes INTEGER",
+            "ALTER TABLE tool_result_events ADD COLUMN output_truncated INTEGER",
+        ] {
+            match conn.execute(ddl, []) {
+                Ok(_) => {}
+                Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                    if msg.contains("duplicate column name") => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 3 WHERE id = 1",
+            [],
+        )?;
+    }
+
+    if current_version < 4 {
+        // v3 → v4: add nullable `turns.subagent_id` so subagent rows
+        // (sidechain rows in the parent file today; sidecar transcripts
+        // under `<sessionId>/subagents/` once the discovery path is
+        // wired into ingest) are queryable structurally without
+        // re-deserializing `record_json`. Same duplicate-column-only
+        // swallow pattern as the earlier steps. See
+        // AgentWorkforce/burn#435.
+        match conn.execute("ALTER TABLE turns ADD COLUMN subagent_id TEXT", []) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") => {}
+            Err(e) => return Err(e.into()),
+        }
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 4 WHERE id = 1",
+            [],
+        )?;
+    }
+
+    // The `idx_turns_stop_reason` index is created here rather than in
+    // the static DDL so a legacy v1 table (no `stop_reason` column yet)
+    // doesn't fail the DDL pre-pass. By this point the column either
+    // existed all along (fresh v2+ DDL) or was just added by the v1 → v2
+    // step above, so the index is safe to create idempotently every
+    // open.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_turns_stop_reason \
+         ON turns(stop_reason) WHERE stop_reason IS NOT NULL",
+        [],
+    )?;
+
+    // `idx_turns_subagent_id` lives here for the same reason as
+    // `idx_turns_stop_reason`: a legacy table without the column would
+    // otherwise blow up the DDL pre-pass. Partial-index predicate
+    // (`WHERE subagent_id IS NOT NULL`) keeps the index size tracking
+    // subagent row count, not the full turn count — subagent rows are
+    // a tiny minority on most ledgers.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_turns_subagent_id \
+         ON turns(subagent_id) WHERE subagent_id IS NOT NULL",
+        [],
+    )?;
+
     Ok(())
 }
 

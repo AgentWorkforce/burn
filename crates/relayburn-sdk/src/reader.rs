@@ -36,13 +36,17 @@ pub use git::{resolve_project, ProjectResolver, ResolvedProject};
 pub use types::{
     ActivityCategory, CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode,
     ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass, Harness,
-    RelationshipSourceKind, RelationshipType, SessionRelationshipRecord, SourceKind, Subagent,
-    ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord, Usage,
-    UsageAttribution, UsageGranularity, UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
+    RelationshipSourceKind, RelationshipType, SessionRelationshipRecord, SourceKind, StopReason,
+    Subagent, ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus,
+    TurnRecord, Usage, UsageAttribution, UsageGranularity, UserTurnBlock, UserTurnBlockKind,
+    UserTurnRecord,
 };
 pub use claude::{
     parse_claude_session, parse_claude_session_incremental,
     reconcile_claude_session_relationships, ParseIncrementalOptions as ClaudeParseIncrementalOptions,
     ParseIncrementalResult as ClaudeParseIncrementalResult, ParseOptions as ClaudeParseOptions,
     ParseResult as ClaudeParseResult, ReconcileClaudeRelationshipsInput,
+};
+pub use claude::subagents::{
+    count_subagents_under, discover_subagents, pair_to_main, SubagentCounts, SubagentTranscript,
 };

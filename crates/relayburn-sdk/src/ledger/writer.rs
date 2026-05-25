@@ -52,8 +52,9 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
             tx.prepare("SELECT 1 FROM turns WHERE content_fingerprint = ? LIMIT 1")?;
         let mut insert = tx.prepare(
             "INSERT OR IGNORE INTO turns
-                 (source, session_id, message_id, ts, project, project_key, record_json, content_fingerprint)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (source, session_id, message_id, ts, project, project_key,
+                  record_json, content_fingerprint, stop_reason, subagent_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         for t in turns {
             let fingerprint = turn_content_fingerprint(t);
@@ -64,6 +65,17 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
                 continue;
             }
             let json = serde_json::to_string(t)?;
+            // Denormalize `stop_reason` so summary aggregations don't have to
+            // re-deserialize `record_json`. NULL for Codex (no field) and
+            // pre-3.0 imports.
+            let stop_reason_str = t.stop_reason.as_ref().map(|s| s.wire_str());
+            // Denormalize `subagent.agent_id` into the v4 `subagent_id`
+            // column so queries can count / filter subagent rows
+            // structurally without deserializing `record_json`. NULL
+            // when the row isn't a subagent or the parser couldn't
+            // resolve the agent id (e.g. sidechain marker without a
+            // chain-walk match). See AgentWorkforce/burn#435.
+            let subagent_id = t.subagent.as_ref().and_then(|s| s.agent_id.as_deref());
             let changed = insert.execute(params![
                 t.source.wire_str(),
                 t.session_id,
@@ -73,6 +85,8 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
                 t.project_key,
                 json,
                 fingerprint,
+                stop_reason_str,
+                subagent_id,
             ])?;
             if changed > 0 {
                 appended += 1;
@@ -160,12 +174,14 @@ pub(crate) fn append_tool_result_events(
     {
         let mut insert = tx.prepare(
             "INSERT OR IGNORE INTO tool_result_events
-                 (id_fingerprint, source, session_id, tool_use_id, event_index, ts, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (id_fingerprint, source, session_id, tool_use_id, event_index, ts,
+                  record_json, output_bytes, output_truncated)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         for r in records {
             let id = tool_result_event_id_fingerprint(r);
             let json = serde_json::to_string(r)?;
+            let truncated_int: Option<i64> = r.output_truncated.map(|b| if b { 1 } else { 0 });
             let changed = insert.execute(params![
                 id,
                 r.source.wire_str(),
@@ -174,6 +190,8 @@ pub(crate) fn append_tool_result_events(
                 r.event_index as i64,
                 r.ts,
                 json,
+                r.output_bytes.map(|n| n as i64),
+                truncated_int,
             ])?;
             if changed > 0 {
                 appended += 1;

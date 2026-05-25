@@ -26,7 +26,35 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 
 /// Bumped when on-disk shape changes incompatibly. Stored in
 /// `archive_state.schema_version` after migration.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// Version history:
+/// - `1`: initial 2.0 SQLite-only layout (see #259); `turns` is `(source,
+///   session_id, message_id, ts, project, project_key, record_json,
+///   content_fingerprint)`.
+/// - `2`: 3.0 release — adds the denormalized `turns.stop_reason TEXT` column
+///   so `burn summary` can roll outcome counts without re-deserializing every
+///   `record_json` row. Existing rows are migrated by `ALTER TABLE … ADD
+///   COLUMN` and left `NULL`; new inserts populate the column from
+///   [`crate::reader::StopReason::wire_str`]. (#437)
+/// - `3`: 3.0 release — `tool_result_events` gains nullable `output_bytes`
+///   and `output_truncated` columns so hotspots can rank by raw payload
+///   bytes alongside post-truncation tokens. Pre-v3 rows leave the new
+///   columns NULL; `burn state rebuild` backfills them by re-running ingest.
+///   (#436)
+/// - `4`: 3.0 release — `turns` gains nullable `subagent_id` column so
+///   subagent transcript rows (sidechain in the parent file and sidecars
+///   under `<sessionId>/subagents/`) can be queried structurally without
+///   re-parsing `record_json`. New inserts denormalize
+///   `TurnRecord.subagent.agent_id`; pre-v4 rows leave the column NULL
+///   and are backfilled by `burn state rebuild`. (#435)
+///
+/// ## Renumbering note for reviewers
+///
+/// This branch built on main at v3 (post-#444). If a parallel PR also
+/// claims v4 before this lands, renumber here AND in the matching
+/// `migrate_burn_schema` step in `db.rs` — the migration is gated
+/// `if current_version < N` so the renumber is mechanical.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.
@@ -46,6 +74,19 @@ CREATE TABLE IF NOT EXISTS turns (
     project_key         TEXT,
     record_json         TEXT NOT NULL,
     content_fingerprint TEXT NOT NULL,
+    -- Denormalized stop reason for the trailing assistant row (kebab-case
+    -- wire spelling of `crate::reader::StopReason`). Nullable so pre-3.0
+    -- rows and harnesses that don't report one (Codex) survive the schema
+    -- bump without a backfill. New inserts populate this directly from the
+    -- parsed `TurnRecord.stop_reason`. See issue #437.
+    stop_reason         TEXT,
+    -- v4: subagent agent id for sidechain / sidecar-sourced turns
+    -- (see `crate::reader::types::Subagent.agent_id`). Nullable so
+    -- non-subagent rows and Codex / opencode imports survive the bump
+    -- without a backfill. New inserts denormalize
+    -- `TurnRecord.subagent.agent_id`; pre-v4 rows stay NULL and are
+    -- backfilled by `burn state rebuild`. See issue #435.
+    subagent_id         TEXT,
     PRIMARY KEY (source, session_id, message_id)
 ) STRICT;
 
@@ -55,6 +96,10 @@ CREATE INDEX IF NOT EXISTS idx_turns_session
     ON turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_ts
     ON turns(ts);
+-- `idx_turns_stop_reason` is created from the in-place migration in
+-- `db::migrate_burn_schema` so a legacy v1 table (no `stop_reason` column
+-- yet) doesn't blow up on the DDL pre-pass. Once `ALTER TABLE` adds the
+-- column, the migration runs `CREATE INDEX IF NOT EXISTS` itself.
 
 CREATE TABLE IF NOT EXISTS compactions (
     id_fingerprint TEXT PRIMARY KEY,
@@ -83,13 +128,21 @@ CREATE INDEX IF NOT EXISTS idx_relationships_related
     ON relationships(related_session_id);
 
 CREATE TABLE IF NOT EXISTS tool_result_events (
-    id_fingerprint TEXT PRIMARY KEY,
-    source         TEXT NOT NULL,
-    session_id     TEXT NOT NULL,
-    tool_use_id    TEXT NOT NULL,
-    event_index    INTEGER NOT NULL,
-    ts             TEXT,
-    record_json    TEXT NOT NULL
+    id_fingerprint   TEXT PRIMARY KEY,
+    source           TEXT NOT NULL,
+    session_id       TEXT NOT NULL,
+    tool_use_id      TEXT NOT NULL,
+    event_index      INTEGER NOT NULL,
+    ts               TEXT,
+    record_json      TEXT NOT NULL,
+    -- v3: raw UTF-8 byte length of the tool result payload (see #436).
+    -- Nullable for pre-v3 rows and events where the source didn't carry
+    -- a measurable content block.
+    output_bytes     INTEGER,
+    -- v3: 1 when the ingest site detected a truncation marker; 0 when
+    -- the payload was inspected and looked complete; NULL when not
+    -- determined.
+    output_truncated INTEGER
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_tool_result_events_session
@@ -143,7 +196,7 @@ CREATE TABLE IF NOT EXISTS archive_state (
 );
 
 INSERT INTO archive_state (id, schema_version)
-    VALUES (1, 1)
+    VALUES (1, 4)
     ON CONFLICT(id) DO NOTHING;
 "#;
 

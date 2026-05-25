@@ -7,6 +7,25 @@
 //! field can be absent), so we keep raw lines as `serde_json::Value` and use
 //! small accessor helpers rather than ahead-of-time deserialization. This
 //! mirrors the TS implementation, which also walks records as `unknown`.
+//!
+//! ## User→assistant text association via `parentUuid` chain (#433)
+//!
+//! Activity classification feeds the user-prompt text into the rules. The
+//! prompt-to-assistant mapping uses the `parentUuid` chain (see the
+//! `claude/parent_chain.rs` submodule) and falls back to the legacy
+//! file-order map only when the assistant row lacks UUIDs or the chain
+//! does not terminate at a known user prompt. The chain walk is robust
+//! against out-of-order JSONL flushes and mid-stream interruptions; the
+//! file-order map is kept solely as a safety net for legacy/malformed
+//! rows.
+//!
+//! Codex (`reader/codex.rs`) and opencode (`reader/opencode.rs`) rollouts
+//! do not carry an equivalent `parentUuid`-style field; they group turns
+//! via their own primitives (Codex: `task_complete` boundaries; opencode:
+//! per-message part files sorted chronologically). Neither parser is
+//! touched by this change. See AgentWorkforce/burn#433.
+
+mod parent_chain;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -15,17 +34,25 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::reader::classifier::{classify_activity, ClassificationInput};
+use self::parent_chain::ChainNode;
+use crate::reader::classifier::{classify_activity, is_task_notification, ClassificationInput};
 use crate::reader::git::resolve_project;
 use crate::reader::hash::{args_hash, content_hash};
 use crate::reader::types::{
     CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
     ContentToolUse, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, Subagent, ToolCall, ToolResultEventRecord,
+    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
     ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageGranularity, UserTurnBlock,
     UserTurnRecord,
 };
 use crate::reader::user_turn::{HeuristicCounter, TokenCounter};
+
+// Discovery + pairing for Task subagent sidecar transcripts. Public so the
+// SDK surface (`crate::reader::{discover_subagents, pair_to_main,
+// SubagentTranscript}`) and the ingest path can both reach it. Lazy —
+// callers stat-then-walk only when something asks for subagents. See
+// AgentWorkforce/burn#435.
+pub mod subagents;
 
 // ---------------------------------------------------------------------------
 // Public surface.
@@ -226,6 +253,64 @@ struct LineNode {
     is_sidechain: bool,
     agent_tool_use: Option<AgentToolUse>,
     tool_result_ids: Option<HashSet<String>>,
+    /// True only when this row is a real user-prompt line (i.e. `kind ==
+    /// User`, the message body contains plain user text, and the row is
+    /// not a harness `<task-notification>` synthetic event). Used as the
+    /// `is_user_root()` signal for the parent-chain walker (#433). A
+    /// user line carrying only a `tool_result` block — the common case
+    /// for tool result envelopes — is NOT a turn root and so this stays
+    /// false.
+    is_user_prompt: bool,
+}
+
+impl ChainNode for LineNode {
+    fn uuid(&self) -> &str {
+        &self.uuid
+    }
+    fn parent_uuid(&self) -> Option<&str> {
+        self.parent_uuid.as_deref()
+    }
+    fn is_user_root(&self) -> bool {
+        self.is_user_prompt
+    }
+}
+
+/// Walk upward from `start_uuid` along `parent_uuid` until the nearest
+/// user-prompt ancestor (`is_user_root() == true`) is found, then return
+/// that ancestor's UUID. Returns `None` if no such ancestor exists or
+/// `start_uuid` is unknown. Cycle-safe via a visited set.
+///
+/// This is the per-row driver for the chain-grouping strategy described
+/// in `claude/parent_chain.rs`. The Claude reader calls it to look up
+/// the user prompt text that should feed activity classification for a
+/// given assistant turn, bypassing the legacy file-order map under
+/// out-of-order JSONL flushes and mid-stream interruption + resume
+/// patterns. See AgentWorkforce/burn#433.
+///
+/// Reads `LineNode`s through the `ChainNode` trait so the walker stays
+/// in sync with the standalone `group_by_parent_chain` helper (same
+/// trait, same termination rules).
+fn nearest_user_prompt_root(
+    start_uuid: &str,
+    nodes: &HashMap<String, LineNode>,
+) -> Option<String> {
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut current: &LineNode = nodes.get(start_uuid)?;
+    visited.insert(current.uuid());
+    if current.is_user_root() {
+        return Some(current.uuid().to_string());
+    }
+    loop {
+        let parent_uuid = current.parent_uuid()?;
+        if !visited.insert(parent_uuid) {
+            return None; // cycle — bail
+        }
+        let parent = nodes.get(parent_uuid)?;
+        if parent.is_user_root() {
+            return Some(parent.uuid().to_string());
+        }
+        current = parent;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -345,6 +430,9 @@ fn make_line_node(line: &Value, kind: LineKind) -> Option<LineNode> {
         is_sidechain,
         agent_tool_use: None,
         tool_result_ids: None,
+        // Recomputed in `register_user_node` based on body shape + task
+        // notification gate. Default false is correct for assistant rows.
+        is_user_prompt: false,
     })
 }
 
@@ -394,11 +482,16 @@ fn register_assistant_node(line: &Value, nodes: &mut HashMap<String, LineNode>) 
     nodes.insert(node.uuid.clone(), node);
 }
 
-fn register_user_node(line: &Value, nodes: &mut HashMap<String, LineNode>) {
+fn register_user_node(
+    line: &Value,
+    nodes: &mut HashMap<String, LineNode>,
+    is_user_prompt: bool,
+) {
     let mut node = match make_line_node(line, LineKind::User) {
         Some(n) => n,
         None => return,
     };
+    node.is_user_prompt = is_user_prompt;
     let body = line.get("message").and_then(|m| m.get("content"));
     if let Some(arr) = body.and_then(Value::as_array) {
         for block in arr {
@@ -1057,6 +1150,8 @@ fn collect_tool_result_events(
             },
             event_source: ToolResultEventSource::ToolResult,
             content_length: None,
+            output_bytes: None,
+            output_truncated: None,
             content_hash: None,
             is_error: if is_error { Some(true) } else { None },
             usage: None,
@@ -1071,6 +1166,8 @@ fn collect_tool_result_events(
             let measured = measure_tool_result(content);
             record.content_length = measured.length;
             record.content_hash = measured.hash;
+            record.output_bytes = measured.byte_length;
+            record.output_truncated = measured.truncated;
         }
         if let Some(meta) = extract_replacement_meta_from_tool_result(block) {
             if let Some(ref names) = meta.replaced_tools {
@@ -1093,6 +1190,15 @@ fn collect_tool_result_events(
 struct Measured {
     length: Option<u64>,
     hash: Option<String>,
+    /// Raw UTF-8 byte length of the materialized text (the same string the
+    /// hash is computed against). Added in #436 so hotspots can rank tools
+    /// by raw payload bytes alongside post-truncation tokens.
+    byte_length: Option<u64>,
+    /// `Some(true)` when a recognized truncation marker was detected in
+    /// the payload (see `detect_truncation_marker`). `None` when no
+    /// payload was available; `Some(false)` when payload was inspected
+    /// and looked complete.
+    truncated: Option<bool>,
 }
 
 fn measure_tool_result(content: &Value) -> Measured {
@@ -1104,6 +1210,8 @@ fn measure_tool_result(content: &Value) -> Measured {
         return Measured {
             length: Some(s.chars().count() as u64),
             hash: Some(content_hash(s)),
+            byte_length: Some(s.as_bytes().len() as u64),
+            truncated: Some(detect_truncation_marker(s)),
         };
     }
     if content.is_null() {
@@ -1113,9 +1221,33 @@ fn measure_tool_result(content: &Value) -> Measured {
         Ok(s) => Measured {
             length: Some(s.chars().count() as u64),
             hash: Some(content_hash(&s)),
+            byte_length: Some(s.as_bytes().len() as u64),
+            truncated: Some(detect_truncation_marker(&s)),
         },
         Err(_) => Measured::default(),
     }
+}
+
+/// Detect whether Claude Code embedded a truncation marker in the tool
+/// result payload. Claude truncates large outputs (notably Bash stdout,
+/// long-file reads) before serializing the tool_result block; the
+/// truncated payload is suffixed/prefixed with a recognizable marker so
+/// the assistant model can react. We look for the well-known phrasings
+/// the Claude Code CLI emits as of 2026-Q1; new markers can be added
+/// here without bumping the schema.
+fn detect_truncation_marker(s: &str) -> bool {
+    // Matched case-insensitively to absorb capitalization tweaks. Patterns
+    // are kept short so partial-message previews still trigger.
+    const MARKERS: &[&str] = &[
+        "<system-truncated>",
+        "[truncated]",
+        "output truncated",
+        "result truncated",
+        "response truncated",
+        "truncated to ",
+    ];
+    let lower = s.to_ascii_lowercase();
+    MARKERS.iter().any(|m| lower.contains(m))
 }
 
 fn build_claude_system_tool_result_event(
@@ -1157,6 +1289,8 @@ fn build_claude_system_tool_result_event(
         status,
         event_source: ToolResultEventSource::SubagentNotification,
         content_length: None,
+        output_bytes: None,
+        output_truncated: None,
         content_hash: None,
         is_error: None,
         usage: None,
@@ -1174,6 +1308,8 @@ fn build_claude_system_tool_result_event(
         let measured = measure_tool_result(c);
         record.content_length = measured.length;
         record.content_hash = measured.hash;
+        record.output_bytes = measured.byte_length;
+        record.output_truncated = measured.truncated;
     }
     Some(record)
 }
@@ -1373,11 +1509,28 @@ fn apply_classification(
     record: &mut TurnRecord,
     w: &WorkingRecord,
     user_text_by_message_id: &HashMap<String, String>,
+    user_text_by_uuid: &HashMap<String, String>,
+    nodes_by_uuid: &HashMap<String, LineNode>,
     errored: &HashSet<String>,
 ) {
-    let user_text = user_text_by_message_id
-        .get(&w.message_id)
-        .cloned()
+    // Prefer the parent-chain walk (#433): walk from the assistant's first
+    // emitted UUID up through `parentUuid` to the nearest user-prompt root
+    // and use *that* user's text. Falls back to the legacy file-order map
+    // keyed by message_id when:
+    //   - the assistant row has no first_assistant_uuid (legacy/malformed)
+    //   - the chain doesn't terminate at a known user prompt (orphan
+    //     chain, cycle, root user prompt lacks text)
+    //
+    // The fallback is intentional: file-order association is wrong for
+    // out-of-order flushes and interrupt+resume sessions, but it's still
+    // the best signal we have for rows without UUIDs. Prefer over-grouping
+    // (silently wrong text) to silently dropping classification entirely.
+    let user_text = w
+        .first_assistant_uuid
+        .as_deref()
+        .and_then(|uuid| nearest_user_prompt_root(uuid, nodes_by_uuid))
+        .and_then(|root_uuid| user_text_by_uuid.get(&root_uuid).cloned())
+        .or_else(|| user_text_by_message_id.get(&w.message_id).cloned())
         .unwrap_or_default();
     let assistant_text = extract_assistant_text_for_classification(&w.blocks);
     let mut text_parts = Vec::new();
@@ -1980,7 +2133,15 @@ fn prescan_nodes(
                 }
             }
             "user" => {
-                register_user_node(&parsed, nodes_by_uuid);
+                // Match the main-loop classification: a row is a real
+                // user-prompt root only when it isn't a harness task
+                // notification AND carries plain user text. See #439 for
+                // the task-notification gate and #433 for why we tag
+                // the LineNode for the parent-chain walker.
+                let is_user_prompt = !is_task_notification(&obj)
+                    && extract_plain_user_text_from_obj(&obj)
+                        .is_some_and(|s| !s.is_empty());
+                register_user_node(&parsed, nodes_by_uuid, is_user_prompt);
                 record_evidence_from_line(evidence, &parsed);
                 record_explicit_relationship_evidence(evidence, &obj);
                 record_resume_marker(evidence, &obj);
@@ -2129,7 +2290,16 @@ fn run_incremental<C: TokenCounter + ?Sized>(
     let mut working: HashMap<String, WorkingRecord> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     let mut message_id_first_offset: HashMap<String, u64> = HashMap::new();
+    // Legacy file-order map kept as a fallback when the assistant row
+    // lacks a `uuid` or its parent chain doesn't terminate at a known
+    // user prompt. The preferred lookup is `user_text_by_uuid` walked
+    // via `nearest_user_prompt_root` (#433).
     let mut user_text_by_message_id: HashMap<String, String> = HashMap::new();
+    // User-prompt text keyed by the user line's own `uuid` — read by the
+    // parent-chain walker during turn classification. Populated only for
+    // real user prompts (task notifications excluded; empty bodies
+    // excluded).
+    let mut user_text_by_uuid: HashMap<String, String> = HashMap::new();
     let mut errored_tool_use_ids: HashSet<String> = HashSet::new();
     let mut replacement_meta_by_tool_use_id: HashMap<String, ReplacementMeta> = HashMap::new();
     let mut events: Vec<(u64, CompactionEvent)> = Vec::new();
@@ -2246,10 +2416,36 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 );
             }
             "user" => {
-                register_user_node(&parsed, &mut nodes_by_uuid);
-                if let Some(text) = extract_plain_user_text_from_obj(&obj) {
-                    if !text.is_empty() {
-                        current_user_text = text;
+                // Harness-injected `<task-notification>` rows share the user
+                // envelope but represent system events, not real prompts.
+                // Detecting them here keeps them out of `current_user_text`
+                // (so the classifier doesn't get task-notification text as
+                // "user intent") and out of `pending_user_turns` (so
+                // user-turn aggregates aren't inflated). Side effects like
+                // session-relationship discovery still run because those
+                // are independent of "is this a real user prompt". See
+                // AgentWorkforce/burn#439.
+                let task_notification = is_task_notification(&obj);
+                let user_text = if task_notification {
+                    None
+                } else {
+                    extract_plain_user_text_from_obj(&obj).filter(|s| !s.is_empty())
+                };
+                let is_user_prompt = user_text.is_some();
+                register_user_node(&parsed, &mut nodes_by_uuid, is_user_prompt);
+                if let Some(ref text) = user_text {
+                    current_user_text = text.clone();
+                    // Index by the user line's UUID for the parent-chain
+                    // walker (#433). Falls back to no-op when the row
+                    // lacks a `uuid`, in which case file-order remains
+                    // the only association mechanism for downstream
+                    // assistants.
+                    if let Some(uuid) = obj.get("uuid").and_then(Value::as_str) {
+                        if !uuid.is_empty() {
+                            user_text_by_uuid
+                                .entry(uuid.to_string())
+                                .or_insert_with(|| text.clone());
+                        }
                     }
                 }
                 collect_errored_tool_use_ids(&obj, &mut errored_tool_use_ids);
@@ -2293,12 +2489,14 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 for ev in harvested {
                     pending_tool_result_events.push((line_start_offset, ev));
                 }
-                if let Some(record) =
-                    build_user_turn_record(&obj, last_assistant_message_id.as_deref(), counter)
-                {
-                    let idx = pending_user_turns.len();
-                    pending_user_turns.push((line_start_offset, record));
-                    pending_user_turn_inc_idx = Some(idx);
+                if !task_notification {
+                    if let Some(record) =
+                        build_user_turn_record(&obj, last_assistant_message_id.as_deref(), counter)
+                    {
+                        let idx = pending_user_turns.len();
+                        pending_user_turns.push((line_start_offset, record));
+                        pending_user_turn_inc_idx = Some(idx);
+                    }
                 }
                 if capture_content {
                     for c in extract_user_content(&obj) {
@@ -2405,7 +2603,10 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 Some(files_touched)
             },
             subagent,
-            stop_reason: w.stop_reason.clone(),
+            stop_reason: w
+                .stop_reason
+                .as_deref()
+                .map(|s| StopReason::from_wire(s).unwrap_or(StopReason::Silent)),
             activity: None,
             retries: None,
             has_edits: None,
@@ -2420,6 +2621,8 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             &mut record,
             w,
             &user_text_by_message_id,
+            &user_text_by_uuid,
+            &nodes_by_uuid,
             &errored_tool_use_ids,
         );
         turns.push(record);
@@ -2579,6 +2782,46 @@ fn first_present<'a>(obj: &'a serde_json::Map<String, Value>, keys: &[&str]) -> 
 mod tests {
     use super::*;
 
+    /// `measure_tool_result` populates both the legacy char-count
+    /// `length` and the new `byte_length` field added in #436. For
+    /// ASCII fixture content they agree; the byte length is what the
+    /// `tool_result_events.output_bytes` column stores so hotspots can
+    /// rank by raw payload regardless of token truncation downstream.
+    #[test]
+    fn measure_tool_result_populates_byte_length_and_truncation_flag() {
+        let plain = serde_json::json!("hello world");
+        let m = measure_tool_result(&plain);
+        assert_eq!(m.byte_length, Some(11));
+        assert_eq!(m.length, Some(11));
+        assert_eq!(m.truncated, Some(false));
+
+        let truncated = serde_json::json!(
+            "... lots of output ...\n[truncated]\nsystem note: response truncated"
+        );
+        let m = measure_tool_result(&truncated);
+        assert_eq!(m.truncated, Some(true));
+        assert!(m.byte_length.unwrap() > 0);
+
+        let null = serde_json::json!(null);
+        let m = measure_tool_result(&null);
+        assert_eq!(m.byte_length, None);
+        assert_eq!(m.truncated, None);
+    }
+
+    #[test]
+    fn detect_truncation_marker_matches_known_phrasings() {
+        assert!(detect_truncation_marker(
+            "Bash output truncated at 30000 chars"
+        ));
+        assert!(detect_truncation_marker("<system-truncated>"));
+        assert!(detect_truncation_marker(
+            "(...)\n[truncated]\n(end of preview)"
+        ));
+        assert!(detect_truncation_marker("Result Truncated"));
+        assert!(!detect_truncation_marker("hello world"));
+        assert!(!detect_truncation_marker(""));
+    }
+
     fn fixture(name: &str) -> std::path::PathBuf {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         manifest
@@ -2621,7 +2864,7 @@ mod tests {
                 subagent_type: Some("general-purpose".to_string()),
                 description: Some("delegate".to_string()),
             }),
-            stop_reason: Some("end_turn".to_string()),
+            stop_reason: Some(StopReason::EndTurn),
             activity: Some(crate::reader::types::ActivityCategory::Coding),
             retries: Some(1),
             has_edits: Some(true),
@@ -2687,6 +2930,8 @@ mod tests {
             status: ToolResultStatus::Completed,
             event_source: ToolResultEventSource::ToolResult,
             content_length: Some(5),
+            output_bytes: Some(5),
+            output_truncated: Some(false),
             content_hash: Some("abc123".to_string()),
             is_error: Some(false),
             usage: Some(Usage::default()),
@@ -2778,7 +3023,7 @@ mod tests {
         assert_eq!(t.source, SourceKind::ClaudeCode);
         assert_eq!(t.message_id, "msg_simple_1");
         assert_eq!(t.model, "claude-sonnet-4-6");
-        assert_eq!(t.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(t.stop_reason, Some(StopReason::EndTurn));
         assert_eq!(t.usage.input, 10);
         assert_eq!(t.usage.output, 5);
         assert_eq!(t.usage.cache_read, 500);
@@ -2823,7 +3068,7 @@ mod tests {
         );
         assert_eq!(t.tool_calls[1].name, "Agent");
         assert_eq!(t.tool_calls[1].target.as_deref(), Some("general-purpose"));
-        assert_eq!(t.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(t.stop_reason, Some(StopReason::ToolUse));
         assert_eq!(t.ts, "2026-04-20T00:00:01.000Z");
     }
 
@@ -3437,7 +3682,7 @@ mod tests {
         .unwrap();
         assert_eq!(second.turns.len(), 1);
         assert_eq!(second.turns[0].message_id, "msg_inprog_1");
-        assert_eq!(second.turns[0].stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(second.turns[0].stop_reason, Some(StopReason::EndTurn));
     }
 
     #[test]
@@ -4219,6 +4464,32 @@ mod tests {
         assert_eq!(res.user_turns[0].blocks[0].kind, UserTurnBlockKind::Text);
     }
 
+    #[test]
+    fn task_notification_rows_are_excluded_from_user_turns() {
+        // Integration coverage for #439. The fixture interleaves real user
+        // prompts with two synthetic `<task-notification>` rows (one
+        // tagged via `origin.kind`, one via the `queued_command`
+        // attachment). Burn must emit exactly two UserTurnRecords (one
+        // per real prompt) — a regression that re-counts task-notification
+        // rows would emit four.
+        let path = fixture("task-notification.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(
+            res.user_turns.len(),
+            2,
+            "task-notification rows must not count as user turns"
+        );
+        let user_uuids: Vec<&str> = res
+            .user_turns
+            .iter()
+            .map(|u| u.user_uuid.as_str())
+            .collect();
+        assert_eq!(user_uuids, vec!["u-user-1", "u-user-2"]);
+        // Sanity: assistant turns are unaffected — the harness-injected
+        // rows don't suppress real assistant accounting.
+        assert_eq!(res.turns.len(), 2);
+    }
+
     // ----- parseClaudeSession content capture -----
 
     #[test]
@@ -4902,5 +5173,150 @@ mod tests {
             sub.source_session_id.as_deref(),
             Some("55555555-5555-5555-5555-555555555555")
         );
+    }
+
+    // ----- parentUuid chain grouping (#433) end-to-end -----
+    //
+    // These two tests prove the chain walk replaces the file-order text
+    // association without depending on parse-state invariants beyond the
+    // public TurnRecord shape. The fixture rows are crafted so the old
+    // heuristic would mis-classify at least one turn, and the chain walk
+    // recovers the right answer.
+
+    /// Out-of-order JSONL flush: two user prompts land in the file before
+    /// either assistant's first chunk. Under the legacy file-order map the
+    /// first assistant (`msg_bug_assistant`) would inherit the *second*
+    /// user prompt's text ("add a new feature ...") and mis-classify as
+    /// `Feature`. The parent-chain walk routes it to the correct user
+    /// prompt ("fix the bug ...") and classifies as `Debugging`.
+    #[test]
+    fn parent_chain_groups_out_of_order_rows_for_classification() {
+        let path = fixture("parent-chain-out-of-order.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 2, "fixture has two assistant turns");
+        let bug = res
+            .turns
+            .iter()
+            .find(|t| t.message_id == "msg_bug_assistant")
+            .expect("bug-fix turn present");
+        let feature = res
+            .turns
+            .iter()
+            .find(|t| t.message_id == "msg_feature_assistant")
+            .expect("feature turn present");
+        // The discriminating assertion: file-order would attach
+        // "add a new feature ..." to BOTH turns (FEATURE_RE wins), so the
+        // bug-fix turn would mis-classify. Chain walk routes each turn
+        // to its own parentUuid root.
+        assert_eq!(
+            bug.activity,
+            Some(ActivityCategory::Debugging),
+            "bug-fix turn must use its own user prompt text via parentUuid chain (#433)"
+        );
+        assert_eq!(
+            feature.activity,
+            Some(ActivityCategory::Feature),
+            "feature turn must use its own user prompt text"
+        );
+    }
+
+    /// Interrupt + resume: the user cancels mid-stream and types a new
+    /// prompt; the original turn's only assistant chunk arrives *after*
+    /// the resume turn completes. Under the legacy file-order map the
+    /// late refactor assistant inherits the bug-fix user text and
+    /// mis-classifies as `Debugging`. The parent-chain walk pins it to
+    /// the original "refactor the auth module" prompt and classifies as
+    /// `Refactoring`.
+    #[test]
+    fn parent_chain_groups_interrupt_resume_rows_into_original_turn() {
+        let path = fixture("parent-chain-interrupt-resume.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 2, "fixture has two assistant turns");
+        let bugfix = res
+            .turns
+            .iter()
+            .find(|t| t.message_id == "msg_bugfix_assistant")
+            .expect("bug-fix interrupt turn present");
+        let refactor = res
+            .turns
+            .iter()
+            .find(|t| t.message_id == "msg_refactor_assistant")
+            .expect("refactor turn present");
+        assert_eq!(
+            bugfix.activity,
+            Some(ActivityCategory::Debugging),
+            "bug-fix turn must classify against its own prompt"
+        );
+        assert_eq!(
+            refactor.activity,
+            Some(ActivityCategory::Refactoring),
+            "late-arriving refactor turn must classify against its ORIGINAL prompt via parentUuid chain (#433), not the most recently seen prompt"
+        );
+    }
+
+    /// Cycle guard: synthetic loop in the parent chain must not hang the
+    /// turn-classification path. With no reachable user-prompt root the
+    /// activity classifier sees empty user text (falls back through the
+    /// classifier's no-text branches); the key assertion is that
+    /// `parse_claude_session` returns in finite time.
+    #[test]
+    fn parent_chain_cycle_in_assistant_chain_does_not_hang() {
+        // Two assistant rows whose parentUuids point at each other,
+        // sharing a message_id so they collapse to one turn. The fixture
+        // has no user-prompt root and no `stop_reason`, so the chain
+        // walk hits the cycle guard and returns `None`; classification
+        // falls through to the empty-text branch without looping.
+        let dir = tempfile::tempdir().unwrap();
+        let working = dir.path().join("session.jsonl");
+        let body = [
+            serde_json::json!({
+                "parentUuid": "u-asst-cycle-b",
+                "isSidechain": false,
+                "type": "assistant",
+                "uuid": "u-asst-cycle-a",
+                "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "timestamp": "2026-05-01T00:00:00.000Z",
+                "cwd": "/tmp/project",
+                "message": {
+                    "id": "msg_cycle",
+                    "model": "claude-sonnet-4-6",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "first chunk"}],
+                    "stop_reason": null,
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }
+            }),
+            serde_json::json!({
+                "parentUuid": "u-asst-cycle-a",
+                "isSidechain": false,
+                "type": "assistant",
+                "uuid": "u-asst-cycle-b",
+                "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "timestamp": "2026-05-01T00:00:01.000Z",
+                "cwd": "/tmp/project",
+                "message": {
+                    "id": "msg_cycle",
+                    "model": "claude-sonnet-4-6",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "second chunk"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1}
+                }
+            }),
+        ]
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n";
+        write_bytes(&working, body.as_bytes());
+        // Just calling this and asserting it returns is the test — a hang
+        // here would cause the suite to time out. The classifier output
+        // is incidental; we only verify the call completes.
+        let res = parse_claude_session(&working, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 1);
+        assert_eq!(res.turns[0].message_id, "msg_cycle");
     }
 }

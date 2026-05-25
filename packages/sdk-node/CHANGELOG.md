@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `fingerprint({ session?, project?, ledgerHome? })` returns a
+  `{count}:{maxMtimeUnix}:{totalBytes}` polling primitive over `turns`.
+  Sub-millisecond per session-scope call; suitable for "did anything
+  change" gates without re-querying or re-ingesting. (#440)
+
 ## [2.10.0] - 2026-05-24
 
 ### Added
