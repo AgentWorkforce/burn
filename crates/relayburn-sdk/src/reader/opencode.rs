@@ -32,7 +32,7 @@ use crate::reader::hash::{args_hash, content_hash};
 use crate::reader::types::{
     CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
     ContentToolUse, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, Subagent, ToolCall, ToolResultEventRecord,
+    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
     ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageAttribution, UsageGranularity,
     UserTurnBlock, UserTurnRecord,
 };
@@ -224,7 +224,9 @@ pub fn parse_opencode_session_incremental(
                 Some(extracted.files_touched.clone())
             },
             subagent: None,
-            stop_reason: stop_reason.clone(),
+            stop_reason: stop_reason
+                .as_deref()
+                .map(|s| StopReason::from_wire(s).unwrap_or(StopReason::Silent)),
             activity: None,
             retries: None,
             has_edits: None,

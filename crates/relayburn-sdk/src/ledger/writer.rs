@@ -52,8 +52,9 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
             tx.prepare("SELECT 1 FROM turns WHERE content_fingerprint = ? LIMIT 1")?;
         let mut insert = tx.prepare(
             "INSERT OR IGNORE INTO turns
-                 (source, session_id, message_id, ts, project, project_key, record_json, content_fingerprint)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (source, session_id, message_id, ts, project, project_key,
+                  record_json, content_fingerprint, stop_reason)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         for t in turns {
             let fingerprint = turn_content_fingerprint(t);
@@ -64,6 +65,10 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
                 continue;
             }
             let json = serde_json::to_string(t)?;
+            // Denormalize `stop_reason` so summary aggregations don't have to
+            // re-deserialize `record_json`. NULL for Codex (no field) and
+            // pre-3.0 imports.
+            let stop_reason_str = t.stop_reason.as_ref().map(|s| s.wire_str());
             let changed = insert.execute(params![
                 t.source.wire_str(),
                 t.session_id,
@@ -73,6 +78,7 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
                 t.project_key,
                 json,
                 fingerprint,
+                stop_reason_str,
             ])?;
             if changed > 0 {
                 appended += 1;

@@ -11,4 +11,6 @@ claude-haiku-4-5   2      1,700  220     0          4,500      0            $0.0
 total cost: $0.044
   input $0.019 / output $0.018 / reasoning $0.00 / cacheRead $0.0063 / cacheCreate $0.0008
 
+Turn outcomes: 0 end_turn, 0 max_tokens, 0 refusal, 0 pause, 7 none
+
 fidelity: 6 full / 1 partial (use --json for per-field coverage)

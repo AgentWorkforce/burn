@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::reader::{ContentKind, ContentRecord, ContentRole, TurnRecord};
+use crate::reader::{ContentKind, ContentRecord, ContentRole, StopReason, TurnRecord};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -324,9 +324,9 @@ fn ending_role(turns: &[&TurnRecord]) -> EndingRole {
     // reason means user-ended (session died after a tool_use). When the
     // source doesn't record stopReason at all (e.g. Codex), return Unknown.
     let last = turns.last().expect("turns non-empty");
-    match &last.stop_reason {
+    match last.stop_reason {
         None => EndingRole::Unknown,
-        Some(s) if s == "end_turn" => EndingRole::Assistant,
+        Some(StopReason::EndTurn) => EndingRole::Assistant,
         Some(_) => EndingRole::User,
     }
 }
@@ -525,7 +525,7 @@ mod tests {
         ts: Option<String>,
         session_id: Option<String>,
         source: Option<SourceKind>,
-        stop_reason: Option<Option<String>>,
+        stop_reason: Option<Option<StopReason>>,
         tool_calls: Option<Vec<ToolCall>>,
         retries: Option<Option<u64>>,
         has_edits: Option<bool>,
@@ -582,13 +582,13 @@ mod tests {
             turn(TurnOverrides {
                 message_id: "m1".into(),
                 turn_index: 0,
-                stop_reason: Some(Some("tool_use".into())),
+                stop_reason: Some(Some(StopReason::ToolUse)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m2".into(),
                 turn_index: 1,
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
         ];
@@ -603,7 +603,7 @@ mod tests {
         let turns = vec![turn(TurnOverrides {
             message_id: "m1".into(),
             turn_index: 0,
-            stop_reason: Some(Some("end_turn".into())),
+            stop_reason: Some(Some(StopReason::EndTurn)),
             ..Default::default()
         })];
         let o = infer_outcome("s", &turns, None, fixed_now());
@@ -617,7 +617,7 @@ mod tests {
         let turns = vec![turn(TurnOverrides {
             message_id: "m1".into(),
             turn_index: 0,
-            stop_reason: Some(Some("tool_use".into())),
+            stop_reason: Some(Some(StopReason::ToolUse)),
             ..Default::default()
         })];
         let o = infer_outcome("s", &turns, None, fixed_now());
@@ -633,21 +633,21 @@ mod tests {
                 message_id: "m1".into(),
                 turn_index: 0,
                 ts: Some("2026-04-20T00:00:00.000Z".into()),
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m2".into(),
                 turn_index: 1,
                 ts: Some("2026-04-20T00:01:00.000Z".into()),
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m3".into(),
                 turn_index: 2,
                 ts: Some("2026-04-20T00:02:00.000Z".into()),
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
         ];
@@ -664,9 +664,11 @@ mod tests {
                 turn(TurnOverrides {
                     message_id: format!("m{i}"),
                     turn_index: i as u64,
-                    stop_reason: Some(Some(
-                        if i == 9 { "tool_use" } else { "end_turn" }.to_string(),
-                    )),
+                    stop_reason: Some(Some(if i == 9 {
+                        StopReason::ToolUse
+                    } else {
+                        StopReason::EndTurn
+                    })),
                     ..Default::default()
                 })
             })
@@ -683,19 +685,19 @@ mod tests {
             turn(TurnOverrides {
                 message_id: "m1".into(),
                 turn_index: 0,
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m2".into(),
                 turn_index: 1,
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m3".into(),
                 turn_index: 2,
-                stop_reason: Some(Some("tool_use".into())),
+                stop_reason: Some(Some(StopReason::ToolUse)),
                 ..Default::default()
             }),
         ];
@@ -711,27 +713,27 @@ mod tests {
             turn(TurnOverrides {
                 message_id: "m1".into(),
                 turn_index: 0,
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m2".into(),
                 turn_index: 1,
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 tool_calls: Some(vec![tc("u1", "Bash", Some(true))]),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m3".into(),
                 turn_index: 2,
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 tool_calls: Some(vec![tc("u2", "Bash", Some(true))]),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "m4".into(),
                 turn_index: 3,
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 tool_calls: Some(vec![tc("u3", "Bash", Some(true))]),
                 ..Default::default()
             }),
@@ -748,7 +750,7 @@ mod tests {
                 turn(TurnOverrides {
                     message_id: format!("m{}", i + 1),
                     turn_index: i,
-                    stop_reason: Some(Some("end_turn".into())),
+                    stop_reason: Some(Some(StopReason::EndTurn)),
                     ..Default::default()
                 })
             })
@@ -825,7 +827,7 @@ mod tests {
                 turn(TurnOverrides {
                     message_id: format!("m{}", i + 1),
                     turn_index: i,
-                    stop_reason: Some(Some("end_turn".into())),
+                    stop_reason: Some(Some(StopReason::EndTurn)),
                     ..Default::default()
                 })
             })
@@ -942,7 +944,7 @@ mod tests {
                 turn_index: 0,
                 session_id: Some("A".into()),
                 has_edits: Some(true),
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
@@ -950,21 +952,21 @@ mod tests {
                 turn_index: 1,
                 session_id: Some("A".into()),
                 has_edits: Some(true),
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "a3".into(),
                 turn_index: 2,
                 session_id: Some("A".into()),
-                stop_reason: Some(Some("end_turn".into())),
+                stop_reason: Some(Some(StopReason::EndTurn)),
                 ..Default::default()
             }),
             turn(TurnOverrides {
                 message_id: "b1".into(),
                 turn_index: 0,
                 session_id: Some("B".into()),
-                stop_reason: Some(Some("tool_use".into())),
+                stop_reason: Some(Some(StopReason::ToolUse)),
                 ..Default::default()
             }),
         ];

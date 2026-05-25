@@ -190,5 +190,15 @@
         }
       ]
     }
+  },
+  "stopReasons": {
+    "endTurn": 0,
+    "maxTokens": 0,
+    "pauseTurn": 0,
+    "stopSequence": 0,
+    "toolUse": 0,
+    "refusal": 0,
+    "silent": 0,
+    "none": 7
   }
 }

@@ -57,6 +57,7 @@ impl Connections {
         let mut burn = Connection::open(burn_path)?;
         configure_pragmas(&burn)?;
         burn.execute_batch(BURN_DDL)?;
+        migrate_burn_schema(&burn)?;
         verify_schema_version(&burn)?;
 
         // Bootstrap from `ledger.jsonl` sibling if the sqlite mirror is
@@ -90,6 +91,66 @@ fn configure_pragmas(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     Ok(())
+}
+
+/// In-place forward migrations for `burn.sqlite`. Re-applying is a no-op so
+/// open is idempotent; called BEFORE [`verify_schema_version`] so the
+/// version we read reflects the post-migration state.
+///
+/// Migrations are tagged by destination schema version; each step is
+/// guarded so re-running `Ledger::open` after a crash mid-migration picks
+/// up where it left off without surfacing `duplicate column name` errors.
+fn migrate_burn_schema(conn: &Connection) -> Result<()> {
+    let current_version: u32 = conn
+        .query_row(
+            "SELECT schema_version FROM archive_state WHERE id = 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|v| v as u32)
+        .unwrap_or(SCHEMA_VERSION);
+
+    if current_version < 2 {
+        // v1 → v2: add the denormalized `turns.stop_reason` column for
+        // outcome aggregation. `CREATE TABLE IF NOT EXISTS` in the DDL
+        // already covers fresh DBs (the column lives in the DDL); this
+        // branch handles existing v1 ledgers whose `turns` table
+        // pre-existed the bump. Probe for the column first so re-runs
+        // after a partial migration don't trip the `duplicate column
+        // name` error.
+        if !column_exists(conn, "turns", "stop_reason")? {
+            conn.execute("ALTER TABLE turns ADD COLUMN stop_reason TEXT", [])?;
+        }
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 2 WHERE id = 1",
+            [],
+        )?;
+    }
+
+    // The `idx_turns_stop_reason` index is created here rather than in
+    // the static DDL so a legacy v1 table (no `stop_reason` column yet)
+    // doesn't fail the DDL pre-pass. By this point the column either
+    // existed all along (fresh v2 DDL) or was just added by the v1 → v2
+    // step above, so the index is safe to create idempotently every
+    // open.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_turns_stop_reason \
+         ON turns(stop_reason) WHERE stop_reason IS NOT NULL",
+        [],
+    )?;
+
+    Ok(())
+}
+
+/// True iff `column` is declared on `table`. Uses `PRAGMA table_info` rather
+/// than parsing `sqlite_master` so STRICT vs non-strict + quoted identifiers
+/// both work.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(names.iter().any(|n| n == column))
 }
 
 fn verify_schema_version(conn: &Connection) -> Result<()> {
