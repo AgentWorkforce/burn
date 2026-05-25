@@ -115,11 +115,22 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         // outcome aggregation. `CREATE TABLE IF NOT EXISTS` in the DDL
         // already covers fresh DBs (the column lives in the DDL); this
         // branch handles existing v1 ledgers whose `turns` table
-        // pre-existed the bump. Probe for the column first so re-runs
-        // after a partial migration don't trip the `duplicate column
-        // name` error.
-        if !column_exists(conn, "turns", "stop_reason")? {
-            conn.execute("ALTER TABLE turns ADD COLUMN stop_reason TEXT", [])?;
+        // pre-existed the bump.
+        //
+        // We try the `ALTER TABLE` unconditionally and swallow the
+        // `duplicate column name` failure rather than pre-checking with
+        // `PRAGMA table_info`. The check-then-act sequence is racy under
+        // concurrent ledger opens: two processes can both observe the
+        // column missing, both issue the `ALTER`, and the second loses.
+        // Letting SQLite arbitrate via the duplicate-column error keeps
+        // the migration genuinely idempotent. We deliberately don't
+        // catch the `SqliteFailure(_, None)` shape — that's too broad
+        // and would mask real schema breakage.
+        match conn.execute("ALTER TABLE turns ADD COLUMN stop_reason TEXT", []) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") => {}
+            Err(e) => return Err(e.into()),
         }
         conn.execute(
             "UPDATE archive_state SET schema_version = 2 WHERE id = 1",
@@ -140,17 +151,6 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
     )?;
 
     Ok(())
-}
-
-/// True iff `column` is declared on `table`. Uses `PRAGMA table_info` rather
-/// than parsing `sqlite_master` so STRICT vs non-strict + quoted identifiers
-/// both work.
-fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(names.iter().any(|n| n == column))
 }
 
 fn verify_schema_version(conn: &Connection) -> Result<()> {
