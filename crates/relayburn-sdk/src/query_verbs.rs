@@ -5702,13 +5702,14 @@ mod fingerprint_bench {
         // The #440 target was <10 ms on a 100k-row ledger. The
         // session-scoped path easily clears it (sees ~1k rows via
         // `idx_turns_session`). The all-sessions path on the synthetic
-        // 100k fixture is dominated by `SUM(LENGTH(record_json))`'s
-        // sequential scan over ~50 MB of JSON — release builds land at
-        // ~30 ms here. The fix would be a stored `byte_size` column on
-        // `turns`, which is a schema bump deliberately scoped out of
-        // #440 (poll-only primitive). Assert a generous all-sessions
-        // bound so a regression that pushes well past the scan-rate
-        // envelope still flags.
+        // 100k fixture is dominated by
+        // `SUM(LENGTH(CAST(record_json AS BLOB)))`'s sequential scan
+        // over ~50 MB of JSON — release builds land at ~30 ms here.
+        // The fix would be a stored `byte_size` column on `turns`,
+        // which is a schema bump deliberately scoped out of #440
+        // (poll-only primitive). Assert a generous all-sessions bound
+        // so a regression that pushes well past the scan-rate envelope
+        // still flags.
         assert!(
             sess_per < std::time::Duration::from_millis(10),
             "session-scope per-call {sess_per:?} exceeds the 10ms #440 target"

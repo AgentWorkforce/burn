@@ -175,11 +175,14 @@ impl Ledger {
     // - `turns` is the right table to fingerprint. It captures every new
     //   turn (count up), every re-ingest of a session that updates a row
     //   (`ts` up — the upstream session log's monotonic timestamp), and
-    //   every content shape change (sum of `LENGTH(record_json)` up). The
-    //   other derivable tables (`compactions`, `tool_result_events`, …)
-    //   change in lockstep with `turns` during ingest, so fingerprinting
-    //   `turns` is sufficient for the "did anything change" question
-    //   without a multi-table aggregate.
+    //   every content shape change (sum of `LENGTH(CAST(record_json AS
+    //   BLOB))` up — the BLOB cast forces byte counting, since SQLite's
+    //   `LENGTH(TEXT)` would count UTF-8 codepoints and miss byte-shape
+    //   rewrites that swap ASCII for non-ASCII at equal codepoint count).
+    //   The other derivable tables (`compactions`, `tool_result_events`,
+    //   …) change in lockstep with `turns` during ingest, so
+    //   fingerprinting `turns` is sufficient for the "did anything
+    //   change" question without a multi-table aggregate.
     //
     // - We use `ts` (the upstream message timestamp string) rather than
     //   an `updated_at` row clock because there isn't one — the 2.0
@@ -191,11 +194,14 @@ impl Ledger {
     //   want, so we accept the marginal aliasing risk noted in #440.
     //
     // - The query runs as a single `SELECT COUNT(*), MAX(ts),
-    //   COALESCE(SUM(LENGTH(record_json)), 0) FROM turns WHERE …` — on
-    //   the canonical `turns` schema, the `COUNT` walks the primary key,
-    //   the `MAX(ts)` rides the `idx_turns_ts` index, and the `SUM` is
-    //   the only full-row scan. Empirically sub-millisecond on the
-    //   benches in `LedgerHandle::fingerprint`.
+    //   COALESCE(SUM(LENGTH(CAST(record_json AS BLOB))), 0) FROM turns
+    //   WHERE …` — on the canonical `turns` schema, the `COUNT` walks
+    //   the primary key, the `MAX(ts)` rides the `idx_turns_ts` index,
+    //   and the `SUM` is the only full-row scan. The BLOB cast keeps
+    //   the same scan cost (still has to read each `record_json` cell)
+    //   but switches `LENGTH` from codepoint to byte counting, which
+    //   is what the fingerprint actually wants. Empirically
+    //   sub-millisecond on the benches in `LedgerHandle::fingerprint`.
 
     /// Compute the ledger fingerprint `{count}:{max_mtime_unix}:{total_bytes}`
     /// for the given scope. See [`LedgerFingerprintScope`] for the
@@ -220,7 +226,7 @@ impl Ledger {
         let sql = format!(
             "SELECT COUNT(*), \
              COALESCE(CAST(strftime('%s', MAX(ts)) AS TEXT), ''), \
-             COALESCE(SUM(LENGTH(record_json)), 0) \
+             COALESCE(SUM(LENGTH(CAST(record_json AS BLOB))), 0) \
              FROM turns {where_sql}"
         );
         // rusqlite's `params_from_iter` adapter handles the dynamic
