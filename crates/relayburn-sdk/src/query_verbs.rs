@@ -3802,10 +3802,9 @@ fn resolve_config_summary(home: Option<&Path>) -> Result<StateConfigSummary> {
 // ---------------------------------------------------------------------------
 // fingerprint — cheap polling primitive (count:max_ts:total_bytes)
 //
-// Borrows from agent-profiler's `/api/traces` `version` field: a stable
-// `{count}:{maxMtime}:{totalSize}` triple lets MCP clients and future
+// A stable `{count}:{maxMtime}:{totalSize}` triple lets MCP clients and
 // dashboards detect "did anything change" without re-querying or
-// re-ingesting. See AgentWorkforce/burn#440.
+// re-ingesting.
 //
 // The actual SQL lives on `RawLedger::ledger_fingerprint`; the verb here
 // is the wire-shaped wrapper (a typed `Fingerprint(String)` newtype
@@ -3838,8 +3837,7 @@ impl FingerprintScope {
 }
 
 /// `{count}:{max_ts}:{total_bytes}` triple. String wrapper so callers
-/// compare with bare equality (`a == b`); matches agent-profiler's
-/// `version` field semantics.
+/// compare with bare equality (`a == b`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Fingerprint(pub String);

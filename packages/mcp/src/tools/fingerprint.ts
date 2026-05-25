@@ -24,10 +24,8 @@ export interface FingerprintDeps {
 /**
  * `burn__fingerprint` — cheap polling primitive over the ledger.
  *
- * Returns a `{count}:{maxMtimeUnix}:{totalBytes}` string borrowed from
- * agent-profiler's `/api/traces` version field. Clients store the
- * last-seen value and skip work when it's unchanged. See
- * AgentWorkforce/burn#440.
+ * Returns a `{count}:{maxMtimeUnix}:{totalBytes}` string. Clients store
+ * the last-seen value and skip work when it's unchanged.
  */
 export function createFingerprintTool(deps: FingerprintDeps = {}): ToolDefinition {
   const callFingerprint = deps.fingerprint ?? sdkFingerprint;

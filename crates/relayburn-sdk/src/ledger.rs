@@ -166,8 +166,7 @@ impl Ledger {
     // --- ledger fingerprint -----------------------------------------------
     //
     // Cheap polling primitive: a `{count}:{max_ts}:{total_bytes}` triple
-    // computed over `turns` in a single SQL roundtrip. Mirrors
-    // agent-profiler's `/api/traces` `version` field — clients store the
+    // computed over `turns` in a single SQL roundtrip. Clients store the
     // last-seen value and skip work when the new fingerprint matches.
     //
     // Implementation notes:
