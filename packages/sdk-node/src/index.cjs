@@ -88,6 +88,7 @@ module.exports = {
   ingest: async (opts) => coerceBigInts(await binding.ingest(opts)),
   summary: async (opts) => coerceBigInts(await binding.summary(opts)),
   sessionCost: async (opts) => coerceBigInts(await binding.sessionCost(opts)),
+  fingerprint: async (opts) => coerceBigInts(await binding.fingerprint(opts)),
   overhead: async (opts) => coerceBigInts(await binding.overhead(opts)),
   overheadTrim: async (opts) => coerceBigInts(await binding.overheadTrim(opts)),
   hotspots: async (opts) => coerceBigInts(await binding.hotspots(opts)),
