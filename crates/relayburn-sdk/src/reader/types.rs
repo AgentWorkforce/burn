@@ -329,10 +329,15 @@ impl StopReason {
             })
             .collect();
         match normalized.as_str() {
-            "end-turn" => Some(Self::EndTurn),
+            // OpenAI / AI-SDK convention emits `"stop"` for ordinary
+            // end-of-turn completions (this is what opencode forwards),
+            // so it maps to `EndTurn`, not `StopSequence`. Anthropic's
+            // actual stop-sequence outcome is the explicit
+            // `"stop_sequence"` / `"stop-sequence"` variant below.
+            "end-turn" | "stop" => Some(Self::EndTurn),
             "max-tokens" | "length" => Some(Self::MaxTokens),
             "pause-turn" => Some(Self::PauseTurn),
-            "stop-sequence" | "stop" => Some(Self::StopSequence),
+            "stop-sequence" => Some(Self::StopSequence),
             // `tool-calls` is the opencode AI-SDK wire form; `tool-use`
             // is the Anthropic one and our canonical kebab spelling.
             "tool-use" | "tool-calls" => Some(Self::ToolUse),
@@ -770,6 +775,23 @@ mod tests {
         assert_eq!(
             StopReason::from_wire("pause-turn"),
             Some(StopReason::PauseTurn)
+        );
+        // OpenAI / AI-SDK (and therefore opencode) emit a bare `"stop"`
+        // for normal end-of-turn completions — that's `EndTurn`, NOT
+        // `StopSequence`. Misclassifying these would skew the
+        // `burn summary` outcome buckets every time opencode wraps an
+        // OpenAI-shaped provider.
+        assert_eq!(StopReason::from_wire("stop"), Some(StopReason::EndTurn));
+        // Anthropic's actual stop-sequence outcome is the explicit
+        // `stop_sequence` (snake) / `stop-sequence` (kebab) variants and
+        // those still resolve to `StopSequence`.
+        assert_eq!(
+            StopReason::from_wire("stop_sequence"),
+            Some(StopReason::StopSequence)
+        );
+        assert_eq!(
+            StopReason::from_wire("stop-sequence"),
+            Some(StopReason::StopSequence)
         );
         // Unknown / harness-specific strings don't map.
         assert_eq!(StopReason::from_wire("magic"), None);
