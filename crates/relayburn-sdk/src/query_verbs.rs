@@ -795,6 +795,15 @@ pub struct SummaryGroupedReport {
     /// Per-outcome turn counts (issue #437). Always populated; presenters
     /// decide whether to render the line based on `is_empty()`.
     pub stop_reasons: StopReasonCounts,
+    /// Paired / orphan subagent transcript counts (issue #435). Populated
+    /// by a lazy walk over the Claude `~/.claude/projects/` tree at
+    /// summary time — when no sidecars exist anywhere reachable the
+    /// `read_dir` short-circuits and the field stays at
+    /// `SubagentCounts::default()`. Presenters render the
+    /// `subagents: X paired, Y orphan` line only when
+    /// `!subagents.is_empty()`.
+    #[serde(default, skip_serializing_if = "crate::reader::SubagentCounts::is_empty")]
+    pub subagents: crate::reader::SubagentCounts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<QualityResult>,
 }
@@ -969,6 +978,24 @@ impl LedgerHandle {
                     None
                 };
                 let stop_reasons = StopReasonCounts::from_turns(&turns);
+                // Lazy walk over `~/.claude/projects/` (or the configured
+                // override) for the `subagents: X paired, Y orphan`
+                // summary line (issue #435). The walk short-circuits when
+                // the projects root is missing or every session lacks a
+                // `subagents/` subdir — i.e. zero cost on the vast
+                // majority of summaries that don't hit a session with
+                // sidecar transcripts.
+                //
+                // When the summary itself is scoped (any of `--session`,
+                // `--project`, `--since`, `--workflow`, `--tags`,
+                // `--agent`, `--providers`) we restrict the sidecar
+                // walk to the same session-id set the rest of the
+                // summary covers; otherwise the line could report
+                // paired/orphan counts from sessions the user excluded.
+                // Un-filtered runs keep the original global walk
+                // behavior.
+                let session_filter = summary_subagent_session_filter(&opts, &turns);
+                let subagents = compute_summary_subagent_counts(session_filter.as_ref());
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
                     group_by,
                     tag_key,
@@ -980,6 +1007,7 @@ impl LedgerHandle {
                     per_cell_fidelity,
                     replacement_savings,
                     stop_reasons,
+                    subagents,
                     quality,
                 }))
             }
@@ -1344,6 +1372,76 @@ fn collect_summary_agent_session_tree(
         }
     }
     sessions
+}
+
+/// Resolve the Claude projects root and run [`count_subagents_under`]
+/// against it for the `subagents: X paired, Y orphan` summary line.
+///
+/// We honor `BURN_CLAUDE_PROJECTS_DIR` so tests (and integration
+/// fixtures) can point at a sandbox without scanning the developer's
+/// `~/.claude`. The env var also lets the CLI summary remain
+/// reproducible against a fixture-only test suite. When unset we fall
+/// back to `$HOME/.claude/projects`; if that doesn't exist the
+/// underlying walk returns `(0, 0)` and the summary line is skipped.
+///
+/// `session_filter` matches the rest of the summary's filter set:
+/// `None` means "no filter — count every session reachable from the
+/// projects root" (the un-filtered `burn summary` path); `Some(set)`
+/// means "only count sidecars whose session id is in `set`" so a
+/// `burn summary --session A` / `--project B` / `--since 24h` run gets
+/// a subagent count scoped to the same sessions the rest of the
+/// numbers cover.
+fn compute_summary_subagent_counts(
+    session_filter: Option<&HashSet<String>>,
+) -> crate::reader::SubagentCounts {
+    use crate::reader::count_subagents_under;
+    let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
+        std::path::PathBuf::from(p)
+    } else {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        home.join(".claude").join("projects")
+    };
+    count_subagents_under(&root, session_filter)
+}
+
+/// Build the session-id filter set the subagent counter should descend
+/// into. Returns `None` when `opts` carries no scoping filters, which
+/// preserves the original "scan every reachable session" behavior for
+/// the bare `burn summary` invocation. Returns `Some(set)` when any
+/// filter (`session`, `project`, `since`, `workflow`, `tags`, `agent`,
+/// `providers`) is active — `set` is the session ids that survived
+/// every filter, derived from the already-filtered `turns` slice.
+///
+/// Plumbing the filter via the filtered turn set (instead of e.g.
+/// duplicating the SQL filters inside the walker) ensures the count
+/// can never diverge from the rest of the summary numbers: anything
+/// that drops a session from the row aggregates also drops it from the
+/// subagent count.
+fn summary_subagent_session_filter(
+    opts: &SummaryReportOptions,
+    turns: &[TurnRecord],
+) -> Option<HashSet<String>> {
+    let has_filter = opts.session.is_some()
+        || opts.project.is_some()
+        || opts.since.is_some()
+        || opts.workflow.is_some()
+        || opts.agent.is_some()
+        || opts
+            .tags
+            .as_ref()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false)
+        || opts
+            .providers
+            .as_ref()
+            .map(|p| !p.is_empty())
+            .unwrap_or(false);
+    if !has_filter {
+        return None;
+    }
+    Some(turns.iter().map(|t| t.session_id.clone()).collect())
 }
 
 fn compute_summary_quality_for_turns(
@@ -4387,6 +4485,119 @@ mod tests {
         assert_eq!(s.stop_reasons.end_turn, 0);
     }
 
+    /// Issue #449 review follow-up: when no filters are set, the
+    /// subagent count helper must return `None` so the underlying
+    /// walker preserves its original "count every reachable session"
+    /// behavior (the global-summary path).
+    #[test]
+    fn summary_subagent_session_filter_returns_none_for_unfiltered_summary() {
+        let opts = SummaryReportOptions::default();
+        let turns: Vec<TurnRecord> = Vec::new();
+        assert!(summary_subagent_session_filter(&opts, &turns).is_none());
+    }
+
+    /// Issue #449 review follow-up: when `--session` (or any other
+    /// scoping filter) is active, the subagent count helper must
+    /// return `Some(set)` containing exactly the session ids that
+    /// survived filtering. This is the linkage that stops the
+    /// `subagents: X paired, Y orphan` line from including sidecars
+    /// from sessions the user excluded.
+    #[test]
+    fn summary_subagent_session_filter_collects_session_ids_when_filtered() {
+        let opts = SummaryReportOptions {
+            session: Some("sess-a".into()),
+            ..SummaryReportOptions::default()
+        };
+        let mk = |session_id: &str| TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: session_id.into(),
+            session_path: None,
+            message_id: format!("m-{session_id}"),
+            turn_index: 0,
+            ts: "2026-04-23T00:00:00.000Z".into(),
+            model: "claude-sonnet-4-6".into(),
+            project: None,
+            project_key: None,
+            usage: Usage::default(),
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        };
+        let turns = vec![mk("sess-a"), mk("sess-a")];
+        let filter = summary_subagent_session_filter(&opts, &turns)
+            .expect("expected Some(set) when --session is active");
+        assert!(filter.contains("sess-a"));
+        assert_eq!(filter.len(), 1, "duplicates collapse into the set");
+    }
+
+    /// Each non-default filter on `SummaryReportOptions` must flip the
+    /// helper into "filtered" mode. Iterating over the surface keeps
+    /// us from quietly losing scoping when a new filter is added.
+    #[test]
+    fn summary_subagent_session_filter_treats_every_filter_as_scoping() {
+        let turns: Vec<TurnRecord> = Vec::new();
+        let cases: Vec<(&str, SummaryReportOptions)> = vec![
+            (
+                "project",
+                SummaryReportOptions {
+                    project: Some("/tmp/proj".into()),
+                    ..SummaryReportOptions::default()
+                },
+            ),
+            (
+                "since",
+                SummaryReportOptions {
+                    since: Some("24h".into()),
+                    ..SummaryReportOptions::default()
+                },
+            ),
+            (
+                "workflow",
+                SummaryReportOptions {
+                    workflow: Some("wf-1".into()),
+                    ..SummaryReportOptions::default()
+                },
+            ),
+            (
+                "agent",
+                SummaryReportOptions {
+                    agent: Some("agent-x".into()),
+                    ..SummaryReportOptions::default()
+                },
+            ),
+            (
+                "providers",
+                SummaryReportOptions {
+                    providers: Some(vec!["anthropic".into()]),
+                    ..SummaryReportOptions::default()
+                },
+            ),
+            (
+                "tags",
+                SummaryReportOptions {
+                    tags: Some({
+                        let mut m = BTreeMap::new();
+                        m.insert("k".into(), "v".into());
+                        m
+                    }),
+                    ..SummaryReportOptions::default()
+                },
+            ),
+        ];
+        for (label, opts) in cases {
+            assert!(
+                summary_subagent_session_filter(&opts, &turns).is_some(),
+                "expected filter to engage for {label}"
+            );
+        }
+    }
+
     #[test]
     fn summary_report_by_tool_uses_predecessor_before_since_boundary() {
         let (_dir, handle) = fixture_handle();
@@ -5227,9 +5438,10 @@ mod tests {
         assert_eq!(s.burn.rows.stamps, 0);
         assert_eq!(s.burn.tracked_rows, 0);
         assert_eq!(s.content.rows, 0);
-        // v3 after #436 chained `tool_result_events.output_bytes` /
-        // `output_truncated` columns onto #437's v2 `turns.stop_reason`.
-        assert_eq!(s.archive.schema_version, 3);
+        // v4 after #435 chained `turns.subagent_id` onto #436's v3
+        // (`tool_result_events.output_bytes` / `output_truncated`) and
+        // #437's v2 (`turns.stop_reason`).
+        assert_eq!(s.archive.schema_version, 4);
         assert!(s.archive.last_built_at.is_none());
         assert!(s.archive.last_rebuild_at.is_none());
     }

@@ -41,7 +41,20 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   bytes alongside post-truncation tokens. Pre-v3 rows leave the new
 ///   columns NULL; `burn state rebuild` backfills them by re-running ingest.
 ///   (#436)
-pub const SCHEMA_VERSION: u32 = 3;
+/// - `4`: 3.0 release — `turns` gains nullable `subagent_id` column so
+///   subagent transcript rows (sidechain in the parent file and sidecars
+///   under `<sessionId>/subagents/`) can be queried structurally without
+///   re-parsing `record_json`. New inserts denormalize
+///   `TurnRecord.subagent.agent_id`; pre-v4 rows leave the column NULL
+///   and are backfilled by `burn state rebuild`. (#435)
+///
+/// ## Renumbering note for reviewers
+///
+/// This branch built on main at v3 (post-#444). If a parallel PR also
+/// claims v4 before this lands, renumber here AND in the matching
+/// `migrate_burn_schema` step in `db.rs` — the migration is gated
+/// `if current_version < N` so the renumber is mechanical.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.
@@ -67,6 +80,13 @@ CREATE TABLE IF NOT EXISTS turns (
     -- bump without a backfill. New inserts populate this directly from the
     -- parsed `TurnRecord.stop_reason`. See issue #437.
     stop_reason         TEXT,
+    -- v4: subagent agent id for sidechain / sidecar-sourced turns
+    -- (see `crate::reader::types::Subagent.agent_id`). Nullable so
+    -- non-subagent rows and Codex / opencode imports survive the bump
+    -- without a backfill. New inserts denormalize
+    -- `TurnRecord.subagent.agent_id`; pre-v4 rows stay NULL and are
+    -- backfilled by `burn state rebuild`. See issue #435.
+    subagent_id         TEXT,
     PRIMARY KEY (source, session_id, message_id)
 ) STRICT;
 
@@ -176,7 +196,7 @@ CREATE TABLE IF NOT EXISTS archive_state (
 );
 
 INSERT INTO archive_state (id, schema_version)
-    VALUES (1, 3)
+    VALUES (1, 4)
     ON CONFLICT(id) DO NOTHING;
 "#;
 

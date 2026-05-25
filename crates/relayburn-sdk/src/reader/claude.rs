@@ -47,6 +47,13 @@ use crate::reader::types::{
 };
 use crate::reader::user_turn::{HeuristicCounter, TokenCounter};
 
+// Discovery + pairing for Task subagent sidecar transcripts. Public so the
+// SDK surface (`crate::reader::{discover_subagents, pair_to_main,
+// SubagentTranscript}`) and the ingest path can both reach it. Lazy —
+// callers stat-then-walk only when something asks for subagents. See
+// AgentWorkforce/burn#435.
+pub mod subagents;
+
 // ---------------------------------------------------------------------------
 // Public surface.
 // ---------------------------------------------------------------------------

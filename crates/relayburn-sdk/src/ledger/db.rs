@@ -161,6 +161,26 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current_version < 4 {
+        // v3 → v4: add nullable `turns.subagent_id` so subagent rows
+        // (sidechain rows in the parent file today; sidecar transcripts
+        // under `<sessionId>/subagents/` once the discovery path is
+        // wired into ingest) are queryable structurally without
+        // re-deserializing `record_json`. Same duplicate-column-only
+        // swallow pattern as the earlier steps. See
+        // AgentWorkforce/burn#435.
+        match conn.execute("ALTER TABLE turns ADD COLUMN subagent_id TEXT", []) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") => {}
+            Err(e) => return Err(e.into()),
+        }
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 4 WHERE id = 1",
+            [],
+        )?;
+    }
+
     // The `idx_turns_stop_reason` index is created here rather than in
     // the static DDL so a legacy v1 table (no `stop_reason` column yet)
     // doesn't fail the DDL pre-pass. By this point the column either
@@ -170,6 +190,18 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_turns_stop_reason \
          ON turns(stop_reason) WHERE stop_reason IS NOT NULL",
+        [],
+    )?;
+
+    // `idx_turns_subagent_id` lives here for the same reason as
+    // `idx_turns_stop_reason`: a legacy table without the column would
+    // otherwise blow up the DDL pre-pass. Partial-index predicate
+    // (`WHERE subagent_id IS NOT NULL`) keeps the index size tracking
+    // subagent row count, not the full turn count — subagent rows are
+    // a tiny minority on most ledgers.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_turns_subagent_id \
+         ON turns(subagent_id) WHERE subagent_id IS NOT NULL",
         [],
     )?;
 

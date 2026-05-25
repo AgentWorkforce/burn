@@ -47,3 +47,6 @@ pub use claude::{
     ParseIncrementalResult as ClaudeParseIncrementalResult, ParseOptions as ClaudeParseOptions,
     ParseResult as ClaudeParseResult, ReconcileClaudeRelationshipsInput,
 };
+pub use claude::subagents::{
+    count_subagents_under, discover_subagents, pair_to_main, SubagentCounts, SubagentTranscript,
+};
