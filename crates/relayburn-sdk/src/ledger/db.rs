@@ -140,9 +140,10 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
 
     if current_version < 3 {
         // v2 → v3: add nullable `output_bytes` / `output_truncated` to
-        // `tool_result_events` for hotspots-by-bytes ranking. Idempotent:
-        // the duplicate-column error from SQLite is the signal we've
-        // already migrated.
+        // `tool_result_events` for hotspots-by-bytes ranking. Same
+        // duplicate-column-only swallow pattern as the v1 → v2 step —
+        // any other `SqliteFailure` (including `(_, None)`) must
+        // propagate rather than silently advance `schema_version`.
         for ddl in [
             "ALTER TABLE tool_result_events ADD COLUMN output_bytes INTEGER",
             "ALTER TABLE tool_result_events ADD COLUMN output_truncated INTEGER",
@@ -151,7 +152,6 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
                 Ok(_) => {}
                 Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
                     if msg.contains("duplicate column name") => {}
-                Err(rusqlite::Error::SqliteFailure(_, None)) => {}
                 Err(e) => return Err(e.into()),
             }
         }

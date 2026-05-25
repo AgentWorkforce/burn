@@ -23,7 +23,7 @@
 //!    discriminator and emits the inner `HotspotsAttributionResult`
 //!    shape directly (TS contract).
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use relayburn_sdk::{
     hotspots as sdk_hotspots, ingest_all, AttributionMethod, BashAggregation, BashVerbAggregation,
     FileAggregation, HotspotsAttributionResult, HotspotsExcludedBreakdown,
@@ -100,13 +100,15 @@ pub struct HotspotsArgs {
     /// truncated to ~0 tokens still surface (#436). JSON output is
     /// unaffected — both rankings ship every field; downstream consumers
     /// pick their own sort.
-    #[arg(long = "rank-by", value_name = "DIM", default_value = "cost")]
-    pub rank_by: String,
+    #[arg(long = "rank-by", value_name = "DIM", value_enum, default_value_t = RankBy::Cost)]
+    pub rank_by: RankBy,
 }
 
 /// Sort dimension for the per-tool human-mode tables. Mirrors `--rank-by`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RankBy {
+/// `ValueEnum` so clap validates at parse time — invalid values fail before
+/// any ingest work runs, in both human and `--json` modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RankBy {
     Cost,
     Bytes,
 }
@@ -271,19 +273,8 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         emit_json(&result)?;
         return Ok(0);
     }
-    let rank_by = match args.rank_by.as_str() {
-        "cost" => RankBy::Cost,
-        "bytes" => RankBy::Bytes,
-        other => {
-            eprintln!(
-                "burn: unknown --rank-by value \"{}\". Valid: cost, bytes",
-                other
-            );
-            return Ok(2);
-        }
-    };
     let limit = if args.all { usize::MAX } else { DEFAULT_TOP_N };
-    emit_human(&result, limit, args.findings, rank_by);
+    emit_human(&result, limit, args.findings, args.rank_by);
     Ok(0)
 }
 
