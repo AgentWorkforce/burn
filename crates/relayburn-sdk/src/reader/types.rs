@@ -375,6 +375,15 @@ pub enum ActivityCategory {
     Reasoning,
     Brainstorming,
     Conversation,
+    /// Synthetic activity for a Claude slash-command (`/review`, `/init`,
+    /// custom skill) detected as a structural triad in the JSONL
+    /// transcript: caveat row → invocation row (`parentUuid == caveat.uuid`)
+    /// → stdout row (`parentUuid == invocation.uuid`). The three underlying
+    /// rows keep their own token attribution; `Skill` is a view that
+    /// collapses the triad into a single activity so per-category rollups
+    /// don't count one slash command three times. See
+    /// `classifier::detect_slash_triads` and AgentWorkforce/burn#438.
+    Skill,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

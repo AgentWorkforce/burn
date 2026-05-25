@@ -1057,6 +1057,271 @@ pub fn is_task_notification(row: &Map<String, Value>) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Slash-command triad detector — see #438.
+//
+// Claude Code's slash commands (`/review`, `/init`, custom skills) emit a
+// deterministic three-row sequence in the JSONL transcript:
+//
+//   caveat       — synthetic user row introducing the command. Body opens
+//                  with the literal `Caveat:` prefix and the row is the
+//                  apparent root of the parent chain for the next two
+//                  rows. Carries no real user intent — it's a harness
+//                  artifact.
+//   invocation   — user row whose `parentUuid == caveat.uuid`. Body
+//                  carries the synthetic command envelope:
+//                  `<command-name>`, `<command-message>`, optionally
+//                  `<command-args>`.
+//   stdout       — user row whose `parentUuid == invocation.uuid`. Body
+//                  carries the captured stdout in a `<local-command-stdout>`
+//                  block.
+//
+// The classifier historically treated each row as a separate activity,
+// which trebled the apparent activity count for sessions that lean on
+// slash commands. The detector here collapses the triad into one
+// synthetic `Skill` activity for downstream rollups; token attribution
+// stays on the underlying rows so `burn hotspots` isn't double-charged.
+//
+// Pinning detection on parent-UUID chain shape (not on the exact text
+// prefix of the caveat row) is deliberate: the literal `Caveat:` opener
+// has drifted across Claude Code versions, but the chain shape — three
+// rows linked caveat → invocation → stdout — has stayed stable. We use
+// the text markers `<command-name>` and `<local-command-stdout>` as
+// purpose checks on the invocation and stdout rows (so an unrelated
+// three-row chain that happens to look structurally similar — e.g. a
+// real user prompt followed by an assistant reply followed by a tool
+// result — does NOT misdetect), but the chain-shape predicate carries
+// the primary signal. See `is_task_notification` (#442) for the same
+// shape-AND-purpose pattern.
+
+const CAVEAT_PREFIX: &str = "Caveat:";
+const COMMAND_NAME_OPEN: &str = "<command-name>";
+const COMMAND_NAME_CLOSE: &str = "</command-name>";
+const LOCAL_STDOUT_OPEN: &str = "<local-command-stdout>";
+
+/// One detected slash-command triad: the three row indices into the
+/// original `rows` slice and the extracted skill name (when the
+/// invocation body exposed a `<command-name>` block; `None` otherwise).
+///
+/// Indices are stable references into the caller's input — the
+/// downstream wiring in the Claude reader uses them to override per-row
+/// activity attribution without re-walking the input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashTriad {
+    pub caveat_idx: usize,
+    pub invocation_idx: usize,
+    pub stdout_idx: usize,
+    pub skill_name: Option<String>,
+}
+
+/// Detect Claude slash-command triads in a flat slice of raw JSONL rows
+/// (already-parsed as `serde_json::Map`s).
+///
+/// The walk is O(n): build a `uuid -> index` index once, then for each
+/// candidate caveat row look up the two children by their UUID chain.
+/// Each row is consumed by at most one triad — the row-index sets are
+/// disjoint by construction (we mark each used index in a bitset).
+///
+/// Caller obligations:
+///
+/// - The slice must preserve JSONL emission order. The detector does
+///   not sort or filter — it inspects rows in place.
+/// - Rows are matched on the parent-UUID chain shape; text checks on
+///   the invocation and stdout rows are purpose guards that block
+///   structurally-similar but semantically-different chains (e.g. a
+///   normal user → assistant → tool_result chain) from misdetecting.
+pub fn detect_slash_triads(rows: &[Map<String, Value>]) -> Vec<SlashTriad> {
+    if rows.len() < 3 {
+        return Vec::new();
+    }
+    // Track rows already consumed by a prior triad so a single row can't
+    // be the invocation of triad A and the caveat of triad B simultaneously.
+    let mut consumed = vec![false; rows.len()];
+    let mut out: Vec<SlashTriad> = Vec::new();
+
+    for (caveat_idx, caveat) in rows.iter().enumerate() {
+        if consumed[caveat_idx] {
+            continue;
+        }
+        if !is_caveat_row(caveat) {
+            continue;
+        }
+        let caveat_uuid = match caveat.get("uuid").and_then(Value::as_str) {
+            Some(u) if !u.is_empty() => u,
+            _ => continue,
+        };
+        // The invocation row must (a) point at the caveat via parentUuid
+        // AND (b) carry an invocation body. The latter is the purpose
+        // check that blocks an unrelated child of the caveat from
+        // promoting the chain into a Skill.
+        let (invocation_idx, invocation) = match find_first_unconsumed_child(
+            rows,
+            &consumed,
+            caveat_uuid,
+            caveat_idx + 1,
+            is_invocation_row,
+        ) {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let invocation_uuid = match invocation.get("uuid").and_then(Value::as_str) {
+            Some(u) if !u.is_empty() => u,
+            _ => continue,
+        };
+        let (stdout_idx, _stdout) = match find_first_unconsumed_child(
+            rows,
+            &consumed,
+            invocation_uuid,
+            invocation_idx + 1,
+            is_stdout_row,
+        ) {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let skill_name = extract_skill_name(invocation).or_else(|| extract_skill_name(caveat));
+        consumed[caveat_idx] = true;
+        consumed[invocation_idx] = true;
+        consumed[stdout_idx] = true;
+        out.push(SlashTriad {
+            caveat_idx,
+            invocation_idx,
+            stdout_idx,
+            skill_name,
+        });
+    }
+    out
+}
+
+/// True when this row matches the caveat shape: a user-typed row whose
+/// extracted text body begins with the `Caveat:` literal. We deliberately
+/// keep this lightweight — the structural check (caveat is the root of
+/// the chain a downstream invocation/stdout points at) carries the
+/// primary signal.
+fn is_caveat_row(row: &Map<String, Value>) -> bool {
+    if row.get("type").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    extract_row_text(row)
+        .map(|s| s.trim_start().starts_with(CAVEAT_PREFIX))
+        .unwrap_or(false)
+}
+
+/// True when this row carries a `<command-name>` block — the invocation
+/// payload of a slash command.
+fn is_invocation_row(row: &Map<String, Value>) -> bool {
+    if row.get("type").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    extract_row_text(row)
+        .map(|s| s.contains(COMMAND_NAME_OPEN))
+        .unwrap_or(false)
+}
+
+/// True when this row carries a `<local-command-stdout>` block — the
+/// stdout-capture payload of a slash command.
+fn is_stdout_row(row: &Map<String, Value>) -> bool {
+    if row.get("type").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    extract_row_text(row)
+        .map(|s| s.contains(LOCAL_STDOUT_OPEN))
+        .unwrap_or(false)
+}
+
+/// Walk forward from `start_idx` looking for the first not-yet-consumed
+/// row whose `parentUuid == parent_uuid` and which passes the purpose
+/// `check`. Returns `(idx, &row)` or `None`. Forward-only because the
+/// JSONL ordering for these rows is stable in practice (the harness
+/// writes caveat → invocation → stdout adjacently); a sibling reorder
+/// would land both the invocation and stdout *after* the caveat.
+fn find_first_unconsumed_child<'a, F>(
+    rows: &'a [Map<String, Value>],
+    consumed: &[bool],
+    parent_uuid: &str,
+    start_idx: usize,
+    check: F,
+) -> Option<(usize, &'a Map<String, Value>)>
+where
+    F: Fn(&Map<String, Value>) -> bool,
+{
+    for (offset, row) in rows[start_idx..].iter().enumerate() {
+        let idx = start_idx + offset;
+        if consumed[idx] {
+            continue;
+        }
+        let pu = row.get("parentUuid").and_then(Value::as_str).unwrap_or("");
+        if pu != parent_uuid {
+            continue;
+        }
+        if check(row) {
+            return Some((idx, row));
+        }
+    }
+    None
+}
+
+/// Pull `<command-name>...</command-name>` text from either the caveat
+/// or invocation row. Returns `None` if no marker block is present.
+fn extract_skill_name(row: &Map<String, Value>) -> Option<String> {
+    let text = extract_row_text(row)?;
+    let open = text.find(COMMAND_NAME_OPEN)?;
+    let after = &text[open + COMMAND_NAME_OPEN.len()..];
+    let close = after.find(COMMAND_NAME_CLOSE)?;
+    let raw = after[..close].trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Tolerate the optional leading `/` (matches the ghost_surface
+    // miner's accept-with-or-without convention).
+    Some(raw.trim_start_matches('/').to_string())
+}
+
+/// Extract the row's plain text body (string content, or concatenation
+/// of `text` / `content` strings inside an array body). Mirrors
+/// `extract_plain_user_text_from_obj` from the Claude reader closely
+/// enough to detect markers; we read the `content` field of a user-typed
+/// row whose body may be a string or a list of blocks.
+fn extract_row_text(row: &Map<String, Value>) -> Option<String> {
+    let body = row.get("message").and_then(|m| m.get("content"))?;
+    if let Some(s) = body.as_str() {
+        if s.is_empty() {
+            return None;
+        }
+        return Some(s.to_string());
+    }
+    let arr = body.as_array()?;
+    let mut parts: Vec<String> = Vec::new();
+    for block in arr {
+        let bo = match block.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        // `{"type":"text","text":"..."}` — assistant-style text block.
+        if bo.get("type").and_then(Value::as_str) == Some("text") {
+            if let Some(s) = bo.get("text").and_then(Value::as_str) {
+                if !s.is_empty() {
+                    parts.push(s.to_string());
+                }
+            }
+            continue;
+        }
+        // `{"type":"tool_result","content":"..."}` — string-content tool
+        // result envelope. The slash-command stdout row can ship its
+        // payload this way; we still want the marker visible to the
+        // purpose check.
+        if let Some(s) = bo.get("content").and_then(Value::as_str) {
+            if !s.is_empty() {
+                parts.push(s.to_string());
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -1433,5 +1698,218 @@ mod tests {
     fn task_notification_empty_row_is_false() {
         let r = row(serde_json::json!({}));
         assert!(!is_task_notification(&r));
+    }
+
+    // -----------------------------------------------------------------
+    // detect_slash_triads — see #438.
+    //
+    // Each test exercises one structural property of the detector in
+    // isolation. The fixture builder below mirrors the Claude JSONL
+    // shape just closely enough for the parent-UUID chain check and
+    // the `<command-name>` / `<local-command-stdout>` purpose checks
+    // to fire.
+    // -----------------------------------------------------------------
+
+    fn caveat(uuid: &str, parent: Option<&str>) -> Map<String, Value> {
+        row(serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "parentUuid": parent,
+            "message": { "role": "user", "content": "Caveat: harness preamble" },
+        }))
+    }
+
+    fn invocation(uuid: &str, parent: &str, name: &str) -> Map<String, Value> {
+        row(serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "parentUuid": parent,
+            "message": {
+                "role": "user",
+                "content": format!(
+                    "<command-message>{name} is running…</command-message>\n<command-name>/{name}</command-name>",
+                ),
+            },
+        }))
+    }
+
+    fn stdout_row(uuid: &str, parent: &str, body: &str) -> Map<String, Value> {
+        row(serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "parentUuid": parent,
+            "message": {
+                "role": "user",
+                "content": format!("<local-command-stdout>{body}</local-command-stdout>"),
+            },
+        }))
+    }
+
+    #[test]
+    fn detect_slash_triads_finds_two_distinct_triads() {
+        let rows = vec![
+            // Real user prompt before any slash commands; must not be touched.
+            row(serde_json::json!({
+                "type": "user",
+                "uuid": "u-prompt",
+                "parentUuid": serde_json::Value::Null,
+                "message": { "role": "user", "content": "hello" },
+            })),
+            // Triad 1: /review
+            caveat("u-cav-1", Some("u-prompt")),
+            invocation("u-inv-1", "u-cav-1", "review"),
+            stdout_row("u-out-1", "u-inv-1", "no issues found"),
+            // Interleaved real user prompt to prove the detector doesn't
+            // greedily span across unrelated rows.
+            row(serde_json::json!({
+                "type": "user",
+                "uuid": "u-prompt-2",
+                "parentUuid": "u-out-1",
+                "message": { "role": "user", "content": "thanks" },
+            })),
+            // Triad 2: /init
+            caveat("u-cav-2", Some("u-prompt-2")),
+            invocation("u-inv-2", "u-cav-2", "init"),
+            stdout_row("u-out-2", "u-inv-2", "initialized"),
+        ];
+        let triads = detect_slash_triads(&rows);
+        assert_eq!(triads.len(), 2, "two slash commands → two triads");
+        assert_eq!(triads[0].caveat_idx, 1);
+        assert_eq!(triads[0].invocation_idx, 2);
+        assert_eq!(triads[0].stdout_idx, 3);
+        assert_eq!(triads[0].skill_name.as_deref(), Some("review"));
+        assert_eq!(triads[1].caveat_idx, 5);
+        assert_eq!(triads[1].invocation_idx, 6);
+        assert_eq!(triads[1].stdout_idx, 7);
+        assert_eq!(triads[1].skill_name.as_deref(), Some("init"));
+    }
+
+    #[test]
+    fn detect_slash_triads_rejects_caveat_without_invocation_child() {
+        // A row whose text starts with `Caveat:` but whose downstream
+        // chain doesn't carry a `<command-name>` invocation MUST NOT
+        // promote into a triad. This is the false-positive guard: real
+        // user content can begin with the word "Caveat:" and the
+        // structural shape must still survive that overlap. Mirrors the
+        // shape-AND-purpose pattern from `is_task_notification` (#442).
+        let rows = vec![
+            row(serde_json::json!({
+                "type": "user",
+                "uuid": "u-cav",
+                "parentUuid": serde_json::Value::Null,
+                "message": { "role": "user", "content": "Caveat: this is a normal user prompt that happens to start with the literal word Caveat." },
+            })),
+            // A child user row, but it's a normal prompt — no
+            // `<command-name>` marker, so the purpose check fails.
+            row(serde_json::json!({
+                "type": "user",
+                "uuid": "u-child",
+                "parentUuid": "u-cav",
+                "message": { "role": "user", "content": "follow-up from the user" },
+            })),
+            row(serde_json::json!({
+                "type": "user",
+                "uuid": "u-grand",
+                "parentUuid": "u-child",
+                "message": { "role": "user", "content": "another follow-up" },
+            })),
+        ];
+        let triads = detect_slash_triads(&rows);
+        assert!(
+            triads.is_empty(),
+            "false-positive guard: no triad without an invocation row",
+        );
+    }
+
+    #[test]
+    fn detect_slash_triads_rejects_broken_parent_chain() {
+        // Caveat + invocation are present but the stdout row's parentUuid
+        // doesn't link back to the invocation. Structural shape is the
+        // primary signal — without the chain, no triad.
+        let rows = vec![
+            caveat("u-cav", None),
+            invocation("u-inv", "u-cav", "review"),
+            // Stdout body looks correct, but parents point at the wrong
+            // row (sibling of the caveat instead of child of invocation).
+            stdout_row("u-out", "u-cav", "should not match"),
+        ];
+        assert!(detect_slash_triads(&rows).is_empty());
+    }
+
+    #[test]
+    fn detect_slash_triads_extracts_skill_name_with_or_without_slash() {
+        // Skill name is extracted with the leading `/` trimmed off, and
+        // unconditionally returns `None` when neither row exposes a
+        // `<command-name>` block at all (e.g. a triad shape with a
+        // truncated invocation body).
+        let rows = vec![
+            caveat("u-cav", None),
+            invocation("u-inv", "u-cav", "init"), // → skill_name = "init"
+            stdout_row("u-out", "u-inv", "ok"),
+        ];
+        let triads = detect_slash_triads(&rows);
+        assert_eq!(triads[0].skill_name.as_deref(), Some("init"));
+
+        // Purpose check requires the `<command-name>` marker on the
+        // invocation row. A row that completes the parent-UUID chain but
+        // carries an empty / unrelated body MUST NOT be picked up as an
+        // invocation — the shape AND purpose checks both have to fire.
+        let rows_no_name = vec![
+            caveat("u-cav", None),
+            row(serde_json::json!({
+                "type": "user",
+                "uuid": "u-inv",
+                "parentUuid": "u-cav",
+                "message": { "role": "user", "content": "no command marker here" },
+            })),
+            stdout_row("u-out", "u-inv", "ok"),
+        ];
+        assert!(
+            detect_slash_triads(&rows_no_name).is_empty(),
+            "invocation without `<command-name>` doesn't match",
+        );
+    }
+
+    #[test]
+    fn detect_slash_triads_returns_empty_for_short_input() {
+        // Inputs shorter than three rows can't contain a triad. Cheap
+        // guard so the row-by-row scan doesn't waste work on tiny
+        // session prefixes.
+        let empty: Vec<Map<String, Value>> = Vec::new();
+        assert!(detect_slash_triads(&empty).is_empty());
+        let one = vec![caveat("u-cav", None)];
+        assert!(detect_slash_triads(&one).is_empty());
+        let two = vec![caveat("u-cav", None), invocation("u-inv", "u-cav", "x")];
+        assert!(detect_slash_triads(&two).is_empty());
+    }
+
+    #[test]
+    fn detect_slash_triads_does_not_consume_rows_twice() {
+        // Two triads share the boundary row (the stdout of triad 1 is
+        // also the parent of triad 2's caveat). The detector marks each
+        // row as consumed by exactly one triad so a single row can't be
+        // counted twice in the activity rollup.
+        let rows = vec![
+            caveat("u-cav-1", None),
+            invocation("u-inv-1", "u-cav-1", "a"),
+            stdout_row("u-out-1", "u-inv-1", "x"),
+            caveat("u-cav-2", Some("u-out-1")),
+            invocation("u-inv-2", "u-cav-2", "b"),
+            stdout_row("u-out-2", "u-inv-2", "y"),
+        ];
+        let triads = detect_slash_triads(&rows);
+        assert_eq!(triads.len(), 2);
+        let mut all: Vec<usize> = triads
+            .iter()
+            .flat_map(|t| [t.caveat_idx, t.invocation_idx, t.stdout_idx])
+            .collect();
+        all.sort();
+        // Six distinct indices — no row used by more than one triad.
+        let unique = {
+            let mut u = all.clone();
+            u.dedup();
+            u
+        };
+        assert_eq!(all, unique, "row indices are disjoint across triads");
     }
 }
