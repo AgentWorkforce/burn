@@ -1398,7 +1398,13 @@ fn compute_summary_subagent_counts(
     let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
         std::path::PathBuf::from(p)
     } else {
+        // `HOME` is unset on stock Windows shells (`USERPROFILE` carries
+        // the user home there). Fall back to it before degenerating to
+        // `.` so a Claude Code install on Windows still resolves to
+        // `%USERPROFILE%\.claude\projects` without the caller having
+        // to set `BURN_CLAUDE_PROJECTS_DIR` explicitly.
         let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         home.join(".claude").join("projects")
@@ -4452,7 +4458,13 @@ fn discover_and_pair_subagents(
     let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
         std::path::PathBuf::from(p)
     } else {
+        // `HOME` is unset on stock Windows shells (`USERPROFILE` carries
+        // the user home there). Fall back to it before degenerating to
+        // `.` so a Claude Code install on Windows still resolves to
+        // `%USERPROFILE%\.claude\projects` without the caller having
+        // to set `BURN_CLAUDE_PROJECTS_DIR` explicitly.
         let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         home.join(".claude").join("projects")

@@ -40,8 +40,6 @@
 //!   to a `Subagent` flagged `attributes["unattached"] = true`. Surfaces
 //!   the orphan case loudly so renderers can highlight it.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::span_tree::{AttrValue, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
@@ -398,6 +396,7 @@ impl Builder {
                                 rail,
                                 turn_x,
                                 subagent_y,
+                                Some(inference_index),
                             );
                             if let Some(first_id) = sub_first_id {
                                 self.cross_rail_edges.push(FlowEdge {
@@ -423,8 +422,20 @@ impl Builder {
                     self.next_rail += 1;
                     let rail = self.next_rail;
                     let unattached_y = main_node_y + RAIL_GAP;
-                    let first_id =
-                        self.emit_subagent_rail(tree, child, rail, turn_x, unattached_y);
+                    // Orphan subagents have no dispatching inference, so
+                    // we pass `None` and `emit_subagent_rail` skips the
+                    // return-edge buffering entirely (orphans never
+                    // "return" to a main-rail successor — they connect
+                    // via an `Unattached` edge from the most recent main
+                    // node and that's the end of the chain).
+                    let first_id = self.emit_subagent_rail(
+                        tree,
+                        child,
+                        rail,
+                        turn_x,
+                        unattached_y,
+                        None,
+                    );
                     if let Some(first_id) = first_id {
                         let anchor = prev_main_id.clone().or_else(|| {
                             self.last_main_node_per_turn
@@ -466,6 +477,7 @@ impl Builder {
         rail: u32,
         x_anchor: i32,
         y_anchor: i32,
+        dispatch_inference_index: Option<u32>,
     ) -> Option<String> {
         let agent_id = span_string(sub, "agent_id")
             .unwrap_or_else(|| format!("rail-{rail}"));
@@ -555,50 +567,97 @@ impl Builder {
             }
         }
 
-        // Buffer a Return edge to wire back to whichever main node lands
-        // first in the next turn. The buffering happens here; the actual
-        // target is resolved post-walk in `finalize_returns` below by
-        // looking up the next main-rail anchor on the session timeline.
-        self.cross_rail_edges.push(FlowEdge {
-            from: prev_id,
-            to: format!("__return_anchor:{}", tree.turn_number),
-            kind: FlowEdgeKind::Return,
-        });
+        // Buffer a Return edge to wire back to the *chronologically
+        // next* main-rail inference after the dispatch point. Encode
+        // both the turn and the dispatching inference's index in the
+        // placeholder so `finalize_returns` can pick the right
+        // successor — including when a turn contains multiple main
+        // inferences and the dispatch happened from a non-last one
+        // (in which case the return should land in the same turn,
+        // not skip to turn+1).
+        //
+        // Orphan rails (`dispatch_inference_index == None`) don't get
+        // a return edge — they have no caller to return to and the
+        // `Unattached` edge already documents the relationship.
+        if let Some(idx) = dispatch_inference_index {
+            self.cross_rail_edges.push(FlowEdge {
+                from: prev_id,
+                to: format!("__return_anchor:{}:{}", tree.turn_number, idx),
+                kind: FlowEdgeKind::Return,
+            });
+        }
 
         Some(root_id)
     }
 }
 
 impl Builder {
-    /// Resolve the `__return_anchor:<turn_number>` placeholders into
-    /// the next main-rail node id, dropping the edge when there is no
-    /// downstream node to return to (last turn in the session).
+    /// Resolve the `__return_anchor:<turn>:<inference_idx>` placeholders
+    /// into the chronologically next main-rail inference id, dropping
+    /// the edge when no downstream main inference exists (dispatch was
+    /// the last inference of the session).
+    ///
+    /// Important: the lookup must consider same-turn successors. A turn
+    /// can carry multiple main-rail inferences (e.g. an assistant turn
+    /// that dispatches a subagent mid-turn, then continues with another
+    /// inference); when that happens the return edge needs to land on
+    /// that next same-turn inference, not on the first inference of the
+    /// following turn.
     fn finalize_returns(&mut self) {
-        // Index the first main-rail node per turn for fast lookup.
-        let mut first_main_per_turn: BTreeMap<u32, String> = BTreeMap::new();
+        // Build the main-rail inference timeline in emission order. The
+        // builder pushes main-rail inferences `(turn_number, idx)` in
+        // strictly increasing order, so iterating `self.nodes` already
+        // gives us the right sequence — we just have to filter and
+        // remember the per-turn index that was baked into each id.
+        //
+        // Each main-rail inference id is `{turn_id}:inf-{idx}`; we strip
+        // the `:inf-` suffix to recover `idx` rather than re-parsing the
+        // attribute payload.
+        let mut timeline: Vec<(u32, u32, String)> = Vec::new();
         for node in &self.nodes {
-            if node.rail == 0 && matches!(node.kind, FlowNodeKind::Inference) {
-                first_main_per_turn
-                    .entry(node.turn_number)
-                    .or_insert_with(|| node.id.clone());
+            if node.rail != 0 || !matches!(node.kind, FlowNodeKind::Inference) {
+                continue;
             }
+            let Some(sep) = node.id.rfind(":inf-") else {
+                continue;
+            };
+            let suffix = &node.id[sep + ":inf-".len()..];
+            let Ok(idx) = suffix.parse::<u32>() else {
+                continue;
+            };
+            timeline.push((node.turn_number, idx, node.id.clone()));
         }
+        // Defensive: the emission order should already be sorted, but
+        // pin it explicitly so a future builder reorder doesn't quietly
+        // break return resolution.
+        timeline.sort_by_key(|(t, i, _)| (*t, *i));
 
         let mut resolved = Vec::with_capacity(self.cross_rail_edges.len());
         for edge in self.cross_rail_edges.drain(..) {
             if let Some(rest) = edge.to.strip_prefix("__return_anchor:") {
-                if let Ok(from_turn) = rest.parse::<u32>() {
-                    if let Some((_, id)) = first_main_per_turn
-                        .range((from_turn + 1)..)
-                        .next()
-                    {
+                // New format: `{turn}:{inference_idx}`. Anything else is
+                // a stale placeholder we leave on the side (it won't
+                // resolve and gets dropped, matching prior behavior on
+                // unparseable anchors).
+                let parsed = rest
+                    .split_once(':')
+                    .and_then(|(t, i)| Some((t.parse::<u32>().ok()?, i.parse::<u32>().ok()?)));
+                if let Some((from_turn, from_idx)) = parsed {
+                    // First timeline entry strictly after `(from_turn,
+                    // from_idx)`. `partition_point` gives us the
+                    // insertion index immediately past the matching
+                    // dispatch entry, which is exactly the successor.
+                    let pivot = timeline.partition_point(|(t, i, _)| {
+                        (*t, *i) <= (from_turn, from_idx)
+                    });
+                    if let Some((_, _, id)) = timeline.get(pivot) {
                         resolved.push(FlowEdge {
                             from: edge.from,
                             to: id.clone(),
                             kind: FlowEdgeKind::Return,
                         });
                     }
-                    // No downstream main node — drop the edge silently.
+                    // No downstream main inference — drop the edge silently.
                 }
             } else {
                 resolved.push(edge);
@@ -855,6 +914,97 @@ mod tests {
             .find(|e| e.kind == FlowEdgeKind::Return)
             .unwrap();
         assert_eq!(return_edge.to, "msg-1:inf-0");
+    }
+
+    #[test]
+    fn return_edge_resolves_to_same_turn_next_inference() {
+        // Setup: a single turn with two main-rail inferences. The first
+        // inference dispatches a subagent; the return edge must land on
+        // the second same-turn inference, not on the next turn (the
+        // pre-fix code only searched `turn_number + 1..`, which would
+        // either drop the edge or skip past the same-turn successor).
+        let mut task = tool_use("Task", "tu-task");
+        task.children.push(subagent("agent-1", false));
+        let mut inf0 = inference("claude-sonnet", "req-1");
+        inf0.children.push(task);
+        let inf1 = inference("claude-sonnet", "req-2");
+        let mut root = turn_root();
+        root.children.push(inf0);
+        root.children.push(inf1);
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[make_tree(0, root)],
+            FlowOpts::default(),
+        );
+
+        let return_edge = graph
+            .edges
+            .iter()
+            .find(|e| e.kind == FlowEdgeKind::Return)
+            .expect("expected a Return edge for the same-turn dispatch");
+        assert_eq!(
+            return_edge.to, "msg-0:inf-1",
+            "return should land on the chronologically next main inference \
+             (msg-0:inf-1), not skip to a later turn"
+        );
+    }
+
+    #[test]
+    fn return_edge_resolves_to_next_turn_when_dispatch_is_last_inference_of_turn() {
+        // Regression guard for the prior behavior: when the dispatch
+        // inference *is* the last one in its turn, the return must
+        // still cross into the next turn's first main inference.
+        let mut task = tool_use("Task", "tu-task");
+        task.children.push(subagent("agent-1", false));
+        let mut inf = inference("claude-sonnet", "req-1");
+        inf.children.push(task);
+        let mut root0 = turn_root();
+        root0.children.push(inf);
+
+        let mut root1 = turn_root();
+        root1.children.push(inference("claude-sonnet", "req-2"));
+        root1.children.push(inference("claude-sonnet", "req-3"));
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[make_tree(0, root0), make_tree(1, root1)],
+            FlowOpts::default(),
+        );
+
+        let return_edge = graph
+            .edges
+            .iter()
+            .find(|e| e.kind == FlowEdgeKind::Return)
+            .expect("expected a Return edge crossing into turn 1");
+        assert_eq!(return_edge.to, "msg-1:inf-0");
+    }
+
+    #[test]
+    fn return_edge_dropped_when_dispatch_is_last_inference_of_session() {
+        // Session ends with a subagent dispatch from the last main
+        // inference. There is no successor to return to, so the edge
+        // must be dropped silently rather than left pointing at a
+        // placeholder id (which would break Mermaid/SVG renderers).
+        let mut task = tool_use("Task", "tu-task");
+        task.children.push(subagent("agent-1", false));
+        let mut inf = inference("claude-sonnet", "req-1");
+        inf.children.push(task);
+        let mut root = turn_root();
+        root.children.push(inf);
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[make_tree(0, root)],
+            FlowOpts::default(),
+        );
+        assert!(
+            !graph.edges.iter().any(|e| e.kind == FlowEdgeKind::Return),
+            "no Return edge expected when dispatch is the terminal inference"
+        );
+        assert!(
+            !graph.edges.iter().any(|e| e.to.starts_with("__return_anchor")),
+            "no unresolved placeholders should leak into the final graph"
+        );
     }
 
     #[test]

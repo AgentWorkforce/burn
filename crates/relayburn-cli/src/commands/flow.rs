@@ -59,6 +59,29 @@ const NODE_WIDTH: i32 = 88;
 const NODE_HEIGHT: i32 = RAIL_GAP - 8;
 /// Height reserved for the legend block at the top of the SVG.
 const LEGEND_HEIGHT: i32 = 56;
+/// Horizontal step between legend swatches, in user units. Matches
+/// the loop step inside [`render_svg_legend`] — keep these in sync.
+const LEGEND_ITEM_STEP: i32 = 96;
+/// Number of items on the widest legend row (row 2: default,
+/// dispatch, return, subagent, unattached). Used to derive a
+/// minimum SVG width so the legend never clips on small graphs.
+const LEGEND_ROW2_ITEMS: i32 = 5;
+/// Trailing-text reserve after the last legend swatch — the
+/// "unattached" label rendered at 11px is roughly 64 user units
+/// wide; round up to 80 to keep a small inset before the right
+/// margin.
+const LEGEND_LAST_LABEL_RESERVE: i32 = 80;
+/// Minimum SVG width required to render the legend without
+/// clipping. Derived from the layout so any change to the legend
+/// (item count, step, label width) propagates automatically:
+///
+/// `SVG_MARGIN + (N-1) * LEGEND_ITEM_STEP + 18 (text offset) +
+///  LEGEND_LAST_LABEL_RESERVE + SVG_MARGIN`
+const LEGEND_MIN_WIDTH: i32 = SVG_MARGIN
+    + (LEGEND_ROW2_ITEMS - 1) * LEGEND_ITEM_STEP
+    + 18
+    + LEGEND_LAST_LABEL_RESERVE
+    + SVG_MARGIN;
 
 pub fn run(globals: &GlobalArgs, args: FlowArgs) -> i32 {
     match run_inner(globals, args) {
@@ -132,6 +155,16 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         None => path.with_extension("tmp"),
     };
     fs::write(&tmp, bytes)?;
+    // Windows `rename` fails when the destination already exists; POSIX
+    // overwrites in place. Drop the destination first on Windows so a
+    // repeat `burn flow --output flow.svg` doesn't trip on the second
+    // run. The gate is `cfg!()` rather than `#[cfg]` so the branch
+    // still type-checks on Linux/macOS — `path.exists()` is a no-op on
+    // the false branch and the dead-code optimizer drops it on
+    // non-Windows targets.
+    if cfg!(windows) && path.exists() {
+        let _ = fs::remove_file(path);
+    }
     fs::rename(&tmp, path)
 }
 
@@ -236,7 +269,11 @@ fn render_svg(graph: &FlowGraph) -> String {
     let (max_x, max_y) = graph.nodes.iter().fold((0_i32, 0_i32), |(mx, my), n| {
         (mx.max(n.x + NODE_WIDTH), my.max(n.y + NODE_HEIGHT))
     });
-    let width = max_x + SVG_MARGIN * 2;
+    // Honor both the node bounds and the legend's intrinsic minimum
+    // width — otherwise small graphs (e.g. 2-3 turn sessions) clip the
+    // legend on the right. `LEGEND_MIN_WIDTH` is derived from the
+    // legend layout constants so the two stay in sync.
+    let width = (max_x + SVG_MARGIN * 2).max(LEGEND_MIN_WIDTH);
     let height = max_y + LEGEND_HEIGHT + SVG_MARGIN * 2;
 
     let mut out = String::with_capacity(4096);
@@ -320,7 +357,7 @@ fn render_svg_legend(out: &mut String) {
             label
         )
         .unwrap();
-        x += 96;
+        x += LEGEND_ITEM_STEP;
     }
     // Edge legend on row 2
     let y2 = y + 22;
@@ -353,7 +390,7 @@ fn render_svg_legend(out: &mut String) {
             label
         )
         .unwrap();
-        x2 += 96;
+        x2 += LEGEND_ITEM_STEP;
     }
     out.push_str("  </g>\n");
 }
@@ -562,6 +599,57 @@ mod tests {
     fn escape_xml_handles_all_five_predefined_entities() {
         assert_eq!(escape_xml("<&>\""), "&lt;&amp;&gt;&quot;");
         assert_eq!(escape_xml("a'b"), "a&apos;b");
+    }
+
+    #[test]
+    fn svg_width_honors_legend_minimum_on_small_graphs() {
+        // Tiny graph (1 turn, 1 inference) — `max_x + SVG_MARGIN * 2`
+        // alone would be far below LEGEND_MIN_WIDTH, so we expect the
+        // legend-min branch to dominate.
+        let mut root = turn_root();
+        root.children.push(inf("claude"));
+        let g = flow_graph_from_trees("sess-1", &[tree(0, root)], SdkFlowOpts::default());
+        let out = render_svg(&g);
+        // Extract the width attribute from the `<svg>` open tag.
+        let after = out.split("width=\"").nth(1).expect("svg width attr");
+        let width: i32 = after
+            .split('"')
+            .next()
+            .unwrap()
+            .parse()
+            .expect("width is integer");
+        assert!(
+            width >= LEGEND_MIN_WIDTH,
+            "small-graph SVG width ({width}) must respect LEGEND_MIN_WIDTH ({LEGEND_MIN_WIDTH})"
+        );
+    }
+
+    #[test]
+    fn svg_width_exceeds_legend_minimum_on_wide_graphs() {
+        // Wide graph: 10 turns → max_x = 10 * INTER_TURN_GAP + NODE_WIDTH
+        // = 1048, which is well past LEGEND_MIN_WIDTH (~530). The
+        // graph-bounds branch should win and the resulting width should
+        // include the right SVG_MARGIN.
+        let trees: Vec<TurnSpanTree> = (0..10)
+            .map(|i| {
+                let mut root = turn_root();
+                root.children.push(inf("claude"));
+                tree(i, root)
+            })
+            .collect();
+        let g = flow_graph_from_trees("sess-1", &trees, SdkFlowOpts::default());
+        let out = render_svg(&g);
+        let after = out.split("width=\"").nth(1).expect("svg width attr");
+        let width: i32 = after
+            .split('"')
+            .next()
+            .unwrap()
+            .parse()
+            .expect("width is integer");
+        assert!(
+            width > LEGEND_MIN_WIDTH,
+            "wide-graph SVG width ({width}) should exceed LEGEND_MIN_WIDTH ({LEGEND_MIN_WIDTH}) — the node-bounds branch should dominate"
+        );
     }
 
     #[test]
