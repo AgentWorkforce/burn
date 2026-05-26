@@ -140,10 +140,9 @@ pub fn build_claude_span_tree(inputs: ClaudeSpanTreeInputs<'_>) -> TurnSpanTree 
     let mut unpaired_subagents: Vec<&SubagentTranscript> = Vec::new();
     for sa in inputs.subagents {
         match sa.paired_tool_use_id.as_deref() {
-            Some(id) if !id.is_empty() => paired_subagents
-                .entry(id.to_string())
-                .or_default()
-                .push(sa),
+            Some(id) if !id.is_empty() => {
+                paired_subagents.entry(id.to_string()).or_default().push(sa)
+            }
             _ => unpaired_subagents.push(sa),
         }
     }
@@ -153,23 +152,15 @@ pub fn build_claude_span_tree(inputs: ClaudeSpanTreeInputs<'_>) -> TurnSpanTree 
     // is_error flag, etc.) lives on the turn's `tool_calls`. Index the
     // turn's calls by id so we can hydrate the `ToolUse` span with the
     // richer per-call attributes without re-parsing.
-    let toolcall_by_id: HashMap<&str, &ToolCall> = turn
-        .tool_calls
-        .iter()
-        .map(|c| (c.id.as_str(), c))
-        .collect();
+    let toolcall_by_id: HashMap<&str, &ToolCall> =
+        turn.tool_calls.iter().map(|c| (c.id.as_str(), c)).collect();
 
     let inference_pairs = effective_inferences(turn, inputs.inferences);
 
     let mut last_inference_end: i64 = root.end_ms;
     for inf in inference_pairs.iter() {
-        let inference_node = build_inference_node(
-            inf,
-            turn,
-            &toolcall_by_id,
-            &tr_by_id,
-            &mut paired_subagents,
-        );
+        let inference_node =
+            build_inference_node(inf, turn, &toolcall_by_id, &tr_by_id, &mut paired_subagents);
         last_inference_end = last_inference_end.max(inference_node.end_ms);
         root.children.push(inference_node);
     }
@@ -187,10 +178,7 @@ pub fn build_claude_span_tree(inputs: ClaudeSpanTreeInputs<'_>) -> TurnSpanTree 
         paired_subagents.into_values().flatten().collect();
     dangling_paired.sort_by(|a, b| a.source_path.cmp(&b.source_path));
 
-    for sa in unpaired_subagents
-        .into_iter()
-        .chain(dangling_paired.into_iter())
-    {
+    for sa in unpaired_subagents.into_iter().chain(dangling_paired) {
         root.children.push(build_subagent_node(sa, true));
     }
 
@@ -256,7 +244,9 @@ fn attach_token_attrs(node: &mut SpanNode, u: &UsageView) {
 /// Group `ToolResultEventRecord`s by `tool_use_id`. Each id may have
 /// multiple events (progress + final status); the slice is preserved in
 /// insertion order so a presenter can render the timeline.
-fn index_tool_results(events: &[ToolResultEventRecord]) -> HashMap<String, Vec<&ToolResultEventRecord>> {
+fn index_tool_results(
+    events: &[ToolResultEventRecord],
+) -> HashMap<String, Vec<&ToolResultEventRecord>> {
     let mut out: HashMap<String, Vec<&ToolResultEventRecord>> = HashMap::new();
     for ev in events {
         out.entry(ev.tool_use_id.clone()).or_default().push(ev);
@@ -277,7 +267,9 @@ fn effective_inferences<'a>(turn: &TurnRecord, supplied: &'a [Inference]) -> Vec
     if !supplied.is_empty() {
         return supplied.iter().map(InferenceRef::Borrowed).collect();
     }
-    vec![InferenceRef::Synthetic(synthesize_inference(turn))]
+    vec![InferenceRef::Synthetic(Box::new(synthesize_inference(
+        turn,
+    )))]
 }
 
 /// Either a caller-supplied Inference (when #434 was wired) or a
@@ -286,14 +278,14 @@ fn effective_inferences<'a>(turn: &TurnRecord, supplied: &'a [Inference]) -> Vec
 /// `Cow<Inference>` (which would require `Inference: ToOwned`).
 enum InferenceRef<'a> {
     Borrowed(&'a Inference),
-    Synthetic(Inference),
+    Synthetic(Box<Inference>),
 }
 
 impl<'a> InferenceRef<'a> {
     fn as_ref(&self) -> &Inference {
         match self {
             InferenceRef::Borrowed(b) => b,
-            InferenceRef::Synthetic(s) => s,
+            InferenceRef::Synthetic(s) => s.as_ref(),
         }
     }
 }
@@ -439,7 +431,10 @@ fn build_tool_result_node(events: &[&ToolResultEventRecord]) -> Option<SpanNode>
         .unwrap_or(*events.last().unwrap());
 
     let mut node = SpanNode::new(SpanKind::ToolResult, "tool-result");
-    node.set_attr("tool_use_id", AttrValue::str(final_event.tool_use_id.clone()));
+    node.set_attr(
+        "tool_use_id",
+        AttrValue::str(final_event.tool_use_id.clone()),
+    );
     if let Some(ts) = final_event.ts.as_deref() {
         let ms = parse_iso_ms(ts).unwrap_or(0);
         node.start_ms = ms;
@@ -461,7 +456,10 @@ fn build_tool_result_node(events: &[&ToolResultEventRecord]) -> Option<SpanNode>
     // Surface status as an attribute too — useful for downstream
     // presenters that want to display "cancelled" / "errored" without
     // having to interpret `SpanStatus`.
-    node.set_attr("status", AttrValue::str(format!("{:?}", final_event.status).to_ascii_lowercase()));
+    node.set_attr(
+        "status",
+        AttrValue::str(format!("{:?}", final_event.status).to_ascii_lowercase()),
+    );
     Some(node)
 }
 
@@ -514,12 +512,9 @@ fn apply_stop_reason_status(root: &mut SpanNode, reason: Option<StopReason>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reader::inference::{
-        Inference, InferenceKeySource, InferenceKind, ToolUseRef,
-    };
+    use crate::reader::inference::{Inference, InferenceKeySource, InferenceKind, ToolUseRef};
     use crate::reader::types::{
-        SourceKind, ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus,
-        Usage,
+        SourceKind, ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, Usage,
     };
 
     fn make_turn(usage: Usage, calls: Vec<ToolCall>) -> TurnRecord {
@@ -650,10 +645,7 @@ mod tests {
 
         // Root + UserPrompt + Inference -> ToolUse.
         let child_kinds: Vec<SpanKind> = tree.root.children.iter().map(|c| c.kind).collect();
-        assert_eq!(
-            child_kinds,
-            vec![SpanKind::UserPrompt, SpanKind::Inference]
-        );
+        assert_eq!(child_kinds, vec![SpanKind::UserPrompt, SpanKind::Inference]);
         let inf_node = &tree.root.children[1];
         assert_eq!(inf_node.children.len(), 1);
         assert_eq!(inf_node.children[0].kind, SpanKind::ToolUse);
@@ -959,11 +951,14 @@ mod tests {
             .unwrap();
         let tool_use = &inf_node.children[0];
         assert_eq!(tool_use.name, "Task");
-        let nested: Vec<&SpanNode> =
-            tool_use.children.iter().filter(|c| c.kind == SpanKind::Subagent).collect();
+        let nested: Vec<&SpanNode> = tool_use
+            .children
+            .iter()
+            .filter(|c| c.kind == SpanKind::Subagent)
+            .collect();
         assert_eq!(nested.len(), 1);
         // Paired subagent does NOT carry the unattached flag.
-        assert!(nested[0].attributes.get("unattached").is_none());
+        assert!(!nested[0].attributes.contains_key("unattached"));
     }
 
     /// Empty-inferences input: builder synthesizes one inference from
@@ -984,8 +979,12 @@ mod tests {
             inferences: &[],
             subagents: &[],
         });
-        let inf_children: Vec<&SpanNode> =
-            tree.root.children.iter().filter(|c| c.kind == SpanKind::Inference).collect();
+        let inf_children: Vec<&SpanNode> = tree
+            .root
+            .children
+            .iter()
+            .filter(|c| c.kind == SpanKind::Inference)
+            .collect();
         assert_eq!(inf_children.len(), 1);
         // Synthetic inference carries the message_id as request_id.
         match inf_children[0].attributes.get("request_id") {

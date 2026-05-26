@@ -300,11 +300,7 @@ async fn no_gap_warning_for_chat_only_claude_session() {
         "cwd": "/tmp/project",
         "sessionId": sid,
     });
-    fs::write(
-        &session_file,
-        format!("{}\n{}\n", user, assistant),
-    )
-    .unwrap();
+    fs::write(&session_file, format!("{}\n{}\n", user, assistant)).unwrap();
 
     let warnings = with_captured_gap_warnings(|captured| async move {
         let mut ledger = open_ledger_in(&tmp);
@@ -621,11 +617,7 @@ async fn per_harness_then_ingest_all_keeps_each_adapter_isolated() {
         // Step 2: drop a fresh claude gap fixture; a follow-up
         // ingest_all should stay silent for codex (nothing new) but
         // emit for claude (fresh adapter).
-        let project_dir = roots
-            .claude_projects_dir
-            .as_ref()
-            .unwrap()
-            .join("-tmp-mix");
+        let project_dir = roots.claude_projects_dir.as_ref().unwrap().join("-tmp-mix");
         fs::create_dir_all(&project_dir).unwrap();
         let claude_sid = "mmmmmmmm-mmmm-mmmm-mmmm-mmmmmmmmmmmm";
         fs::write(
@@ -649,10 +641,7 @@ async fn per_harness_then_ingest_all_keeps_each_adapter_isolated() {
             .iter()
             .filter(|w| w.starts_with("claude:"))
             .count();
-        let codex_count = after_all
-            .iter()
-            .filter(|w| w.starts_with("codex:"))
-            .count();
+        let codex_count = after_all.iter().filter(|w| w.starts_with("codex:")).count();
         assert_eq!(
             claude_count, 1,
             "ingest_all should fire one claude warning after fresh fixture (got {:?})",

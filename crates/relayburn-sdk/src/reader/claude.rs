@@ -316,10 +316,7 @@ impl ChainNode for LineNode {
 /// Reads `LineNode`s through the `ChainNode` trait so the walker stays
 /// in sync with the standalone `group_by_parent_chain` helper (same
 /// trait, same termination rules).
-fn nearest_user_prompt_root(
-    start_uuid: &str,
-    nodes: &HashMap<String, LineNode>,
-) -> Option<String> {
+fn nearest_user_prompt_root(start_uuid: &str, nodes: &HashMap<String, LineNode>) -> Option<String> {
     let mut visited: HashSet<&str> = HashSet::new();
     let mut current: &LineNode = nodes.get(start_uuid)?;
     visited.insert(current.uuid());
@@ -402,8 +399,7 @@ fn ingest_assistant_record(
     // inside `message`. Capture from the first row that carries one for
     // this `message_id`; later rows belonging to the same API call
     // re-emit the same `requestId` so first-wins is the right merge.
-    let request_id =
-        string_field(obj, &["requestId", "request_id"], true);
+    let request_id = string_field(obj, &["requestId", "request_id"], true);
     let usage_with_cov = to_usage(msg.get("usage"));
     // Claude writes one row per content block but only ONE of those rows
     // carries the `usage` block. The previous merge updated
@@ -531,11 +527,7 @@ fn register_assistant_node(line: &Value, nodes: &mut HashMap<String, LineNode>) 
     nodes.insert(node.uuid.clone(), node);
 }
 
-fn register_user_node(
-    line: &Value,
-    nodes: &mut HashMap<String, LineNode>,
-    is_user_prompt: bool,
-) {
+fn register_user_node(line: &Value, nodes: &mut HashMap<String, LineNode>, is_user_prompt: bool) {
     let mut node = match make_line_node(line, LineKind::User) {
         Some(n) => n,
         None => return,
@@ -830,11 +822,8 @@ fn resolve_invocation(
     }
     let mut current_uuid = start_uuid.to_string();
     let mut visited: HashSet<String> = HashSet::new();
-    loop {
-        let node = match nodes.get(&current_uuid) {
-            Some(n) => n.clone(),
-            None => break,
-        };
+    while let Some(n) = nodes.get(&current_uuid) {
+        let node = n.clone();
         if !visited.insert(node.uuid.clone()) {
             break;
         }
@@ -846,34 +835,35 @@ fn resolve_invocation(
             Some(p) => p.clone(),
             None => break,
         };
-        let parent_agent = parent.agent_tool_use.clone();
-        if node.kind == LineKind::User
-            && parent.kind == LineKind::Assistant
-            && parent_agent.is_some()
-            && !node
-                .tool_result_ids
-                .as_ref()
-                .is_some_and(|ids| ids.contains(&parent_agent.as_ref().unwrap().id))
-        {
-            let pat = parent_agent.unwrap();
-            let mut info = InvocationInfo {
-                root_uuid: node.uuid.clone(),
-                parent_tool_use_id: if pat.id.is_empty() {
-                    None
-                } else {
-                    Some(pat.id.clone())
-                },
-                subagent_type: pat.subagent_type.clone(),
-                description: pat.description.clone(),
-                parent_agent_id: None,
-            };
-            if parent.is_sidechain {
-                if let Some(pi) = resolve_invocation(&parent.uuid, nodes, cache, depth + 1) {
-                    info.parent_agent_id = Some(pi.root_uuid);
+        match parent.agent_tool_use.clone() {
+            Some(pat)
+                if node.kind == LineKind::User
+                    && parent.kind == LineKind::Assistant
+                    && !node
+                        .tool_result_ids
+                        .as_ref()
+                        .is_some_and(|ids| ids.contains(&pat.id)) =>
+            {
+                let mut info = InvocationInfo {
+                    root_uuid: node.uuid.clone(),
+                    parent_tool_use_id: if pat.id.is_empty() {
+                        None
+                    } else {
+                        Some(pat.id.clone())
+                    },
+                    subagent_type: pat.subagent_type.clone(),
+                    description: pat.description.clone(),
+                    parent_agent_id: None,
+                };
+                if parent.is_sidechain {
+                    if let Some(pi) = resolve_invocation(&parent.uuid, nodes, cache, depth + 1) {
+                        info.parent_agent_id = Some(pi.root_uuid);
+                    }
                 }
+                cache.insert(start_uuid.to_string(), Some(info.clone()));
+                return Some(info);
             }
-            cache.insert(start_uuid.to_string(), Some(info.clone()));
-            return Some(info);
+            _ => {}
         }
         current_uuid = parent_uuid;
     }
@@ -1259,7 +1249,7 @@ fn measure_tool_result(content: &Value) -> Measured {
         return Measured {
             length: Some(s.chars().count() as u64),
             hash: Some(content_hash(s)),
-            byte_length: Some(s.as_bytes().len() as u64),
+            byte_length: Some(s.len() as u64),
             truncated: Some(detect_truncation_marker(s)),
         };
     }
@@ -1270,7 +1260,7 @@ fn measure_tool_result(content: &Value) -> Measured {
         Ok(s) => Measured {
             length: Some(s.chars().count() as u64),
             hash: Some(content_hash(&s)),
-            byte_length: Some(s.as_bytes().len() as u64),
+            byte_length: Some(s.len() as u64),
             truncated: Some(detect_truncation_marker(&s)),
         },
         Err(_) => Measured::default(),
@@ -1746,18 +1736,11 @@ fn append_unique(values: Option<Vec<String>>, value: String) -> Vec<String> {
 /// for cross-line dedup; cheap because the original `relationship_key` did one
 /// `format!`-driven allocation per call but had to be re-run for every
 /// candidate during `has_relationship`.
-type RelationshipKey = (
-    &'static str,
-    String,
-    &'static str,
-    String,
-    String,
-    String,
-);
+type RelationshipKey = (&'static str, String, &'static str, String, String, String);
 
-fn relationship_key_borrowed<'a>(
-    row: &'a SessionRelationshipRecord,
-) -> (&'static str, &'a str, &'static str, &'a str, &'a str, &'a str) {
+fn relationship_key_borrowed(
+    row: &SessionRelationshipRecord,
+) -> (&'static str, &str, &'static str, &str, &str, &str) {
     (
         row.source.wire_str(),
         row.session_id.as_str(),
@@ -1770,7 +1753,14 @@ fn relationship_key_borrowed<'a>(
 
 fn relationship_key(row: &SessionRelationshipRecord) -> RelationshipKey {
     let b = relationship_key_borrowed(row);
-    (b.0, b.1.to_string(), b.2, b.3.to_string(), b.4.to_string(), b.5.to_string())
+    (
+        b.0,
+        b.1.to_string(),
+        b.2,
+        b.3.to_string(),
+        b.4.to_string(),
+        b.5.to_string(),
+    )
 }
 
 fn has_relationship(rows: &[SessionRelationshipRecord], row: &SessionRelationshipRecord) -> bool {
@@ -2205,8 +2195,7 @@ fn prescan_nodes(
                 // the task-notification gate and #433 for why we tag
                 // the LineNode for the parent-chain walker.
                 let is_user_prompt = !is_task_notification(&obj)
-                    && extract_plain_user_text_from_obj(&obj)
-                        .is_some_and(|s| !s.is_empty());
+                    && extract_plain_user_text_from_obj(&obj).is_some_and(|s| !s.is_empty());
                 register_user_node(&parsed, nodes_by_uuid, is_user_prompt);
                 record_evidence_from_line(evidence, &parsed);
                 record_explicit_relationship_evidence(evidence, &obj);
@@ -2219,16 +2208,15 @@ fn prescan_nodes(
                     next_event_index,
                 );
             }
-            "system" => {
+            "system"
                 if build_claude_system_tool_result_event(
                     &obj,
                     tool_result_counters,
                     next_event_index,
                 )
-                .is_some()
-                {
-                    next_event_index += 1;
-                }
+                .is_some() =>
+            {
+                next_event_index += 1;
             }
             _ => {}
         }
@@ -3119,7 +3107,10 @@ mod tests {
         assert_eq!(full.user_turns, vec![user_turn]);
         assert_eq!(full.evidence.file_session_id, evidence.file_session_id);
         assert_eq!(full.evidence.first_ts, evidence.first_ts);
-        assert_eq!(full.evidence.in_log_session_ids, evidence.in_log_session_ids);
+        assert_eq!(
+            full.evidence.in_log_session_ids,
+            evidence.in_log_session_ids
+        );
         assert_eq!(full.evidence.source_version, evidence.source_version);
         assert_eq!(full.evidence.first_parent_uuid, evidence.first_parent_uuid);
         assert_eq!(full.evidence.seen_uuids, evidence.seen_uuids);

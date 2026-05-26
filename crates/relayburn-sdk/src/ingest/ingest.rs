@@ -382,12 +382,7 @@ pub fn ingest_claude_transcript_path(
         session_mtime_ms: Some(mtime_ms(&pre_cursor_meta)),
         cwd,
     };
-    resolve_pending_stamps_for_report(
-        ledger,
-        &candidate,
-        opts.ledger_home.as_deref(),
-        &mut report,
-    );
+    resolve_pending_stamps_for_report(ledger, &candidate, opts.ledger_home.as_deref(), &mut report);
 
     // Re-stat after parsing so the cursor reflects the byte position the
     // parser actually read to. `parse_claude_session` uses BufReader::lines()
@@ -1019,9 +1014,7 @@ macro_rules! impl_derived_records_common {
             fn turns(&self) -> &[TurnRecord] {
                 &self.turns
             }
-            fn request_id_lookup(
-                &self,
-            ) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
+            fn request_id_lookup(&self) -> std::borrow::Cow<'_, crate::reader::RequestIdLookup> {
                 // Default: empty lookup (Codex / opencode). Claude
                 // overrides this in the per-impl block below; we can't
                 // express that override via a single macro arm because

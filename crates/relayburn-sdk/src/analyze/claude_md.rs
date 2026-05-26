@@ -14,9 +14,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use crate::reader::TurnRecord;
 use indexmap::IndexMap;
 use regex::Regex;
-use crate::reader::TurnRecord;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::lookup_model_rate;
@@ -188,9 +188,14 @@ pub fn parse_claude_md(file_path: &str, text: &str) -> ParsedClaudeMd {
         };
     }
 
-    let group_headings: Vec<&HeadingInfo> =
-        headings.iter().filter(|h| h.level == grouping_level).collect();
-    let first_start = group_headings.first().map(|h| h.line).unwrap_or(total_lines + 1);
+    let group_headings: Vec<&HeadingInfo> = headings
+        .iter()
+        .filter(|h| h.level == grouping_level)
+        .collect();
+    let first_start = group_headings
+        .first()
+        .map(|h| h.line)
+        .unwrap_or(total_lines + 1);
     if first_start > 1 {
         let pb_bytes = range_bytes(1, first_start - 1);
         if pb_bytes > 0 {
@@ -929,11 +934,19 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| {
             f.file_name().unwrap() == "CLAUDE.md"
-                && f.parent().unwrap().file_name().map(|s| s != ".claude").unwrap_or(true)
+                && f.parent()
+                    .unwrap()
+                    .file_name()
+                    .map(|s| s != ".claude")
+                    .unwrap_or(true)
         }));
         assert!(files.iter().any(|f| {
             f.file_name().unwrap() == "CLAUDE.md"
-                && f.parent().unwrap().file_name().map(|s| s == ".claude").unwrap_or(false)
+                && f.parent()
+                    .unwrap()
+                    .file_name()
+                    .map(|s| s == ".claude")
+                    .unwrap_or(false)
         }));
     }
 

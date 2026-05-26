@@ -19,7 +19,9 @@ use serde_json::Value;
 /// `tool-calls`, etc.). An unrecognized string decodes to
 /// [`StopReason::Silent`] instead of an error so a pre-3.0 ledger replays
 /// cleanly through the new column.
-fn deserialize_optional_stop_reason<'de, D>(d: D) -> std::result::Result<Option<StopReason>, D::Error>
+fn deserialize_optional_stop_reason<'de, D>(
+    d: D,
+) -> std::result::Result<Option<StopReason>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -779,18 +781,12 @@ mod tests {
     #[test]
     fn stop_reason_from_wire_normalizes_underscored_and_legacy_variants() {
         // Anthropic snake_case.
-        assert_eq!(
-            StopReason::from_wire("end_turn"),
-            Some(StopReason::EndTurn)
-        );
+        assert_eq!(StopReason::from_wire("end_turn"), Some(StopReason::EndTurn));
         assert_eq!(
             StopReason::from_wire("max_tokens"),
             Some(StopReason::MaxTokens)
         );
-        assert_eq!(
-            StopReason::from_wire("tool_use"),
-            Some(StopReason::ToolUse)
-        );
+        assert_eq!(StopReason::from_wire("tool_use"), Some(StopReason::ToolUse));
         // Opencode finish reason for the same outcome ships as `tool-calls`.
         assert_eq!(
             StopReason::from_wire("tool-calls"),

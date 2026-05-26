@@ -841,13 +841,13 @@ fn measure_opencode_tool_output(output: Option<&Value>) -> Measured {
         Some(Value::String(s)) => Measured {
             length: Some(s.len() as u64),
             hash: Some(content_hash(s)),
-            byte_length: Some(s.as_bytes().len() as u64),
+            byte_length: Some(s.len() as u64),
         },
         Some(other) => match serde_json::to_string(other) {
             Ok(serialized) => Measured {
                 length: Some(serialized.len() as u64),
                 hash: Some(content_hash(&serialized)),
-                byte_length: Some(serialized.as_bytes().len() as u64),
+                byte_length: Some(serialized.len() as u64),
             },
             Err(_) => Measured::default(),
         },

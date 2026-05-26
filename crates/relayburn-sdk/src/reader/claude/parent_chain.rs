@@ -341,10 +341,7 @@ mod tests {
     /// issue's "prefer over-grouping to silently dropping rows" guidance.
     #[test]
     fn orphan_chain_uses_deepest_reachable_uuid() {
-        let rows = vec![
-            asst("a1", "missing_parent"),
-            asst("a2", "a1"),
-        ];
+        let rows = vec![asst("a1", "missing_parent"), asst("a2", "a1")];
         let g = group_by_parent_chain(&rows);
         // a2 walks up to a1, then a1's parent ("missing_parent") is not in
         // the map → bucket key is "a1". a1 also walks once and hits the

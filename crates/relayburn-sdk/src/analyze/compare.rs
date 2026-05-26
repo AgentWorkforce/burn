@@ -144,16 +144,16 @@ pub fn build_compare_table(turns: &[EnrichedTurn], opts: &CompareOptions<'_>) ->
         if !by_model_category.contains_key(model) {
             let owned = model.to_string();
             model_set.insert(owned.clone(), ());
-            model_totals
-                .entry(owned.clone())
-                .or_insert_with(CompareTotals::default);
+            model_totals.entry(owned.clone()).or_default();
             by_model_category.insert(owned, BTreeMap::new());
         }
         if !category_set.contains_key(&cat) {
             category_set.insert(cat.clone(), ());
         }
 
-        let by_cat = by_model_category.get_mut(model).expect("model just inserted");
+        let by_cat = by_model_category
+            .get_mut(model)
+            .expect("model just inserted");
         let acc = by_cat.entry(cat).or_default();
 
         acc.turns += 1;

@@ -410,9 +410,7 @@ fn parse_codex_buffer<R: BufRead>(
         }
         let line_end_offset = current_offset + n as u64;
         current_offset = line_end_offset;
-        let text = std::str::from_utf8(&line_buf[..n - 1])
-            .unwrap_or("")
-            .trim();
+        let text = std::str::from_utf8(&line_buf[..n - 1]).unwrap_or("").trim();
         if text.is_empty() {
             continue;
         }
@@ -1431,13 +1429,13 @@ fn measure_tool_output(output: &Value) -> Measured {
         Value::String(s) => Measured {
             length: Some(s.len() as u64),
             hash: Some(content_hash(s)),
-            byte_length: Some(s.as_bytes().len() as u64),
+            byte_length: Some(s.len() as u64),
         },
         other => match serde_json::to_string(other) {
             Ok(serialized) => Measured {
                 length: Some(serialized.len() as u64),
                 hash: Some(content_hash(&serialized)),
-                byte_length: Some(serialized.as_bytes().len() as u64),
+                byte_length: Some(serialized.len() as u64),
             },
             Err(_) => Measured::default(),
         },

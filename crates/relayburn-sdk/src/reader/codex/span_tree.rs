@@ -83,11 +83,8 @@ pub fn build_codex_span_tree(inputs: CodexSpanTreeInputs<'_>) -> TurnSpanTree {
     root.children.push(user_prompt);
 
     let tr_by_id = index_tool_results(inputs.tool_result_events);
-    let toolcall_by_id: HashMap<&str, &ToolCall> = turn
-        .tool_calls
-        .iter()
-        .map(|c| (c.id.as_str(), c))
-        .collect();
+    let toolcall_by_id: HashMap<&str, &ToolCall> =
+        turn.tool_calls.iter().map(|c| (c.id.as_str(), c)).collect();
 
     let inferences = effective_inferences(turn, inputs.inferences);
 
@@ -150,7 +147,9 @@ fn attach_token_attrs(node: &mut SpanNode, u: &UsageView) {
     node.set_attr("tokens.reasoning", AttrValue::Int(u.reasoning));
 }
 
-fn index_tool_results(events: &[ToolResultEventRecord]) -> HashMap<String, Vec<&ToolResultEventRecord>> {
+fn index_tool_results(
+    events: &[ToolResultEventRecord],
+) -> HashMap<String, Vec<&ToolResultEventRecord>> {
     let mut out: HashMap<String, Vec<&ToolResultEventRecord>> = HashMap::new();
     for ev in events {
         out.entry(ev.tool_use_id.clone()).or_default().push(ev);
@@ -272,7 +271,10 @@ fn build_tool_result_node(events: &[&ToolResultEventRecord]) -> Option<SpanNode>
         .copied()
         .unwrap_or(*events.last().unwrap());
     let mut node = SpanNode::new(SpanKind::ToolResult, "tool-result");
-    node.set_attr("tool_use_id", AttrValue::str(final_event.tool_use_id.clone()));
+    node.set_attr(
+        "tool_use_id",
+        AttrValue::str(final_event.tool_use_id.clone()),
+    );
     if let Some(ts) = final_event.ts.as_deref() {
         let ms = parse_iso_ms(ts).unwrap_or(0);
         node.start_ms = ms;
@@ -446,7 +448,10 @@ mod tests {
         let kinds: Vec<SpanKind> = tree.root.children.iter().map(|c| c.kind).collect();
         assert_eq!(kinds, vec![SpanKind::UserPrompt, SpanKind::Inference]);
         let inf = &tree.root.children[1];
-        assert!(inf.children.is_empty(), "no tool_calls => no ToolUse children");
+        assert!(
+            inf.children.is_empty(),
+            "no tool_calls => no ToolUse children"
+        );
     }
 
     /// Regression: a `ToolResult` whose timestamp lands after the

@@ -136,8 +136,7 @@ pub fn adapter_static(config: PendingStampAdapter) -> &'static dyn HarnessAdapte
 /// per-tick `Box::pin` adaptation that drops them into [`IngestSessionsFn`]
 /// happens at the call site in [`session_store_adapter`] so the helper
 /// stays a fn pointer (no per-tick closure allocation).
-pub type SessionIngestor =
-    fn(&mut RawLedger, &RawIngestOptions) -> anyhow::Result<IngestReport>;
+pub type SessionIngestor = fn(&mut RawLedger, &RawIngestOptions) -> anyhow::Result<IngestReport>;
 
 /// One-call factory for pending-stamp adapters whose only differences are
 /// the harness name, the session-root resolver, and which SDK ingest pass
@@ -175,7 +174,11 @@ pub fn session_store_adapter(
             ingestor(handle.raw_mut(), &opts)
         })
     });
-    adapter_static(PendingStampAdapter::new(name, session_root, ingest_sessions))
+    adapter_static(PendingStampAdapter::new(
+        name,
+        session_root,
+        ingest_sessions,
+    ))
 }
 
 /// `HarnessAdapter` implementation backing the [`adapter`] factory. Kept
@@ -260,9 +263,8 @@ impl HarnessAdapter for PendingStampAdapterImpl {
             spawn_start_ts: Some(ctx.spawn_start_ts),
             spawner_pid: None,
         };
-        let written = write_pending_stamp(opts).map_err(|err| {
-            anyhow::anyhow!("failed to write {} pending stamp: {err}", self.name)
-        })?;
+        let written = write_pending_stamp(opts)
+            .map_err(|err| anyhow::anyhow!("failed to write {} pending stamp: {err}", self.name))?;
         eprintln!(
             "[burn] {} spawn: pending stamp {}",
             self.name,
@@ -271,11 +273,7 @@ impl HarnessAdapter for PendingStampAdapterImpl {
         Ok(())
     }
 
-    fn start_watcher(
-        &self,
-        ctx: &PlanCtx,
-        on_report: ReportSink,
-    ) -> Option<WatchController> {
+    fn start_watcher(&self, ctx: &PlanCtx, on_report: ReportSink) -> Option<WatchController> {
         // Match the TS adapter: do not run an immediate first tick. The
         // child has barely started; let the periodic interval drive the
         // first scan so we don't spawn an ingest pass that races the

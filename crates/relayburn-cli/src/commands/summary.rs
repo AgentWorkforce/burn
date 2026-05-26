@@ -216,15 +216,13 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         None => LedgerOpenOptions::default(),
     };
     progress.set_task("opening ledger");
-    let mut handle = Ledger::open(opts).map_err(|err| {
+    let mut handle = Ledger::open(opts).inspect_err(|_| {
         progress.finish_and_clear();
-        err
     })?;
 
-    let ingest_report =
-        run_ingest(&mut handle, &progress, globals.ledger_path.clone()).map_err(|err| {
+    let ingest_report = run_ingest(&mut handle, &progress, globals.ledger_path.clone())
+        .inspect_err(|_| {
             progress.finish_and_clear();
-            err
         })?;
 
     let mode = if let Some(session_id) = subagent_tree_session_id {
@@ -244,27 +242,27 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
     };
 
     progress.set_task("building summary");
-    let report = handle.summary_report(SummaryReportOptions {
-        session: args.session,
-        project: args.project,
-        since: args.since,
-        workflow: args.workflow,
-        tags: if tag_filter.is_empty() {
-            None
-        } else {
-            Some(tag_filter)
-        },
-        group_by_tag: args.group_by_tag,
-        agent: args.agent,
-        providers: provider_filter.map(|providers| providers.into_iter().collect()),
-        mode,
-        include_quality: args.quality,
-        ledger_home: None,
-    })
-    .map_err(|err| {
-        progress.finish_and_clear();
-        err
-    })?;
+    let report = handle
+        .summary_report(SummaryReportOptions {
+            session: args.session,
+            project: args.project,
+            since: args.since,
+            workflow: args.workflow,
+            tags: if tag_filter.is_empty() {
+                None
+            } else {
+                Some(tag_filter)
+            },
+            group_by_tag: args.group_by_tag,
+            agent: args.agent,
+            providers: provider_filter.map(|providers| providers.into_iter().collect()),
+            mode,
+            include_quality: args.quality,
+            ledger_home: None,
+        })
+        .inspect_err(|_| {
+            progress.finish_and_clear();
+        })?;
     progress.finish_and_clear();
 
     match report {
@@ -333,9 +331,8 @@ fn run_ingest(
 ) -> anyhow::Result<relayburn_sdk::IngestReport> {
     progress.set_task("refreshing ledger");
     let opts = progress.ingest_options(ledger_home);
-    ingest_all(handle.raw_mut(), &opts).map_err(|err| {
+    ingest_all(handle.raw_mut(), &opts).inspect_err(|_| {
         progress.finish_and_clear();
-        err
     })
 }
 
@@ -490,7 +487,10 @@ fn grouped_json_value(
             summary_replacement_savings_to_value(&report.replacement_savings),
         );
     }
-    payload.insert("stopReasons".into(), stop_reasons_to_json(&report.stop_reasons));
+    payload.insert(
+        "stopReasons".into(),
+        stop_reasons_to_json(&report.stop_reasons),
+    );
     if !report.subagents.is_empty() {
         // `subagents: {paired, orphan, total}` (issue #435). Skipped
         // when both buckets are zero so the JSON shape stays compact
@@ -849,7 +849,7 @@ fn render_subagent_tree_report(
         if root.cumulative_turns == 1 { "" } else { "s" },
     ));
     out.push(String::new());
-    out.extend(render_tree(&root));
+    out.extend(render_tree(root));
     out.push(String::new());
     print!("{}", out.join("\n"));
     Ok(0)
@@ -1289,7 +1289,10 @@ mod tests {
         // counts. Issue #435 explicitly wants both numbers even when
         // one is zero, so a slash-command-only session showing only
         // orphans is still scannable.
-        let counts = SubagentCounts { paired: 2, orphan: 1 };
+        let counts = SubagentCounts {
+            paired: 2,
+            orphan: 1,
+        };
         assert_eq!(
             format_subagents_line(&counts),
             "subagents: 2 paired, 1 orphan"
@@ -1328,7 +1331,10 @@ mod tests {
             "subagents key must be omitted when counts are zero; got {value}"
         );
 
-        report.subagents = SubagentCounts { paired: 2, orphan: 1 };
+        report.subagents = SubagentCounts {
+            paired: 2,
+            orphan: 1,
+        };
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
         assert_eq!(
             value["subagents"],

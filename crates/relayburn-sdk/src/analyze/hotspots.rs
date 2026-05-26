@@ -9,12 +9,12 @@
 
 use std::collections::HashMap;
 
-use indexmap::IndexMap;
-use phf::phf_set;
 use crate::reader::{
     BashParse, ContentKind, ContentRecord, ToolResultEventRecord, TurnRecord, UserTurnBlockKind,
     UserTurnRecord,
 };
+use indexmap::IndexMap;
+use phf::phf_set;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -479,7 +479,8 @@ fn attribute_session(
                 if new_content > 0.0 {
                     let input_share = turn.usage.input as f64 / new_content;
                     let create_share = 1.0 - input_share;
-                    let per_token_price = input_share * rate.input + create_share * rate.cache_write;
+                    let per_token_price =
+                        input_share * rate.input + create_share * rate.cache_write;
                     if have_any_sizes {
                         let sibling_total: f64 = pending_initial
                             .iter()
@@ -571,7 +572,10 @@ fn attribute_session(
             } else {
                 None
             };
-            let bytes_entry = bytes_by_tool_use_id.get(&tc.id).cloned().unwrap_or_default();
+            let bytes_entry = bytes_by_tool_use_id
+                .get(&tc.id)
+                .cloned()
+                .unwrap_or_default();
             attributions.push(ToolAttribution {
                 tool_use_id: tc.id.clone(),
                 tool_name: tc.name.clone(),
@@ -903,11 +907,8 @@ where
                     .total_cmp(&a.total_cost)
                     .then_with(|| a.command.cmp(&b.command))
             });
-            let top_examples: Vec<String> = examples
-                .into_iter()
-                .take(3)
-                .map(|e| e.command)
-                .collect();
+            let top_examples: Vec<String> =
+                examples.into_iter().take(3).map(|e| e.command).collect();
             BashVerbAggregation {
                 verb: row.verb,
                 call_count: row.call_count,
@@ -1083,6 +1084,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn turn(
         session_id: &str,
         message_id: &str,
@@ -1171,11 +1173,7 @@ mod tests {
         }
     }
 
-    fn user_turn(
-        session_id: &str,
-        user_uuid: &str,
-        blocks: Vec<UserTurnBlock>,
-    ) -> UserTurnRecord {
+    fn user_turn(session_id: &str, user_uuid: &str, blocks: Vec<UserTurnBlock>) -> UserTurnRecord {
         UserTurnRecord {
             v: 1,
             source: SourceKind::ClaudeCode,
@@ -1234,7 +1232,10 @@ mod tests {
     #[test]
     fn attributes_persistence_of_8k_read_across_20_ride_along_turns_within_10_pct() {
         let pricing = load_builtin_pricing();
-        let rate = pricing.get("claude-sonnet-4-6").expect("sonnet present").clone();
+        let rate = pricing
+            .get("claude-sonnet-4-6")
+            .expect("sonnet present")
+            .clone();
         const READ_TOKENS: u64 = 8000;
         let read_text: String = "x".repeat((READ_TOKENS as usize) * 4);
 
@@ -1569,7 +1570,12 @@ mod tests {
                 "2026-04-20T00:00:00.000Z",
                 "claude-sonnet-4-6",
                 empty_usage(),
-                vec![tc_with_hash("tu_a1", "Agent", "general-purpose", "Agent:gp")],
+                vec![tc_with_hash(
+                    "tu_a1",
+                    "Agent",
+                    "general-purpose",
+                    "Agent:gp",
+                )],
                 SourceKind::ClaudeCode,
             ),
             turn(
@@ -1981,15 +1987,8 @@ mod tests {
                 tool_result_events_by_session: None,
             },
         );
-        let summed: f64 = result
-            .attributions
-            .iter()
-            .map(|a| a.initial_tokens)
-            .sum();
-        assert!(
-            summed <= 5000.0 + 1e-6,
-            "summed={summed} > newContent=5000"
-        );
+        let summed: f64 = result.attributions.iter().map(|a| a.initial_tokens).sum();
+        assert!(summed <= 5000.0 + 1e-6, "summed={summed} > newContent=5000");
         let big = result
             .attributions
             .iter()

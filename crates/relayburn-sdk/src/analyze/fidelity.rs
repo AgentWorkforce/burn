@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use crate::reader::{
-    Coverage, Fidelity, FidelityClass, TurnRecord, UsageGranularity, classify_fidelity,
+    classify_fidelity, Coverage, Fidelity, FidelityClass, TurnRecord, UsageGranularity,
 };
 
 /// Names of the boolean fields on [`Coverage`]. Mirrors the TS `keyof Coverage`

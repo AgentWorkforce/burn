@@ -312,17 +312,18 @@ mod tests {
     /// actual production wiring path: if `adapter_static`'s return
     /// type stopped fitting the runtime registry's value bound, this
     /// test would fail to compile.
-    static FAKE_PENDING_STAMP_ADAPTER: LazyLock<&'static dyn HarnessAdapter> = LazyLock::new(|| {
-        let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
-            Arc::new(|| PathBuf::from("/tmp/codex-sessions"));
-        let ingest_sessions: IngestSessionsFn =
-            Arc::new(|_ledger_home| Box::pin(async { Ok(IngestReport::default()) }));
-        pending_stamp::adapter_static(PendingStampAdapter::new(
-            "codex",
-            session_root,
-            ingest_sessions,
-        ))
-    });
+    static FAKE_PENDING_STAMP_ADAPTER: LazyLock<&'static dyn HarnessAdapter> =
+        LazyLock::new(|| {
+            let session_root: Arc<dyn Fn() -> PathBuf + Send + Sync> =
+                Arc::new(|| PathBuf::from("/tmp/codex-sessions"));
+            let ingest_sessions: IngestSessionsFn =
+                Arc::new(|_ledger_home| Box::pin(async { Ok(IngestReport::default()) }));
+            pending_stamp::adapter_static(PendingStampAdapter::new(
+                "codex",
+                session_root,
+                ingest_sessions,
+            ))
+        });
 
     /// Module-scoped runtime fake registry. Same value type as the
     /// production [`RUNTIME_ADAPTERS`] above, so this fixture
@@ -363,6 +364,7 @@ mod tests {
     /// The bound is enforced by storing the function pointer in a
     /// const with the explicit signature; mismatched types cause a
     /// compile error here, not a test failure.
-    const _ASSERT_ADAPTER_STATIC_FITS_REGISTRY: fn(PendingStampAdapter) -> &'static dyn HarnessAdapter =
-        pending_stamp::adapter_static;
+    const _ASSERT_ADAPTER_STATIC_FITS_REGISTRY: fn(
+        PendingStampAdapter,
+    ) -> &'static dyn HarnessAdapter = pending_stamp::adapter_static;
 }

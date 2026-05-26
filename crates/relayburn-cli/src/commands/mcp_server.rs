@@ -176,7 +176,12 @@ impl Server {
             }
         };
         if !value.is_object() {
-            write_response(&error_envelope(&Value::Null, -32600, "invalid request", None));
+            write_response(&error_envelope(
+                &Value::Null,
+                -32600,
+                "invalid request",
+                None,
+            ));
             return;
         }
 
@@ -421,11 +426,12 @@ impl Server {
 
         // Mirror TS: when no override and no registered default, surface
         // a more descriptive note than the SDK's generic one.
-        if payload.session_id.is_none() && override_id.is_none() && self.default_session_id.is_none()
+        if payload.session_id.is_none()
+            && override_id.is_none()
+            && self.default_session_id.is_none()
         {
-            payload.note = Some(
-                "no session id provided and server was not registered with one".to_string(),
-            );
+            payload.note =
+                Some("no session id provided and server was not registered with one".to_string());
         }
 
         let value = serde_json::to_value(&payload).unwrap_or(Value::Null);

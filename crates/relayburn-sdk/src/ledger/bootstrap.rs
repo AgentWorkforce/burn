@@ -126,10 +126,7 @@ pub(crate) fn decide_bootstrap(burn_path: &Path) -> BootstrapDecision {
 /// Apply the decision captured by [`decide_bootstrap`]. A no-op for
 /// `BootstrapDecision::Skip`; for `Rebuild`, wipes derivable tables
 /// and replays the JSONL via `writer::append_*`.
-pub(crate) fn apply_bootstrap(
-    burn: &mut Connection,
-    decision: BootstrapDecision,
-) -> Result<()> {
+pub(crate) fn apply_bootstrap(burn: &mut Connection, decision: BootstrapDecision) -> Result<()> {
     match decision {
         BootstrapDecision::Skip => Ok(()),
         BootstrapDecision::Rebuild { jsonl_path } => rebuild_from_jsonl(burn, &jsonl_path),
@@ -372,7 +369,10 @@ mod tests {
         }
         // Bump the sqlite's mtime explicitly so we don't depend on
         // filesystem resolution.
-        set_mtime(&burn, SystemTime::now() + std::time::Duration::from_secs(60));
+        set_mtime(
+            &burn,
+            SystemTime::now() + std::time::Duration::from_secs(60),
+        );
 
         // Append a second turn to the JSONL — but *force* its mtime to
         // be older than sqlite's. The reopen should NOT rebuild and the
@@ -380,7 +380,10 @@ mod tests {
         let mut f = fs::OpenOptions::new().append(true).open(&jsonl).unwrap();
         writeln!(f, "{}", turn_envelope_line("sess-a", "msg-2", 20)).unwrap();
         drop(f);
-        set_mtime(&jsonl, SystemTime::now() - std::time::Duration::from_secs(60));
+        set_mtime(
+            &jsonl,
+            SystemTime::now() - std::time::Duration::from_secs(60),
+        );
 
         let l = Ledger::open(&burn, &content).unwrap();
         assert_eq!(l.count_table("turns").unwrap(), 1);
@@ -403,7 +406,10 @@ mod tests {
         }
 
         // Force sqlite's mtime well into the past.
-        set_mtime(&burn, SystemTime::now() - std::time::Duration::from_secs(3600));
+        set_mtime(
+            &burn,
+            SystemTime::now() - std::time::Duration::from_secs(3600),
+        );
 
         // Append to JSONL — its mtime is now newer than sqlite's.
         let mut f = fs::OpenOptions::new().append(true).open(&jsonl).unwrap();

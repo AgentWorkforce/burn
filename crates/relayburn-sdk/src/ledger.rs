@@ -120,10 +120,7 @@ impl Ledger {
     /// existing row — inferences are pure derived state and a re-parse
     /// can legitimately produce updated `end_ts` / merged `usage`
     /// values.
-    pub fn append_inferences(
-        &mut self,
-        records: &[crate::reader::Inference],
-    ) -> Result<usize> {
+    pub fn append_inferences(&mut self, records: &[crate::reader::Inference]) -> Result<usize> {
         writer::append_inferences(&mut self.conns.burn, records)
     }
 
@@ -468,17 +465,16 @@ impl Ledger {
     pub fn count_reset_targets(&self) -> Result<ResetSummary> {
         let mut rows_dropped = 0i64;
         for table in DERIVABLE_TABLES {
-            let count: i64 = self.conns.burn.query_row(
-                &format!("SELECT COUNT(*) FROM {table}"),
-                [],
-                |r| r.get(0),
-            )?;
+            let count: i64 =
+                self.conns
+                    .burn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
             rows_dropped += count;
         }
-        let stamps_dropped: i64 = self
-            .conns
-            .burn
-            .query_row("SELECT COUNT(*) FROM stamps", [], |r| r.get(0))?;
+        let stamps_dropped: i64 =
+            self.conns
+                .burn
+                .query_row("SELECT COUNT(*) FROM stamps", [], |r| r.get(0))?;
         let content_rows_dropped = content::count_content(&self.conns.content)?;
         Ok(ResetSummary {
             rows_dropped: rows_dropped as usize,

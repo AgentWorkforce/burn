@@ -115,7 +115,8 @@ pub(crate) fn append_compactions(
         for e in events {
             let id = compaction_id_fingerprint(e);
             let json = serde_json::to_string(e)?;
-            let changed = insert.execute(params![id, e.source.wire_str(), e.session_id, e.ts, json])?;
+            let changed =
+                insert.execute(params![id, e.source.wire_str(), e.session_id, e.ts, json])?;
             if changed > 0 {
                 appended += 1;
             }
@@ -209,10 +210,7 @@ pub(crate) fn append_tool_result_events(
 /// if the JSONL grew between runs. The composite PK
 /// `(source, session_id, request_id)` is the natural identity. See issue
 /// #434.
-pub(crate) fn append_inferences(
-    conn: &mut Connection,
-    records: &[Inference],
-) -> Result<usize> {
+pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
     }
@@ -267,7 +265,12 @@ pub(crate) fn append_user_turns(
             let id = user_turn_id_fingerprint(r);
             let json = serde_json::to_string(r)?;
             let changed = insert.execute(params![
-                id, r.source.wire_str(), r.session_id, r.user_uuid, r.ts, json,
+                id,
+                r.source.wire_str(),
+                r.session_id,
+                r.user_uuid,
+                r.ts,
+                json,
             ])?;
             if changed > 0 {
                 appended += 1;
@@ -326,10 +329,7 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn append_content(
-    conn: &mut Connection,
-    records: &[ContentRecord],
-) -> Result<usize> {
+pub(crate) fn append_content(conn: &mut Connection, records: &[ContentRecord]) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
     }
@@ -399,4 +399,3 @@ pub(crate) fn synthesize_relationship(stamp: &Stamp) -> Option<SessionRelationsh
 pub(crate) fn debug_now() -> String {
     now_lex_token()
 }
-

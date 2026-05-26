@@ -368,11 +368,7 @@ fn format_line_range(start: u64, end: u64) -> String {
 // `burn overhead deltas` (#432)
 // ---------------------------------------------------------------------------
 
-fn run_deltas(
-    globals: &GlobalArgs,
-    since: Option<String>,
-    args: OverheadDeltasArgs,
-) -> i32 {
+fn run_deltas(globals: &GlobalArgs, since: Option<String>, args: OverheadDeltasArgs) -> i32 {
     let opts = ContextDeltaOpts {
         session: args.session.clone(),
         since: since.as_deref().and_then(parse_since_duration),
@@ -626,9 +622,7 @@ mod tests {
                 approx_bytes: 400,
                 truncated: false,
             },
-            InterveningStep::Compaction {
-                tokens_freed: 5000,
-            },
+            InterveningStep::Compaction { tokens_freed: 5000 },
         ];
         let s = driver_summary(&steps);
         assert!(s.contains("compaction"));

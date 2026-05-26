@@ -46,31 +46,28 @@
 //! - `tokens.output`        — completion output tokens for this span.
 //! - `tokens.cache_read`    — cached-prefix tokens read for this span.
 //! - `tokens.cache_write`   — sum of `cache_create_5m` + `cache_create_1h`
-//!                            for this span; the 5m/1h split is harness-
-//!                            specific and not exposed here.
+//!   for this span; the 5m/1h split is harness-specific and not exposed here.
 //! - `tokens.reasoning`     — extended-thinking reasoning tokens.
 //!
 //! Identity / context (encoded as [`AttrValue::String`]):
 //! - `model`                — model identifier the inference ran against.
 //! - `request_id`           — upstream Claude `requestId` (or the fallback
-//!                            key — see [`crate::reader::InferenceKeySource`]).
+//!   key — see [`crate::reader::InferenceKeySource`]).
 //! - `agent_id`             — `<agentId>` filename portion of a subagent
-//!                            sidecar transcript.
+//!   sidecar transcript.
 //! - `tool_use_id`          — id of a `tool_use` block; matches the
-//!                            paired `tool_result` event's `tool_use_id`.
+//!   paired `tool_result` event's `tool_use_id`.
 //! - `cwd`                  — working directory active for the turn (when
-//!                            recorded by the harness; absent today on the
-//!                            `TurnRecord` shape but reserved here so
-//!                            future captures need no new key).
+//!   recorded by the harness; absent today on the `TurnRecord` shape but
+//!   reserved here so future captures need no new key).
 //! - `mode`                 — harness mode (plan / accept-edits / etc.) —
-//!                            reserved for the same reason as `cwd`.
+//!   reserved for the same reason as `cwd`.
 //! - `stop_reason`          — kebab-case [`StopReason`] wire string on the
-//!                            root span when the trailing assistant row
-//!                            carried one.
+//!   root span when the trailing assistant row carried one.
 //!
 //! Flags (encoded as [`AttrValue::Bool`]):
 //! - `unattached`           — `true` on `Subagent` spans whose sidecar
-//!                            could not be paired to a parent `ToolUse`.
+//!   could not be paired to a parent `ToolUse`.
 //!
 //! # Status mapping
 //!
@@ -340,9 +337,7 @@ impl SpanNode {
     /// Depth-first iterator yielding `&SpanNode` for `self` and every
     /// descendant. Useful for "sum scalars across the tree" projections.
     pub fn iter_dfs(&self) -> SpanDfsIter<'_> {
-        SpanDfsIter {
-            stack: vec![self],
-        }
+        SpanDfsIter { stack: vec![self] }
     }
 }
 
@@ -541,10 +536,8 @@ mod tests {
     fn iter_dfs_visits_parent_before_children() {
         let mut root = SpanNode::new(SpanKind::Turn, "turn");
         let mut a = SpanNode::new(SpanKind::Inference, "a");
-        a.children
-            .push(SpanNode::new(SpanKind::ToolUse, "Bash"));
-        a.children
-            .push(SpanNode::new(SpanKind::ToolUse, "Read"));
+        a.children.push(SpanNode::new(SpanKind::ToolUse, "Bash"));
+        a.children.push(SpanNode::new(SpanKind::ToolUse, "Read"));
         let b = SpanNode::new(SpanKind::Inference, "b");
         root.children.push(a);
         root.children.push(b);
@@ -574,9 +567,6 @@ mod tests {
     #[test]
     fn span_status_is_error_helper() {
         assert!(!SpanStatus::Ok.is_error());
-        assert!(SpanStatus::Error {
-            msg: "x".into()
-        }
-        .is_error());
+        assert!(SpanStatus::Error { msg: "x".into() }.is_error());
     }
 }

@@ -173,11 +173,7 @@ fn read_config_file(path: &Path) -> Option<RawConfig> {
             // Missing config file is the common case and not worth
             // mentioning — same fail-quiet behaviour as TS.
             if err.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "[burn] warning: could not read {}: {}",
-                    path.display(),
-                    err
-                );
+                eprintln!("[burn] warning: could not read {}: {}", path.display(), err);
             }
             return None;
         }
@@ -357,11 +353,7 @@ mod tests {
         with_clean_env(|| {
             let tmp = TempDir::new().unwrap();
             let path = tmp.path().join("config.json");
-            std::fs::write(
-                &path,
-                r#"{"content":{"store":"full","retentionDays":-1}}"#,
-            )
-            .unwrap();
+            std::fs::write(&path, r#"{"content":{"store":"full","retentionDays":-1}}"#).unwrap();
             let cfg = load_config_at(&path).unwrap();
             assert_eq!(cfg.content.retention_days, Retention::Forever);
         });
@@ -417,11 +409,7 @@ mod tests {
         with_clean_env(|| {
             let tmp = TempDir::new().unwrap();
             let path = tmp.path().join("config.json");
-            std::fs::write(
-                &path,
-                r#"{"content":{"store":"full","retentionDays":1.5}}"#,
-            )
-            .unwrap();
+            std::fs::write(&path, r#"{"content":{"store":"full","retentionDays":1.5}}"#).unwrap();
             let cfg = load_config_at(&path).unwrap();
             assert_eq!(cfg.content.retention_days, Retention::Days(1.5));
         });
@@ -454,11 +442,7 @@ mod tests {
         with_clean_env(|| {
             let tmp = TempDir::new().unwrap();
             let path = tmp.path().join("config.json");
-            std::fs::write(
-                &path,
-                r#"{"content":{"store":"bogus","retentionDays":7}}"#,
-            )
-            .unwrap();
+            std::fs::write(&path, r#"{"content":{"store":"bogus","retentionDays":7}}"#).unwrap();
             let cfg = load_config_at(&path).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::Full);
             assert_eq!(cfg.content.retention_days, Retention::Days(7.0));

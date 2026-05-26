@@ -141,7 +141,10 @@ mod tests {
         assert_eq!(plan.args[0], "--session-id");
         let sid = plan.args.get(1).cloned().unwrap_or_default();
         assert!(plan.session_id.as_deref() == Some(sid.as_str()));
-        assert_eq!(&plan.args[2..], &["--resume".to_string(), "abc".to_string()]);
+        assert_eq!(
+            &plan.args[2..],
+            &["--resume".to_string(), "abc".to_string()]
+        );
         // Env override carries the same id so a nested `burn …` inherits it.
         assert!(plan
             .env_overrides

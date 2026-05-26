@@ -76,7 +76,10 @@ mod tests {
     #[test]
     fn parse_with_fractional() {
         // 2026-01-01T00:00:00.500Z == 1767225600500
-        assert_eq!(parse_iso_ms("2026-01-01T00:00:00.500Z"), Some(1_767_225_600_500));
+        assert_eq!(
+            parse_iso_ms("2026-01-01T00:00:00.500Z"),
+            Some(1_767_225_600_500)
+        );
     }
 
     #[test]

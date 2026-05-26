@@ -221,11 +221,7 @@ impl<'a> Serializer for StableSerializer<'a> {
             current_key: None,
         })
     }
-    fn serialize_struct(
-        self,
-        _: &'static str,
-        len: usize,
-    ) -> Result<StableMap<'a>, StableError> {
+    fn serialize_struct(self, _: &'static str, len: usize) -> Result<StableMap<'a>, StableError> {
         Ok(StableMap {
             out: self.out,
             entries: Vec::with_capacity(len),
@@ -605,10 +601,7 @@ mod tests {
             zebra: u32,
             apple: u32,
         }
-        let s = stable_stringify(&Args {
-            zebra: 1,
-            apple: 2,
-        });
+        let s = stable_stringify(&Args { zebra: 1, apple: 2 });
         assert_eq!(s, r#"{"apple":2,"zebra":1}"#);
     }
 
