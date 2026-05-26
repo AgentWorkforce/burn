@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-05-26
+
 ### Added
 
 - `fingerprint({ session?, project?, ledgerHome? })` returns a

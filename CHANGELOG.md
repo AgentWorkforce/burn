@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-05-26
+
 ### Added
 
 - `burn overhead deltas`: per-inference context-window attribution. New `--session`, `--top`, `--min-delta`, `--owner`, `--explain`, `--json` flags surface "what blew up my context between inference N and inference N+1?" — pairs same-rail `Inference` spans, attributes the delta in `input + cache_read + cache_write` to intervening `ToolResult` / `UserPrompt` / `SystemReminder` leaves, surfaces compaction events as their own row (never a negative delta), and isolates main-rail deltas from subagent rails. SDK entry point: `LedgerHandle::context_delta(opts)`. (#432)

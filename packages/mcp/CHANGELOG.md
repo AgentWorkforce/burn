@@ -4,6 +4,8 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-05-26
+
 ### Added
 
 - `createFingerprintTool()` factory + `burn__fingerprint` tool wrapping the
