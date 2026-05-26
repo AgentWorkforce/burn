@@ -123,7 +123,7 @@ jobs:
       - name: Lockstep Cargo.toml to release version
         # When invoked via the publish workflow, sed the workspace
         # `[workspace.package].version` (and the path-dep `version = "X.Y"`
-        # pin in `crates/relayburn-sdk-node/Cargo.toml`) so the napi-rs
+        # pins in crates that depend on `relayburn-sdk`) so the napi-rs
         # binding built below carries the post-bump `CARGO_PKG_VERSION`.
         # Mirrors the lockstep regex in publish.yml and cli-build.yml.
         #
@@ -135,8 +135,10 @@ jobs:
           RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}')
           echo "Rust workspace lockstep: $RUST_VER (minor pin: $RUST_MINOR)"
           sed -i.bak -E "s/^version = \"[^\"]+\"$/version = \"$RUST_VER\"/" Cargo.toml
-          sed -i.bak -E "s|(relayburn-sdk = \\{ path = \"\\.\\./relayburn-sdk\", version = \")[^\"]+(\" \\})|\\1$RUST_MINOR\\2|" crates/relayburn-sdk-node/Cargo.toml
-          rm -f Cargo.toml.bak crates/relayburn-sdk-node/Cargo.toml.bak
+          for crate in relayburn-cli relayburn-sdk-node; do
+            sed -i.bak -E "s|(relayburn-sdk = \\{ path = \"\\.\\./relayburn-sdk\", version = \")[^\"]+(\" \\})|\\1$RUST_MINOR\\2|" "crates/$crate/Cargo.toml"
+          done
+          rm -f Cargo.toml.bak crates/relayburn-cli/Cargo.toml.bak crates/relayburn-sdk-node/Cargo.toml.bak
 
       - name: Build napi binding for ${{ matrix.target }}
         # `napi build` reads `packages/sdk-node/package.json`'s `napi`
