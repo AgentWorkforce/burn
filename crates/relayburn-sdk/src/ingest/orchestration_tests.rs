@@ -30,8 +30,8 @@ use std::path::{Path, PathBuf};
 
 use crate::ingest::cursors::{load_cursors, ClaudeCursor, FileCursor};
 use crate::ingest::ingest::{
-    ingest_all, ingest_claude_projects, ingest_claude_session, ingest_codex_sessions,
-    ingest_opencode_sessions, IngestOptions, IngestRoots,
+    ingest_all, ingest_claude_projects, ingest_claude_session, ingest_claude_transcript_path,
+    ingest_codex_sessions, ingest_opencode_sessions, IngestOptions, IngestRoots,
 };
 use crate::ingest::pending_stamps::{write_pending_stamp, PendingStampHarness, WriteOptions};
 use crate::ledger::{Enrichment, Ledger, LedgerLayout, Query};
@@ -402,6 +402,81 @@ fn ingest_claude_session_writes_eof_cursor_so_followup_skips_file() {
         "follow-up ingest_all reported {} new turns; cursor should have skipped the file",
         r2.appended_turns
     );
+}
+
+/// `ingest_claude_transcript_path` is the SDK fast-path used by `burn
+/// ingest --hook claude`: hand it the JSONL the Claude Code hook
+/// payload points at and it must ingest only that one session,
+/// persist an EOF cursor for it, and a follow-up `ingest_all` sweep
+/// must skip the file. Mirrors
+/// `ingest_claude_session_writes_eof_cursor_so_followup_skips_file`
+/// but exercises the path-based public entrypoint instead of the
+/// cwd+sessionId-based one so the hook's transcript_path stays an
+/// opaque path (no cwd decoding round-trip).
+#[test]
+fn ingest_claude_transcript_path_writes_eof_cursor_so_followup_skips_file() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let sid = "abcdef12-3456-7890-abcd-ef1234567899";
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-myproject");
+    fs::create_dir_all(&project_dir).unwrap();
+    let session_file = project_dir.join(format!("{sid}.jsonl"));
+    fs::write(&session_file, claude_minimal_session(sid)).unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    let r = ingest_claude_transcript_path(&mut ledger, &session_file, &opts).unwrap();
+    assert!(r.appended_turns >= 1, "expected ≥1 turn appended");
+    assert_eq!(r.ingested_sessions, 1);
+
+    let cursors = load_cursors(&ledger).unwrap();
+    let key = session_file.to_string_lossy().into_owned();
+    match cursors.get_typed(&key) {
+        Some(FileCursor::Claude(ClaudeCursor { offset_bytes, .. })) => {
+            assert_eq!(offset_bytes, fs::metadata(&session_file).unwrap().len());
+        }
+        other => panic!("expected ClaudeCursor at EOF for {key}, got {other:?}"),
+    }
+
+    let before_count = ledger.query_turns(&Query::for_session(sid)).unwrap().len();
+    let r2 = ingest_all(&mut ledger, &opts).unwrap();
+    let after_count = ledger.query_turns(&Query::for_session(sid)).unwrap().len();
+    assert_eq!(
+        before_count, after_count,
+        "follow-up ingest_all should not re-append turns when cursor is at EOF"
+    );
+    assert_eq!(r2.appended_turns, 0);
+}
+
+/// Missing transcript path is a no-op, not an error: hook callers
+/// must never fail the parent invocation just because the JSONL was
+/// rotated or never written. Returns an empty report; subsequent
+/// queries must still succeed.
+#[test]
+fn ingest_claude_transcript_path_missing_file_is_empty_report() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let bogus = tmp.path().join("never-existed.jsonl");
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+    let r = ingest_claude_transcript_path(&mut ledger, &bogus, &opts).unwrap();
+    assert_eq!(r.ingested_sessions, 0);
+    assert_eq!(r.appended_turns, 0);
 }
 
 // --- helpers -------------------------------------------------------------

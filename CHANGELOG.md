@@ -17,6 +17,19 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   `request_id`, `tool_use_id`, `agent_id`, `stop_reason`) for
   downstream consumers (inference-flow DAG, context-delta attribution).
   (#430)
+- `relayburn-sdk`: `ingest_claude_transcript_path(ledger, path, opts)` —
+  per-transcript Claude fast-path used by `burn ingest --hook claude` so
+  the hook ingests only the one JSONL the payload points at instead of a
+  full sweep.
+
+### Changed
+
+- `relayburn-cli`: `burn ingest --hook claude` now drives the new
+  single-transcript fast-path, bounding per-hook cost to one JSONL parse.
+- `relayburn-cli`: `burn ingest --quiet` is now accepted in default
+  (one-shot) and `--watch` modes (no longer hook-only). Suppresses the
+  progress spinner, watch banner, and per-tick summaries; one-shot mode
+  still writes its final summary line to stdout for pipeline capture.
 - `relayburn-sdk`: `Inference` aggregate keys per-API-call rollups by
   `(source, session_id, request_id)` with merged usage and `kind`
   (`reasoning` / `message` / `tool-use` / `mixed`). Read via
@@ -37,9 +50,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-sdk`: Claude Task subagent sidecar discovery + pairing. New `discover_subagents` / `pair_to_main` / `count_subagents_under` helpers under `crate::reader::claude::subagents` walk `<sessionId>/subagents/agent-*.jsonl`, pair each sidecar against the parent's `toolUseResult.agentId`, and surface unpaired sidecars (slash-command synthetic dispatches and crash-mid-dispatch) as the `UnattachedGroup` bucket. Discovery is lazy — the directory is only stat'd when something asks for it. (#435)
 - `burn summary`: new `subagents: X paired, Y orphan` line (and matching `subagents` key in `--json`) populated by a lazy walk over `~/.claude/projects/`. Skipped entirely when no sidecars exist anywhere reachable so pre-#435 outputs stay byte-identical. Honors `BURN_CLAUDE_PROJECTS_DIR` for test sandboxing. (#435)
 - Ledger schema bumped to v4 — new nullable `turns.subagent_id TEXT` column denormalizes `TurnRecord.subagent.agent_id` so subagent rows are queryable without re-deserializing `record_json`. Migrated in place by `ALTER TABLE … ADD COLUMN`; pre-v4 rows stay `NULL` and are backfilled by `burn state rebuild`. (#435)
-
-### Changed
-
+- `relayburn-sdk`: Claude slash-command triads (`/review`, `/init`, custom skills) now collapse into one synthetic `Skill` activity instead of inflating the activity count three rows at a time. Detection pins on the caveat → invocation → stdout parent-UUID chain shape with `<command-name>` / `<local-command-stdout>` purpose checks, so real user prompts that happen to look structurally similar are not misdetected. Token attribution stays on the underlying assistant rows — `Skill` is a view, not a billing reattribution. New `ActivityCategory::Skill` variant and `detect_slash_triads` helper. (#438)
 - `relayburn-sdk`: Claude Code parser now skips harness-injected
   `<task-notification>` rows when emitting `UserTurnRecord`s. The detector
   matches shape AND purpose across three envelope variants
