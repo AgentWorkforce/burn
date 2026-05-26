@@ -1,0 +1,151 @@
+{
+  "sessionId": "11111111-1111-1111-1111-111111111111",
+  "turnCount": 3,
+  "totalTurnCount": 3,
+  "truncated": false,
+  "nodes": [
+    {
+      "id": "msg-c1-1:inf-0",
+      "kind": "inference",
+      "turnNumber": 0,
+      "rail": 0,
+      "label": "inf #1",
+      "model": "claude-sonnet-4-6",
+      "tokens": {
+        "input": 1500,
+        "output": 220,
+        "cacheRead": 5000,
+        "cacheWrite": 0,
+        "reasoning": 0
+      },
+      "durationMs": 0,
+      "status": {
+        "code": "ok"
+      },
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "msg-c1-1:tu-tu-c1-r1",
+      "kind": "tool-use",
+      "turnNumber": 0,
+      "rail": 0,
+      "label": "Read",
+      "model": null,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0
+      },
+      "durationMs": 0,
+      "status": {
+        "code": "ok"
+      },
+      "x": 0,
+      "y": 32
+    },
+    {
+      "id": "msg-c1-2:inf-0",
+      "kind": "inference",
+      "turnNumber": 1,
+      "rail": 0,
+      "label": "inf #1",
+      "model": "claude-sonnet-4-6",
+      "tokens": {
+        "input": 1800,
+        "output": 350,
+        "cacheRead": 6000,
+        "cacheWrite": 200,
+        "reasoning": 0
+      },
+      "durationMs": 0,
+      "status": {
+        "code": "ok"
+      },
+      "x": 96,
+      "y": 0
+    },
+    {
+      "id": "msg-c1-2:tu-tu-c1-e1",
+      "kind": "tool-use",
+      "turnNumber": 1,
+      "rail": 0,
+      "label": "Edit",
+      "model": null,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0
+      },
+      "durationMs": 0,
+      "status": {
+        "code": "ok"
+      },
+      "x": 96,
+      "y": 32
+    },
+    {
+      "id": "msg-c1-3:inf-0",
+      "kind": "inference",
+      "turnNumber": 2,
+      "rail": 0,
+      "label": "inf #1",
+      "model": "claude-sonnet-4-6",
+      "tokens": {
+        "input": 1200,
+        "output": 180,
+        "cacheRead": 7000,
+        "cacheWrite": 0,
+        "reasoning": 0
+      },
+      "durationMs": 0,
+      "status": {
+        "code": "ok"
+      },
+      "x": 192,
+      "y": 0
+    },
+    {
+      "id": "msg-c1-3:tu-tu-c1-b1",
+      "kind": "tool-use",
+      "turnNumber": 2,
+      "rail": 0,
+      "label": "Bash",
+      "model": null,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0
+      },
+      "durationMs": 0,
+      "status": {
+        "code": "ok"
+      },
+      "x": 192,
+      "y": 32
+    }
+  ],
+  "edges": [
+    {
+      "from": "msg-c1-1:inf-0",
+      "to": "msg-c1-1:tu-tu-c1-r1",
+      "kind": "default"
+    },
+    {
+      "from": "msg-c1-2:inf-0",
+      "to": "msg-c1-2:tu-tu-c1-e1",
+      "kind": "default"
+    },
+    {
+      "from": "msg-c1-3:inf-0",
+      "to": "msg-c1-3:tu-tu-c1-b1",
+      "kind": "default"
+    }
+  ]
+}

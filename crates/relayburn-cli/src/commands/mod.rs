@@ -19,6 +19,7 @@
 //! here. Shared rendering helpers live in `crate::render`.
 
 pub mod compare;
+pub mod flow;
 pub mod hotspots;
 pub mod ingest;
 pub mod mcp_server;

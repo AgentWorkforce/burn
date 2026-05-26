@@ -31,6 +31,7 @@ const SUBCOMMANDS: &[&str] = &[
     "state",
     "sessions",
     "stamps",
+    "flow",
     "ingest",
     "mcp-server",
 ];

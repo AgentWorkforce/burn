@@ -4325,6 +4325,23 @@ impl LedgerHandle {
         }
         Ok(out)
     }
+
+    /// Build the per-session inference-flow DAG (issue #431).
+    ///
+    /// Convenience wrapper: pulls the session's [`TurnSpanTree`]s via
+    /// [`Self::session_span_trees`] and projects them through
+    /// [`crate::analyze::flow_graph_from_trees`]. Pure read; no DB
+    /// writes, no caching. Honors [`crate::analyze::FlowOpts::max_turns`].
+    pub fn flow_graph(
+        &self,
+        session_id: &str,
+        opts: crate::analyze::FlowOpts,
+    ) -> Result<crate::analyze::FlowGraph> {
+        let trees = self.session_span_trees(session_id)?;
+        Ok(crate::analyze::flow_graph_from_trees(
+            session_id, &trees, opts,
+        ))
+    }
 }
 
 /// Bucket subagent transcripts into per-turn lists for the span-tree
@@ -4512,6 +4529,16 @@ pub fn session_span_trees(
 ) -> Result<Vec<crate::analyze::span_tree::TurnSpanTree>> {
     let handle = open_with(ledger_home.as_deref())?;
     handle.session_span_trees(session_id)
+}
+
+/// Free-function form of [`LedgerHandle::flow_graph`].
+pub fn flow_graph(
+    session_id: &str,
+    opts: crate::analyze::FlowOpts,
+    ledger_home: Option<PathBuf>,
+) -> Result<crate::analyze::FlowGraph> {
+    let handle = open_with(ledger_home.as_deref())?;
+    handle.flow_graph(session_id, opts)
 }
 
 // ---------------------------------------------------------------------------

@@ -107,6 +107,9 @@ pub enum Command {
     /// Enumerate sessions in the ledger.
     Sessions(SessionsArgs),
 
+    /// Visualize a session's inference flow as an SVG / Mermaid DAG.
+    Flow(FlowArgs),
+
     /// Inspect or export stamps in the ledger.
     Stamps(StampsArgs),
 
@@ -570,4 +573,44 @@ pub struct StampsExportArgs {
     /// Otherwise, writes to the specified file.
     #[arg(short, long, value_name = "PATH")]
     pub out: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// `burn flow` — inference-flow DAG visualization
+// ---------------------------------------------------------------------------
+
+/// `burn flow --session <id>` — render a session's inference-flow DAG.
+///
+/// Default: emit a Mermaid `graph LR` block to stdout (handy for pasting
+/// into PR descriptions and markdown notes). Pass `--output flow.svg` to
+/// write an SVG to disk instead, or `--json` for the raw `FlowGraph`
+/// projection for downstream tooling.
+///
+/// `--mermaid` forces Mermaid output to stdout even when `--output` is
+/// set; this is how you snapshot Mermaid alongside an SVG render.
+///
+/// `--serve` (local web view) is intentionally not in scope for this
+/// command yet — see the follow-up issue.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct FlowArgs {
+    /// Session id to render. Required — the flow view is single-session.
+    #[arg(long, value_name = "ID")]
+    pub session: String,
+
+    /// Write SVG to this path. Without `--output` (and without
+    /// `--mermaid` / `--json`), Mermaid is emitted to stdout.
+    #[arg(long, short = 'o', value_name = "PATH")]
+    pub output: Option<PathBuf>,
+
+    /// Force Mermaid output to stdout regardless of `--output`. Useful
+    /// for piping both an SVG file and a Mermaid block in one
+    /// invocation: `burn flow --session ... --output flow.svg --mermaid`.
+    #[arg(long)]
+    pub mermaid: bool,
+
+    /// Cap the number of turns rendered. Defaults to 50 — 200-turn
+    /// sessions get too wide to read in static SVG / Mermaid. Pass
+    /// `0` to disable the cap.
+    #[arg(long, value_name = "N")]
+    pub max_turns: Option<u32>,
 }
