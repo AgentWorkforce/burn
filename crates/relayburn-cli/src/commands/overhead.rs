@@ -29,7 +29,7 @@ pub fn run(globals: &GlobalArgs, args: OverheadArgs) -> i32 {
         Some(OverheadAction::Trim(trim)) => {
             run_trim(globals, args.project, args.since, args.kind, trim.top)
         }
-        Some(OverheadAction::Deltas(deltas)) => run_deltas(globals, deltas),
+        Some(OverheadAction::Deltas(deltas)) => run_deltas(globals, args.since, deltas),
         None => run_report(globals, args.project, args.since, args.kind),
     }
 }
@@ -368,10 +368,14 @@ fn format_line_range(start: u64, end: u64) -> String {
 // `burn overhead deltas` (#432)
 // ---------------------------------------------------------------------------
 
-fn run_deltas(globals: &GlobalArgs, args: OverheadDeltasArgs) -> i32 {
+fn run_deltas(
+    globals: &GlobalArgs,
+    since: Option<String>,
+    args: OverheadDeltasArgs,
+) -> i32 {
     let opts = ContextDeltaOpts {
         session: args.session.clone(),
-        since: None,
+        since: since.as_deref().and_then(parse_since_duration),
         top: args.top,
         min_delta: args.min_delta,
         owner: args.owner.into(),
@@ -468,29 +472,61 @@ fn render_human_deltas(deltas: &[ContextDelta], explain: bool) -> io::Result<()>
     Ok(())
 }
 
+/// Parse the CLI's relative-range `--since` form (`24h`, `7d`, `4w`, `2m`)
+/// into a [`std::time::Duration`]. ISO-timestamp forms are accepted by the
+/// SDK's `normalize_since` elsewhere, but the deltas verb only takes a
+/// relative window today (`ContextDeltaOpts::since: Option<Duration>`).
+/// Unrecognized inputs fall through to `None` — the SDK then applies the
+/// 24h default.
+fn parse_since_duration(s: &str) -> Option<std::time::Duration> {
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let unit = *bytes.last()? as char;
+    if !matches!(unit, 'h' | 'd' | 'w' | 'm') {
+        return None;
+    }
+    let num = &s[..s.len() - 1];
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u64 = num.parse().ok()?;
+    let secs = match unit {
+        'h' => n.checked_mul(3_600)?,
+        'd' => n.checked_mul(86_400)?,
+        'w' => n.checked_mul(7 * 86_400)?,
+        'm' => n.checked_mul(30 * 86_400)?,
+        _ => unreachable!(),
+    };
+    Some(std::time::Duration::from_secs(secs))
+}
+
 fn short_turn_label(turn_id: &str) -> String {
     // Turn ids on Claude are `msg-...` UUIDs; trim to a short prefix
-    // for the table. Keep the original for JSON output.
+    // for the table. Keep the original for JSON output. Use
+    // `chars().take(8)` rather than byte slicing so non-ASCII ids
+    // (defensive — Claude ids are ASCII, but the helper is generic)
+    // don't panic on a mid-byte cut.
     let trimmed = turn_id.trim_start_matches("msg_");
     let trimmed = trimmed.trim_start_matches("msg-");
-    if trimmed.len() > 8 {
-        format!("T{}", &trimmed[..8])
-    } else {
-        format!("T{trimmed}")
-    }
+    let short: String = trimmed.chars().take(8).collect();
+    format!("T{short}")
 }
 
 fn short_agent_label(agent_id: &str) -> String {
     let trimmed = agent_id.trim_start_matches("agent-");
-    if trimmed.len() > 8 {
-        trimmed[..8].to_string()
-    } else {
-        trimmed.to_string()
-    }
+    trimmed.chars().take(8).collect()
 }
 
 fn format_signed_tokens(n: i64) -> String {
-    let sign = if n > 0 { "+" } else { "" };
+    let sign = if n > 0 {
+        "+"
+    } else if n < 0 {
+        "-"
+    } else {
+        ""
+    };
     format!("{sign}{}", format_tokens(n.unsigned_abs()))
 }
 

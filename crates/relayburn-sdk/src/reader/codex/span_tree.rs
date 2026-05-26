@@ -41,6 +41,7 @@ use crate::reader::inference::{Inference, InferenceKeySource, InferenceKind, Too
 use crate::reader::types::{
     StopReason, ToolCall, ToolResultEventRecord, ToolResultStatus, TurnRecord,
 };
+use crate::util::time::parse_iso_ms;
 
 /// Inputs to the Codex span-tree builder. Mirrors the Claude builder's
 /// input struct minus the subagent transcripts.
@@ -232,6 +233,16 @@ fn build_inference_node(
                 if tool_node.end_ms < result_node.end_ms {
                     tool_node.end_ms = result_node.end_ms;
                 }
+                // Propagate the result's error up to the tool_use parent.
+                // The Codex `ToolCall::is_error` only reflects what the
+                // assistant row claimed; the runtime tool_result event
+                // is the ground truth. Without this, an errored result
+                // on a tool_use that the assistant didn't flag would
+                // never reach the parent inference's `child_error`
+                // rollup below.
+                if result_node.status.is_error() {
+                    tool_node.set_error("tool_error");
+                }
                 tool_node.children.push(result_node);
             }
         }
@@ -270,6 +281,11 @@ fn build_tool_result_node(events: &[&ToolResultEventRecord]) -> Option<SpanNode>
     if let Some(bytes) = final_event.output_bytes {
         node.set_attr("output_bytes", AttrValue::Int(bytes as i64));
     }
+    // Propagate `output_truncated` mirroring the Claude builder (see the
+    // matching block in `reader::claude::span_tree::build_tool_result_node`).
+    if let Some(truncated) = final_event.output_truncated {
+        node.set_attr("output_truncated", AttrValue::Bool(truncated));
+    }
     if final_event.is_error.unwrap_or(false) {
         node.set_error("tool_error");
     }
@@ -286,58 +302,6 @@ fn apply_stop_reason_status(root: &mut SpanNode, reason: Option<StopReason>) {
         Some(StopReason::MaxTokens) => root.set_error("max_tokens"),
         _ => return,
     };
-}
-
-/// Same Howard-Hinnant ISO parser the Claude builder uses. Duplicated
-/// to keep each builder self-contained.
-fn parse_iso_ms(s: &str) -> Option<i64> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    if !(bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && (bytes[10] == b'T' || bytes[10] == b' ')
-        && bytes[13] == b':'
-        && bytes[16] == b':')
-    {
-        return None;
-    }
-    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
-    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
-    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
-    let hour: u32 = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
-    let minute: u32 = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
-    let second: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
-    let mut millis: i64 = 0;
-    let mut idx = 19;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        idx += 1;
-        let frac_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        let mut frac = std::str::from_utf8(&bytes[frac_start..idx]).ok()?.to_string();
-        if frac.len() > 3 {
-            frac.truncate(3);
-        }
-        while frac.len() < 3 {
-            frac.push('0');
-        }
-        millis = frac.parse().ok()?;
-    }
-    let m = month as i64;
-    let d = day as i64;
-    let y = if m <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
-    let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days_from_epoch = era * 146_097 + (doe as i64) - 719_468;
-    let secs =
-        days_from_epoch * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
-    Some(secs * 1_000 + millis)
 }
 
 #[cfg(test)]

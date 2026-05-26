@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use crate::analyze::pricing::PricingTable;
 use crate::analyze::span_tree::{AttrValue, SpanKind, SpanNode, TurnSpanTree};
 use crate::reader::CompactionEvent;
+use crate::util::time::parse_iso_ms;
 
 /// Approximate bytes-per-token ratio used when no real tokenizer pass is
 /// available. Mirrors the rule of thumb used elsewhere in burn for
@@ -277,7 +278,9 @@ pub fn deltas_for_session(
     }
     let timeline = build_timeline(trees);
     let mut compactions_sorted: Vec<&CompactionEvent> = compactions.iter().collect();
-    compactions_sorted.sort_by_key(|c| parse_iso_ms(&c.ts).unwrap_or(0));
+    // `sort_by_cached_key` so the relatively expensive `parse_iso_ms` runs once
+    // per element rather than once per comparison.
+    compactions_sorted.sort_by_cached_key(|c| parse_iso_ms(&c.ts).unwrap_or(0));
 
     let mut per_rail: HashMap<OwnerRail, Vec<usize>> = HashMap::new();
     for (idx, item) in timeline.iter().enumerate() {
@@ -376,13 +379,16 @@ pub fn deltas_for_session(
         }
     }
 
-    // Sort by delta descending, ties broken by turn_id then inference_idx
-    // so the output is deterministic across HashMap iteration order.
+    // Sort by delta descending, with a full lex chain so the output is
+    // deterministic across HashMap iteration order even when multiple
+    // rails / sessions tie on (delta_tokens, turn_id, inference_idx).
     out.sort_by(|a, b| {
         b.delta_tokens
             .cmp(&a.delta_tokens)
             .then_with(|| a.turn_id.cmp(&b.turn_id))
             .then_with(|| a.inference_idx.cmp(&b.inference_idx))
+            .then_with(|| owner_rail_sort_key(&a.owner_rail).cmp(&owner_rail_sort_key(&b.owner_rail)))
+            .then_with(|| a.session_id.cmp(&b.session_id))
     });
 
     let top = opts.effective_top() as usize;
@@ -390,6 +396,16 @@ pub fn deltas_for_session(
         out.truncate(top);
     }
     out
+}
+
+/// Stable lex key for sorting `OwnerRail` so tie-breakers are deterministic
+/// regardless of HashMap iteration order. `Main` sorts before any subagent;
+/// subagents sort by `agent_id`.
+fn owner_rail_sort_key(rail: &OwnerRail) -> (&str, &str) {
+    match rail {
+        OwnerRail::Main => ("main", ""),
+        OwnerRail::Subagent { agent_id } => ("subagent", agent_id.as_str()),
+    }
 }
 
 fn rail_passes_filter(rail: &OwnerRail, filter: OwnerFilter) -> bool {
@@ -629,61 +645,6 @@ fn attr_int(node: &SpanNode, key: &str) -> Option<i64> {
         Some(AttrValue::Int(i)) => Some(*i),
         _ => None,
     }
-}
-
-/// ISO-8601 -> Unix-ms. Mirror of the parsers elsewhere in the SDK; kept
-/// here so this module has no dependency on `reader::claude::span_tree`'s
-/// internals (which is a peer module, not an upstream).
-fn parse_iso_ms(s: &str) -> Option<i64> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    if !(bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && (bytes[10] == b'T' || bytes[10] == b' ')
-        && bytes[13] == b':'
-        && bytes[16] == b':')
-    {
-        return None;
-    }
-    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
-    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
-    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
-    let hour: u32 = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
-    let minute: u32 = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
-    let second: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
-    let mut millis: i64 = 0;
-    let mut idx = 19;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        idx += 1;
-        let frac_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        let mut frac = std::str::from_utf8(&bytes[frac_start..idx])
-            .ok()?
-            .to_string();
-        if frac.len() > 3 {
-            frac.truncate(3);
-        }
-        while frac.len() < 3 {
-            frac.push('0');
-        }
-        millis = frac.parse().ok()?;
-    }
-    let m = month as i64;
-    let d = day as i64;
-    let y = if m <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
-    let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days_from_epoch = era * 146_097 + (doe as i64) - 719_468;
-    let secs =
-        days_from_epoch * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
-    Some(secs * 1_000 + millis)
 }
 
 // ---------------------------------------------------------------------------

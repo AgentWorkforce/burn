@@ -4235,9 +4235,23 @@ impl LedgerHandle {
         let source = turns[0].source;
 
         // Bulk-load the per-session sidecar tables.
-        let inferences = self.inner.query_inferences(&session_q).unwrap_or_default();
-        let tool_result_events =
-            self.inner.query_tool_result_events(&session_q).unwrap_or_default();
+        //
+        // These tables landed in later schema versions (see #434 / #444);
+        // a pre-schema ledger reports "no such table" / "no such column".
+        // Tolerate that single class of failure so the span-tree builder
+        // still works on older snapshots, but propagate every other read
+        // error so corrupted ledgers don't silently produce truncated
+        // span trees (which would mis-attribute downstream context deltas).
+        let inferences = match self.inner.query_inferences(&session_q) {
+            Ok(v) => v,
+            Err(err) if is_schema_missing(&err) => Vec::new(),
+            Err(err) => return Err(err.into()),
+        };
+        let tool_result_events = match self.inner.query_tool_result_events(&session_q) {
+            Ok(v) => v,
+            Err(err) if is_schema_missing(&err) => Vec::new(),
+            Err(err) => return Err(err.into()),
+        };
 
         // Group sidecars by message_id for fast per-turn slicing.
         let mut infs_by_msg: HashMap<String, Vec<crate::reader::Inference>> = HashMap::new();
@@ -4399,58 +4413,10 @@ fn first_record_ts_ms(records: &[serde_json::Value]) -> Option<i64> {
     earliest
 }
 
-/// Local ISO-8601-with-fractional-seconds parser, returning Unix ms.
-/// Mirrors the per-builder copies (see `reader::claude::span_tree::parse_iso_ms`)
-/// — duplicated here so `query_verbs` doesn't reach into the builder
-/// internals.
+/// ISO-8601 parser thin wrapper. Reuses the shared `crate::util::time`
+/// helper so all four ex-copies stay in sync.
 fn parse_iso_ms_compat(s: &str) -> Option<i64> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    if !(bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && (bytes[10] == b'T' || bytes[10] == b' ')
-        && bytes[13] == b':'
-        && bytes[16] == b':')
-    {
-        return None;
-    }
-    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
-    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
-    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
-    let hour: u32 = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
-    let minute: u32 = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
-    let second: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
-    let mut millis: i64 = 0;
-    let mut idx = 19;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        idx += 1;
-        let frac_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        let mut frac = std::str::from_utf8(&bytes[frac_start..idx]).ok()?.to_string();
-        if frac.len() > 3 {
-            frac.truncate(3);
-        }
-        while frac.len() < 3 {
-            frac.push('0');
-        }
-        millis = frac.parse().ok()?;
-    }
-    let m = month as i64;
-    let d = day as i64;
-    let y = if m <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
-    let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days_from_epoch = era * 146_097 + (doe as i64) - 719_468;
-    let secs =
-        days_from_epoch * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
-    Some(secs * 1_000 + millis)
+    crate::util::time::parse_iso_ms(s)
 }
 
 /// Resolve the Claude projects root and discover + pair subagent
@@ -4509,17 +4475,17 @@ fn discover_and_pair_subagents(
 /// sidecar as orphan in that case, which is the right fallback when
 /// the parent transcript is missing or corrupt.
 fn read_jsonl_values(path: &Path) -> Vec<serde_json::Value> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
+    use std::io::BufRead;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
         Err(_) => return Vec::new(),
     };
-    let text = match std::str::from_utf8(&bytes) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    text.lines()
+    let reader = std::io::BufReader::new(file);
+    reader
+        .lines()
         .filter_map(|line| {
-            let t = line.trim();
+            let l = line.ok()?;
+            let t = l.trim();
             if t.is_empty() {
                 None
             } else {
@@ -4555,6 +4521,40 @@ pub fn session_span_trees(
 // Pure derivation over `session_span_trees`. The `ledger_home` plumbing is
 // the only I/O; the math lives in `analyze::context_delta::deltas_for_session`.
 
+/// Return `true` when `err` looks like a pre-schema "table / column missing"
+/// SQLite failure. Used to distinguish a tolerable "this ledger predates the
+/// inferences / tool_result_events tables" miss from a real ledger-read
+/// failure that should propagate to the caller.
+fn is_schema_missing(err: &crate::ledger::LedgerError) -> bool {
+    let crate::ledger::LedgerError::Sqlite(rusqlite::Error::SqliteFailure(_, Some(msg))) = err
+    else {
+        return false;
+    };
+    msg.contains("no such table") || msg.contains("no such column")
+}
+
+/// Convert a relative `Duration` window into a canonical
+/// `now - duration` ISO-8601 timestamp suitable for a [`Query::since`]
+/// filter. Centralized so the deltas seed-query mirrors the same
+/// `format_iso_z_ms` shape the rest of the SDK emits.
+fn duration_to_since_iso(d: std::time::Duration) -> String {
+    let now = system_now_secs();
+    let when = now.saturating_sub(d.as_secs()) as i64;
+    format_iso_z_ms(when, 0)
+}
+
+/// Lex key for sorting cross-session [`ContextDelta`] rows by owner_rail
+/// when other tie-breakers are equal. Mirrors the per-session helper in
+/// `analyze::context_delta`.
+fn owner_rail_str(rail: &crate::analyze::context_delta::OwnerRail) -> (&str, &str) {
+    match rail {
+        crate::analyze::context_delta::OwnerRail::Main => ("main", ""),
+        crate::analyze::context_delta::OwnerRail::Subagent { agent_id } => {
+            ("subagent", agent_id.as_str())
+        }
+    }
+}
+
 impl LedgerHandle {
     /// Per-inference context-window deltas.
     ///
@@ -4567,25 +4567,38 @@ impl LedgerHandle {
     /// isolation).
     ///
     /// When [`ContextDeltaOpts::session`] is `Some`, only that session is
-    /// scanned. When `None`, every session in the ledger window
-    /// contributes; sessions are picked from
-    /// [`SessionsListOptions`]-style filters (no `since` is applied to
-    /// session enumeration today — the issue's window flag controls the
-    /// `Vec<ContextDelta>` cap, not the input set).
+    /// scanned. When `None`, every session in the ledger that has activity
+    /// inside the [`ContextDeltaOpts::since`] window contributes — sessions
+    /// whose latest activity falls outside the window are skipped before any
+    /// span trees get loaded. The same window is then applied to the
+    /// returned [`Vec<ContextDelta>`] cap.
     pub fn context_delta(
         &self,
         opts: crate::analyze::context_delta::ContextDeltaOpts,
     ) -> Result<Vec<crate::analyze::context_delta::ContextDelta>> {
         let pricing = load_pricing(None);
 
+        // Build the seed `since` filter from `opts.since`. We always have a
+        // sensible `effective_since()` default, but only apply it when the
+        // caller actually passed a value — when `None`, scan every session.
+        // (Honoring the default would change historic behavior for callers
+        // that relied on "no since = all time".)
+        let seed_since: Option<String> = opts.since.map(duration_to_since_iso);
+        let session_query = Query {
+            since: seed_since.clone(),
+            ..Default::default()
+        };
+
         let session_ids: Vec<String> = match opts.session.clone() {
             Some(id) => vec![id],
             None => {
-                // Enumerate sessions present on the ledger (independent
-                // of `since` — that flag caps output rows, not the
-                // input scan).
+                // Enumerate sessions that have activity inside the
+                // `since` window. Walking only the matching `turns`
+                // rows keeps this cheap on large ledgers — we never
+                // load span trees for sessions that already missed
+                // the filter.
                 let mut ids: BTreeSet<String> = BTreeSet::new();
-                let all = self.inner.query_turns(&Query::default())?;
+                let all = self.inner.query_turns(&session_query)?;
                 for enriched in all {
                     ids.insert(enriched.turn.session_id);
                 }
@@ -4614,13 +4627,16 @@ impl LedgerHandle {
 
         // Cross-session sort + top cap. `deltas_for_session` already
         // sorted within a single session; re-sort here so multi-session
-        // calls return a single coherent top-N list.
+        // calls return a single coherent top-N list. Tie chain includes
+        // `owner_rail` so subagent-vs-main ties stay stable across
+        // HashMap iteration order from the per-session pass.
         out.sort_by(|a, b| {
             b.delta_tokens
                 .cmp(&a.delta_tokens)
                 .then_with(|| a.session_id.cmp(&b.session_id))
                 .then_with(|| a.turn_id.cmp(&b.turn_id))
                 .then_with(|| a.inference_idx.cmp(&b.inference_idx))
+                .then_with(|| owner_rail_str(&a.owner_rail).cmp(&owner_rail_str(&b.owner_rail)))
         });
         let top = opts.effective_top() as usize;
         if out.len() > top {
@@ -6243,6 +6259,40 @@ mod tests {
         let pricing = load_pricing(None);
         let result = compute_summary(&turns, &pricing);
         assert!(result.replacement_savings.is_none());
+    }
+
+    #[test]
+    fn duration_to_since_iso_emits_canonical_zulu_ms() {
+        let iso = super::duration_to_since_iso(std::time::Duration::from_secs(60));
+        // Shape only — actual value depends on system clock. We assert
+        // the canonical lower-bound shape `YYYY-MM-DDTHH:MM:SS.mmmZ`
+        // that `Query::since` lex-compares against ledger rows.
+        assert_eq!(iso.len(), 24, "{iso}");
+        assert!(iso.ends_with(".000Z"));
+        assert!(iso.contains('T'));
+    }
+
+    /// Regression for the `since`-is-ignored bug: when `opts.since` is
+    /// `Some`, sessions whose latest turn is older than the window must
+    /// not appear in the deltas output. With a 1-second window and
+    /// fixtures whose turns are dated 2026-04 (weeks in the past),
+    /// every fixture session falls outside and the result is empty.
+    /// Without the fix the SDK would walk every session, so this
+    /// asserts the seed `query_turns(&since_scoped)` actually narrows.
+    #[test]
+    fn context_delta_since_filter_excludes_old_sessions() {
+        use crate::analyze::context_delta::ContextDeltaOpts;
+        let (_dir, handle) = multi_session_handle();
+        let opts = ContextDeltaOpts {
+            since: Some(std::time::Duration::from_secs(1)),
+            ..ContextDeltaOpts::default()
+        };
+        let deltas = handle.context_delta(opts).expect("context_delta");
+        assert!(
+            deltas.is_empty(),
+            "since=1s must drop fixture sessions whose latest turn is weeks old; got {} deltas",
+            deltas.len(),
+        );
     }
 
     fn multi_session_handle() -> (TempDir, LedgerHandle) {
