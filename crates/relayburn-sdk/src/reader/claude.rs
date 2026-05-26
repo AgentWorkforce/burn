@@ -35,16 +35,18 @@ use std::path::Path;
 use serde_json::Value;
 
 use self::parent_chain::ChainNode;
-use crate::reader::classifier::{classify_activity, is_task_notification, ClassificationInput};
+use crate::reader::classifier::{
+    classify_activity, detect_slash_triads, is_task_notification, ClassificationInput,
+};
 use crate::reader::git::resolve_project;
 use crate::reader::hash::{args_hash, content_hash};
 use crate::reader::inference::{RequestIdLookup, TurnKey};
 use crate::reader::types::{
-    CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
-    ContentToolUse, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
-    ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageGranularity, UserTurnBlock,
-    UserTurnRecord,
+    ActivityCategory, CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode,
+    ContentToolResult, ContentToolUse, Coverage, Fidelity, RelationshipSourceKind,
+    RelationshipType, SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall,
+    ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord, Usage,
+    UsageGranularity, UserTurnBlock, UserTurnRecord,
 };
 use crate::reader::user_turn::{HeuristicCounter, TokenCounter};
 
@@ -1554,6 +1556,7 @@ fn apply_classification(
     user_text_by_uuid: &HashMap<String, String>,
     nodes_by_uuid: &HashMap<String, LineNode>,
     errored: &HashSet<String>,
+    skill_uuids: &HashSet<String>,
 ) {
     // Prefer the parent-chain walk (#433): walk from the assistant's first
     // emitted UUID up through `parentUuid` to the nearest user-prompt root
@@ -1567,11 +1570,13 @@ fn apply_classification(
     // out-of-order flushes and interrupt+resume sessions, but it's still
     // the best signal we have for rows without UUIDs. Prefer over-grouping
     // (silently wrong text) to silently dropping classification entirely.
-    let user_text = w
+    let root_uuid = w
         .first_assistant_uuid
         .as_deref()
-        .and_then(|uuid| nearest_user_prompt_root(uuid, nodes_by_uuid))
-        .and_then(|root_uuid| user_text_by_uuid.get(&root_uuid).cloned())
+        .and_then(|uuid| nearest_user_prompt_root(uuid, nodes_by_uuid));
+    let user_text = root_uuid
+        .as_ref()
+        .and_then(|root| user_text_by_uuid.get(root).cloned())
         .or_else(|| user_text_by_message_id.get(&w.message_id).cloned())
         .unwrap_or_default();
     let assistant_text = extract_assistant_text_for_classification(&w.blocks);
@@ -1590,7 +1595,21 @@ fn apply_classification(
         has_failed_tool,
         reasoning_tokens: record.usage.reasoning,
     });
-    record.activity = Some(result.activity);
+    // Slash-command triad override (#438). When the assistant turn's nearest
+    // user-prompt root is one of the three triad UUIDs (caveat / invocation /
+    // stdout), the assistant is paying for the slash command's stdout — tag
+    // it as a `Skill` activity. Token attribution stays on the underlying
+    // rows; the synthetic `Skill` label is a view that keeps per-category
+    // rollups from counting one slash command three times. Override is
+    // unconditional once the chain matches: a slash-command's text body is
+    // a `<command-name>` / `<local-command-stdout>` envelope, not real
+    // user intent, so keyword refinement on that text never produces a
+    // category we'd want to preserve.
+    let activity = match root_uuid.as_ref() {
+        Some(root) if skill_uuids.contains(root) => ActivityCategory::Skill,
+        _ => result.activity,
+    };
+    record.activity = Some(activity);
     record.retries = Some(result.retries);
     record.has_edits = Some(result.has_edits);
 }
@@ -2345,6 +2364,14 @@ fn run_incremental<C: TokenCounter + ?Sized>(
     let mut user_text_by_uuid: HashMap<String, String> = HashMap::new();
     let mut errored_tool_use_ids: HashSet<String> = HashSet::new();
     let mut replacement_meta_by_tool_use_id: HashMap<String, ReplacementMeta> = HashMap::new();
+    // Slash-command triad detection (#438) needs a flat slice of user-typed
+    // rows to look up the parent-UUID chain shape. We accumulate only the
+    // minimal field set the detector reads (`type`, `uuid`, `parentUuid`,
+    // `message.content`) so memory stays bounded — three rows per triad,
+    // and only user-typed rows are stored. Detection runs once after the
+    // streaming loop closes; the resulting `skill_uuids` set is consulted
+    // by `apply_classification` to override the activity to `Skill`.
+    let mut user_rows_for_triad: Vec<serde_json::Map<String, Value>> = Vec::new();
     let mut events: Vec<(u64, CompactionEvent)> = Vec::new();
     let mut pending_user_content: Vec<(u64, ContentRecord)> = Vec::new();
     let mut pending_tool_result_events: Vec<(u64, ToolResultEventRecord)> = Vec::new();
@@ -2459,6 +2486,13 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 );
             }
             "user" => {
+                // Slash-command triad detector (#438) keeps a slim copy of
+                // every user-typed row so a post-loop pass can find the
+                // caveat → invocation → stdout chain shape. We clone the
+                // row before the rest of the branch consumes it; the
+                // detector only reads four fields so memory stays modest
+                // (one entry per user row, dropped at function exit).
+                user_rows_for_triad.push(obj.clone());
                 // Harness-injected `<task-notification>` rows share the user
                 // envelope but represent system events, not real prompts.
                 // Detecting them here keeps them out of `current_user_text`
@@ -2605,6 +2639,31 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         earliest_incomplete.unwrap_or(cursor_offset)
     };
 
+    // Slash-command triad detection (#438). Run once over the accumulated
+    // user rows; the resulting set of triad UUIDs (caveat + invocation +
+    // stdout) is consulted by `apply_classification` to override the
+    // assistant turn's activity to `Skill` when its parent-chain root
+    // lands on any one of the three triad rows. Token attribution stays
+    // on the underlying turn's `usage` — the synthetic `Skill` label is
+    // a view, not a billing reattribution.
+    let mut skill_uuids: HashSet<String> = HashSet::new();
+    for triad in detect_slash_triads(&user_rows_for_triad) {
+        for idx in [triad.caveat_idx, triad.invocation_idx, triad.stdout_idx] {
+            if let Some(uuid) = user_rows_for_triad
+                .get(idx)
+                .and_then(|r| r.get("uuid"))
+                .and_then(Value::as_str)
+            {
+                if !uuid.is_empty() {
+                    skill_uuids.insert(uuid.to_string());
+                }
+            }
+        }
+    }
+    // Detector input is no longer needed; drop the cloned rows so we
+    // don't carry them past the emission loop.
+    drop(user_rows_for_triad);
+
     // Emit completed turns. In-progress messages (no stop_reason) are deferred
     // — `end_offset` already backs up to before their first byte so the next
     // call re-reads them. `emit_in_progress` opts the non-incremental path out
@@ -2667,6 +2726,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             &user_text_by_uuid,
             &nodes_by_uuid,
             &errored_tool_use_ids,
+            &skill_uuids,
         );
         turns.push(record);
 
@@ -4599,6 +4659,73 @@ mod tests {
         assert_eq!(res.user_turns.len(), 1);
         assert_eq!(res.user_turns[0].blocks.len(), 1);
         assert_eq!(res.user_turns[0].blocks[0].kind, UserTurnBlockKind::Text);
+    }
+
+    #[test]
+    fn slash_command_triads_collapse_to_one_skill_activity_each() {
+        // Integration coverage for #438. The fixture has two slash-command
+        // triads (`/review` then `/init`), each three rows: caveat row,
+        // invocation row (`<command-name>`), stdout row
+        // (`<local-command-stdout>`). Three assistant rows surround the
+        // triads (one before, one between, one after). Without the
+        // detector, the two post-triad assistants would classify against
+        // the stdout body (whatever keyword the stdout text happened to
+        // hit) — with the detector, they collapse to `Skill`.
+        let path = fixture("slash-command-triad.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 3, "three assistant turns survive");
+        let activities: Vec<Option<ActivityCategory>> =
+            res.turns.iter().map(|t| t.activity).collect();
+        // First assistant is a normal reply, NOT inside a triad.
+        assert_ne!(activities[0], Some(ActivityCategory::Skill));
+        // Second + third assistants follow a slash-command triad's stdout;
+        // each must surface as a single `Skill` activity. Two triads →
+        // two `Skill` turns (3 → 1 per triad, per the issue acceptance).
+        assert_eq!(activities[1], Some(ActivityCategory::Skill));
+        assert_eq!(activities[2], Some(ActivityCategory::Skill));
+        let skill_count = activities
+            .iter()
+            .filter(|a| **a == Some(ActivityCategory::Skill))
+            .count();
+        assert_eq!(skill_count, 2, "two triads → two Skill activities");
+    }
+
+    #[test]
+    fn slash_command_triad_does_not_double_count_token_attribution() {
+        // Token attribution stays on the underlying assistant rows; the
+        // synthetic `Skill` label is a view, not a billing unit. The sum
+        // of the three assistants' (input + output) tokens equals what
+        // we computed before the triad classifier landed — collapsing
+        // the activity label does NOT redirect tokens onto the Skill
+        // turns or off of them. See AgentWorkforce/burn#438.
+        let path = fixture("slash-command-triad.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        let total_input: u64 = res.turns.iter().map(|t| t.usage.input).sum();
+        let total_output: u64 = res.turns.iter().map(|t| t.usage.output).sum();
+        // Fixture: assistants 1, 2, 3 have input 10/20/25 and output 5/3/4.
+        assert_eq!(total_input, 10 + 20 + 25);
+        assert_eq!(total_output, 5 + 3 + 4);
+    }
+
+    #[test]
+    fn slash_command_triad_false_positive_guard_normal_user_turn() {
+        // Regression guard for the false-positive case in #438. A
+        // legitimate user prompt that *looks* structurally similar to a
+        // caveat row (parent chain shape: user → user → user) but
+        // lacks the `<command-name>` invocation marker MUST NOT
+        // misdetect as a triad. The classifier should fall through to
+        // its normal text-based rules. Mirrors the false-positive guard
+        // in `task_notification_does_not_match_user_typed_marker_string`
+        // (#442).
+        let path = fixture("task-notification.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        for turn in &res.turns {
+            assert_ne!(
+                turn.activity,
+                Some(ActivityCategory::Skill),
+                "no slash-command markers → no Skill activity",
+            );
+        }
     }
 
     #[test]
