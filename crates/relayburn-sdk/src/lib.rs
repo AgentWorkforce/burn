@@ -52,6 +52,7 @@ mod export_verbs;
 mod ingest_verb;
 mod query_verbs;
 mod stamp_verb;
+mod util;
 
 pub use export_verbs::*;
 pub use ingest_verb::*;
@@ -84,6 +85,11 @@ pub use crate::ledger::{
     Enrichment, Ledger as RawLedger, LedgerError, LedgerFingerprintScope, MessageRange, PruneStats,
     Query, RebuildSummary, ResetSummary, Retention, SearchHit, SearchOptions, Stamp, StampError,
     StampSelector, DEFAULT_RETENTION_DAYS,
+};
+
+pub use crate::analyze::{
+    deltas_for_session, ContextDelta, ContextDeltaOpts, InterveningStep,
+    OwnerFilter as ContextDeltaOwnerFilter, OwnerRail as ContextDeltaOwnerRail, ReminderSource,
 };
 
 pub use crate::analyze::{

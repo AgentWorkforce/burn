@@ -60,6 +60,18 @@
     "enabled": true
   },
   {
+    "name": "overhead-deltas",
+    "args": ["overhead", "deltas", "--min-delta", "0", "--top", "5"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
+    "name": "overhead-deltas-json",
+    "args": ["overhead", "deltas", "--min-delta", "0", "--top", "5", "--json"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
     "name": "state-status",
     "args": ["state", "status"],
     "expectStatus": 0,

@@ -52,6 +52,7 @@ use crate::reader::inference::Inference;
 use crate::reader::types::{
     StopReason, ToolCall, ToolResultEventRecord, ToolResultStatus, TurnRecord,
 };
+use crate::util::time::parse_iso_ms;
 
 /// Inputs to the Claude span-tree builder. Grouped here (instead of as
 /// a long positional argument list) so future inputs — content sidecar
@@ -175,7 +176,21 @@ pub fn build_claude_span_tree(inputs: ClaudeSpanTreeInputs<'_>) -> TurnSpanTree 
 
     // Unpaired subagents — sibling nodes under the root with the
     // `unattached` flag. See module doc for the orphan-semantics choice.
-    for sa in unpaired_subagents {
+    //
+    // Anything still in `paired_subagents` after the inference walk
+    // had a `paired_tool_use_id` that didn't match any `ToolUse` we
+    // saw on this turn (out-of-sync inference view, ingest race, etc).
+    // Surface those as `unattached` siblings too rather than dropping
+    // them — losing a subagent transcript silently is the worst
+    // failure mode here.
+    let mut dangling_paired: Vec<&SubagentTranscript> =
+        paired_subagents.into_values().flatten().collect();
+    dangling_paired.sort_by(|a, b| a.source_path.cmp(&b.source_path));
+
+    for sa in unpaired_subagents
+        .into_iter()
+        .chain(dangling_paired.into_iter())
+    {
         root.children.push(build_subagent_node(sa, true));
     }
 
@@ -359,6 +374,16 @@ fn build_inference_node(
                 if tool_node.end_ms < result_node.end_ms {
                     tool_node.end_ms = result_node.end_ms;
                 }
+                // Propagate the result's error up to the tool_use parent.
+                // `ToolCall::is_error` is the assistant-row hint; the
+                // tool_result event carries the runtime outcome. The
+                // parent inference rollup below only consults
+                // `tool_node.status`, so without this an errored
+                // tool_result on a tool_use whose `is_error` flag was
+                // unset would silently report as success.
+                if result_node.status.is_error() {
+                    tool_node.set_error("tool_error");
+                }
                 tool_node.children.push(result_node);
             }
         }
@@ -423,6 +448,13 @@ fn build_tool_result_node(events: &[&ToolResultEventRecord]) -> Option<SpanNode>
     if let Some(bytes) = final_event.output_bytes {
         node.set_attr("output_bytes", AttrValue::Int(bytes as i64));
     }
+    // Propagate `output_truncated` so downstream consumers (context-delta
+    // attribution, hotspots-by-bytes presenters) can flag tool outputs
+    // that ingest decided to cap. Without this, large outputs appear as
+    // fully representative even when only the head was retained.
+    if let Some(truncated) = final_event.output_truncated {
+        node.set_attr("output_truncated", AttrValue::Bool(truncated));
+    }
     if final_event.is_error.unwrap_or(false) {
         node.set_error("tool_error");
     }
@@ -477,60 +509,6 @@ fn apply_stop_reason_status(root: &mut SpanNode, reason: Option<StopReason>) {
         Some(StopReason::MaxTokens) => root.set_error("max_tokens"),
         _ => return,
     };
-}
-
-/// Local copy of the inference module's `parse_iso_ms`. Duplicated to
-/// keep the `analyze::span_tree` types module free of a dependency on
-/// `reader::inference` internals — the parser is a peer, not an
-/// upstream. Same Howard Hinnant math as everywhere else in the SDK.
-fn parse_iso_ms(s: &str) -> Option<i64> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    if !(bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && (bytes[10] == b'T' || bytes[10] == b' ')
-        && bytes[13] == b':'
-        && bytes[16] == b':')
-    {
-        return None;
-    }
-    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
-    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
-    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
-    let hour: u32 = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
-    let minute: u32 = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
-    let second: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
-    let mut millis: i64 = 0;
-    let mut idx = 19;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        idx += 1;
-        let frac_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        let mut frac = std::str::from_utf8(&bytes[frac_start..idx]).ok()?.to_string();
-        if frac.len() > 3 {
-            frac.truncate(3);
-        }
-        while frac.len() < 3 {
-            frac.push('0');
-        }
-        millis = frac.parse().ok()?;
-    }
-    let m = month as i64;
-    let d = day as i64;
-    let y = if m <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
-    let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days_from_epoch = era * 146_097 + (doe as i64) - 719_468;
-    let secs =
-        days_from_epoch * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
-    Some(secs * 1_000 + millis)
 }
 
 #[cfg(test)]
