@@ -375,6 +375,14 @@ fn build_inference_node(
             node.set_error("child_error");
         }
 
+        // Propagate the widened tool_use end (from a later tool_result
+        // event) back up to the inference span. Otherwise turns with a
+        // tool_result timestamped after the assistant row would report
+        // truncated durations once the root rolls up child end_ms.
+        if node.end_ms < tool_node.end_ms {
+            node.end_ms = tool_node.end_ms;
+        }
+
         node.children.push(tool_node);
     }
 
@@ -1009,6 +1017,56 @@ mod tests {
         // ToolUse child for the lone tool call.
         assert_eq!(inf_children[0].children.len(), 1);
         assert_eq!(inf_children[0].children[0].name, "Read");
+    }
+
+    /// Regression: a `ToolResult` whose timestamp lands after the
+    /// assistant row must widen the parent `Inference` (and the turn
+    /// root) `end_ms`. Without the propagation up the chain, the root
+    /// rolls up the inference's stale end and the turn reports a
+    /// truncated duration.
+    #[test]
+    fn tool_result_after_assistant_row_widens_inference_and_root_end_ms() {
+        let turn = make_turn(
+            Usage::default(),
+            vec![make_tool_call("toolu_1", "Bash", None)],
+        );
+        // Inference ends at t=00:00:02, ToolResult is at t=00:00:03.
+        let inf = make_inference(
+            "req-1",
+            Usage::default(),
+            vec![ToolUseRef {
+                id: "toolu_1".into(),
+                name: "Bash".into(),
+            }],
+        );
+        let evt = make_tr_event("toolu_1", ToolResultStatus::Completed, Some(false));
+
+        let tree = build_claude_span_tree(ClaudeSpanTreeInputs {
+            turn: &turn,
+            tool_result_events: &[evt],
+            inferences: &[inf],
+            subagents: &[],
+        });
+
+        let inf_node = tree
+            .root
+            .children
+            .iter()
+            .find(|c| c.kind == SpanKind::Inference)
+            .expect("inference child");
+        let tool_use = &inf_node.children[0];
+        assert_eq!(tool_use.kind, SpanKind::ToolUse);
+        let result = &tool_use.children[0];
+        assert_eq!(result.kind, SpanKind::ToolResult);
+        // ToolResult.end_ms is the t=00:00:03 timestamp.
+        assert_eq!(result.end_ms, 1_776_643_203_000);
+        // ToolUse end widens to the ToolResult end.
+        assert_eq!(tool_use.end_ms, result.end_ms);
+        // Inference end_ms must be propagated up — was 1_776_643_202_000
+        // before, must widen to match the tool_result.
+        assert_eq!(inf_node.end_ms, result.end_ms);
+        // Turn root rolls up the inference end.
+        assert_eq!(tree.root.end_ms, result.end_ms);
     }
 
     /// turn_index saturation: a future record with a > u32::MAX turn

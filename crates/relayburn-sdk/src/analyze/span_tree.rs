@@ -232,13 +232,12 @@ impl AttrValue {
     }
 }
 
-impl Eq for AttrValue {}
-
-/// Hashing isn't derived because `f64` doesn't implement `Hash`. Span
-/// nodes don't need to be hashed today, but `AttrValue` is small and
-/// shared enough that a manual `PartialEq` keeps the contract narrow.
-/// The `Float` variant treats `NaN != NaN`, matching `f64` semantics —
-/// any consumer wanting NaN equality should normalize beforehand.
+// No `Eq` impl: `AttrValue::Float(f64)` makes `Eq`'s reflexivity
+// contract impossible — `NaN != NaN` violates `a == a`. The span tree
+// stores attributes in a `BTreeMap<String, AttrValue>`, which only
+// requires `Ord` on its keys (always `String`), so `PartialEq` is
+// sufficient. Consumers that want NaN equality should normalize
+// beforehand.
 
 /// One point-in-time event attached to a span. Modeled on OTel's
 /// `SpanEvent` so a future exporter can hand-off cleanly.

@@ -238,6 +238,13 @@ fn build_inference_node(
         if tool_node.status.is_error() && node.status == SpanStatus::Ok {
             node.set_error("child_error");
         }
+        // Mirror the widened tool_use end into the parent inference so
+        // turns whose tool_result timestamps trail the assistant row
+        // don't underreport duration (the turn root rolls up its
+        // inference children's end_ms).
+        if node.end_ms < tool_node.end_ms {
+            node.end_ms = tool_node.end_ms;
+        }
         node.children.push(tool_node);
     }
     node
@@ -476,6 +483,34 @@ mod tests {
         assert_eq!(kinds, vec![SpanKind::UserPrompt, SpanKind::Inference]);
         let inf = &tree.root.children[1];
         assert!(inf.children.is_empty(), "no tool_calls => no ToolUse children");
+    }
+
+    /// Regression: a `ToolResult` whose timestamp lands after the
+    /// assistant row must widen the parent `Inference` (and the turn
+    /// root) `end_ms`. Mirrors the Claude builder's contract.
+    #[test]
+    fn codex_tool_result_after_assistant_row_widens_inference_and_root_end_ms() {
+        // codex_turn's `ts` is "2026-04-20T00:00:01.000Z" → start_ms.
+        // tr_event uses "2026-04-20T00:00:02.000Z" — one second later.
+        let turn = codex_turn(Usage::default(), vec![tool_call("call_1", "shell", None)]);
+        let evt = tr_event("call_1", 128);
+        let tree = build_codex_span_tree(CodexSpanTreeInputs {
+            turn: &turn,
+            tool_result_events: &[evt],
+            inferences: &[],
+        });
+
+        let inf = &tree.root.children[1];
+        assert_eq!(inf.kind, SpanKind::Inference);
+        let tool_use = &inf.children[0];
+        let result = &tool_use.children[0];
+        assert_eq!(result.kind, SpanKind::ToolResult);
+        // Synthetic inference ends at the turn ts. ToolResult is 1s later.
+        assert!(result.end_ms > inf.start_ms);
+        // ToolUse widens, inference must follow, root must follow.
+        assert_eq!(tool_use.end_ms, result.end_ms);
+        assert_eq!(inf.end_ms, result.end_ms);
+        assert_eq!(tree.root.end_ms, result.end_ms);
     }
 
     /// tool_use with `is_error == true` propagates the error to the
