@@ -17,6 +17,7 @@
 
 pub mod claude_md;
 pub mod compare;
+pub mod context_delta;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
@@ -43,6 +44,10 @@ pub use claude_md::{
 pub use compare::{
     build_compare_table, compare_from_archive, CompareCategory, CompareCell, CompareFromArchiveResult,
     CompareOptions, CompareTable, CompareTotals, DEFAULT_MIN_SAMPLE,
+};
+pub use context_delta::{
+    deltas_for_session, ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail,
+    ReminderSource,
 };
 pub use cost::{cost_for_turn, cost_for_usage, sum_costs, CostBreakdown};
 pub use overhead::{

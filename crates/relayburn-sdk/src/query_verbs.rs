@@ -4549,6 +4549,97 @@ pub fn session_span_trees(
 }
 
 // ---------------------------------------------------------------------------
+// Context delta — per-inference attribution of context-window growth (#432)
+// ---------------------------------------------------------------------------
+//
+// Pure derivation over `session_span_trees`. The `ledger_home` plumbing is
+// the only I/O; the math lives in `analyze::context_delta::deltas_for_session`.
+
+impl LedgerHandle {
+    /// Per-inference context-window deltas.
+    ///
+    /// Walks each session's [`TurnSpanTree`] timeline, pairs same-rail
+    /// `Inference` spans, and attributes the delta in `context_tokens =
+    /// input + cache_read + cache_write` to the intervening
+    /// [`InterveningStep`]s. See the module-level docs of
+    /// [`crate::analyze::context_delta`] for the algorithm and the
+    /// decision rationale (cost rate, compaction handling, rail
+    /// isolation).
+    ///
+    /// When [`ContextDeltaOpts::session`] is `Some`, only that session is
+    /// scanned. When `None`, every session in the ledger window
+    /// contributes; sessions are picked from
+    /// [`SessionsListOptions`]-style filters (no `since` is applied to
+    /// session enumeration today — the issue's window flag controls the
+    /// `Vec<ContextDelta>` cap, not the input set).
+    pub fn context_delta(
+        &self,
+        opts: crate::analyze::context_delta::ContextDeltaOpts,
+    ) -> Result<Vec<crate::analyze::context_delta::ContextDelta>> {
+        let pricing = load_pricing(None);
+
+        let session_ids: Vec<String> = match opts.session.clone() {
+            Some(id) => vec![id],
+            None => {
+                // Enumerate sessions present on the ledger (independent
+                // of `since` — that flag caps output rows, not the
+                // input scan).
+                let mut ids: BTreeSet<String> = BTreeSet::new();
+                let all = self.inner.query_turns(&Query::default())?;
+                for enriched in all {
+                    ids.insert(enriched.turn.session_id);
+                }
+                ids.into_iter().collect()
+            }
+        };
+
+        let mut out: Vec<crate::analyze::context_delta::ContextDelta> = Vec::new();
+        for session_id in session_ids {
+            let trees = self.session_span_trees(&session_id)?;
+            if trees.is_empty() {
+                continue;
+            }
+            let compactions = self.inner.query_compactions(&Query {
+                session_id: Some(session_id.clone()),
+                ..Default::default()
+            })?;
+            let per_session = crate::analyze::context_delta::deltas_for_session(
+                &trees,
+                &compactions,
+                &pricing,
+                &opts,
+            );
+            out.extend(per_session);
+        }
+
+        // Cross-session sort + top cap. `deltas_for_session` already
+        // sorted within a single session; re-sort here so multi-session
+        // calls return a single coherent top-N list.
+        out.sort_by(|a, b| {
+            b.delta_tokens
+                .cmp(&a.delta_tokens)
+                .then_with(|| a.session_id.cmp(&b.session_id))
+                .then_with(|| a.turn_id.cmp(&b.turn_id))
+                .then_with(|| a.inference_idx.cmp(&b.inference_idx))
+        });
+        let top = opts.effective_top() as usize;
+        if out.len() > top {
+            out.truncate(top);
+        }
+        Ok(out)
+    }
+}
+
+/// Free-function form of [`LedgerHandle::context_delta`].
+pub fn context_delta(
+    opts: crate::analyze::context_delta::ContextDeltaOpts,
+    ledger_home: Option<PathBuf>,
+) -> Result<Vec<crate::analyze::context_delta::ContextDelta>> {
+    let handle = open_with(ledger_home.as_deref())?;
+    handle.context_delta(opts)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

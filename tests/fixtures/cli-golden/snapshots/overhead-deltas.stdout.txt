@@ -1,0 +1,8 @@
+Inference   Owner  Delta  Cost     Driver
+Tc1-2/inf2  main   +1.5k  $0.0004  user prompt
+Tc2-2/inf2  main   +400   $0.0000  user prompt
+Tc1-3/inf3  main   +200   $0.0001  user prompt
+
+# token / cost figures are approximate (bytes/4 for tool results,
+# cache-read rate for cost). Compaction rows surface separately and
+# never appear as negative deltas.

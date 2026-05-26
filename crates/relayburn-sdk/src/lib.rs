@@ -87,6 +87,11 @@ pub use crate::ledger::{
 };
 
 pub use crate::analyze::{
+    deltas_for_session, ContextDelta, ContextDeltaOpts, InterveningStep,
+    OwnerFilter as ContextDeltaOwnerFilter, OwnerRail as ContextDeltaOwnerRail, ReminderSource,
+};
+
+pub use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
     aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
     attribute_hotspots, attribute_overhead, build_compare_table, build_subagent_tree,

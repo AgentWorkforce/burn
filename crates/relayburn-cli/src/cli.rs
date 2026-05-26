@@ -313,6 +313,9 @@ pub enum OverheadAction {
     /// each overhead file. Recommendations only — `burn` never
     /// modifies the source files.
     Trim(OverheadTrimArgs),
+    /// Per-inference context-window deltas: "what blew up my context
+    /// between inference N and inference N+1?" See AgentWorkforce/burn#432.
+    Deltas(OverheadDeltasArgs),
 }
 
 /// `burn overhead trim` flags layered on top of [`OverheadArgs`].
@@ -321,6 +324,52 @@ pub struct OverheadTrimArgs {
     /// Number of recommendations per file. Defaults to 3.
     #[arg(long, value_name = "N")]
     pub top: Option<u64>,
+}
+
+/// `burn overhead deltas` flags layered on top of [`OverheadArgs`].
+#[derive(Debug, ClapArgs)]
+pub struct OverheadDeltasArgs {
+    /// Restrict to a single session id. When unset, every session in the
+    /// ledger window contributes.
+    #[arg(long, value_name = "ID")]
+    pub session: Option<String>,
+
+    /// Row cap. Defaults to 20.
+    #[arg(long, value_name = "N")]
+    pub top: Option<u32>,
+
+    /// Hide deltas below this many tokens. Defaults to 1000 (the noise
+    /// floor). Compaction rows always show through regardless.
+    #[arg(long, value_name = "TOKENS")]
+    pub min_delta: Option<u64>,
+
+    /// Rail filter: `main` (top-level conversation), `subagent`, or
+    /// `all` (default).
+    #[arg(long, value_enum, value_name = "RAIL", default_value = "all")]
+    pub owner: OverheadDeltasOwner,
+
+    /// Expand intervening steps in the human table. Without this, only
+    /// the driver step is shown per row.
+    #[arg(long)]
+    pub explain: bool,
+}
+
+/// CLI-facing mirror of [`relayburn_sdk::ContextDeltaOwnerFilter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OverheadDeltasOwner {
+    All,
+    Main,
+    Subagent,
+}
+
+impl From<OverheadDeltasOwner> for relayburn_sdk::ContextDeltaOwnerFilter {
+    fn from(o: OverheadDeltasOwner) -> Self {
+        match o {
+            OverheadDeltasOwner::All => relayburn_sdk::ContextDeltaOwnerFilter::All,
+            OverheadDeltasOwner::Main => relayburn_sdk::ContextDeltaOwnerFilter::Main,
+            OverheadDeltasOwner::Subagent => relayburn_sdk::ContextDeltaOwnerFilter::Subagent,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

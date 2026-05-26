@@ -1,0 +1,59 @@
+[
+  {
+    "sessionId": "11111111-1111-1111-1111-111111111111",
+    "turnId": "msg-c1-2",
+    "inferenceIdx": 2,
+    "ownerRail": {
+      "kind": "main"
+    },
+    "priorContextTokens": 6500,
+    "currentContextTokens": 8000,
+    "deltaTokens": 1500,
+    "intervening": [
+      {
+        "kind": "user-prompt",
+        "approxTokens": 0,
+        "hasSystemReminder": false
+      }
+    ],
+    "attributedCostUSD": 0.00045
+  },
+  {
+    "sessionId": "22222222-2222-2222-2222-222222222222",
+    "turnId": "msg-c2-2",
+    "inferenceIdx": 2,
+    "ownerRail": {
+      "kind": "main"
+    },
+    "priorContextTokens": 2900,
+    "currentContextTokens": 3300,
+    "deltaTokens": 400,
+    "intervening": [
+      {
+        "kind": "user-prompt",
+        "approxTokens": 0,
+        "hasSystemReminder": false
+      }
+    ],
+    "attributedCostUSD": 0.00004
+  },
+  {
+    "sessionId": "11111111-1111-1111-1111-111111111111",
+    "turnId": "msg-c1-3",
+    "inferenceIdx": 3,
+    "ownerRail": {
+      "kind": "main"
+    },
+    "priorContextTokens": 8000,
+    "currentContextTokens": 8200,
+    "deltaTokens": 200,
+    "intervening": [
+      {
+        "kind": "user-prompt",
+        "approxTokens": 0,
+        "hasSystemReminder": false
+      }
+    ],
+    "attributedCostUSD": 0.00006
+  }
+]
