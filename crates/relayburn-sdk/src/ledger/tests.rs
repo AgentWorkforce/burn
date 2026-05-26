@@ -239,7 +239,10 @@ fn stamps_survive_state_rebuild() {
 
     let stamps = l.list_stamps().unwrap();
     assert_eq!(stamps.len(), 1);
-    assert_eq!(stamps[0].enrichment.get("role").map(String::as_str), Some("fix-bug"));
+    assert_eq!(
+        stamps[0].enrichment.get("role").map(String::as_str),
+        Some("fix-bug")
+    );
 }
 
 #[test]
@@ -248,7 +251,8 @@ fn cursors_survive_state_rebuild() {
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
 
-    l.write_cursors(r#"{"claude-code": "2025-01-01T00:00:00Z"}"#).unwrap();
+    l.write_cursors(r#"{"claude-code": "2025-01-01T00:00:00Z"}"#)
+        .unwrap();
     l.append_turns(&[make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10)])
         .unwrap();
     l.rebuild_derivable().unwrap();
@@ -266,7 +270,8 @@ fn reset_wipes_derivable_stamps_content_and_cursors() {
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
 
-    l.write_cursors(r#"{"claude-code": "2025-01-01T00:00:00Z"}"#).unwrap();
+    l.write_cursors(r#"{"claude-code": "2025-01-01T00:00:00Z"}"#)
+        .unwrap();
 
     let mut enrichment = BTreeMap::new();
     enrichment.insert("role".into(), "fix-bug".into());
@@ -332,7 +337,8 @@ fn count_reset_targets_does_not_mutate() {
     l.append_stamp(&stamp).unwrap();
     l.append_turns(&[make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10)])
         .unwrap();
-    l.append_content(&[make_content("s1", "m1", "hello")]).unwrap();
+    l.append_content(&[make_content("s1", "m1", "hello")])
+        .unwrap();
 
     let preview = l.count_reset_targets().unwrap();
     assert_eq!(preview.rows_dropped, 1);
@@ -417,7 +423,11 @@ fn fts5_search_returns_ranked_snippets() {
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
     l.append_content(&[
-        make_content("ses_a", "m1", "the build failed with an out of memory error"),
+        make_content(
+            "ses_a",
+            "m1",
+            "the build failed with an out of memory error",
+        ),
         make_content("ses_a", "m2", "permission denied while reading file"),
         make_content("ses_b", "m1", "out of memory: killed by oom-killer"),
     ])
@@ -465,7 +475,9 @@ fn fts5_index_stays_consistent_across_insert_delete() {
     l.append_content(&[make_content("ses_a", "m1", "needle in haystack")])
         .unwrap();
     assert_eq!(
-        l.search_content(SearchOptions::new("needle")).unwrap().len(),
+        l.search_content(SearchOptions::new("needle"))
+            .unwrap()
+            .len(),
         1
     );
 
@@ -474,7 +486,9 @@ fn fts5_index_stays_consistent_across_insert_delete() {
     assert_eq!(l.count_content().unwrap(), 0);
     // Trigger should have removed the FTS row too.
     assert_eq!(
-        l.search_content(SearchOptions::new("needle")).unwrap().len(),
+        l.search_content(SearchOptions::new("needle"))
+            .unwrap()
+            .len(),
         0
     );
 
@@ -482,7 +496,9 @@ fn fts5_index_stays_consistent_across_insert_delete() {
     l.append_content(&[make_content("ses_a", "m1", "needle in haystack")])
         .unwrap();
     assert_eq!(
-        l.search_content(SearchOptions::new("needle")).unwrap().len(),
+        l.search_content(SearchOptions::new("needle"))
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -892,7 +908,10 @@ fn relationship_records_round_trip() {
         subagent_type: None,
         description: None,
     };
-    assert_eq!(l.append_relationships(std::slice::from_ref(&rel)).unwrap(), 1);
+    assert_eq!(
+        l.append_relationships(std::slice::from_ref(&rel)).unwrap(),
+        1
+    );
     // Re-append: dedup'd by primary-key fingerprint.
     assert_eq!(l.append_relationships(&[rel]).unwrap(), 0);
     assert_eq!(l.count_table("relationships").unwrap(), 1);
@@ -1038,19 +1057,17 @@ fn pruning_content_does_not_lock_events_db() {
     // events DB; analytic queries on burn.sqlite keep running.
     let tmp = TempDir::new().unwrap();
     let layout = LedgerLayout::under(tmp.path());
-    let ledger = Arc::new(Mutex::new(Ledger::open(&layout.burn, &layout.content).unwrap()));
+    let ledger = Arc::new(Mutex::new(
+        Ledger::open(&layout.burn, &layout.content).unwrap(),
+    ));
 
     {
         let mut l = ledger.lock().unwrap();
         l.append_turns(&[make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10)])
             .unwrap();
         for i in 0..50 {
-            l.append_content(&[make_content(
-                "ses_x",
-                &format!("m{i}"),
-                "lots of body text",
-            )])
-            .unwrap();
+            l.append_content(&[make_content("ses_x", &format!("m{i}"), "lots of body text")])
+                .unwrap();
         }
     }
 
@@ -1233,9 +1250,7 @@ fn query_relationships_session_filter_matches_either_endpoint() {
     };
     l.append_relationships(&[parent_edge, unrelated]).unwrap();
 
-    let by_child = l
-        .query_relationships(&Query::for_session("child"))
-        .unwrap();
+    let by_child = l.query_relationships(&Query::for_session("child")).unwrap();
     assert_eq!(by_child.len(), 1);
 
     let by_parent = l

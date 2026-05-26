@@ -51,8 +51,7 @@ impl Connections {
         // creates `burn.sqlite` as a side effect — if we waited, the
         // freshly-created (and newer-than-JSONL) sqlite mtime would
         // always look "current" and we'd skip the rebuild.
-        let bootstrap_decision =
-            crate::ledger::bootstrap::decide_bootstrap(burn_path);
+        let bootstrap_decision = crate::ledger::bootstrap::decide_bootstrap(burn_path);
 
         let mut burn = Connection::open(burn_path)?;
         configure_pragmas(&burn)?;

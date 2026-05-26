@@ -428,11 +428,9 @@ fn format_iso_8601(t: SystemTime) -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0));
     let nanos = dur.as_nanos() as i128;
-    let dt =
-        OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let fmt = format_description!(
-        "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-    );
+    let dt = OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let fmt =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
     dt.format(&fmt).expect("format ms iso")
 }
 

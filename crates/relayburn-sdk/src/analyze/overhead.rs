@@ -132,11 +132,8 @@ pub fn attribute_overhead(input: AttributeOverheadInput<'_>) -> OverheadAttribut
             .iter()
             .filter(|t| pf.file.applies_to.contains(&t.source))
             .collect();
-        let attribution = attribute_claude_md_refs(
-            std::slice::from_ref(&pf.parsed),
-            &filtered,
-            input.pricing,
-        );
+        let attribution =
+            attribute_claude_md_refs(std::slice::from_ref(&pf.parsed), &filtered, input.pricing);
 
         for sc in &attribution.session_costs {
             let prev = max_riding_by_session
@@ -236,8 +233,14 @@ mod tests {
 
         let files = find_overhead_files(root);
         assert_eq!(files.len(), 3);
-        let agents = files.iter().find(|f| f.kind == OverheadFileKind::AgentsMd).unwrap();
-        assert_eq!(agents.applies_to, vec![SourceKind::Codex, SourceKind::Opencode]);
+        let agents = files
+            .iter()
+            .find(|f| f.kind == OverheadFileKind::AgentsMd)
+            .unwrap();
+        assert_eq!(
+            agents.applies_to,
+            vec![SourceKind::Codex, SourceKind::Opencode]
+        );
         let claude_count = files
             .iter()
             .filter(|f| f.kind == OverheadFileKind::ClaudeMd)
@@ -253,14 +256,10 @@ mod tests {
     #[test]
     fn routes_turns_by_source_and_grand_total_matches_per_file_sum_within_1e_9() {
         let pricing = pricing_with("claude-sonnet-4-6", 0.30);
-        let claude_md = parse_claude_md(
-            "/p/CLAUDE.md",
-            &format!("## Claude\n{}", "c".repeat(4000)),
-        );
-        let agents_md = parse_claude_md(
-            "/p/AGENTS.md",
-            &format!("## Agents\n{}", "a".repeat(4000)),
-        );
+        let claude_md =
+            parse_claude_md("/p/CLAUDE.md", &format!("## Claude\n{}", "c".repeat(4000)));
+        let agents_md =
+            parse_claude_md("/p/AGENTS.md", &format!("## Agents\n{}", "a".repeat(4000)));
 
         let files = vec![
             ParsedOverheadFile {
@@ -307,10 +306,7 @@ mod tests {
 
         // Claude Code session attributes only to CLAUDE.md.
         assert_eq!(claude_attr.attribution.session_count, 1);
-        assert_eq!(
-            claude_attr.attribution.session_costs[0].session_id,
-            "s-cc"
-        );
+        assert_eq!(claude_attr.attribution.session_costs[0].session_id, "s-cc");
         let expected_claude = (claude_md.tokens as f64 / 1_000_000.0) * 0.30;
         assert!(
             (claude_attr.attribution.total_cost - expected_claude).abs() <= expected_claude * 0.10,
@@ -323,8 +319,7 @@ mod tests {
         assert_eq!(agents_attr.attribution.session_count, 2);
         let expected_agents = 2.0 * (agents_md.tokens as f64 / 1_000_000.0) * 0.30;
         assert!(
-            (agents_attr.attribution.total_cost - expected_agents).abs()
-                <= expected_agents * 0.10,
+            (agents_attr.attribution.total_cost - expected_agents).abs() <= expected_agents * 0.10,
             "agents cost={} expected~{}",
             agents_attr.attribution.total_cost,
             expected_agents
@@ -364,10 +359,20 @@ mod tests {
         ];
         let mut turns: Vec<TurnRecord> = Vec::new();
         for i in 0..5 {
-            turns.push(mk_turn("s-both", i, SourceKind::ClaudeCode, big.tokens + 1000));
+            turns.push(mk_turn(
+                "s-both",
+                i,
+                SourceKind::ClaudeCode,
+                big.tokens + 1000,
+            ));
         }
         for i in 5..8 {
-            turns.push(mk_turn("s-both", i, SourceKind::ClaudeCode, small.tokens + 500));
+            turns.push(mk_turn(
+                "s-both",
+                i,
+                SourceKind::ClaudeCode,
+                small.tokens + 500,
+            ));
         }
         let result = attribute_overhead(AttributeOverheadInput {
             files: &files,
@@ -512,7 +517,12 @@ mod tests {
         let mut summed_per_file = 0.0_f64;
         for fa in &result.per_file {
             summed_per_file += fa.attribution.total_cost;
-            let sec_sum: f64 = fa.attribution.section_costs.iter().map(|s| s.total_cost).sum();
+            let sec_sum: f64 = fa
+                .attribution
+                .section_costs
+                .iter()
+                .map(|s| s.total_cost)
+                .sum();
             assert!(sec_sum <= fa.attribution.total_cost + 1e-9);
         }
         assert!((result.grand_total - summed_per_file).abs() < 1e-9);

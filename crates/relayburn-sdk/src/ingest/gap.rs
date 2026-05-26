@@ -241,10 +241,7 @@ pub struct ToolCallGapCounts {
 ///
 /// Mirrors the TS `countToolCallGaps`.
 #[cfg(test)]
-pub fn count_tool_call_gaps(
-    turns: &[TurnRecord],
-    content: &[ContentRecord],
-) -> ToolCallGapCounts {
+pub fn count_tool_call_gaps(turns: &[TurnRecord], content: &[ContentRecord]) -> ToolCallGapCounts {
     let tool_calls_observed: u64 = turns.iter().map(|t| t.tool_calls.len() as u64).sum();
     if tool_calls_observed == 0 {
         return ToolCallGapCounts {
@@ -431,7 +428,12 @@ mod tests {
         }
     }
 
-    fn make_content(session: &str, message: &str, kind: ContentKind, role: ContentRole) -> ContentRecord {
+    fn make_content(
+        session: &str,
+        message: &str,
+        kind: ContentKind,
+        role: ContentRole,
+    ) -> ContentRecord {
         ContentRecord {
             v: 1,
             source: SourceKind::Codex,
@@ -454,7 +456,12 @@ mod tests {
         ];
         let content = vec![
             make_content("sess_test", "m1", ContentKind::Text, ContentRole::Assistant),
-            make_content("sess_test", "m1", ContentKind::ToolUse, ContentRole::Assistant),
+            make_content(
+                "sess_test",
+                "m1",
+                ContentKind::ToolUse,
+                ContentRole::Assistant,
+            ),
         ];
         let r = count_tool_call_gaps(&turns, &content);
         assert!(r.session_affected);
@@ -477,7 +484,12 @@ mod tests {
     fn count_tool_call_gaps_with_tool_result_does_not_flag() {
         let turns = vec![make_turn("sess_test", "m1", 1)];
         let content = vec![
-            make_content("sess_test", "m1", ContentKind::ToolUse, ContentRole::Assistant),
+            make_content(
+                "sess_test",
+                "m1",
+                ContentKind::ToolUse,
+                ContentRole::Assistant,
+            ),
             make_content(
                 "sess_test",
                 "m1",
@@ -574,7 +586,11 @@ mod tests {
         // Pass 2: same session heals — affected set is now empty.
         record_session_gap(AdapterName::Codex, "sess_gap_1", 0, 1);
         emit_gap_warning(AdapterName::Codex, ContentStoreMode::Full, None);
-        assert_eq!(captured.lock().unwrap().len(), 1, "no new warning after heal");
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "no new warning after heal"
+        );
 
         // Pass 3: a brand-new gap session re-ignites the warning,
         // proving the suppression marker decayed back to zero (not

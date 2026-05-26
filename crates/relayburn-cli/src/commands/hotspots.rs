@@ -141,7 +141,7 @@ fn resolve_pattern_selection(raw: &str) -> Result<Vec<String>, String> {
     }
     let mut out: Vec<String> = Vec::new();
     for piece in raw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        if !PATTERN_KINDS.iter().any(|k| *k == piece) {
+        if !PATTERN_KINDS.contains(&piece) {
             return Err(format!(
                 "unknown --patterns value \"{}\". Valid: {}",
                 piece,
@@ -1156,10 +1156,7 @@ fn format_bytes(bytes: u64) -> String {
 
 // ---- sort helpers ---------------------------------------------------------
 
-fn sort_file<'a>(
-    rows: &'a [FileAggregation],
-    rank_by: RankBy,
-) -> (&'static str, Vec<&'a FileAggregation>) {
+fn sort_file(rows: &[FileAggregation], rank_by: RankBy) -> (&'static str, Vec<&FileAggregation>) {
     let mut out: Vec<&FileAggregation> = rows.iter().collect();
     match rank_by {
         RankBy::Cost => (
@@ -1168,49 +1165,46 @@ fn sort_file<'a>(
             out,
         ),
         RankBy::Bytes => {
-            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            out.sort_by_key(|b| std::cmp::Reverse(b.total_output_bytes));
             ("Top files by output bytes", out)
         }
     }
 }
 
-fn sort_bash<'a>(
-    rows: &'a [BashAggregation],
-    rank_by: RankBy,
-) -> (&'static str, Vec<&'a BashAggregation>) {
+fn sort_bash(rows: &[BashAggregation], rank_by: RankBy) -> (&'static str, Vec<&BashAggregation>) {
     let mut out: Vec<&BashAggregation> = rows.iter().collect();
     match rank_by {
         RankBy::Cost => ("Top exact Bash commands by cost", out),
         RankBy::Bytes => {
-            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            out.sort_by_key(|b| std::cmp::Reverse(b.total_output_bytes));
             ("Top exact Bash commands by output bytes", out)
         }
     }
 }
 
-fn sort_bash_verb<'a>(
-    rows: &'a [BashVerbAggregation],
+fn sort_bash_verb(
+    rows: &[BashVerbAggregation],
     rank_by: RankBy,
-) -> (&'static str, Vec<&'a BashVerbAggregation>) {
+) -> (&'static str, Vec<&BashVerbAggregation>) {
     let mut out: Vec<&BashVerbAggregation> = rows.iter().collect();
     match rank_by {
         RankBy::Cost => ("Top Bash verbs by cost", out),
         RankBy::Bytes => {
-            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            out.sort_by_key(|b| std::cmp::Reverse(b.total_output_bytes));
             ("Top Bash verbs by output bytes", out)
         }
     }
 }
 
-fn sort_subagent<'a>(
-    rows: &'a [SubagentAggregation],
+fn sort_subagent(
+    rows: &[SubagentAggregation],
     rank_by: RankBy,
-) -> (&'static str, Vec<&'a SubagentAggregation>) {
+) -> (&'static str, Vec<&SubagentAggregation>) {
     let mut out: Vec<&SubagentAggregation> = rows.iter().collect();
     match rank_by {
         RankBy::Cost => ("Top subagent calls by cost", out),
         RankBy::Bytes => {
-            out.sort_by(|a, b| b.total_output_bytes.cmp(&a.total_output_bytes));
+            out.sort_by_key(|b| std::cmp::Reverse(b.total_output_bytes));
             ("Top subagent calls by output bytes", out)
         }
     }

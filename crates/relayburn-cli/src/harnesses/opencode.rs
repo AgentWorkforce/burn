@@ -39,7 +39,11 @@ fn opencode_sessions_dir() -> PathBuf {
 /// calls this once at lazy-init time. See
 /// [`pending_stamp::session_store_adapter`] for the leak semantics.
 pub fn adapter() -> &'static dyn HarnessAdapter {
-    pending_stamp::session_store_adapter("opencode", opencode_sessions_dir, ingest_opencode_sessions)
+    pending_stamp::session_store_adapter(
+        "opencode",
+        opencode_sessions_dir,
+        ingest_opencode_sessions,
+    )
 }
 
 #[cfg(test)]

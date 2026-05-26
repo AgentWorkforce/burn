@@ -339,7 +339,7 @@ pub fn deltas_for_session(
                 ms >= prev_end && ms <= curr_start
             });
             let (delta_tokens, intervening) = if raw_delta < 0 && compaction_between {
-                let freed = (prev_ctx - curr_ctx) as u64;
+                let freed = prev_ctx - curr_ctx;
                 let mut steps = intervening;
                 steps.push(InterveningStep::Compaction {
                     tokens_freed: freed,
@@ -387,7 +387,9 @@ pub fn deltas_for_session(
             .cmp(&a.delta_tokens)
             .then_with(|| a.turn_id.cmp(&b.turn_id))
             .then_with(|| a.inference_idx.cmp(&b.inference_idx))
-            .then_with(|| owner_rail_sort_key(&a.owner_rail).cmp(&owner_rail_sort_key(&b.owner_rail)))
+            .then_with(|| {
+                owner_rail_sort_key(&a.owner_rail).cmp(&owner_rail_sort_key(&b.owner_rail))
+            })
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
 
@@ -409,12 +411,12 @@ fn owner_rail_sort_key(rail: &OwnerRail) -> (&str, &str) {
 }
 
 fn rail_passes_filter(rail: &OwnerRail, filter: OwnerFilter) -> bool {
-    match (rail, filter) {
-        (_, OwnerFilter::All) => true,
-        (OwnerRail::Main, OwnerFilter::Main) => true,
-        (OwnerRail::Subagent { .. }, OwnerFilter::Subagent) => true,
-        _ => false,
-    }
+    matches!(
+        (rail, filter),
+        (_, OwnerFilter::All)
+            | (OwnerRail::Main, OwnerFilter::Main)
+            | (OwnerRail::Subagent { .. }, OwnerFilter::Subagent)
+    )
 }
 
 fn attributed_cost(delta_tokens: i64, model: &str, pricing: &PricingTable) -> f64 {
@@ -657,7 +659,13 @@ mod tests {
     use crate::analyze::span_tree::{SpanKind, SpanNode, SpanStatus, TurnSpanTree};
     use crate::reader::{CompactionEvent, SourceKind};
 
-    fn make_inf(req_id: &str, model: &str, input: i64, cache_read: i64, cache_write: i64) -> SpanNode {
+    fn make_inf(
+        req_id: &str,
+        model: &str,
+        input: i64,
+        cache_read: i64,
+        cache_write: i64,
+    ) -> SpanNode {
         let mut n = SpanNode::new(SpanKind::Inference, model);
         n.set_attr("model", AttrValue::str(model));
         n.set_attr("request_id", AttrValue::str(req_id));
@@ -707,7 +715,9 @@ mod tests {
         // inference #1: context = 1000
         let inf1 = make_inf("req-1", "claude-sonnet-4-6", 1000, 0, 0);
         let mut bash_use = make_tool_use("Bash", "tu-1");
-        bash_use.children.push(make_tool_result("tu-1", 40_000, false));
+        bash_use
+            .children
+            .push(make_tool_result("tu-1", 40_000, false));
         let mut inf1 = inf1;
         inf1.children.push(bash_use);
 
@@ -924,11 +934,7 @@ mod tests {
             ..ContextDeltaOpts::default()
         };
         let deltas = deltas_for_session(
-            &[turn_tree(
-                "sess-1",
-                "msg-1",
-                root_with_two_infs(1000, 1500),
-            )],
+            &[turn_tree("sess-1", "msg-1", root_with_two_infs(1000, 1500))],
             &[],
             &pricing,
             &opts,
@@ -955,13 +961,8 @@ mod tests {
         root.children.push(make_user_prompt());
         let ctx_steps = [1000, 6000, 11_000, 16_000, 21_000];
         for (i, c) in ctx_steps.iter().enumerate() {
-            root.children.push(make_inf(
-                &format!("req-{i}"),
-                "claude-sonnet-4-6",
-                *c,
-                0,
-                0,
-            ));
+            root.children
+                .push(make_inf(&format!("req-{i}"), "claude-sonnet-4-6", *c, 0, 0));
         }
         let tree = turn_tree("sess-1", "msg-1", root);
         let pricing = crate::analyze::pricing::load_builtin_pricing();
@@ -971,7 +972,7 @@ mod tests {
             min_delta: Some(0),
             ..ContextDeltaOpts::default()
         };
-        let all = deltas_for_session(&[tree.clone()], &[], &pricing, &opts);
+        let all = deltas_for_session(std::slice::from_ref(&tree), &[], &pricing, &opts);
         assert_eq!(all.len(), 4);
 
         // Cap at 2 → only the top 2 deltas.

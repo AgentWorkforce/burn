@@ -43,25 +43,25 @@ pub use claude_md::{
     SessionClaudeMdCost, TrimRecommendation,
 };
 pub use compare::{
-    build_compare_table, compare_from_archive, CompareCategory, CompareCell, CompareFromArchiveResult,
-    CompareOptions, CompareTable, CompareTotals, DEFAULT_MIN_SAMPLE,
+    build_compare_table, compare_from_archive, CompareCategory, CompareCell,
+    CompareFromArchiveResult, CompareOptions, CompareTable, CompareTotals, DEFAULT_MIN_SAMPLE,
 };
 pub use context_delta::{
     deltas_for_session, ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail,
     ReminderSource,
 };
 pub use cost::{cost_for_turn, cost_for_usage, sum_costs, CostBreakdown};
-pub use overhead::{
-    attribute_overhead, describe_applies_to, find_overhead_files, load_overhead_file,
-    AttributeOverheadInput, OverheadAttribution, OverheadFile, OverheadFileAttribution,
-    OverheadFileKind, ParsedOverheadFile,
-};
-pub use patterns::{detect_patterns, DetectPatternsOptions};
 pub use fidelity::{
     has_minimum_fidelity, summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary,
 };
 pub use findings::{findings_from_patterns, sort_findings, WasteFinding, WasteSeverity};
-pub use ghost_surface::{detect_ghost_surface, ghost_surface_to_finding, GhostSurfaceFindingOptions};
+pub use flow_graph::{
+    flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
+    TurnTokens, DEFAULT_MAX_TURNS as FLOW_DEFAULT_MAX_TURNS, INTER_TURN_GAP, RAIL_GAP,
+};
+pub use ghost_surface::{
+    detect_ghost_surface, ghost_surface_to_finding, GhostSurfaceFindingOptions,
+};
 pub use ghost_surface_inputs::build_ghost_surface_inputs;
 pub use hotspots::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
@@ -69,6 +69,12 @@ pub use hotspots::{
     BashVerbAggregation, FileAggregation, HotspotsOptions, HotspotsResult, McpServerAggregation,
     SessionTotals, SubagentAggregation, ToolAttribution,
 };
+pub use overhead::{
+    attribute_overhead, describe_applies_to, find_overhead_files, load_overhead_file,
+    AttributeOverheadInput, OverheadAttribution, OverheadFile, OverheadFileAttribution,
+    OverheadFileKind, ParsedOverheadFile,
+};
+pub use patterns::{detect_patterns, DetectPatternsOptions};
 pub use pricing::{load_pricing, ModelCost, PricingTable, ReasoningMode};
 pub use provider::{
     aggregate_by_provider, filter_turns_by_provider, filter_turns_by_provider_with_rules,
@@ -84,10 +90,6 @@ pub use replacement_savings::{
     summarize_replacement_savings, ReplacementSavingsSummary, ToolSavingsAggregate,
 };
 pub use span_tree::{AttrValue, SpanEvent, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
-pub use flow_graph::{
-    flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
-    TurnTokens, DEFAULT_MAX_TURNS as FLOW_DEFAULT_MAX_TURNS, INTER_TURN_GAP, RAIL_GAP,
-};
 pub use subagent_tree::{
     aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions, SubagentTreeNode,
     SubagentTypeStats,

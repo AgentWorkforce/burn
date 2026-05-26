@@ -674,7 +674,7 @@ fn total_tokens_for_turn(t: &TurnRecord) -> u64 {
 // richer summary report
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SummaryReportOptions {
     pub session: Option<String>,
@@ -695,24 +695,6 @@ pub struct SummaryReportOptions {
     #[serde(default)]
     pub include_quality: bool,
     pub ledger_home: Option<PathBuf>,
-}
-
-impl Default for SummaryReportOptions {
-    fn default() -> Self {
-        Self {
-            session: None,
-            project: None,
-            since: None,
-            workflow: None,
-            tags: None,
-            group_by_tag: None,
-            agent: None,
-            providers: None,
-            mode: SummaryReportMode::default(),
-            include_quality: false,
-            ledger_home: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -768,6 +750,7 @@ impl SummaryGroupBy {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::large_enum_variant)]
 pub enum SummaryReport {
     Grouped(SummaryGroupedReport),
     ByTool(SummaryByToolReport),
@@ -802,7 +785,10 @@ pub struct SummaryGroupedReport {
     /// `SubagentCounts::default()`. Presenters render the
     /// `subagents: X paired, Y orphan` line only when
     /// `!subagents.is_empty()`.
-    #[serde(default, skip_serializing_if = "crate::reader::SubagentCounts::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::reader::SubagentCounts::is_empty"
+    )]
     pub subagents: crate::reader::SubagentCounts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<QualityResult>,
@@ -1434,11 +1420,7 @@ fn summary_subagent_session_filter(
         || opts.since.is_some()
         || opts.workflow.is_some()
         || opts.agent.is_some()
-        || opts
-            .tags
-            .as_ref()
-            .map(|t| !t.is_empty())
-            .unwrap_or(false)
+        || opts.tags.as_ref().map(|t| !t.is_empty()).unwrap_or(false)
         || opts
             .providers
             .as_ref()
@@ -2412,10 +2394,7 @@ impl LedgerHandle {
     /// `TurnRecord` already, but the inference key is the durable
     /// per-API-call identity even when the harness changes how it
     /// chunks rows).
-    pub fn inferences(
-        &self,
-        opts: InferencesOptions,
-    ) -> Result<Vec<crate::reader::Inference>> {
+    pub fn inferences(&self, opts: InferencesOptions) -> Result<Vec<crate::reader::Inference>> {
         let q = build_query(
             opts.session.as_deref(),
             opts.project.as_deref(),
@@ -4133,9 +4112,9 @@ pub struct FingerprintOptions {
 impl FingerprintOptions {
     fn scope(&self) -> Result<FingerprintScope> {
         match (self.session.as_deref(), self.project.as_ref()) {
-            (Some(_), Some(_)) => anyhow::bail!(
-                "fingerprint: pass at most one of `session` or `project`"
-            ),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("fingerprint: pass at most one of `session` or `project`")
+            }
             (Some(s), None) => Ok(FingerprintScope::Session(s.to_string())),
             (None, Some(p)) => Ok(FingerprintScope::Project(p.clone())),
             (None, None) => Ok(FingerprintScope::AllSessions),
@@ -4206,9 +4185,7 @@ impl LedgerHandle {
             .into_iter()
             .find(|t| t.turn_id == turn_id)
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "turn not found: session_id={session_id} turn_id={turn_id}"
-                )
+                anyhow::anyhow!("turn not found: session_id={session_id} turn_id={turn_id}")
             })
     }
 
@@ -4262,12 +4239,13 @@ impl LedgerHandle {
         // Group sidecars by message_id for fast per-turn slicing.
         let mut infs_by_msg: HashMap<String, Vec<crate::reader::Inference>> = HashMap::new();
         for inf in inferences {
-            infs_by_msg.entry(inf.turn_id.clone()).or_default().push(inf);
+            infs_by_msg
+                .entry(inf.turn_id.clone())
+                .or_default()
+                .push(inf);
         }
-        let mut events_by_msg: HashMap<
-            String,
-            Vec<crate::reader::ToolResultEventRecord>,
-        > = HashMap::new();
+        let mut events_by_msg: HashMap<String, Vec<crate::reader::ToolResultEventRecord>> =
+            HashMap::new();
         for ev in tool_result_events {
             if let Some(m) = ev.message_id.clone() {
                 events_by_msg.entry(m).or_default().push(ev);
@@ -4298,28 +4276,30 @@ impl LedgerHandle {
         // - **Orphan**: assign to the latest turn whose `ts <=
         //   subagent_start_ms`; if no turn precedes it (or the sidecar
         //   has no parseable timestamp), assign to the first turn.
-        let subagent_buckets =
-            bucket_subagents_per_turn(&turns, &subagents);
+        let subagent_buckets = bucket_subagents_per_turn(&turns, &subagents);
 
         let mut out = Vec::with_capacity(turns.len());
         for (turn_idx, turn) in turns.iter().enumerate() {
-            let infs_for_turn = infs_by_msg.get(&turn.message_id).cloned().unwrap_or_default();
-            let events_for_turn =
-                events_by_msg.get(&turn.message_id).cloned().unwrap_or_default();
+            let infs_for_turn = infs_by_msg
+                .get(&turn.message_id)
+                .cloned()
+                .unwrap_or_default();
+            let events_for_turn = events_by_msg
+                .get(&turn.message_id)
+                .cloned()
+                .unwrap_or_default();
             let subagents_for_turn: Vec<crate::reader::SubagentTranscript> = subagent_buckets
                 .get(&turn_idx)
                 .map(|idxs| idxs.iter().map(|i| subagents[*i].clone()).collect())
                 .unwrap_or_default();
             let tree = match source {
                 crate::reader::SourceKind::ClaudeCode => {
-                    crate::reader::build_claude_span_tree(
-                        crate::reader::ClaudeSpanTreeInputs {
-                            turn,
-                            tool_result_events: &events_for_turn,
-                            inferences: &infs_for_turn,
-                            subagents: &subagents_for_turn,
-                        },
-                    )
+                    crate::reader::build_claude_span_tree(crate::reader::ClaudeSpanTreeInputs {
+                        turn,
+                        tool_result_events: &events_for_turn,
+                        inferences: &infs_for_turn,
+                        subagents: &subagents_for_turn,
+                    })
                 }
                 _ => crate::reader::build_codex_span_tree(crate::reader::CodexSpanTreeInputs {
                     turn,
@@ -4452,9 +4432,7 @@ fn parse_iso_ms_compat(s: &str) -> Option<i64> {
 /// We resolve `BURN_CLAUDE_PROJECTS_DIR` first to mirror what the
 /// summary path does (so the test suite can pin a sandbox); otherwise
 /// fall back to `$HOME/.claude/projects`.
-fn discover_and_pair_subagents(
-    session_id: &str,
-) -> Result<Vec<crate::reader::SubagentTranscript>> {
+fn discover_and_pair_subagents(session_id: &str) -> Result<Vec<crate::reader::SubagentTranscript>> {
     let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
         std::path::PathBuf::from(p)
     } else {
@@ -4811,7 +4789,9 @@ mod tests {
         // cutoff of `...12Z`, dropping valid turns. Canonicalizing widens to
         // `.000Z` so the cutoff is the lower bound for that second.
         assert_eq!(
-            normalize_since(Some("2026-04-01T00:00:00Z")).unwrap().as_deref(),
+            normalize_since(Some("2026-04-01T00:00:00Z"))
+                .unwrap()
+                .as_deref(),
             Some("2026-04-01T00:00:00.000Z"),
         );
     }
@@ -4819,17 +4799,23 @@ mod tests {
     #[test]
     fn normalize_since_preserves_millisecond_precision() {
         assert_eq!(
-            normalize_since(Some("2026-05-06T00:00:00.500Z")).unwrap().as_deref(),
+            normalize_since(Some("2026-05-06T00:00:00.500Z"))
+                .unwrap()
+                .as_deref(),
             Some("2026-05-06T00:00:00.500Z"),
         );
         // Sub-millisecond digits are truncated to 3.
         assert_eq!(
-            normalize_since(Some("2026-05-06T00:00:00.500999Z")).unwrap().as_deref(),
+            normalize_since(Some("2026-05-06T00:00:00.500999Z"))
+                .unwrap()
+                .as_deref(),
             Some("2026-05-06T00:00:00.500Z"),
         );
         // Shorter fraction is right-padded.
         assert_eq!(
-            normalize_since(Some("2026-05-06T00:00:00.5Z")).unwrap().as_deref(),
+            normalize_since(Some("2026-05-06T00:00:00.5Z"))
+                .unwrap()
+                .as_deref(),
             Some("2026-05-06T00:00:00.500Z"),
         );
     }
@@ -4839,7 +4825,9 @@ mod tests {
         // `-07:00` is 7h behind UTC → same wall-clock corresponds to a UTC
         // instant 7h later. 2026-05-06T00:00:00-07:00 == 2026-05-06T07:00:00Z.
         assert_eq!(
-            normalize_since(Some("2026-05-06T00:00:00-07:00")).unwrap().as_deref(),
+            normalize_since(Some("2026-05-06T00:00:00-07:00"))
+                .unwrap()
+                .as_deref(),
             Some("2026-05-06T07:00:00.000Z"),
         );
     }
@@ -4848,7 +4836,9 @@ mod tests {
     fn normalize_since_converts_positive_offset_to_utc() {
         // 2026-05-06T00:00:00+09:00 == 2026-05-05T15:00:00Z.
         assert_eq!(
-            normalize_since(Some("2026-05-06T00:00:00+09:00")).unwrap().as_deref(),
+            normalize_since(Some("2026-05-06T00:00:00+09:00"))
+                .unwrap()
+                .as_deref(),
             Some("2026-05-05T15:00:00.000Z"),
         );
     }
@@ -4856,7 +4846,9 @@ mod tests {
     #[test]
     fn normalize_since_accepts_lowercase_z_and_t() {
         assert_eq!(
-            normalize_since(Some("2026-05-06t00:00:00.500z")).unwrap().as_deref(),
+            normalize_since(Some("2026-05-06t00:00:00.500z"))
+                .unwrap()
+                .as_deref(),
             Some("2026-05-06T00:00:00.500Z"),
         );
     }
@@ -4959,10 +4951,7 @@ mod tests {
         let opts = LedgerOpenOptions::with_home(dir.path());
         let mut handle = Ledger::open(opts).expect("open ledger");
 
-        let make_turn = |idx: u64,
-                         msg: &str,
-                         stop_reason: Option<StopReason>|
-         -> TurnRecord {
+        let make_turn = |idx: u64, msg: &str, stop_reason: Option<StopReason>| -> TurnRecord {
             TurnRecord {
                 v: 1,
                 source: SourceKind::ClaudeCode,
@@ -6544,7 +6533,10 @@ mod tests {
         assert_eq!(parts[0], "2", "fixture appends 2 turns");
         assert!(!parts[1].is_empty(), "max_ts must be non-empty");
         let total_bytes: u64 = parts[2].parse().expect("total_bytes is numeric");
-        assert!(total_bytes > 0, "total_bytes must be > 0 for non-empty fixture");
+        assert!(
+            total_bytes > 0,
+            "total_bytes must be > 0 for non-empty fixture"
+        );
     }
 
     #[test]
@@ -6719,8 +6711,7 @@ mod tests {
         assert_eq!(trees[0].root.status, SpanStatus::Ok);
 
         // Each root has UserPrompt + at least one Inference child.
-        let kinds: Vec<SpanKind> =
-            trees[0].root.children.iter().map(|c| c.kind).collect();
+        let kinds: Vec<SpanKind> = trees[0].root.children.iter().map(|c| c.kind).collect();
         assert!(kinds.contains(&SpanKind::UserPrompt));
         assert!(kinds.contains(&SpanKind::Inference));
 
@@ -6755,11 +6746,10 @@ mod tests {
     #[test]
     fn turn_span_tree_missing_turn_errors() {
         let (_dir, handle) = fixture_handle();
-        let err = handle.turn_span_tree("sess-a", "does-not-exist").unwrap_err();
-        assert!(
-            err.to_string().contains("turn not found"),
-            "got: {err:?}"
-        );
+        let err = handle
+            .turn_span_tree("sess-a", "does-not-exist")
+            .unwrap_err();
+        assert!(err.to_string().contains("turn not found"), "got: {err:?}");
     }
 
     /// Unknown session id → no trees, no error.
@@ -6847,18 +6837,10 @@ mod tests {
         let orphan_mid = bucket_subagent("orphan-mid", None, Some("2026-04-23T00:02:00.000Z"));
         // Orphan timestamped before any turn — attaches to turn 0
         // (first-turn fallback).
-        let orphan_early = bucket_subagent(
-            "orphan-early",
-            None,
-            Some("2026-04-22T23:00:00.000Z"),
-        );
+        let orphan_early = bucket_subagent("orphan-early", None, Some("2026-04-22T23:00:00.000Z"));
         // Orphan timestamped after both turns — attaches to turn 1
         // (latest preceding).
-        let orphan_late = bucket_subagent(
-            "orphan-late",
-            None,
-            Some("2026-04-23T00:10:00.000Z"),
-        );
+        let orphan_late = bucket_subagent("orphan-late", None, Some("2026-04-23T00:10:00.000Z"));
         let subagents = vec![paired, orphan_mid, orphan_early, orphan_late];
 
         let buckets = bucket_subagents_per_turn(&turns, &subagents);
@@ -6892,7 +6874,10 @@ mod tests {
             "orphan-early -> turn0 (first-turn fallback)"
         );
         assert!(turn1_agents.contains(&"paired-1"), "paired-1 -> turn1");
-        assert!(turn1_agents.contains(&"orphan-late"), "orphan-late -> turn1");
+        assert!(
+            turn1_agents.contains(&"orphan-late"),
+            "orphan-late -> turn1"
+        );
         // No turn carries the same agent twice.
         assert_eq!(turn0_agents.len(), 2);
         assert_eq!(turn1_agents.len(), 2);

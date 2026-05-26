@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use crate::ingest::{IngestOptions as RawIngestOptions, IngestReport, IngestRoots, ingest_all};
+use crate::ingest::{ingest_all, IngestOptions as RawIngestOptions, IngestReport, IngestRoots};
 
 use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
 

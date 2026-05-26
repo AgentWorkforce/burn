@@ -21,6 +21,7 @@
 pub mod cursors;
 pub(crate) mod fs_events;
 pub mod gap;
+#[allow(clippy::module_inception)]
 pub mod ingest;
 pub mod pending_stamps;
 pub mod reingest;

@@ -570,13 +570,7 @@ fn parse_iso_system_time(s: &str) -> std::result::Result<SystemTime, BurnError> 
     let nanos = parse_fractional_nanos(frac_part)?;
 
     let max_day = days_in_month(year, month);
-    if max_day == 0
-        || day == 0
-        || day > max_day
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
+    if max_day == 0 || day == 0 || day > max_day || hour > 23 || minute > 59 || second > 60 {
         return Err(invalid_arg("spawnStartTs is outside the supported range"));
     }
     let days = days_from_civil(year, month, day);

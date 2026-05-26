@@ -428,14 +428,8 @@ impl Builder {
                     // "return" to a main-rail successor — they connect
                     // via an `Unattached` edge from the most recent main
                     // node and that's the end of the chain).
-                    let first_id = self.emit_subagent_rail(
-                        tree,
-                        child,
-                        rail,
-                        turn_x,
-                        unattached_y,
-                        None,
-                    );
+                    let first_id =
+                        self.emit_subagent_rail(tree, child, rail, turn_x, unattached_y, None);
                     if let Some(first_id) = first_id {
                         let anchor = prev_main_id.clone().or_else(|| {
                             self.last_main_node_per_turn
@@ -479,8 +473,7 @@ impl Builder {
         y_anchor: i32,
         dispatch_inference_index: Option<u32>,
     ) -> Option<String> {
-        let agent_id = span_string(sub, "agent_id")
-            .unwrap_or_else(|| format!("rail-{rail}"));
+        let agent_id = span_string(sub, "agent_id").unwrap_or_else(|| format!("rail-{rail}"));
         let label = if !sub.name.is_empty() {
             sub.name.clone()
         } else {
@@ -647,9 +640,8 @@ impl Builder {
                     // from_idx)`. `partition_point` gives us the
                     // insertion index immediately past the matching
                     // dispatch entry, which is exactly the successor.
-                    let pivot = timeline.partition_point(|(t, i, _)| {
-                        (*t, *i) <= (from_turn, from_idx)
-                    });
+                    let pivot =
+                        timeline.partition_point(|(t, i, _)| (*t, *i) <= (from_turn, from_idx));
                     if let Some((_, _, id)) = timeline.get(pivot) {
                         resolved.push(FlowEdge {
                             from: edge.from,
@@ -710,11 +702,7 @@ fn span_duration(node: &SpanNode) -> i64 {
 /// buffered cross-rail / unattached edges, and assembles the final
 /// `FlowGraph` value. Kept private — callers go through one of the
 /// public entrypoints so the projection contract has one home.
-fn build_with_finalize(
-    session_id: &str,
-    trees: &[TurnSpanTree],
-    opts: FlowOpts,
-) -> FlowGraph {
+fn build_with_finalize(session_id: &str, trees: &[TurnSpanTree], opts: FlowOpts) -> FlowGraph {
     let total_turn_count = u32::try_from(trees.len()).unwrap_or(u32::MAX);
     let max_turns = opts.effective_max_turns();
     let take = match max_turns {
@@ -932,11 +920,7 @@ mod tests {
         root.children.push(inf0);
         root.children.push(inf1);
 
-        let graph = flow_graph_from_trees(
-            "sess-1",
-            &[make_tree(0, root)],
-            FlowOpts::default(),
-        );
+        let graph = flow_graph_from_trees("sess-1", &[make_tree(0, root)], FlowOpts::default());
 
         let return_edge = graph
             .edges
@@ -992,17 +976,16 @@ mod tests {
         inf.children.push(task);
         let mut root = turn_root();
         root.children.push(inf);
-        let graph = flow_graph_from_trees(
-            "sess-1",
-            &[make_tree(0, root)],
-            FlowOpts::default(),
-        );
+        let graph = flow_graph_from_trees("sess-1", &[make_tree(0, root)], FlowOpts::default());
         assert!(
             !graph.edges.iter().any(|e| e.kind == FlowEdgeKind::Return),
             "no Return edge expected when dispatch is the terminal inference"
         );
         assert!(
-            !graph.edges.iter().any(|e| e.to.starts_with("__return_anchor")),
+            !graph
+                .edges
+                .iter()
+                .any(|e| e.to.starts_with("__return_anchor")),
             "no unresolved placeholders should leak into the final graph"
         );
     }
@@ -1054,11 +1037,7 @@ mod tests {
                 make_tree(i, root)
             })
             .collect();
-        let graph = flow_graph_from_trees(
-            "sess-1",
-            &trees,
-            FlowOpts { max_turns: Some(3) },
-        );
+        let graph = flow_graph_from_trees("sess-1", &trees, FlowOpts { max_turns: Some(3) });
         assert_eq!(graph.turn_count, 3);
         assert_eq!(graph.total_turn_count, 10);
         assert!(graph.truncated);
@@ -1074,11 +1053,7 @@ mod tests {
                 make_tree(i, root)
             })
             .collect();
-        let graph = flow_graph_from_trees(
-            "sess-1",
-            &trees,
-            FlowOpts { max_turns: Some(0) },
-        );
+        let graph = flow_graph_from_trees("sess-1", &trees, FlowOpts { max_turns: Some(0) });
         assert_eq!(graph.turn_count, 3);
         assert!(!graph.truncated);
     }

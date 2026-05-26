@@ -199,11 +199,9 @@ mod tests {
         // period, the second call would hang indefinitely.
         let debounce = Duration::from_millis(50);
         for _ in 0..3 {
-            let result = tokio::time::timeout(
-                Duration::from_millis(500),
-                burst.wait_for_burst(debounce),
-            )
-            .await;
+            let result =
+                tokio::time::timeout(Duration::from_millis(500), burst.wait_for_burst(debounce))
+                    .await;
             assert!(matches!(result, Ok(Some(()))));
         }
 

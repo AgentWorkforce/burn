@@ -187,7 +187,10 @@ fn classifies_activity_via_aliased_tool_names() {
     let r = parse("with-tool", "ses_tool");
     let t = &r.turns[0];
     assert_eq!(t.has_edits, Some(true));
-    assert_eq!(t.activity.unwrap(), crate::reader::types::ActivityCategory::Coding);
+    assert_eq!(
+        t.activity.unwrap(),
+        crate::reader::types::ActivityCategory::Coding
+    );
 }
 
 // ---------------------------------------------------------------------------

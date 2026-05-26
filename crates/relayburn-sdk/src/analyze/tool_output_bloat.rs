@@ -493,10 +493,12 @@ impl<'a> DetectToolOutputBloatOptions<'a> {
 pub fn detect_tool_output_bloat(opts: &DetectToolOutputBloatOptions<'_>) -> Vec<ToolOutputBloat> {
     let mut out: Vec<ToolOutputBloat> = Vec::new();
     if !opts.settings.is_empty() {
-        out.extend(detect_static_config_bloat(&DetectStaticConfigBloatOptions {
-            threshold: opts.threshold,
-            settings: opts.settings.to_vec(),
-        }));
+        out.extend(detect_static_config_bloat(
+            &DetectStaticConfigBloatOptions {
+                threshold: opts.threshold,
+                settings: opts.settings.to_vec(),
+            },
+        ));
     }
     if !opts.tool_result_events.is_empty() {
         out.extend(detect_observed_bloat(&DetectObservedBloatOptions {
@@ -636,9 +638,7 @@ Estimated next-turn carry cost {usd}. {advice}",
 mod tests {
     use super::*;
     use crate::analyze::pricing::load_builtin_pricing;
-    use crate::reader::{
-        ToolCall, ToolResultEventSource, ToolResultStatus, Usage, UserTurnBlock,
-    };
+    use crate::reader::{ToolCall, ToolResultEventSource, ToolResultStatus, Usage, UserTurnBlock};
     use serde_json::json;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -689,6 +689,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn evt_with(
         source: SourceKind,
         session_id: &str,
@@ -724,6 +725,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn user_turn_with(
         source: SourceKind,
         session_id: &str,
@@ -827,7 +829,10 @@ mod tests {
         assert_eq!(f.evidenced_max_output, 20_000);
         assert_eq!(f.occurrence_count, 1);
         assert_eq!(f.cost, 0.0);
-        assert_eq!(f.evidence, vec!["/home/u/.claude/settings.json".to_string()]);
+        assert_eq!(
+            f.evidence,
+            vec!["/home/u/.claude/settings.json".to_string()]
+        );
     }
 
     #[test]
@@ -902,7 +907,10 @@ mod tests {
             settings,
         });
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].evidence, vec!["/cwd/.claude/settings.json".to_string()]);
+        assert_eq!(
+            out[0].evidence,
+            vec!["/cwd/.claude/settings.json".to_string()]
+        );
         assert_eq!(out[0].configured_limit, Some(99_999));
     }
 
@@ -1065,14 +1073,59 @@ mod tests {
             evt("s3", "tu_c", 0, Some("m3")),
         ];
         let user_turns = vec![
-            user_turn_with(SourceKind::ClaudeCode, "s1", "u1", "m1", "m2", "tu_a", 80_000, 20_000),
-            user_turn_with(SourceKind::ClaudeCode, "s2", "u2", "m2", "m3", "tu_b", 100_000, 25_000),
-            user_turn_with(SourceKind::ClaudeCode, "s3", "u3", "m3", "m4", "tu_c", 120_000, 30_000),
+            user_turn_with(
+                SourceKind::ClaudeCode,
+                "s1",
+                "u1",
+                "m1",
+                "m2",
+                "tu_a",
+                80_000,
+                20_000,
+            ),
+            user_turn_with(
+                SourceKind::ClaudeCode,
+                "s2",
+                "u2",
+                "m2",
+                "m3",
+                "tu_b",
+                100_000,
+                25_000,
+            ),
+            user_turn_with(
+                SourceKind::ClaudeCode,
+                "s3",
+                "u3",
+                "m3",
+                "m4",
+                "tu_c",
+                120_000,
+                30_000,
+            ),
         ];
         let turns = vec![
-            turn_with(SourceKind::ClaudeCode, "s1", "m1", 0, vec![tc("tu_a", "Bash")]),
-            turn_with(SourceKind::ClaudeCode, "s2", "m2", 0, vec![tc("tu_b", "Bash")]),
-            turn_with(SourceKind::ClaudeCode, "s3", "m3", 0, vec![tc("tu_c", "Bash")]),
+            turn_with(
+                SourceKind::ClaudeCode,
+                "s1",
+                "m1",
+                0,
+                vec![tc("tu_a", "Bash")],
+            ),
+            turn_with(
+                SourceKind::ClaudeCode,
+                "s2",
+                "m2",
+                0,
+                vec![tc("tu_b", "Bash")],
+            ),
+            turn_with(
+                SourceKind::ClaudeCode,
+                "s3",
+                "m3",
+                0,
+                vec![tc("tu_c", "Bash")],
+            ),
         ];
         let out = detect_observed_bloat(&DetectObservedBloatOptions {
             tool_result_events: &events,
@@ -1125,14 +1178,59 @@ mod tests {
             ),
         ];
         let user_turns = vec![
-            user_turn_with(SourceKind::ClaudeCode, "s1", "u1", "m1", "m2", "tu_a", 80_000, 20_000),
-            user_turn_with(SourceKind::Codex, "s2", "u2", "m2", "m3", "call_b", 90_000, 22_500),
-            user_turn_with(SourceKind::Opencode, "s3", "u3", "m3", "m4", "opc_c", 85_000, 21_250),
+            user_turn_with(
+                SourceKind::ClaudeCode,
+                "s1",
+                "u1",
+                "m1",
+                "m2",
+                "tu_a",
+                80_000,
+                20_000,
+            ),
+            user_turn_with(
+                SourceKind::Codex,
+                "s2",
+                "u2",
+                "m2",
+                "m3",
+                "call_b",
+                90_000,
+                22_500,
+            ),
+            user_turn_with(
+                SourceKind::Opencode,
+                "s3",
+                "u3",
+                "m3",
+                "m4",
+                "opc_c",
+                85_000,
+                21_250,
+            ),
         ];
         let turns = vec![
-            turn_with(SourceKind::ClaudeCode, "s1", "m1", 0, vec![tc("tu_a", "Bash")]),
-            turn_with(SourceKind::Codex, "s2", "m2", 0, vec![tc("call_b", "shell")]),
-            turn_with(SourceKind::Opencode, "s3", "m3", 0, vec![tc("opc_c", "bash")]),
+            turn_with(
+                SourceKind::ClaudeCode,
+                "s1",
+                "m1",
+                0,
+                vec![tc("tu_a", "Bash")],
+            ),
+            turn_with(
+                SourceKind::Codex,
+                "s2",
+                "m2",
+                0,
+                vec![tc("call_b", "shell")],
+            ),
+            turn_with(
+                SourceKind::Opencode,
+                "s3",
+                "m3",
+                0,
+                vec![tc("opc_c", "bash")],
+            ),
         ];
         let out = detect_observed_bloat(&DetectObservedBloatOptions {
             tool_result_events: &events,
@@ -1152,7 +1250,11 @@ mod tests {
         });
         assert_eq!(
             sources,
-            vec![SourceKind::ClaudeCode, SourceKind::Codex, SourceKind::Opencode]
+            vec![
+                SourceKind::ClaudeCode,
+                SourceKind::Codex,
+                SourceKind::Opencode
+            ]
         );
         for b in &out {
             assert_eq!(b.tool_name, "Bash");
@@ -1435,7 +1537,10 @@ mod tests {
             WasteAction::Paste { label, text } => {
                 assert!(label.contains("settings.json"), "label: {label}");
                 assert!(text.contains(BASH_MAX_OUTPUT_ENV_KEY), "text: {text}");
-                assert!(text.contains("\"60000\""), "text should target 60000 chars: {text}");
+                assert!(
+                    text.contains("\"60000\""),
+                    "text should target 60000 chars: {text}"
+                );
             }
             other => panic!("expected Paste action, got {other:?}"),
         }
@@ -1488,7 +1593,10 @@ mod tests {
         });
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].configured_limit, Some(80_000));
-        assert_eq!(result[0].evidence, vec![path.to_string_lossy().into_owned()]);
+        assert_eq!(
+            result[0].evidence,
+            vec![path.to_string_lossy().into_owned()]
+        );
     }
 
     #[test]

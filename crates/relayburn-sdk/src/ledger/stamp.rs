@@ -180,8 +180,14 @@ mod tests {
             Enrichment::new(),
         )
         .unwrap();
-        assert!(stamp_matches(&s, &make_turn("a", "m1", "2025-01-01T00:00:00Z")));
-        assert!(!stamp_matches(&s, &make_turn("b", "m1", "2025-01-01T00:00:00Z")));
+        assert!(stamp_matches(
+            &s,
+            &make_turn("a", "m1", "2025-01-01T00:00:00Z")
+        ));
+        assert!(!stamp_matches(
+            &s,
+            &make_turn("b", "m1", "2025-01-01T00:00:00Z")
+        ));
     }
 
     #[test]
@@ -200,8 +206,14 @@ mod tests {
             Enrichment::new(),
         )
         .unwrap();
-        assert!(stamp_matches(&s, &make_turn("a", "m", "2025-01-01T00:00:00Z")));
-        assert!(stamp_matches(&s, &make_turn("a", "m", "2025-01-02T00:00:00Z")));
+        assert!(stamp_matches(
+            &s,
+            &make_turn("a", "m", "2025-01-01T00:00:00Z")
+        ));
+        assert!(stamp_matches(
+            &s,
+            &make_turn("a", "m", "2025-01-02T00:00:00Z")
+        ));
         assert!(!stamp_matches(
             &s,
             &make_turn("a", "m", "2024-12-31T23:59:59Z")

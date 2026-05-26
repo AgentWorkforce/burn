@@ -111,7 +111,10 @@ mod tests {
         env::set_var("HOME", "/tmp/burn-paths-test-home");
 
         let p = ledger_home();
-        assert_eq!(p, PathBuf::from("/tmp/burn-paths-test-home/.agentworkforce/burn"));
+        assert_eq!(
+            p,
+            PathBuf::from("/tmp/burn-paths-test-home/.agentworkforce/burn")
+        );
 
         match prev_home {
             Some(v) => env::set_var("HOME", v),
@@ -149,9 +152,7 @@ mod tests {
 
     #[test]
     fn accepts_real_session_ids() {
-        assert!(is_valid_session_id(
-            "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
-        ));
+        assert!(is_valid_session_id("0a1b2c3d-4e5f-6789-abcd-ef0123456789"));
         assert!(is_valid_session_id("ses_abc123"));
         assert!(is_valid_session_id("sess_x"));
         assert!(is_valid_session_id("turn_42"));

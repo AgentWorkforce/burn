@@ -294,8 +294,7 @@ fn squash_numeric_field(text: &str, key: &str, placeholder: &str) -> String {
         // below is the right scope. NB: `char::is_ascii_whitespace` is *not*
         // equivalent — it excludes U+000B (vertical tab), which JS `\s` does
         // match, so we list the bytes explicitly.
-        let trimmed_start = after_key
-            .trim_start_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
+        let trimmed_start = after_key.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
         let ws_consumed = after_key.len() - trimmed_start.len();
         // If the value isn't a bare integer (e.g. `null`), bail and emit
         // the original bytes untouched.

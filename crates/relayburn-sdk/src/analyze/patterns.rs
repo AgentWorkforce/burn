@@ -15,7 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-
 use crate::reader::{
     count_retries, normalize_tool_name, CompactionEvent, ContentKind, ContentRecord,
     ContentToolResult, ContentToolUse, SourceKind, ToolCall, ToolResultEventRecord,
@@ -27,8 +26,8 @@ use crate::analyze::cost::{cost_for_turn, cost_for_usage, CostForUsageOptions};
 use crate::analyze::findings::{
     CancellationRun, CompactionLoss, CompactionLostWork, EditHeavySession, EditPreview,
     EditRevertCycle, EditRevertSamplePreview, FailureRun, FailureRunErrorSignature,
-    PatternEventSource, PatternsResult, RetryLoop, SessionPatternSummary,
-    SkillPruningProtection, SkillRecallDup, SystemPromptTax,
+    PatternEventSource, PatternsResult, RetryLoop, SessionPatternSummary, SkillPruningProtection,
+    SkillRecallDup, SystemPromptTax,
 };
 use crate::analyze::pricing::PricingTable;
 
@@ -219,7 +218,9 @@ pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -
     }
 
     let compactions = match opts.compactions {
-        Some(events) => detect_compaction_losses(events, turns, opts.pricing, opts.content_by_session),
+        Some(events) => {
+            detect_compaction_losses(events, turns, opts.pricing, opts.content_by_session)
+        }
         None => Vec::new(),
     };
 
@@ -1064,10 +1065,7 @@ pub(crate) fn detect_edit_reverts_for_session<'a>(
                     first_edit_turn_index: first.turn.turn_index,
                     revert_turn_index: r.turn.turn_index,
                     span_turns: r.turn.turn_index - first.turn.turn_index,
-                    cost: sum_cost_for_turns(
-                        &dedup_turns(vec![first.turn, r.turn]),
-                        pricing,
-                    ),
+                    cost: sum_cost_for_turns(&dedup_turns(vec![first.turn, r.turn]), pricing),
                     sample_preview: None,
                 };
                 if let Some(content_idx) = content_index {
@@ -1084,10 +1082,7 @@ pub(crate) fn detect_edit_reverts_for_session<'a>(
                             .map(|tu| &tu.input),
                     );
                     if let (Some(first_edit), Some(revert)) = (first_edit, revert) {
-                        cycle.sample_preview = Some(EditRevertSamplePreview {
-                            first_edit,
-                            revert,
-                        });
+                        cycle.sample_preview = Some(EditRevertSamplePreview { first_edit, revert });
                     }
                 }
                 cycles.push(cycle);
@@ -1124,7 +1119,10 @@ fn detect_compaction_losses(
         if !events_by_session.contains_key(&e.session_id) {
             events_order.push(e.session_id.clone());
         }
-        events_by_session.entry(e.session_id.clone()).or_default().push(e);
+        events_by_session
+            .entry(e.session_id.clone())
+            .or_default()
+            .push(e);
     }
     for list in events_by_session.values_mut() {
         list.sort_by(|a, b| a.ts.cmp(&b.ts));
@@ -1133,7 +1131,10 @@ fn detect_compaction_losses(
     // Sort turns by session, then turn_index.
     let mut turns_by_session: HashMap<String, Vec<&TurnRecord>> = HashMap::new();
     for t in turns {
-        turns_by_session.entry(t.session_id.clone()).or_default().push(t);
+        turns_by_session
+            .entry(t.session_id.clone())
+            .or_default()
+            .push(t);
     }
     for list in turns_by_session.values_mut() {
         list.sort_by_key(|t| t.turn_index);
@@ -1325,7 +1326,9 @@ pub(crate) fn detect_skill_pruning_protection_for_session(
         if riding_turns == 0 {
             continue;
         }
-        let invoke_cost = cost_for_turn(r.turn, pricing).map(|c| c.total).unwrap_or(0.0);
+        let invoke_cost = cost_for_turn(r.turn, pricing)
+            .map(|c| c.total)
+            .unwrap_or(0.0);
         out.push(SkillPruningProtection {
             session_id: session_id.to_string(),
             skill_name,
@@ -1348,8 +1351,7 @@ pub(crate) fn detect_system_prompt_tax_for_session(
         return Vec::new();
     }
     let first_turn = turns[0];
-    let first_cache_create =
-        first_turn.usage.cache_create_5m + first_turn.usage.cache_create_1h;
+    let first_cache_create = first_turn.usage.cache_create_5m + first_turn.usage.cache_create_1h;
     if first_cache_create == 0 {
         return Vec::new();
     }

@@ -277,7 +277,9 @@ fn extract_agent_id_to_tool_use_id(main: &[Value]) -> std::collections::HashMap<
                     if bo.get("type").and_then(Value::as_str)? != "tool_result" {
                         return None;
                     }
-                    bo.get("tool_use_id").and_then(Value::as_str).map(str::to_string)
+                    bo.get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
                 })
             });
         if let Some(tu) = tool_use_id {
@@ -833,15 +835,9 @@ mod tests {
 
         let by_id: std::collections::HashMap<&str, &SubagentTranscript> =
             paired.iter().map(|t| (t.agent_id.as_str(), t)).collect();
-        assert_eq!(
-            by_id["aaa"].paired_tool_use_id.as_deref(),
-            Some("toolu_a")
-        );
+        assert_eq!(by_id["aaa"].paired_tool_use_id.as_deref(), Some("toolu_a"));
         assert_eq!(by_id["aaa"].agent_type.as_deref(), Some("general-purpose"));
-        assert_eq!(
-            by_id["bbb"].paired_tool_use_id.as_deref(),
-            Some("toolu_b")
-        );
+        assert_eq!(by_id["bbb"].paired_tool_use_id.as_deref(), Some("toolu_b"));
         assert_eq!(by_id["bbb"].agent_type.as_deref(), Some("code-reviewer"));
         assert!(
             by_id["ccc"].paired_tool_use_id.is_none(),

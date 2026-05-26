@@ -7,8 +7,8 @@
 //! the primary substrate for newer ingests; the legacy path falls back to
 //! `TurnRecord.subagent` only.
 
-use indexmap::{IndexMap, IndexSet};
 use crate::reader::{RelationshipType, SessionRelationshipRecord, TurnRecord};
+use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::cost_for_turn;
@@ -138,7 +138,11 @@ fn build_session_tree(
         session_id.to_string(),
         MutableNode {
             depth: 0,
-            ..MutableNode::new(session_id.to_string(), "main".to_string(), RelationshipType::Root)
+            ..MutableNode::new(
+                session_id.to_string(),
+                "main".to_string(),
+                RelationshipType::Root,
+            )
         },
     );
     models.insert(session_id.to_string(), IndexSet::new());
@@ -274,7 +278,12 @@ fn build_relationship_trees(
 
     for r in relationships {
         let id = canonical_id(&state, &relationship_node_id(r));
-        ensure_node(&mut state, &id, &label_for_relationship(r), r.relationship_type);
+        ensure_node(
+            &mut state,
+            &id,
+            &label_for_relationship(r),
+            r.relationship_type,
+        );
         apply_relationship_metadata(&mut state, &id, r);
         if r.relationship_type == RelationshipType::Root {
             continue;
@@ -371,12 +380,7 @@ fn canonical_id(state: &GraphState, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-fn ensure_node(
-    state: &mut GraphState,
-    id: &str,
-    label: &str,
-    relationship_type: RelationshipType,
-) {
+fn ensure_node(state: &mut GraphState, id: &str, label: &str, relationship_type: RelationshipType) {
     if !state.node_by_id.contains_key(id) {
         state.node_by_id.insert(
             id.to_string(),
@@ -782,7 +786,9 @@ pub fn aggregate_subagent_type_stats(
             inv.ty = ty;
         }
         inv.turns += 1;
-        inv.cost += cost_for_turn(t, opts.pricing).map(|c| c.total).unwrap_or(0.0);
+        inv.cost += cost_for_turn(t, opts.pricing)
+            .map(|c| c.total)
+            .unwrap_or(0.0);
     }
     let mut by_type: IndexMap<String, Vec<f64>> = IndexMap::new();
     let mut totals_by_type: IndexMap<String, (u64, f64)> = IndexMap::new();
@@ -922,15 +928,34 @@ mod tests {
         let pricing = load_builtin_pricing();
         let session_id = "sess-1";
         let turns = vec![
-            make_turn(session_id, "m1", "claude-sonnet-4-6", 0, SourceKind::ClaudeCode, None),
-            make_turn(session_id, "m2", "claude-sonnet-4-6", 1, SourceKind::ClaudeCode, None),
+            make_turn(
+                session_id,
+                "m1",
+                "claude-sonnet-4-6",
+                0,
+                SourceKind::ClaudeCode,
+                None,
+            ),
+            make_turn(
+                session_id,
+                "m2",
+                "claude-sonnet-4-6",
+                1,
+                SourceKind::ClaudeCode,
+                None,
+            ),
             make_turn(
                 session_id,
                 "o1",
                 "claude-haiku-4-5",
                 2,
                 SourceKind::ClaudeCode,
-                Some(sub(Some("u-outer"), Some(session_id), Some("Explore"), Some("Research"))),
+                Some(sub(
+                    Some("u-outer"),
+                    Some(session_id),
+                    Some("Explore"),
+                    Some("Research"),
+                )),
             ),
             make_turn(
                 session_id,
@@ -938,7 +963,12 @@ mod tests {
                 "claude-haiku-4-5",
                 3,
                 SourceKind::ClaudeCode,
-                Some(sub(Some("u-outer"), Some(session_id), Some("Explore"), None)),
+                Some(sub(
+                    Some("u-outer"),
+                    Some(session_id),
+                    Some("Explore"),
+                    None,
+                )),
             ),
             make_turn(
                 session_id,
@@ -946,7 +976,12 @@ mod tests {
                 "claude-haiku-4-5",
                 4,
                 SourceKind::ClaudeCode,
-                Some(sub(Some("u-inner"), Some("u-outer"), Some("code-reviewer"), None)),
+                Some(sub(
+                    Some("u-inner"),
+                    Some("u-outer"),
+                    Some("code-reviewer"),
+                    None,
+                )),
             ),
         ];
 
@@ -985,7 +1020,14 @@ mod tests {
         let pricing = load_builtin_pricing();
         let session_id = "sess-2";
         let turns = vec![
-            make_turn(session_id, "m1", "claude-sonnet-4-6", 0, SourceKind::ClaudeCode, None),
+            make_turn(
+                session_id,
+                "m1",
+                "claude-sonnet-4-6",
+                0,
+                SourceKind::ClaudeCode,
+                None,
+            ),
             make_turn(
                 session_id,
                 "s1",
@@ -1015,14 +1057,26 @@ mod tests {
         let pricing = load_builtin_pricing();
         let session_id = "sess-graph";
         let turns = vec![
-            make_turn(session_id, "m1", "claude-sonnet-4-6", 0, SourceKind::ClaudeCode, None),
+            make_turn(
+                session_id,
+                "m1",
+                "claude-sonnet-4-6",
+                0,
+                SourceKind::ClaudeCode,
+                None,
+            ),
             make_turn(
                 session_id,
                 "o1",
                 "claude-haiku-4-5",
                 1,
                 SourceKind::ClaudeCode,
-                Some(sub(Some("u-outer"), Some(session_id), Some("Explore"), Some("Research"))),
+                Some(sub(
+                    Some("u-outer"),
+                    Some(session_id),
+                    Some("Explore"),
+                    Some("Research"),
+                )),
             ),
             make_turn(
                 session_id,
@@ -1030,7 +1084,12 @@ mod tests {
                 "claude-haiku-4-5",
                 2,
                 SourceKind::ClaudeCode,
-                Some(sub(Some("u-inner"), Some("u-outer"), Some("code-reviewer"), None)),
+                Some(sub(
+                    Some("u-inner"),
+                    Some("u-outer"),
+                    Some("code-reviewer"),
+                    None,
+                )),
             ),
         ];
         let relationships = vec![
@@ -1064,20 +1123,43 @@ mod tests {
         ];
 
         let legacy_opts = BuildSubagentTreeOptions::new(&pricing);
-        let legacy = build_subagent_tree(&turns, &legacy_opts).get(session_id).unwrap().clone();
+        let legacy = build_subagent_tree(&turns, &legacy_opts)
+            .get(session_id)
+            .unwrap()
+            .clone();
         let graph_opts = BuildSubagentTreeOptions::new(&pricing).with_relationships(&relationships);
-        let graph = build_subagent_tree(&turns, &graph_opts).get(session_id).unwrap().clone();
+        let graph = build_subagent_tree(&turns, &graph_opts)
+            .get(session_id)
+            .unwrap()
+            .clone();
         assert_eq!(graph, legacy);
         assert_eq!(graph.relationship_type, RelationshipType::Root);
-        assert_eq!(graph.children[0].relationship_type, RelationshipType::Subagent);
+        assert_eq!(
+            graph.children[0].relationship_type,
+            RelationshipType::Subagent
+        );
     }
 
     #[test]
     fn joins_child_session_relationship_rows_to_turns_without_per_turn_subagent_metadata() {
         let pricing = load_builtin_pricing();
         let turns = vec![
-            make_turn("parent-session", "parent-1", "gpt-5.1-codex", 0, SourceKind::Codex, None),
-            make_turn("child-session", "child-1", "gpt-5.1-codex", 0, SourceKind::Codex, None),
+            make_turn(
+                "parent-session",
+                "parent-1",
+                "gpt-5.1-codex",
+                0,
+                SourceKind::Codex,
+                None,
+            ),
+            make_turn(
+                "child-session",
+                "child-1",
+                "gpt-5.1-codex",
+                0,
+                SourceKind::Codex,
+                None,
+            ),
         ];
         let relationships = vec![
             rel(
@@ -1101,18 +1183,25 @@ mod tests {
         ];
 
         let opts = BuildSubagentTreeOptions::new(&pricing).with_relationships(&relationships);
-        let root = build_subagent_tree(&turns, &opts).get("parent-session").unwrap().clone();
+        let root = build_subagent_tree(&turns, &opts)
+            .get("parent-session")
+            .unwrap()
+            .clone();
         assert_eq!(root.self_turns, 1);
         assert_eq!(root.cumulative_turns, 2);
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.children[0].label, "worker");
         assert_eq!(root.children[0].node_id, "child-session");
-        assert_eq!(root.children[0].relationship_type, RelationshipType::Subagent);
+        assert_eq!(
+            root.children[0].relationship_type,
+            RelationshipType::Subagent
+        );
         assert_eq!(root.children[0].self_turns, 1);
     }
 
     #[test]
-    fn does_not_alias_native_sidechain_session_roots_onto_agent_ids_when_turns_lack_subagent_fields() {
+    fn does_not_alias_native_sidechain_session_roots_onto_agent_ids_when_turns_lack_subagent_fields(
+    ) {
         let pricing = load_builtin_pricing();
         let session_id = "partial-claude";
         let turns = vec![make_turn(
@@ -1144,7 +1233,10 @@ mod tests {
             ),
         ];
         let opts = BuildSubagentTreeOptions::new(&pricing).with_relationships(&relationships);
-        let root = build_subagent_tree(&turns, &opts).get(session_id).unwrap().clone();
+        let root = build_subagent_tree(&turns, &opts)
+            .get(session_id)
+            .unwrap()
+            .clone();
         assert_eq!(root.node_id, session_id);
         assert_eq!(root.label, "main");
         assert_eq!(root.self_turns, 1);
@@ -1188,11 +1280,13 @@ mod tests {
         assert!(explore.p95_cost >= explore.median_cost);
         assert!((explore.mean_cost - explore.total_cost / 3.0).abs() < 1e-12);
 
-        let rev = stats.iter().find(|s| s.subagent_type == "code-reviewer").unwrap();
+        let rev = stats
+            .iter()
+            .find(|s| s.subagent_type == "code-reviewer")
+            .unwrap();
         assert_eq!(rev.invocations, 1);
         assert_eq!(rev.turns, 1);
         assert!((rev.median_cost - rev.total_cost).abs() < 1e-12);
         assert!((rev.p95_cost - rev.total_cost).abs() < 1e-12);
     }
-
 }

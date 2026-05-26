@@ -116,9 +116,7 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     if args.include_partial {
         if let Some(raw) = args.fidelity.as_deref() {
             if raw != "partial" {
-                return Err(anyhow!(
-                    "--include-partial conflicts with --fidelity {raw}"
-                ));
+                return Err(anyhow!("--include-partial conflicts with --fidelity {raw}"));
             }
         }
         min_fidelity = FidelityClass::Partial;
@@ -128,7 +126,9 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     //    per-command so the global JSON take-precedence rule in the TS CLI
     //    becomes "explicit conflict" here — same exit code, same message.
     if globals.json && args.csv {
-        return Err(anyhow!("--json and --csv are mutually exclusive; pick one."));
+        return Err(anyhow!(
+            "--json and --csv are mutually exclusive; pick one."
+        ));
     }
 
     // 4. Provider filter. Lower-cased CSV; turns whose effective provider
@@ -238,12 +238,7 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         print!("{csv}");
         return Ok(0);
     }
-    let tty = render_tty(
-        &table,
-        analyzed_turns,
-        min_fidelity,
-        &fidelity_summary,
-    );
+    let tty = render_tty(&table, analyzed_turns, min_fidelity, &fidelity_summary);
     print!("{tty}");
     Ok(0)
 }
@@ -490,13 +485,24 @@ fn build_json(
 /// `preserve_order` feature).
 fn fidelity_summary_to_value(s: &FidelitySummary) -> Value {
     let mut by_class = serde_json::Map::new();
-    for key in &["full", "usage-only", "aggregate-only", "cost-only", "partial"] {
+    for key in &[
+        "full",
+        "usage-only",
+        "aggregate-only",
+        "cost-only",
+        "partial",
+    ] {
         let cls = parse_fidelity(key).unwrap();
         let n = s.by_class.get(&cls).copied().unwrap_or(0);
         by_class.insert((*key).to_string(), Value::from(n));
     }
     let mut by_granularity = serde_json::Map::new();
-    for key in &["per-turn", "per-message", "per-session-aggregate", "cost-only"] {
+    for key in &[
+        "per-turn",
+        "per-message",
+        "per-session-aggregate",
+        "cost-only",
+    ] {
         let g = match *key {
             "per-turn" => UsageGranularity::PerTurn,
             "per-message" => UsageGranularity::PerMessage,
@@ -589,15 +595,9 @@ fn render_csv(table: &CompareTable) -> String {
                 c.one_shot_turns.to_string(),
                 c.priced_turns.to_string(),
                 num_csv(c.total_cost, 6),
-                c.cost_per_turn
-                    .map(|v| num_csv(v, 6))
-                    .unwrap_or_default(),
-                c.one_shot_rate
-                    .map(|v| num_csv(v, 4))
-                    .unwrap_or_default(),
-                c.cache_hit_rate
-                    .map(|v| num_csv(v, 4))
-                    .unwrap_or_default(),
+                c.cost_per_turn.map(|v| num_csv(v, 6)).unwrap_or_default(),
+                c.one_shot_rate.map(|v| num_csv(v, 4)).unwrap_or_default(),
+                c.cache_hit_rate.map(|v| num_csv(v, 4)).unwrap_or_default(),
                 c.median_retries
                     .map(|v| {
                         // `String(n)` for numbers; JS prints integers as-is.
@@ -662,7 +662,10 @@ fn render_tty(
 ) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push(String::new());
-    lines.push(format!("turns analyzed: {}", format_uint(analyzed_turns as u64)));
+    lines.push(format!(
+        "turns analyzed: {}",
+        format_uint(analyzed_turns as u64)
+    ));
 
     let excluded = compute_excluded(summary, minimum);
     if excluded.total > 0 {
@@ -671,9 +674,8 @@ fn render_tty(
     lines.push(String::new());
 
     if table.models.is_empty() || table.categories.is_empty() {
-        lines.push(
-            "no data to compare (need turns spanning ≥1 model and ≥1 activity).".to_string(),
-        );
+        lines
+            .push("no data to compare (need turns spanning ≥1 model and ≥1 activity).".to_string());
         lines.push(String::new());
         return lines.join("\n");
     }
@@ -751,10 +753,7 @@ fn render_tty(
     // Coverage notes.
     let mut notes: Vec<String> = Vec::new();
     for cat in &table.categories {
-        let any_has_data = table
-            .models
-            .iter()
-            .any(|m| !cell_for(m, cat).no_data);
+        let any_has_data = table.models.iter().any(|m| !cell_for(m, cat).no_data);
         if !any_has_data {
             continue;
         }
@@ -931,7 +930,10 @@ mod tests {
 
     #[test]
     fn parse_fidelity_known_classes() {
-        assert!(matches!(parse_fidelity("full").unwrap(), FidelityClass::Full));
+        assert!(matches!(
+            parse_fidelity("full").unwrap(),
+            FidelityClass::Full
+        ));
         assert!(matches!(
             parse_fidelity("usage-only").unwrap(),
             FidelityClass::UsageOnly
@@ -941,7 +943,10 @@ mod tests {
 
     #[test]
     fn display_model_name_strips_provider_prefix() {
-        assert_eq!(display_model_name("anthropic/claude-sonnet-4-6"), "claude-sonnet-4-6");
+        assert_eq!(
+            display_model_name("anthropic/claude-sonnet-4-6"),
+            "claude-sonnet-4-6"
+        );
         assert_eq!(display_model_name("claude-haiku-4-5"), "claude-haiku-4-5");
     }
 }

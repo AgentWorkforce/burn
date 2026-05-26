@@ -75,9 +75,7 @@ fn now_iso(now: &std::time::SystemTime) -> String {
         .unwrap_or(0);
     let dt = time::OffsetDateTime::from_unix_timestamp(secs as i64)
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-    let fmt = time::macros::format_description!(
-        "[year]-[month]-[day]T[hour]:[minute]:[second]Z"
-    );
+    let fmt = time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
     dt.format(&fmt).expect("format z iso")
 }
 
@@ -138,8 +136,7 @@ mod tests {
             ledger_home: Some(dir.path().to_path_buf()),
         })
         .unwrap();
-        let handle =
-            Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
         let stamps = handle.inner.list_stamps().unwrap();
         let ts = &stamps[0].ts;
         assert!(

@@ -66,14 +66,7 @@ fn tc_target(id: &str, name: &str, args_hash: &str, target: &str) -> ToolCall {
     c
 }
 
-fn tc_edit(
-    id: &str,
-    name: &str,
-    args_hash: &str,
-    target: &str,
-    pre: &str,
-    post: &str,
-) -> ToolCall {
+fn tc_edit(id: &str, name: &str, args_hash: &str, target: &str, pre: &str, post: &str) -> ToolCall {
     let mut c = tc_target(id, name, args_hash, target);
     c.edit_pre_hash = Some(pre.into());
     c.edit_post_hash = Some(post.into());
@@ -156,12 +149,13 @@ fn evt(
     }
 }
 
-fn evt_subagent(
-    session_id: &str,
-    tool_use_id: &str,
-    event_index: u64,
-) -> ToolResultEventRecord {
-    let mut e = evt(session_id, tool_use_id, event_index, ToolResultStatus::Errored);
+fn evt_subagent(session_id: &str, tool_use_id: &str, event_index: u64) -> ToolResultEventRecord {
+    let mut e = evt(
+        session_id,
+        tool_use_id,
+        event_index,
+        ToolResultStatus::Errored,
+    );
     e.event_source = ToolResultEventSource::SubagentNotification;
     e
 }
@@ -265,7 +259,7 @@ mod retry_loops {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 1);
@@ -289,7 +283,7 @@ mod retry_loops {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         let graph = detect_patterns(
@@ -299,7 +293,7 @@ mod retry_loops {
                 tool_result_events: Some(&res.tool_result_events),
                 compactions: None,
                 user_turns_by_session: None,
-                content_by_session: None
+                content_by_session: None,
             },
         );
         assert_eq!(graph.retry_loops.len(), 1);
@@ -332,7 +326,7 @@ mod retry_loops {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 0);
@@ -358,7 +352,7 @@ mod retry_loops {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 0);
@@ -391,7 +385,7 @@ mod retry_loops {
                 tool_result_events: Some(&events),
                 compactions: None,
                 user_turns_by_session: None,
-                content_by_session: None
+                content_by_session: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 2);
@@ -430,7 +424,7 @@ mod consecutive_failure_runs {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.failure_runs.len(), 1);
@@ -459,7 +453,7 @@ mod consecutive_failure_runs {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.failure_runs.len(), 0);
@@ -478,22 +472,29 @@ mod consecutive_failure_runs {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 1, "retry loop reported");
-        assert_eq!(result.failure_runs.len(), 0, "same-key streak is NOT a failure run");
+        assert_eq!(
+            result.failure_runs.len(),
+            0,
+            "same-key streak is NOT a failure run"
+        );
     }
 
     #[test]
     fn counts_chained_subagent_notification_errors() {
         let pricing = load_builtin_pricing();
         let mut t1 = turn("s", "m1", 0);
-        t1.tool_calls.push(tc_target("a1", "Agent", "agent:one", "agent-a"));
+        t1.tool_calls
+            .push(tc_target("a1", "Agent", "agent:one", "agent-a"));
         let mut t2 = turn("s", "m2", 1);
-        t2.tool_calls.push(tc_target("a2", "Agent", "agent:two", "agent-b"));
+        t2.tool_calls
+            .push(tc_target("a2", "Agent", "agent:two", "agent-b"));
         let mut t3 = turn("s", "m3", 2);
-        t3.tool_calls.push(tc_target("a3", "Agent", "agent:three", "agent-c"));
+        t3.tool_calls
+            .push(tc_target("a3", "Agent", "agent:three", "agent-c"));
         let events = vec![
             evt_subagent("s", "a1", 0),
             evt_subagent("s", "a2", 1),
@@ -506,7 +507,7 @@ mod consecutive_failure_runs {
                 tool_result_events: Some(&events),
                 compactions: None,
                 user_turns_by_session: None,
-                content_by_session: None
+                content_by_session: None,
             },
         );
         assert_eq!(result.failure_runs.len(), 1);
@@ -546,7 +547,7 @@ mod cancelled_graph_events {
                 tool_result_events: Some(&events),
                 compactions: None,
                 user_turns_by_session: None,
-                content_by_session: None
+                content_by_session: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 0);
@@ -582,7 +583,7 @@ mod compaction_losses {
                 compactions: Some(&res.events),
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.compactions.len(), 1);
@@ -603,8 +604,9 @@ mod edit_reverts {
     #[test]
     fn detects_two_edit_cycle_where_b_reverts_a() {
         let pricing = load_builtin_pricing();
-        let res = parse_claude_session(fixture("edit-revert.jsonl"), &ClaudeParseOptions::default())
-            .expect("parse edit-revert fixture");
+        let res =
+            parse_claude_session(fixture("edit-revert.jsonl"), &ClaudeParseOptions::default())
+                .expect("parse edit-revert fixture");
         let result = detect_patterns(
             &res.turns,
             &DetectPatternsOptions {
@@ -612,7 +614,7 @@ mod edit_reverts {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_reverts.len(), 1);
@@ -639,7 +641,7 @@ mod edit_reverts {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_reverts.len(), 0);
@@ -664,7 +666,7 @@ mod edit_reverts {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_reverts.len(), 1);
@@ -705,7 +707,7 @@ mod session_summary_rollup {
                 compactions: Some(&compact.events),
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
 
@@ -751,7 +753,7 @@ mod defensive {
                 compactions: Some(&no_compactions),
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert!(result.retry_loops.is_empty());
@@ -770,7 +772,12 @@ mod defensive {
 mod opencode_skill_recall_dups {
     use super::*;
 
-    fn opencode_turn_with_skill(message_id: &str, turn_index: u64, id: &str, skill: &str) -> TurnRecord {
+    fn opencode_turn_with_skill(
+        message_id: &str,
+        turn_index: u64,
+        id: &str,
+        skill: &str,
+    ) -> TurnRecord {
         turn_with(
             "s",
             message_id,
@@ -796,7 +803,7 @@ mod opencode_skill_recall_dups {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.skill_recall_dups.len(), 1);
@@ -818,7 +825,7 @@ mod opencode_skill_recall_dups {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.skill_recall_dups.len(), 0);
@@ -838,7 +845,7 @@ mod opencode_skill_recall_dups {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.skill_recall_dups.len(), 0);
@@ -860,7 +867,7 @@ mod opencode_skill_recall_dups {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.skill_recall_dups.len(), 2);
@@ -933,7 +940,7 @@ mod opencode_skill_pruning_protection {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.skill_pruning_protection.len(), 1);
@@ -972,7 +979,7 @@ mod opencode_skill_pruning_protection {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.skill_pruning_protection.len(), 0);
@@ -1006,7 +1013,7 @@ mod opencode_skill_pruning_protection {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.skill_pruning_protection.len(), 0);
@@ -1072,7 +1079,7 @@ mod session_summary_includes_skill_detectors {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         let summary = result
@@ -1129,7 +1136,7 @@ mod opencode_system_prompt_tax {
                 user_turns_by_session: Some(&user_turns_by_session),
                 compactions: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.system_prompt_taxes.len(), 1);
@@ -1159,7 +1166,7 @@ mod opencode_system_prompt_tax {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.system_prompt_taxes.len(), 0);
@@ -1176,7 +1183,14 @@ mod opencode_system_prompt_tax {
             cache_create_5m: 5200,
             cache_create_1h: 0,
         };
-        let turns = vec![turn_with("s", "m1", 0, SourceKind::ClaudeCode, usage, vec![])];
+        let turns = vec![turn_with(
+            "s",
+            "m1",
+            0,
+            SourceKind::ClaudeCode,
+            usage,
+            vec![],
+        )];
         let mut user_turns_by_session: HashMap<String, Vec<UserTurnRecord>> = HashMap::new();
         user_turns_by_session.insert(
             "s".into(),
@@ -1189,7 +1203,7 @@ mod opencode_system_prompt_tax {
                 user_turns_by_session: Some(&user_turns_by_session),
                 compactions: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.system_prompt_taxes.len(), 0);
@@ -1230,7 +1244,7 @@ mod opencode_system_prompt_tax {
                 user_turns_by_session: Some(&user_turns_by_session),
                 compactions: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.system_prompt_taxes.len(), 1);
@@ -1261,7 +1275,7 @@ mod opencode_system_prompt_tax {
                 user_turns_by_session: Some(&user_turns_by_session),
                 compactions: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.system_prompt_taxes.len(), 0);
@@ -1302,7 +1316,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
@@ -1324,7 +1338,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
@@ -1343,7 +1357,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
@@ -1372,7 +1386,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 0);
@@ -1400,7 +1414,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 0);
@@ -1435,7 +1449,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
@@ -1467,7 +1481,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 0);
@@ -1493,7 +1507,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
@@ -1507,7 +1521,8 @@ mod edit_heavy_sessions {
         let mut turns = edit_heavy_turns(SourceKind::Codex, "apply_patch", "s");
         let mut b1 = turn("s", "b1", 6);
         b1.source = SourceKind::Codex;
-        b1.tool_calls.push(tc_target("b1", "shell", "a", "git status"));
+        b1.tool_calls
+            .push(tc_target("b1", "shell", "a", "git status"));
         let mut b2 = turn("s", "b2", 7);
         b2.source = SourceKind::Codex;
         b2.tool_calls.push(tc_target(
@@ -1525,7 +1540,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
@@ -1551,7 +1566,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         // 6 edits + 2 reads → ratio 3.0, ≤ 4: no flag.
@@ -1592,7 +1607,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
@@ -1612,7 +1627,7 @@ mod edit_heavy_sessions {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         let summary = result
@@ -1649,7 +1664,12 @@ mod retry_loop_error_signature {
         content_by_session.insert(
             "s".into(),
             vec![
-                tool_result_record("s", "m0", "u0", "npm ERR! code ENOENT\n  more details\n  more details"),
+                tool_result_record(
+                    "s",
+                    "m0",
+                    "u0",
+                    "npm ERR! code ENOENT\n  more details\n  more details",
+                ),
                 tool_result_record("s", "m1", "u1", "npm ERR! code ENOENT\n  more details"),
                 tool_result_record("s", "m2", "u2", "npm ERR! code ENOENT\n  trailing"),
                 tool_result_record("s", "m3", "u3", "npm ERR! code ENOENT\n  yet again"),
@@ -1662,7 +1682,7 @@ mod retry_loop_error_signature {
                 content_by_session: Some(&content_by_session),
                 compactions: None,
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 1);
@@ -1692,7 +1712,7 @@ mod retry_loop_error_signature {
                 content_by_session: Some(&content_by_session),
                 compactions: None,
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 1);
@@ -1713,7 +1733,7 @@ mod retry_loop_error_signature {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 1);
@@ -1727,7 +1747,12 @@ mod retry_loop_error_signature {
         let mut content_by_session: HashMap<String, Vec<ContentRecord>> = HashMap::new();
         content_by_session.insert(
             "s".into(),
-            vec![tool_result_record("s", "m99", "unrelated", "something else")],
+            vec![tool_result_record(
+                "s",
+                "m99",
+                "unrelated",
+                "something else",
+            )],
         );
         let result = detect_patterns(
             &turns,
@@ -1736,7 +1761,7 @@ mod retry_loop_error_signature {
                 content_by_session: Some(&content_by_session),
                 compactions: None,
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.retry_loops.len(), 1);
@@ -1781,7 +1806,7 @@ mod failure_run_error_signatures {
                 content_by_session: Some(&content_by_session),
                 compactions: None,
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.failure_runs.len(), 1);
@@ -1806,7 +1831,7 @@ mod failure_run_error_signatures {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.failure_runs.len(), 1);
@@ -1826,11 +1851,13 @@ mod compaction_loss_lost_work {
         let pricing = load_builtin_pricing();
         let mut t0 = turn("s", "m0", 0);
         t0.ts = "2026-04-20T00:00:00.000Z".into();
-        t0.tool_calls.push(tc_edit("u0", "Edit", "h0", "/src/foo.ts", "a", "b"));
+        t0.tool_calls
+            .push(tc_edit("u0", "Edit", "h0", "/src/foo.ts", "a", "b"));
         t0.tool_calls.push(tc_("u1", "Bash", "h1"));
         let mut t1 = turn("s", "m1", 1);
         t1.ts = "2026-04-20T00:00:01.000Z".into();
-        t1.tool_calls.push(tc_edit("u2", "Edit", "h2", "/src/bar.ts", "c", "d"));
+        t1.tool_calls
+            .push(tc_edit("u2", "Edit", "h2", "/src/bar.ts", "c", "d"));
         t1.tool_calls.push(tc_("u3", "Read", "h3"));
         t1.tool_calls.push(tc_("u4", "Bash", "h4"));
         let events = vec![CompactionEvent {
@@ -1853,7 +1880,7 @@ mod compaction_loss_lost_work {
                 compactions: Some(&events),
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.compactions.len(), 1);
@@ -1894,10 +1921,7 @@ mod compaction_loss_lost_work {
             },
         ];
         let mut content_by_session: HashMap<String, Vec<ContentRecord>> = HashMap::new();
-        content_by_session.insert(
-            "s".into(),
-            vec![tool_result_record("s", "m0", "u0", "x")],
-        );
+        content_by_session.insert("s".into(), vec![tool_result_record("s", "m0", "u0", "x")]);
         let result = detect_patterns(
             &[t0, t1],
             &DetectPatternsOptions {
@@ -1905,7 +1929,7 @@ mod compaction_loss_lost_work {
                 compactions: Some(&events),
                 content_by_session: Some(&content_by_session),
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.compactions.len(), 2);
@@ -1941,7 +1965,7 @@ mod compaction_loss_lost_work {
                 compactions: Some(&events),
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.compactions.len(), 1);
@@ -1997,7 +2021,7 @@ mod edit_revert_sample_preview {
                 content_by_session: Some(&content_by_session),
                 compactions: None,
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_reverts.len(), 1);
@@ -2040,7 +2064,7 @@ mod edit_revert_sample_preview {
                 content_by_session: Some(&content_by_session),
                 compactions: None,
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         let preview = result.edit_reverts[0].sample_preview.as_ref().unwrap();
@@ -2060,7 +2084,7 @@ mod edit_revert_sample_preview {
                 compactions: None,
                 user_turns_by_session: None,
                 content_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_reverts.len(), 1);
@@ -2083,7 +2107,7 @@ mod edit_revert_sample_preview {
                 content_by_session: Some(&content_by_session),
                 compactions: None,
                 user_turns_by_session: None,
-                tool_result_events: None
+                tool_result_events: None,
             },
         );
         assert_eq!(result.edit_reverts.len(), 1);

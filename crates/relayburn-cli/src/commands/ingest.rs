@@ -247,12 +247,13 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         });
 
         let progress_for_error = progress_for_loop.clone();
-        let on_error: relayburn_sdk::ErrorSink = Arc::new(move |err: &anyhow::Error| match &progress_for_error {
-            Some(p) => p.suspend(|| {
-                eprintln!("[burn] ingest: {err}");
-            }),
-            None => eprintln!("[burn] ingest: {err}"),
-        });
+        let on_error: relayburn_sdk::ErrorSink =
+            Arc::new(move |err: &anyhow::Error| match &progress_for_error {
+                Some(p) => p.suspend(|| {
+                    eprintln!("[burn] ingest: {err}");
+                }),
+                None => eprintln!("[burn] ingest: {err}"),
+            });
 
         // Default to the `notify`-backed FS-event driver against the
         // three session-store roots ingest scans. Falls back to polling

@@ -9,9 +9,9 @@
 
 use std::collections::HashMap;
 
+use crate::reader::{ToolCall, TurnRecord};
 use indexmap::IndexMap;
 use phf::phf_map;
-use crate::reader::{ToolCall, TurnRecord};
 
 /// Average tokens (input + output) one vanilla call of each tool consumes.
 /// Numbers mirror `DEFAULT_REPLACED_TOOL_TOKEN_COST` in the TS implementation.
@@ -71,11 +71,7 @@ pub struct ReplacementSavingsSummary {
     pub by_tool: IndexMap<String, ToolSavingsAggregate>,
 }
 
-fn lookup_cost(
-    name: &str,
-    overrides: Option<&HashMap<String, u32>>,
-    fallback: u32,
-) -> u32 {
+fn lookup_cost(name: &str, overrides: Option<&HashMap<String, u32>>, fallback: u32) -> u32 {
     if let Some(o) = overrides {
         if let Some(v) = o.get(name) {
             return *v;
@@ -124,10 +120,7 @@ pub fn estimate_savings_for_tool_call(
     options: Option<&ReplacementSavingsOptions>,
 ) -> Option<ToolCallSavings> {
     let collapsed = call.collapsed_calls.unwrap_or(0);
-    let replaced: &[String] = call
-        .replaced_tools
-        .as_deref()
-        .unwrap_or(&[]);
+    let replaced: &[String] = call.replaced_tools.as_deref().unwrap_or(&[]);
     if collapsed == 0 && replaced.is_empty() {
         return None;
     }
@@ -136,7 +129,11 @@ pub fn estimate_savings_for_tool_call(
     let avg = average_replaced_cost(replaced, overrides, fallback);
     // When `collapsedCalls` is missing but `replaces` is present, treat the
     // call as having replaced one of each named tool. Conservative floor.
-    let calls = if collapsed > 0 { collapsed } else { replaced.len() as u64 };
+    let calls = if collapsed > 0 {
+        collapsed
+    } else {
+        replaced.len() as u64
+    };
     Some(ToolCallSavings {
         collapsed_calls: calls,
         replaced_tools: replaced.to_vec(),
@@ -157,10 +154,7 @@ pub fn summarize_replacement_savings(
             summary.calls += 1;
             summary.collapsed_calls += est.collapsed_calls;
             summary.estimated_tokens_saved += est.estimated_tokens_saved;
-            let agg = summary
-                .by_tool
-                .entry(tc.name.clone())
-                .or_default();
+            let agg = summary.by_tool.entry(tc.name.clone()).or_default();
             agg.calls += 1;
             agg.collapsed_calls += est.collapsed_calls;
             agg.estimated_tokens_saved += est.estimated_tokens_saved;
@@ -246,7 +240,11 @@ mod tests {
 
     #[test]
     fn estimates_using_average_per_call_cost_across_replaced_tools() {
-        let tc = call_with("relaywash__Search", Some(vec!["Glob", "Grep", "Read"]), Some(9));
+        let tc = call_with(
+            "relaywash__Search",
+            Some(vec!["Glob", "Grep", "Read"]),
+            Some(9),
+        );
         let est = estimate_savings_for_tool_call(&tc, None).expect("est");
         let avg = (DEFAULT_REPLACED_TOOL_TOKEN_COST.get("Glob").unwrap()
             + DEFAULT_REPLACED_TOOL_TOKEN_COST.get("Grep").unwrap()
@@ -275,7 +273,11 @@ mod tests {
     fn aggregates_savings_across_many_turns_and_tool_names() {
         let turns = vec![
             turn(vec![
-                call_with("relaywash__Search", Some(vec!["Glob", "Grep", "Read"]), Some(9)),
+                call_with(
+                    "relaywash__Search",
+                    Some(vec!["Glob", "Grep", "Read"]),
+                    Some(9),
+                ),
                 call("Bash"),
             ]),
             turn(vec![call_with(

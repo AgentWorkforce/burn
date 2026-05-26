@@ -38,8 +38,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use regex::Regex;
 use crate::reader::SourceKind;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::findings::{EstimatedSavings, WasteAction, WasteFinding, WasteSeverity};
@@ -52,6 +52,7 @@ use crate::analyze::findings::{EstimatedSavings, WasteAction, WasteFinding, Wast
 /// as the TS string-literal union.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[allow(clippy::enum_variant_names)]
 pub enum GhostFindingKind {
     GhostAgent,
     GhostSkill,

@@ -194,7 +194,12 @@ fn render_mermaid(graph: &FlowGraph) -> String {
     for node in &graph.nodes {
         let safe_id = mermaid_id(&node.id);
         let label = mermaid_label(&node.label, node.turn_number);
-        writeln!(out, "    {safe_id}[\"{label}\"]:::{}", mermaid_class(node.kind)).unwrap();
+        writeln!(
+            out,
+            "    {safe_id}[\"{label}\"]:::{}",
+            mermaid_class(node.kind)
+        )
+        .unwrap();
     }
 
     if !graph.edges.is_empty() {
@@ -277,11 +282,7 @@ fn render_svg(graph: &FlowGraph) -> String {
     let height = max_y + LEGEND_HEIGHT + SVG_MARGIN * 2;
 
     let mut out = String::with_capacity(4096);
-    writeln!(
-        out,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-    )
-    .unwrap();
+    writeln!(out, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
     writeln!(
         out,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" font-family=\"-apple-system,Segoe UI,Helvetica,sans-serif\" font-size=\"11\">"
@@ -518,7 +519,10 @@ const _ASSERT_LAYOUT_CONSTANTS: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use relayburn_sdk::{flow_graph_from_trees, FlowOpts as SdkFlowOpts, SpanAttrValue, SpanKind, SpanNode, TurnSpanTree};
+    use relayburn_sdk::{
+        flow_graph_from_trees, FlowOpts as SdkFlowOpts, SpanAttrValue, SpanKind, SpanNode,
+        TurnSpanTree,
+    };
 
     fn turn_root() -> SpanNode {
         SpanNode::new(SpanKind::Turn, "turn")

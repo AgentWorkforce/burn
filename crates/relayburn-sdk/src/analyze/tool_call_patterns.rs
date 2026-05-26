@@ -9,16 +9,14 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use phf::phf_set;
 use crate::reader::{
     normalize_tool_name, parse_bash_command, BashParse, SourceKind, ToolCall, TurnRecord,
 };
+use phf::phf_set;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::lookup_model_rate;
-use crate::analyze::findings::{
-    severity_from_usd, EstimatedSavings, WasteAction, WasteFinding,
-};
+use crate::analyze::findings::{severity_from_usd, EstimatedSavings, WasteAction, WasteFinding};
 use crate::analyze::pricing::PricingTable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -334,7 +332,10 @@ fn matches_git_state(parsed: &BashParse) -> bool {
     if parsed.binary != "git" {
         return false;
     }
-    matches!(parsed.subcommand.as_deref(), Some("status" | "diff" | "log"))
+    matches!(
+        parsed.subcommand.as_deref(),
+        Some("status" | "diff" | "log")
+    )
 }
 
 fn matches_test_run(parsed: &BashParse) -> bool {
@@ -478,7 +479,12 @@ pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFi
     let evidence_str = if finding.evidence.is_empty() {
         String::new()
     } else {
-        let head: Vec<&str> = finding.evidence.iter().take(3).map(|s| s.as_str()).collect();
+        let head: Vec<&str> = finding
+            .evidence
+            .iter()
+            .take(3)
+            .map(|s| s.as_str())
+            .collect();
         let extra = finding.evidence.len().saturating_sub(3);
         let tail = if extra > 0 {
             format!(", +{extra} more")
@@ -604,10 +610,8 @@ mod tests {
                 ],
             ));
         }
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let search = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::SearchSequence)
@@ -644,10 +648,8 @@ mod tests {
                 ],
             ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         assert!(out
             .iter()
             .all(|f| f.category != ToolCallPatternCategory::SearchSequence));
@@ -670,10 +672,8 @@ mod tests {
                 ],
             ));
         }
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         assert!(out
             .iter()
             .all(|f| f.category != ToolCallPatternCategory::SearchSequence));
@@ -692,10 +692,8 @@ mod tests {
                 vec![tc(&format!("e{i}"), "Edit", Some("/src/foo.ts"))],
             ));
         }
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let cluster = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::EditCluster)
@@ -730,10 +728,8 @@ mod tests {
                 vec![tc("e2", "Edit", Some("/f.ts"))],
             ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         assert!(out
             .iter()
             .all(|f| f.category != ToolCallPatternCategory::EditCluster));
@@ -743,15 +739,37 @@ mod tests {
     fn caps_window_at_exactly_5_consecutive_turn_indexes() {
         let pricing = pricing();
         let turns = vec![
-            turn("s", "m0", 0, SourceKind::ClaudeCode, vec![tc("e0", "Edit", Some("/f.ts"))]),
-            turn("s", "m1", 1, SourceKind::ClaudeCode, vec![tc("e1", "Edit", Some("/f.ts"))]),
-            turn("s", "m4", 4, SourceKind::ClaudeCode, vec![tc("e4", "Edit", Some("/f.ts"))]),
-            turn("s", "m5", 5, SourceKind::ClaudeCode, vec![tc("e5", "Edit", Some("/f.ts"))]),
+            turn(
+                "s",
+                "m0",
+                0,
+                SourceKind::ClaudeCode,
+                vec![tc("e0", "Edit", Some("/f.ts"))],
+            ),
+            turn(
+                "s",
+                "m1",
+                1,
+                SourceKind::ClaudeCode,
+                vec![tc("e1", "Edit", Some("/f.ts"))],
+            ),
+            turn(
+                "s",
+                "m4",
+                4,
+                SourceKind::ClaudeCode,
+                vec![tc("e4", "Edit", Some("/f.ts"))],
+            ),
+            turn(
+                "s",
+                "m5",
+                5,
+                SourceKind::ClaudeCode,
+                vec![tc("e5", "Edit", Some("/f.ts"))],
+            ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let cluster = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::EditCluster)
@@ -779,19 +797,14 @@ mod tests {
                 vec![tc(&format!("b{i}"), "Edit", Some("/b.ts"))],
             ));
         }
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let clusters: Vec<_> = out
             .iter()
             .filter(|f| f.category == ToolCallPatternCategory::EditCluster)
             .collect();
         assert_eq!(clusters.len(), 2);
-        let mut files: Vec<&str> = clusters
-            .iter()
-            .map(|c| c.evidence[0].as_str())
-            .collect();
+        let mut files: Vec<&str> = clusters.iter().map(|c| c.evidence[0].as_str()).collect();
         files.sort();
         assert_eq!(files, vec!["/a.ts", "/b.ts"]);
     }
@@ -800,14 +813,30 @@ mod tests {
     fn flags_git_state_calls() {
         let pricing = pricing();
         let turns = vec![
-            turn("s", "m0", 0, SourceKind::ClaudeCode, vec![tc("a", "Bash", Some("git status"))]),
-            turn("s", "m1", 1, SourceKind::ClaudeCode, vec![tc("b", "Bash", Some("git diff HEAD~1"))]),
-            turn("s", "m2", 2, SourceKind::ClaudeCode, vec![tc("c", "Bash", Some("git log --oneline -n 5"))]),
+            turn(
+                "s",
+                "m0",
+                0,
+                SourceKind::ClaudeCode,
+                vec![tc("a", "Bash", Some("git status"))],
+            ),
+            turn(
+                "s",
+                "m1",
+                1,
+                SourceKind::ClaudeCode,
+                vec![tc("b", "Bash", Some("git diff HEAD~1"))],
+            ),
+            turn(
+                "s",
+                "m2",
+                2,
+                SourceKind::ClaudeCode,
+                vec![tc("c", "Bash", Some("git log --oneline -n 5"))],
+            ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let git = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::BashGitState)
@@ -822,14 +851,30 @@ mod tests {
     fn flags_test_run_calls() {
         let pricing = pricing();
         let turns = vec![
-            turn("s", "m0", 0, SourceKind::ClaudeCode, vec![tc("a", "Bash", Some("pnpm test"))]),
-            turn("s", "m1", 1, SourceKind::ClaudeCode, vec![tc("b", "Bash", Some("pytest -k foo"))]),
-            turn("s", "m2", 2, SourceKind::ClaudeCode, vec![tc("c", "Bash", Some("jest --watch"))]),
+            turn(
+                "s",
+                "m0",
+                0,
+                SourceKind::ClaudeCode,
+                vec![tc("a", "Bash", Some("pnpm test"))],
+            ),
+            turn(
+                "s",
+                "m1",
+                1,
+                SourceKind::ClaudeCode,
+                vec![tc("b", "Bash", Some("pytest -k foo"))],
+            ),
+            turn(
+                "s",
+                "m2",
+                2,
+                SourceKind::ClaudeCode,
+                vec![tc("c", "Bash", Some("jest --watch"))],
+            ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let test = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::BashTestRun)
@@ -841,13 +886,27 @@ mod tests {
     fn flags_gh_pr_and_gh_api_calls() {
         let pricing = pricing();
         let turns = vec![
-            turn("s", "m0", 0, SourceKind::ClaudeCode, vec![tc("a", "Bash", Some("gh pr view 123"))]),
-            turn("s", "m1", 1, SourceKind::ClaudeCode, vec![tc("b", "Bash", Some("gh api repos/foo/bar/pulls/1/comments"))]),
+            turn(
+                "s",
+                "m0",
+                0,
+                SourceKind::ClaudeCode,
+                vec![tc("a", "Bash", Some("gh pr view 123"))],
+            ),
+            turn(
+                "s",
+                "m1",
+                1,
+                SourceKind::ClaudeCode,
+                vec![tc(
+                    "b",
+                    "Bash",
+                    Some("gh api repos/foo/bar/pulls/1/comments"),
+                )],
+            ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let gh = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::BashGhPr)
@@ -859,13 +918,23 @@ mod tests {
     fn does_not_match_gh_project_or_gh_prerelease() {
         let pricing = pricing();
         let turns = vec![
-            turn("s", "m0", 0, SourceKind::ClaudeCode, vec![tc("a", "Bash", Some("gh project list"))]),
-            turn("s", "m1", 1, SourceKind::ClaudeCode, vec![tc("b", "Bash", Some("gh project view 5"))]),
+            turn(
+                "s",
+                "m0",
+                0,
+                SourceKind::ClaudeCode,
+                vec![tc("a", "Bash", Some("gh project list"))],
+            ),
+            turn(
+                "s",
+                "m1",
+                1,
+                SourceKind::ClaudeCode,
+                vec![tc("b", "Bash", Some("gh project view 5"))],
+            ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         assert!(out
             .iter()
             .all(|f| f.category != ToolCallPatternCategory::BashGhPr));
@@ -875,13 +944,23 @@ mod tests {
     fn does_not_match_unrelated_bash_commands() {
         let pricing = pricing();
         let turns = vec![
-            turn("s", "m0", 0, SourceKind::ClaudeCode, vec![tc("a", "Bash", Some("ls -la"))]),
-            turn("s", "m1", 1, SourceKind::ClaudeCode, vec![tc("b", "Bash", Some("cat README.md"))]),
+            turn(
+                "s",
+                "m0",
+                0,
+                SourceKind::ClaudeCode,
+                vec![tc("a", "Bash", Some("ls -la"))],
+            ),
+            turn(
+                "s",
+                "m1",
+                1,
+                SourceKind::ClaudeCode,
+                vec![tc("b", "Bash", Some("cat README.md"))],
+            ),
         ];
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         assert!(out.is_empty());
     }
 
@@ -902,10 +981,8 @@ mod tests {
                 ],
             ));
         }
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let search = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::SearchSequence)
@@ -926,10 +1003,8 @@ mod tests {
                 vec![tc(&format!("e{i}"), "apply_patch", Some("/src/x.ts"))],
             ));
         }
-        let out = detect_tool_call_patterns(
-            &turns,
-            &DetectToolCallPatternsOptions { pricing: &pricing },
-        );
+        let out =
+            detect_tool_call_patterns(&turns, &DetectToolCallPatternsOptions { pricing: &pricing });
         let cluster = out
             .iter()
             .find(|f| f.category == ToolCallPatternCategory::EditCluster)

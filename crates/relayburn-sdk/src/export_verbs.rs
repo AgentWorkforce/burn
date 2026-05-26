@@ -17,7 +17,7 @@ use crate::{Ledger, LedgerHandle, LedgerOpenOptions, SearchHit, SearchOptions};
 /// Options for the FTS5 search verb. Equivalent to
 /// [`crate::ledger::SearchOptions`] but owns its strings so callers can
 /// build it without juggling lifetimes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SearchQueryOptions {
     /// FTS5 query string. Supports phrase (`"out of memory"`), boolean
     /// (`a OR b`), and prefix (`mem*`) syntax — see the SQLite docs.
@@ -30,17 +30,6 @@ pub struct SearchQueryOptions {
     /// free-function form; the method form uses the handle's existing
     /// connections.
     pub ledger_home: Option<PathBuf>,
-}
-
-impl Default for SearchQueryOptions {
-    fn default() -> Self {
-        Self {
-            query: String::new(),
-            limit: None,
-            session_id: None,
-            ledger_home: None,
-        }
-    }
 }
 
 impl SearchQueryOptions {
@@ -223,14 +212,16 @@ mod tests {
         handle
             .raw_mut()
             .append_content(&[
-                make_content("ses_a", "m1", "the build failed with an out of memory error"),
+                make_content(
+                    "ses_a",
+                    "m1",
+                    "the build failed with an out of memory error",
+                ),
                 make_content("ses_a", "m2", "permission denied while reading file"),
             ])
             .unwrap();
 
-        let result = handle
-            .search(SearchQueryOptions::new("memory"))
-            .unwrap();
+        let result = handle.search(SearchQueryOptions::new("memory")).unwrap();
         assert_eq!(result.query, "memory");
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].session_id, "ses_a");

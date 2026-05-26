@@ -191,7 +191,11 @@ impl TurnKey {
     }
 
     fn sort_tuple(&self) -> (&'static str, &str, &str) {
-        (self.source.wire_str(), self.session_id.as_str(), self.message_id.as_str())
+        (
+            self.source.wire_str(),
+            self.session_id.as_str(),
+            self.message_id.as_str(),
+        )
     }
 }
 
@@ -352,11 +356,7 @@ struct KeyPair {
     source: InferenceKeySource,
 }
 
-fn derive_inference_key(
-    turn: &TurnRecord,
-    idx: usize,
-    lookup: &RequestIdLookup,
-) -> KeyPair {
+fn derive_inference_key(turn: &TurnRecord, idx: usize, lookup: &RequestIdLookup) -> KeyPair {
     if let Some(req) = lookup.get(&TurnKey::for_turn(turn)) {
         if !req.is_empty() {
             return KeyPair {
@@ -404,7 +404,9 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
     if bytes.len() < 19 {
         return None;
     }
-    if !(bytes[4] == b'-' && bytes[7] == b'-' && (bytes[10] == b'T' || bytes[10] == b' ')
+    if !(bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && (bytes[10] == b'T' || bytes[10] == b' ')
         && bytes[13] == b':'
         && bytes[16] == b':')
     {
@@ -424,7 +426,9 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
         while idx < bytes.len() && bytes[idx].is_ascii_digit() {
             idx += 1;
         }
-        let mut frac = std::str::from_utf8(&bytes[frac_start..idx]).ok()?.to_string();
+        let mut frac = std::str::from_utf8(&bytes[frac_start..idx])
+            .ok()?
+            .to_string();
         if frac.len() > 3 {
             frac.truncate(3);
         }
@@ -445,10 +449,8 @@ fn parse_iso_ms(s: &str) -> Option<i64> {
     let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days_from_epoch = era * 146_097 + (doe as i64) - 719_468;
-    let secs = days_from_epoch * 86_400
-        + (hour as i64) * 3_600
-        + (minute as i64) * 60
-        + (second as i64);
+    let secs =
+        days_from_epoch * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
     Some(secs * 1_000 + millis)
 }
 
@@ -533,7 +535,13 @@ mod tests {
 
     #[test]
     fn missing_request_id_falls_back_to_message_id() {
-        let t = turn("s1", "msg-1", "2026-04-20T00:00:01.000Z", Usage::default(), vec![]);
+        let t = turn(
+            "s1",
+            "msg-1",
+            "2026-04-20T00:00:01.000Z",
+            Usage::default(),
+            vec![],
+        );
         let infs = build_inferences(&[t], &RequestIdLookup::new());
         assert_eq!(infs.len(), 1);
         assert_eq!(infs[0].request_id, "msg-1");
@@ -542,7 +550,13 @@ mod tests {
 
     #[test]
     fn missing_message_id_falls_back_to_row_synthetic() {
-        let t = turn("s1", "", "2026-04-20T00:00:01.000Z", Usage::default(), vec![]);
+        let t = turn(
+            "s1",
+            "",
+            "2026-04-20T00:00:01.000Z",
+            Usage::default(),
+            vec![],
+        );
         let infs = build_inferences(&[t], &RequestIdLookup::new());
         assert_eq!(infs.len(), 1);
         assert_eq!(infs[0].request_id_source, InferenceKeySource::RowSynthetic);
@@ -563,7 +577,13 @@ mod tests {
             replaced_tools: None,
             collapsed_calls: None,
         };
-        let t = turn("s1", "msg-1", "2026-04-20T00:00:01.000Z", Usage::default(), vec![tc]);
+        let t = turn(
+            "s1",
+            "msg-1",
+            "2026-04-20T00:00:01.000Z",
+            Usage::default(),
+            vec![tc],
+        );
         let infs = build_inferences(&[t], &RequestIdLookup::new());
         assert_eq!(infs[0].kind, InferenceKind::ToolUse);
         assert_eq!(infs[0].tool_uses.len(), 1);
@@ -622,8 +642,20 @@ mod tests {
     fn different_session_with_same_request_id_stays_separate() {
         // Two sessions, both ship `requestId=req-1`. The composite
         // storage key includes session_id so they don't collide.
-        let t1 = turn("s1", "msg-1", "2026-04-20T00:00:01.000Z", Usage::default(), vec![]);
-        let t2 = turn("s2", "msg-2", "2026-04-20T00:00:02.000Z", Usage::default(), vec![]);
+        let t1 = turn(
+            "s1",
+            "msg-1",
+            "2026-04-20T00:00:01.000Z",
+            Usage::default(),
+            vec![],
+        );
+        let t2 = turn(
+            "s2",
+            "msg-2",
+            "2026-04-20T00:00:02.000Z",
+            Usage::default(),
+            vec![],
+        );
         let mut lookup = RequestIdLookup::new();
         lookup.insert(TurnKey::for_turn(&t1), "req-1".to_string());
         lookup.insert(TurnKey::for_turn(&t2), "req-1".to_string());

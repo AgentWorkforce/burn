@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::reader::{
@@ -19,7 +19,7 @@ use crate::reader::{
 use crate::ledger::error::Result;
 use crate::ledger::paths::is_valid_session_id;
 use crate::ledger::query::Query;
-use crate::ledger::stamp::{Enrichment, Stamp, StampSelector, stamp_matches};
+use crate::ledger::stamp::{stamp_matches, Enrichment, Stamp, StampSelector};
 
 /// A turn with stamp enrichment folded in. Enrichment is a flat
 /// string→string map; entries from later stamps win.
@@ -408,4 +408,3 @@ pub(crate) fn raw_record_jsons(conn: &Connection, table: &str) -> Result<Vec<Str
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
-

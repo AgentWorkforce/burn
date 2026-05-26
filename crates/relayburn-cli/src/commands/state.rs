@@ -77,10 +77,7 @@ fn format_status(s: &StateStatus) -> String {
     let mut out = String::new();
     out.push_str(&format!("derived state at {}:\n", s.home));
     out.push_str("events DB (burn.sqlite):\n");
-    out.push_str(&format!(
-        "  path: {}\n",
-        rel_to_home(&s.burn.path, &s.home)
-    ));
+    out.push_str(&format!("  path: {}\n", rel_to_home(&s.burn.path, &s.home)));
     if !s.burn.exists {
         out.push_str("  status: not built yet\n");
     }
@@ -315,8 +312,7 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
         Retention::Forever => {
             progress.finish_and_clear();
             if globals.json {
-                let payload =
-                    serde_json::json!({ "rowsDeleted": 0, "bytesFreed": 0, "retention": "forever" });
+                let payload = serde_json::json!({ "rowsDeleted": 0, "bytesFreed": 0, "retention": "forever" });
                 let _ = render_json(&payload);
             } else {
                 println!("content retention=forever - nothing to prune");
@@ -492,7 +488,12 @@ fn run_reset(globals: &GlobalArgs, args: crate::cli::StateResetArgs) -> i32 {
     };
 
     progress.finish_and_clear();
-    print_reset_report(globals, &summary, /*executed=*/ true, ingest_report.as_ref())
+    print_reset_report(
+        globals,
+        &summary,
+        /*executed=*/ true,
+        ingest_report.as_ref(),
+    )
 }
 
 /// Drive a single `ingest_all` sweep on the open handle.
@@ -548,14 +549,22 @@ fn print_reset_report(
             format_uint(summary.stamps_dropped as u64),
             if summary.stamps_dropped == 1 { "" } else { "s" },
             format_uint(summary.content_rows_dropped as u64),
-            if summary.content_rows_dropped == 1 { "" } else { "s" },
+            if summary.content_rows_dropped == 1 {
+                ""
+            } else {
+                "s"
+            },
         );
         match ingest_report {
             Some(report) => {
                 println!(
                     "  re-ingested {} session{} (+{} turn{}).",
                     format_uint(report.ingested_sessions as u64),
-                    if report.ingested_sessions == 1 { "" } else { "s" },
+                    if report.ingested_sessions == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
                     format_uint(report.appended_turns as u64),
                     if report.appended_turns == 1 { "" } else { "s" },
                 );
@@ -722,10 +731,7 @@ mod tests {
             rel_to_home("/x/home/burn.sqlite", "/x/home/"),
             "${RELAYBURN_HOME}/burn.sqlite"
         );
-        assert_eq!(
-            rel_to_home("/x/home2/foo", "/x/home/"),
-            "/x/home2/foo"
-        );
+        assert_eq!(rel_to_home("/x/home2/foo", "/x/home/"), "/x/home2/foo");
     }
 
     #[test]
