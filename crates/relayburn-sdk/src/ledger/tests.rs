@@ -723,7 +723,7 @@ fn invalid_session_id_in_content_rejected() {
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
 /// migration, and the stored version bumps forward to the current
-/// `SCHEMA_VERSION` (4 after #436 + #435 chained on top of #437).
+/// `SCHEMA_VERSION` (5 after #436 + #435 + #434 chained on top of #437).
 /// Existing rows stay `NULL` for every back-added column until rewritten.
 #[test]
 fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
@@ -782,10 +782,11 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    // Current `SCHEMA_VERSION` is 4 (chained #437 v2 + #436 v3 + #435
-    // v4); the migration must walk every step in one open() call.
+    // Current `SCHEMA_VERSION` is 5 (chained #437 v2 + #436 v3 + #435
+    // v4 + #434 v5); the migration must walk every step in one open()
+    // call.
     assert_eq!(
-        version, 4,
+        version, 5,
         "open must bump v1 forward to the current schema version"
     );
 
@@ -829,6 +830,19 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     assert!(
         legacy_subagent_id.is_none(),
         "legacy row's subagent_id stays NULL post-migration"
+    );
+
+    // v5 step (issue #434): the `inferences` derived table must exist
+    // post-migration; pre-v5 ledgers stay empty until `burn state
+    // rebuild` repopulates it from upstream JSONL.
+    let inferences_count: i64 = l
+        .conns
+        .burn
+        .query_row("SELECT COUNT(*) FROM inferences", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        inferences_count, 0,
+        "v5 migration must create the inferences table; legacy ledger starts empty"
     );
 
     // Re-opening is idempotent: the migration probe sees the column and
@@ -1133,6 +1147,52 @@ fn query_turns_filters_pushed_to_sql_match_legacy_semantics() {
         .unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].turn.message_id, "m2");
+}
+
+#[test]
+fn query_inferences_filters_by_project_via_turns_table() {
+    // `inferences` doesn't carry project columns directly — they live on
+    // `turns`. Query semantics should still match by project (issue:
+    // `q.project` was previously dropped). Two sessions, one with
+    // project=project-A, the other project=project-B; project-scoped
+    // query returns only the project-A inference.
+    use crate::reader::{build_inferences, RequestIdLookup, TurnKey};
+
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let mut t_a = make_turn("sess-a", "msg-a", "2026-05-01T00:00:00Z", 100);
+    t_a.project = Some("project-A".into());
+    t_a.project_key = Some("project-A".into());
+    let mut t_b = make_turn("sess-b", "msg-b", "2026-05-02T00:00:00Z", 200);
+    t_b.project = Some("project-B".into());
+    t_b.project_key = Some("project-B".into());
+
+    let mut lookup = RequestIdLookup::new();
+    lookup.insert(TurnKey::for_turn(&t_a), "req-a".into());
+    lookup.insert(TurnKey::for_turn(&t_b), "req-b".into());
+
+    let turns = vec![t_a, t_b];
+    let infs = build_inferences(&turns, &lookup);
+    assert_eq!(infs.len(), 2);
+
+    l.append_turns(&turns).unwrap();
+    l.append_inferences(&infs).unwrap();
+
+    // No project filter: both inferences come back.
+    let all = l.query_inferences(&Query::default()).unwrap();
+    assert_eq!(all.len(), 2);
+
+    // project-A filter: only the project-A inference.
+    let only_a = l
+        .query_inferences(&Query {
+            project: Some("project-A".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(only_a.len(), 1);
+    assert_eq!(only_a[0].session_id, "sess-a");
+    assert_eq!(only_a[0].request_id, "req-a");
 }
 
 #[test]

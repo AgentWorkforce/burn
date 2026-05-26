@@ -35,15 +35,18 @@ use std::path::Path;
 use serde_json::Value;
 
 use self::parent_chain::ChainNode;
-use crate::reader::classifier::{classify_activity, is_task_notification, ClassificationInput};
+use crate::reader::classifier::{
+    classify_activity, detect_slash_triads, is_task_notification, ClassificationInput,
+};
 use crate::reader::git::resolve_project;
 use crate::reader::hash::{args_hash, content_hash};
+use crate::reader::inference::{RequestIdLookup, TurnKey};
 use crate::reader::types::{
-    CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
-    ContentToolUse, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall, ToolResultEventRecord,
-    ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageGranularity, UserTurnBlock,
-    UserTurnRecord,
+    ActivityCategory, CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode,
+    ContentToolResult, ContentToolUse, Coverage, Fidelity, RelationshipSourceKind,
+    RelationshipType, SessionRelationshipRecord, SourceKind, StopReason, Subagent, ToolCall,
+    ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord, Usage,
+    UsageGranularity, UserTurnBlock, UserTurnRecord,
 };
 use crate::reader::user_turn::{HeuristicCounter, TokenCounter};
 
@@ -73,6 +76,13 @@ pub struct ParseResult {
     pub relationships: Vec<SessionRelationshipRecord>,
     pub tool_result_events: Vec<ToolResultEventRecord>,
     pub user_turns: Vec<UserTurnRecord>,
+    /// `(source, session_id, message_id) -> requestId` map for every
+    /// emitted turn whose source row carried an upstream `requestId`.
+    /// Keys are missing for turns whose harness doesn't ship one (Codex,
+    /// opencode, some older Claude versions). Fed to
+    /// [`crate::reader::build_inferences`] to key the per-API-call
+    /// aggregate (issue #434).
+    pub request_id_lookup: RequestIdLookup,
     /// Read by the in-crate test suite to verify the From<ParseIncrementalResult>
     /// conversion preserves evidence. Production callers consume the incremental
     /// result directly and access `evidence` from there.
@@ -145,6 +155,7 @@ impl From<ParseIncrementalResult> for ParseResult {
             relationships: r.relationships,
             tool_result_events: r.tool_result_events,
             user_turns: r.user_turns,
+            request_id_lookup: r.request_id_lookup,
             #[cfg(test)]
             evidence: r.evidence,
         }
@@ -174,6 +185,10 @@ pub struct ParseIncrementalResult {
     pub relationships: Vec<SessionRelationshipRecord>,
     pub tool_result_events: Vec<ToolResultEventRecord>,
     pub user_turns: Vec<UserTurnRecord>,
+    /// `(source, session_id, message_id) -> requestId` map for the
+    /// turns emitted on this incremental pass (see [`ParseResult`] for
+    /// rationale). Issue #434.
+    pub request_id_lookup: RequestIdLookup,
     /// Byte position to pass as `start_offset` on the next call. May back up
     /// past in-progress trailing messages so the next call re-reads them.
     pub end_offset: u64,
@@ -230,6 +245,12 @@ struct WorkingRecord {
     first_assistant_uuid: Option<String>,
     #[allow(dead_code)]
     parent_assistant_uuid: Option<String>,
+    /// Upstream `requestId` field from the first row that carried one
+    /// for this `message_id`. Powers the `Inference` aggregate's
+    /// per-API-call key (see `reader/inference.rs` and issue #434).
+    /// `None` when no row in this group emitted one — the inference
+    /// builder falls back to `message_id`.
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,7 +393,21 @@ fn ingest_assistant_record(
     let uuid = string_field(obj, &["uuid"], false);
     let parent_uuid = string_field(obj, &["parentUuid"], false);
 
+    // `requestId` lives on the outer envelope (sibling of `message`), NOT
+    // inside `message`. Capture from the first row that carries one for
+    // this `message_id`; later rows belonging to the same API call
+    // re-emit the same `requestId` so first-wins is the right merge.
+    let request_id =
+        string_field(obj, &["requestId", "request_id"], true);
     let usage_with_cov = to_usage(msg.get("usage"));
+    // Claude writes one row per content block but only ONE of those rows
+    // carries the `usage` block. The previous merge updated
+    // `usage_coverage` from later carriers but not `usage` itself, so
+    // `usage` could end up as zeros if the carrier wasn't the first row.
+    // We now overwrite `usage` from whichever row owns the field — per
+    // issue #434 the usage block is single-carrier, so "last writer
+    // wins" and "any writer wins" both round-trip to the same value.
+    let has_usage = msg.contains_key("usage");
 
     if let Some(w) = working.get_mut(&message_id) {
         if is_sidechain {
@@ -381,14 +416,22 @@ fn ingest_assistant_record(
         if w.model.is_empty() && !model.is_empty() {
             w.model = model.clone();
         }
-        if msg.contains_key("usage") {
+        if has_usage {
             w.usage_coverage = merge_usage_coverage(&w.usage_coverage, &usage_with_cov.coverage);
+            // Adopt the carrier row's usage. See the comment above the
+            // outer `let has_usage` for why overwrite is safe.
+            w.usage = usage_with_cov.usage.clone();
         }
         if let Some(s) = stop_reason {
             w.stop_reason = Some(s);
         }
         for b in &blocks {
             w.blocks.push(b.clone());
+        }
+        if w.request_id.is_none() {
+            if let Some(req) = request_id.clone() {
+                w.request_id = Some(req);
+            }
         }
     } else {
         let w = WorkingRecord {
@@ -404,6 +447,7 @@ fn ingest_assistant_record(
             stop_reason,
             first_assistant_uuid: uuid,
             parent_assistant_uuid: parent_uuid,
+            request_id,
         };
         working.insert(message_id.clone(), w);
         order.push(message_id);
@@ -1512,6 +1556,7 @@ fn apply_classification(
     user_text_by_uuid: &HashMap<String, String>,
     nodes_by_uuid: &HashMap<String, LineNode>,
     errored: &HashSet<String>,
+    skill_uuids: &HashSet<String>,
 ) {
     // Prefer the parent-chain walk (#433): walk from the assistant's first
     // emitted UUID up through `parentUuid` to the nearest user-prompt root
@@ -1525,11 +1570,13 @@ fn apply_classification(
     // out-of-order flushes and interrupt+resume sessions, but it's still
     // the best signal we have for rows without UUIDs. Prefer over-grouping
     // (silently wrong text) to silently dropping classification entirely.
-    let user_text = w
+    let root_uuid = w
         .first_assistant_uuid
         .as_deref()
-        .and_then(|uuid| nearest_user_prompt_root(uuid, nodes_by_uuid))
-        .and_then(|root_uuid| user_text_by_uuid.get(&root_uuid).cloned())
+        .and_then(|uuid| nearest_user_prompt_root(uuid, nodes_by_uuid));
+    let user_text = root_uuid
+        .as_ref()
+        .and_then(|root| user_text_by_uuid.get(root).cloned())
         .or_else(|| user_text_by_message_id.get(&w.message_id).cloned())
         .unwrap_or_default();
     let assistant_text = extract_assistant_text_for_classification(&w.blocks);
@@ -1548,7 +1595,21 @@ fn apply_classification(
         has_failed_tool,
         reasoning_tokens: record.usage.reasoning,
     });
-    record.activity = Some(result.activity);
+    // Slash-command triad override (#438). When the assistant turn's nearest
+    // user-prompt root is one of the three triad UUIDs (caveat / invocation /
+    // stdout), the assistant is paying for the slash command's stdout — tag
+    // it as a `Skill` activity. Token attribution stays on the underlying
+    // rows; the synthetic `Skill` label is a view that keeps per-category
+    // rollups from counting one slash command three times. Override is
+    // unconditional once the chain matches: a slash-command's text body is
+    // a `<command-name>` / `<local-command-stdout>` envelope, not real
+    // user intent, so keyword refinement on that text never produces a
+    // category we'd want to preserve.
+    let activity = match root_uuid.as_ref() {
+        Some(root) if skill_uuids.contains(root) => ActivityCategory::Skill,
+        _ => result.activity,
+    };
+    record.activity = Some(activity);
     record.retries = Some(result.retries);
     record.has_edits = Some(result.has_edits);
 }
@@ -2252,6 +2313,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             relationships: Vec::new(),
             tool_result_events: Vec::new(),
             user_turns: Vec::new(),
+            request_id_lookup: RequestIdLookup::new(),
             end_offset: start_offset,
             last_user_text: options.last_user_text.clone().unwrap_or_default(),
             evidence,
@@ -2302,6 +2364,14 @@ fn run_incremental<C: TokenCounter + ?Sized>(
     let mut user_text_by_uuid: HashMap<String, String> = HashMap::new();
     let mut errored_tool_use_ids: HashSet<String> = HashSet::new();
     let mut replacement_meta_by_tool_use_id: HashMap<String, ReplacementMeta> = HashMap::new();
+    // Slash-command triad detection (#438) needs a flat slice of user-typed
+    // rows to look up the parent-UUID chain shape. We accumulate only the
+    // minimal field set the detector reads (`type`, `uuid`, `parentUuid`,
+    // `message.content`) so memory stays bounded — three rows per triad,
+    // and only user-typed rows are stored. Detection runs once after the
+    // streaming loop closes; the resulting `skill_uuids` set is consulted
+    // by `apply_classification` to override the activity to `Skill`.
+    let mut user_rows_for_triad: Vec<serde_json::Map<String, Value>> = Vec::new();
     let mut events: Vec<(u64, CompactionEvent)> = Vec::new();
     let mut pending_user_content: Vec<(u64, ContentRecord)> = Vec::new();
     let mut pending_tool_result_events: Vec<(u64, ToolResultEventRecord)> = Vec::new();
@@ -2416,6 +2486,13 @@ fn run_incremental<C: TokenCounter + ?Sized>(
                 );
             }
             "user" => {
+                // Slash-command triad detector (#438) keeps a slim copy of
+                // every user-typed row so a post-loop pass can find the
+                // caveat → invocation → stdout chain shape. We clone the
+                // row before the rest of the branch consumes it; the
+                // detector only reads four fields so memory stays modest
+                // (one entry per user row, dropped at function exit).
+                user_rows_for_triad.push(obj.clone());
                 // Harness-injected `<task-notification>` rows share the user
                 // envelope but represent system events, not real prompts.
                 // Detecting them here keeps them out of `current_user_text`
@@ -2562,6 +2639,31 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         earliest_incomplete.unwrap_or(cursor_offset)
     };
 
+    // Slash-command triad detection (#438). Run once over the accumulated
+    // user rows; the resulting set of triad UUIDs (caveat + invocation +
+    // stdout) is consulted by `apply_classification` to override the
+    // assistant turn's activity to `Skill` when its parent-chain root
+    // lands on any one of the three triad rows. Token attribution stays
+    // on the underlying turn's `usage` — the synthetic `Skill` label is
+    // a view, not a billing reattribution.
+    let mut skill_uuids: HashSet<String> = HashSet::new();
+    for triad in detect_slash_triads(&user_rows_for_triad) {
+        for idx in [triad.caveat_idx, triad.invocation_idx, triad.stdout_idx] {
+            if let Some(uuid) = user_rows_for_triad
+                .get(idx)
+                .and_then(|r| r.get("uuid"))
+                .and_then(Value::as_str)
+            {
+                if !uuid.is_empty() {
+                    skill_uuids.insert(uuid.to_string());
+                }
+            }
+        }
+    }
+    // Detector input is no longer needed; drop the cloned rows so we
+    // don't carry them past the emission loop.
+    drop(user_rows_for_triad);
+
     // Emit completed turns. In-progress messages (no stop_reason) are deferred
     // — `end_offset` already backs up to before their first byte so the next
     // call re-reads them. `emit_in_progress` opts the non-incremental path out
@@ -2624,6 +2726,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             &user_text_by_uuid,
             &nodes_by_uuid,
             &errored_tool_use_ids,
+            &skill_uuids,
         );
         turns.push(record);
 
@@ -2686,6 +2789,22 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         .map(|(_, ut)| ut)
         .collect();
 
+    // Build the `(source, session_id, message_id) -> requestId` lookup
+    // for every emitted turn. We only walk turns the run actually emits
+    // (in-progress assistant rows are filtered out above) so the lookup
+    // entries always correspond to an outbound `TurnRecord`. See issue
+    // #434.
+    let mut request_id_lookup = RequestIdLookup::new();
+    for t in &turns {
+        if let Some(w) = working.get(&t.message_id) {
+            if let Some(req) = w.request_id.as_ref() {
+                if !req.is_empty() {
+                    request_id_lookup.insert(TurnKey::for_turn(t), req.clone());
+                }
+            }
+        }
+    }
+
     Ok(ParseIncrementalResult {
         turns,
         content,
@@ -2693,6 +2812,7 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         relationships: emitted_relationships,
         tool_result_events: emitted_tool_result_events,
         user_turns: emitted_user_turns,
+        request_id_lookup,
         end_offset,
         last_user_text: current_user_text,
         evidence,
@@ -2978,6 +3098,7 @@ mod tests {
             relationships: vec![relationship.clone()],
             tool_result_events: vec![tool_result_event.clone()],
             user_turns: vec![user_turn.clone()],
+            request_id_lookup: RequestIdLookup::new(),
             end_offset: 123,
             last_user_text: "latest user turn".to_string(),
             evidence: evidence.clone(),
@@ -3070,6 +3191,82 @@ mod tests {
         assert_eq!(t.tool_calls[1].target.as_deref(), Some("general-purpose"));
         assert_eq!(t.stop_reason, Some(StopReason::ToolUse));
         assert_eq!(t.ts, "2026-04-20T00:00:01.000Z");
+    }
+
+    /// Issue #434 acceptance: the multi-block fixture's four assistant
+    /// rows share `requestId=req_1` and a single `message.id`. The
+    /// parser surfaces that requestId on its `request_id_lookup`, the
+    /// inference builder collapses the four rows into ONE
+    /// `Inference`, and the merged usage matches the carrier row
+    /// (NOT 4× the carrier row, which would be the row-summing
+    /// pathology).
+    #[test]
+    fn multi_block_turn_emits_one_inference_with_merged_usage() {
+        let path = fixture("multi-block-turn.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 1, "one turn (collapsed by message_id)");
+        let t = &res.turns[0];
+        // The reader populated the per-turn lookup with the upstream
+        // requestId. Without this entry, the inference builder would
+        // fall back to `message_id`, which is correct cardinality for
+        // Claude but loses the `request-id` provenance.
+        let req = res
+            .request_id_lookup
+            .get(&crate::reader::TurnKey::for_turn(t))
+            .expect("request_id_lookup must carry every Claude turn");
+        assert_eq!(req, "req_1");
+
+        let infs = crate::reader::build_inferences(&res.turns, &res.request_id_lookup);
+        assert_eq!(
+            infs.len(),
+            1,
+            "four assistant rows sharing requestId collapse to one Inference"
+        );
+        let inf = &infs[0];
+        assert_eq!(inf.request_id, "req_1");
+        assert_eq!(
+            inf.request_id_source,
+            crate::reader::InferenceKeySource::RequestId
+        );
+        assert_eq!(inf.turn_id, "msg_multi_1");
+        // Carrier usage values: input=3, output=43, cache_read=11_496,
+        // cache_create_1h=4_773. The pre-fix bug emitted these multiplied
+        // by row count when usage was on the first row; with the fix the
+        // single inference reports the carrier's values exactly once.
+        assert_eq!(inf.usage.input, 3);
+        assert_eq!(inf.usage.output, 43);
+        assert_eq!(inf.usage.cache_read, 11_496);
+        assert_eq!(inf.usage.cache_create_1h, 4_773);
+        // start_ts / end_ts come from the parent `TurnRecord` (already
+        // collapsed by message_id), so they equal each other here —
+        // `TurnRecord.ts` is the first row's ts. A future surface that
+        // wants per-row spans should reach into the parser's per-row
+        // metadata; the inference summary stays correct for the
+        // "how long did the API call take" case the issue asked about
+        // by giving us the first-row arrival time.
+        assert_eq!(inf.start_ts, "2026-04-20T00:00:01.000Z");
+        assert_eq!(inf.end_ts, "2026-04-20T00:00:01.000Z");
+        assert_eq!(inf.tool_uses.len(), 2);
+        assert_eq!(inf.kind, crate::reader::InferenceKind::ToolUse);
+    }
+
+    /// A turn that the parser parsed without an upstream `requestId`
+    /// (older Claude version, sidechain, or other harness) falls back
+    /// to `message_id` as the inference key. See `RequestIdLookup`
+    /// fallback rules in `reader/inference.rs`.
+    #[test]
+    fn inference_falls_back_to_message_id_when_lookup_empty() {
+        let path = fixture("multi-block-turn.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        // Empty the lookup to simulate a harness that didn't ship one.
+        let empty = crate::reader::RequestIdLookup::new();
+        let infs = crate::reader::build_inferences(&res.turns, &empty);
+        assert_eq!(infs.len(), 1);
+        assert_eq!(infs[0].request_id, "msg_multi_1");
+        assert_eq!(
+            infs[0].request_id_source,
+            crate::reader::InferenceKeySource::MessageId
+        );
     }
 
     #[test]
@@ -4462,6 +4659,73 @@ mod tests {
         assert_eq!(res.user_turns.len(), 1);
         assert_eq!(res.user_turns[0].blocks.len(), 1);
         assert_eq!(res.user_turns[0].blocks[0].kind, UserTurnBlockKind::Text);
+    }
+
+    #[test]
+    fn slash_command_triads_collapse_to_one_skill_activity_each() {
+        // Integration coverage for #438. The fixture has two slash-command
+        // triads (`/review` then `/init`), each three rows: caveat row,
+        // invocation row (`<command-name>`), stdout row
+        // (`<local-command-stdout>`). Three assistant rows surround the
+        // triads (one before, one between, one after). Without the
+        // detector, the two post-triad assistants would classify against
+        // the stdout body (whatever keyword the stdout text happened to
+        // hit) — with the detector, they collapse to `Skill`.
+        let path = fixture("slash-command-triad.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        assert_eq!(res.turns.len(), 3, "three assistant turns survive");
+        let activities: Vec<Option<ActivityCategory>> =
+            res.turns.iter().map(|t| t.activity).collect();
+        // First assistant is a normal reply, NOT inside a triad.
+        assert_ne!(activities[0], Some(ActivityCategory::Skill));
+        // Second + third assistants follow a slash-command triad's stdout;
+        // each must surface as a single `Skill` activity. Two triads →
+        // two `Skill` turns (3 → 1 per triad, per the issue acceptance).
+        assert_eq!(activities[1], Some(ActivityCategory::Skill));
+        assert_eq!(activities[2], Some(ActivityCategory::Skill));
+        let skill_count = activities
+            .iter()
+            .filter(|a| **a == Some(ActivityCategory::Skill))
+            .count();
+        assert_eq!(skill_count, 2, "two triads → two Skill activities");
+    }
+
+    #[test]
+    fn slash_command_triad_does_not_double_count_token_attribution() {
+        // Token attribution stays on the underlying assistant rows; the
+        // synthetic `Skill` label is a view, not a billing unit. The sum
+        // of the three assistants' (input + output) tokens equals what
+        // we computed before the triad classifier landed — collapsing
+        // the activity label does NOT redirect tokens onto the Skill
+        // turns or off of them. See AgentWorkforce/burn#438.
+        let path = fixture("slash-command-triad.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        let total_input: u64 = res.turns.iter().map(|t| t.usage.input).sum();
+        let total_output: u64 = res.turns.iter().map(|t| t.usage.output).sum();
+        // Fixture: assistants 1, 2, 3 have input 10/20/25 and output 5/3/4.
+        assert_eq!(total_input, 10 + 20 + 25);
+        assert_eq!(total_output, 5 + 3 + 4);
+    }
+
+    #[test]
+    fn slash_command_triad_false_positive_guard_normal_user_turn() {
+        // Regression guard for the false-positive case in #438. A
+        // legitimate user prompt that *looks* structurally similar to a
+        // caveat row (parent chain shape: user → user → user) but
+        // lacks the `<command-name>` invocation marker MUST NOT
+        // misdetect as a triad. The classifier should fall through to
+        // its normal text-based rules. Mirrors the false-positive guard
+        // in `task_notification_does_not_match_user_typed_marker_string`
+        // (#442).
+        let path = fixture("task-notification.jsonl");
+        let res = parse_claude_session(&path, &ParseOptions::default()).unwrap();
+        for turn in &res.turns {
+            assert_ne!(
+                turn.activity,
+                Some(ActivityCategory::Skill),
+                "no slash-command markers → no Skill activity",
+            );
+        }
     }
 
     #[test]

@@ -11,8 +11,8 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::reader::{
-    CompactionEvent, ContentRecord, SessionRelationshipRecord, ToolResultEventRecord, TurnRecord,
-    UserTurnRecord,
+    CompactionEvent, ContentRecord, Inference, SessionRelationshipRecord, ToolResultEventRecord,
+    TurnRecord, UserTurnRecord,
 };
 
 use crate::ledger::error::{LedgerError, Result};
@@ -192,6 +192,52 @@ pub(crate) fn append_tool_result_events(
                 json,
                 r.output_bytes.map(|n| n as i64),
                 truncated_int,
+            ])?;
+            if changed > 0 {
+                appended += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(appended)
+}
+
+/// `INSERT OR REPLACE` per-API-call inferences. Re-ingest of the same
+/// session intentionally replaces existing rows: the inference is pure
+/// derived state (no fingerprint dedup, no first-party fields), and a
+/// re-parse may legitimately produce different `end_ts` / `usage` values
+/// if the JSONL grew between runs. The composite PK
+/// `(source, session_id, request_id)` is the natural identity. See issue
+/// #434.
+pub(crate) fn append_inferences(
+    conn: &mut Connection,
+    records: &[Inference],
+) -> Result<usize> {
+    if records.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut appended = 0usize;
+    {
+        let mut insert = tx.prepare(
+            "INSERT OR REPLACE INTO inferences
+                 (source, session_id, request_id, request_id_source, turn_id,
+                  model, kind, start_ts, end_ts, record_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )?;
+        for r in records {
+            let json = serde_json::to_string(r)?;
+            let changed = insert.execute(params![
+                r.source.wire_str(),
+                r.session_id,
+                r.request_id,
+                r.request_id_source.wire_str(),
+                r.turn_id,
+                r.model,
+                r.kind.wire_str(),
+                r.start_ts,
+                r.end_ts,
+                json,
             ])?;
             if changed > 0 {
                 appended += 1;

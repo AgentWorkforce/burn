@@ -22,6 +22,11 @@ pub const DERIVABLE_TABLES: &[&str] = &[
     "tool_result_events",
     "user_turns",
     "sessions",
+    // `inferences` is derived from turns + parser-supplied `requestId`
+    // lookup at ingest time; `burn state rebuild` re-runs ingest so the
+    // table is rebuilt from upstream JSONL alongside the others. See
+    // issue #434.
+    "inferences",
 ];
 
 /// Bumped when on-disk shape changes incompatibly. Stored in
@@ -47,14 +52,12 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   re-parsing `record_json`. New inserts denormalize
 ///   `TurnRecord.subagent.agent_id`; pre-v4 rows leave the column NULL
 ///   and are backfilled by `burn state rebuild`. (#435)
-///
-/// ## Renumbering note for reviewers
-///
-/// This branch built on main at v3 (post-#444). If a parallel PR also
-/// claims v4 before this lands, renumber here AND in the matching
-/// `migrate_burn_schema` step in `db.rs` — the migration is gated
-/// `if current_version < N` so the renumber is mechanical.
-pub const SCHEMA_VERSION: u32 = 4;
+/// - `5`: adds the `inferences` table — a per-API-call materialization
+///   keyed by `(source, session_id, request_id)` so callers asking "how
+///   many inferences" don't conflate a single Claude API call's multiple
+///   content-block rows. Derived at ingest from the parser's
+///   `request_id_lookup`; rebuilt by `burn state rebuild`. (#434)
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.
@@ -160,6 +163,32 @@ CREATE TABLE IF NOT EXISTS user_turns (
 CREATE INDEX IF NOT EXISTS idx_user_turns_session
     ON user_turns(session_id);
 
+-- v5: per-API-call aggregate. One row per `(source, session_id,
+-- request_id)` triple. Derived from `turns` + the parser's per-row
+-- `requestId` lookup; rebuilt by `burn state rebuild`. The primary key
+-- is the composite triple so re-ingesting the same JSONL is a no-op via
+-- `INSERT OR REPLACE` (different from `turns`' content-fingerprint
+-- dedup — inferences are pure derived state, no fingerprint needed). See
+-- issue #434.
+CREATE TABLE IF NOT EXISTS inferences (
+    source              TEXT NOT NULL,
+    session_id          TEXT NOT NULL,
+    request_id          TEXT NOT NULL,
+    request_id_source   TEXT NOT NULL,
+    turn_id             TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    kind                TEXT NOT NULL,
+    start_ts            TEXT NOT NULL,
+    end_ts              TEXT NOT NULL,
+    record_json         TEXT NOT NULL,
+    PRIMARY KEY (source, session_id, request_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_inferences_session
+    ON inferences(session_id);
+CREATE INDEX IF NOT EXISTS idx_inferences_turn
+    ON inferences(turn_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
     source        TEXT NOT NULL,
     session_id    TEXT NOT NULL,
@@ -196,7 +225,7 @@ CREATE TABLE IF NOT EXISTS archive_state (
 );
 
 INSERT INTO archive_state (id, schema_version)
-    VALUES (1, 4)
+    VALUES (1, 5)
     ON CONFLICT(id) DO NOTHING;
 "#;
 

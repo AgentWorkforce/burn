@@ -109,6 +109,10 @@ fn format_status(s: &StateStatus) -> String {
         format_uint(s.burn.rows.tool_result_events)
     ));
     out.push_str(&format!(
+        "    inferences:         {}\n",
+        format_uint(s.burn.rows.inferences)
+    ));
+    out.push_str(&format!(
         "    sessions:           {}\n",
         format_uint(s.burn.rows.sessions)
     ));

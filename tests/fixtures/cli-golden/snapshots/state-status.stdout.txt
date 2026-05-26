@@ -7,13 +7,14 @@ events DB (burn.sqlite):
     compactions:        0
     relationships:      4
     tool_result_events: 3
+    inferences:         0
     sessions:           0
     stamps:             1
 content DB (content.sqlite):
   path: ${RELAYBURN_HOME}/content.sqlite
   rows: 0
 archive state:
-  schema version: 4
+  schema version: 5
   last built:   never
   last rebuild: never
 config:
