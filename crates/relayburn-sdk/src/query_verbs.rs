@@ -1398,7 +1398,13 @@ fn compute_summary_subagent_counts(
     let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
         std::path::PathBuf::from(p)
     } else {
+        // `HOME` is unset on stock Windows shells (`USERPROFILE` carries
+        // the user home there). Fall back to it before degenerating to
+        // `.` so a Claude Code install on Windows still resolves to
+        // `%USERPROFILE%\.claude\projects` without the caller having
+        // to set `BURN_CLAUDE_PROJECTS_DIR` explicitly.
         let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         home.join(".claude").join("projects")
@@ -4325,6 +4331,23 @@ impl LedgerHandle {
         }
         Ok(out)
     }
+
+    /// Build the per-session inference-flow DAG (issue #431).
+    ///
+    /// Convenience wrapper: pulls the session's [`TurnSpanTree`]s via
+    /// [`Self::session_span_trees`] and projects them through
+    /// [`crate::analyze::flow_graph_from_trees`]. Pure read; no DB
+    /// writes, no caching. Honors [`crate::analyze::FlowOpts::max_turns`].
+    pub fn flow_graph(
+        &self,
+        session_id: &str,
+        opts: crate::analyze::FlowOpts,
+    ) -> Result<crate::analyze::FlowGraph> {
+        let trees = self.session_span_trees(session_id)?;
+        Ok(crate::analyze::flow_graph_from_trees(
+            session_id, &trees, opts,
+        ))
+    }
 }
 
 /// Bucket subagent transcripts into per-turn lists for the span-tree
@@ -4435,7 +4458,13 @@ fn discover_and_pair_subagents(
     let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
         std::path::PathBuf::from(p)
     } else {
+        // `HOME` is unset on stock Windows shells (`USERPROFILE` carries
+        // the user home there). Fall back to it before degenerating to
+        // `.` so a Claude Code install on Windows still resolves to
+        // `%USERPROFILE%\.claude\projects` without the caller having
+        // to set `BURN_CLAUDE_PROJECTS_DIR` explicitly.
         let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         home.join(".claude").join("projects")
@@ -4512,6 +4541,16 @@ pub fn session_span_trees(
 ) -> Result<Vec<crate::analyze::span_tree::TurnSpanTree>> {
     let handle = open_with(ledger_home.as_deref())?;
     handle.session_span_trees(session_id)
+}
+
+/// Free-function form of [`LedgerHandle::flow_graph`].
+pub fn flow_graph(
+    session_id: &str,
+    opts: crate::analyze::FlowOpts,
+    ledger_home: Option<PathBuf>,
+) -> Result<crate::analyze::FlowGraph> {
+    let handle = open_with(ledger_home.as_deref())?;
+    handle.flow_graph(session_id, opts)
 }
 
 // ---------------------------------------------------------------------------

@@ -123,6 +123,14 @@ pub use crate::analyze::{
     AttrValue as SpanAttrValue, SpanEvent, SpanKind, SpanNode, SpanStatus, TurnSpanTree,
 };
 
+// Flow-graph projection (issue #431). Re-exported alongside the span
+// tree types because every flow-graph consumer already imports the
+// span tree.
+pub use crate::analyze::{
+    flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
+    TurnTokens as FlowTurnTokens, FLOW_DEFAULT_MAX_TURNS, INTER_TURN_GAP, RAIL_GAP,
+};
+
 pub use crate::ingest::{
     cleanup_stale_pending_stamps, default_session_roots, ingest_all, ingest_claude_session,
     ingest_claude_transcript_path, ingest_codex_sessions, ingest_opencode_sessions,

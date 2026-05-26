@@ -72,6 +72,18 @@
     "enabled": true
   },
   {
+    "name": "flow-mermaid",
+    "args": ["flow", "--session", "11111111-1111-1111-1111-111111111111"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
+    "name": "flow-json",
+    "args": ["flow", "--session", "11111111-1111-1111-1111-111111111111", "--json"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
     "name": "state-status",
     "args": ["state", "status"],
     "expectStatus": 0,

@@ -7,6 +7,14 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ### Added
 
 - `burn overhead deltas`: per-inference context-window attribution. New `--session`, `--top`, `--min-delta`, `--owner`, `--explain`, `--json` flags surface "what blew up my context between inference N and inference N+1?" — pairs same-rail `Inference` spans, attributes the delta in `input + cache_read + cache_write` to intervening `ToolResult` / `UserPrompt` / `SystemReminder` leaves, surfaces compaction events as their own row (never a negative delta), and isolates main-rail deltas from subagent rails. SDK entry point: `LedgerHandle::context_delta(opts)`. (#432)
+- `burn flow --session <id>`: inference-flow DAG over a session's span
+  trees. One column per turn on the main rail; dispatched subagents
+  branch onto their own rails inheriting the dispatching inference's
+  Y, with `dispatch` / `return` edges between rails and `unattached`
+  edges for orphan subagents. Renders Mermaid (default), SVG
+  (`--output flow.svg`), and JSON (`--json`). `--max-turns` defaults
+  to 50. New SDK surface: `LedgerHandle::flow_graph(session, opts)`
+  and free-function `flow_graph_from_trees`. (#431)
 - `relayburn-sdk`: per-turn span tree as derived analytical primitive.
   New `LedgerHandle::turn_span_tree(session_id, turn_id)` and
   `session_span_trees(session_id)` verbs project `TurnRecord` +

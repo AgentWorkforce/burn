@@ -21,6 +21,7 @@ pub mod context_delta;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
+pub mod flow_graph;
 pub mod ghost_surface;
 pub mod ghost_surface_inputs;
 pub mod hotspots;
@@ -83,6 +84,10 @@ pub use replacement_savings::{
     summarize_replacement_savings, ReplacementSavingsSummary, ToolSavingsAggregate,
 };
 pub use span_tree::{AttrValue, SpanEvent, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
+pub use flow_graph::{
+    flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
+    TurnTokens, DEFAULT_MAX_TURNS as FLOW_DEFAULT_MAX_TURNS, INTER_TURN_GAP, RAIL_GAP,
+};
 pub use subagent_tree::{
     aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions, SubagentTreeNode,
     SubagentTypeStats,
