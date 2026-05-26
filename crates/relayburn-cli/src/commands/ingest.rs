@@ -14,13 +14,11 @@
 //!   / SIGTERM.
 //! - `--hook claude` = `runIngestHook` — stdin-driven hook payload.
 //!   Today only `--hook claude` is wired here (Codex / OpenCode hooks
-//!   were never part of the TS surface either). The hook path
-//!   currently ingests via a full `ingest_all` sweep, since the SDK
-//!   does not yet expose a single-transcript verb. Practically this
-//!   is no slower than the TS hook because Claude hooks fire at
-//!   session-end and the sweep short-circuits on unchanged cursors;
-//!   the cost is bounded by the number of new sessions, not by the
-//!   hook payload.
+//!   were never part of the TS surface either). The hook path uses
+//!   the SDK's single-transcript fast-path
+//!   (`ingest_claude_transcript_path`) on the `transcript_path` from
+//!   the Claude Code hook payload so the per-call cost is bounded by
+//!   the one JSONL file, not by the number of sessions on disk.
 //!
 //! Output shape: every successful run writes a single
 //! `[burn] ingest: ingested N session(s) (+M turn(s))` line. The
@@ -29,16 +27,28 @@
 //! `packages/cli/src/commands/ingest.ts:121-126`); `--watch` and
 //! `--hook` modes log on **stderr** so the foreground banner / hook
 //! breadcrumbs don't pollute downstream stdout consumers. `--quiet`
-//! (only valid with `--hook`) suppresses the hook breadcrumb when the
-//! report is empty.
+//! is accepted in every mode: in `--watch` and `--hook` it silences
+//! every breadcrumb; in one-shot mode it suppresses the progress
+//! spinner / gap warnings but the final stdout summary still prints.
+//!
+//! Not ported from 1.x: `--opencode-stream`, `--opencode-url`, and
+//! `--opencode-global`. The 1.x stream subscribed to the OpenCode dev
+//! server's SSE feed directly. 2.x consumes OpenCode through the
+//! file-based session store (`~/.local/share/opencode/storage`) on
+//! every sweep, and `--watch` reacts to FS events the moment OpenCode
+//! writes a new event file. The `OpencodeStreamIngestor` parser still
+//! lives in `relayburn-sdk::reader::opencode_stream` for embedders
+//! that want to consume the SSE feed themselves, but the CLI no
+//! longer ships HTTP client wiring for it.
 
 use std::io::{self, Read};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use relayburn_sdk::{
-    default_session_roots, ingest_all, start_watch_loop, IngestReport, IngestRoots, Ledger,
-    LedgerHandle, LedgerOpenOptions, StartWatchLoopOptions,
+    default_session_roots, ingest_all, ingest_claude_transcript_path, start_watch_loop,
+    IngestReport, IngestRoots, Ledger, LedgerHandle, LedgerOpenOptions, StartWatchLoopOptions,
 };
 
 use crate::cli::{GlobalArgs, IngestArgs};
@@ -78,23 +88,36 @@ pub fn run(globals: &GlobalArgs, args: IngestArgs) -> i32 {
 ///
 /// Summary line is emitted on **stdout** (matching TS `runIngestOnce`
 /// at `packages/cli/src/commands/ingest.ts:121-126`) so callers can
-/// capture pipeline output without redirecting stderr.
+/// capture pipeline output without redirecting stderr. `--quiet`
+/// suppresses the progress spinner and gap-warning side channel but
+/// leaves the final stdout summary alone so pipeline consumers always
+/// see the report.
 fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
-    let _ = quiet; // `--quiet` is hook-only (clap `requires = "hook"`); kept in
-                   // the dispatch signature for symmetry with run_watch / run_hook.
-    let progress = TaskProgress::new(globals, "ingest");
-    progress.set_task("opening ledger");
+    let progress = (!quiet).then(|| {
+        let p = TaskProgress::new(globals, "ingest");
+        p.set_task("opening ledger");
+        p
+    });
     let mut handle = match open_handle(globals) {
         Ok(h) => h,
         Err(err) => {
-            progress.finish_and_clear();
+            if let Some(p) = &progress {
+                p.finish_and_clear();
+            }
             return report_error(&err, globals);
         }
     };
-    progress.set_task("scanning sessions");
-    let opts = progress.ingest_options(globals.ledger_path.clone());
+    if let Some(p) = &progress {
+        p.set_task("scanning sessions");
+    }
+    let opts = match &progress {
+        Some(p) => p.ingest_options(globals.ledger_path.clone()),
+        None => TaskProgress::quiet_ingest_options(globals.ledger_path.clone()),
+    };
     let result = ingest_all(handle.raw_mut(), &opts);
-    progress.finish_and_clear();
+    if let Some(p) = &progress {
+        p.finish_and_clear();
+    }
     match result {
         Ok(report) => {
             log_report_oneshot(&report);
@@ -123,29 +146,38 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         None => 1000,
     };
 
-    let progress = TaskProgress::new(globals, "ingest");
-    progress.set_task("opening ledger");
+    let quiet = args.quiet;
+    let progress = (!quiet).then(|| {
+        let p = TaskProgress::new(globals, "ingest");
+        p.set_task("opening ledger");
+        p
+    });
     let handle = match open_handle(globals) {
         Ok(h) => h,
         Err(err) => {
-            progress.finish_and_clear();
+            if let Some(p) = &progress {
+                p.finish_and_clear();
+            }
             return report_error(&err, globals);
         }
     };
 
-    progress.set_task("starting watcher");
+    if let Some(p) = &progress {
+        p.set_task("starting watcher");
+    }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(err) => {
-            progress.finish_and_clear();
+            if let Some(p) = &progress {
+                p.finish_and_clear();
+            }
             return report_error(&err, globals);
         }
     };
 
-    let quiet = args.quiet;
     let no_fsevents = args.no_fsevents;
     // The FS-event driver may silently demote to polling at startup
     // (no watchable path yet) or mid-run (notify channel closes), so
@@ -156,9 +188,9 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
     } else {
         "watching (FS events with polling fallback); Ctrl-C to stop".to_string()
     };
-    if !quiet {
-        if progress.is_visible() {
-            progress.set_task(watch_message.clone());
+    if let Some(p) = &progress {
+        if p.is_visible() {
+            p.set_task(watch_message.clone());
         } else if no_fsevents {
             eprintln!(
                 "[burn] ingest: foreground ingest polling every {interval_ms}ms; Ctrl-C to stop",
@@ -184,15 +216,18 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
             let ledger_home = ledger_home.clone();
             let watch_message = watch_message_for_ingest.clone();
             Box::pin(async move {
-                progress.set_task("scanning sessions");
+                if let Some(p) = &progress {
+                    p.set_task("scanning sessions");
+                }
                 let mut guard = h.lock().await;
-                let opts = if quiet {
-                    TaskProgress::quiet_ingest_options(ledger_home)
-                } else {
-                    progress.ingest_options(ledger_home)
+                let opts = match &progress {
+                    Some(p) => p.ingest_options(ledger_home),
+                    None => TaskProgress::quiet_ingest_options(ledger_home),
                 };
                 let result = ingest_all(guard.raw_mut(), &opts);
-                progress.set_task(watch_message);
+                if let Some(p) = &progress {
+                    p.set_task(watch_message);
+                }
                 result
             })
         });
@@ -202,18 +237,21 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
             // Match TS: only log a summary when the tick actually
             // appended turns. Empty ticks would otherwise drown the
             // user with zero-progress lines.
-            if !quiet && report.appended_turns > 0 {
-                progress_for_report.suspend(|| {
-                    eprint!("{}", render_ingest_line(report));
-                });
+            if let Some(p) = &progress_for_report {
+                if report.appended_turns > 0 {
+                    p.suspend(|| {
+                        eprint!("{}", render_ingest_line(report));
+                    });
+                }
             }
         });
 
         let progress_for_error = progress_for_loop.clone();
-        let on_error: relayburn_sdk::ErrorSink = Arc::new(move |err: &anyhow::Error| {
-            progress_for_error.suspend(|| {
+        let on_error: relayburn_sdk::ErrorSink = Arc::new(move |err: &anyhow::Error| match &progress_for_error {
+            Some(p) => p.suspend(|| {
                 eprintln!("[burn] ingest: {err}");
-            });
+            }),
+            None => eprintln!("[burn] ingest: {err}"),
         });
 
         // Default to the `notify`-backed FS-event driver against the
@@ -221,7 +259,7 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         // automatically when no path exists yet (fresh install) or
         // when the user passes `--no-fsevents`. The slow polling
         // backstop in the SDK keeps progress on filesystems where FS
-        // events are unreliable. Closes #250.
+        // events are unreliable.
         let watch_paths = default_session_roots(&IngestRoots::default());
         let opts = StartWatchLoopOptions::new(ingest_fn)
             .with_interval(Duration::from_millis(interval_ms))
@@ -235,7 +273,9 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         wait_for_stop_signal().await;
         controller.stop().await;
     });
-    progress.finish_and_clear();
+    if let Some(p) = &progress {
+        p.finish_and_clear();
+    }
 
     0
 }
@@ -247,6 +287,12 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
 /// non-zero exit can block the surrounding tool call); the Rust port
 /// keeps that policy — every error is logged to stderr but the exit
 /// code is `0` so the calling Claude Code session continues.
+///
+/// Fast-path: when the payload carries a `transcript_path` we drive
+/// the SDK's single-transcript verb against just that JSONL file
+/// instead of a full sweep. Falls back to `ingest_all` when the
+/// payload is missing `transcript_path` (older Claude Code releases
+/// occasionally elide it) so we still make forward progress.
 fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
     if hook != "claude" {
         eprintln!("burn: unsupported hook harness: {hook}");
@@ -267,34 +313,30 @@ fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
         return 0;
     }
 
-    // Validate the payload shape so we don't trigger a full sweep on
-    // unrelated stdin content. The TS hook ignores payloads missing
-    // `session_id` / `transcript_path`; mirror that.
-    match serde_json::from_str::<serde_json::Value>(&raw) {
+    // Validate the payload shape. The TS hook ignores payloads missing
+    // `session_id`; mirror that. `transcript_path` is optional — when
+    // present we drive the single-transcript fast-path, when absent we
+    // fall back to `ingest_all` so older Claude Code releases that
+    // elide the field still make forward progress.
+    let transcript_path = match serde_json::from_str::<serde_json::Value>(&raw) {
         Ok(v) => {
             let has_session = v.get("session_id").and_then(|x| x.as_str()).is_some();
-            let has_transcript = v.get("transcript_path").and_then(|x| x.as_str()).is_some();
-            if !has_session || !has_transcript {
+            if !has_session {
                 if !quiet {
-                    eprintln!(
-                        "[burn] ingest: payload missing session_id or transcript_path; ignoring",
-                    );
+                    eprintln!("[burn] ingest: payload missing session_id; ignoring");
                 }
                 return 0;
             }
+            v.get("transcript_path")
+                .and_then(|x| x.as_str())
+                .map(PathBuf::from)
         }
         Err(err) => {
             eprintln!("[burn] ingest: invalid JSON payload: {err}");
             return 0;
         }
-    }
+    };
 
-    // Drive a full sweep. The SDK does not (yet) expose a
-    // single-transcript verb; `ingest_all` short-circuits unchanged
-    // cursors so the practical cost is bounded by the new turns this
-    // hook fires for. Matches the TS hook's "ingest the matching
-    // session" intent — the Claude transcript that just changed will
-    // be picked up by `ingest_claude_into` on the same sweep.
     let progress = (!quiet).then(|| TaskProgress::new(globals, "ingest"));
     if let Some(progress) = &progress {
         progress.set_task("opening ledger");
@@ -311,13 +353,16 @@ fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
         }
     };
     if let Some(progress) = &progress {
-        progress.set_task("scanning sessions");
+        progress.set_task("ingesting transcript");
     }
     let opts = match &progress {
         Some(progress) => progress.ingest_options(globals.ledger_path.clone()),
         None => TaskProgress::quiet_ingest_options(globals.ledger_path.clone()),
     };
-    let result = ingest_all(handle.raw_mut(), &opts);
+    let result = match transcript_path.as_deref() {
+        Some(path) => ingest_claude_transcript_path(handle.raw_mut(), path, &opts),
+        None => ingest_all(handle.raw_mut(), &opts),
+    };
     if let Some(progress) = &progress {
         progress.finish_and_clear();
     }

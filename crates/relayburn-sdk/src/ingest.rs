@@ -62,8 +62,8 @@ pub(crate) static TEST_GAP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 #[cfg(any(test, feature = "test-utils"))]
 pub use gap::{restore_ingest_gap_writer, set_ingest_gap_writer};
 pub use ingest::{
-    default_session_roots, ingest_all, ingest_claude_session, ingest_codex_sessions,
-    ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
+    default_session_roots, ingest_all, ingest_claude_session, ingest_claude_transcript_path,
+    ingest_codex_sessions, ingest_opencode_sessions, IngestOptions, IngestReport, IngestRoots,
 };
 pub use pending_stamps::{
     cleanup_stale_pending_stamps, write_pending_stamp, PendingStamp, PendingStampHarness,

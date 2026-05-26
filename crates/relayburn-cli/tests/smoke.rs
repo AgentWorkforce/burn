@@ -463,3 +463,153 @@ fn stamps_export_json_flag_succeeds() {
         .success()
         .stdout("");
 }
+
+/// `burn ingest` (one-shot) must always emit the canonical summary
+/// line on **stdout** so pipelines can capture it without redirecting
+/// stderr. Pin the contract against an empty isolated ledger so a
+/// regression in the presenter (e.g. accidentally routing the summary
+/// through stderr) breaks here.
+#[test]
+fn ingest_one_shot_writes_summary_to_stdout() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .arg("ingest")
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[burn] ingest: ingested"));
+}
+
+/// `burn ingest --quiet` must still emit the final summary on stdout
+/// — `--quiet` only suppresses the stderr breadcrumbs (progress
+/// spinner, gap warnings), not the structured summary pipelines
+/// consume. Pre-2.x parity: 1.x accepted `--quiet` in default mode,
+/// so the contract is restored here.
+#[test]
+fn ingest_one_shot_quiet_keeps_stdout_summary() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["ingest", "--quiet"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[burn] ingest: ingested"))
+        .stderr(predicate::str::is_empty());
+}
+
+/// `burn ingest --hook` only accepts `claude` today; any other value
+/// must hard-fail with exit 2 so a typo can't silently no-op the
+/// surrounding Claude Code hook wiring.
+#[test]
+fn ingest_hook_rejects_unknown_harness() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["ingest", "--hook", "definitely-not-a-harness"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .write_stdin("{}")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unsupported hook harness"));
+}
+
+/// `burn ingest --hook claude` reads one JSON payload from stdin. A
+/// well-formed payload with a non-existent `transcript_path` must
+/// still exit 0 (hooks never fail the parent) and must NOT crash on
+/// the missing file. Validates the new path-based fast-path
+/// gracefully handles a rotated/deleted transcript.
+#[test]
+fn ingest_hook_claude_missing_transcript_is_a_no_op() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    let payload = serde_json::json!({
+        "session_id": "00000000-0000-0000-0000-000000000000",
+        "transcript_path": home.path().join("does-not-exist.jsonl").to_string_lossy(),
+    })
+    .to_string();
+
+    burn()
+        .args(["ingest", "--hook", "claude", "--quiet"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .write_stdin(payload)
+        .assert()
+        .success();
+}
+
+/// `burn ingest --hook claude` against a payload that's syntactically
+/// JSON but missing `session_id` / `transcript_path` is ignored with
+/// exit 0 — matching the TS hook policy of never breaking the parent.
+#[test]
+fn ingest_hook_claude_payload_missing_fields_is_ignored() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["ingest", "--hook", "claude"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .write_stdin(r#"{"unrelated": true}"#)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("payload missing"));
+}
+
+/// `burn ingest --hook claude --quiet` against the same
+/// missing-fields payload must produce **no** stderr breadcrumb;
+/// `--quiet` is the contract orchestrators rely on to keep the
+/// Claude Code hook pipeline noise-free.
+#[test]
+fn ingest_hook_claude_quiet_suppresses_payload_warning() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["ingest", "--hook", "claude", "--quiet"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .write_stdin(r#"{"unrelated": true}"#)
+        .assert()
+        .success()
+        .stderr("");
+}
+
+/// Older Claude Code hook payloads carry `session_id` without
+/// `transcript_path`; the hook must still make forward progress by
+/// falling back to a full sweep (`ingest_all`) rather than ignoring
+/// the payload. Pin the contract: well-formed JSON with session_id
+/// but no transcript_path exits 0 quietly under `--quiet`.
+#[test]
+fn ingest_hook_claude_session_id_without_transcript_falls_back() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    burn()
+        .args(["ingest", "--hook", "claude", "--quiet"])
+        .env("RELAYBURN_HOME", home.path())
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .write_stdin(r#"{"session_id": "00000000-0000-0000-0000-000000000000"}"#)
+        .assert()
+        .success()
+        .stderr("");
+}
+
+/// `--watch` and `--hook` remain mutually exclusive at clap parse
+/// time. Pin the exit code so a future refactor can't silently relax
+/// the contract.
+#[test]
+fn ingest_watch_and_hook_are_mutually_exclusive() {
+    burn()
+        .args(["ingest", "--watch", "--hook", "claude"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("mutually exclusive"));
+}

@@ -128,10 +128,12 @@ pub enum Command {
 /// - No flags: scan all known session stores once and exit.
 /// - `--watch` (optionally with `--interval <MS>`): foreground poll loop
 ///   driven by [`relayburn_sdk::start_watch_loop`].
-/// - `--hook <HARNESS> [--quiet]`: stdin-driven hook entrypoint. Today
-///   only `--hook claude` is supported; the `--quiet` flag suppresses
-///   non-error stderr breadcrumbs so it is safe to call from every
-///   Claude Code hook.
+/// - `--hook <HARNESS>`: stdin-driven hook entrypoint. Today only
+///   `--hook claude` is supported.
+///
+/// `--quiet` is accepted in every mode and suppresses non-error stderr
+/// breadcrumbs (progress spinner, watch banner, hook summary). One-shot
+/// mode still writes its final summary line to stdout regardless.
 ///
 /// `--watch` and `--hook` are mutually exclusive; the presenter rejects
 /// the combination at runtime with exit 2 (matching TS).
@@ -153,11 +155,13 @@ pub struct IngestArgs {
     #[arg(long, value_name = "HARNESS")]
     pub hook: Option<String>,
 
-    /// Suppress non-error stderr breadcrumbs. Used by hook callers so
-    /// the surrounding tool invocation isn't blocked by a noisy
-    /// pipeline. Only meaningful with `--hook`; clap rejects `--quiet`
-    /// on its own (or with `--watch`) so a typo can't silently no-op.
-    #[arg(long, requires = "hook")]
+    /// Suppress non-error stderr breadcrumbs (progress spinner, watch
+    /// banner, and per-tick `[burn] ingest: …` summaries). Useful for
+    /// hook callers so the surrounding tool invocation isn't blocked by
+    /// a noisy pipeline, and for automation/cron drivers of `--watch` /
+    /// one-shot mode. One-shot mode still writes its final summary line
+    /// to stdout so pipelines can capture it.
+    #[arg(long)]
     pub quiet: bool,
 
     /// Force the polling driver in `--watch` mode instead of the
