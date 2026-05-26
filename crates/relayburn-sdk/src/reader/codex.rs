@@ -1721,5 +1721,12 @@ fn clone_resume(r: Option<&CodexResumeState>) -> CodexResumeState {
     }
 }
 
+// Per-turn span tree builder. Pure projection over `TurnRecord` +
+// paired `tool_result_event` rows. Codex has strictly less hierarchy
+// to project than Claude (no requestId, no subagent sidecars); see
+// AgentWorkforce/burn#430 and the module's own doc comment for the
+// scope discussion.
+pub mod span_tree;
+
 #[cfg(test)]
 mod tests;

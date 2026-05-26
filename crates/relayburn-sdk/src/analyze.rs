@@ -30,6 +30,7 @@ pub mod provider;
 pub mod provider_reattribution;
 pub mod quality;
 pub mod replacement_savings;
+pub mod span_tree;
 pub mod subagent_tree;
 pub mod tool_call_patterns;
 pub mod tool_output_bloat;
@@ -76,6 +77,7 @@ pub use quality::{
 pub use replacement_savings::{
     summarize_replacement_savings, ReplacementSavingsSummary, ToolSavingsAggregate,
 };
+pub use span_tree::{AttrValue, SpanEvent, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
 pub use subagent_tree::{
     aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions, SubagentTreeNode,
     SubagentTypeStats,

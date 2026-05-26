@@ -6,6 +6,17 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Added
 
+- `relayburn-sdk`: per-turn span tree as derived analytical primitive.
+  New `LedgerHandle::turn_span_tree(session_id, turn_id)` and
+  `session_span_trees(session_id)` verbs project `TurnRecord` +
+  `tool_result_event` rows + Claude subagent sidecars into an
+  OTel-style `TurnSpanTree { Turn -> { UserPrompt, Inference -> ToolUse ->
+  { ToolResult, Subagent } } }`. Pure projection — no schema change,
+  no caching. Orphan subagents surface as sibling `Subagent` spans
+  with `unattached=true`. Locked attribute keys (`tokens.*`, `model`,
+  `request_id`, `tool_use_id`, `agent_id`, `stop_reason`) for
+  downstream consumers (inference-flow DAG, context-delta attribution).
+  (#430)
 - `relayburn-sdk`: `ingest_claude_transcript_path(ledger, path, opts)` —
   per-transcript Claude fast-path used by `burn ingest --hook claude` so
   the hook ingests only the one JSONL the payload points at instead of a
