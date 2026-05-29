@@ -151,8 +151,13 @@ fn update_toggle_auto_update_json_writes_state_without_network() {
     let state_path = home.path().join("update.json");
     let state = std::fs::read_to_string(&state_path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", state_path.display()));
-    assert!(
-        state.contains("\"auto_update\": false"),
+    // Parse rather than substring-match so the assertion survives a switch
+    // between pretty and compact serde output.
+    let persisted: serde_json::Value =
+        serde_json::from_str(&state).expect("update.json is valid JSON");
+    assert_eq!(
+        persisted["auto_update"],
+        serde_json::Value::Bool(false),
         "expected persisted auto_update=false, got:\n{state}",
     );
 }

@@ -4,7 +4,7 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
-- Set `RELAYBURN_INSTALL_CHANNEL=npm` when launching the binary so `burn update` upgrades via `npm install -g relayburn@latest` instead of guessing the install channel.
+- `burn update` now upgrades npm installs through `npm install -g relayburn@latest`: the launcher tags the install channel so the binary picks the right package manager.
 
 ## [2.4.0] - 2026-05-08
 

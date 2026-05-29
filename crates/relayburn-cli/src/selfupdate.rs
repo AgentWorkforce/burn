@@ -188,7 +188,16 @@ pub fn detect_channel() -> Channel {
         }
     }
     match std::env::current_exe() {
-        Ok(exe) => channel_from_path(&exe.to_string_lossy()),
+        Ok(exe) => {
+            // A custom `$CARGO_HOME` relocates cargo-installed binaries out
+            // of `~/.cargo/bin`, which the path heuristic below would miss.
+            if let Ok(cargo_home) = std::env::var("CARGO_HOME") {
+                if !cargo_home.is_empty() && exe.starts_with(&cargo_home) {
+                    return Channel::Cargo;
+                }
+            }
+            channel_from_path(&exe.to_string_lossy())
+        }
         Err(_) => Channel::Unknown,
     }
 }
@@ -291,10 +300,13 @@ pub fn maybe_offer_update(globals: &GlobalArgs) {
     if std::env::var_os(SKIP_ENV).is_some() {
         return;
     }
-    // No prompts in machine-readable mode or when not attached to a
-    // terminal we can both read from and draw on.
+    // No prompts in machine-readable mode or when any of our standard
+    // streams isn't a terminal: a piped stdout (`burn summary | cat`) means
+    // the user isn't watching an interactive session, so we must not block
+    // on a prompt.
     if globals.json
         || !io::stdin().is_terminal()
+        || !io::stdout().is_terminal()
         || !io::stderr().is_terminal()
         || ux::term_is_dumb()
     {
@@ -375,7 +387,11 @@ pub fn maybe_offer_update(globals: &GlobalArgs) {
 /// any state change. Returns `None` when nothing usable is known.
 fn resolve_latest(channel: Channel, home: &Path, state: &mut UpdateState) -> Option<Version> {
     let now = now_unix();
-    if now - state.last_check < CHECK_INTERVAL_SECS {
+    // Clock skew or a hand-edited `last_check` in the future would
+    // otherwise suppress probes until wall-clock time caught up; treat a
+    // future stamp as "due now".
+    let within_window = state.last_check <= now && now - state.last_check < CHECK_INTERVAL_SECS;
+    if within_window {
         return state
             .latest_known
             .as_deref()
@@ -399,11 +415,10 @@ fn resolve_latest(channel: Channel, home: &Path, state: &mut UpdateState) -> Opt
 
 /// Re-launch the (now updated) binary with the original arguments,
 /// replacing the current process on Unix. Only returns on failure.
-fn reexec() -> io::Error {
-    let exe = match std::env::current_exe() {
-        Ok(e) => e,
-        Err(e) => return e,
-    };
+///
+/// `exe` must be resolved *before* the installer runs — see
+/// [`maybe_offer_update`] for why.
+fn reexec(exe: PathBuf) -> io::Error {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     #[cfg(unix)]

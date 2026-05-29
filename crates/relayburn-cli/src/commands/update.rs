@@ -47,6 +47,14 @@ fn run_update(globals: &GlobalArgs, check_only: bool, force: bool) -> i32 {
     let channel = selfupdate::detect_channel();
     let current = selfupdate::current_version();
 
+    // Without a known install channel we can neither pick a registry to
+    // query nor an installer to run, so bail before the network probe with
+    // the manual commands rather than a cryptic request error. Covers both
+    // `--check` and the install path.
+    if channel == Channel::Unknown {
+        return report_error(&unknown_channel_error(), globals);
+    }
+
     let latest = match selfupdate::fetch_latest(channel, MANUAL_TIMEOUT) {
         Ok(v) => v,
         Err(err) => return report_error(&err, globals),
@@ -83,16 +91,6 @@ fn run_update(globals: &GlobalArgs, check_only: bool, force: bool) -> i32 {
     if !available && !force {
         ux::print_success(&format!("burn is already up to date ({current})."), globals);
         return 0;
-    }
-
-    if channel == Channel::Unknown {
-        return report_error(
-            &anyhow::anyhow!(
-                "can't tell how `burn` was installed; upgrade manually with \
-                 `npm install -g relayburn@latest` or `cargo install relayburn-cli --force`"
-            ),
-            globals,
-        );
     }
 
     match selfupdate::perform_install(globals, channel) {
@@ -138,6 +136,15 @@ fn run_toggle(globals: &GlobalArgs, toggle: ToggleAutoUpdateArgs) -> i32 {
         );
     }
     0
+}
+
+/// Shared "we don't know how this was installed" guidance for the
+/// `Channel::Unknown` path.
+fn unknown_channel_error() -> anyhow::Error {
+    anyhow::anyhow!(
+        "can't tell how `burn` was installed; upgrade manually with \
+         `npm install -g relayburn@latest` or `cargo install relayburn-cli --force`"
+    )
 }
 
 fn print_json(value: &serde_json::Value) -> std::io::Result<()> {
