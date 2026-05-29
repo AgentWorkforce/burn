@@ -34,6 +34,7 @@ const SUBCOMMANDS: &[&str] = &[
     "flow",
     "ingest",
     "mcp-server",
+    "update",
 ];
 
 /// Subcommands that still print "not yet implemented" when invoked
@@ -106,6 +107,79 @@ fn overhead_trim_help_exits_zero_with_non_empty_stdout() {
         !stdout.is_empty(),
         "`overhead trim --help` should emit non-empty stdout; got empty",
     );
+}
+
+#[test]
+fn update_toggle_auto_update_help_exits_zero_with_non_empty_stdout() {
+    let output = burn()
+        .args(["update", "toggle-auto-update", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).expect("help should be valid UTF-8");
+    assert!(
+        !stdout.is_empty(),
+        "`update toggle-auto-update --help` should emit non-empty stdout; got empty",
+    );
+}
+
+#[test]
+fn update_toggle_auto_update_json_writes_state_without_network() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+
+    let output = burn()
+        .args([
+            "--json",
+            "--ledger-path",
+            home.path().to_str().expect("tmp path is utf-8"),
+            "update",
+            "toggle-auto-update",
+            "--off",
+        ])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("--json output is valid JSON");
+    assert_eq!(value["autoUpdate"], serde_json::Value::Bool(false));
+
+    let state_path = home.path().join("update.json");
+    let state = std::fs::read_to_string(&state_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", state_path.display()));
+    // Parse rather than substring-match so the assertion survives a switch
+    // between pretty and compact serde output.
+    let persisted: serde_json::Value =
+        serde_json::from_str(&state).expect("update.json is valid JSON");
+    assert_eq!(
+        persisted["auto_update"],
+        serde_json::Value::Bool(false),
+        "expected persisted auto_update=false, got:\n{state}",
+    );
+}
+
+#[test]
+fn update_parent_flags_do_not_apply_to_toggle_subcommand() {
+    burn()
+        .args(["--json", "update", "--check", "toggle-auto-update"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "cannot be combined with a subcommand",
+        ));
+}
+
+#[test]
+fn update_check_and_force_are_mutually_exclusive() {
+    burn()
+        .args(["update", "--check", "--force"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
 }
 
 #[test]

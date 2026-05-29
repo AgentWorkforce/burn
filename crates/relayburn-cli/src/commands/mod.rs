@@ -28,3 +28,4 @@ pub mod sessions;
 pub mod stamps;
 pub mod state;
 pub mod summary;
+pub mod update;

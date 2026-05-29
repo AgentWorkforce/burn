@@ -120,6 +120,50 @@ pub enum Command {
     /// in-session self-query.
     #[command(name = "mcp-server")]
     McpServer(McpServerArgs),
+
+    /// Check for, install, or configure `burn` self-updates.
+    Update(UpdateArgs),
+}
+
+/// Per-command flags for `burn update`.
+///
+/// Bare `burn update` upgrades to the latest published release through
+/// whichever package manager installed the binary (npm or cargo). The
+/// `toggle-auto-update` subcommand flips the on-launch update check that
+/// every other command runs.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct UpdateArgs {
+    /// Report whether a newer release exists, but install nothing.
+    #[arg(long, conflicts_with = "force")]
+    pub check: bool,
+
+    /// Reinstall the latest release even if already up to date.
+    #[arg(long)]
+    pub force: bool,
+
+    #[command(subcommand)]
+    pub action: Option<UpdateAction>,
+}
+
+/// Nested subcommand for `burn update`.
+#[derive(Debug, Clone, Subcommand)]
+pub enum UpdateAction {
+    /// Turn the on-launch update check on or off (bare form flips it).
+    #[command(name = "toggle-auto-update")]
+    ToggleAutoUpdate(ToggleAutoUpdateArgs),
+}
+
+/// `burn update toggle-auto-update` flags. With neither `--on` nor
+/// `--off`, the current setting is flipped.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct ToggleAutoUpdateArgs {
+    /// Force the on-launch check on.
+    #[arg(long, conflicts_with = "off")]
+    pub on: bool,
+
+    /// Force the on-launch check off.
+    #[arg(long)]
+    pub off: bool,
 }
 
 /// Per-command flags for `burn ingest`. Mirrors the TS surface in

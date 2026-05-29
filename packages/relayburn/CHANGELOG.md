@@ -4,6 +4,8 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+- `burn update` now upgrades npm installs through `npm install -g relayburn@latest`: the launcher tags the install channel so the binary picks the right package manager.
+
 ## [2.4.0] - 2026-05-08
 
 ### Removed
