@@ -134,7 +134,7 @@ pub enum Command {
 #[derive(Debug, Clone, ClapArgs)]
 pub struct UpdateArgs {
     /// Report whether a newer release exists, but install nothing.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "force")]
     pub check: bool,
 
     /// Reinstall the latest release even if already up to date.

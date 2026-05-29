@@ -24,9 +24,22 @@ use crate::selfupdate::{self, Channel, UpdateState};
 const MANUAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn run(globals: &GlobalArgs, args: UpdateArgs) -> i32 {
-    match args.action {
+    let UpdateArgs {
+        check,
+        force,
+        action,
+    } = args;
+
+    match action {
+        Some(_) if check || force => report_error(
+            &anyhow::anyhow!(
+                "`burn update --check` and `burn update --force` cannot be combined \
+                 with a subcommand"
+            ),
+            globals,
+        ),
         Some(UpdateAction::ToggleAutoUpdate(toggle)) => run_toggle(globals, toggle),
-        None => run_update(globals, args.check, args.force),
+        None => run_update(globals, check, force),
     }
 }
 

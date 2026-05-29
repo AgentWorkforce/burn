@@ -322,8 +322,9 @@ pub fn maybe_offer_update(globals: &GlobalArgs) {
     if latest <= current {
         return;
     }
+    let latest_label = latest.to_string();
     // Already said no to exactly this version — wait for the next release.
-    if state.declined_version.as_deref() == Some(latest.to_string().as_str()) {
+    if state.declined_version.as_deref() == Some(latest_label.as_str()) {
         return;
     }
 
@@ -332,7 +333,7 @@ pub fn maybe_offer_update(globals: &GlobalArgs) {
     match prompt::confirm(globals, &question, true) {
         Ok(true) => {}
         Ok(false) => {
-            state.declined_version = Some(latest.to_string());
+            state.declined_version = Some(latest_label.clone());
             let _ = state.save(&home);
             ux::print_info(
                 "Staying on the current version. I'll ask again on the next release — or run `burn update` anytime.",
@@ -347,7 +348,7 @@ pub fn maybe_offer_update(globals: &GlobalArgs) {
 
     match perform_install(globals, channel) {
         Ok(()) => {
-            state.latest_known = Some(latest.to_string());
+            state.latest_known = Some(latest_label);
             state.declined_version = None;
             let _ = state.save(&home);
             ux::print_success(&format!("Updated to burn {latest}. Restarting…"), globals);
