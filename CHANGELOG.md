@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-05-29
+
 ### Added
 
 - `burn update`: upgrade to the latest release through whichever package manager installed the binary (npm or cargo); `--check` reports availability without installing.
