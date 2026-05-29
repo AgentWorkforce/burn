@@ -168,7 +168,9 @@ fn update_parent_flags_do_not_apply_to_toggle_subcommand() {
         .args(["--json", "update", "--check", "toggle-auto-update"])
         .assert()
         .code(2)
-        .stdout(predicate::str::contains("cannot be combined with a subcommand"));
+        .stdout(predicate::str::contains(
+            "cannot be combined with a subcommand",
+        ));
 }
 
 #[test]
