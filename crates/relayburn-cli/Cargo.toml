@@ -95,6 +95,19 @@ tokio = { workspace = true, features = ["sync", "rt", "signal"] }
 # `Map`-backed implementation does. Mirrors the SDK's own dependency.
 indexmap = { version = "2", features = ["serde"] }
 
+# `ureq` is the blocking HTTP client behind `burn update` / the on-launch
+# update check (`src/selfupdate.rs`). Picked over `reqwest` because the
+# self-update path is sync and one-shot — a tiny GET against the npm /
+# crates.io registry — so the async runtime + heavier dep tree reqwest
+# pulls in would be pure overhead. Default features bring rustls so we
+# don't take a system-OpenSSL build dependency in the CI release matrix.
+ureq = { version = "2", features = ["json"] }
+
+# Semver comparison for the update check: parse `CARGO_PKG_VERSION` and the
+# registry's reported latest, then compare. Already in the lockfile as a
+# transitive dep, so declaring it direct adds no new build cost.
+semver = "1"
+
 [dev-dependencies]
 # `assert_cmd` drives the binary in the smoke test under `tests/`.
 # `predicates` provides the matchers `assert_cmd` wants.

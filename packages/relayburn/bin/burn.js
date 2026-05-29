@@ -105,6 +105,10 @@ if (!command) {
 const child = spawnSync(command, passthroughArgs, {
   stdio: 'inherit',
   windowsHide: false,
+  // Tell the binary it was installed via npm so `burn update` / the
+  // on-launch update check drive `npm install -g relayburn@latest`
+  // rather than guessing from the executable path.
+  env: { ...process.env, RELAYBURN_INSTALL_CHANNEL: 'npm' },
 });
 
 if (child.error) {

@@ -4,6 +4,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Added
+
+- `burn update`: upgrade to the latest release through whichever package manager installed the binary (npm or cargo); `--check` reports availability without installing.
+- On-launch update check: interactive `burn` invocations offer to install a newer release and restart, throttled to one network probe per 24h and suppressed once a version is declined.
+- `burn update toggle-auto-update [--on|--off]`: enable or disable the on-launch update check (state stored in `$RELAYBURN_HOME/update.json`).
+
 ## [3.0.0] - 2026-05-26
 
 ### Added

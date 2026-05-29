@@ -13,6 +13,7 @@
 mod cli;
 mod commands;
 mod render;
+mod selfupdate;
 
 use clap::Parser;
 
@@ -37,6 +38,15 @@ fn dispatch(args: Args) -> i32 {
         no_color = globals.no_color,
         "dispatching command"
     );
+    // On-launch self-update offer. Skipped for `update` itself (it owns
+    // the upgrade flow) and `mcp-server` (a stdio protocol channel that a
+    // prompt would corrupt). The check is otherwise best-effort and
+    // silently no-ops in non-interactive / `--json` / disabled cases — see
+    // `selfupdate::maybe_offer_update`. On accept it installs and re-execs,
+    // so it may not return.
+    if offer_update_for(&args.command) {
+        selfupdate::maybe_offer_update(&globals);
+    }
     match args.command {
         Command::Summary(sub) => commands::summary::run(&globals, sub),
         Command::Hotspots(sub) => commands::hotspots::run(&globals, sub),
@@ -48,7 +58,15 @@ fn dispatch(args: Args) -> i32 {
         Command::Stamps(args) => commands::stamps::run(&globals, args),
         Command::Ingest(args) => commands::ingest::run(&globals, args),
         Command::McpServer(args) => commands::mcp_server::run(&globals, args),
+        Command::Update(args) => commands::update::run(&globals, args),
     }
+}
+
+/// Whether the on-launch update check should run for this command. The
+/// `update` command drives upgrades itself, and `mcp-server` speaks a
+/// machine protocol on stdio where an interactive prompt has no place.
+fn offer_update_for(command: &Command) -> bool {
+    !matches!(command, Command::Update(_) | Command::McpServer(_))
 }
 
 fn command_name(command: &Command) -> &'static str {
@@ -63,5 +81,6 @@ fn command_name(command: &Command) -> &'static str {
         Command::Stamps(_) => "stamps",
         Command::Ingest(_) => "ingest",
         Command::McpServer(_) => "mcp-server",
+        Command::Update(_) => "update",
     }
 }
