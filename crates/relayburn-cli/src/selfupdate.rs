@@ -358,15 +358,25 @@ pub fn maybe_offer_update(globals: &GlobalArgs) {
         Err(_) => return,
     }
 
+    // Resolve our own path BEFORE the installer runs. npm/cargo replace the
+    // binary by unlinking + rewriting at the same path; afterwards Linux can
+    // resolve `current_exe()` to the now-deleted inode (a `…/burn (deleted)`
+    // path), which would make the restart fail even though the new binary is
+    // sitting right there.
+    let exe = std::env::current_exe();
+
     match perform_install(globals, channel) {
         Ok(()) => {
             state.latest_known = Some(latest_label);
             state.declined_version = None;
             let _ = state.save(&home);
             ux::print_success(&format!("Updated to burn {latest}. Restarting…"), globals);
-            // On success this replaces the process and never returns; if
-            // it does return, the re-exec failed and we fall through.
-            let err = reexec();
+            // On success the re-exec replaces the process and never returns;
+            // if it does return, the restart failed and we fall through.
+            let err = match exe {
+                Ok(exe) => reexec(exe),
+                Err(e) => e,
+            };
             ux::print_warning(
                 &format!(
                     "Couldn't restart automatically ({err}). Re-run your command to use {latest}."
