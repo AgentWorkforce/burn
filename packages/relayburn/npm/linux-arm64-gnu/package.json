@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/cli-linux-arm64-gnu",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "Prebuilt `burn` binary for linux-arm64-gnu (glibc).",
   "bin": {
     "burn": "./bin/burn"
