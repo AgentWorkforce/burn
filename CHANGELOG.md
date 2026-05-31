@@ -4,6 +4,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- Pricing: added `claude-opus-4-8` to the vendored models.dev snapshot ($5/$25 per Mtok input/output, $0.5 cache-read, $6.25 cache-write, 1M context) so cost reporting recognizes Claude Opus 4.8.
+
 ## [3.1.0] - 2026-05-29
 
 ### Added
