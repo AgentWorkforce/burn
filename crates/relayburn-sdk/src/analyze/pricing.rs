@@ -174,6 +174,11 @@ mod tests {
     #[test]
     fn builtin_snapshot_parses_and_has_anthropic_models() {
         let table = load_builtin_pricing();
+        let opus_4_8 = table.get("claude-opus-4-8").expect("opus-4-8 present");
+        assert_eq!(opus_4_8.input, 5.0);
+        assert_eq!(opus_4_8.output, 25.0);
+        assert_eq!(opus_4_8.cache_read, 0.5);
+        assert_eq!(opus_4_8.cache_write, 6.25);
         assert!(table.contains_key("claude-opus-4-7"), "opus-4-7 present");
         assert!(
             table.contains_key("claude-sonnet-4-6"),
