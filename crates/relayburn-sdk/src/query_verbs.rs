@@ -2977,6 +2977,29 @@ pub enum HotspotsGroupBy {
     BashVerb,
     File,
     Subagent,
+    Findings,
+}
+
+const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
+    "retry-loop",
+    "failure-run",
+    "cancellation-run",
+    "compaction-loss",
+    "edit-revert",
+    "edit-heavy",
+    "skill-recall-dup",
+    "skill-pruning-protection",
+    "system-prompt-tax",
+    "ghost-surface",
+    "tool-output-bloat",
+    "tool-call-pattern",
+];
+
+fn default_hotspots_finding_kinds() -> Vec<String> {
+    DEFAULT_HOTSPOTS_FINDING_KINDS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -3151,6 +3174,13 @@ impl LedgerHandle {
         }
         let pricing = load_pricing(None);
 
+        if matches!(opts.group_by, Some(HotspotsGroupBy::Findings)) {
+            let patterns = match opts.patterns {
+                Some(patterns) if !patterns.is_empty() => patterns,
+                _ => default_hotspots_finding_kinds(),
+            };
+            return run_hotspots_findings(self, &turns, &pricing, patterns, &q);
+        }
         if using_patterns {
             return run_hotspots_findings(
                 self,
@@ -3267,6 +3297,7 @@ fn run_hotspots_attribution(
                 refusal_reason: None,
             });
         }
+        HotspotsGroupBy::Findings => unreachable!("findings is handled before attribution"),
         HotspotsGroupBy::Attribution => {}
     }
 
@@ -3372,6 +3403,10 @@ fn refused_for_group(
             rows: Vec::new(),
             refused: Some(true),
             refusal_reason: Some(refusal),
+        },
+        HotspotsGroupBy::Findings => HotspotsResult::Findings {
+            findings: Vec::new(),
+            summary: summary_value,
         },
         HotspotsGroupBy::Attribution => {
             HotspotsResult::Attribution(Box::new(HotspotsAttributionResult {
@@ -5548,6 +5583,43 @@ mod tests {
             HotspotsResult::Findings { findings, summary } => {
                 // No retries in fixture, so findings is empty — but the
                 // kind:findings shape and summary block should still ship.
+                assert!(findings.is_empty());
+                assert!(summary.is_object());
+            }
+            other => panic!("expected findings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hotspots_group_by_findings_returns_findings_kind() {
+        let (_dir, handle) = fixture_handle();
+        let r = handle
+            .hotspots(HotspotsOptions {
+                group_by: Some(HotspotsGroupBy::Findings),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match r {
+            HotspotsResult::Findings { findings, summary } => {
+                assert!(findings.iter().all(|f| !f.kind.is_empty()));
+                assert!(summary.is_object());
+            }
+            other => panic!("expected findings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hotspots_group_by_findings_honors_patterns_filter() {
+        let (_dir, handle) = fixture_handle();
+        let r = handle
+            .hotspots(HotspotsOptions {
+                group_by: Some(HotspotsGroupBy::Findings),
+                patterns: Some(vec!["retry-loop".into()]),
+                ..HotspotsOptions::default()
+            })
+            .unwrap();
+        match r {
+            HotspotsResult::Findings { findings, summary } => {
                 assert!(findings.is_empty());
                 assert!(summary.is_object());
             }

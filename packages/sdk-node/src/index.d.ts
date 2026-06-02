@@ -249,7 +249,13 @@ export interface OverheadTrimResult {
 /** Trim recommendations for high-cost overhead-file sections. Powers `burn overhead trim`. */
 export declare function overheadTrim(opts?: OverheadTrimOptions): Promise<OverheadTrimResult>
 
-export type HotspotsGroupBy = 'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent';
+export type HotspotsGroupBy =
+  | 'attribution'
+  | 'bash'
+  | 'bash-verb'
+  | 'file'
+  | 'subagent'
+  | 'findings';
 
 export interface HotspotsOptions {
   session?: string;
@@ -525,4 +531,5 @@ export declare const HotspotsGroupBy: {
   readonly BashVerb: 'bash-verb';
   readonly File: 'file';
   readonly Subagent: 'subagent';
+  readonly Findings: 'findings';
 };

@@ -990,8 +990,8 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
 
 /// Mirror of `sdk::HotspotsGroupBy`. Wire values match
 /// The Node facade's
-/// `'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent'` literal
-/// union.
+/// `'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent' |
+/// 'findings'` literal union.
 #[napi(string_enum = "kebab-case")]
 pub enum HotspotsGroupBy {
     Attribution,
@@ -999,6 +999,7 @@ pub enum HotspotsGroupBy {
     BashVerb,
     File,
     Subagent,
+    Findings,
 }
 
 impl From<HotspotsGroupBy> for sdk::HotspotsGroupBy {
@@ -1009,6 +1010,7 @@ impl From<HotspotsGroupBy> for sdk::HotspotsGroupBy {
             HotspotsGroupBy::BashVerb => sdk::HotspotsGroupBy::BashVerb,
             HotspotsGroupBy::File => sdk::HotspotsGroupBy::File,
             HotspotsGroupBy::Subagent => sdk::HotspotsGroupBy::Subagent,
+            HotspotsGroupBy::Findings => sdk::HotspotsGroupBy::Findings,
         }
     }
 }

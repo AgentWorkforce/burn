@@ -121,6 +121,14 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
     const hotspots = await sdk.hotspots({ ledgerHome });
     assert.equal(typeof hotspots.kind, 'string');
 
+    assert.equal(sdk.HotspotsGroupBy.Findings, 'findings');
+    const hotspotFindings = await sdk.hotspots({
+      ledgerHome,
+      groupBy: sdk.HotspotsGroupBy.Findings,
+    });
+    assert.equal(hotspotFindings.kind, 'findings');
+    assert.ok(Array.isArray(hotspotFindings.findings));
+
     const compare = await sdk.compare({
       ledgerHome,
       models: ['claude-sonnet-4-5', 'claude-opus-4-7'],
