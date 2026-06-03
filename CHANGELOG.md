@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-06-03
+
 ### Fixed
 
 - `@relayburn/sdk` `hotspots({ groupBy: "findings" })` now returns the exported findings result instead of rejecting the option.
