@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `hotspots({ groupBy: "findings" })` now returns the exported findings result instead of rejecting the option.
+
 ## [3.1.2] - 2026-06-03
 
 ### Changed
