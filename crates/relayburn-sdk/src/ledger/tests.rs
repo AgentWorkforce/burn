@@ -798,12 +798,28 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    // Current `SCHEMA_VERSION` is 5 (chained #437 v2 + #436 v3 + #435
-    // v4 + #434 v5); the migration must walk every step in one open()
-    // call.
+    // Current `SCHEMA_VERSION` is 6 (chained #437 v2 + #436 v3 + #435
+    // v4 + #434 v5 + #468 v6); the migration must walk every step in one
+    // open() call.
     assert_eq!(
-        version, 5,
+        version, 6,
         "open must bump v1 forward to the current schema version"
+    );
+
+    // v5 → v6 must have added the `source_fingerprint` column to the
+    // legacy archive_state table (which predated it).
+    let archive_cols: Vec<String> = l
+        .conns
+        .burn
+        .prepare("PRAGMA table_info(archive_state)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert!(
+        archive_cols.iter().any(|c| c == "source_fingerprint"),
+        "v6 migration must add archive_state.source_fingerprint"
     );
 
     let column_names: Vec<String> = l

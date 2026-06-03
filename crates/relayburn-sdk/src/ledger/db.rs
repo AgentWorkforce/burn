@@ -220,6 +220,27 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current_version < 6 {
+        // v5 → v6: add `archive_state.source_fingerprint` so `ingest_all`
+        // can short-circuit a no-op sweep. Same duplicate-column-only
+        // swallow pattern as the earlier steps; legacy rows default to ''
+        // which never matches a live fingerprint, so the first post-upgrade
+        // ingest walks normally and records the column. See #468.
+        match conn.execute(
+            "ALTER TABLE archive_state ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''",
+            [],
+        ) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") => {}
+            Err(e) => return Err(e.into()),
+        }
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 6 WHERE id = 1",
+            [],
+        )?;
+    }
+
     // The `idx_turns_stop_reason` index is created here rather than in
     // the static DDL so a legacy v1 table (no `stop_reason` column yet)
     // doesn't fail the DDL pre-pass. By this point the column either

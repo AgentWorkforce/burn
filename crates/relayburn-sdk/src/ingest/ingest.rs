@@ -183,10 +183,88 @@ fn resolve_content_mode(ledger_home: Option<&Path>) -> ContentStoreMode {
         .unwrap_or(ContentStoreMode::Full)
 }
 
+/// Cheap aggregate over the source session files `ingest_all` scans:
+/// `"count:totalBytes:mtimeSum"`. Any file added, removed, appended,
+/// truncated, or touched changes at least one component, so an unchanged
+/// fingerprint means there is nothing new to ingest.
+///
+/// Computed from `fs::metadata` only — no cursor deserialization and no
+/// parse — so it is far cheaper than a full sweep while still detecting
+/// in-place appends to existing JSONL files (which directory mtimes miss).
+/// For OpenCode it folds in each session's message-dir mtime, the same
+/// signal [`ingest_opencode_into`] watches for new message files.
+///
+/// `mtime_sum` is a wrapping `i128` accumulation: order-independent and
+/// sensitive to any single file's mtime moving in either direction, so a
+/// clock going backwards still registers as a change.
+fn source_fingerprint(roots: &IngestRoots) -> String {
+    let mut count: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut mtime_sum: i128 = 0;
+
+    // Claude: ~/.claude/projects/<project>/<session>.jsonl
+    let projects_root = claude_projects_dir(roots);
+    for project_dir in list_dirs(&projects_root) {
+        for file in list_jsonl_files(&project_dir) {
+            if let Ok(meta) = fs::metadata(&file) {
+                count += 1;
+                total_bytes = total_bytes.wrapping_add(meta.len());
+                mtime_sum = mtime_sum.wrapping_add(mtime_ms(&meta) as i128);
+            }
+        }
+    }
+
+    // Codex: ~/.codex/sessions/**/*.jsonl
+    for file in walk_jsonl(codex_sessions_dir(roots)) {
+        if let Ok(meta) = fs::metadata(&file) {
+            count += 1;
+            total_bytes = total_bytes.wrapping_add(meta.len());
+            mtime_sum = mtime_sum.wrapping_add(mtime_ms(&meta) as i128);
+        }
+    }
+
+    // OpenCode: ses_*.json plus the per-session message-dir mtime, which is
+    // what the adapter watches for new message files (appends land as new
+    // files in that dir, not as growth of the session json).
+    let message_root = opencode_message_root(roots);
+    for file in walk_opencode_sessions(opencode_session_root(roots)) {
+        if let Ok(meta) = fs::metadata(&file) {
+            count += 1;
+            total_bytes = total_bytes.wrapping_add(meta.len());
+            mtime_sum = mtime_sum.wrapping_add(mtime_ms(&meta) as i128);
+        }
+        if let Some(session_id) = file.file_stem().and_then(|s| s.to_str()) {
+            if let Some(t) = dir_mtime(&message_root.join(session_id)) {
+                mtime_sum = mtime_sum.wrapping_add(t as i128);
+            }
+        }
+    }
+
+    format!("{count}:{total_bytes}:{mtime_sum}")
+}
+
 /// Ingest every known session store once. Cleans stale pending stamps,
 /// loads cursors, walks Claude/Codex/OpenCode in turn, then persists any
 /// cursor mutations. Returns the merged report.
+///
+/// Fast path: a stat-only [`source_fingerprint`] is compared against the
+/// value the last sweep recorded. When they match, nothing upstream has
+/// moved and the call returns an empty report without loading cursors or
+/// touching any session file beyond the fingerprint walk. See #468.
 pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<IngestReport> {
+    progress(opts, "checking for source changes");
+    let current_fp = source_fingerprint(&opts.roots);
+    match ledger.read_source_fingerprint() {
+        Ok(stored) if !stored.is_empty() && stored == current_fp => {
+            // Nothing upstream changed since the last sweep — skip the
+            // cursor load + per-file deserialize entirely.
+            return Ok(IngestReport::empty());
+        }
+        Ok(_) => {}
+        // A read failure shouldn't wedge ingest; fall through to a full sweep.
+        Err(_) => {}
+    }
+
     progress(opts, "cleaning pending spawn stamps");
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     progress(opts, "loading ingest cursors");
@@ -236,6 +314,14 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
 
     progress(opts, "saving ingest cursors");
     save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
+    // Record the source fingerprint captured at the start of this sweep so
+    // the next call can short-circuit. Storing the *start* value is
+    // conservative: any file that changed mid-sweep yields a different
+    // fingerprint next time, forcing a re-scan (cheap, since per-file
+    // cursors then skip the already-read bytes).
+    ledger
+        .write_source_fingerprint(&current_fp)
+        .map_err(|e| anyhow::anyhow!(e))?;
     Ok(report)
 }
 
@@ -1194,5 +1280,34 @@ mod tests {
         assert_eq!(claude_projects_dir(&roots), PathBuf::from("/x/claude"));
         assert_eq!(codex_sessions_dir(&roots), PathBuf::from("/x/codex"));
         assert_eq!(opencode_storage_dir(&roots), PathBuf::from("/x/oc"));
+    }
+
+    #[test]
+    fn source_fingerprint_is_stable_and_moves_on_change() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let roots = IngestRoots {
+            claude_projects_dir: Some(tmp.path().join("claude")),
+            codex_sessions_dir: Some(tmp.path().join("codex")),
+            opencode_storage_dir: Some(tmp.path().join("opencode")),
+        };
+        // Empty roots: well-formed, stable, and identical across calls.
+        let empty = source_fingerprint(&roots);
+        assert_eq!(empty, source_fingerprint(&roots));
+        assert_eq!(empty, "0:0:0");
+
+        let project = roots.claude_projects_dir.as_ref().unwrap().join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let file = project.join("s1.jsonl");
+        fs::write(&file, "a\n").unwrap();
+        let with_file = source_fingerprint(&roots);
+        assert_ne!(with_file, empty, "adding a file must move the fingerprint");
+
+        // Growing the file (size + mtime) must move it again.
+        fs::write(&file, "a\nbb\n").unwrap();
+        let appended = source_fingerprint(&roots);
+        assert_ne!(
+            appended, with_file,
+            "appending bytes must move the fingerprint"
+        );
     }
 }

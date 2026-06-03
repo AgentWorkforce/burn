@@ -479,7 +479,148 @@ fn ingest_claude_transcript_path_missing_file_is_empty_report() {
     assert_eq!(r.appended_turns, 0);
 }
 
+/// No-op fast path (#468): once a sweep records the source fingerprint, a
+/// follow-up `ingest_all` with no upstream change must short-circuit before
+/// it walks any session file. The earlier EOF-cursor test proves
+/// `appended_turns == 0`; this one proves the stronger property that the
+/// loops never ran at all (`scanned_sessions == 0`).
+#[test]
+fn ingest_all_short_circuits_when_source_unchanged() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    let session_file = project_dir.join(format!("{sid}.jsonl"));
+    fs::write(&session_file, claude_minimal_session(sid)).unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    let r1 = ingest_all(&mut ledger, &opts).unwrap();
+    assert!(r1.scanned_sessions >= 1, "first sweep should walk the file");
+    assert!(
+        r1.appended_turns >= 1,
+        "first sweep should ingest the turns"
+    );
+
+    // Nothing on disk moved — the second sweep must take the fast path.
+    let r2 = ingest_all(&mut ledger, &opts).unwrap();
+    assert_eq!(
+        r2.scanned_sessions, 0,
+        "unchanged source should short-circuit before walking any file"
+    );
+    assert_eq!(r2.appended_turns, 0);
+}
+
+/// The fast path must not mask new data: appending to an existing session
+/// file changes its size + mtime, so the source fingerprint differs and the
+/// next `ingest_all` re-walks and picks up the new turns.
+#[test]
+fn ingest_all_rescans_after_source_file_appended() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+
+    let sid_a = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    let file_a = project_dir.join(format!("{sid_a}.jsonl"));
+    fs::write(&file_a, claude_minimal_session(sid_a)).unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    let r1 = ingest_all(&mut ledger, &opts).unwrap();
+    assert!(r1.appended_turns >= 1);
+
+    // Confirm the gate is armed: an unchanged re-sweep short-circuits.
+    assert_eq!(ingest_all(&mut ledger, &opts).unwrap().scanned_sessions, 0);
+
+    // Drop a brand-new session file — the fingerprint's file count + byte
+    // total + mtime sum all move, so the gate must reopen. Give it a
+    // distinct timestamp/token shape so layer-2 content dedup doesn't
+    // collapse it onto session A's structurally-identical turn.
+    let sid_b = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    let file_b = project_dir.join(format!("{sid_b}.jsonl"));
+    fs::write(&file_b, claude_distinct_session(sid_b)).unwrap();
+
+    let r3 = ingest_all(&mut ledger, &opts).unwrap();
+    assert!(
+        r3.scanned_sessions >= 1,
+        "a new source file must defeat the fast path"
+    );
+    assert!(
+        r3.appended_turns >= 1,
+        "the new session's turns must be ingested"
+    );
+    let turns_b = ledger.query_turns(&Query::for_session(sid_b)).unwrap();
+    assert!(!turns_b.is_empty(), "new session should be queryable");
+}
+
 // --- helpers -------------------------------------------------------------
+
+/// Like [`claude_minimal_session`] but with a distinct timestamp, message
+/// id, and token shape so its layer-2 content fingerprint differs from the
+/// minimal fixture — lets a test ingest two sessions without one being
+/// deduped onto the other.
+fn claude_distinct_session(session_id: &str) -> String {
+    let user = serde_json::json!({
+        "parentUuid": null,
+        "isSidechain": false,
+        "type": "user",
+        "message": {"role": "user", "content": "hello again"},
+        "uuid": "u-user-2",
+        "timestamp": "2026-05-01T12:00:00.000Z",
+        "cwd": "/tmp/project",
+        "sessionId": session_id,
+    });
+    let assistant = serde_json::json!({
+        "parentUuid": "u-user-2",
+        "isSidechain": false,
+        "message": {
+            "model": "claude-sonnet-4-6",
+            "id": "msg-asst-2",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "different reply"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 42,
+                "output_tokens": 99,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 0
+                }
+            }
+        },
+        "type": "assistant",
+        "uuid": "u-asst-2",
+        "timestamp": "2026-05-01T12:00:01.000Z",
+        "cwd": "/tmp/project",
+        "sessionId": session_id,
+    });
+    format!("{}\n{}\n", user, assistant)
+}
 
 fn copy_dir_recursive(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).unwrap();

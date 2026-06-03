@@ -4,6 +4,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+### Changed
+
+- `ingest()` short-circuits when nothing upstream changed: a stat-only source fingerprint is compared against the last sweep's value, so a no-op ingest skips the cursor load and per-file deserialize and returns `{ ingested: 0 }` in roughly the cost of walking the source dirs instead of ~0.7s. Adds `archive_state.source_fingerprint` (schema v6, auto-migrated). (#468)
+
 ## [3.1.1] - 2026-05-31
 
 ### Changed
