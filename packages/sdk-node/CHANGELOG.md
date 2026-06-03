@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-06-03
+
 ### Changed
 
 - `ingest()` returns immediately with `{ ingested: 0 }` when nothing upstream has changed, avoiding the ~0.7s cursor load + per-file scan.

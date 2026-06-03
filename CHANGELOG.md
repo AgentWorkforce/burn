@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-06-03
+
 ### Changed
 
 - `ingest()` is near-instant when nothing upstream changed: a no-op sweep returns `{ ingested: 0 }` in roughly source-walk time (~0.2s) instead of ~0.7s. Adds `archive_state.source_fingerprint` (schema v6, auto-migrated).
