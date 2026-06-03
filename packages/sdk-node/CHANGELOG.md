@@ -4,7 +4,7 @@
 
 ### Changed
 
-- `ingest()` returns in roughly source-walk time (`{ ingested: 0 }`) when nothing upstream has changed, instead of paying the full ~0.7s cursor-load + per-file scan every call. Gated on a stat-only source fingerprint persisted in the ledger. (#468)
+- `ingest()` returns immediately with `{ ingested: 0 }` when nothing upstream has changed, avoiding the ~0.7s cursor load + per-file scan.
 
 ## [3.0.0] - 2026-05-26
 

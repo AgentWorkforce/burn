@@ -26,6 +26,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::ingest::cursors::{load_cursors, ClaudeCursor, FileCursor};
@@ -573,6 +574,63 @@ fn ingest_all_fast_path_still_cleans_stale_pending_stamps() {
     );
 }
 
+/// `force_scan` (set by the watch loop on an FS-event tick) must bypass the
+/// fingerprint gate even when the stat aggregate is unchanged — a `notify`
+/// event can land before the write flushes, so the fingerprint can't be
+/// trusted to prove "nothing changed" on that tick (#468 round 2). Without
+/// the bypass, a real event could be swallowed.
+#[test]
+fn ingest_all_force_scan_bypasses_unchanged_fingerprint() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let sid = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    let session_file = project_dir.join(format!("{sid}.jsonl"));
+    fs::write(&session_file, claude_minimal_session(sid)).unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots: roots.clone(),
+        ..Default::default()
+    };
+    let forced_opts = IngestOptions {
+        roots,
+        force_scan: true,
+        ..Default::default()
+    };
+
+    // First sweep records the fingerprint.
+    assert!(ingest_all(&mut ledger, &opts).unwrap().scanned_sessions >= 1);
+
+    // Confirm the gate is armed: an unforced re-sweep short-circuits.
+    assert_eq!(
+        ingest_all(&mut ledger, &opts).unwrap().scanned_sessions,
+        0,
+        "unforced re-sweep with unchanged source should short-circuit"
+    );
+
+    // Forced sweep over the *same* unchanged source must still walk the file —
+    // this is the FS-event guarantee that a real event is never swallowed.
+    let forced = ingest_all(&mut ledger, &forced_opts).unwrap();
+    assert!(
+        forced.scanned_sessions >= 1,
+        "force_scan must bypass the fingerprint gate and re-walk the source"
+    );
+    // No new bytes on disk, so the per-file cursors still find nothing to
+    // append — force re-scans, it doesn't re-ingest already-seen turns.
+    assert_eq!(
+        forced.appended_turns, 0,
+        "a forced re-scan of unchanged bytes must not duplicate turns"
+    );
+}
+
 /// The fast path must not mask new data: appending to an existing session
 /// file changes its size + mtime, so the source fingerprint differs and the
 /// next `ingest_all` re-walks and picks up the new turns.
@@ -601,29 +659,196 @@ fn ingest_all_rescans_after_source_file_appended() {
 
     let r1 = ingest_all(&mut ledger, &opts).unwrap();
     assert!(r1.appended_turns >= 1);
+    let turns_before = ledger.query_turns(&Query::for_session(sid_a)).unwrap().len();
 
     // Confirm the gate is armed: an unchanged re-sweep short-circuits.
     assert_eq!(ingest_all(&mut ledger, &opts).unwrap().scanned_sessions, 0);
 
-    // Drop a brand-new session file — the fingerprint's file count, byte
-    // total, and path-aware metadata hash all move, so the gate must reopen.
-    // Give it a distinct timestamp/token shape so layer-2 content dedup
-    // doesn't collapse it onto session A's structurally-identical turn.
-    let sid_b = "cccccccc-cccc-cccc-cccc-cccccccccccc";
-    let file_b = project_dir.join(format!("{sid_b}.jsonl"));
-    fs::write(&file_b, claude_distinct_session(sid_b)).unwrap();
+    // Append new JSONL lines to the *existing* session file in place — the
+    // case directory mtimes miss but the stat-only fingerprint must still
+    // catch via the byte-total (and path-aware metadata hash) moving. Reuse
+    // the distinct-session turn shape (new uuids/message id + different
+    // text/timestamp) so layer-2 content dedup doesn't collapse it onto the
+    // first turn pair.
+    {
+        let extra = claude_distinct_session(sid_a);
+        let mut f = fs::OpenOptions::new().append(true).open(&file_a).unwrap();
+        f.write_all(extra.as_bytes()).unwrap();
+    }
 
     let r3 = ingest_all(&mut ledger, &opts).unwrap();
     assert!(
         r3.scanned_sessions >= 1,
-        "a new source file must defeat the fast path"
+        "an in-place append must defeat the fast path"
     );
     assert!(
         r3.appended_turns >= 1,
-        "the new session's turns must be ingested"
+        "the appended turns must be ingested"
     );
-    let turns_b = ledger.query_turns(&Query::for_session(sid_b)).unwrap();
-    assert!(!turns_b.is_empty(), "new session should be queryable");
+    let turns_after = ledger.query_turns(&Query::for_session(sid_a)).unwrap().len();
+    assert!(
+        turns_after > turns_before,
+        "appended turns must be queryable (before={turns_before}, after={turns_after})"
+    );
+}
+
+/// A source file that was statted (and so counted into the fingerprint) but
+/// couldn't be parsed must NOT arm the fast path: caching the fingerprint over
+/// a skip would make a transient read failure sticky — a later `chmod` that
+/// fixes the file (moving ctime, not size/mtime) would match the stored
+/// fingerprint and short-circuit before retrying, stranding the session. The
+/// next sweep must re-walk and pick the file up once it's readable.
+#[cfg(unix)]
+#[test]
+fn ingest_all_skipped_source_does_not_arm_fast_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+
+    // A readable session plus one we make unreadable so the parser errors.
+    let sid_ok = "11111111-2222-3333-4444-555555555555";
+    fs::write(
+        project_dir.join(format!("{sid_ok}.jsonl")),
+        claude_minimal_session(sid_ok),
+    )
+    .unwrap();
+    let sid_bad = "99999999-8888-7777-6666-555555555555";
+    let file_bad = project_dir.join(format!("{sid_bad}.jsonl"));
+    fs::write(&file_bad, claude_distinct_session(sid_bad)).unwrap();
+    fs::set_permissions(&file_bad, fs::Permissions::from_mode(0o000)).unwrap();
+
+    // Running as root bypasses the permission bits, so the parser would read
+    // the file fine and there'd be no skip to assert on. Skip the test there.
+    if fs::File::open(&file_bad).is_ok() {
+        fs::set_permissions(&file_bad, fs::Permissions::from_mode(0o644)).unwrap();
+        return;
+    }
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    // First sweep: the bad file is statted (counted into the fingerprint) but
+    // fails to parse, so the fingerprint must be left stale.
+    ingest_all(&mut ledger, &opts).unwrap();
+
+    // Because of the skip, an unchanged re-sweep must NOT short-circuit — it
+    // re-walks so the still-broken file gets another chance.
+    assert!(
+        ingest_all(&mut ledger, &opts).unwrap().scanned_sessions >= 1,
+        "a skipped source must keep the fast path off until it's processed"
+    );
+
+    // Fix the file's permissions (ctime moves, size/mtime don't) and confirm
+    // the next sweep finally ingests it — proving the gate never closed over it.
+    fs::set_permissions(&file_bad, fs::Permissions::from_mode(0o644)).unwrap();
+    let recovered = ingest_all(&mut ledger, &opts).unwrap();
+    assert!(
+        recovered.appended_turns >= 1,
+        "the recovered file's turns must be ingested once it's readable"
+    );
+    let turns_bad = ledger.query_turns(&Query::for_session(sid_bad)).unwrap();
+    assert!(
+        !turns_bad.is_empty(),
+        "previously-unreadable session should now be queryable"
+    );
+}
+
+/// The fingerprint lives in `archive_state`, so it must survive closing and
+/// reopening the ledger: a fresh `Ledger::open` against the same DB must still
+/// short-circuit an unchanged source. Guards against the gate accidentally
+/// keying on in-memory-only state.
+#[test]
+fn ingest_all_short_circuit_survives_ledger_reopen() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let sid = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    let session_file = project_dir.join(format!("{sid}.jsonl"));
+    fs::write(&session_file, claude_minimal_session(sid)).unwrap();
+
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    {
+        let mut ledger = open_ledger_in(&tmp);
+        let r1 = ingest_all(&mut ledger, &opts).unwrap();
+        assert!(r1.scanned_sessions >= 1, "first sweep should walk the file");
+    }
+
+    // Reopen the same on-disk ledger. The persisted fingerprint must still
+    // gate the unchanged source.
+    let mut ledger = open_ledger_in(&tmp);
+    let r2 = ingest_all(&mut ledger, &opts).unwrap();
+    assert_eq!(
+        r2.scanned_sessions, 0,
+        "fingerprint persisted in archive_state should gate across a reopen"
+    );
+    assert_eq!(r2.appended_turns, 0);
+}
+
+/// `reset` blanks `source_fingerprint`, so the next `ingest_all` must re-walk
+/// from scratch even though nothing on disk changed. Proves the ledger-side
+/// blanking is wired end-to-end through the ingest gate (not just covered by
+/// the unit test on the SQL).
+#[test]
+fn ingest_all_rescans_after_reset_blanks_fingerprint() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let sid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+    let session_file = project_dir.join(format!("{sid}.jsonl"));
+    fs::write(&session_file, claude_minimal_session(sid)).unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    assert!(ingest_all(&mut ledger, &opts).unwrap().scanned_sessions >= 1);
+    // Gate is armed.
+    assert_eq!(ingest_all(&mut ledger, &opts).unwrap().scanned_sessions, 0);
+
+    // reset() blanks the fingerprint (and cursors), so ingest must re-walk
+    // and re-ingest the still-present source file.
+    ledger.reset().unwrap();
+    let r = ingest_all(&mut ledger, &opts).unwrap();
+    assert!(
+        r.scanned_sessions >= 1,
+        "reset must blank the fingerprint and force a re-walk"
+    );
+    assert!(
+        r.appended_turns >= 1,
+        "reset wiped derivable turns, so the re-walk must re-ingest them"
+    );
 }
 
 // --- helpers -------------------------------------------------------------

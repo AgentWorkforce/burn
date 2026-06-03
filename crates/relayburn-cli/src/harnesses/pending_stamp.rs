@@ -222,7 +222,10 @@ impl PendingStampAdapterImpl {
     /// same path `after_exit` does.
     fn ingest_fn(&self, ledger_home: Option<PathBuf>) -> IngestFn {
         let ingest_sessions = self.ingest_sessions.clone();
-        Arc::new(move || {
+        // `_force` is ignored here: the pending-stamp watcher runs its own
+        // caller-supplied ingest closure (not `ingest_all` directly), so the
+        // FS-event force-scan signal isn't plumbed through this path.
+        Arc::new(move |_force: bool| {
             let f = ingest_sessions.clone();
             let ledger_home = ledger_home.clone();
             Box::pin(async move { f(ledger_home).await })

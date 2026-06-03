@@ -54,6 +54,9 @@ impl IngestOptions {
             on_warn: self.on_warn,
             ledger_home: self.ledger_home,
             roots: self.roots,
+            // The public verb is never FS-event driven, so it always keeps the
+            // no-op fast path. `force_scan` is internal to the watch loop.
+            force_scan: false,
         }
     }
 }
