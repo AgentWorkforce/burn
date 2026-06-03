@@ -522,6 +522,57 @@ fn ingest_all_short_circuits_when_source_unchanged() {
     assert_eq!(r2.appended_turns, 0);
 }
 
+#[test]
+fn ingest_all_fast_path_still_cleans_stale_pending_stamps() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+
+    let project_dir = roots
+        .claude_projects_dir
+        .as_ref()
+        .unwrap()
+        .join("-tmp-project");
+    fs::create_dir_all(&project_dir).unwrap();
+    let sid = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    let session_file = project_dir.join(format!("{sid}.jsonl"));
+    fs::write(&session_file, claude_minimal_session(sid)).unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+    assert!(ingest_all(&mut ledger, &opts).unwrap().appended_turns >= 1);
+
+    let pending_dir = tmp.path().join("relayburn").join("pending-stamps");
+    fs::create_dir_all(&pending_dir).unwrap();
+    let stale = pending_dir.join("claude-1-946684800000-stale.json");
+    fs::write(
+        &stale,
+        r#"{
+  "v": 1,
+  "harness": "claude",
+  "spawnerPid": 1,
+  "spawnStartTs": "2000-01-01T00:00:00.000Z",
+  "cwd": "/tmp/project",
+  "enrichment": {
+    "persona": "stale"
+  }
+}
+"#,
+    )
+    .unwrap();
+    assert!(stale.exists());
+
+    let r2 = ingest_all(&mut ledger, &opts).unwrap();
+    assert_eq!(r2.scanned_sessions, 0);
+    assert!(
+        !stale.exists(),
+        "fast-path ingest must still clean stale pending stamps"
+    );
+}
+
 /// The fast path must not mask new data: appending to an existing session
 /// file changes its size + mtime, so the source fingerprint differs and the
 /// next `ingest_all` re-walks and picks up the new turns.
@@ -554,10 +605,10 @@ fn ingest_all_rescans_after_source_file_appended() {
     // Confirm the gate is armed: an unchanged re-sweep short-circuits.
     assert_eq!(ingest_all(&mut ledger, &opts).unwrap().scanned_sessions, 0);
 
-    // Drop a brand-new session file — the fingerprint's file count + byte
-    // total + mtime sum all move, so the gate must reopen. Give it a
-    // distinct timestamp/token shape so layer-2 content dedup doesn't
-    // collapse it onto session A's structurally-identical turn.
+    // Drop a brand-new session file — the fingerprint's file count, byte
+    // total, and path-aware metadata hash all move, so the gate must reopen.
+    // Give it a distinct timestamp/token shape so layer-2 content dedup
+    // doesn't collapse it onto session A's structurally-identical turn.
     let sid_b = "cccccccc-cccc-cccc-cccc-cccccccccccc";
     let file_b = project_dir.join(format!("{sid_b}.jsonl"));
     fs::write(&file_b, claude_distinct_session(sid_b)).unwrap();

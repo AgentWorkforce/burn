@@ -183,24 +183,23 @@ fn resolve_content_mode(ledger_home: Option<&Path>) -> ContentStoreMode {
         .unwrap_or(ContentStoreMode::Full)
 }
 
+const FINGERPRINT_HASH_OFFSET: u64 = 0xcbf29ce484222325;
+const FINGERPRINT_HASH_PRIME: u64 = 0x100000001b3;
+
 /// Cheap aggregate over the source session files `ingest_all` scans:
-/// `"count:totalBytes:mtimeSum"`. Any file added, removed, appended,
-/// truncated, or touched changes at least one component, so an unchanged
-/// fingerprint means there is nothing new to ingest.
+/// `"count:totalBytes:hash"`. The hash folds in each path, byte length,
+/// and mtime, so a file added, removed, appended, truncated, touched, or
+/// renamed changes the fingerprint in normal operation.
 ///
 /// Computed from `fs::metadata` only — no cursor deserialization and no
 /// parse — so it is far cheaper than a full sweep while still detecting
 /// in-place appends to existing JSONL files (which directory mtimes miss).
 /// For OpenCode it folds in each session's message-dir mtime, the same
 /// signal [`ingest_opencode_into`] watches for new message files.
-///
-/// `mtime_sum` is a wrapping `i128` accumulation: order-independent and
-/// sensitive to any single file's mtime moving in either direction, so a
-/// clock going backwards still registers as a change.
 fn source_fingerprint(roots: &IngestRoots) -> String {
     let mut count: u64 = 0;
     let mut total_bytes: u64 = 0;
-    let mut mtime_sum: i128 = 0;
+    let mut hash_sum: u64 = 0;
 
     // Claude: ~/.claude/projects/<project>/<session>.jsonl
     let projects_root = claude_projects_dir(roots);
@@ -209,7 +208,7 @@ fn source_fingerprint(roots: &IngestRoots) -> String {
             if let Ok(meta) = fs::metadata(&file) {
                 count += 1;
                 total_bytes = total_bytes.wrapping_add(meta.len());
-                mtime_sum = mtime_sum.wrapping_add(mtime_ms(&meta) as i128);
+                hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("claude", &file, &meta));
             }
         }
     }
@@ -219,7 +218,7 @@ fn source_fingerprint(roots: &IngestRoots) -> String {
         if let Ok(meta) = fs::metadata(&file) {
             count += 1;
             total_bytes = total_bytes.wrapping_add(meta.len());
-            mtime_sum = mtime_sum.wrapping_add(mtime_ms(&meta) as i128);
+            hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("codex", &file, &meta));
         }
     }
 
@@ -231,16 +230,46 @@ fn source_fingerprint(roots: &IngestRoots) -> String {
         if let Ok(meta) = fs::metadata(&file) {
             count += 1;
             total_bytes = total_bytes.wrapping_add(meta.len());
-            mtime_sum = mtime_sum.wrapping_add(mtime_ms(&meta) as i128);
+            hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("opencode", &file, &meta));
         }
         if let Some(session_id) = file.file_stem().and_then(|s| s.to_str()) {
-            if let Some(t) = dir_mtime(&message_root.join(session_id)) {
-                mtime_sum = mtime_sum.wrapping_add(t as i128);
+            let message_dir = message_root.join(session_id);
+            if let Some(t) = dir_mtime(&message_dir) {
+                hash_sum = hash_sum.wrapping_add(fingerprint_virtual_hash(
+                    "opencode-message",
+                    &message_dir,
+                    t,
+                ));
             }
         }
     }
 
-    format!("{count}:{total_bytes}:{mtime_sum}")
+    format!("{count}:{total_bytes}:{hash_sum:016x}")
+}
+
+fn fingerprint_entry_hash(kind: &str, path: &Path, meta: &fs::Metadata) -> u64 {
+    fingerprint_hash(kind, path, meta.len(), mtime_ms(meta))
+}
+
+fn fingerprint_virtual_hash(kind: &str, path: &Path, mtime_ms: i64) -> u64 {
+    fingerprint_hash(kind, path, 0, mtime_ms)
+}
+
+fn fingerprint_hash(kind: &str, path: &Path, len: u64, mtime_ms: i64) -> u64 {
+    let mut hash = FINGERPRINT_HASH_OFFSET;
+    fn feed(hash: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *hash ^= u64::from(*b);
+            *hash = hash.wrapping_mul(FINGERPRINT_HASH_PRIME);
+        }
+    }
+    feed(&mut hash, kind.as_bytes());
+    feed(&mut hash, b"\0");
+    feed(&mut hash, path.to_string_lossy().as_bytes());
+    feed(&mut hash, b"\0");
+    feed(&mut hash, &len.to_le_bytes());
+    feed(&mut hash, &mtime_ms.to_le_bytes());
+    hash
 }
 
 /// Ingest every known session store once. Cleans stale pending stamps,
@@ -252,6 +281,9 @@ fn source_fingerprint(roots: &IngestRoots) -> String {
 /// moved and the call returns an empty report without loading cursors or
 /// touching any session file beyond the fingerprint walk. See #468.
 pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<IngestReport> {
+    progress(opts, "cleaning pending spawn stamps");
+    cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
+
     progress(opts, "checking for source changes");
     let current_fp = source_fingerprint(&opts.roots);
     match ledger.read_source_fingerprint() {
@@ -265,8 +297,6 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
         Err(_) => {}
     }
 
-    progress(opts, "cleaning pending spawn stamps");
-    cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     progress(opts, "loading ingest cursors");
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
@@ -1293,7 +1323,7 @@ mod tests {
         // Empty roots: well-formed, stable, and identical across calls.
         let empty = source_fingerprint(&roots);
         assert_eq!(empty, source_fingerprint(&roots));
-        assert_eq!(empty, "0:0:0");
+        assert_eq!(empty, "0:0:0000000000000000");
 
         let project = roots.claude_projects_dir.as_ref().unwrap().join("proj");
         fs::create_dir_all(&project).unwrap();

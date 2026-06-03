@@ -58,9 +58,9 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   content-block rows. Derived at ingest from the parser's
 ///   `request_id_lookup`; rebuilt by `burn state rebuild`. (#434)
 /// - `6`: adds `archive_state.source_fingerprint TEXT` — a cheap aggregate
-///   (`count:totalBytes:mtimeSum`) over the source session files ingest
-///   scans. `ingest_all` records it after each sweep and short-circuits to
-///   an empty report when the live source fingerprint is unchanged, so a
+///   (`count:totalBytes:hash`) over the source session files ingest scans.
+///   `ingest_all` records it after each sweep and short-circuits to an
+///   empty report when the live source fingerprint is unchanged, so a
 ///   no-op ingest costs a stat-only walk instead of a full cursor load +
 ///   per-file deserialize. Blanked by `state reset` so the next ingest
 ///   re-walks from scratch. (#468)
@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS archive_state (
     upstream_cursors_json TEXT NOT NULL DEFAULT '{}',
     last_built_at         TEXT,
     last_rebuild_at       TEXT,
-    -- Cheap source-side change gate: `count:totalBytes:mtimeSum` over the
+    -- Cheap source-side change gate: `count:totalBytes:hash` over the
     -- session files ingest scans. Empty until the first ingest records it.
     source_fingerprint    TEXT NOT NULL DEFAULT ''
 );
