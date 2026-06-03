@@ -372,8 +372,13 @@ impl Ledger {
         }
 
         let now = writer::debug_now();
+        // Blank the source fingerprint so the ingest gate can't short-circuit
+        // a sweep against derived tables we just wiped. Cursors survive (the
+        // partial-progress contract for rebuild), so re-ingest stays cheap;
+        // this only forces the next ingest to re-examine source state rather
+        // than trusting a fingerprint recorded before the drop.
         self.conns.burn.execute(
-            "UPDATE archive_state SET last_rebuild_at = ? WHERE id = 1",
+            "UPDATE archive_state SET last_rebuild_at = ?, source_fingerprint = '' WHERE id = 1",
             params![now],
         )?;
 
@@ -443,6 +448,30 @@ impl Ledger {
                  last_built_at = ?
              WHERE id = 1",
             params![cursors_json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Read the cheap source-change fingerprint recorded by the last
+    /// `ingest_all` sweep. Empty string means "never recorded" (fresh DB,
+    /// pre-v6 ledger, or post-reset) — which never matches a live
+    /// fingerprint, so ingest falls through to a full walk.
+    pub fn read_source_fingerprint(&self) -> Result<String> {
+        let fp: String = self.conns.burn.query_row(
+            "SELECT source_fingerprint FROM archive_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(fp)
+    }
+
+    /// Persist the source-change fingerprint. `ingest_all` calls this at the
+    /// end of a full sweep so the next call can short-circuit when nothing
+    /// upstream has moved.
+    pub fn write_source_fingerprint(&mut self, fingerprint: &str) -> Result<()> {
+        self.conns.burn.execute(
+            "UPDATE archive_state SET source_fingerprint = ? WHERE id = 1",
+            params![fingerprint],
         )?;
         Ok(())
     }
@@ -517,7 +546,8 @@ impl Ledger {
             "UPDATE archive_state \
              SET upstream_cursors_json = '{}', \
                  last_built_at = NULL, \
-                 last_rebuild_at = NULL \
+                 last_rebuild_at = NULL, \
+                 source_fingerprint = '' \
              WHERE id = 1",
             [],
         )?;

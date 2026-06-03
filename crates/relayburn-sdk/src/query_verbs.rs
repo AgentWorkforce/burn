@@ -6088,11 +6088,11 @@ mod tests {
         assert_eq!(s.burn.rows.stamps, 0);
         assert_eq!(s.burn.tracked_rows, 0);
         assert_eq!(s.content.rows, 0);
-        // v5 after #434 chained the `inferences` derived table onto
-        // #435's v4 (`turns.subagent_id`), #436's v3
-        // (`tool_result_events.output_bytes` / `output_truncated`) and
-        // #437's v2 (`turns.stop_reason`).
-        assert_eq!(s.archive.schema_version, 5);
+        // v6 (#468 `archive_state.source_fingerprint`) chained onto v5
+        // (#434 `inferences`), v4 (#435 `turns.subagent_id`), v3 (#436
+        // `tool_result_events.output_bytes` / `output_truncated`) and v2
+        // (#437 `turns.stop_reason`).
+        assert_eq!(s.archive.schema_version, 6);
         assert!(s.archive.last_built_at.is_none());
         assert!(s.archive.last_rebuild_at.is_none());
     }

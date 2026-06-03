@@ -8,6 +8,12 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - `@relayburn/sdk` `hotspots({ groupBy: "findings" })` now returns the exported findings result instead of rejecting the option.
 
+## [3.1.2] - 2026-06-03
+
+### Changed
+
+- `ingest()` is near-instant when nothing upstream changed: a no-op sweep returns `{ ingested: 0 }` in roughly source-walk time (~0.2s) instead of ~0.7s. Adds `archive_state.source_fingerprint` (schema v6, auto-migrated).
+
 ## [3.1.1] - 2026-05-31
 
 ### Changed
@@ -40,7 +46,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   `session_span_trees(session_id)` verbs project `TurnRecord` +
   `tool_result_event` rows + Claude subagent sidecars into an
   OTel-style `TurnSpanTree { Turn -> { UserPrompt, Inference -> ToolUse ->
-  { ToolResult, Subagent } } }`. Pure projection — no schema change,
+{ ToolResult, Subagent } } }`. Pure projection — no schema change,
   no caching. Orphan subagents surface as sibling `Subagent` spans
   with `unattached=true`. Locked attribute keys (`tokens.*`, `model`,
   `request_id`, `tool_use_id`, `agent_id`, `stop_reason`) for
@@ -99,10 +105,10 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   `Option<StopReason>` enum (kebab-case wire form); deserialization is
   lenient so pre-3.0 ledgers replay cleanly. (#437)
 - `relayburn-sdk` ledger schema bumps to v3: `turns` gains a `stop_reason
-  TEXT` column (#437) and `tool_result_events` gains nullable `output_bytes`
+TEXT` column (#437) and `tool_result_events` gains nullable `output_bytes`
   / `output_truncated` columns (#436). Both are migrated in place on
   `Ledger::open`; existing rows leave the new columns `NULL`. Run `burn
-  state rebuild` to backfill an older ledger.
+state rebuild` to backfill an older ledger.
 - `relayburn-sdk` ledger schema bumps to v5: adds the `inferences`
   derived table for per-API-call aggregates. Created idempotently on
   open; rebuilt by `burn state rebuild`. Pre-v5 ledgers stay empty
@@ -233,7 +239,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `relayburn-cli`: dropped the no-op flags `burn state prune --force`,
   `burn state rebuild archive --full`/`--vacuum` (and the legacy
   `vacuum` positional), `burn state rebuild all --force`, and `burn
-  state rebuild classify --force`. They had no effect against the
+state rebuild classify --force`. They had no effect against the
   SQLite layout; passing them now fails at parse time.
 
 ## [2.6.1] - 2026-05-09
@@ -259,9 +265,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
   project), `--limit` (defaults to 20), and the global `--json`. Pipes
   cleanly into `burn summary --session <id>` for drill-down.
 - `relayburn-sdk`: new `sessions_list` query verb (`LedgerHandle::sessions_list`
-  + free-function form) returning `SessionsListResult { sessions, limit,
-  truncated }`. Derived from the `turns` table so older ledgers with an
-  empty `sessions` table still enumerate correctly.
+  - free-function form) returning `SessionsListResult { sessions, limit,
+truncated }`. Derived from the `turns` table so older ledgers with an
+    empty `sessions` table still enumerate correctly.
 
 ### Fixed
 
