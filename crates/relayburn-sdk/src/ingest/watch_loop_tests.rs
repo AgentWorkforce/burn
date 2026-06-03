@@ -20,7 +20,7 @@ async fn watch_loop_drains_pending_work_within_two_ticks() {
 
     let pending_for_ingest = pending.clone();
     let drained_for_ingest = drained.clone();
-    let ingest: IngestFn = Arc::new(move || {
+    let ingest: IngestFn = Arc::new(move |_force: bool| {
         let pending = pending_for_ingest.clone();
         let drained = drained_for_ingest.clone();
         Box::pin(async move {
@@ -76,7 +76,7 @@ async fn manual_tick_joins_periodic_run() {
 
     let in_flight_for_ingest = in_flight.clone();
     let completed_for_ingest = completed.clone();
-    let ingest: IngestFn = Arc::new(move || {
+    let ingest: IngestFn = Arc::new(move |_force: bool| {
         let in_flight = in_flight_for_ingest.clone();
         let completed = completed_for_ingest.clone();
         Box::pin(async move {
@@ -131,7 +131,7 @@ async fn stop_awaits_in_flight_tick() {
 
     let in_flight_for_ingest = in_flight.clone();
     let completed_for_ingest = completed.clone();
-    let ingest: IngestFn = Arc::new(move || {
+    let ingest: IngestFn = Arc::new(move |_force: bool| {
         let in_flight = in_flight_for_ingest.clone();
         let completed = completed_for_ingest.clone();
         Box::pin(async move {
@@ -172,7 +172,7 @@ async fn stop_awaits_in_flight_tick() {
 async fn fs_events_fall_back_to_polling_when_no_path_exists() {
     let runs = Arc::new(AtomicUsize::new(0));
     let runs_for_ingest = runs.clone();
-    let ingest: IngestFn = Arc::new(move || {
+    let ingest: IngestFn = Arc::new(move |_force: bool| {
         let runs = runs_for_ingest.clone();
         Box::pin(async move {
             runs.fetch_add(1, Ordering::SeqCst);
@@ -218,7 +218,7 @@ async fn disable_fsevents_forces_polling_driver() {
     let dir = tempfile::tempdir().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));
     let runs_for_ingest = runs.clone();
-    let ingest: IngestFn = Arc::new(move || {
+    let ingest: IngestFn = Arc::new(move |_force: bool| {
         let runs = runs_for_ingest.clone();
         Box::pin(async move {
             runs.fetch_add(1, Ordering::SeqCst);
@@ -257,11 +257,17 @@ async fn disable_fsevents_forces_polling_driver() {
 async fn burst_writes_coalesce_into_one_tick() {
     let dir = tempfile::tempdir().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));
+    let forced_runs = Arc::new(AtomicUsize::new(0));
     let runs_for_ingest = runs.clone();
-    let ingest: IngestFn = Arc::new(move || {
+    let forced_for_ingest = forced_runs.clone();
+    let ingest: IngestFn = Arc::new(move |force: bool| {
         let runs = runs_for_ingest.clone();
+        let forced = forced_for_ingest.clone();
         Box::pin(async move {
             runs.fetch_add(1, Ordering::SeqCst);
+            if force {
+                forced.fetch_add(1, Ordering::SeqCst);
+            }
             Ok(IngestReport::default())
         })
     });
@@ -295,5 +301,13 @@ async fn burst_writes_coalesce_into_one_tick() {
     assert!(
         n >= 1,
         "100 burst writes should still wake the loop at least once, got {n}"
+    );
+    // The slow backstop is 60s and never fires in this window, so every tick
+    // here came from an FS event and must be forced — that is what defeats the
+    // fingerprint gate when a `notify` event beats the write's flush (#468 r2).
+    assert_eq!(
+        forced_runs.load(Ordering::SeqCst),
+        n,
+        "every FS-event-driven tick must pass force = true"
     );
 }

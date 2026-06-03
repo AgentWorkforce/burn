@@ -48,7 +48,8 @@ use std::time::Duration;
 
 use relayburn_sdk::{
     default_session_roots, ingest_all, ingest_claude_transcript_path, start_watch_loop,
-    IngestReport, IngestRoots, Ledger, LedgerHandle, LedgerOpenOptions, StartWatchLoopOptions,
+    IngestReport, IngestRoots, Ledger, LedgerHandle, LedgerOpenOptions, RawIngestOptions,
+    StartWatchLoopOptions,
 };
 
 use crate::cli::{GlobalArgs, IngestArgs};
@@ -210,7 +211,7 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         let handle_for_ingest = handle_arc.clone();
         let progress_for_ingest = progress_for_loop.clone();
         let watch_message_for_ingest = watch_message.clone();
-        let ingest_fn: relayburn_sdk::IngestFn = Arc::new(move || {
+        let ingest_fn: relayburn_sdk::IngestFn = Arc::new(move |force: bool| {
             let h = handle_for_ingest.clone();
             let progress = progress_for_ingest.clone();
             let ledger_home = ledger_home.clone();
@@ -220,9 +221,16 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
                     p.set_task("scanning sessions");
                 }
                 let mut guard = h.lock().await;
+                // `force` is set by the FS-event driver: a `notify` event can
+                // beat the write's flush, so force a full sweep rather than
+                // trust the stat-only source fingerprint for that tick.
                 let opts = match &progress {
                     Some(p) => p.ingest_options(ledger_home),
                     None => TaskProgress::quiet_ingest_options(ledger_home),
+                };
+                let opts = RawIngestOptions {
+                    force_scan: force,
+                    ..opts
                 };
                 let result = ingest_all(guard.raw_mut(), &opts);
                 if let Some(p) = &progress {

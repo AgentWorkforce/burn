@@ -43,8 +43,15 @@ use tokio::task::JoinHandle;
 use crate::ingest::fs_events::FsBurst;
 use crate::ingest::ingest::IngestReport;
 
+/// Ingest callable driven by the loop. The `bool` argument is `force`: the
+/// FS-event driver passes `true` so the tick bypasses the no-op fast path
+/// (an FS event can fire before the write flushes, leaving the stat-only
+/// source fingerprint unchanged), while the polling backstop and the
+/// on-demand [`WatchController::tick`] pass `false` and keep the fast path.
 pub type IngestFn = Arc<
-    dyn Fn() -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send>> + Send + Sync,
+    dyn Fn(bool) -> Pin<Box<dyn Future<Output = anyhow::Result<IngestReport>> + Send>>
+        + Send
+        + Sync,
 >;
 
 pub type ReportSink = Arc<dyn Fn(&IngestReport) + Send + Sync>;
@@ -190,11 +197,11 @@ impl WatchInner {
     /// The runner — whichever path holds the `in_flight` lock — owns the
     /// `tick_done` notify so a public `tick().await` parked via
     /// `run_tick_or_join` wakes regardless of which path drove the run.
-    async fn run_tick_skip_if_busy(self: &Arc<Self>) {
+    async fn run_tick_skip_if_busy(self: &Arc<Self>, force: bool) {
         let Ok(_guard) = self.in_flight.try_lock() else {
             return;
         };
-        self.run_locked().await;
+        self.run_locked(force).await;
     }
 
     /// Run-or-join variant used by the public `tick()`: if a tick is
@@ -202,7 +209,7 @@ impl WatchInner {
     /// silently skipping. Mirrors the TS `if (running) return running;`
     /// branch where overlapping callers share the in-flight promise — a
     /// `tick().await` is a real completion barrier rather than a no-op.
-    async fn run_tick_or_join(self: &Arc<Self>) {
+    async fn run_tick_or_join(self: &Arc<Self>, force: bool) {
         // Register interest BEFORE the try_lock peek. `Notified::enable`
         // (added in tokio 1.13) latches the waker on creation so a runner
         // that finishes between our peek and the await still wakes us;
@@ -213,7 +220,7 @@ impl WatchInner {
         notified.as_mut().enable();
 
         if let Ok(_guard) = self.in_flight.try_lock() {
-            self.run_locked().await;
+            self.run_locked(force).await;
         } else {
             notified.await;
         }
@@ -224,8 +231,8 @@ impl WatchInner {
     /// `run_tick_or_join` (public `tick`) funnel through here so any
     /// caller parked on `tick_done` wakes when the run finishes —
     /// regardless of which path the runner came from.
-    async fn run_locked(self: &Arc<Self>) {
-        let result = (self.ingest)().await;
+    async fn run_locked(self: &Arc<Self>, force: bool) {
+        let result = (self.ingest)(force).await;
         match result {
             Ok(report) => {
                 if let Some(sink) = &self.on_report {
@@ -249,7 +256,9 @@ impl WatchController {
     /// it and return when it completes — `tick().await` is a true
     /// completion barrier, matching the TS adapter's shared-promise shape.
     pub async fn tick(&self) {
-        self.inner.run_tick_or_join().await;
+        // On-demand ticks keep the fast path: a manual `tick()` isn't tied to
+        // an in-flight FS write, so the stat fingerprint is trustworthy.
+        self.inner.run_tick_or_join(false).await;
     }
 
     /// Stop the periodic task and await any in-flight tick. Idempotent.
@@ -313,7 +322,9 @@ pub fn start_watch_loop(opts: StartWatchLoopOptions) -> WatchController {
         };
 
         if immediate {
-            ticker.run_tick_skip_if_busy().await;
+            // Startup sweep: a fresh ledger has a blank fingerprint, so this
+            // always runs a full scan anyway; no need to force.
+            ticker.run_tick_skip_if_busy(false).await;
         }
 
         match burst {
@@ -361,7 +372,9 @@ async fn run_polling_driver(ticker: &Arc<WatchInner>, interval: Duration) {
         if ticker.stopped.load(Ordering::SeqCst) {
             break;
         }
-        ticker.run_tick_skip_if_busy().await;
+        // Pure-polling driver: no FS-event signal, so the stat fingerprint is
+        // the only change source — keep the fast path (force = false).
+        ticker.run_tick_skip_if_busy(false).await;
     }
 }
 
@@ -380,21 +393,27 @@ async fn run_fs_event_driver(
         if ticker.stopped.load(Ordering::SeqCst) {
             break;
         }
-        tokio::select! {
+        // `force` is true only when an FS event woke us: a `notify` event can
+        // arrive before the write is flushed, so the stat-only source
+        // fingerprint may still match the stored value. Forcing the sweep on an
+        // event makes the per-file cursors the source of truth for that tick.
+        // The slow backstop leaves `force` false so a quiet period still pays
+        // only the no-op fast path.
+        let force = tokio::select! {
             // `wait_for_burst` always resolves to `Some(())` once its
             // debounce window elapses; under sustained writes that's
             // every ~debounce, under bursts it coalesces. We don't
             // pattern-match the Option because the Notify-backed
             // channel can't close without dropping `_watcher`, which
             // would have already torn down this task.
-            _ = burst.wait_for_burst(debounce) => {}
-            _ = slow.tick() => {}
+            _ = burst.wait_for_burst(debounce) => true,
+            _ = slow.tick() => false,
             _ = ticker.stop_signal.notified() => break,
-        }
+        };
         if ticker.stopped.load(Ordering::SeqCst) {
             break;
         }
-        ticker.run_tick_skip_if_busy().await;
+        ticker.run_tick_skip_if_busy(force).await;
     }
 }
 
@@ -404,7 +423,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn ingest_counting(counter: Arc<AtomicUsize>) -> IngestFn {
-        Arc::new(move || {
+        Arc::new(move |_force: bool| {
             let counter = counter.clone();
             Box::pin(async move {
                 counter.fetch_add(1, Ordering::SeqCst);
@@ -502,7 +521,7 @@ mod tests {
         let in_flight_for_ingest = in_flight_count.clone();
         let max_for_ingest = max_concurrent.clone();
         let completed_for_ingest = completed.clone();
-        let ingest: IngestFn = Arc::new(move || {
+        let ingest: IngestFn = Arc::new(move |_force: bool| {
             let in_flight = in_flight_for_ingest.clone();
             let max = max_for_ingest.clone();
             let completed = completed_for_ingest.clone();
@@ -556,7 +575,8 @@ mod tests {
         use std::sync::Mutex as StdMutex;
         let captured: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
         let captured_clone = captured.clone();
-        let ingest: IngestFn = Arc::new(|| Box::pin(async move { Err(anyhow::anyhow!("boom")) }));
+        let ingest: IngestFn =
+            Arc::new(|_force: bool| Box::pin(async move { Err(anyhow::anyhow!("boom")) }));
         let on_error: ErrorSink = Arc::new(move |err| {
             captured_clone.lock().unwrap().push(err.to_string());
         });

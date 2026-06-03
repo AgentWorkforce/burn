@@ -57,7 +57,15 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   many inferences" don't conflate a single Claude API call's multiple
 ///   content-block rows. Derived at ingest from the parser's
 ///   `request_id_lookup`; rebuilt by `burn state rebuild`. (#434)
-pub const SCHEMA_VERSION: u32 = 5;
+/// - `6`: adds `archive_state.source_fingerprint TEXT` — a cheap aggregate
+///   (`count:totalBytes:hash`) over the source session files ingest scans.
+///   `ingest_all` records it after each sweep and short-circuits to an
+///   empty report when the live source fingerprint is unchanged, so a
+///   no-op ingest costs a stat-only walk instead of a full cursor load +
+///   per-file deserialize. Blanked by `state rebuild` / `state reset` so the
+///   next ingest does not trust source state captured before derived rows were
+///   wiped. (#468)
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.
@@ -221,11 +229,14 @@ CREATE TABLE IF NOT EXISTS archive_state (
     schema_version        INTEGER NOT NULL,
     upstream_cursors_json TEXT NOT NULL DEFAULT '{}',
     last_built_at         TEXT,
-    last_rebuild_at       TEXT
+    last_rebuild_at       TEXT,
+    -- Cheap source-side change gate: `count:totalBytes:hash` over the
+    -- session files ingest scans. Empty until the first ingest records it.
+    source_fingerprint    TEXT NOT NULL DEFAULT ''
 );
 
 INSERT INTO archive_state (id, schema_version)
-    VALUES (1, 5)
+    VALUES (1, 6)
     ON CONFLICT(id) DO NOTHING;
 "#;
 

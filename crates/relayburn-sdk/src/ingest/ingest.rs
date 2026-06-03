@@ -96,6 +96,16 @@ pub struct IngestOptions {
     /// per-harness home dirs (`~/.claude/projects`, `~/.codex/sessions`,
     /// `~/.local/share/opencode/storage`).
     pub roots: IngestRoots,
+    /// Bypass the no-op fast path and always run a full cursor-based sweep.
+    /// The watch loop sets this for FS-event-driven ticks: a real `notify`
+    /// event can fire while a write is still in flight (file opened, bytes
+    /// not yet flushed), so `fs::metadata` — and therefore the stat-only
+    /// [`source_fingerprint`] — can still read pre-write size/mtime and
+    /// collide with the stored value. Forcing the sweep on an FS event lets
+    /// the per-file cursors observe whatever has flushed instead of trusting
+    /// the aggregate. The fingerprint is still recorded afterwards, so the
+    /// slow polling backstop (which leaves this `false`) keeps the fast path.
+    pub force_scan: bool,
 }
 
 /// Per-harness root paths. `None` means "use the OS default for this harness".
@@ -183,12 +193,142 @@ fn resolve_content_mode(ledger_home: Option<&Path>) -> ContentStoreMode {
         .unwrap_or(ContentStoreMode::Full)
 }
 
+const FINGERPRINT_HASH_OFFSET: u64 = 0xcbf29ce484222325;
+const FINGERPRINT_HASH_PRIME: u64 = 0x100000001b3;
+
+/// Cheap aggregate over the source session files `ingest_all` scans:
+/// `"count:totalBytes:hash"`. The hash folds in each path, byte length,
+/// and mtime, so a file added, removed, appended, truncated, touched, or
+/// renamed changes the fingerprint in normal operation.
+///
+/// Computed from `fs::metadata` only — no cursor deserialization and no
+/// parse — so it is far cheaper than a full sweep while still detecting
+/// in-place appends to existing JSONL files (which directory mtimes miss).
+///
+/// For OpenCode, appends land as *new files* in `message/<session>/` rather
+/// than as growth of the session json, so we fold in both the message-dir
+/// mtime (the signal [`ingest_opencode_into`] keys on) AND the dir's child
+/// count. The count is the load-bearing one: on filesystems with coarse
+/// mtime granularity a new message file can land inside the same tick as the
+/// recorded fingerprint, leaving the dir mtime unmoved — but adding the file
+/// always bumps the entry count, so the gate still re-opens. (Without the
+/// count, the fast path would make that blind spot sticky: it would block the
+/// whole sweep until some unrelated change moved the fingerprint.)
+///
+/// This is a change *detector*, not a content hash: two distinct source
+/// states could in principle collide. For append-only session logs within a
+/// single inter-sweep window that is not a practical concern, and the worst
+/// case is one skipped no-op sweep, never lost data — the per-file cursors
+/// still catch up on the next fingerprint change.
+fn source_fingerprint(roots: &IngestRoots) -> String {
+    let mut count: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut hash_sum: u64 = 0;
+
+    // Claude: ~/.claude/projects/<project>/<session>.jsonl
+    let projects_root = claude_projects_dir(roots);
+    for project_dir in list_dirs(&projects_root) {
+        for file in list_jsonl_files(&project_dir) {
+            if let Ok(meta) = fs::metadata(&file) {
+                count = count.wrapping_add(1);
+                total_bytes = total_bytes.wrapping_add(meta.len());
+                hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("claude", &file, &meta));
+            }
+        }
+    }
+
+    // Codex: ~/.codex/sessions/**/*.jsonl
+    for file in walk_jsonl(codex_sessions_dir(roots)) {
+        if let Ok(meta) = fs::metadata(&file) {
+            count = count.wrapping_add(1);
+            total_bytes = total_bytes.wrapping_add(meta.len());
+            hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("codex", &file, &meta));
+        }
+    }
+
+    // OpenCode: ses_*.json plus, per session, the message-dir mtime and its
+    // child count. The count closes the coarse-mtime new-file window (see the
+    // doc comment); the adapter watches the same dir for new message files.
+    let message_root = opencode_message_root(roots);
+    for file in walk_opencode_sessions(opencode_session_root(roots)) {
+        if let Ok(meta) = fs::metadata(&file) {
+            count = count.wrapping_add(1);
+            total_bytes = total_bytes.wrapping_add(meta.len());
+            hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("opencode", &file, &meta));
+        }
+        if let Some(session_id) = file.file_stem().and_then(|s| s.to_str()) {
+            let message_dir = message_root.join(session_id);
+            if let Some(t) = dir_mtime(&message_dir) {
+                hash_sum = hash_sum.wrapping_add(fingerprint_virtual_hash(
+                    "opencode-message",
+                    &message_dir,
+                    t,
+                ));
+                count = count.wrapping_add(dir_entry_count(&message_dir));
+            }
+        }
+    }
+
+    format!("{count}:{total_bytes}:{hash_sum:016x}")
+}
+
+fn fingerprint_entry_hash(kind: &str, path: &Path, meta: &fs::Metadata) -> u64 {
+    fingerprint_hash(kind, path, meta.len(), mtime_ms(meta))
+}
+
+fn fingerprint_virtual_hash(kind: &str, path: &Path, mtime_ms: i64) -> u64 {
+    fingerprint_hash(kind, path, 0, mtime_ms)
+}
+
+fn fingerprint_hash(kind: &str, path: &Path, len: u64, mtime_ms: i64) -> u64 {
+    let mut hash = FINGERPRINT_HASH_OFFSET;
+    fn feed(hash: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *hash ^= u64::from(*b);
+            *hash = hash.wrapping_mul(FINGERPRINT_HASH_PRIME);
+        }
+    }
+    feed(&mut hash, kind.as_bytes());
+    feed(&mut hash, b"\0");
+    feed(&mut hash, path.to_string_lossy().as_bytes());
+    feed(&mut hash, b"\0");
+    feed(&mut hash, &len.to_le_bytes());
+    feed(&mut hash, &mtime_ms.to_le_bytes());
+    hash
+}
+
 /// Ingest every known session store once. Cleans stale pending stamps,
 /// loads cursors, walks Claude/Codex/OpenCode in turn, then persists any
 /// cursor mutations. Returns the merged report.
+///
+/// Fast path: a stat-only [`source_fingerprint`] is compared against the
+/// value the last sweep recorded. When they match, nothing upstream has
+/// moved and the call returns an empty report without loading cursors or
+/// touching any session file beyond the fingerprint walk. See #468.
 pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
+
+    progress(opts, "checking for source changes");
+    let current_fp = source_fingerprint(&opts.roots);
+    // `force_scan` (set by the watch loop on an FS-event tick) skips the gate:
+    // a `notify` event can land before the write is flushed, so the stat-only
+    // fingerprint may still match the stored value even though new bytes are
+    // coming. A forced full sweep lets the per-file cursors catch up; an
+    // unforced tick (slow polling backstop, manual ingest) keeps the fast path.
+    if !opts.force_scan {
+        match ledger.read_source_fingerprint() {
+            Ok(stored) if !stored.is_empty() && stored == current_fp => {
+                // Nothing upstream changed since the last sweep — skip the
+                // cursor load + per-file deserialize entirely.
+                return Ok(IngestReport::empty());
+            }
+            Ok(_) => {}
+            // A read failure shouldn't wedge ingest; fall through to a full sweep.
+            Err(_) => {}
+        }
+    }
+
     progress(opts, "loading ingest cursors");
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
@@ -197,6 +337,15 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
     progress(opts, "loading content settings");
     let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
     let on_warn: Option<&dyn Fn(&str)> = opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str));
+
+    // Set by any per-harness loop that statted a source file but couldn't read
+    // or parse it. Such a file was already folded into `current_fp`, so caching
+    // the fingerprint would let a transient failure (e.g. a `PermissionDenied`
+    // read later fixed with `chmod`, which moves ctime but not size/mtime) stay
+    // sticky: the next sweep would match the stored fingerprint and short-
+    // circuit before retrying. When set, we leave the stored fingerprint
+    // untouched so the next ingest re-walks and retries the skipped source.
+    let mut had_skips = false;
 
     // Emit per-adapter, immediately after each scan, so a later adapter
     // returning Err does not swallow a gap the earlier adapter already
@@ -208,6 +357,7 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
         &opts.roots,
         content_mode,
         opts.ledger_home.as_deref(),
+        &mut had_skips,
     )?;
     report.merge(&r);
     emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
@@ -219,6 +369,7 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
         &opts.roots,
         content_mode,
         opts.ledger_home.as_deref(),
+        &mut had_skips,
     )?;
     report.merge(&r);
     emit_gap_warning(AdapterName::Codex, content_mode, on_warn);
@@ -230,12 +381,37 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
         &opts.roots,
         content_mode,
         opts.ledger_home.as_deref(),
+        &mut had_skips,
     )?;
     report.merge(&r);
     emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
 
     progress(opts, "saving ingest cursors");
     save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
+    // Record the source fingerprint captured at the start of this sweep so
+    // the next call can short-circuit. Storing the *start* value is
+    // conservative: any file that changed mid-sweep yields a different
+    // fingerprint next time, forcing a re-scan (cheap, since per-file
+    // cursors then skip the already-read bytes).
+    //
+    // Ordering is deliberate: cursors are saved first, fingerprint last and
+    // in a separate statement. A crash between them leaves cursors advanced
+    // but the fingerprint stale/blank, which only forces one extra full scan
+    // (cursors then find nothing new) — never a missed append. We must never
+    // store a fingerprint *ahead* of the cursors, so the fingerprint write
+    // stays after the cursor save.
+    //
+    // Skip the write entirely when a source file was counted into `current_fp`
+    // but couldn't be read/parsed: caching would make that skip sticky (see
+    // `had_skips` above). Leaving the stored fingerprint stale costs at most a
+    // full re-scan next time — a persistently-broken file keeps the fast path
+    // off until it parses, which is the conservative trade (never a lost append
+    // over a perf win).
+    if !had_skips {
+        ledger
+            .write_source_fingerprint(&current_fp)
+            .map_err(|e| anyhow::anyhow!(e))?;
+    }
     Ok(report)
 }
 
@@ -278,6 +454,7 @@ where
         &IngestRoots,
         ContentStoreMode,
         Option<&Path>,
+        &mut bool,
     ) -> anyhow::Result<IngestReport>,
 {
     progress(opts, "cleaning pending spawn stamps");
@@ -285,12 +462,16 @@ where
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
     let mut after = before.clone();
     let content_mode = resolve_content_mode(opts.ledger_home.as_deref());
+    // The single-harness verbs don't gate on the source fingerprint, so the
+    // skip flag is only consumed by `ingest_all`; capture and ignore it here.
+    let mut had_skips = false;
     let report = body(
         ledger,
         &mut after,
         &opts.roots,
         content_mode,
         opts.ledger_home.as_deref(),
+        &mut had_skips,
     )?;
     let on_warn: Option<&dyn Fn(&str)> = opts.on_warn.as_ref().map(|f| f.as_ref() as &dyn Fn(&str));
     emit_gap_warning(adapter, content_mode, on_warn);
@@ -418,6 +599,7 @@ fn ingest_claude_into(
     roots: &IngestRoots,
     content_mode: ContentStoreMode,
     ledger_home: Option<&Path>,
+    had_skips: &mut bool,
 ) -> anyhow::Result<IngestReport> {
     let mut report = IngestReport::empty();
     let projects_root = claude_projects_dir(roots);
@@ -434,6 +616,7 @@ fn ingest_claude_into(
                 Ok(m) => m,
                 Err(err) => {
                     eprintln!("[burn] skipping {}: {}", file.display(), err);
+                    *had_skips = true;
                     continue;
                 }
             };
@@ -482,6 +665,7 @@ fn ingest_claude_into(
                 Ok(r) => r,
                 Err(err) => {
                     eprintln!("[burn] skipping {}: {}", file.display(), err);
+                    *had_skips = true;
                     continue;
                 }
             };
@@ -558,6 +742,7 @@ fn ingest_codex_into(
     roots: &IngestRoots,
     content_mode: ContentStoreMode,
     ledger_home: Option<&Path>,
+    had_skips: &mut bool,
 ) -> anyhow::Result<IngestReport> {
     let mut report = IngestReport::empty();
     let sessions_root = codex_sessions_dir(roots);
@@ -568,6 +753,7 @@ fn ingest_codex_into(
             Ok(m) => m,
             Err(err) => {
                 eprintln!("[burn] skipping {}: {}", file.display(), err);
+                *had_skips = true;
                 continue;
             }
         };
@@ -613,6 +799,7 @@ fn ingest_codex_into(
             Ok(r) => r,
             Err(err) => {
                 eprintln!("[burn] skipping {}: {}", file.display(), err);
+                *had_skips = true;
                 continue;
             }
         };
@@ -692,6 +879,7 @@ fn ingest_opencode_into(
     roots: &IngestRoots,
     content_mode: ContentStoreMode,
     ledger_home: Option<&Path>,
+    had_skips: &mut bool,
 ) -> anyhow::Result<IngestReport> {
     let mut report = IngestReport::empty();
     let session_root = opencode_session_root(roots);
@@ -712,6 +900,7 @@ fn ingest_opencode_into(
             Ok(m) => m,
             Err(err) => {
                 eprintln!("[burn] skipping {}: {}", file.display(), err);
+                *had_skips = true;
                 continue;
             }
         };
@@ -751,6 +940,7 @@ fn ingest_opencode_into(
             Ok(r) => r,
             Err(err) => {
                 eprintln!("[burn] skipping {}: {}", file.display(), err);
+                *had_skips = true;
                 continue;
             }
         };
@@ -1127,6 +1317,17 @@ fn dir_mtime(dir: &Path) -> Option<i64> {
     Some(mtime_ms(&meta))
 }
 
+/// Number of direct entries in `dir`, or `0` if it can't be read. Used by the
+/// source fingerprint to detect a new OpenCode message file even when the
+/// directory mtime granularity is too coarse to register the add within the
+/// same tick.
+fn dir_entry_count(dir: &Path) -> u64 {
+    match fs::read_dir(dir) {
+        Ok(entries) => entries.filter(|e| e.is_ok()).count() as u64,
+        Err(_) => 0,
+    }
+}
+
 fn mtime_ms(meta: &fs::Metadata) -> i64 {
     meta.modified()
         .ok()
@@ -1194,5 +1395,77 @@ mod tests {
         assert_eq!(claude_projects_dir(&roots), PathBuf::from("/x/claude"));
         assert_eq!(codex_sessions_dir(&roots), PathBuf::from("/x/codex"));
         assert_eq!(opencode_storage_dir(&roots), PathBuf::from("/x/oc"));
+    }
+
+    #[test]
+    fn source_fingerprint_is_stable_and_moves_on_change() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let roots = IngestRoots {
+            claude_projects_dir: Some(tmp.path().join("claude")),
+            codex_sessions_dir: Some(tmp.path().join("codex")),
+            opencode_storage_dir: Some(tmp.path().join("opencode")),
+        };
+        // Empty roots: well-formed, stable, and identical across calls.
+        let empty = source_fingerprint(&roots);
+        assert_eq!(empty, source_fingerprint(&roots));
+        assert_eq!(empty, "0:0:0000000000000000");
+
+        let project = roots.claude_projects_dir.as_ref().unwrap().join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let file = project.join("s1.jsonl");
+        fs::write(&file, "a\n").unwrap();
+        let with_file = source_fingerprint(&roots);
+        assert_ne!(with_file, empty, "adding a file must move the fingerprint");
+
+        // Growing the file (size + mtime) must move it again.
+        fs::write(&file, "a\nbb\n").unwrap();
+        let appended = source_fingerprint(&roots);
+        assert_ne!(
+            appended, with_file,
+            "appending bytes must move the fingerprint"
+        );
+
+        // Deleting the file (count drops) must move it back toward empty.
+        fs::remove_file(&file).unwrap();
+        let deleted = source_fingerprint(&roots);
+        assert_ne!(
+            deleted, appended,
+            "deleting a file must move the fingerprint"
+        );
+        assert_eq!(deleted, empty, "back to zero files == empty fingerprint");
+    }
+
+    #[test]
+    fn source_fingerprint_moves_on_new_opencode_message_file() {
+        // M1 regression: an OpenCode append lands as a NEW file under
+        // message/<session>/, not as growth of the ses_*.json. Folding the
+        // message-dir child count into the fingerprint guarantees the gate
+        // re-opens even if the dir mtime granularity is too coarse to move.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let storage = tmp.path().join("opencode");
+        let roots = IngestRoots {
+            claude_projects_dir: Some(tmp.path().join("claude")),
+            codex_sessions_dir: Some(tmp.path().join("codex")),
+            opencode_storage_dir: Some(storage.clone()),
+        };
+
+        let session_dir = storage.join("session");
+        fs::create_dir_all(&session_dir).unwrap();
+        let session_file = session_dir.join("ses_abc.json");
+        fs::write(&session_file, "{}").unwrap();
+
+        let message_dir = storage.join("message").join("ses_abc");
+        fs::create_dir_all(&message_dir).unwrap();
+        fs::write(message_dir.join("msg_1.json"), "{}").unwrap();
+        let before = source_fingerprint(&roots);
+
+        // Add a second message file WITHOUT touching ses_abc.json. The session
+        // file size/mtime are unchanged; only the message-dir child count moves.
+        fs::write(message_dir.join("msg_2.json"), "{}").unwrap();
+        let after = source_fingerprint(&roots);
+        assert_ne!(
+            after, before,
+            "a new message file must move the fingerprint via the dir child count"
+        );
     }
 }
