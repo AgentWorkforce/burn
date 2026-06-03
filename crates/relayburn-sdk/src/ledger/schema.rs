@@ -62,8 +62,9 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   `ingest_all` records it after each sweep and short-circuits to an
 ///   empty report when the live source fingerprint is unchanged, so a
 ///   no-op ingest costs a stat-only walk instead of a full cursor load +
-///   per-file deserialize. Blanked by `state reset` so the next ingest
-///   re-walks from scratch. (#468)
+///   per-file deserialize. Blanked by `state rebuild` / `state reset` so the
+///   next ingest does not trust source state captured before derived rows were
+///   wiped. (#468)
 pub const SCHEMA_VERSION: u32 = 6;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on

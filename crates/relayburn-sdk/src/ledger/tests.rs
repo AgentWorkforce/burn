@@ -739,7 +739,8 @@ fn invalid_session_id_in_content_rejected() {
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
 /// migration, and the stored version bumps forward to the current
-/// `SCHEMA_VERSION` (5 after #436 + #435 + #434 chained on top of #437).
+/// `SCHEMA_VERSION` (6 after #436 + #435 + #434 + #468 chained on top of
+/// #437).
 /// Existing rows stay `NULL` for every back-added column until rewritten.
 #[test]
 fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
@@ -786,7 +787,7 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     // Step 2: open through the SDK. The migration must:
     //   a) add `turns.stop_reason TEXT`,
     //   b) bump archive_state.schema_version forward to the current
-    //      `SCHEMA_VERSION` (chained v1 → v2 → v3 once #436 lands),
+    //      `SCHEMA_VERSION` (chained v1 → v2 → v3 → v4 → v5 → v6),
     //   c) leave the legacy row's stop_reason as NULL.
     let l = Ledger::open(&layout.burn, &layout.content).unwrap();
     let version: i64 = l
