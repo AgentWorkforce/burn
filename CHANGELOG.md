@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-06-09
+
 ### Added
 
 - Pricing: added `claude-fable-5` to the vendored models.dev snapshot ($10/$50 per Mtok input/output, $1 cache-read, $12.5 cache-write, 1M context, 128K output) so cost reporting recognizes Claude Fable 5.

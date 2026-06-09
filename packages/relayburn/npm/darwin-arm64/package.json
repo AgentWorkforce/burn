@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/cli-darwin-arm64",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Prebuilt `burn` binary for darwin-arm64.",
   "bin": {
     "burn": "./bin/burn"
