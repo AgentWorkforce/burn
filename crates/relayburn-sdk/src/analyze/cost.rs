@@ -220,6 +220,7 @@ mod tests {
         assert!(p.contains_key("claude-opus-4-7"), "opus-4-7 present");
         assert!(p.contains_key("claude-sonnet-4-6"), "sonnet-4-6 present");
         assert!(p.contains_key("claude-haiku-4-5"), "haiku-4-5 present");
+        assert!(p.contains_key("claude-fable-5"), "fable-5 present");
     }
 
     #[test]
