@@ -185,6 +185,11 @@ mod tests {
             "sonnet-4-6 present"
         );
         assert!(table.contains_key("claude-haiku-4-5"), "haiku-4-5 present");
+        let fable_5 = table.get("claude-fable-5").expect("fable-5 present");
+        assert_eq!(fable_5.input, 10.0);
+        assert_eq!(fable_5.output, 50.0);
+        assert_eq!(fable_5.cache_read, 1.0);
+        assert_eq!(fable_5.cache_write, 12.5);
     }
 
     #[test]
