@@ -147,6 +147,23 @@ fn strip_provider_prefix(model: &str) -> &str {
     }
 }
 
+/// Count turns whose model has no pricing entry, and collect the distinct
+/// model names, first-seen order. Used by summary surfaces to make pricing
+/// gaps visible instead of silently folding them in at $0.
+pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec<String>) {
+    let mut count = 0u64;
+    let mut models: Vec<String> = Vec::new();
+    for t in turns {
+        if lookup_model_rate(&t.model, pricing).is_none() {
+            count += 1;
+            if !models.iter().any(|m| m == &t.model) {
+                models.push(t.model.clone());
+            }
+        }
+    }
+    (count, models)
+}
+
 pub fn sum_costs<I, B>(costs: I) -> CostBreakdown
 where
     I: IntoIterator<Item = B>,
@@ -583,6 +600,56 @@ mod tests {
         assert_eq!(s.total, 3.0);
         assert_eq!(s.input, 1.5);
         assert_eq!(s.output, 1.5);
+    }
+
+    #[test]
+    fn tally_unpriced_returns_zero_when_all_models_priced() {
+        let p = load_builtin_pricing();
+        let turns = vec![
+            turn(
+                "claude-sonnet-4-6",
+                usage_with(100, 50, 0),
+                SourceKind::ClaudeCode,
+            ),
+            turn(
+                "claude-opus-4-7",
+                usage_with(200, 100, 0),
+                SourceKind::ClaudeCode,
+            ),
+        ];
+        let (count, models) = tally_unpriced(&turns, &p);
+        assert_eq!(count, 0);
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn tally_unpriced_counts_turns_and_deduplicates_models() {
+        let p = load_builtin_pricing();
+        // "made-up-model-xyz" is not in the pricing table; appears in two turns.
+        let turns = vec![
+            turn(
+                "made-up-model-xyz",
+                usage_with(100, 50, 0),
+                SourceKind::ClaudeCode,
+            ),
+            turn(
+                "made-up-model-xyz",
+                usage_with(200, 100, 0),
+                SourceKind::ClaudeCode,
+            ),
+            turn(
+                "claude-sonnet-4-6",
+                usage_with(300, 150, 0),
+                SourceKind::ClaudeCode,
+            ),
+        ];
+        let (count, models) = tally_unpriced(&turns, &p);
+        assert_eq!(count, 2, "two turns used the unknown model");
+        assert_eq!(
+            models,
+            vec!["made-up-model-xyz"],
+            "model listed exactly once"
+        );
     }
 
     #[test]

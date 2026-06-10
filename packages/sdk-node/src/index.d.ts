@@ -114,6 +114,10 @@ export declare function summary(opts?: SummaryOptions): Promise<{
       estimatedTokensSaved: number | bigint;
     }>;
   };
+  /** Number of turns whose model had no pricing entry; their cost is reported as $0. */
+  unpricedTurns?: number;
+  /** Distinct model names (first-seen order) that had no pricing entry. */
+  unpricedModels?: string[];
 }>
 
 export interface SessionCostOptions {
