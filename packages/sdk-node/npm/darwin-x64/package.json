@@ -1,6 +1,6 @@
 {
   "name": "@relayburn/sdk-darwin-x64",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "description": "Prebuilt napi-rs binding for @relayburn/sdk on darwin-x64.",
   "main": "relayburn-sdk.darwin-x64.node",
   "files": [

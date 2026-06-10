@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-06-10
+
 - `burn summary` now reports turns whose model has no pricing entry (`unpricedTurns`/`unpricedModels` in JSON output, warning footer in human output) instead of silently counting them at $0.
 
 ## [3.2.1] - 2026-06-09

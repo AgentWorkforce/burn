@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-06-10
+
+### Changed
+
+- Sdk/summary: surface unpriced turns instead of silently reporting them as $0 (#474)
+
 ## [3.2.0] - 2026-06-03
 
 ### Fixed
