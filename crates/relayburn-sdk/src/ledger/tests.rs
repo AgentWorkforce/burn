@@ -1325,3 +1325,153 @@ fn query_tool_result_events_keeps_null_ts_rows_under_since_filter() {
     assert_eq!(r.len(), 1);
     assert!(r[0].ts.is_none());
 }
+
+// ---------- query_turns_in_sessions tests ----------
+
+#[test]
+fn query_turns_in_sessions_empty_slice_returns_empty_without_db_access() {
+    let tmp = TempDir::new().unwrap();
+    let l = open_in(&tmp);
+    // No turns written — but even with an open ledger the empty-ID path
+    // must short-circuit and return an empty vec.
+    let result = l.query_turns_in_sessions(&Query::default(), &[]).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn query_turns_in_sessions_matches_union_of_per_session_queries() {
+    // Seed turns across 4 sessions; request s1, s2, s3 — s4 must NOT appear.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let turns = vec![
+        make_turn("s1", "m1a", "2025-01-01T00:00:00Z", 10),
+        make_turn("s1", "m1b", "2025-01-01T01:00:00Z", 20),
+        make_turn("s2", "m2a", "2025-01-02T00:00:00Z", 30),
+        make_turn("s3", "m3a", "2025-01-03T00:00:00Z", 40),
+        make_turn("s4", "m4a", "2025-01-04T00:00:00Z", 50), // must not appear
+    ];
+    l.append_turns(&turns).unwrap();
+
+    let requested: Vec<String> = vec!["s1".into(), "s2".into(), "s3".into()];
+    let batched = l
+        .query_turns_in_sessions(&Query::default(), &requested)
+        .unwrap();
+
+    // Must return exactly the 4 turns belonging to s1, s2, s3.
+    let mut batched_ids: Vec<String> = batched.iter().map(|e| e.turn.message_id.clone()).collect();
+    batched_ids.sort();
+    assert_eq!(batched_ids, vec!["m1a", "m1b", "m2a", "m3a"]);
+
+    // Verify equivalence with individual per-session queries (union).
+    let mut individual: Vec<_> = ["s1", "s2", "s3"]
+        .iter()
+        .flat_map(|&sid| l.query_turns(&Query::for_session(sid)).unwrap().into_iter())
+        .collect::<Vec<_>>();
+    individual.sort_by_key(|e| e.turn.message_id.clone());
+
+    let mut batched_sorted = batched;
+    batched_sorted.sort_by_key(|e| e.turn.message_id.clone());
+
+    assert_eq!(batched_sorted.len(), individual.len());
+    for (b, i) in batched_sorted.iter().zip(individual.iter()) {
+        assert_eq!(b.turn.message_id, i.turn.message_id);
+        assert_eq!(b.turn.session_id, i.turn.session_id);
+        assert_eq!(b.enrichment, i.enrichment);
+    }
+}
+
+#[test]
+fn query_turns_in_sessions_folds_stamps() {
+    // Stamps must still be folded correctly in the batched path.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    l.append_turns(&[
+        make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10),
+        make_turn("s2", "m2", "2025-01-02T00:00:00Z", 20),
+    ])
+    .unwrap();
+
+    let mut enrichment = BTreeMap::new();
+    enrichment.insert("phase".into(), "review".into());
+    let stamp = Stamp::new(
+        "2025-01-01T00:00:00Z",
+        StampSelector {
+            session_id: Some("s1".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+    l.append_stamp(&stamp).unwrap();
+
+    let session_ids: Vec<String> = vec!["s1".into(), "s2".into()];
+    let turns = l
+        .query_turns_in_sessions(&Query::default(), &session_ids)
+        .unwrap();
+
+    let t1 = turns
+        .iter()
+        .find(|e| e.turn.session_id == "s1")
+        .expect("s1 turn");
+    let t2 = turns
+        .iter()
+        .find(|e| e.turn.session_id == "s2")
+        .expect("s2 turn");
+
+    assert_eq!(
+        t1.enrichment.get("phase").map(String::as_str),
+        Some("review")
+    );
+    assert!(!t2.enrichment.contains_key("phase"));
+}
+
+#[test]
+fn query_turns_in_sessions_source_filter_excludes_mismatched_turns() {
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    let mut t_cc = make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10);
+    t_cc.source = SourceKind::ClaudeCode;
+    let mut t_cx = make_turn("s2", "m2", "2025-01-02T00:00:00Z", 20);
+    t_cx.source = SourceKind::Codex;
+    l.append_turns(&[t_cc, t_cx]).unwrap();
+
+    let base = Query {
+        source: Some(SourceKind::ClaudeCode),
+        ..Default::default()
+    };
+    let session_ids: Vec<String> = vec!["s1".into(), "s2".into()];
+    let turns = l.query_turns_in_sessions(&base, &session_ids).unwrap();
+
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].turn.source, SourceKind::ClaudeCode);
+    assert_eq!(turns[0].turn.session_id, "s1");
+}
+
+#[test]
+fn query_turns_in_sessions_chunking_handles_large_id_list() {
+    // Pass >500 session IDs (mostly nonexistent) to exercise the chunking
+    // path; confirm it doesn't error and still returns the seeded turns.
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+
+    l.append_turns(&[
+        make_turn("real-s1", "m1", "2025-01-01T00:00:00Z", 10),
+        make_turn("real-s2", "m2", "2025-01-02T00:00:00Z", 20),
+    ])
+    .unwrap();
+
+    let mut session_ids: Vec<String> = (0..600).map(|i| format!("ghost-{i}")).collect();
+    session_ids.push("real-s1".into());
+    session_ids.push("real-s2".into());
+
+    let turns = l
+        .query_turns_in_sessions(&Query::default(), &session_ids)
+        .unwrap();
+
+    let mut msg_ids: Vec<String> = turns.iter().map(|e| e.turn.message_id.clone()).collect();
+    msg_ids.sort();
+    assert_eq!(msg_ids, vec!["m1", "m2"]);
+}
