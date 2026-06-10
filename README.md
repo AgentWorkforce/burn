@@ -235,6 +235,8 @@ Reports read local data from the ledger and derived sidecars.
 
 ## Development
 
+Run `pnpm run verify` to run every check CI runs.
+
 ```bash
 pnpm install
 cargo build --workspace
