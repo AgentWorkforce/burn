@@ -659,7 +659,10 @@ fn ingest_all_rescans_after_source_file_appended() {
 
     let r1 = ingest_all(&mut ledger, &opts).unwrap();
     assert!(r1.appended_turns >= 1);
-    let turns_before = ledger.query_turns(&Query::for_session(sid_a)).unwrap().len();
+    let turns_before = ledger
+        .query_turns(&Query::for_session(sid_a))
+        .unwrap()
+        .len();
 
     // Confirm the gate is armed: an unchanged re-sweep short-circuits.
     assert_eq!(ingest_all(&mut ledger, &opts).unwrap().scanned_sessions, 0);
@@ -685,7 +688,10 @@ fn ingest_all_rescans_after_source_file_appended() {
         r3.appended_turns >= 1,
         "the appended turns must be ingested"
     );
-    let turns_after = ledger.query_turns(&Query::for_session(sid_a)).unwrap().len();
+    let turns_after = ledger
+        .query_turns(&Query::for_session(sid_a))
+        .unwrap()
+        .len();
     assert!(
         turns_after > turns_before,
         "appended turns must be queryable (before={turns_before}, after={turns_after})"
