@@ -352,7 +352,7 @@ fn pending_stamp_matches(record: &PendingStamp, candidate: &PendingStampSessionC
         return false;
     };
     if let Some(mtime) = candidate.session_mtime_ms {
-        if mtime + MTIME_SLOP_MS < spawn_ms {
+        if mtime.saturating_add(MTIME_SLOP_MS) < spawn_ms {
             return false;
         }
     }
@@ -362,7 +362,7 @@ fn pending_stamp_matches(record: &PendingStamp, candidate: &PendingStampSessionC
     // Fallback when reader cannot recover session cwd: rely on mtime causality.
     candidate
         .session_mtime_ms
-        .map(|m| m + MTIME_SLOP_MS >= spawn_ms)
+        .map(|m| m.saturating_add(MTIME_SLOP_MS) >= spawn_ms)
         .unwrap_or(false)
 }
 
@@ -548,5 +548,38 @@ mod tests {
         assert_eq!(resolved.applied, 1);
         assert_eq!(resolved.enrichment, enrichment);
         assert!(!written.file.exists());
+    }
+
+    /// A candidate with `session_mtime_ms = i64::MAX` (corrupt / hostile FS
+    /// metadata) must NOT be rejected by the mtime-causality guard, and when
+    /// there is no cwd the fallback must return `true` (mtime is not "before"
+    /// spawn). Before the `saturating_add` fix, `i64::MAX + 1` wraps negative
+    /// in release builds (or panics in debug), inverting the comparison.
+    #[test]
+    fn pending_stamp_matches_saturates_i64_max_mtime() {
+        // A real spawn timestamp (well in the past relative to i64::MAX).
+        let spawn_ts = "2024-01-01T00:00:00.000Z";
+        let record = PendingStamp {
+            v: 1,
+            harness: PendingStampHarness::Claude,
+            spawner_pid: 1,
+            spawn_start_ts: spawn_ts.to_string(),
+            cwd: "/some/project".to_string(),
+            enrichment: Enrichment::new(),
+            session_dir_hint: None,
+        };
+        let candidate = PendingStampSessionCandidate {
+            harness: PendingStampHarness::Claude,
+            session_id: "sess-max".to_string(),
+            session_path: None,
+            session_mtime_ms: Some(i64::MAX),
+            cwd: None, // no cwd → fallback path (line-365 guard)
+        };
+        // With saturating_add: i64::MAX.saturating_add(1) == i64::MAX >= spawn_ms → true
+        // Without fix (wraps): i64::MAX + 1 == i64::MIN < spawn_ms → false
+        assert!(
+            pending_stamp_matches(&record, &candidate),
+            "i64::MAX mtime must not be rejected by mtime-causality guard"
+        );
     }
 }
