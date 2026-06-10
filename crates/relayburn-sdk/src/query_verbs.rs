@@ -27,16 +27,17 @@ use crate::analyze::{
     load_claude_settings, load_overhead_file, load_pricing, project_claude_settings_path,
     provider_for, render_unified_diff_for_recommendation, sort_findings, sum_costs,
     summarize_fidelity, summarize_fidelity_from_iter, summarize_replacement_savings,
-    tool_call_pattern_to_finding, tool_output_bloat_to_finding, user_claude_settings_path,
-    AggregateByProviderOptions, AttributeOverheadInput, AttributionMethod, BashAggregation,
-    BashVerbAggregation, BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions,
-    CompareTable, ComputeQualityOptions, CostBreakdown, CoverageField, DetectPatternsOptions,
-    DetectToolCallPatternsOptions, DetectToolOutputBloatOptions, FidelitySummary, FieldCoverage,
-    FileAggregation, GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions,
-    LoadedClaudeSettings, MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind,
-    ParsedOverheadFile, PricingTable, ProviderAggregateRow, ProviderFilter, QualityResult,
-    ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SubagentAggregation,
-    SubagentTreeNode, SubagentTypeStats, ToolSavingsAggregate, UsageCostAggregateRow, WasteFinding,
+    tally_unpriced, tool_call_pattern_to_finding, tool_output_bloat_to_finding,
+    user_claude_settings_path, AggregateByProviderOptions, AttributeOverheadInput,
+    AttributionMethod, BashAggregation, BashVerbAggregation, BuildSubagentTreeOptions,
+    CompareOptions as AnalyzeCompareOptions, CompareTable, ComputeQualityOptions, CostBreakdown,
+    CoverageField, DetectPatternsOptions, DetectToolCallPatternsOptions,
+    DetectToolOutputBloatOptions, FidelitySummary, FieldCoverage, FileAggregation,
+    GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings,
+    MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind, ParsedOverheadFile,
+    PricingTable, ProviderAggregateRow, ProviderFilter, QualityResult, ReplacementSavingsSummary,
+    RowCoverage, SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
+    ToolSavingsAggregate, UsageCostAggregateRow, WasteFinding,
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
@@ -496,6 +497,14 @@ pub struct Summary {
     /// Counts roll up the trailing `stop_reason` of every assistant turn
     /// in the filtered slice. See #437.
     pub stop_reasons: StopReasonCounts,
+    /// Count of turns whose model had no entry in the pricing snapshot.
+    /// Their cost is reported as $0. Zero when all models are priced.
+    #[serde(default)]
+    pub unpriced_turns: u64,
+    /// Distinct model names (first-seen order) that had no pricing entry.
+    /// Empty when all models are priced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<String>,
 }
 
 impl LedgerHandle {
@@ -602,6 +611,10 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
         None
     };
 
+    // Use the same pricing table that was used for cost accumulation so the
+    // count precisely matches which turns contributed $0 to `total_cost`.
+    let (unpriced_turns, unpriced_models) = tally_unpriced(turns, pricing);
+
     Summary {
         total_tokens,
         total_cost,
@@ -617,6 +630,8 @@ fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> Summary {
         by_tag: None,
         replacement_savings,
         stop_reasons: StopReasonCounts::from_turns(turns),
+        unpriced_turns,
+        unpriced_models,
     }
 }
 
@@ -792,6 +807,14 @@ pub struct SummaryGroupedReport {
     pub subagents: crate::reader::SubagentCounts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<QualityResult>,
+    /// Count of turns whose model had no entry in the pricing snapshot.
+    /// Their cost is reported as $0. Zero when all models are priced.
+    #[serde(default)]
+    pub unpriced_turns: u64,
+    /// Distinct model names (first-seen order) that had no pricing entry.
+    /// Empty when all models are priced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -982,6 +1005,7 @@ impl LedgerHandle {
                 // behavior.
                 let session_filter = summary_subagent_session_filter(&opts, &turns);
                 let subagents = compute_summary_subagent_counts(session_filter.as_ref());
+                let (unpriced_turns, unpriced_models) = tally_unpriced(&turns, &pricing);
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
                     group_by,
                     tag_key,
@@ -995,6 +1019,8 @@ impl LedgerHandle {
                     stop_reasons,
                     subagents,
                     quality,
+                    unpriced_turns,
+                    unpriced_models,
                 }))
             }
             SummaryReportMode::ByTool => {
@@ -5044,6 +5070,145 @@ mod tests {
         assert_eq!(grouped.stop_reasons.pause_turn, 0);
         assert_eq!(grouped.stop_reasons.silent, 0);
         assert!(!grouped.stop_reasons.is_empty());
+    }
+
+    /// `compute_summary` (the slim legacy verb) populates unpriced_turns
+    /// and unpriced_models when a turn's model is absent from the pricing table.
+    #[test]
+    fn compute_summary_tracks_unpriced_turns_and_models() {
+        let pricing = load_pricing(None);
+        let unknown_model = "made-up-model-xyz";
+        let priced_turn = TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "s".into(),
+            session_path: None,
+            message_id: "m-priced".into(),
+            turn_index: 0,
+            ts: "2026-05-01T00:00:00.000Z".into(),
+            model: "claude-sonnet-4-6".into(),
+            project: None,
+            project_key: None,
+            usage: Usage {
+                input: 100,
+                output: 50,
+                reasoning: 0,
+                cache_read: 0,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        };
+        let unpriced_turn = TurnRecord {
+            message_id: "m-unpriced".into(),
+            turn_index: 1,
+            ts: "2026-05-01T00:01:00.000Z".into(),
+            model: unknown_model.into(),
+            ..priced_turn.clone()
+        };
+        let turns = vec![priced_turn, unpriced_turn];
+        let s = compute_summary(&turns, &pricing);
+        assert_eq!(s.turn_count, 2);
+        assert_eq!(s.unpriced_turns, 1, "one turn uses an unknown model");
+        assert_eq!(
+            s.unpriced_models,
+            vec![unknown_model],
+            "unknown model listed exactly once"
+        );
+    }
+
+    /// `summary_report` (grouped mode) surfaces unpriced turn count and model
+    /// names when a turn's model is absent from the pricing snapshot.
+    #[test]
+    fn summary_report_grouped_tracks_unpriced_turns_and_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = LedgerOpenOptions::with_home(dir.path());
+        let mut handle = Ledger::open(opts).expect("open ledger");
+
+        let make_turn = |idx: u64, msg: &str, model: &str, ts: &str| -> TurnRecord {
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: "sess-unpriced".into(),
+                session_path: None,
+                message_id: msg.into(),
+                turn_index: idx,
+                ts: ts.into(),
+                model: model.into(),
+                project: None,
+                project_key: None,
+                usage: Usage {
+                    input: 100 + idx,
+                    output: 50,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: vec![],
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            }
+        };
+
+        handle
+            .raw_mut()
+            .append_turns(&[
+                make_turn(
+                    0,
+                    "m-known",
+                    "claude-sonnet-4-6",
+                    "2026-05-01T00:00:00.000Z",
+                ),
+                make_turn(
+                    1,
+                    "m-unknown-1",
+                    "made-up-model-xyz",
+                    "2026-05-01T00:01:00.000Z",
+                ),
+                make_turn(
+                    2,
+                    "m-unknown-2",
+                    "made-up-model-xyz",
+                    "2026-05-01T00:02:00.000Z",
+                ),
+            ])
+            .expect("append turns");
+
+        let report = handle
+            .summary_report(SummaryReportOptions::default())
+            .expect("summary report");
+        let SummaryReport::Grouped(grouped) = report else {
+            panic!("expected grouped report");
+        };
+
+        assert_eq!(grouped.turn_count, 3);
+        assert_eq!(
+            grouped.unpriced_turns, 2,
+            "two turns used the unknown model"
+        );
+        assert_eq!(
+            grouped.unpriced_models,
+            vec!["made-up-model-xyz"],
+            "unknown model listed exactly once"
+        );
+        // The priced turn's cost must be non-zero; total must equal the priced portion.
+        assert!(
+            grouped.total_cost.total > 0.0,
+            "priced turn must contribute positive cost"
+        );
     }
 
     /// Acceptance test for issue #437: the legacy `LedgerHandle::summary`

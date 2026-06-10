@@ -50,7 +50,7 @@ pub use context_delta::{
     deltas_for_session, ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail,
     ReminderSource,
 };
-pub use cost::{cost_for_turn, cost_for_usage, sum_costs, CostBreakdown};
+pub use cost::{cost_for_turn, cost_for_usage, sum_costs, tally_unpriced, CostBreakdown};
 pub use fidelity::{
     has_minimum_fidelity, summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary,
 };

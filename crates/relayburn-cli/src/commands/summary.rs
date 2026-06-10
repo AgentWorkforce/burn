@@ -1014,6 +1014,17 @@ fn emit_human(report: &SummaryGroupedReport, ingest_report: &relayburn_sdk::Inge
     let out = lines.join("\n");
     // TS uses `process.stdout.write(lines.join('\n'))` — no trailing newline.
     print!("{}", out);
+
+    if report.unpriced_turns > 0 {
+        let models = report.unpriced_models.join(", ");
+        eprintln!(
+            "warning: {} turn(s) had no pricing for model(s): {} — their cost is reported as $0.",
+            report.unpriced_turns, models,
+        );
+        eprintln!(
+            "         Update the snapshot (pnpm run pricing:update) or add an override at $RELAYBURN_HOME/models.dev.json.",
+        );
+    }
 }
 
 fn render_quality(q: &QualityResult) -> String {
@@ -1271,6 +1282,8 @@ mod tests {
             stop_reasons: relayburn_sdk::StopReasonCounts::default(),
             subagents: SubagentCounts::default(),
             quality: Some(QualityResult::default()),
+            unpriced_turns: 0,
+            unpriced_models: Vec::new(),
         };
 
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
@@ -1324,6 +1337,8 @@ mod tests {
             stop_reasons: relayburn_sdk::StopReasonCounts::default(),
             subagents: SubagentCounts::default(),
             quality: None,
+            unpriced_turns: 0,
+            unpriced_models: Vec::new(),
         };
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
         assert!(
