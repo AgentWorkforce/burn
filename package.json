@@ -14,7 +14,8 @@
     "build:napi:debug": "pnpm --filter @relayburn/sdk build:napi:debug",
     "test": "pnpm --filter @relayburn/sdk test && pnpm --filter @relayburn/mcp test",
     "test:bundle": "pnpm --filter @relayburn/sdk test:bundle",
-    "pricing:update": "node scripts/update-pricing.mjs"
+    "pricing:update": "node scripts/update-pricing.mjs",
+    "verify": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && pnpm -r --if-present run build && pnpm run test"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
