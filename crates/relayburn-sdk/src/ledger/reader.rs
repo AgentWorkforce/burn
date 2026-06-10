@@ -62,6 +62,80 @@ pub(crate) fn query_turns(conn: &Connection, q: &Query) -> Result<Vec<EnrichedTu
     Ok(out)
 }
 
+/// Like `query_turns`, but matches any of `session_ids` in one SQL pass and
+/// loads the stamps table once. `base` supplies the non-session filters
+/// (source, since/until, project); its own `session_id` is ignored.
+///
+/// Empty `session_ids` returns `Ok(vec![])` without touching the DB.
+/// IDs are chunked in groups of at most 500 so prepared statements stay
+/// cacheable and the IN-list stays well under SQLite's host-parameter limit.
+pub(crate) fn query_turns_in_sessions(
+    conn: &Connection,
+    base: &Query,
+    session_ids: &[String],
+) -> Result<Vec<EnrichedTurn>> {
+    if session_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let stamps = collect_stamps(conn)?;
+
+    // Build the base WHERE clause without a session_id filter.
+    let base_query = Query {
+        session_id: None,
+        ..base.clone()
+    };
+    let (base_sql, base_bound) = build_select_sql(
+        "turns",
+        &base_query,
+        TableFilters {
+            ts_nullable: false,
+            session_id_or_related: false,
+            project_columns: true,
+        },
+    );
+
+    // Determine the WHERE prefix to know how to append the IN clause.
+    // `build_select_sql` appends " ORDER BY rowid" at the end; we need to
+    // inject our IN clause before that suffix.
+    const ORDER_SUFFIX: &str = " ORDER BY rowid";
+    let base_without_order = base_sql.strip_suffix(ORDER_SUFFIX).unwrap_or(&base_sql);
+    let has_where = base_without_order.contains(" WHERE ");
+
+    let mut out = Vec::new();
+
+    for chunk in session_ids.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let connector = if has_where { " AND " } else { " WHERE " };
+        let sql =
+            format!("{base_without_order}{connector}session_id IN ({placeholders}){ORDER_SUFFIX}");
+
+        let mut bound: Vec<String> = base_bound.clone();
+        bound.extend(chunk.iter().cloned());
+
+        let mut stmt = conn.prepare_cached(&sql)?;
+        let rows = stmt
+            .query_map(params_from_iter(bound.iter()), |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        for json in rows {
+            let turn: TurnRecord = match serde_json::from_str(&json) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let enrichment = fold_stamps(&turn, &stamps);
+            if !enrichment_filter_passes(&enrichment, base) {
+                continue;
+            }
+            out.push(EnrichedTurn { turn, enrichment });
+        }
+    }
+
+    Ok(out)
+}
+
 pub(crate) fn query_compactions(conn: &Connection, q: &Query) -> Result<Vec<CompactionEvent>> {
     select_filtered_records(
         conn,
