@@ -1008,7 +1008,9 @@ fn extract_user_content(line: &serde_json::Map<String, Value>) -> Vec<ContentRec
                     .get("content")
                     .cloned()
                     .unwrap_or(Value::String(String::new()));
-                let mut rec = ContentRecord {
+                let is_error =
+                    (bo.get("is_error").and_then(Value::as_bool) == Some(true)).then_some(true);
+                let rec = ContentRecord {
                     v: 1,
                     source: SourceKind::ClaudeCode,
                     session_id: session_id.clone(),
@@ -1021,12 +1023,9 @@ fn extract_user_content(line: &serde_json::Map<String, Value>) -> Vec<ContentRec
                     tool_result: Some(ContentToolResult {
                         tool_use_id: tu,
                         content,
-                        is_error: None,
+                        is_error,
                     }),
                 };
-                if bo.get("is_error").and_then(Value::as_bool) == Some(true) {
-                    rec.tool_result.as_mut().unwrap().is_error = Some(true);
-                }
                 out.push(rec);
             }
             "text" => {
@@ -4898,6 +4897,77 @@ mod tests {
             Some("ls -la /tmp/project")
         );
         assert_eq!(agent_use.tool_use.as_ref().unwrap().name, "Agent");
+    }
+
+    #[test]
+    fn content_tool_result_is_error_tri_state() {
+        // Verify that ContentRecord.tool_result.is_error is Some(true) when
+        // the JSON field is `true`, and None when absent (or `false`).
+        // Uses user-turn-blocks.jsonl which has:
+        //   - tu_bash_1 (no is_error field)  → None
+        //   - tu_read_1 (no is_error field)  → None
+        //   - tu_bash_2 ("is_error": true)   → Some(true)
+        let path = fixture("user-turn-blocks.jsonl");
+        let res = parse_claude_session(
+            &path,
+            &ParseOptions {
+                content_mode: Some(ContentStoreMode::Full),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let tool_results: Vec<&ContentRecord> = res
+            .content
+            .iter()
+            .filter(|c| matches!(c.kind, ContentKind::ToolResult))
+            .collect();
+        assert_eq!(
+            tool_results.len(),
+            3,
+            "expected 3 tool_result content records"
+        );
+        let bash1 = tool_results
+            .iter()
+            .find(|c| {
+                c.tool_result
+                    .as_ref()
+                    .map(|tr| tr.tool_use_id.as_str() == "tu_bash_1")
+                    .unwrap_or(false)
+            })
+            .expect("tu_bash_1 content record present");
+        assert_eq!(
+            bash1.tool_result.as_ref().unwrap().is_error,
+            None,
+            "tu_bash_1 has no is_error field — must be None"
+        );
+        let read1 = tool_results
+            .iter()
+            .find(|c| {
+                c.tool_result
+                    .as_ref()
+                    .map(|tr| tr.tool_use_id.as_str() == "tu_read_1")
+                    .unwrap_or(false)
+            })
+            .expect("tu_read_1 content record present");
+        assert_eq!(
+            read1.tool_result.as_ref().unwrap().is_error,
+            None,
+            "tu_read_1 has no is_error field — must be None"
+        );
+        let bash2 = tool_results
+            .iter()
+            .find(|c| {
+                c.tool_result
+                    .as_ref()
+                    .map(|tr| tr.tool_use_id.as_str() == "tu_bash_2")
+                    .unwrap_or(false)
+            })
+            .expect("tu_bash_2 content record present");
+        assert_eq!(
+            bash2.tool_result.as_ref().unwrap().is_error,
+            Some(true),
+            "tu_bash_2 has is_error=true — must be Some(true)"
+        );
     }
 
     // ----- parseClaudeSession fork / continuation relationships (#112) -----
