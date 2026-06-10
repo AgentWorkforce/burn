@@ -138,6 +138,23 @@ impl Ledger {
         reader::query_turns(&self.conns.burn, q)
     }
 
+    /// Like [`Self::query_turns`], but fetches all turns for any of
+    /// `session_ids` in a single batched SQL query, loading the stamps
+    /// table exactly once regardless of how many sessions are requested.
+    /// `base` supplies the non-session filters (source, since, until,
+    /// project); its own `session_id` field is ignored.
+    ///
+    /// Intentionally `pub(crate)`: callers outside the crate that need
+    /// multi-session filtering should design the `Query` shape at the
+    /// cross-language level rather than using this internal shortcut.
+    pub(crate) fn query_turns_in_sessions(
+        &self,
+        base: &Query,
+        session_ids: &[String],
+    ) -> Result<Vec<EnrichedTurn>> {
+        reader::query_turns_in_sessions(&self.conns.burn, base, session_ids)
+    }
+
     pub fn query_compactions(&self, q: &Query) -> Result<Vec<crate::reader::CompactionEvent>> {
         reader::query_compactions(&self.conns.burn, q)
     }

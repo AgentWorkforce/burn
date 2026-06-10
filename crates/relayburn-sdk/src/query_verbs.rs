@@ -1316,24 +1316,28 @@ fn load_summary_by_tool_attribution_turns(
     selected: &[EnrichedTurn],
     q: &Query,
 ) -> Result<Vec<TurnRecord>> {
-    let session_ids: BTreeSet<String> =
-        selected.iter().map(|e| e.turn.session_id.clone()).collect();
-    let mut by_key: IndexMap<String, EnrichedTurn> = IndexMap::new();
-    for session_id in session_ids {
-        let turns = ledger.query_turns(&Query {
-            session_id: Some(session_id),
+    let session_ids: Vec<String> = selected
+        .iter()
+        .map(|e| e.turn.session_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let turns = ledger.query_turns_in_sessions(
+        &Query {
             source: q.source,
             ..Default::default()
-        })?;
-        for t in turns {
-            let key = format!(
-                "{}|{}|{}",
-                t.turn.source.wire_str(),
-                t.turn.session_id,
-                t.turn.message_id,
-            );
-            by_key.insert(key, t);
-        }
+        },
+        &session_ids,
+    )?;
+    let mut by_key: IndexMap<String, EnrichedTurn> = IndexMap::new();
+    for t in turns {
+        let key = format!(
+            "{}|{}|{}",
+            t.turn.source.wire_str(),
+            t.turn.session_id,
+            t.turn.message_id,
+        );
+        by_key.insert(key, t);
     }
     Ok(by_key.into_values().map(|e| e.turn).collect())
 }
@@ -7173,6 +7177,115 @@ mod tests {
         // zero; the assertion catches the regression by failing if a
         // future bug re-introduces orphan duplication.
         assert!(orphan_subs_per_tree.iter().all(|n| *n == 0));
+    }
+
+    #[test]
+    fn summary_report_by_tool_aggregates_across_multiple_sessions() {
+        // Regression: the old N+1 loop was replaced with a single batched
+        // query. Verify that per-tool totals include contributions from
+        // BOTH sessions so a future regression restoring the loop can't
+        // silently drop cross-session data.
+        let dir = tempfile::tempdir().unwrap();
+        let opts = LedgerOpenOptions::with_home(dir.path());
+        let mut handle = Ledger::open(opts).expect("open ledger");
+
+        let make_turn_with_tool =
+            |session_id: &str, message_id: &str, ts: &str, tool: &str| TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: session_id.into(),
+                session_path: None,
+                message_id: message_id.into(),
+                turn_index: 0,
+                ts: ts.into(),
+                model: "claude-sonnet-4-6".into(),
+                project: Some("/tmp/proj".into()),
+                project_key: None,
+                usage: Usage {
+                    input: 1000,
+                    output: 500,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "tc-1".into(),
+                    name: tool.into(),
+                    target: None,
+                    args_hash: "h1".into(),
+                    is_error: None,
+                    edit_pre_hash: None,
+                    edit_post_hash: None,
+                    skill_name: None,
+                    replaced_tools: None,
+                    collapsed_calls: None,
+                }],
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            };
+
+        // Attribution works by attributing turn[i]'s input cost to the tool
+        // calls in turn[i-1]. So to get a tool to appear in the report, we
+        // need a "response turn" that follows it.
+        //
+        // Layout:
+        //   sess-a: ma-1 (Read), ma-2 (no tools) → ma-2 cost attributed to Read
+        //   sess-b: mb-1 (Edit), mb-2 (no tools) → mb-2 cost attributed to Edit
+        //
+        // Cross-session assertion: Read from sess-a and Edit from sess-b both
+        // appear in the same report, proving the batched query covers all sessions.
+        let make_turn_no_tools = |session_id: &str, message_id: &str, ts: &str| {
+            let mut t = make_turn_with_tool(session_id, message_id, ts, "Read");
+            t.tool_calls.clear();
+            t
+        };
+
+        handle
+            .raw_mut()
+            .append_turns(&[
+                make_turn_with_tool("sess-a", "ma-1", "2026-05-01T00:00:00.000Z", "Read"),
+                make_turn_no_tools("sess-a", "ma-2", "2026-05-01T00:01:00.000Z"),
+                make_turn_with_tool("sess-b", "mb-1", "2026-05-01T01:00:00.000Z", "Edit"),
+                make_turn_no_tools("sess-b", "mb-2", "2026-05-01T01:01:00.000Z"),
+            ])
+            .expect("append turns");
+
+        let report = handle
+            .summary_report(SummaryReportOptions {
+                mode: SummaryReportMode::ByTool,
+                ..SummaryReportOptions::default()
+            })
+            .expect("summary report");
+        let SummaryReport::ByTool(report) = report else {
+            panic!("expected by-tool report");
+        };
+
+        // 4 turns across 2 sessions.
+        assert_eq!(report.turn_count, 4);
+
+        let read_row = report
+            .rows
+            .iter()
+            .find(|r| r.tool == "Read")
+            .expect("Read row from sess-a");
+        let edit_row = report
+            .rows
+            .iter()
+            .find(|r| r.tool == "Edit")
+            .expect("Edit row from sess-b");
+
+        // Each tool call is from a different session — cross-session totals.
+        assert_eq!(read_row.calls, 1, "Read calls should come from sess-a");
+        assert_eq!(edit_row.calls, 1, "Edit calls should come from sess-b");
+        // Attribution cost must be positive for both tools.
+        assert!(read_row.attributed_cost > 0.0);
+        assert!(edit_row.attributed_cost > 0.0);
     }
 }
 
