@@ -1507,7 +1507,9 @@ fn summary_bridge_key(preceding_message_id: &str, following_message_id: &str) ->
     format!("{preceding_message_id}\0{following_message_id}")
 }
 
-pub(crate) fn summary_tool_attribution_method(agg: &SummaryToolAgg) -> SummaryToolAttributionMethod {
+pub(crate) fn summary_tool_attribution_method(
+    agg: &SummaryToolAgg,
+) -> SummaryToolAttributionMethod {
     if agg.sized_cost == 0.0 && agg.even_split_cost == 0.0 {
         SummaryToolAttributionMethod::Unattributed
     } else if agg.sized_cost >= agg.even_split_cost {

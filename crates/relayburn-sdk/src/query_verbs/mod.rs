@@ -381,30 +381,23 @@ fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFi
 mod summary;
 pub use summary::*;
 
-
 mod sessions;
 pub use sessions::*;
-
 
 mod overhead;
 pub use overhead::*;
 
-
 mod hotspots;
 pub use hotspots::*;
-
 
 mod compare;
 pub use compare::*;
 
-
 mod state;
 pub use state::*;
 
-
 mod flow;
 pub use flow::*;
-
 
 // ---------------------------------------------------------------------------
 // Tests
