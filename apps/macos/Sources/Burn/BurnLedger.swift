@@ -41,6 +41,76 @@ actor BurnLedger {
         return total
     }
 
+    /// One `burn summary` reading: cumulative cost and token count since a point.
+    struct Summary {
+        /// Total USD cost (`totalCost.total`).
+        let cost: Double
+        /// Total tokens across every model row's usage fields.
+        let tokens: Int
+    }
+
+    /// Cumulative cost and token totals for `provider` since `since`, or `nil`
+    /// when burn is unavailable or the query fails. Cheap enough to poll on a
+    /// short interval: `burn summary` only queries the ledger (it no longer runs
+    /// an ingest sweep), so freshness comes from a separate `ingest --watch`.
+    func summary(provider: String, since: Date) async -> Summary? {
+        let iso = ISO8601DateFormatter().string(from: since)
+        let args = ["summary", "--provider", provider, "--since", iso, "--json"]
+        guard let output = runBurn(args),
+              let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        let cost = ((json["totalCost"] as? [String: Any])?["total"] as? NSNumber)?.doubleValue ?? 0
+
+        // Total tokens = sum of every usage field across model rows.
+        var tokens = 0
+        if let byModel = json["byModel"] as? [[String: Any]] {
+            let fields = ["input", "output", "reasoning", "cacheRead", "cacheCreate5m", "cacheCreate1h"]
+            for row in byModel {
+                guard let usage = row["usage"] as? [String: Any] else { continue }
+                for field in fields {
+                    tokens += (usage[field] as? NSNumber)?.intValue ?? 0
+                }
+            }
+        }
+        return Summary(cost: cost, tokens: tokens)
+    }
+
+    // MARK: - Long-lived ingest watch
+
+    /// The running `burn ingest --watch` process, if any. Kept alive for the
+    /// lifetime of the live view so freshly written turns land in the ledger and
+    /// the polled live chart actually moves.
+    private var watchProcess: Process?
+
+    /// Starts a background `burn ingest --watch` (FS-event driven) if one isn't
+    /// already running. No-op when burn is unavailable. The PATH fallback can't
+    /// host a long-lived child cleanly through a login shell, so the watch only
+    /// runs with the bundled native helper; the live chart still polls either
+    /// way, it just won't self-freshen without it.
+    func startIngestWatch() {
+        guard watchProcess == nil else { return }
+        guard case .bundled(let url) = resolveTool() else { return }
+        let process = Process()
+        process.executableURL = url
+        process.arguments = ["ingest", "--watch", "--quiet"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            watchProcess = process
+        } catch {
+            watchProcess = nil
+        }
+    }
+
+    /// Terminates the background watch process, if running.
+    func stopIngestWatch() {
+        watchProcess?.terminate()
+        watchProcess = nil
+    }
+
     // MARK: - Resolution & invocation
 
     private func resolveTool() -> Tool {

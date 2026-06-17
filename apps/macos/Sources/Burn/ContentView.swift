@@ -1,18 +1,53 @@
 import SwiftUI
 
+/// The popover's tabs: the headline usage burndown, and the live burn-rate
+/// stream.
+private enum BurnTab: Hashable {
+    case usage
+    case live
+}
+
 /// The popover shown when the menu bar item is clicked.
 struct ContentView: View {
     @ObservedObject var viewModel: UsageViewModel
+    @StateObject private var liveViewModel: LiveBurnViewModel
+    @State private var tab: BurnTab = .usage
+
+    init(viewModel: UsageViewModel) {
+        self.viewModel = viewModel
+        _liveViewModel = StateObject(
+            wrappedValue: LiveBurnViewModel(provider: viewModel.selectedProvider))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             Divider()
-            content
+            tabPicker
+            switch tab {
+            case .usage:
+                content
+            case .live:
+                LiveBurnView(viewModel: liveViewModel)
+            }
         }
         .padding(16)
         .frame(width: 380)
         .background(quitShortcut)
+        // Keep the live stream tracking whichever provider the picker selects.
+        .onChange(of: viewModel.selectedProvider) { provider in
+            liveViewModel.select(provider)
+        }
+    }
+
+    /// Segmented switch between the usage burndown and the live stream.
+    private var tabPicker: some View {
+        Picker("", selection: $tab) {
+            Text("Usage").tag(BurnTab.usage)
+            Text("Live").tag(BurnTab.live)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
     /// Registers ⌘Q while the popover is open. The app is menu-bar-only (no Dock
