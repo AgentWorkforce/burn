@@ -31,40 +31,44 @@ final class LiveBurnViewModel: ObservableObject {
     /// True once we've confirmed burn can't be queried, so the view can hint.
     @Published private(set) var unavailable = false
 
-    /// How often we poll `burn summary`. Cheap now that summary doesn't ingest,
-    /// so a tight cadence makes the chart feel live without hammering anything.
-    private let pollInterval: TimeInterval = 1.5
-    /// Rolling window passed to `--since`: cumulative totals are measured over
-    /// the trailing few minutes so the line tracks recent activity, not all time.
-    private let windowSeconds: TimeInterval = 5 * 60
-    /// Ring-buffer cap. At 1.5s/sample this is ~3.75 minutes of history on screen.
+    /// How often we ingest + poll `burn summary`. Each cycle runs a one-shot
+    /// incremental ingest (summary is read-only and the background watch lags),
+    /// which takes a beat on a large ledger — so the cadence is a few seconds,
+    /// not sub-second.
+    private let pollInterval: TimeInterval = 2.5
+    /// Trailing window the burn rate is averaged over. Each poll re-queries the
+    /// last `rateWindow` seconds and divides — a moving average that's robust to
+    /// the window sliding and to late ingests, unlike an inter-sample delta
+    /// (which dips negative as old turns age out and reads as "no usage").
+    private let rateWindow: TimeInterval = 60
+    /// Ring-buffer cap on samples kept on screen.
     private let maxSamples = 150
 
     private var provider: ProviderName
     private var timer: Timer?
     /// Guards against overlapping polls if a `summary` call runs long.
     private var polling = false
+    /// Running session totals (integral of the rate) for the cumulative line.
+    private var sessionTokens = 0.0
+    private var sessionCost = 0.0
 
     init(provider: ProviderName) {
         self.provider = provider
     }
 
-    /// Begins polling and starts the background ingest watch. Idempotent.
+    /// Begins the ingest+poll loop. Idempotent.
     func start() {
         guard timer == nil else { return }
-        Task { await BurnLedger.shared.startIngestWatch() }
         Task { await poll() }
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { await self?.poll() }
         }
     }
 
-    /// Stops polling and tears down the ingest watch. Called when the live view
-    /// disappears or the app closes.
+    /// Stops the loop. Called when the live view disappears or the app closes.
     func stop() {
         timer?.invalidate()
         timer = nil
-        Task { await BurnLedger.shared.stopIngestWatch() }
     }
 
     /// Switches the tracked provider, clearing the series so the new provider's
@@ -73,6 +77,8 @@ final class LiveBurnViewModel: ObservableObject {
         guard provider != self.provider else { return }
         self.provider = provider
         samples = []
+        sessionTokens = 0
+        sessionCost = 0
         unavailable = false
         Task { await poll() }
     }
@@ -82,42 +88,36 @@ final class LiveBurnViewModel: ObservableObject {
         polling = true
         defer { polling = false }
 
+        // Freshen the ledger ourselves — summary is read-only and the background
+        // watch lags, so without this the totals don't move even with active
+        // sessions.
+        await BurnLedger.shared.ingest()
+
         let burnProvider = BurnLedger.burnProvider(for: provider)
-        let since = Date().addingTimeInterval(-windowSeconds)
-        guard let summary = await BurnLedger.shared.summary(provider: burnProvider, since: since) else {
+        let now = Date()
+        guard let window = await BurnLedger.shared.summary(
+            provider: burnProvider, since: now.addingTimeInterval(-rateWindow)
+        ) else {
             // Only flip to "unavailable" before we've ever shown data, so a
             // transient query failure doesn't blank an established chart.
             if samples.isEmpty { unavailable = true }
             return
         }
         unavailable = false
-        append(summary)
-    }
 
-    private func append(_ summary: BurnLedger.Summary) {
-        let now = Date()
-        let tokensPerSecond: Double
-        let dollarsPerMinute: Double
-        if let prev = samples.last {
-            let dt = now.timeIntervalSince(prev.date)
-            if dt > 0 {
-                // Deltas can dip negative as the rolling window slides old turns
-                // out from under `--since`; clamp so the rate line stays sane.
-                tokensPerSecond = max(0, Double(summary.tokens - prev.tokens) / dt)
-                dollarsPerMinute = max(0, (summary.cost - prev.cost) / dt * 60)
-            } else {
-                tokensPerSecond = 0
-                dollarsPerMinute = 0
-            }
-        } else {
-            tokensPerSecond = 0
-            dollarsPerMinute = 0
-        }
+        // Burn rate = tokens/cost over the trailing `rateWindow`, divided by it.
+        let tokensPerSecond = Double(window.tokens) / rateWindow
+        let dollarsPerMinute = window.cost / rateWindow * 60
+
+        // Integrate the rate into a monotonic session total for the second line.
+        let dt = samples.last.map { now.timeIntervalSince($0.date) } ?? pollInterval
+        sessionTokens += tokensPerSecond * dt
+        sessionCost += dollarsPerMinute / 60 * dt
 
         samples.append(LiveBurnSample(
             date: now,
-            cost: summary.cost,
-            tokens: summary.tokens,
+            cost: sessionCost,
+            tokens: Int(sessionTokens),
             tokensPerSecond: tokensPerSecond,
             dollarsPerMinute: dollarsPerMinute
         ))
