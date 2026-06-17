@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct AgentLimitApp: App {
+struct BurnApp: App {
     @StateObject private var viewModel = UsageViewModel()
 
     var body: some Scene {

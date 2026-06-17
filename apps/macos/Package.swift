@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "AgentLimit",
+    name: "Burn",
     platforms: [
         .macOS(.v13)
     ],
     targets: [
         .executableTarget(
-            name: "AgentLimit",
-            path: "Sources/AgentLimit",
+            name: "Burn",
+            path: "Sources/Burn",
             resources: [
                 .process("Resources")
             ]

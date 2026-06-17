@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Builds AgentLimit.app — a macOS menu bar app — from the Swift package.
+# Builds Burn.app — a macOS menu bar app — from the Swift package.
 # Requires macOS with the Swift toolchain (Xcode or Command Line Tools).
 #
 set -euo pipefail
 
-APP_NAME="AgentLimit"
+APP_NAME="Burn"
 CONFIG="release"
 
 cd "$(dirname "$0")"
@@ -32,12 +32,14 @@ done
 
 # Bundle the native `burn` helper (self-contained Rust binary from this repo's
 # relayburn-cli) into Contents/MacOS so spend works with no separate install.
-# Skipped if cargo is unavailable — the app then falls back to a `burn` on PATH.
+# Named `burn-cli` to avoid colliding with the `Burn` app executable on
+# case-insensitive filesystems. Skipped if cargo is unavailable — the app then
+# falls back to a `burn` on PATH.
 REPO_ROOT="$(cd ../.. && pwd)"
 if command -v cargo >/dev/null 2>&1; then
     echo "Building burn helper (cargo)…"
     ( cd "$REPO_ROOT" && cargo build --release -p relayburn-cli )
-    cp "$REPO_ROOT/target/release/burn" "$APP_DIR/Contents/MacOS/burn"
+    cp "$REPO_ROOT/target/release/burn" "$APP_DIR/Contents/MacOS/burn-cli"
 else
     echo "warning: cargo not found — skipping bundled burn helper (spend will"
     echo "         require a 'burn' on PATH at runtime)."

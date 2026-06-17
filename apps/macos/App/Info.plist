@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>AgentLimit</string>
+    <string>Burn</string>
     <key>CFBundleDisplayName</key>
-    <string>Agent Limit</string>
+    <string>Burn</string>
     <key>CFBundleExecutable</key>
-    <string>AgentLimit</string>
+    <string>Burn</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>com.agentworkforce.agentlimit</string>
+    <string>com.agentworkforce.burn</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

@@ -1,4 +1,4 @@
-# Agent Limit — burn's macOS app
+# Burn for Mac
 
 The macOS **menu bar app** for [burn](../../). It shows your **Claude Code** and
 **Codex** usage limits as burndown charts — so you can see at a glance whether
@@ -53,9 +53,9 @@ access — choose **Always Allow**.
 
 ## Install
 
-Download the latest DMG, open it, and drag **Agent Limit** to **Applications**:
+Download the latest DMG, open it, and drag **Burn** to **Applications**:
 
-> **[⬇ AgentLimit-arm64.dmg](../../releases/download/macos-latest/AgentLimit-arm64.dmg)**
+> **[⬇ Burn-arm64.dmg](../../releases/download/macos-latest/Burn-arm64.dmg)**
 > (Apple Silicon)
 
 The build is signed and notarized, so it launches without Gatekeeper warnings.
@@ -69,13 +69,13 @@ Requires macOS 13+ and the Swift toolchain (Xcode or the Command Line Tools).
 
 ```bash
 ./build.sh
-open dist/AgentLimit.app
+open dist/Burn.app
 ```
 
 To install it permanently:
 
 ```bash
-cp -R dist/AgentLimit.app /Applications/
+cp -R dist/Burn.app /Applications/
 ```
 
 For development you can also run straight from the package:
@@ -90,11 +90,11 @@ swift run
 Package.swift                 Swift package manifest
 App/Info.plist                Bundle metadata (LSUIElement → menu-bar-only app)
 App/AppIcon.icns              App icon (regenerate with scripts/make-icon.sh)
-build.sh                      Builds AgentLimit.app
+build.sh                      Builds Burn.app
 release.sh                    Signs, notarizes & packages the DMG
 scripts/                      Icon generator
-Sources/AgentLimit/
-  AgentLimitApp.swift         App entry point + menu bar label
+Sources/Burn/
+  BurnApp.swift               App entry point + menu bar label
   ContentView.swift           Popover UI + provider icon picker
   BurndownChartView.swift     Swift Charts burndown card
   BrandIcon.swift             Loads/tints the lobe-icons SVGs
@@ -123,9 +123,9 @@ To cut a release, go to **Actions → "Release (macOS app)" → Run workflow**. 
 2. generates release notes from commits since the last `macos-v*` tag;
 3. builds the app **and the native `burn` helper** (`cargo build -p
    relayburn-cli`), bundles + signs both with a hardened runtime, notarizes via
-   the App Store Connect API key, staples, and packages `AgentLimit-arm64.dmg`;
+   the App Store Connect API key, staples, and packages `Burn-arm64.dmg`;
 4. publishes a versioned release (history) and moves a `macos-latest` pointer so
-   `releases/download/macos-latest/AgentLimit-arm64.dmg` is a stable link. It is
+   `releases/download/macos-latest/Burn-arm64.dmg` is a stable link. It is
    **not** marked the repo's "latest" — that belongs to burn's CLI releases.
 
 `release.sh` runs the same build/sign/notarize/package steps locally (set
