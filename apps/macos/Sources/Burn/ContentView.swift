@@ -7,11 +7,26 @@ private enum BurnTab: Hashable {
     case live
 }
 
+/// Popover appearance preference, persisted in UserDefaults.
+private enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+}
+
 /// The popover shown when the menu bar item is clicked.
 struct ContentView: View {
     @ObservedObject var viewModel: UsageViewModel
     @StateObject private var liveViewModel: LiveBurnViewModel
     @State private var tab: BurnTab = .usage
+    @State private var showingSettings = false
+    @AppStorage("appearance") private var appearanceRaw = AppearanceMode.system.rawValue
 
     init(viewModel: UsageViewModel) {
         self.viewModel = viewModel
@@ -23,21 +38,72 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             Divider()
-            tabPicker
-            switch tab {
-            case .usage:
-                content
-            case .live:
-                LiveBurnView(viewModel: liveViewModel)
+            if showingSettings {
+                settingsView
+            } else {
+                tabPicker
+                switch tab {
+                case .usage:
+                    content
+                case .live:
+                    LiveBurnView(viewModel: liveViewModel)
+                }
             }
         }
         .padding(16)
         .frame(width: 380)
         .background(quitShortcut)
+        // Appearance is applied to the whole popover by AppDelegate via
+        // `popover.appearance` (driven by the same "appearance" default).
         // Keep the live stream tracking whichever provider the picker selects.
         .onChange(of: viewModel.selectedProvider) { provider in
             liveViewModel.select(provider)
         }
+    }
+
+    // MARK: Settings
+
+    /// The settings tab, toggled by the header cog.
+    private var settingsView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Appearance")
+                    .font(.subheadline.weight(.medium))
+                Picker("", selection: $appearanceRaw) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Text(mode.label).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            Divider()
+
+            Button { NSApp.terminate(nil) } label: {
+                Label("Quit Burn", systemImage: "power")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+            .help("Quit Burn (⌘Q)")
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
+    }
+
+    /// Header cog that toggles the settings tab.
+    private var settingsButton: some View {
+        Button { showingSettings.toggle() } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(showingSettings ? Color.accentColor : .secondary)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Settings")
     }
 
     /// Segmented switch between the usage burndown and the live stream.
@@ -65,7 +131,11 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            providerPicker
+            HStack(spacing: 8) {
+                providerPicker
+                Spacer()
+                settingsButton
+            }
 
             Text(subtitle)
                 .font(.caption)
