@@ -22,6 +22,9 @@ final class UsageViewModel: ObservableObject {
     /// across refreshes, unlike the per-fetch metric id). Empty when burn isn't
     /// installed.
     @Published private(set) var spend: [String: PeriodSpend] = [:]
+    /// The menu bar flame image. Rendered here (off the view-render path) and
+    /// only when usage changes — see the warning in `MenuBarLabel`.
+    @Published private(set) var menuBarIcon: NSImage
 
     let refreshInterval: TimeInterval = 60
 
@@ -41,7 +44,21 @@ final class UsageViewModel: ObservableObject {
         } else {
             selectedProvider = .codex
         }
+        menuBarIcon = MenuBarIcon.render(usage: nil, offTarget: false)
         start()
+    }
+
+    /// Recomputes the cached menu bar flame from the current headline state, but
+    /// only when the visual state actually changes — keeping the published
+    /// `NSImage` instance stable so the menu bar item never churns.
+    private var lastIconKey: String?
+    private func updateMenuBarIcon() {
+        let usage = headlineUsage
+        let offTarget = headlineOffTarget
+        let key = "\(offTarget)-\(usage ?? -1)"
+        guard key != lastIconKey else { return }
+        lastIconKey = key
+        menuBarIcon = MenuBarIcon.render(usage: usage, offTarget: offTarget)
     }
 
     private func start() {
@@ -59,6 +76,7 @@ final class UsageViewModel: ObservableObject {
         charts = []
         notice = nil
         spend = [:]
+        updateMenuBarIcon()
         // New provider has its own rate-limit budget; clear any pending backoff.
         backoffUntil = nil
         consecutiveRateLimits = 0
@@ -90,6 +108,7 @@ final class UsageViewModel: ObservableObject {
             } else {
                 notice = result.message
             }
+            updateMenuBarIcon()
             isLoading = false
             return
         }
@@ -110,6 +129,7 @@ final class UsageViewModel: ObservableObject {
         status = result
         charts = built
         lastUpdated = now
+        updateMenuBarIcon()
         isLoading = false
 
         // Spend comes from the burn ledger via a subprocess; load it off the

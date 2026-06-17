@@ -16,41 +16,43 @@ struct BurnApp: App {
 
 /// The label shown in the menu bar: a fixed-size flame colored by the highest
 /// current usage (orange→red) that fills (turns "hot") when that window is
-/// burning off its target pace. The flame is rendered to a non-template image so
-/// the menu bar preserves its color instead of flattening it to monochrome.
+/// burning off its target pace.
+///
+/// IMPORTANT: the flame image is rendered by the view model when usage changes
+/// and cached — `body` only displays it. Rendering with `ImageRenderer` *inside*
+/// this `body` is re-entrant SwiftUI rendering and makes `MenuBarExtra` spawn
+/// status items in a runaway loop, so never move it back here.
 struct MenuBarLabel: View {
     @ObservedObject var viewModel: UsageViewModel
 
     var body: some View {
-        Image(nsImage: flameImage)
+        Image(nsImage: viewModel.menuBarIcon)
             .renderingMode(.original)
     }
+}
 
-    /// Outline flame while on pace; a solid "hot" flame once over pace.
-    private var symbol: String {
-        viewModel.headlineOffTarget ? "flame.fill" : "flame"
-    }
-
+/// Renders the colored menu bar flame to a non-template `NSImage` (so the menu
+/// bar preserves the color instead of flattening it to monochrome). Called off
+/// the view-render path — see `MenuBarLabel`.
+enum MenuBarIcon {
     /// Fixed size — a usage-varying size would shift the menu bar layout. Usage
     /// is conveyed by color and fill instead.
-    private let flameSize: CGFloat = 15
+    private static let size: CGFloat = 15
 
-    /// Warms from orange toward red as usage climbs, and is full red whenever the
-    /// window is off its target pace.
-    private var flameColor: Color {
-        if viewModel.headlineOffTarget { return .red }
-        let t = min(1, Double(viewModel.headlineUsage ?? 0) / 100)
-        // orange #FF8C00 → red #FF3B30
-        return Color(red: 1.0, green: 0.55 - 0.32 * t, blue: 0.19 * t)
-    }
-
-    /// Rasterizes the colored flame. `isTemplate = false` stops the menu bar from
-    /// re-tinting it monochrome.
-    private var flameImage: NSImage {
+    @MainActor
+    static func render(usage: Int?, offTarget: Bool) -> NSImage {
+        let symbol = offTarget ? "flame.fill" : "flame"
+        let color: Color
+        if offTarget {
+            color = .red
+        } else {
+            let t = min(1, Double(usage ?? 0) / 100)
+            color = Color(red: 1.0, green: 0.55 - 0.32 * t, blue: 0.19 * t) // orange→red
+        }
         let renderer = ImageRenderer(content:
             Image(systemName: symbol)
-                .font(.system(size: flameSize, weight: .semibold))
-                .foregroundStyle(flameColor)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(color)
                 .padding(1)
         )
         renderer.scale = 2
