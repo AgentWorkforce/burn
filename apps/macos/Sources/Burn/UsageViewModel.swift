@@ -76,6 +76,7 @@ final class UsageViewModel: ObservableObject {
         charts = []
         notice = nil
         spend = [:]
+        lastSpendAt = nil   // let the new provider's spend load immediately
         updateMenuBarIcon()
         // New provider has its own rate-limit budget; clear any pending backoff.
         backoffUntil = nil
@@ -147,9 +148,12 @@ final class UsageViewModel: ObservableObject {
     private let spendInterval: TimeInterval = 300
 
     private func loadSpend(provider: ProviderName, metrics: [UsageMetric]) async {
-        if !spend.isEmpty, let last = lastSpendAt, Date().timeIntervalSince(last) < spendInterval {
+        // Throttle on time alone — not on whether spend is populated — so failed
+        // lookups (e.g. burn missing) also back off instead of retrying every 60s.
+        if let last = lastSpendAt, Date().timeIntervalSince(last) < spendInterval {
             return
         }
+        lastSpendAt = Date()
         let burnProvider = BurnLedger.burnProvider(for: provider)
         var result: [String: PeriodSpend] = [:]
         for metric in metrics {
@@ -167,7 +171,6 @@ final class UsageViewModel: ObservableObject {
         }
         guard provider == selectedProvider else { return }
         spend = result
-        lastSpendAt = Date()
     }
 
     /// The busiest window (highest used percentage), driving the menu bar label.

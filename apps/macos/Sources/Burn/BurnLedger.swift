@@ -151,8 +151,9 @@ actor BurnLedger {
     }
 
     /// Runs a configured process and returns stdout, or `nil` on failure /
-    /// nonzero exit.
-    private func capture(_ configure: (Process) -> Void) -> String? {
+    /// nonzero exit / timeout. The timeout stops a hung `burn` from wedging the
+    /// actor and queuing follow-up spend requests behind it.
+    private func capture(_ configure: (Process) -> Void, timeout: TimeInterval = 30) -> String? {
         let process = Process()
         configure(process)
         let stdout = Pipe()
@@ -163,10 +164,21 @@ actor BurnLedger {
         } catch {
             return nil
         }
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        // Drain stdout on a background queue so a full pipe buffer can't deadlock
+        // against waitUntilExit, then bound the wait with a timeout.
+        let dataQueue = DispatchQueue(label: "burn-ledger.capture")
+        var output = Data()
+        dataQueue.async { output = stdout.fileHandleForReading.readDataToEndOfFile() }
+
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        if finished.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            return nil
+        }
+        dataQueue.sync {} // ensure the drain finished
         guard process.terminationStatus == 0 else { return nil }
-        return String(data: data, encoding: .utf8)
+        return String(data: output, encoding: .utf8)
     }
 
     private func shellQuote(_ value: String) -> String {

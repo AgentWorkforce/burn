@@ -61,8 +61,9 @@ final class UsageHistoryStore {
     /// Drops series for windows that reset more than an hour ago.
     private func pruneStaleWindows(reference: Date) {
         for k in cache.keys {
-            let parts = k.split(separator: "|")
-            guard parts.count == 3, let ts = Double(parts[2]), ts != 0 else { continue }
+            // The reset timestamp is always the final segment and never contains
+            // "|", so read it from the end — robust to a "|" in a metric name.
+            guard let last = k.split(separator: "|").last, let ts = Double(last), ts != 0 else { continue }
             let resetDate = Date(timeIntervalSince1970: ts)
             if resetDate < reference.addingTimeInterval(-3600) {
                 cache.removeValue(forKey: k)

@@ -11,7 +11,12 @@ struct ClaudeProvider: UsageProvider {
     let name: ProviderName = .claude
 
     func fetch() async -> ProviderStatus {
-        guard let credentials = Credentials.claude() else {
+        // Credential loading shells out to `security` and reads files — keep it
+        // off the MainActor caller so it can't stall the menu bar UI.
+        let credentials = await Task.detached(priority: .userInitiated) {
+            Credentials.claude()
+        }.value
+        guard let credentials else {
             return .unavailable(.claude, "Not logged in. Run 'claude' to authenticate.")
         }
 
@@ -75,7 +80,11 @@ struct CodexProvider: UsageProvider {
     let name: ProviderName = .codex
 
     func fetch() async -> ProviderStatus {
-        guard let credentials = Credentials.codex() else {
+        // Credential loading reads files off the MainActor caller (see Claude).
+        let credentials = await Task.detached(priority: .userInitiated) {
+            Credentials.codex()
+        }.value
+        guard let credentials else {
             return .unavailable(.codex, "Not logged in. Run 'codex' to authenticate.")
         }
 
