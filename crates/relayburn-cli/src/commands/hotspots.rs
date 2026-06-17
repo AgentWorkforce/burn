@@ -102,6 +102,15 @@ pub struct HotspotsArgs {
     /// pick their own sort.
     #[arg(long = "rank-by", value_name = "DIM", value_enum, default_value_t = RankBy::Cost)]
     pub rank_by: RankBy,
+
+    /// Run a pre-query ingest sweep so hotspots reflects freshly appended
+    /// sessions. Off by default: `hotspots` is a read verb, and a full-store
+    /// sweep re-stats every session file under every harness store — seconds
+    /// on a large ledger. Keep the ledger current out of band with
+    /// `burn ingest --watch` (or the Claude Stop hook); pass `--ingest` only
+    /// for a one-off freshen. Mirrors `burn summary --ingest`.
+    #[arg(long = "ingest")]
+    pub ingest: bool,
 }
 
 /// Sort dimension for the per-tool human-mode tables. Mirrors `--rank-by`.
@@ -246,9 +255,15 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
     progress.set_task("opening ledger");
     let mut handle = Ledger::open(opts)?;
 
-    progress.set_task("refreshing ledger");
-    let raw_opts = progress.ingest_options(ledger_home.clone());
-    ingest_all(handle.raw_mut(), &raw_opts)?;
+    // Read-verb default: skip the pre-query sweep (see `burn summary` /
+    // `burn compare`). `--ingest` opts back into a one-off freshen; otherwise
+    // go straight to the query and let `burn ingest --watch` / the Claude Stop
+    // hook keep the ledger current out of band.
+    if args.ingest {
+        progress.set_task("refreshing ledger");
+        let raw_opts = progress.ingest_options(ledger_home.clone());
+        ingest_all(handle.raw_mut(), &raw_opts)?;
+    }
     drop(handle);
 
     let session_filter = match args.session.as_deref() {

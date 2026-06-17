@@ -39,6 +39,7 @@ pub(crate) fn query_turns(conn: &Connection, q: &Query) -> Result<Vec<EnrichedTu
             ts_nullable: false,
             session_id_or_related: false,
             project_columns: true,
+            prefer_ts_index: true,
         },
     );
     let mut stmt = conn.prepare_cached(&sql)?;
@@ -92,6 +93,9 @@ pub(crate) fn query_turns_in_sessions(
             ts_nullable: false,
             session_id_or_related: false,
             project_columns: true,
+            // This path targets specific sessions via the injected IN clause
+            // below, which rides idx_turns_session — do not force the ts index.
+            prefer_ts_index: false,
         },
     );
 
@@ -145,6 +149,7 @@ pub(crate) fn query_compactions(conn: &Connection, q: &Query) -> Result<Vec<Comp
             ts_nullable: false,
             session_id_or_related: false,
             project_columns: false,
+            prefer_ts_index: false,
         },
     )
 }
@@ -161,6 +166,7 @@ pub(crate) fn query_relationships(
             ts_nullable: true,
             session_id_or_related: true,
             project_columns: false,
+            prefer_ts_index: false,
         },
     )
 }
@@ -177,6 +183,7 @@ pub(crate) fn query_tool_result_events(
             ts_nullable: true,
             session_id_or_related: false,
             project_columns: false,
+            prefer_ts_index: false,
         },
     )
 }
@@ -190,6 +197,7 @@ pub(crate) fn query_user_turns(conn: &Connection, q: &Query) -> Result<Vec<UserT
             ts_nullable: false,
             session_id_or_related: false,
             project_columns: false,
+            prefer_ts_index: false,
         },
     )
 }
@@ -299,6 +307,12 @@ struct TableFilters {
     ts_nullable: bool,
     session_id_or_related: bool,
     project_columns: bool,
+    /// Force `idx_turns_ts` for a bounded `ts` window (see the access-path
+    /// note in [`build_select_sql`]). Set only by the full-window
+    /// [`query_turns`] read against the `turns` table; left `false` for the
+    /// session-IN path (which rides `idx_turns_session`) and every non-`turns`
+    /// table (which has no such index).
+    prefer_ts_index: bool,
 }
 
 /// Build a `SELECT record_json FROM <table> WHERE … ORDER BY rowid`
@@ -307,7 +321,31 @@ struct TableFilters {
 /// per filter combination so [`Connection::prepare_cached`] can reuse the
 /// compiled statement across calls.
 fn build_select_sql(table: &str, q: &Query, shape: TableFilters) -> (String, Vec<String>) {
-    let mut sql = format!("SELECT record_json FROM {table}");
+    // Access-path hint: a bounded `ts` window on `turns` should seek the
+    // matching tail via `idx_turns_ts` instead of scanning every row. Because
+    // the statement ends in `ORDER BY rowid`, SQLite otherwise prefers a full
+    // rowid `SCAN` (no sort needed) and reads the entire table — ~85ms / ~97k
+    // rows on a large ledger even when the window matches ~1% of turns. Forcing
+    // the index turns that into an index range-seek plus an in-memory sort of
+    // just the matched rows; output stays byte-identical (same rows, same
+    // `ORDER BY rowid`). Applied only when:
+    //   (a) the table is `turns` (the only one carrying `idx_turns_ts`),
+    //   (b) there is a `ts` bound to seek on, and
+    //   (c) no `session_id` filter — session-scoped reads ride
+    //       `idx_turns_session` and are already cheap; forcing the ts index
+    //       there would pessimize them.
+    // Trade-off: a window covering most of the table pays an index seek + a
+    // large sort instead of a plain scan, but such unbounded reads are already
+    // aggregation-bound (well over any interactive budget), so the common
+    // recent-window path is the one worth optimizing.
+    let use_ts_index =
+        shape.prefer_ts_index && q.session_id.is_none() && (q.since.is_some() || q.until.is_some());
+    let from = if use_ts_index {
+        std::borrow::Cow::Owned(format!("{table} INDEXED BY idx_turns_ts"))
+    } else {
+        std::borrow::Cow::Borrowed(table)
+    };
+    let mut sql = format!("SELECT record_json FROM {from}");
     let mut clauses: Vec<&'static str> = Vec::new();
     let mut bound: Vec<String> = Vec::new();
 
@@ -481,4 +519,72 @@ pub(crate) fn raw_record_jsons(conn: &Connection, table: &str) -> Result<Vec<Str
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+#[cfg(test)]
+mod build_select_sql_tests {
+    use super::*;
+
+    fn turns_shape(prefer_ts_index: bool) -> TableFilters {
+        TableFilters {
+            ts_nullable: false,
+            session_id_or_related: false,
+            project_columns: true,
+            prefer_ts_index,
+        }
+    }
+
+    /// The `query_turns` full-window path forces `idx_turns_ts` for a bounded
+    /// `ts` filter — that's the access-path fix that keeps `summary` /
+    /// `hotspots` / `overhead` / `compare` off a full table scan. Ordering
+    /// stays `ORDER BY rowid`, so rows (and golden output) are unchanged.
+    #[test]
+    fn ts_window_forces_index_and_keeps_rowid_order() {
+        let q = Query {
+            since: Some("2026-06-16T00:00:00.000Z".into()),
+            ..Query::default()
+        };
+        let (sql, bound) = build_select_sql("turns", &q, turns_shape(true));
+        assert!(
+            sql.contains("FROM turns INDEXED BY idx_turns_ts"),
+            "bounded ts window must seek the ts index, got: {sql}"
+        );
+        assert!(sql.trim_end().ends_with("ORDER BY rowid"), "got: {sql}");
+        assert_eq!(bound, vec!["2026-06-16T00:00:00.000Z".to_string()]);
+    }
+
+    /// A `session_id` filter rides `idx_turns_session` and is already cheap;
+    /// forcing the ts index there would pessimize it, so the hint is dropped
+    /// even though `prefer_ts_index` is set.
+    #[test]
+    fn session_filter_does_not_force_ts_index() {
+        let q = Query {
+            since: Some("2026-06-16T00:00:00.000Z".into()),
+            session_id: Some("abc".into()),
+            ..Query::default()
+        };
+        let (sql, _) = build_select_sql("turns", &q, turns_shape(true));
+        assert!(!sql.contains("INDEXED BY"), "got: {sql}");
+    }
+
+    /// No `ts` bound → nothing to seek on → no hint (forcing the index with no
+    /// `ts` predicate would be invalid).
+    #[test]
+    fn no_ts_bound_does_not_force_index() {
+        let q = Query::default();
+        let (sql, _) = build_select_sql("turns", &q, turns_shape(true));
+        assert!(!sql.contains("INDEXED BY"), "got: {sql}");
+    }
+
+    /// Callers that don't opt in (`prefer_ts_index: false`, e.g. the
+    /// session-IN path and every non-`turns` table) never get the hint.
+    #[test]
+    fn opt_out_never_forces_index() {
+        let q = Query {
+            since: Some("2026-06-16T00:00:00.000Z".into()),
+            ..Query::default()
+        };
+        let (sql, _) = build_select_sql("turns", &q, turns_shape(false));
+        assert!(!sql.contains("INDEXED BY"), "got: {sql}");
+    }
 }

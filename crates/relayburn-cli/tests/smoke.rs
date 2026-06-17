@@ -688,3 +688,120 @@ fn ingest_watch_and_hook_are_mutually_exclusive() {
         .code(2)
         .stderr(predicate::str::contains("mutually exclusive"));
 }
+
+/// Resolve a checked-in fixture path relative to the repo root (this
+/// crate's manifest dir is `crates/relayburn-cli`).
+fn fixture_path(rel: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("repo root is two levels above the crate manifest")
+        .join(rel)
+}
+
+/// `burn summary` is a read verb: by default it must NOT run a pre-query
+/// ingest sweep (which re-stats every session file under every harness
+/// store and costs seconds on a large ledger — see
+/// `plans/009-summary-sub-100ms.md`). A Claude transcript sitting in
+/// `$HOME/.claude/projects` must therefore be invisible to a default
+/// `summary` against an empty ledger: the banner reports
+/// `ingested 0 new sessions` and no turns are analyzed.
+#[test]
+fn summary_does_not_ingest_by_default() {
+    let home = tempfile::TempDir::new().expect("tmp HOME");
+    let project_dir = home.path().join(".claude/projects/proj");
+    std::fs::create_dir_all(&project_dir).expect("create claude project dir");
+    std::fs::copy(
+        fixture_path("tests/fixtures/claude/multi-block-turn.jsonl"),
+        project_dir.join("sess.jsonl"),
+    )
+    .expect("seed a Claude transcript that ingest *would* pick up");
+    let ledger = home.path().join("ledger");
+
+    burn()
+        .arg("summary")
+        .env("RELAYBURN_HOME", &ledger)
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ingested 0 new sessions"))
+        .stdout(predicate::str::contains("turns analyzed: 0"));
+}
+
+/// `burn summary --ingest` opts back into the one-off sweep: the same
+/// seeded transcript is now ingested (`ingested 1 new session`) and its
+/// turn shows up in the report. Guards the flag so the read-verb default
+/// can't silently swallow the explicit freshen path.
+#[test]
+fn summary_ingest_flag_runs_the_sweep() {
+    let home = tempfile::TempDir::new().expect("tmp HOME");
+    let project_dir = home.path().join(".claude/projects/proj");
+    std::fs::create_dir_all(&project_dir).expect("create claude project dir");
+    std::fs::copy(
+        fixture_path("tests/fixtures/claude/multi-block-turn.jsonl"),
+        project_dir.join("sess.jsonl"),
+    )
+    .expect("seed a Claude transcript");
+    let ledger = home.path().join("ledger");
+
+    burn()
+        .args(["summary", "--ingest"])
+        .env("RELAYBURN_HOME", &ledger)
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ingested 1 new session"))
+        .stdout(predicate::str::contains("turns analyzed: 1"));
+}
+
+/// `burn hotspots` is a read verb with the same default as `summary`: no
+/// pre-query ingest sweep. A seeded Claude transcript must be invisible to a
+/// default `hotspots` against an empty ledger. See
+/// `plans/009-summary-sub-100ms.md`.
+#[test]
+fn hotspots_does_not_ingest_by_default() {
+    let home = tempfile::TempDir::new().expect("tmp HOME");
+    let project_dir = home.path().join(".claude/projects/proj");
+    std::fs::create_dir_all(&project_dir).expect("create claude project dir");
+    std::fs::copy(
+        fixture_path("tests/fixtures/claude/multi-block-turn.jsonl"),
+        project_dir.join("sess.jsonl"),
+    )
+    .expect("seed a Claude transcript that ingest *would* pick up");
+    let ledger = home.path().join("ledger");
+
+    burn()
+        .arg("hotspots")
+        .env("RELAYBURN_HOME", &ledger)
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("turns analyzed: 0"));
+}
+
+/// `burn hotspots --ingest` opts back into the one-off sweep, mirroring
+/// `summary --ingest`.
+#[test]
+fn hotspots_ingest_flag_runs_the_sweep() {
+    let home = tempfile::TempDir::new().expect("tmp HOME");
+    let project_dir = home.path().join(".claude/projects/proj");
+    std::fs::create_dir_all(&project_dir).expect("create claude project dir");
+    std::fs::copy(
+        fixture_path("tests/fixtures/claude/multi-block-turn.jsonl"),
+        project_dir.join("sess.jsonl"),
+    )
+    .expect("seed a Claude transcript");
+    let ledger = home.path().join("ledger");
+
+    burn()
+        .args(["hotspots", "--ingest"])
+        .env("RELAYBURN_HOME", &ledger)
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("turns analyzed: 1"));
+}

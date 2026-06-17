@@ -9,10 +9,18 @@
 //!
 //! 1. Open a [`relayburn_sdk::LedgerHandle`] honoring `--ledger-path` /
 //!    `RELAYBURN_HOME`.
-//! 2. Run [`relayburn_sdk::ingest_all`] against the same handle. The TS CLI
-//!    does this unconditionally so the summary block in human mode always
-//!    leads with `ingested N new sessions (+M turns)`. Output is captured
-//!    by reference while TTY runs get a stderr spinner.
+//! 2. Optionally run [`relayburn_sdk::ingest_all`] against the same handle,
+//!    gated on `--ingest`. `summary` is a read verb, and a pre-query sweep
+//!    re-stats every session file under every harness store — seconds on a
+//!    large OpenCode store (tens of thousands of sessions) — so it is
+//!    **off by default**. The steady-state setup keeps the ledger fresh out
+//!    of band: `burn ingest --watch` once per host, or the Claude Stop hook
+//!    (`burn ingest --hook claude`) firing each turn. Pass `--ingest` for a
+//!    one-off freshen; the human banner then leads with
+//!    `ingested N new sessions (+M turns)` and a TTY gets a stderr spinner.
+//!    When the sweep is skipped, an empty [`relayburn_sdk::IngestReport`]
+//!    keeps the banner / JSON `ingest` block byte-identical to a no-op sweep
+//!    (`ingested 0 new sessions`). See `burn compare` for the same decision.
 //! 3. Lower CLI flags into [`relayburn_sdk::SummaryReportOptions`] and call
 //!    the SDK-owned `summary_report` verb.
 //! 4. Render the typed report as JSON or human output.
@@ -109,6 +117,15 @@ pub struct SummaryArgs {
     /// which is SQLite-native and has no archive layer to bypass.
     #[arg(long = "no-archive")]
     pub no_archive: bool,
+
+    /// Run a pre-query ingest sweep so the summary leads with freshly
+    /// appended sessions. Off by default: `summary` is a read verb, and a
+    /// full-store sweep re-stats every session file under every harness
+    /// store — seconds on a large ledger. Keep the ledger current out of
+    /// band with `burn ingest --watch` (or the Claude Stop hook); pass
+    /// `--ingest` only for a one-off freshen.
+    #[arg(long = "ingest")]
+    pub ingest: bool,
 }
 
 pub fn run(globals: &GlobalArgs, args: SummaryArgs) -> i32 {
@@ -220,10 +237,17 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         progress.finish_and_clear();
     })?;
 
-    let ingest_report = run_ingest(&mut handle, &progress, globals.ledger_path.clone())
-        .inspect_err(|_| {
+    // Read-verb default: skip the pre-query sweep (see the module doc and
+    // `burn compare`). `--ingest` opts back into a one-off freshen; otherwise
+    // an empty report keeps the banner / JSON `ingest` block identical to a
+    // no-op sweep without paying for the full-store stat walk.
+    let ingest_report = if args.ingest {
+        run_ingest(&mut handle, &progress, globals.ledger_path.clone()).inspect_err(|_| {
             progress.finish_and_clear();
-        })?;
+        })?
+    } else {
+        relayburn_sdk::IngestReport::empty()
+    };
 
     let mode = if let Some(session_id) = subagent_tree_session_id {
         SummaryReportMode::SubagentTree { session_id }
