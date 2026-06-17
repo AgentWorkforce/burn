@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds, signs, notarizes, and packages Burn.app into a distributable
+# Builds, signs, notarizes, and packages BurnOSX.app into a distributable
 # DMG. Runs locally or in CI — all credentials come from the environment.
 #
 # Mirrors the Pear release flow: Developer ID signing + notarization via an
@@ -23,7 +23,7 @@
 #
 set -euo pipefail
 
-APP_NAME="Burn"
+APP_NAME="BurnOSX"
 ARCH="$(uname -m)"            # arm64 on Apple Silicon CI/runners
 APP_DIR="dist/${APP_NAME}.app"
 DMG="dist/${APP_NAME}-${ARCH}.dmg"
@@ -55,9 +55,9 @@ while IFS= read -r -d '' bundle; do
     codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "$bundle"
 done < <(find "${APP_DIR}/Contents/Resources" -maxdepth 1 -name "*.bundle" -print0)
 
-# Sign the bundled burn helper (if present) before the main executable.
-if [[ -f "${APP_DIR}/Contents/MacOS/burn-cli" ]]; then
-    codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "${APP_DIR}/Contents/MacOS/burn-cli"
+# Sign the bundled burn CLI (if present) before the main executable.
+if [[ -f "${APP_DIR}/Contents/MacOS/burn" ]]; then
+    codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "${APP_DIR}/Contents/MacOS/burn"
 fi
 
 codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"

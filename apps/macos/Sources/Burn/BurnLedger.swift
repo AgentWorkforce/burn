@@ -45,7 +45,7 @@ actor BurnLedger {
 
     private func resolveTool() -> Tool {
         if case .unknown = tool {
-            if let url = Bundle.main.url(forAuxiliaryExecutable: "burn-cli"),
+            if let url = Bundle.main.url(forAuxiliaryExecutable: "burn"),
                FileManager.default.isExecutableFile(atPath: url.path) {
                 tool = .bundled(url)
             } else if !(loginShell("command -v burn")?

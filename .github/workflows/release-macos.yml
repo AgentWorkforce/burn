@@ -99,7 +99,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
-          DMG="dist/Burn-arm64.dmg"
+          DMG="dist/BurnOSX-arm64.dmg"
           # Versioned release (history). Not marked --latest: burn's own v* CLI
           # releases own the repo's "latest" pointer.
           gh release create "${TAG}" "${DMG}" \
@@ -108,7 +108,7 @@ jobs:
             --title "Burn for Mac ${{ steps.version.outputs.version }}" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}"
           # Moving pointer for a stable download URL:
-          #   releases/download/macos-latest/Burn-arm64.dmg
+          #   releases/download/macos-latest/BurnOSX-arm64.dmg
           gh release delete macos-latest --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag || true
           gh release create macos-latest "${DMG}" \
             --repo "${GITHUB_REPOSITORY}" \
