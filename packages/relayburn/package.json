@@ -1,6 +1,6 @@
 {
   "name": "relayburn",
-  "version": "3.2.2",
+  "version": "3.3.0",
   "description": "Token usage & cost attribution for agent CLIs (installs the `burn` command). Resolves a prebuilt Rust binary from the `@relayburn/cli-<platform>` packages.",
   "type": "module",
   "bin": {
@@ -19,10 +19,10 @@
     "node": ">=22"
   },
   "optionalDependencies": {
-    "@relayburn/cli-darwin-arm64": "3.2.2",
-    "@relayburn/cli-darwin-x64": "3.2.2",
-    "@relayburn/cli-linux-arm64-gnu": "3.2.2",
-    "@relayburn/cli-linux-x64-gnu": "3.2.2"
+    "@relayburn/cli-darwin-arm64": "3.3.0",
+    "@relayburn/cli-darwin-x64": "3.3.0",
+    "@relayburn/cli-linux-arm64-gnu": "3.3.0",
+    "@relayburn/cli-linux-x64-gnu": "3.3.0"
   },
   "repository": {
     "type": "git",

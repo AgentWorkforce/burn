@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-06-17
+
 - `burn summary` and `burn hotspots` no longer run a pre-query ingest sweep by default — both return in well under 100ms instead of seconds on large ledgers (`hotspots` was ~3s). Pass `--ingest` for a one-off freshen; keep the ledger current out of band with `burn ingest --watch` or the Claude Stop hook.
 - Faster reads on large ledgers: time-windowed turn queries (`--since`/`--until` without a `--session`) now seek the `ts` index instead of scanning the whole `turns` table, cutting `summary`/`hotspots`/`overhead`/`compare` query time by roughly 3-4x. Output is unchanged.
 
