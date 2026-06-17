@@ -22,8 +22,8 @@ final class UsageViewModel: ObservableObject {
     /// across refreshes, unlike the per-fetch metric id). Empty when burn isn't
     /// installed.
     @Published private(set) var spend: [String: PeriodSpend] = [:]
-    /// The menu bar flame image. Rendered here (off the view-render path) and
-    /// only when usage changes — see the warning in `MenuBarLabel`.
+    /// The menu bar flame image, recomputed only when usage changes. AppDelegate
+    /// mirrors it onto the NSStatusItem button via the `$menuBarIcon` publisher.
     @Published private(set) var menuBarIcon: NSImage
 
     let refreshInterval: TimeInterval = 60

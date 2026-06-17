@@ -1,42 +1,65 @@
 import SwiftUI
+import AppKit
+import Combine
 
 @main
 struct BurnApp: App {
-    @StateObject private var viewModel = UsageViewModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra {
-            ContentView(viewModel: viewModel)
-        } label: {
-            MenuBarLabel(viewModel: viewModel)
-        }
-        .menuBarExtraStyle(.window)
+        // No SwiftUI scene drives the menu bar. The status item is created once,
+        // imperatively, by AppDelegate. SwiftUI's `MenuBarExtra` can duplicate
+        // its status item when the app's scene body re-evaluates — that runaway
+        // ("endless menu bar flames") panicked the machine. An AppKit
+        // NSStatusItem created a single time cannot be duplicated.
+        Settings { EmptyView() }
     }
 }
 
-/// The label shown in the menu bar: a fixed-size flame colored by the highest
-/// current usage (orange→red) that fills (turns "hot") when that window is
-/// burning off its target pace.
-///
-/// IMPORTANT: the flame image is rendered by the view model when usage changes
-/// and cached — `body` only displays it. Rendering with `ImageRenderer` *inside*
-/// this `body` is re-entrant SwiftUI rendering and makes `MenuBarExtra` spawn
-/// status items in a runaway loop, so never move it back here.
-struct MenuBarLabel: View {
-    @ObservedObject var viewModel: UsageViewModel
+/// Owns the single menu bar status item and its popover. Created once in
+/// `applicationDidFinishLaunching`; the flame image is mirrored from the view
+/// model's cached icon. No SwiftUI rendering touches the status item, so there
+/// is no render path that can storm or duplicate it.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let viewModel = UsageViewModel()
+    private var statusItem: NSStatusItem?
+    private let popover = NSPopover()
+    private var iconObserver: AnyCancellable?
 
-    var body: some View {
-        // Safety breaker: if this label ever re-renders in a storm again, quit
-        // the app rather than locking up the machine. See RenderWatchdog.
-        RenderWatchdog.tick()
-        return Image(nsImage: viewModel.menuBarIcon)
-            .renderingMode(.original)
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory) // menu-bar-only, no Dock icon
+
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = viewModel.menuBarIcon
+        item.button?.action = #selector(togglePopover(_:))
+        item.button?.target = self
+        statusItem = item
+
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(
+            rootView: ContentView(viewModel: viewModel))
+
+        // Mirror the cached flame onto the status button whenever it changes.
+        iconObserver = viewModel.$menuBarIcon.sink { [weak item] image in
+            item?.button?.image = image
+        }
+    }
+
+    @objc private func togglePopover(_ sender: NSStatusBarButton) {
+        if popover.isShown {
+            popover.performClose(sender)
+            return
+        }
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
 /// Renders the colored menu bar flame to a non-template `NSImage` (so the menu
 /// bar preserves the color instead of flattening it to monochrome). Called off
-/// the view-render path — see `MenuBarLabel`.
+/// any view-render path — only by the view model when usage changes.
 enum MenuBarIcon {
     /// Fixed size — a usage-varying size would shift the menu bar layout. Usage
     /// is conveyed by color and fill instead.
