@@ -26,7 +26,10 @@ struct MenuBarLabel: View {
     @ObservedObject var viewModel: UsageViewModel
 
     var body: some View {
-        Image(nsImage: viewModel.menuBarIcon)
+        // Safety breaker: if this label ever re-renders in a storm again, quit
+        // the app rather than locking up the machine. See RenderWatchdog.
+        RenderWatchdog.tick()
+        return Image(nsImage: viewModel.menuBarIcon)
             .renderingMode(.original)
     }
 }
