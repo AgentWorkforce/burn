@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private var iconObserver: AnyCancellable?
+    private var appearanceObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // menu-bar-only, no Dock icon
@@ -43,6 +44,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Mirror the cached flame onto the status button whenever it changes.
         iconObserver = viewModel.$menuBarIcon.sink { [weak item] image in
             item?.button?.image = image
+        }
+
+        // Apply the saved appearance to the whole popover (chrome + content), and
+        // keep it in sync as the Settings tab writes the "appearance" default.
+        applyAppearance()
+        appearanceObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyAppearance() }
+        }
+    }
+
+    /// Sets `popover.appearance` from the "appearance" preference
+    /// (anything but light/dark → nil, which follows the system).
+    private func applyAppearance() {
+        switch UserDefaults.standard.string(forKey: "appearance") {
+        case "light": popover.appearance = NSAppearance(named: .aqua)
+        case "dark":  popover.appearance = NSAppearance(named: .darkAqua)
+        default:      popover.appearance = nil
         }
     }
 
