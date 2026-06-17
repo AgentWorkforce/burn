@@ -164,19 +164,29 @@ actor BurnLedger {
         } catch {
             return nil
         }
-        // Drain stdout on a background queue so a full pipe buffer can't deadlock
-        // against waitUntilExit, then bound the wait with a timeout.
-        let dataQueue = DispatchQueue(label: "burn-ledger.capture")
+        // Read stdout to EOF (which arrives when the process exits) and reap it
+        // on a background queue; bound the wait with a timeout. This blocks the
+        // BurnLedger actor until the process truly finishes or is killed — which,
+        // because the actor serializes calls, guarantees only one `burn`
+        // subprocess can ever be alive at a time (no pile-up). Avoids the
+        // `terminationHandler` race that could let capture() return while the
+        // child kept running.
+        let group = DispatchGroup()
+        group.enter()
         var output = Data()
-        dataQueue.async { output = stdout.fileHandleForReading.readDataToEndOfFile() }
-
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        if finished.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
+        DispatchQueue.global(qos: .utility).async {
+            output = stdout.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            group.leave()
+        }
+        if group.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()                       // SIGTERM…
+            usleep(200_000)
+            if process.isRunning {                    // …then SIGKILL if it ignores it
+                kill(process.processIdentifier, SIGKILL)
+            }
             return nil
         }
-        dataQueue.sync {} // ensure the drain finished
         guard process.terminationStatus == 0 else { return nil }
         return String(data: output, encoding: .utf8)
     }
