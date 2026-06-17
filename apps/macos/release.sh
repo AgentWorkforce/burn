@@ -55,6 +55,11 @@ while IFS= read -r -d '' bundle; do
     codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "$bundle"
 done < <(find "${APP_DIR}/Contents/Resources" -maxdepth 1 -name "*.bundle" -print0)
 
+# Sign the bundled burn helper (if present) before the main executable.
+if [[ -f "${APP_DIR}/Contents/MacOS/burn" ]]; then
+    codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "${APP_DIR}/Contents/MacOS/burn"
+fi
+
 codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
 codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "${APP_DIR}"
 codesign --verify --deep --strict --verbose=2 "${APP_DIR}"

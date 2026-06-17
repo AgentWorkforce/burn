@@ -40,7 +40,13 @@ If a provider isn't authenticated, run `claude` or `codex` once to log in.
 Spend figures are read from the burn ledger (`~/.agentworkforce/burn/`) by
 shelling out to `burn summary --provider <p> --since <window-start> --json` —
 cost isn't stored in the ledger, so we let burn price it rather than re-deriving
-its pricing table. The spend line is hidden when `burn` isn't on `PATH`.
+its pricing table.
+
+The release build **bundles a native `burn` binary** (compiled from this repo's
+`relayburn-cli`) inside the app, so spend works with **no separate install** —
+it even builds the ledger from your session logs on first run. Dev builds run
+via `swift run` fall back to a `burn` on `PATH`; the spend line is hidden only if
+neither is available.
 
 The first time it reads the Claude keychain item, macOS may prompt you to allow
 access — choose **Always Allow**.
@@ -49,7 +55,7 @@ access — choose **Always Allow**.
 
 Download the latest DMG, open it, and drag **Agent Limit** to **Applications**:
 
-> **[⬇ AgentLimit-arm64.dmg](../../releases/latest/download/AgentLimit-arm64.dmg)**
+> **[⬇ AgentLimit-arm64.dmg](../../releases/download/macos-latest/AgentLimit-arm64.dmg)**
 > (Apple Silicon)
 
 The build is signed and notarized, so it launches without Gatekeeper warnings.
@@ -98,6 +104,7 @@ Sources/AgentLimit/
   UsageHistory.swift          Persists samples for the usage curve
   Burndown.swift              Turns samples into chart data
   Models.swift                Shared types
+  BurnLedger.swift            Reads spend from the bundled/PATH `burn` binary
   Resources/                  claude.svg, openai.svg (lobe-icons, MIT)
 ```
 
@@ -105,23 +112,25 @@ Brand icons are from [lobe-icons](https://github.com/lobehub/lobe-icons) (MIT).
 
 ## Releasing
 
-Set up the same way as [Pear](../../../pear): signed + notarized DMG published to
-GitHub Releases, using the **same repository secrets** so one set of Apple
-credentials covers both repos.
+Signed + notarized DMG published to GitHub Releases, using the **same Apple
+secrets** as Pear so one set of credentials covers both.
 
-To cut a release, go to **Actions → "Release (macOS)" → Run workflow**. The
-[workflow](.github/workflows/release.yml):
+To cut a release, go to **Actions → "Release (macOS app)" → Run workflow**. The
+[workflow](../../.github/workflows/release-macos.yml):
 
-1. computes a **date-based version** `YEAR.MONTH.N` (N = the next release this
-   month) and tag `vYEAR.MONTH.N` — nothing is committed;
-2. generates release notes from the commits since the last tag;
-3. signs with a hardened runtime, notarizes via the App Store Connect API key,
-   staples, and builds `AgentLimit-arm64.dmg`;
-4. publishes the release as **latest**, so the stable
-   `releases/latest/download/AgentLimit-arm64.dmg` link always points at it.
+1. computes a **date-based version** `YEAR.MONTH.N` and tag `macos-vYEAR.MONTH.N`
+   — a `macos-v*` scheme so it never touches burn's own `v*` CLI releases;
+2. generates release notes from commits since the last `macos-v*` tag;
+3. builds the app **and the native `burn` helper** (`cargo build -p
+   relayburn-cli`), bundles + signs both with a hardened runtime, notarizes via
+   the App Store Connect API key, staples, and packages `AgentLimit-arm64.dmg`;
+4. publishes a versioned release (history) and moves a `macos-latest` pointer so
+   `releases/download/macos-latest/AgentLimit-arm64.dmg` is a stable link. It is
+   **not** marked the repo's "latest" — that belongs to burn's CLI releases.
 
 `release.sh` runs the same build/sign/notarize/package steps locally (set
-`VERSION` and the Apple env vars listed at the top of the script).
+`VERSION` and the Apple env vars listed at the top of the script). It needs both
+the Swift and Rust toolchains (for the bundled `burn`).
 
 Required repository **secrets** (Settings → Secrets and variables → Actions) —
 identical to Pear's:

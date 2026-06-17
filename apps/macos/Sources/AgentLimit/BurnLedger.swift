@@ -1,10 +1,13 @@
 import Foundation
 
-/// Reads authoritative spend figures from the locally-installed `burn` CLI
-/// (relayburn) ledger. Cost is *not* stored in the ledger — burn computes it
-/// from its pricing table — so we shell out to `burn` rather than re-derive
-/// pricing here. Every method returns `nil` when burn isn't available, letting
-/// the UI simply hide the spend line.
+/// Reads authoritative spend figures from the burn ledger. Cost is *not* stored
+/// in the ledger — burn computes it from its pricing table — so we invoke the
+/// `burn` binary rather than re-derive pricing here.
+///
+/// Prefers the native `burn` helper bundled inside the app (so spend works with
+/// no separate install), and falls back to a `burn` on `PATH` for dev builds
+/// run via `swift run`. Returns `nil` when neither is available, letting the UI
+/// hide the spend line.
 actor BurnLedger {
     static let shared = BurnLedger()
 
@@ -16,16 +19,20 @@ actor BurnLedger {
         }
     }
 
-    private enum Availability { case unknown, missing, present }
-    private var availability: Availability = .unknown
+    private enum Tool {
+        case unknown
+        case bundled(URL) // self-contained native binary in the app bundle
+        case path         // a `burn` on PATH (resolved via a login shell)
+        case missing
+    }
+    private var tool: Tool = .unknown
 
     /// Total USD spend for `provider` since `since`, or `nil` if burn is
     /// unavailable or the query fails.
     func cost(provider: String, since: Date) async -> Double? {
-        guard isAvailable() else { return nil }
         let iso = ISO8601DateFormatter().string(from: since)
-        let command = "burn summary --provider \(provider) --since \(iso) --json"
-        guard let output = run(command),
+        let args = ["summary", "--provider", provider, "--since", iso, "--json"]
+        guard let output = runBurn(args),
               let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let totalCost = json["totalCost"] as? [String: Any],
@@ -34,27 +41,50 @@ actor BurnLedger {
         return total
     }
 
-    // MARK: - Subprocess
+    // MARK: - Resolution & invocation
 
-    private func isAvailable() -> Bool {
-        switch availability {
-        case .present: return true
-        case .missing: return false
-        case .unknown:
-            let found = !(run("command -v burn")?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
-            availability = found ? .present : .missing
-            return found
+    private func resolveTool() -> Tool {
+        if case .unknown = tool {
+            if let url = Bundle.main.url(forAuxiliaryExecutable: "burn"),
+               FileManager.default.isExecutableFile(atPath: url.path) {
+                tool = .bundled(url)
+            } else if !(loginShell("command -v burn")?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty {
+                tool = .path
+            } else {
+                tool = .missing
+            }
+        }
+        return tool
+    }
+
+    private func runBurn(_ args: [String]) -> String? {
+        switch resolveTool() {
+        case .bundled(let url):
+            // Self-contained Rust binary — exec directly, no shell needed.
+            return capture { $0.executableURL = url; $0.arguments = args }
+        case .path:
+            // Run through a login shell so nvm/Homebrew PATH (and the `node` the
+            // npm `burn` shim needs) resolve even when launched from Finder.
+            let command = "burn " + args.map(shellQuote).joined(separator: " ")
+            return loginShell(command)
+        case .missing, .unknown:
+            return nil
         }
     }
 
-    /// Runs a command in a login shell — so nvm/Homebrew PATH (and the `node`
-    /// the `burn` shim needs) resolve even when launched from Finder — and
-    /// returns stdout, or `nil` on failure / nonzero exit.
-    private func run(_ command: String) -> String? {
+    private func loginShell(_ command: String) -> String? {
+        capture {
+            $0.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            $0.arguments = ["-lc", command]
+        }
+    }
+
+    /// Runs a configured process and returns stdout, or `nil` on failure /
+    /// nonzero exit.
+    private func capture(_ configure: (Process) -> Void) -> String? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", command]
+        configure(process)
         let stdout = Pipe()
         process.standardOutput = stdout
         process.standardError = Pipe()
@@ -67,5 +97,9 @@ actor BurnLedger {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
