@@ -110,7 +110,7 @@ struct LiveBurnView: View {
         .chartForegroundStyleScale(domain: shown.map(\.displayName), range: shown.map(\.brandColor))
         .chartLegend(.hidden) // the toggles serve as the legend
         .chartXScale(domain: xDomain)
-        .chartXAxis(.hidden)
+        .chartXAxis { timeAxis(desiredCount: 4) }
         .chartYAxis { tokenAxis(desiredCount: nil) }
         .chartCard()
     }
@@ -133,19 +133,43 @@ struct LiveBurnView: View {
         .chartForegroundStyleScale(domain: shown.map(\.displayName), range: shown.map(\.brandColor))
         .chartLegend(.hidden)
         .chartXScale(domain: xDomain)
-        .chartXAxis(.hidden)
+        .chartXAxis { timeAxis(desiredCount: 4) }
         .chartYAxis { tokenAxis(desiredCount: 3) }
         .chartCard()
     }
 
     private func tokenAxis(desiredCount: Int?) -> some AxisContent {
         AxisMarks(position: .leading, values: desiredCount.map { .automatic(desiredCount: $0) } ?? .automatic) { value in
-            AxisGridLine().foregroundStyle(Color.primary.opacity(0.08))
+            AxisGridLine().foregroundStyle(Color.primary.opacity(0.06))
             AxisValueLabel {
                 if let v = value.as(Double.self) {
                     Text(tokenAxisLabel(v)).font(.caption2).foregroundStyle(.tertiary)
                 }
             }
+        }
+    }
+
+    /// Time (x) axis with labels that adapt to the selected range — the "legend
+    /// for time" across the bottom of each chart.
+    private func timeAxis(desiredCount: Int) -> some AxisContent {
+        AxisMarks(values: .automatic(desiredCount: desiredCount)) { value in
+            AxisGridLine().foregroundStyle(Color.primary.opacity(0.06))
+            AxisValueLabel {
+                if let date = value.as(Date.self) {
+                    Text(date, format: xAxisFormat)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    /// Label granularity per range: clock time for intraday windows, calendar
+    /// date for the multi-day window.
+    private var xAxisFormat: Date.FormatStyle {
+        switch viewModel.range {
+        case .m5, .h1, .h12, .d1: return .dateTime.hour().minute()
+        case .d7: return .dateTime.month(.abbreviated).day()
         }
     }
 
