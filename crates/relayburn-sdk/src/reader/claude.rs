@@ -24,6 +24,19 @@
 //! via their own primitives (Codex: `task_complete` boundaries; opencode:
 //! per-message part files sorted chronologically). Neither parser is
 //! touched by this change. See AgentWorkforce/burn#433.
+//!
+//! ## Module layout
+//!
+//! This file holds the parse engine (line ingest, the `parentUuid` prescan,
+//! and the incremental walk in `run_incremental`) plus the small `Value`
+//! accessors the submodules share. Cohesive concerns live alongside it:
+//!
+//! - `parent_chain` — user→assistant `parentUuid` chain walk.
+//! - `relationships` — explicit/inferred session relationship reconstruction.
+//! - `tool_results` — `tool_result_event` extraction and replacement metadata.
+//! - `subagents` — Task sidecar transcript discovery + pairing.
+//! - `span_tree` — per-turn span tree projection.
+//! - `tests` — conformance tests over `tests/fixtures/claude/*.jsonl`.
 
 mod parent_chain;
 
