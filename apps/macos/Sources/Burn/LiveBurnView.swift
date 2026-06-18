@@ -1,12 +1,13 @@
 import SwiftUI
 import Charts
 
-/// The "Burn rate" tab: a moving, streaming chart of token burn that updates in
-/// real time, with one color-coded line per provider (Claude, Codex) overlaid
-/// and per-provider show/hide toggles. The headline is the combined per-interval
-/// burn rate (tokens/sec) across the shown providers, with a cumulative line.
+/// The "Burn rate" tab: a bucketed chart of token burn over a selectable time
+/// range (5m/1h/12h/1d/7d), with one color-coded line per provider (Claude,
+/// Codex) overlaid and per-provider show/hide toggles. The headline is the
+/// combined burn rate (tokens/sec) of the latest bucket across the shown
+/// providers, with a cumulative line.
 ///
-/// Owns a `LiveBurnViewModel` whose lifecycle (poll timer + background ingest
+/// Owns a `LiveBurnViewModel` whose lifecycle (refresh timer + background ingest
 /// watch) is bound to this view's appearance. Falls back to a hint when burn
 /// can't be queried, mirroring how the rest of the app no-ops on a missing
 /// binary.
@@ -18,6 +19,7 @@ struct LiveBurnView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            rangePicker
             if viewModel.unavailable {
                 hint
             } else if !hasData {
@@ -34,6 +36,20 @@ struct LiveBurnView: View {
         .onDisappear { viewModel.stop() }
     }
 
+    /// Segmented switch for the chart's time range.
+    private var rangePicker: some View {
+        Picker("", selection: Binding(
+            get: { viewModel.range },
+            set: { viewModel.setRange($0) }
+        )) {
+            ForEach(LiveRange.allCases) { range in
+                Text(range.label).tag(range)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
+
     private var hasData: Bool {
         shown.contains { (viewModel.series[$0]?.count ?? 0) >= 2 }
     }
@@ -45,7 +61,7 @@ struct LiveBurnView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Burn rate")
                     .font(.title3.weight(.bold))
-                Text("live · combined")
+                Text("last \(viewModel.range.label) · combined")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

@@ -77,6 +77,40 @@ actor BurnLedger {
         return Summary(cost: cost, tokens: tokens)
     }
 
+    /// One bucket of a `burn summary --bucket` time-series.
+    struct TimeseriesPoint {
+        let date: Date
+        let tokens: Int
+        let cost: Double
+    }
+
+    /// Per-bucket cost/token totals for `provider` over `[since, now]`, bucketed
+    /// by `bucket` (a burn duration like "30s"/"5m"/"1h"). Returns `nil` when
+    /// burn is unavailable or the query/parse fails. Runs `burn summary --bucket`
+    /// (read-only), so it's cheap to refresh.
+    func timeseries(provider: String, since: Date, bucket: String) async -> [TimeseriesPoint]? {
+        let iso = ISO8601DateFormatter().string(from: since)
+        let args = ["summary", "--provider", provider, "--since", iso, "--bucket", bucket, "--json"]
+        guard let output = runBurn(args),
+              let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let buckets = json["buckets"] as? [[String: Any]]
+        else { return nil }
+
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+
+        return buckets.compactMap { entry -> TimeseriesPoint? in
+            guard let start = entry["start"] as? String,
+                  let date = parser.date(from: start) ?? plain.date(from: start)
+            else { return nil }
+            let tokens = (entry["totalTokens"] as? NSNumber)?.intValue ?? 0
+            let cost = ((entry["totalCost"] as? [String: Any])?["total"] as? NSNumber)?.doubleValue ?? 0
+            return TimeseriesPoint(date: date, tokens: tokens, cost: cost)
+        }
+    }
+
     // MARK: - Long-lived ingest watch
 
     /// The running `burn ingest --watch` process, if any. `burn summary` is

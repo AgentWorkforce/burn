@@ -1,56 +1,109 @@
 import SwiftUI
 
-/// One polled reading of the live burn series for a provider: the running
-/// session totals and the moving per-interval burn rate.
+/// One bucket of the burn series for a provider: the per-bucket burn rate plus
+/// the running cumulative totals across the selected range.
 struct LiveBurnSample: Identifiable {
     let id = UUID()
     let date: Date
-    /// Running session cost (USD) — integral of the rate.
+    /// Cumulative cost (USD) across the range up to and including this bucket.
     let cost: Double
-    /// Running session token count — integral of the rate.
+    /// Cumulative token count across the range up to and including this bucket.
     let tokens: Int
-    /// Moving-average tokens burned per second over the trailing rate window.
+    /// Tokens burned per second within this bucket.
     let tokensPerSecond: Double
-    /// Moving-average USD burned per minute over the trailing rate window.
+    /// USD burned per minute within this bucket.
     let dollarsPerMinute: Double
 }
 
-/// Drives the live "Burn rate" tab. Polls `burn summary --json` for every
-/// provider on a short timer and keeps a bounded per-provider ring buffer, so
-/// the view can overlay one color-coded line per provider with show/hide
-/// toggles. Freshness comes from a background `burn ingest --watch` (summary is
-/// read-only); when burn is missing the series stay empty and the view hints.
+/// The time window the live chart covers, with its burn-bucket size and refresh
+/// cadence. `bucket` uses burn's `--bucket` grammar where `m` = minutes.
+enum LiveRange: String, CaseIterable, Identifiable {
+    case m5, h1, h12, d1, d7
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .m5: return "5m"
+        case .h1: return "1h"
+        case .h12: return "12h"
+        case .d1: return "1d"
+        case .d7: return "7d"
+        }
+    }
+
+    /// How far back the window reaches.
+    var sinceSeconds: TimeInterval {
+        switch self {
+        case .m5: return 300
+        case .h1: return 3_600
+        case .h12: return 43_200
+        case .d1: return 86_400
+        case .d7: return 604_800
+        }
+    }
+
+    /// `--bucket` argument (burn grammar; `m` = minutes).
+    var bucketArg: String {
+        switch self {
+        case .m5: return "30s"
+        case .h1: return "5m"
+        case .h12: return "1h"
+        case .d1: return "2h"
+        case .d7: return "12h"
+        }
+    }
+
+    /// Bucket width in seconds — the denominator for the per-bucket rate.
+    var bucketSeconds: Double {
+        switch self {
+        case .m5: return 30
+        case .h1: return 300
+        case .h12: return 3_600
+        case .d1: return 7_200
+        case .d7: return 43_200
+        }
+    }
+
+    /// How often to re-query (longer ranges change slowly).
+    var refreshInterval: TimeInterval {
+        switch self {
+        case .m5: return 3
+        case .h1: return 15
+        case .h12: return 60
+        case .d1: return 120
+        case .d7: return 300
+        }
+    }
+}
+
+/// Drives the live "Burn rate" tab. For the selected `range`, queries
+/// `burn summary --bucket` per provider on a cadence and keeps a per-provider
+/// series, so the view can overlay one color-coded line per provider with
+/// show/hide toggles. Freshness comes from a background `burn ingest --watch`
+/// (summary is read-only); when burn is missing the series stay empty and the
+/// view hints.
 @MainActor
 final class LiveBurnViewModel: ObservableObject {
-    /// Per-provider rolling sample series (oldest first), capped at `maxSamples`.
+    /// Per-provider bucketed series (oldest first) for the current range.
     @Published private(set) var series: [ProviderName: [LiveBurnSample]] = [:]
     /// Providers whose line is currently shown (the toggles).
     @Published private(set) var enabled: Set<ProviderName> = Set(ProviderName.allCases)
+    /// The selected time range.
+    @Published private(set) var range: LiveRange = .m5
     /// True once we've confirmed burn can't be queried at all.
     @Published private(set) var unavailable = false
 
-    /// Poll `burn summary` (read-only, ~10ms). Freshness is handled by the watch.
-    private let pollInterval: TimeInterval = 1.5
-    /// Trailing window the burn rate is averaged over — robust to window slide
-    /// and late ingests (unlike an inter-sample delta, which dips negative).
-    private let rateWindow: TimeInterval = 60
-    /// Ring-buffer cap on samples kept on screen, per provider.
-    private let maxSamples = 150
-
     private let providers = ProviderName.allCases
     private var timer: Timer?
-    private var polling = false
-    /// Running session totals (integral of the rate) per provider.
-    private var session: [ProviderName: (tokens: Double, cost: Double)] = [:]
+    private var refreshing = false
 
-    /// Begins the poll loop and the background ingest watch. Idempotent.
+    /// Begins the refresh loop and the background ingest watch. Idempotent.
     func start() {
         guard timer == nil else { return }
         Task { await BurnLedger.shared.startIngestWatch() }
-        Task { await poll() }
-        timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            Task { await self?.poll() }
-        }
+        Task { await refresh() }
+        scheduleTimer()
     }
 
     /// Stops the loop and the watch.
@@ -72,45 +125,62 @@ final class LiveBurnViewModel: ObservableObject {
         }
     }
 
-    private func poll() async {
-        guard !polling else { return }
-        polling = true
-        defer { polling = false }
+    /// Switches the chart's time range, re-querying immediately and retiming the
+    /// refresh loop to the new range's cadence.
+    func setRange(_ newRange: LiveRange) {
+        guard newRange != range else { return }
+        range = newRange
+        series = [:]
+        if timer != nil { scheduleTimer() } // only retime when running
+        Task { await refresh() }
+    }
 
-        let now = Date()
+    private func scheduleTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: range.refreshInterval, repeats: true) { [weak self] _ in
+            Task { await self?.refresh() }
+        }
+    }
+
+    private func refresh() async {
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+
+        let range = self.range
+        let since = Date().addingTimeInterval(-range.sinceSeconds)
+        var next: [ProviderName: [LiveBurnSample]] = [:]
         var gotAny = false
+
         for provider in providers {
             let burnProvider = BurnLedger.burnProvider(for: provider)
-            guard let window = await BurnLedger.shared.summary(
-                provider: burnProvider, since: now.addingTimeInterval(-rateWindow)
+            guard let points = await BurnLedger.shared.timeseries(
+                provider: burnProvider, since: since, bucket: range.bucketArg
             ) else { continue }
             gotAny = true
 
-            let tokensPerSecond = Double(window.tokens) / rateWindow
-            let dollarsPerMinute = window.cost / rateWindow * 60
-            let dt = series[provider]?.last.map { now.timeIntervalSince($0.date) } ?? pollInterval
-            var totals = session[provider] ?? (tokens: 0, cost: 0)
-            totals.tokens += tokensPerSecond * dt
-            totals.cost += dollarsPerMinute / 60 * dt
-            session[provider] = totals
-
-            var samples = series[provider] ?? []
-            samples.append(LiveBurnSample(
-                date: now,
-                cost: totals.cost,
-                tokens: Int(totals.tokens),
-                tokensPerSecond: tokensPerSecond,
-                dollarsPerMinute: dollarsPerMinute
-            ))
-            if samples.count > maxSamples {
-                samples.removeFirst(samples.count - maxSamples)
+            var cumulativeTokens = 0
+            var cumulativeCost = 0.0
+            next[provider] = points.map { point in
+                cumulativeTokens += point.tokens
+                cumulativeCost += point.cost
+                return LiveBurnSample(
+                    date: point.date,
+                    cost: cumulativeCost,
+                    tokens: cumulativeTokens,
+                    tokensPerSecond: Double(point.tokens) / range.bucketSeconds,
+                    dollarsPerMinute: point.cost / range.bucketSeconds * 60
+                )
             }
-            series[provider] = samples
         }
 
+        // Ignore a result for a range the user switched away from mid-flight.
+        guard range == self.range else { return }
+
         if gotAny {
+            series = next
             unavailable = false
-        } else if series.values.allSatisfy({ $0.isEmpty }) {
+        } else {
             unavailable = true // burn not installed / query failing
         }
     }
