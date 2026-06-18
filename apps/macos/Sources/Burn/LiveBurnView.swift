@@ -59,36 +59,47 @@ struct LiveBurnView: View {
     private var headline: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Burn rate")
+                Text("Last \(viewModel.range.label)")
                     .font(.title3.weight(.bold))
-                Text("last \(viewModel.range.label) · combined")
+                Text("total burn")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 1) {
-                Text(rateLabel)
+                Text(totalTokensLabel)
                     .font(.headline.weight(.bold))
                     .monospacedDigit()
-                Text(spendLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                HStack(spacing: 6) {
+                    Text(totalCostLabel)
+                    Text("·")
+                    Text(rateLabel)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
             }
         }
     }
 
+    /// Range totals — the cumulative line's last point per shown provider, summed.
+    private var rangeTotalTokens: Int {
+        shown.reduce(0) { $0 + (viewModel.series[$1]?.last?.tokens ?? 0) }
+    }
+    private var rangeTotalCost: Double {
+        shown.reduce(0) { $0 + (viewModel.series[$1]?.last?.cost ?? 0) }
+    }
+    private var totalTokensLabel: String { "\(tokenAxisLabel(Double(rangeTotalTokens))) tokens" }
+    private var totalCostLabel: String { String(format: "$%.2f", rangeTotalCost) }
+
+    /// Current burn rate (latest bucket) across shown providers — secondary context.
     private var totalRate: Double {
         shown.reduce(0) { $0 + (viewModel.series[$1]?.last?.tokensPerSecond ?? 0) }
-    }
-    private var totalSpend: Double {
-        shown.reduce(0) { $0 + (viewModel.series[$1]?.last?.dollarsPerMinute ?? 0) }
     }
     private var rateLabel: String {
         totalRate >= 1000 ? String(format: "%.1fk tok/s", totalRate / 1000)
                           : "\(Int(totalRate.rounded())) tok/s"
     }
-    private var spendLabel: String { String(format: "$%.2f/min", totalSpend) }
 
     // MARK: Charts
 
@@ -184,6 +195,7 @@ struct LiveBurnView: View {
     }
 
     private func tokenAxisLabel(_ value: Double) -> String {
+        if value >= 1_000_000_000 { return String(format: "%.2fB", value / 1_000_000_000) }
         if value >= 1_000_000 { return String(format: "%.1fM", value / 1_000_000) }
         if value >= 1_000 { return String(format: "%.0fk", value / 1_000) }
         return "\(Int(value))"
