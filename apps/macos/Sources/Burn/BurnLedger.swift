@@ -77,38 +77,15 @@ actor BurnLedger {
         return Summary(cost: cost, tokens: tokens)
     }
 
-    // MARK: - Long-lived ingest watch
+    // MARK: - Ingest
 
-    /// The running `burn ingest --watch` process, if any. Kept alive for the
-    /// lifetime of the live view so freshly written turns land in the ledger and
-    /// the polled live chart actually moves.
-    private var watchProcess: Process?
-
-    /// Starts a background `burn ingest --watch` (FS-event driven) if one isn't
-    /// already running. No-op when burn is unavailable. The PATH fallback can't
-    /// host a long-lived child cleanly through a login shell, so the watch only
-    /// runs with the bundled native helper; the live chart still polls either
-    /// way, it just won't self-freshen without it.
-    func startIngestWatch() {
-        guard watchProcess == nil else { return }
-        guard case .bundled(let url) = resolveTool() else { return }
-        let process = Process()
-        process.executableURL = url
-        process.arguments = ["ingest", "--watch", "--quiet"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            watchProcess = process
-        } catch {
-            watchProcess = nil
-        }
-    }
-
-    /// Terminates the background watch process, if running.
-    func stopIngestWatch() {
-        watchProcess?.terminate()
-        watchProcess = nil
+    /// Runs one incremental `burn ingest` sweep so the ledger reflects freshly
+    /// written turns. `burn summary` is read-only (it no longer ingests), and the
+    /// background `ingest --watch` doesn't keep up, so the live monitor calls this
+    /// each poll to keep the numbers moving. A warm incremental sweep is fast
+    /// (only new turns). No-op / `nil` when burn is unavailable.
+    func ingest() {
+        _ = runBurn(["ingest", "--quiet"])
     }
 
     // MARK: - Resolution & invocation
