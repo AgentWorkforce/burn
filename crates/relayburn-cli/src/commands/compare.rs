@@ -180,6 +180,54 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     };
     progress.set_task("opening ledger");
     let handle = Ledger::open(ledger_opts)?;
+
+    // `--bucket` switches to a per-bucket time-series via the SDK verb.
+    if let Some(bucket_raw) = args.bucket.as_deref() {
+        let bucket_secs = match relayburn_sdk::parse_bucket(bucket_raw) {
+            Ok(secs) => secs,
+            Err(err) => {
+                progress.finish_and_clear();
+                eprintln!("burn: {err}");
+                return Ok(2);
+            }
+        };
+        let provider = provider_filter
+            .as_ref()
+            .map(|f| f.iter().cloned().collect::<Vec<_>>());
+        progress.set_task("building comparison time-series");
+        let series = handle
+            .compare_timeseries(
+                relayburn_sdk::CompareOptions {
+                    models: models.clone(),
+                    session: args.session.clone(),
+                    project: args.project.clone(),
+                    since: args.since.clone(),
+                    workflow: args.workflow.clone(),
+                    agent: args.agent.clone(),
+                    provider,
+                    min_sample: Some(min_sample),
+                    min_fidelity: Some(min_fidelity),
+                    ledger_home: None,
+                },
+                bucket_secs,
+            )
+            .inspect_err(|_| progress.finish_and_clear())?;
+        progress.finish_and_clear();
+        if globals.json {
+            render_json(&series)?;
+            return Ok(0);
+        }
+        for bucket in &series.buckets {
+            println!(
+                "{}  {:>5} turns  {} models",
+                bucket.start,
+                bucket.result.analyzed_turns,
+                bucket.result.models.len(),
+            );
+        }
+        return Ok(0);
+    }
+
     progress.set_task("loading turns");
     let queried_turns: Vec<EnrichedTurn> = handle.raw().query_turns(&q)?;
 

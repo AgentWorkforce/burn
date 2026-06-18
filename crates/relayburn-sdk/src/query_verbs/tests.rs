@@ -2633,3 +2633,147 @@ mod fingerprint_bench {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// `--bucket` time-series
+// ---------------------------------------------------------------------------
+
+fn bucket_test_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnRecord {
+    TurnRecord {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: session.into(),
+        session_path: None,
+        message_id: message.into(),
+        turn_index: 0,
+        ts: ts.into(),
+        model: "claude-sonnet-4-6".into(),
+        project: Some("/tmp/proj".into()),
+        project_key: None,
+        usage: Usage {
+            input,
+            output: 0,
+            reasoning: 0,
+            cache_read: 0,
+            cache_create_5m: 0,
+            cache_create_1h: 0,
+        },
+        tool_calls: vec![],
+        files_touched: None,
+        subagent: None,
+        stop_reason: None,
+        activity: None,
+        retries: None,
+        has_edits: None,
+        fidelity: None,
+    }
+}
+
+#[test]
+fn parse_bucket_uses_minute_grammar_and_rejects_garbage() {
+    assert_eq!(super::parse_bucket("30s").unwrap(), 30);
+    assert_eq!(super::parse_bucket("5m").unwrap(), 300); // minutes, not months
+    assert_eq!(super::parse_bucket("1h").unwrap(), 3_600);
+    assert_eq!(super::parse_bucket("12h").unwrap(), 43_200);
+    assert_eq!(super::parse_bucket("1d").unwrap(), 86_400);
+    assert_eq!(super::parse_bucket("7d").unwrap(), 604_800);
+    assert_eq!(super::parse_bucket("1w").unwrap(), 604_800);
+    for bad in ["", "5", "5x", "0m", "abc", "h", "-5m", "m"] {
+        assert!(
+            super::parse_bucket(bad).is_err(),
+            "{bad:?} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn iso_z_to_epoch_secs_roundtrips_with_formatter() {
+    for secs in [0_i64, 1_700_000_000, super::system_now_secs() as i64] {
+        let iso = super::format_iso_z_ms(secs, 0);
+        assert_eq!(
+            super::iso_z_to_epoch_secs(&iso),
+            Some(secs),
+            "roundtrip {iso}"
+        );
+    }
+    // sub-second precision is floored, not rejected.
+    assert_eq!(
+        super::iso_z_to_epoch_secs("2026-04-23T00:00:00.500Z"),
+        super::iso_z_to_epoch_secs("2026-04-23T00:00:00.000Z")
+    );
+    assert_eq!(super::iso_z_to_epoch_secs("garbage"), None);
+}
+
+#[test]
+fn buckets_partition_edges_and_indices() {
+    let b = super::Buckets::new(0, 1000, 300); // edges 0,300,600,900,1200 -> 4 buckets
+    assert_eq!(b.len(), 4);
+    assert_eq!(b.index_for(0), Some(0));
+    assert_eq!(b.index_for(299), Some(0));
+    assert_eq!(b.index_for(300), Some(1));
+    assert_eq!(b.index_for(899), Some(2));
+    assert_eq!(b.index_for(950), Some(3));
+    assert_eq!(b.index_for(-1), None); // before anchor
+    assert_eq!(b.index_for(1200), None); // last edge is exclusive
+}
+
+#[test]
+fn summary_timeseries_places_turns_in_buckets_and_sums_to_total() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).expect("open");
+
+    // Two turns inside the last hour, ~9 minutes apart, so they land in
+    // different 5-minute buckets. Timestamps are anchored to `now` so the
+    // `--since 1h` window (which ends at `now`) actually contains them.
+    let now = super::system_now_secs() as i64;
+    let ts_recent = super::format_iso_z_ms(now - 180, 0); // 3m ago
+    let ts_older = super::format_iso_z_ms(now - 720, 0); // 12m ago
+    handle
+        .raw_mut()
+        .append_turns(&[
+            bucket_test_turn("s1", "m1", &ts_recent, 1_000),
+            bucket_test_turn("s1", "m2", &ts_older, 2_000),
+        ])
+        .expect("append");
+
+    let series = handle
+        .summary_timeseries(
+            SummaryReportOptions {
+                since: Some("1h".into()),
+                mode: SummaryReportMode::Grouped { by_provider: false },
+                ..SummaryReportOptions::default()
+            },
+            300, // 5-minute buckets
+        )
+        .expect("timeseries");
+
+    assert_eq!(series.bucket_secs, 300);
+    let nonempty: Vec<_> = series.buckets.iter().filter(|b| b.turn_count > 0).collect();
+    assert_eq!(
+        nonempty.len(),
+        2,
+        "two turns 9m apart -> two distinct 5m buckets"
+    );
+    assert!(nonempty.iter().all(|b| b.turn_count == 1));
+
+    // Per-bucket totals reconcile with the un-bucketed total.
+    let total_tokens: u64 = series.buckets.iter().map(|b| b.total_tokens).sum();
+    assert_eq!(total_tokens, 3_000);
+    let total_turns: u64 = series.buckets.iter().map(|b| b.turn_count).sum();
+    assert_eq!(total_turns, 2);
+}
+
+#[test]
+fn summary_timeseries_rejects_attribution_modes() {
+    let (_dir, handle) = fixture_handle();
+    let err = handle
+        .summary_timeseries(
+            SummaryReportOptions {
+                mode: SummaryReportMode::ByTool,
+                ..SummaryReportOptions::default()
+            },
+            300,
+        )
+        .expect_err("--bucket must reject --by-tool");
+    assert!(err.to_string().contains("--bucket"));
+}

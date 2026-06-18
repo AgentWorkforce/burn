@@ -142,6 +142,131 @@ impl LedgerHandle {
             fidelity_summary,
         ))
     }
+
+    /// Time-bucketed [`compare`]: the same model comparison computed per
+    /// `bucket_secs`-wide window across the `--since` range (turn-level
+    /// partition; a clean per-turn fold). Note: small buckets thin each
+    /// model×category cell's sample, so `insufficientSample` trips far more
+    /// often than over the whole window.
+    pub fn compare_timeseries(
+        &self,
+        opts: CompareOptions,
+        bucket_secs: u64,
+    ) -> Result<CompareTimeseries> {
+        if opts.models.len() < 2 {
+            anyhow::bail!("compare: needs at least 2 models");
+        }
+        let min_fidelity = opts.min_fidelity.unwrap_or(FidelityClass::UsageOnly);
+        let models = opts.models.clone();
+        let min_sample = opts.min_sample;
+
+        let mut q = build_query(
+            opts.session.as_deref(),
+            opts.project.as_deref(),
+            opts.since.as_deref(),
+        )?;
+        let mut enrichment = BTreeMap::new();
+        if let Some(workflow) = opts.workflow {
+            enrichment.insert("workflowId".to_string(), workflow);
+        }
+        if let Some(agent) = opts.agent {
+            enrichment.insert("agentId".to_string(), agent);
+        }
+        if !enrichment.is_empty() {
+            q.enrichment = Some(enrichment);
+        }
+
+        let mut turns = self.inner.query_turns(&q)?;
+        if let Some(filter) = normalize_provider_filter(opts.provider) {
+            turns.retain(|t| {
+                let provider = crate::analyze::provider_for(&t.turn).provider;
+                filter.contains(&provider.to_ascii_lowercase())
+            });
+        }
+        let pricing = load_pricing(None);
+
+        let Some(anchor) = super::bucket_anchor_secs(
+            q.since.as_deref(),
+            turns
+                .iter()
+                .filter_map(|t| super::iso_z_to_epoch_secs(&t.turn.ts)),
+        ) else {
+            return Ok(CompareTimeseries {
+                bucket_secs,
+                buckets: Vec::new(),
+            });
+        };
+        let now = super::system_now_secs() as i64;
+        let anchor = super::clamp_bucket_anchor(anchor, now, bucket_secs);
+        let buckets = super::Buckets::new(anchor, now, bucket_secs);
+        let n = buckets.len();
+
+        let mut per_bucket: Vec<Vec<EnrichedTurn>> = (0..n).map(|_| Vec::new()).collect();
+        for t in turns {
+            let Some(ep) = super::iso_z_to_epoch_secs(&t.turn.ts) else {
+                continue;
+            };
+            if let Some(i) = buckets.index_for(ep) {
+                per_bucket[i].push(t);
+            }
+        }
+
+        let out = per_bucket
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut bturns)| {
+                let fidelity_summary =
+                    summarize_fidelity_from_iter(bturns.iter().map(|t| t.turn.fidelity.as_ref()));
+                if min_fidelity != FidelityClass::Partial {
+                    bturns.retain(|t| has_minimum_fidelity(t.turn.fidelity.as_ref(), min_fidelity));
+                }
+                let table = build_compare_table(
+                    &bturns,
+                    &AnalyzeCompareOptions {
+                        pricing: &pricing,
+                        models: Some(models.clone()),
+                        min_sample,
+                    },
+                );
+                let result = shape_compare_result(
+                    table,
+                    bturns.len() as u64,
+                    min_fidelity,
+                    fidelity_summary,
+                );
+                CompareBucket {
+                    start: buckets.start_iso(i),
+                    end: buckets.end_iso(i),
+                    result,
+                }
+            })
+            .collect();
+
+        Ok(CompareTimeseries {
+            bucket_secs,
+            buckets: out,
+        })
+    }
+}
+
+/// One time bucket of a [`CompareTimeseries`] — the [`CompareResult`] for turns
+/// in `[start, end)`, flattened alongside the window bounds.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareBucket {
+    pub start: String,
+    pub end: String,
+    #[serde(flatten)]
+    pub result: CompareResult,
+}
+
+/// A time-series of model comparisons, one [`CompareBucket`] per window.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareTimeseries {
+    #[serde(rename = "bucketSeconds")]
+    pub bucket_secs: u64,
+    pub buckets: Vec<CompareBucket>,
 }
 
 pub fn compare(opts: CompareOptions) -> Result<CompareResult> {
