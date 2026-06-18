@@ -31,11 +31,9 @@ final class LiveBurnViewModel: ObservableObject {
     /// True once we've confirmed burn can't be queried, so the view can hint.
     @Published private(set) var unavailable = false
 
-    /// How often we ingest + poll `burn summary`. Each cycle runs a one-shot
-    /// incremental ingest (summary is read-only and the background watch lags),
-    /// which takes a beat on a large ledger — so the cadence is a few seconds,
-    /// not sub-second.
-    private let pollInterval: TimeInterval = 2.5
+    /// How often we poll `burn summary` (read-only, ~10ms). Freshness comes from
+    /// the background `ingest --watch`, so this can be a tight, smooth cadence.
+    private let pollInterval: TimeInterval = 1.5
     /// Trailing window the burn rate is averaged over. Each poll re-queries the
     /// last `rateWindow` seconds and divides — a moving average that's robust to
     /// the window sliding and to late ingests, unlike an inter-sample delta
@@ -56,19 +54,22 @@ final class LiveBurnViewModel: ObservableObject {
         self.provider = provider
     }
 
-    /// Begins the ingest+poll loop. Idempotent.
+    /// Begins the poll loop and the background ingest watch. Idempotent.
     func start() {
         guard timer == nil else { return }
+        Task { await BurnLedger.shared.startIngestWatch() }
         Task { await poll() }
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { await self?.poll() }
         }
     }
 
-    /// Stops the loop. Called when the live view disappears or the app closes.
+    /// Stops the loop and the watch. Called when the live view disappears or the
+    /// app closes.
     func stop() {
         timer?.invalidate()
         timer = nil
+        Task { await BurnLedger.shared.stopIngestWatch() }
     }
 
     /// Switches the tracked provider, clearing the series so the new provider's
@@ -87,11 +88,6 @@ final class LiveBurnViewModel: ObservableObject {
         guard !polling else { return }
         polling = true
         defer { polling = false }
-
-        // Freshen the ledger ourselves — summary is read-only and the background
-        // watch lags, so without this the totals don't move even with active
-        // sessions.
-        await BurnLedger.shared.ingest()
 
         let burnProvider = BurnLedger.burnProvider(for: provider)
         let now = Date()
