@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn sync` pushes the local ledger to a hosted burn backend (default `https://burn.agentrelay.com`) so usage from multiple machines lands in one shared, per-organization store. The push is idempotent and doubles as backfill; credentials come from `--token`/`--url`, `BURN_CLOUD_TOKEN`/`BURN_CLOUD_URL`, or stored login credentials.
+
 ## [3.3.0] - 2026-06-17
 
 - `burn summary` and `burn hotspots` no longer run a pre-query ingest sweep by default — both return in well under 100ms instead of seconds on large ledgers (`hotspots` was ~3s). Pass `--ingest` for a one-off freshen; keep the ledger current out of band with `burn ingest --watch` or the Claude Stop hook.

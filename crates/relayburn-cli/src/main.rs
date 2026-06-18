@@ -57,6 +57,7 @@ fn dispatch(args: Args) -> i32 {
         Command::Flow(args) => commands::flow::run(&globals, args),
         Command::Stamps(args) => commands::stamps::run(&globals, args),
         Command::Ingest(args) => commands::ingest::run(&globals, args),
+        Command::Sync(args) => commands::sync::run(&globals, args),
         Command::McpServer(args) => commands::mcp_server::run(&globals, args),
         Command::Update(args) => commands::update::run(&globals, args),
     }
@@ -80,6 +81,7 @@ fn command_name(command: &Command) -> &'static str {
         Command::Flow(_) => "flow",
         Command::Stamps(_) => "stamps",
         Command::Ingest(_) => "ingest",
+        Command::Sync(_) => "sync",
         Command::McpServer(_) => "mcp-server",
         Command::Update(_) => "update",
     }

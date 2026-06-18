@@ -116,6 +116,9 @@ pub enum Command {
     /// Scan harness session stores and append new turns to the ledger.
     Ingest(IngestArgs),
 
+    /// Push the local ledger to a hosted burn backend (burn.agentrelay.com).
+    Sync(SyncArgs),
+
     /// Stdio MCP server exposing read-only ledger queries for
     /// in-session self-query.
     #[command(name = "mcp-server")]
@@ -217,6 +220,38 @@ pub struct IngestArgs {
     /// some Docker setups). Ignored without `--watch`.
     #[arg(long, requires = "watch")]
     pub no_fsevents: bool,
+}
+
+/// Per-command flags for `burn sync`.
+///
+/// Pushes the local ledger to a hosted burn backend
+/// (default `https://burn.agentrelay.com`) so usage from multiple machines
+/// lands in one shared, per-organization store. The push is idempotent: the
+/// backend dedups on each record's natural key, so re-running is safe and a
+/// re-imaged machine can backfill by simply syncing again.
+///
+/// Credentials resolve in this order: the `--token` / `--url` flags, then the
+/// `BURN_CLOUD_TOKEN` / `BURN_CLOUD_URL` env vars, then a `credentials.json`
+/// written by `burn login` under `$RELAYBURN_HOME`.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct SyncArgs {
+    /// Backend base URL. Defaults to `$BURN_CLOUD_URL` or
+    /// `https://burn.agentrelay.com`.
+    #[arg(long, value_name = "URL")]
+    pub url: Option<String>,
+
+    /// Bearer access token (`brn_at_…`). Defaults to `$BURN_CLOUD_TOKEN` or
+    /// the stored credentials.
+    #[arg(long, value_name = "TOKEN")]
+    pub token: Option<String>,
+
+    /// Human-friendly label for this machine, shown in the dashboard.
+    #[arg(long, value_name = "LABEL")]
+    pub label: Option<String>,
+
+    /// Records per HTTP batch. Defaults to 500.
+    #[arg(long, value_name = "N")]
+    pub batch_size: Option<usize>,
 }
 
 /// Per-command flags for `burn mcp-server`. The stdio MCP server speaks
