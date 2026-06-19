@@ -97,6 +97,9 @@ final class LiveBurnViewModel: ObservableObject {
     private let providers = ProviderName.allCases
     private var timer: Timer?
     private var refreshing = false
+    /// Set when a refresh is requested while one is in flight, so the running
+    /// one does another pass (for the latest range) instead of being dropped.
+    private var refreshAgain = false
 
     /// Begins the refresh loop and the background ingest watch. Idempotent.
     func start() {
@@ -143,45 +146,58 @@ final class LiveBurnViewModel: ObservableObject {
     }
 
     private func refresh() async {
-        guard !refreshing else { return }
+        // Coalesce: if a refresh is already running, ask it to do one more pass
+        // (for whatever the latest range is) instead of dropping this request.
+        // Otherwise a fast range switch clears the series and then has its
+        // refresh skipped, leaving the warming spinner until the next timer tick
+        // (up to 5 min on the 7d range).
+        if refreshing {
+            refreshAgain = true
+            return
+        }
         refreshing = true
         defer { refreshing = false }
 
-        let range = self.range
-        let since = Date().addingTimeInterval(-range.sinceSeconds)
-        var next: [ProviderName: [LiveBurnSample]] = [:]
-        var gotAny = false
+        repeat {
+            refreshAgain = false
+            let range = self.range
+            let since = Date().addingTimeInterval(-range.sinceSeconds)
+            var next: [ProviderName: [LiveBurnSample]] = [:]
+            var gotAny = false
 
-        for provider in providers {
-            let burnProvider = BurnLedger.burnProvider(for: provider)
-            guard let points = await BurnLedger.shared.timeseries(
-                provider: burnProvider, since: since, bucket: range.bucketArg
-            ) else { continue }
-            gotAny = true
+            for provider in providers {
+                let burnProvider = BurnLedger.burnProvider(for: provider)
+                guard let points = await BurnLedger.shared.timeseries(
+                    provider: burnProvider, since: since, bucket: range.bucketArg
+                ) else { continue }
+                gotAny = true
 
-            var cumulativeTokens = 0
-            var cumulativeCost = 0.0
-            next[provider] = points.map { point in
-                cumulativeTokens += point.tokens
-                cumulativeCost += point.cost
-                return LiveBurnSample(
-                    date: point.date,
-                    cost: cumulativeCost,
-                    tokens: cumulativeTokens,
-                    tokensPerSecond: Double(point.tokens) / range.bucketSeconds,
-                    dollarsPerMinute: point.cost / range.bucketSeconds * 60
-                )
+                var cumulativeTokens = 0
+                var cumulativeCost = 0.0
+                next[provider] = points.map { point in
+                    cumulativeTokens += point.tokens
+                    cumulativeCost += point.cost
+                    return LiveBurnSample(
+                        date: point.date,
+                        cost: cumulativeCost,
+                        tokens: cumulativeTokens,
+                        tokensPerSecond: Double(point.tokens) / range.bucketSeconds,
+                        dollarsPerMinute: point.cost / range.bucketSeconds * 60
+                    )
+                }
             }
-        }
 
-        // Ignore a result for a range the user switched away from mid-flight.
-        guard range == self.range else { return }
-
-        if gotAny {
-            series = next
-            unavailable = false
-        } else {
-            unavailable = true // burn not installed / query failing
-        }
+            // Only publish if the range still matches what we queried. A switch
+            // during the query sets refreshAgain, so the loop reruns for the new
+            // range rather than showing stale data or getting stuck empty.
+            if range == self.range {
+                if gotAny {
+                    series = next
+                    unavailable = false
+                } else {
+                    unavailable = true // burn not installed / query failing
+                }
+            }
+        } while refreshAgain
     }
 }
