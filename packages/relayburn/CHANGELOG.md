@@ -4,6 +4,8 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-06-20
+
 - Added `--bucket <DURATION>` to `burn summary` and `burn compare` for a per-bucket time-series across the `--since` window (`{ bucketSeconds, buckets: [...] }` in `--json`). Grammar: `30s`/`5m`(minutes)/`1h`/`12h`/`1d`/`7d`.
 
 ## [3.1.0] - 2026-05-29
