@@ -581,6 +581,9 @@ impl LedgerHandle {
         if opts.group_by_tag.is_some() {
             anyhow::bail!("--bucket is not supported with --group-by-tag");
         }
+        if opts.include_quality {
+            anyhow::bail!("--bucket is not supported with --quality metrics yet");
+        }
 
         let q = build_summary_report_query(&opts)?;
         let provider_filter = normalize_summary_provider_filter(opts.providers.as_deref());
@@ -611,7 +614,7 @@ impl LedgerHandle {
             });
         };
         let now = super::system_now_secs() as i64;
-        let anchor = super::clamp_bucket_anchor(anchor, now, bucket_secs);
+        super::ensure_bucket_span(anchor, now, bucket_secs)?;
         let buckets = super::Buckets::new(anchor, now, bucket_secs);
         let n = buckets.len();
 

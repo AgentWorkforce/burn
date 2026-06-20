@@ -2678,7 +2678,9 @@ fn parse_bucket_uses_minute_grammar_and_rejects_garbage() {
     assert_eq!(super::parse_bucket("1d").unwrap(), 86_400);
     assert_eq!(super::parse_bucket("7d").unwrap(), 604_800);
     assert_eq!(super::parse_bucket("1w").unwrap(), 604_800);
-    for bad in ["", "5", "5x", "0m", "abc", "h", "-5m", "m"] {
+    // A trailing multi-byte unit must be rejected, not panic on a byte-index
+    // slice that lands mid-codepoint.
+    for bad in ["", "5", "5x", "0m", "abc", "h", "-5m", "m", "5€", "5м"] {
         assert!(
             super::parse_bucket(bad).is_err(),
             "{bad:?} should be rejected"
@@ -2776,4 +2778,48 @@ fn summary_timeseries_rejects_attribution_modes() {
         )
         .expect_err("--bucket must reject --by-tool");
     assert!(err.to_string().contains("--bucket"));
+}
+
+#[test]
+fn summary_timeseries_rejects_quality() {
+    let (_dir, handle) = fixture_handle();
+    let err = handle
+        .summary_timeseries(
+            SummaryReportOptions {
+                mode: SummaryReportMode::Grouped { by_provider: false },
+                include_quality: true,
+                ..SummaryReportOptions::default()
+            },
+            300,
+        )
+        .expect_err("--bucket must reject --quality");
+    assert!(err.to_string().contains("--quality"));
+}
+
+#[test]
+fn summary_timeseries_rejects_oversized_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).expect("open");
+
+    // A turn ~24h ago with a 1s bucket would demand ~86k buckets (> MAX_BUCKETS),
+    // which previously truncated the anchor and silently dropped older turns.
+    // We now fail fast so per-bucket totals can't drift from the window total.
+    let now = super::system_now_secs() as i64;
+    let ts_old = super::format_iso_z_ms(now - 86_400, 0);
+    handle
+        .raw_mut()
+        .append_turns(&[bucket_test_turn("s1", "m1", &ts_old, 1_000)])
+        .expect("append");
+
+    let err = handle
+        .summary_timeseries(
+            SummaryReportOptions {
+                since: Some("24h".into()),
+                mode: SummaryReportMode::Grouped { by_provider: false },
+                ..SummaryReportOptions::default()
+            },
+            1, // 1-second buckets over 24h -> far more than MAX_BUCKETS
+        )
+        .expect_err("oversized bucket window must be rejected");
+    assert!(err.to_string().contains("buckets"));
 }

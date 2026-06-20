@@ -305,11 +305,11 @@ pub fn parse_bucket(s: &str) -> Result<u64> {
 }
 
 fn bucket_secs_from_str(s: &str) -> Option<u64> {
-    if s.len() < 2 {
-        return None;
-    }
-    let unit = s.as_bytes()[s.len() - 1] as char;
-    let num = &s[..s.len() - 1];
+    // Split on the final char (not the final byte) so a trailing multi-byte
+    // UTF-8 unit can't land us on an invalid boundary and panic.
+    let mut chars = s.chars();
+    let unit = chars.next_back()?;
+    let num = chars.as_str();
     if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -404,18 +404,21 @@ pub(crate) fn bucket_anchor_secs(
 }
 
 /// Upper bound on bucket count, so a tiny `--bucket` over an ancient `--since`
-/// can't allocate millions of windows. When the natural span would exceed it,
-/// the anchor moves forward to keep the most-recent `MAX_BUCKETS` windows.
+/// can't allocate millions of windows.
 pub(crate) const MAX_BUCKETS: i64 = 10_000;
 
-/// Clamp the anchor so `[anchor, end)` spans at most [`MAX_BUCKETS`] buckets.
-pub(crate) fn clamp_bucket_anchor(anchor: i64, end: i64, bucket_secs: u64) -> i64 {
+/// Reject a window that would span more than [`MAX_BUCKETS`] buckets. We fail
+/// fast rather than silently moving the anchor forward: truncating the lower
+/// bound would drop already-queried turns and break the invariant that
+/// per-bucket totals reconcile with the un-bucketed `--since` total.
+pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Result<()> {
     let max_span = MAX_BUCKETS.saturating_mul(bucket_secs.max(1) as i64);
     if end.saturating_sub(anchor) > max_span {
-        end - max_span
-    } else {
-        anchor
+        anyhow::bail!(
+            "--bucket would create more than {MAX_BUCKETS} buckets; use a wider --bucket or a narrower --since"
+        );
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

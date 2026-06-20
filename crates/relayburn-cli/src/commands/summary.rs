@@ -202,6 +202,36 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         }
     }
 
+    // `--bucket` opts into a per-bucket time-series. Parse and validate it
+    // (including the mode/flag combinations it supports) before opening the
+    // ledger or running ingest, so a bad invocation fails fast.
+    let bucket_secs = if let Some(bucket_raw) = args.bucket.as_deref() {
+        if args.by_tool
+            || args.by_subagent_type
+            || args.by_relationship.is_some()
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some()
+        {
+            eprintln!(
+                "burn: --bucket is only supported with the default grouped summary or --by-provider"
+            );
+            return Ok(2);
+        }
+        if args.quality {
+            eprintln!("burn: --bucket is not supported with --quality");
+            return Ok(2);
+        }
+        match relayburn_sdk::parse_bucket(bucket_raw) {
+            Ok(secs) => Some(secs),
+            Err(err) => {
+                eprintln!("burn: {err}");
+                return Ok(2);
+            }
+        }
+    } else {
+        None
+    };
+
     let provider_filter = match parse_provider_filter(args.provider.as_deref()) {
         Ok(filter) => filter,
         Err(msg) => {
@@ -291,15 +321,8 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
     };
 
     // `--bucket` switches to a per-bucket time-series of the grouped summary.
-    if let Some(bucket_raw) = args.bucket {
-        let bucket_secs = match relayburn_sdk::parse_bucket(&bucket_raw) {
-            Ok(secs) => secs,
-            Err(err) => {
-                progress.finish_and_clear();
-                eprintln!("burn: {err}");
-                return Ok(2);
-            }
-        };
+    // Parsing/validation already happened above, before the ledger was opened.
+    if let Some(bucket_secs) = bucket_secs {
         progress.set_task("building summary time-series");
         let series = handle
             .summary_timeseries(opts, bucket_secs)

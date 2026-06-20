@@ -131,6 +131,22 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         ));
     }
 
+    // `--bucket` opts into a per-bucket time-series. Parse it up front (before
+    // the ledger is opened) so a bad duration routes through the same error
+    // envelope as the other argument validations. CSV time-series rendering
+    // isn't implemented, so reject the combination rather than silently
+    // falling back to TTY output.
+    let bucket_secs = args
+        .bucket
+        .as_deref()
+        .map(relayburn_sdk::parse_bucket)
+        .transpose()?;
+    if bucket_secs.is_some() && args.csv {
+        return Err(anyhow!(
+            "--bucket and --csv are mutually exclusive; pick one."
+        ));
+    }
+
     // 4. Provider filter. Lower-cased CSV; turns whose effective provider
     //    (per `provider_for`) isn't in the set get dropped after the ledger
     //    query but before the fidelity gate, matching the TS pipeline order.
@@ -182,15 +198,8 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     let handle = Ledger::open(ledger_opts)?;
 
     // `--bucket` switches to a per-bucket time-series via the SDK verb.
-    if let Some(bucket_raw) = args.bucket.as_deref() {
-        let bucket_secs = match relayburn_sdk::parse_bucket(bucket_raw) {
-            Ok(secs) => secs,
-            Err(err) => {
-                progress.finish_and_clear();
-                eprintln!("burn: {err}");
-                return Ok(2);
-            }
-        };
+    // Parsing/validation already happened above, before the ledger was opened.
+    if let Some(bucket_secs) = bucket_secs {
         let provider = provider_filter
             .as_ref()
             .map(|f| f.iter().cloned().collect::<Vec<_>>());
@@ -215,6 +224,10 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         progress.finish_and_clear();
         if globals.json {
             render_json(&series)?;
+            return Ok(0);
+        }
+        if series.buckets.is_empty() {
+            println!("(no data in range)");
             return Ok(0);
         }
         for bucket in &series.buckets {

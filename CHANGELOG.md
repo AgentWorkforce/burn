@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- `--bucket <DURATION>` on `burn summary` and `burn compare`: emit a per-bucket time-series across the `--since` window instead of a single total. JSON is `{ "bucketSeconds": N, "buckets": [ { "start", "end", ...the verb's report... } ] }`. Bucket grammar is the chart-axis form `30s` / `5m` (minutes) / `1h` / `12h` / `1d` / `7d` — note `m` is minutes here, unlike `--since` where `m` is months. Summary buckets are a pure per-turn fold, so per-bucket totals reconcile with the un-bucketed total; only the default grouped (`byModel` / `--by-provider`) summary supports `--bucket`. (`--bucket` on `hotspots` / `overhead` is not yet wired — their cross-turn attribution and window-amortized denominators need session-granular bucketing.)
+- `burn summary` and `burn compare` accept `--bucket <DURATION>` to emit a per-bucket time-series across the `--since` window instead of a single total (`{ "bucketSeconds": N, "buckets": [...] }` in JSON). Bucket units: `30s` / `5m` / `1h` / `12h` / `1d` / `7d` — note `m` is minutes here, unlike `--since` where `m` is months. `summary --bucket` supports only the default grouped (`byModel` / `--by-provider`) modes; `hotspots` / `overhead` are unchanged.
 
 ## [3.3.0] - 2026-06-17
 

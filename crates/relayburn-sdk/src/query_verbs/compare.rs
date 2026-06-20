@@ -197,7 +197,7 @@ impl LedgerHandle {
             });
         };
         let now = super::system_now_secs() as i64;
-        let anchor = super::clamp_bucket_anchor(anchor, now, bucket_secs);
+        super::ensure_bucket_span(anchor, now, bucket_secs)?;
         let buckets = super::Buckets::new(anchor, now, bucket_secs);
         let n = buckets.len();
 
