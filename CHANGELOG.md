@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn summary` and `burn compare` accept `--bucket <DURATION>` to emit a per-bucket time-series across the `--since` window instead of a single total (`{ "bucketSeconds": N, "buckets": [...] }` in JSON). Bucket units: `30s` / `5m` / `1h` / `12h` / `1d` / `7d` — note `m` is minutes here, unlike `--since` where `m` is months. `summary --bucket` supports only the default grouped (`byModel` / `--by-provider`) modes; `hotspots` / `overhead` are unchanged.
+
 ## [3.3.0] - 2026-06-17
 
 - `burn summary` and `burn hotspots` no longer run a pre-query ingest sweep by default — both return in well under 100ms instead of seconds on large ledgers (`hotspots` was ~3s). Pass `--ingest` for a one-off freshen; keep the ledger current out of band with `burn ingest --watch` or the Claude Stop hook.

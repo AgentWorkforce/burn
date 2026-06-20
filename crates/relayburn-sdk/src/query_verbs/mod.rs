@@ -289,6 +289,139 @@ fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {
 }
 
 // ---------------------------------------------------------------------------
+// time-bucketing — shared by `--bucket` on summary / compare / hotspots / overhead
+// ---------------------------------------------------------------------------
+
+/// Parse a `--bucket` duration into seconds.
+///
+/// Note: unlike `--since` (where `m` means *month*), bucket sizes use the
+/// natural chart-axis grammar — `s`=seconds, `m`=minutes, `h`=hours, `d`=days,
+/// `w`=weeks. A month-sized bucket is meaningless for a burn time-series, and
+/// minute buckets (`5m`) are the common case (e.g. a "last 5 minutes" chart).
+pub fn parse_bucket(s: &str) -> Result<u64> {
+    bucket_secs_from_str(s).ok_or_else(|| {
+        anyhow::anyhow!("invalid bucket: {s} (expected a duration like 30s, 5m, 1h, 12h, 1d, 7d)")
+    })
+}
+
+fn bucket_secs_from_str(s: &str) -> Option<u64> {
+    // Split on the final char (not the final byte) so a trailing multi-byte
+    // UTF-8 unit can't land us on an invalid boundary and panic.
+    let mut chars = s.chars();
+    let unit = chars.next_back()?;
+    let num = chars.as_str();
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u64 = num.parse().ok()?;
+    if n == 0 {
+        return None;
+    }
+    match unit {
+        's' => Some(n),
+        'm' => n.checked_mul(60),
+        'h' => n.checked_mul(3_600),
+        'd' => n.checked_mul(86_400),
+        'w' => n.checked_mul(7 * 86_400),
+        _ => None,
+    }
+}
+
+/// Parse the canonical ledger `ts` (`YYYY-MM-DDTHH:MM:SS(.mmm)Z`) into whole
+/// seconds since the Unix epoch. Sub-second precision is dropped (fine for
+/// bucket assignment). Returns `None` for malformed input.
+pub(crate) fn iso_z_to_epoch_secs(ts: &str) -> Option<i64> {
+    if ts.len() < 19 {
+        return None;
+    }
+    let year: i64 = ts.get(0..4)?.parse().ok()?;
+    let month: u32 = ts.get(5..7)?.parse().ok()?;
+    let day: u32 = ts.get(8..10)?.parse().ok()?;
+    let hour: i64 = ts.get(11..13)?.parse().ok()?;
+    let minute: i64 = ts.get(14..16)?.parse().ok()?;
+    let second: i64 = ts.get(17..19)?.parse().ok()?;
+    let days = ymd_to_days(year, month, day)?;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+/// Contiguous time buckets `[edges[i], edges[i+1])` covering `[anchor, end)`,
+/// each `bucket_secs` wide. There are `edges.len() - 1` buckets; the final
+/// edge is the first multiple of `bucket_secs` at or after `end`.
+pub(crate) struct Buckets {
+    pub(crate) bucket_secs: u64,
+    edges: Vec<i64>,
+}
+
+impl Buckets {
+    pub(crate) fn new(anchor_secs: i64, end_secs: i64, bucket_secs: u64) -> Self {
+        let step = bucket_secs.max(1) as i64;
+        let end = end_secs.max(anchor_secs + step); // always at least one bucket
+        let mut edges = Vec::new();
+        let mut e = anchor_secs;
+        while e < end {
+            edges.push(e);
+            e += step;
+        }
+        edges.push(e);
+        Self { bucket_secs, edges }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.edges.len().saturating_sub(1)
+    }
+
+    pub(crate) fn start_iso(&self, i: usize) -> String {
+        format_iso_z_ms(self.edges[i], 0)
+    }
+
+    pub(crate) fn end_iso(&self, i: usize) -> String {
+        format_iso_z_ms(self.edges[i + 1], 0)
+    }
+
+    /// Bucket index for a `ts` epoch, or `None` if it falls outside
+    /// `[anchor, last_edge)`.
+    pub(crate) fn index_for(&self, ts_epoch: i64) -> Option<usize> {
+        let anchor = *self.edges.first()?;
+        let last = *self.edges.last()?;
+        if ts_epoch < anchor || ts_epoch >= last {
+            return None;
+        }
+        let idx = ((ts_epoch - anchor) / self.bucket_secs.max(1) as i64) as usize;
+        Some(idx.min(self.len().saturating_sub(1)))
+    }
+}
+
+/// Pick the bucket anchor: the normalized `--since` epoch when present, else
+/// the earliest turn `ts` seen in `turn_ts`.
+pub(crate) fn bucket_anchor_secs(
+    since_norm: Option<&str>,
+    turn_ts: impl Iterator<Item = i64>,
+) -> Option<i64> {
+    if let Some(secs) = since_norm.and_then(iso_z_to_epoch_secs) {
+        return Some(secs);
+    }
+    turn_ts.min()
+}
+
+/// Upper bound on bucket count, so a tiny `--bucket` over an ancient `--since`
+/// can't allocate millions of windows.
+pub(crate) const MAX_BUCKETS: i64 = 10_000;
+
+/// Reject a window that would span more than [`MAX_BUCKETS`] buckets. We fail
+/// fast rather than silently moving the anchor forward: truncating the lower
+/// bound would drop already-queried turns and break the invariant that
+/// per-bucket totals reconcile with the un-bucketed `--since` total.
+pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Result<()> {
+    let max_span = MAX_BUCKETS.saturating_mul(bucket_secs.max(1) as i64);
+    if end.saturating_sub(anchor) > max_span {
+        anyhow::bail!(
+            "--bucket would create more than {MAX_BUCKETS} buckets; use a wider --bucket or a narrower --since"
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers — query construction + hotspots coverage gate
 // ---------------------------------------------------------------------------
 

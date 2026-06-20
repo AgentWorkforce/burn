@@ -534,7 +534,137 @@ pub struct SummarySubagentTreeReport {
     pub root: Option<SubagentTreeNode>,
 }
 
+/// One time bucket of a [`SummaryTimeseries`]: the grouped summary totals for
+/// turns whose `ts` falls in `[start, end)`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryBucket {
+    pub start: String,
+    pub end: String,
+    pub turn_count: u64,
+    pub total_tokens: u64,
+    pub total_cost: CostBreakdown,
+    pub group_by: SummaryGroupBy,
+    pub rows: Vec<UsageCostAggregateRow>,
+}
+
+/// A time-series of grouped summary totals — one [`SummaryBucket`] per
+/// `bucket_secs`-wide window across the `--since` range. Produced by
+/// [`LedgerHandle::summary_timeseries`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryTimeseries {
+    #[serde(rename = "bucketSeconds")]
+    pub bucket_secs: u64,
+    pub buckets: Vec<SummaryBucket>,
+}
+
 impl LedgerHandle {
+    /// Time-bucketed cost/usage totals (the `--bucket` form of the default
+    /// grouped summary). Fetches the `--since` window once, then partitions the
+    /// turns by `ts` into `bucket_secs`-wide buckets and aggregates each — a
+    /// pure per-turn fold, so per-bucket totals sum back to the un-bucketed
+    /// total. Supported only for the default grouped (`byModel`/`byProvider`)
+    /// summary; the tool/subagent/relationship attribution modes are rejected.
+    pub fn summary_timeseries(
+        &self,
+        opts: SummaryReportOptions,
+        bucket_secs: u64,
+    ) -> Result<SummaryTimeseries> {
+        let by_provider = match &opts.mode {
+            SummaryReportMode::Grouped { by_provider } => *by_provider,
+            _ => anyhow::bail!(
+                "--bucket is only supported with the default grouped summary, not \
+                 --by-tool/--by-subagent-type/--by-relationship/--subagent-tree"
+            ),
+        };
+        if opts.group_by_tag.is_some() {
+            anyhow::bail!("--bucket is not supported with --group-by-tag");
+        }
+        if opts.include_quality {
+            anyhow::bail!("--bucket is not supported with --quality metrics yet");
+        }
+
+        let q = build_summary_report_query(&opts)?;
+        let provider_filter = normalize_summary_provider_filter(opts.providers.as_deref());
+        let pricing = load_pricing(None);
+        let agent_session_ids = match opts.agent.as_deref() {
+            Some(agent_id) => Some(resolve_summary_agent_session_tree(&self.inner, agent_id)?),
+            None => None,
+        };
+
+        let enriched = self.inner.query_turns(&q)?;
+        let enriched = filter_summary_enriched_turns(
+            enriched,
+            opts.agent.as_deref(),
+            agent_session_ids.as_ref(),
+            provider_filter.as_ref(),
+        );
+        let turns = summary_turns_from_enriched(&enriched);
+
+        let Some(anchor) = super::bucket_anchor_secs(
+            q.since.as_deref(),
+            turns
+                .iter()
+                .filter_map(|t| super::iso_z_to_epoch_secs(&t.ts)),
+        ) else {
+            return Ok(SummaryTimeseries {
+                bucket_secs,
+                buckets: Vec::new(),
+            });
+        };
+        let now = super::system_now_secs() as i64;
+        super::ensure_bucket_span(anchor, now, bucket_secs)?;
+        let buckets = super::Buckets::new(anchor, now, bucket_secs);
+        let n = buckets.len();
+
+        let mut per_bucket: Vec<Vec<TurnRecord>> = (0..n).map(|_| Vec::new()).collect();
+        for t in turns {
+            let Some(ep) = super::iso_z_to_epoch_secs(&t.ts) else {
+                continue;
+            };
+            if let Some(i) = buckets.index_for(ep) {
+                per_bucket[i].push(t);
+            }
+        }
+
+        let group_by = if by_provider {
+            SummaryGroupBy::Provider
+        } else {
+            SummaryGroupBy::Model
+        };
+        let out = per_bucket
+            .into_iter()
+            .enumerate()
+            .map(|(i, bturns)| {
+                let rows = if by_provider {
+                    aggregate_by_provider(&bturns, AggregateByProviderOptions::new(&pricing))
+                        .into_iter()
+                        .map(summary_provider_to_aggregate_row)
+                        .collect::<Vec<_>>()
+                } else {
+                    summary_aggregate_by_model(&bturns, &pricing)
+                };
+                let total_cost = sum_costs(rows.iter().map(|r| &r.cost));
+                let total_tokens: u64 = bturns.iter().map(total_tokens_for_turn).sum();
+                SummaryBucket {
+                    start: buckets.start_iso(i),
+                    end: buckets.end_iso(i),
+                    turn_count: bturns.len() as u64,
+                    total_tokens,
+                    total_cost,
+                    group_by,
+                    rows,
+                }
+            })
+            .collect();
+
+        Ok(SummaryTimeseries {
+            bucket_secs,
+            buckets: out,
+        })
+    }
+
     pub fn summary_report(&self, opts: SummaryReportOptions) -> Result<SummaryReport> {
         let q = build_summary_report_query(&opts)?;
         let provider_filter = normalize_summary_provider_filter(opts.providers.as_deref());

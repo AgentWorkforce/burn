@@ -4,6 +4,8 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+- Added `--bucket <DURATION>` to `burn summary` and `burn compare` for a per-bucket time-series across the `--since` window (`{ bucketSeconds, buckets: [...] }` in `--json`). Grammar: `30s`/`5m`(minutes)/`1h`/`12h`/`1d`/`7d`.
+
 ## [3.1.0] - 2026-05-29
 
 - `burn update` now upgrades npm installs through `npm install -g relayburn@latest`: the launcher tags the install channel so the binary picks the right package manager.

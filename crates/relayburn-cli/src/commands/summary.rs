@@ -126,6 +126,13 @@ pub struct SummaryArgs {
     /// `--ingest` only for a one-off freshen.
     #[arg(long = "ingest")]
     pub ingest: bool,
+
+    /// Emit a time-series instead of a single total: bucket the `--since`
+    /// window into fixed-width windows and report per-bucket cost/usage.
+    /// Duration grammar: `30s`, `5m` (minutes), `1h`, `12h`, `1d`, `7d`.
+    /// Only valid for the default grouped (`byModel`/`--by-provider`) summary.
+    #[arg(long, value_name = "DURATION")]
+    pub bucket: Option<String>,
 }
 
 pub fn run(globals: &GlobalArgs, args: SummaryArgs) -> i32 {
@@ -194,6 +201,36 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
             return Ok(2);
         }
     }
+
+    // `--bucket` opts into a per-bucket time-series. Parse and validate it
+    // (including the mode/flag combinations it supports) before opening the
+    // ledger or running ingest, so a bad invocation fails fast.
+    let bucket_secs = if let Some(bucket_raw) = args.bucket.as_deref() {
+        if args.by_tool
+            || args.by_subagent_type
+            || args.by_relationship.is_some()
+            || args.subagent_tree.is_some()
+            || args.group_by_tag.is_some()
+        {
+            eprintln!(
+                "burn: --bucket is only supported with the default grouped summary or --by-provider"
+            );
+            return Ok(2);
+        }
+        if args.quality {
+            eprintln!("burn: --bucket is not supported with --quality");
+            return Ok(2);
+        }
+        match relayburn_sdk::parse_bucket(bucket_raw) {
+            Ok(secs) => Some(secs),
+            Err(err) => {
+                eprintln!("burn: {err}");
+                return Ok(2);
+            }
+        }
+    } else {
+        None
+    };
 
     let provider_filter = match parse_provider_filter(args.provider.as_deref()) {
         Ok(filter) => filter,
@@ -265,28 +302,41 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         }
     };
 
+    let opts = SummaryReportOptions {
+        session: args.session,
+        project: args.project,
+        since: args.since,
+        workflow: args.workflow,
+        tags: if tag_filter.is_empty() {
+            None
+        } else {
+            Some(tag_filter)
+        },
+        group_by_tag: args.group_by_tag,
+        agent: args.agent,
+        providers: provider_filter.map(|providers| providers.into_iter().collect()),
+        mode,
+        include_quality: args.quality,
+        ledger_home: None,
+    };
+
+    // `--bucket` switches to a per-bucket time-series of the grouped summary.
+    // Parsing/validation already happened above, before the ledger was opened.
+    if let Some(bucket_secs) = bucket_secs {
+        progress.set_task("building summary time-series");
+        let series = handle
+            .summary_timeseries(opts, bucket_secs)
+            .inspect_err(|_| {
+                progress.finish_and_clear();
+            })?;
+        progress.finish_and_clear();
+        return emit_summary_timeseries(globals, &series, &ingest_report);
+    }
+
     progress.set_task("building summary");
-    let report = handle
-        .summary_report(SummaryReportOptions {
-            session: args.session,
-            project: args.project,
-            since: args.since,
-            workflow: args.workflow,
-            tags: if tag_filter.is_empty() {
-                None
-            } else {
-                Some(tag_filter)
-            },
-            group_by_tag: args.group_by_tag,
-            agent: args.agent,
-            providers: provider_filter.map(|providers| providers.into_iter().collect()),
-            mode,
-            include_quality: args.quality,
-            ledger_home: None,
-        })
-        .inspect_err(|_| {
-            progress.finish_and_clear();
-        })?;
+    let report = handle.summary_report(opts).inspect_err(|_| {
+        progress.finish_and_clear();
+    })?;
     progress.finish_and_clear();
 
     match report {
@@ -442,6 +492,34 @@ fn emit_json(
 ) -> std::io::Result<()> {
     let value = grouped_json_value(report, ingest_report);
     render_json(&value)
+}
+
+/// Render a `--bucket` time-series. JSON emits `{ bucketSeconds, buckets: [...] }`
+/// (the consumer); human output is one line per bucket.
+fn emit_summary_timeseries(
+    globals: &GlobalArgs,
+    series: &relayburn_sdk::SummaryTimeseries,
+    ingest_report: &relayburn_sdk::IngestReport,
+) -> anyhow::Result<i32> {
+    if globals.json {
+        render_json(series)?;
+        return Ok(0);
+    }
+    emit_human_ingest_prelude(ingest_report);
+    if series.buckets.is_empty() {
+        println!("(no data in range)");
+        return Ok(0);
+    }
+    for bucket in &series.buckets {
+        println!(
+            "{}  {:>5} turns  {:>14} tok  {}",
+            bucket.start,
+            bucket.turn_count,
+            format_uint(bucket.total_tokens),
+            format_usd(bucket.total_cost.total),
+        );
+    }
+    Ok(0)
 }
 
 fn grouped_json_value(

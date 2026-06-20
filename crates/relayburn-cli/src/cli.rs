@@ -309,6 +309,13 @@ pub struct CompareArgs {
     /// which is SQLite-native and has no archive layer to bypass.
     #[arg(long = "no-archive")]
     pub no_archive: bool,
+
+    /// Emit a per-bucket time-series across the `--since` window instead of a
+    /// single comparison. Duration grammar: `30s`, `5m` (minutes), `1h`, `1d`,
+    /// `7d`. Note: small buckets thin each cell's sample, so `insufficientSample`
+    /// trips more often.
+    #[arg(long, value_name = "DURATION")]
+    pub bucket: Option<String>,
 }
 
 /// `burn overhead [trim]` argument set. The top-level form takes the

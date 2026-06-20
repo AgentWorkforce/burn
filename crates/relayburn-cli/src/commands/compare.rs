@@ -131,6 +131,22 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         ));
     }
 
+    // `--bucket` opts into a per-bucket time-series. Parse it up front (before
+    // the ledger is opened) so a bad duration routes through the same error
+    // envelope as the other argument validations. CSV time-series rendering
+    // isn't implemented, so reject the combination rather than silently
+    // falling back to TTY output.
+    let bucket_secs = args
+        .bucket
+        .as_deref()
+        .map(relayburn_sdk::parse_bucket)
+        .transpose()?;
+    if bucket_secs.is_some() && args.csv {
+        return Err(anyhow!(
+            "--bucket and --csv are mutually exclusive; pick one."
+        ));
+    }
+
     // 4. Provider filter. Lower-cased CSV; turns whose effective provider
     //    (per `provider_for`) isn't in the set get dropped after the ledger
     //    query but before the fidelity gate, matching the TS pipeline order.
@@ -180,6 +196,51 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     };
     progress.set_task("opening ledger");
     let handle = Ledger::open(ledger_opts)?;
+
+    // `--bucket` switches to a per-bucket time-series via the SDK verb.
+    // Parsing/validation already happened above, before the ledger was opened.
+    if let Some(bucket_secs) = bucket_secs {
+        let provider = provider_filter
+            .as_ref()
+            .map(|f| f.iter().cloned().collect::<Vec<_>>());
+        progress.set_task("building comparison time-series");
+        let series = handle
+            .compare_timeseries(
+                relayburn_sdk::CompareOptions {
+                    models: models.clone(),
+                    session: args.session.clone(),
+                    project: args.project.clone(),
+                    since: args.since.clone(),
+                    workflow: args.workflow.clone(),
+                    agent: args.agent.clone(),
+                    provider,
+                    min_sample: Some(min_sample),
+                    min_fidelity: Some(min_fidelity),
+                    ledger_home: None,
+                },
+                bucket_secs,
+            )
+            .inspect_err(|_| progress.finish_and_clear())?;
+        progress.finish_and_clear();
+        if globals.json {
+            render_json(&series)?;
+            return Ok(0);
+        }
+        if series.buckets.is_empty() {
+            println!("(no data in range)");
+            return Ok(0);
+        }
+        for bucket in &series.buckets {
+            println!(
+                "{}  {:>5} turns  {} models",
+                bucket.start,
+                bucket.result.analyzed_turns,
+                bucket.result.models.len(),
+            );
+        }
+        return Ok(0);
+    }
+
     progress.set_task("loading turns");
     let queried_turns: Vec<EnrichedTurn> = handle.raw().query_turns(&q)?;
 
