@@ -42,7 +42,7 @@ use crate::reader::SourceKind;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::findings::{EstimatedSavings, WasteAction, WasteFinding, WasteSeverity};
+use crate::analyze::findings::{EstimatedSavings, WasteAction, WasteFinding};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -734,22 +734,7 @@ pub fn detect_ghost_surface_with_adapters(
 // Finding envelope adapter
 // ---------------------------------------------------------------------------
 
-const SEVERITY_HIGH_USD: f64 = 0.5;
-const SEVERITY_WARN_USD: f64 = 0.05;
-
-fn fmt_usd(n: f64) -> String {
-    format!("${:.4}", n)
-}
-
-fn severity_from_usd(usd: f64) -> WasteSeverity {
-    if usd >= SEVERITY_HIGH_USD {
-        WasteSeverity::High
-    } else if usd >= SEVERITY_WARN_USD {
-        WasteSeverity::Warn
-    } else {
-        WasteSeverity::Info
-    }
-}
+use super::findings::severity_from_usd;
 
 fn default_archive_dir() -> PathBuf {
     crate::ledger::ledger_home().join("ghost-archive")
@@ -794,7 +779,7 @@ fn basename_of(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-use super::util::format_with_commas;
+use super::util::{fmt_usd, format_with_commas};
 
 pub fn ghost_surface_to_finding(
     ghost: &GhostSurfaceFinding,
@@ -897,6 +882,7 @@ fn source_kind_str(source: SourceKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyze::findings::WasteSeverity;
     use std::path::PathBuf;
 
     fn fixtures_root() -> PathBuf {

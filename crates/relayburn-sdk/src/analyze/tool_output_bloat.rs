@@ -66,24 +66,8 @@ fn bytes_to_tokens(bytes: u64) -> u64 {
     bytes.div_ceil(BYTES_PER_TOKEN)
 }
 
-const SEVERITY_HIGH_USD: f64 = 0.5;
-const SEVERITY_WARN_USD: f64 = 0.05;
-
-fn severity_from_usd(usd: f64) -> WasteSeverity {
-    if usd >= SEVERITY_HIGH_USD {
-        WasteSeverity::High
-    } else if usd >= SEVERITY_WARN_USD {
-        WasteSeverity::Warn
-    } else {
-        WasteSeverity::Info
-    }
-}
-
-fn fmt_usd(n: f64) -> String {
-    format!("${:.4}", n)
-}
-
-use super::util::format_with_commas;
+use super::findings::severity_from_usd;
+use super::util::{fmt_usd, format_with_commas};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

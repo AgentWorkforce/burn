@@ -18,10 +18,9 @@ use phf::phf_set;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::analyze::cost::{cost_for_turn, lookup_model_rate};
+use crate::analyze::cost::{cost_for_turn, lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
 
-const PER_MILLION: f64 = 1_000_000.0;
 const CHARS_PER_TOKEN: u64 = 4;
 
 /// How a session's attribution loop allocated cost across tool calls.

@@ -314,11 +314,7 @@ fn hotspots_action(session_id: &str) -> WasteAction {
     }
 }
 
-fn fmt_usd(n: f64) -> String {
-    format!("${:.4}", n)
-}
-
-use super::util::format_with_commas;
+use super::util::{fmt_usd, format_with_commas};
 
 pub fn retry_loop_to_finding(loop_: &RetryLoop) -> WasteFinding {
     let target = match &loop_.target {

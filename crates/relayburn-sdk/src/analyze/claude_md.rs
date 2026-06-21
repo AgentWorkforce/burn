@@ -19,10 +19,9 @@ use indexmap::IndexMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::cost::lookup_model_rate;
+use crate::analyze::cost::{lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
 
-const PER_MILLION: f64 = 1_000_000.0;
 const CHARS_PER_TOKEN: u64 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
