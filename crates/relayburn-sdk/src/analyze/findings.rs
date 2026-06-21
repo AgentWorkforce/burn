@@ -478,8 +478,13 @@ Pre-compact cacheRead cost {cost} — that cache won't be reused on subsequent t
         cost = fmt_usd(loss.cache_lost_cost),
         lost = lost_work_detail,
     );
-    let finding =
-        WasteFinding::session_cost("compaction-loss", &loss.session_id, loss.cache_lost_cost, title, detail);
+    let finding = WasteFinding::session_cost(
+        "compaction-loss",
+        &loss.session_id,
+        loss.cache_lost_cost,
+        title,
+        detail,
+    );
     if loss.tokens_before_compact > 0 {
         finding.with_tokens_per_session(loss.tokens_before_compact)
     } else {
@@ -544,8 +549,14 @@ Edit-bearing turn cost {cost} — careless editing without first reading surroun
         retries = session.likely_retries,
         cost = fmt_usd(session.cost),
     );
-    WasteFinding::session_cost("edit-heavy", &session.session_id, session.cost, title, detail)
-        .with_severity(severity)
+    WasteFinding::session_cost(
+        "edit-heavy",
+        &session.session_id,
+        session.cost,
+        title,
+        detail,
+    )
+    .with_severity(severity)
 }
 
 pub fn skill_recall_dup_to_finding(dup: &SkillRecallDup) -> WasteFinding {
@@ -580,7 +591,13 @@ Invoke + riding-turn cost {cost}.",
         last = prot.last_cached_turn_index,
         cost = fmt_usd(prot.cost),
     );
-    WasteFinding::session_cost("skill-pruning-protection", &prot.session_id, prot.cost, title, detail)
+    WasteFinding::session_cost(
+        "skill-pruning-protection",
+        &prot.session_id,
+        prot.cost,
+        title,
+        detail,
+    )
 }
 
 pub fn system_prompt_tax_to_finding(tax: &SystemPromptTax) -> WasteFinding {
@@ -602,8 +619,14 @@ Total cost {cost}.",
         turns = tax.riding_turns,
         cost = fmt_usd(tax.total_cost),
     );
-    WasteFinding::session_cost("system-prompt-tax", &tax.session_id, tax.total_cost, title, detail)
-        .with_tokens_per_session(riding_tokens)
+    WasteFinding::session_cost(
+        "system-prompt-tax",
+        &tax.session_id,
+        tax.total_cost,
+        title,
+        detail,
+    )
+    .with_tokens_per_session(riding_tokens)
 }
 
 /// Roll the full PatternsResult into a single severity-ranked list. Within
