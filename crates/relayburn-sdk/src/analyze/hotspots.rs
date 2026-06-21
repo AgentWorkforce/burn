@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::analyze::cost::{cost_for_turn, lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::tokens_from_utf16_len;
+use crate::analyze::util::{group_turns_by_session, tokens_from_utf16_len};
 
 /// How a session's attribution loop allocated cost across tool calls.
 ///
@@ -273,10 +273,7 @@ pub fn attribute_hotspots(turns: &[TurnRecord], opts: &HotspotsOptions<'_>) -> H
     // First-seen session ordering matches the TS `Map` iteration semantics.
     // Borrow turns rather than cloning — nothing below mutates them and the
     // input slice outlives every aggregation step.
-    let mut by_session: IndexMap<String, Vec<&TurnRecord>> = IndexMap::new();
-    for t in turns {
-        by_session.entry(t.session_id.clone()).or_default().push(t);
-    }
+    let by_session = group_turns_by_session(turns);
 
     let mut attributions: Vec<ToolAttribution> = Vec::new();
     let mut session_totals: Vec<SessionTotals> = Vec::new();

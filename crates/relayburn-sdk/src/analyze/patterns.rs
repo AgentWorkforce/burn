@@ -30,6 +30,7 @@ use crate::analyze::findings::{
     SkillRecallDup, SystemPromptTax,
 };
 use crate::analyze::pricing::PricingTable;
+use crate::analyze::util::group_turns_by_session;
 
 // ---------------------------------------------------------------------------
 // Hardcoded thresholds. Each constant cites the TS source line so future
@@ -128,7 +129,7 @@ impl<'a> DetectPatternsOptions<'a> {
 /// Run every detector across the supplied turn stream. Mirrors the TS
 /// `detectPatterns` orchestrator (patterns.ts:273-345).
 pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -> PatternsResult {
-    let by_session = group_by_session(turns);
+    let by_session = group_turns_by_session(turns);
     let events_by_session = group_tool_result_events_by_session(opts.tool_result_events);
 
     let mut retry_loops: Vec<RetryLoop> = Vec::new();
@@ -253,28 +254,6 @@ pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -
 // ---------------------------------------------------------------------------
 // Grouping helpers
 // ---------------------------------------------------------------------------
-
-/// Group turns by session id while preserving first-seen order. The TS
-/// `Map<string, TurnRecord[]>` iteration follows insertion order, and
-/// downstream test fixtures rely on it (e.g. the cross-session retry-vs-
-/// fallback test expects `graph` then `fallback`).
-fn group_by_session<'a>(turns: &'a [TurnRecord]) -> Vec<(String, Vec<&'a TurnRecord>)> {
-    let mut order: Vec<String> = Vec::new();
-    let mut by: HashMap<String, Vec<&'a TurnRecord>> = HashMap::new();
-    for t in turns {
-        if !by.contains_key(&t.session_id) {
-            order.push(t.session_id.clone());
-        }
-        by.entry(t.session_id.clone()).or_default().push(t);
-    }
-    order
-        .into_iter()
-        .map(|sid| {
-            let v = by.remove(&sid).unwrap();
-            (sid, v)
-        })
-        .collect()
-}
 
 fn group_tool_result_events_by_session<'a>(
     events: Option<&'a [ToolResultEventRecord]>,

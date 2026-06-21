@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::cost_for_turn;
 use crate::analyze::pricing::PricingTable;
+use crate::analyze::util::group_turns_by_session;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,10 +116,7 @@ fn build_legacy_subagent_trees(
     turns: &[TurnRecord],
     pricing: &PricingTable,
 ) -> IndexMap<String, SubagentTreeNode> {
-    let mut by_session: IndexMap<String, Vec<&TurnRecord>> = IndexMap::new();
-    for t in turns {
-        by_session.entry(t.session_id.clone()).or_default().push(t);
-    }
+    let by_session = group_turns_by_session(turns);
     let mut out: IndexMap<String, SubagentTreeNode> = IndexMap::new();
     for (session_id, session_turns) in by_session {
         let root = build_session_tree(&session_id, &session_turns, pricing);

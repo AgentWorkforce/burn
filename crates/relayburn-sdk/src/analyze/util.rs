@@ -1,4 +1,28 @@
-//! Shared formatting helpers for the analyze module.
+//! Shared helpers for the analyze module: money/number formatting, the
+//! approximate token<->byte heuristic, and turn grouping.
+
+use indexmap::IndexMap;
+
+use crate::reader::TurnRecord;
+
+/// Bucket turns by `session_id`, preserving first-seen (insertion) order so
+/// the result iterates in the same order as the TS `Map<sessionId,
+/// TurnRecord[]>` it ports — analyze fixtures depend on that ordering.
+///
+/// Turns within each session stay in input order; callers that need
+/// turn-index order sort the returned `Vec`s themselves. Generic over the
+/// turn iterator so both `&[TurnRecord]` and `&[&TurnRecord]` slices work
+/// (`turns` directly, or `turns.iter().copied()` respectively).
+pub(crate) fn group_turns_by_session<'a, I>(turns: I) -> IndexMap<String, Vec<&'a TurnRecord>>
+where
+    I: IntoIterator<Item = &'a TurnRecord>,
+{
+    let mut by_session: IndexMap<String, Vec<&'a TurnRecord>> = IndexMap::new();
+    for t in turns {
+        by_session.entry(t.session_id.clone()).or_default().push(t);
+    }
+    by_session
+}
 
 /// Format a USD amount to 4 decimal places (`$0.1234`), matching the TS
 /// finding adapters' money formatting.

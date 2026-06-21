@@ -72,24 +72,10 @@ pub fn detect_tool_call_patterns(
     turns: &[TurnRecord],
     opts: &DetectToolCallPatternsOptions<'_>,
 ) -> Vec<ToolCallPatternFinding> {
-    // Bucket by session preserving first-seen order to match TS `Map`.
-    let mut order: Vec<String> = Vec::new();
-    let mut by_session: std::collections::HashMap<String, Vec<&TurnRecord>> =
-        std::collections::HashMap::new();
-    for t in turns {
-        by_session
-            .entry(t.session_id.clone())
-            .or_insert_with(|| {
-                order.push(t.session_id.clone());
-                Vec::new()
-            })
-            .push(t);
-    }
     let mut out: Vec<ToolCallPatternFinding> = Vec::new();
-    for sid in &order {
-        let mut sess = by_session.remove(sid).unwrap();
+    for (sid, mut sess) in group_turns_by_session(turns) {
         sess.sort_by_key(|t| t.turn_index);
-        out.extend(detect_for_session(sid, &sess, opts.pricing));
+        out.extend(detect_for_session(&sid, &sess, opts.pricing));
     }
     // Sort: usd desc, then tokens desc.
     out.sort_by(|a, b| {
@@ -469,7 +455,7 @@ fn hotspots_action(session_id: &str) -> WasteAction {
     }
 }
 
-use super::util::{fmt_usd, format_with_commas};
+use super::util::{fmt_usd, format_with_commas, group_turns_by_session};
 
 pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFinding {
     let evidence_str = if finding.evidence.is_empty() {
