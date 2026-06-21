@@ -100,7 +100,9 @@ pub struct LoadedClaudeSettings {
 /// Resolve the user-level settings file (`~/.claude/settings.json`). Home
 /// resolution honors `HOME`, then `USERPROFILE` — see [`crate::util::home_dir`].
 pub fn user_claude_settings_path() -> PathBuf {
-    crate::util::home_dir().join(".claude").join("settings.json")
+    crate::util::home_dir()
+        .join(".claude")
+        .join("settings.json")
 }
 
 /// Resolve the project-level settings file relative to `cwd`. Project

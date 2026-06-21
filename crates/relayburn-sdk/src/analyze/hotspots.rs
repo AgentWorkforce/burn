@@ -701,6 +701,26 @@ where
     out
 }
 
+/// Fold one tool call's output-byte metrics into a rollup row's running
+/// `(total_output_bytes, max_output_bytes, truncated_count)` triple (#436).
+/// Shared by the file / bash / bash-verb / subagent aggregations, which all
+/// carry these three fields.
+fn accumulate_output_bytes(
+    total: &mut u64,
+    max: &mut u64,
+    truncated: &mut u32,
+    a: &ToolAttribution,
+) {
+    let bytes = a.output_bytes.unwrap_or(0);
+    *total = total.saturating_add(bytes);
+    if bytes > *max {
+        *max = bytes;
+    }
+    if a.output_truncated == Some(true) {
+        *truncated = truncated.saturating_add(1);
+    }
+}
+
 /// Roll up file-touching tool attributions (`Read | Edit | Write |
 /// NotebookEdit`) by their target path. Rows missing or with an empty target
 /// are skipped. Output is sorted by `total_cost` descending.
@@ -735,14 +755,12 @@ pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregatio
             row.persistence_tokens += a.persistence_tokens;
             row.riding_turns += a.riding_turns;
             row.total_cost += a.total_cost;
-            let bytes = a.output_bytes.unwrap_or(0);
-            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-            if bytes > row.max_output_bytes {
-                row.max_output_bytes = bytes;
-            }
-            if a.output_truncated == Some(true) {
-                row.truncated_count = row.truncated_count.saturating_add(1);
-            }
+            accumulate_output_bytes(
+                &mut row.total_output_bytes,
+                &mut row.max_output_bytes,
+                &mut row.truncated_count,
+                a,
+            );
             if a.emit_ts < row.first_emit_ts {
                 row.first_emit_ts = a.emit_ts.clone();
                 row.first_emit_turn_index = a.emit_turn_index;
@@ -776,14 +794,12 @@ pub fn aggregate_by_bash(attributions: &[ToolAttribution]) -> Vec<BashAggregatio
             row.total_cost += a.total_cost;
             row.initial_tokens += a.initial_tokens;
             row.persistence_tokens += a.persistence_tokens;
-            let bytes = a.output_bytes.unwrap_or(0);
-            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-            if bytes > row.max_output_bytes {
-                row.max_output_bytes = bytes;
-            }
-            if a.output_truncated == Some(true) {
-                row.truncated_count = row.truncated_count.saturating_add(1);
-            }
+            accumulate_output_bytes(
+                &mut row.total_output_bytes,
+                &mut row.max_output_bytes,
+                &mut row.truncated_count,
+                a,
+            );
         },
         |row| row.total_cost,
     )
@@ -860,14 +876,12 @@ where
         row.initial_tokens += a.initial_tokens;
         row.persistence_tokens += a.persistence_tokens;
         row.riding_turns += a.riding_turns;
-        let bytes = a.output_bytes.unwrap_or(0);
-        row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-        if bytes > row.max_output_bytes {
-            row.max_output_bytes = bytes;
-        }
-        if a.output_truncated == Some(true) {
-            row.truncated_count = row.truncated_count.saturating_add(1);
-        }
+        accumulate_output_bytes(
+            &mut row.total_output_bytes,
+            &mut row.max_output_bytes,
+            &mut row.truncated_count,
+            a,
+        );
         row.hashes.insert(a.args_hash.clone(), ());
 
         let example = row
@@ -967,14 +981,12 @@ pub fn aggregate_by_subagent(attributions: &[ToolAttribution]) -> Vec<SubagentAg
             row.total_cost += a.total_cost;
             row.initial_tokens += a.initial_tokens;
             row.persistence_tokens += a.persistence_tokens;
-            let bytes = a.output_bytes.unwrap_or(0);
-            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-            if bytes > row.max_output_bytes {
-                row.max_output_bytes = bytes;
-            }
-            if a.output_truncated == Some(true) {
-                row.truncated_count = row.truncated_count.saturating_add(1);
-            }
+            accumulate_output_bytes(
+                &mut row.total_output_bytes,
+                &mut row.max_output_bytes,
+                &mut row.truncated_count,
+                a,
+            );
         },
         |row| row.total_cost,
     )
