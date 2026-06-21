@@ -163,13 +163,6 @@ pub struct GhostSurfaceFindingOptions {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-const APPROX_BYTES_PER_TOKEN: u64 = 4;
-
-fn approx_tokens_from_bytes(byte_len: u64) -> u64 {
-    // Math.ceil(byteLen / 4)
-    byte_len.div_ceil(APPROX_BYTES_PER_TOKEN)
-}
-
 fn strip_extension(basename: &str) -> &str {
     match basename.rfind('.') {
         Some(i) if i > 0 => &basename[..i],
@@ -429,7 +422,7 @@ impl GhostSurfaceAdapter for ClaudeGhostAdapter {
                     kind: *kind,
                     path: file.path.to_string_lossy().to_string(),
                     basename: file.basename,
-                    size_tokens: approx_tokens_from_bytes(file.size),
+                    size_tokens: tokens_from_bytes(file.size),
                     counted_by_catalog_bloat: None,
                 });
             }
@@ -478,7 +471,7 @@ impl GhostSurfaceAdapter for CodexGhostAdapter {
                     kind: *kind,
                     path: file.path.to_string_lossy().to_string(),
                     basename: file.basename,
-                    size_tokens: approx_tokens_from_bytes(file.size),
+                    size_tokens: tokens_from_bytes(file.size),
                     counted_by_catalog_bloat: None,
                 });
             }
@@ -567,7 +560,7 @@ fn enumerate_opencode_project(project: &Path) -> Vec<GhostCandidate> {
                             };
                             declared_commands.push((
                                 name.clone(),
-                                approx_tokens_from_bytes(serialized.len() as u64),
+                                tokens_from_bytes(serialized.len() as u64),
                                 format!("{config_path_str}#/commands/{name}"),
                             ));
                         }
@@ -611,7 +604,7 @@ fn enumerate_opencode_project(project: &Path) -> Vec<GhostCandidate> {
                 kind: GhostFindingKind::GhostSkill,
                 path: file.path.to_string_lossy().to_string(),
                 basename: file.basename,
-                size_tokens: approx_tokens_from_bytes(file.size),
+                size_tokens: tokens_from_bytes(file.size),
                 counted_by_catalog_bloat: None,
             });
         }
@@ -779,7 +772,7 @@ fn basename_of(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-use super::util::{fmt_usd, format_with_commas};
+use super::util::{fmt_usd, format_with_commas, tokens_from_bytes};
 
 pub fn ghost_surface_to_finding(
     ghost: &GhostSurfaceFinding,

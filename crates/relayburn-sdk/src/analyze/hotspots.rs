@@ -20,8 +20,7 @@ use serde_json::Value;
 
 use crate::analyze::cost::{cost_for_turn, lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
-
-const CHARS_PER_TOKEN: u64 = 4;
+use crate::analyze::util::tokens_from_utf16_len;
 
 /// How a session's attribution loop allocated cost across tool calls.
 ///
@@ -431,7 +430,7 @@ fn attribute_session(
                 if size_by_tool_use_id.contains_key(tu) {
                     continue;
                 }
-                size_by_tool_use_id.insert(tu.clone(), estimate_tokens(text));
+                size_by_tool_use_id.insert(tu.clone(), tokens_from_utf16_len(text));
             }
         }
     }
@@ -674,16 +673,6 @@ fn stringify_tool_result(content: &Value) -> String {
         // still serialize numbers / booleans / objects deterministically.
         _ => serde_json::to_string(content).unwrap_or_default(),
     }
-}
-
-/// Standard chars-per-token heuristic. Anthropic's BPE averages ~3.5–4
-/// chars/token for English; we use 4 to slightly under-estimate (better to
-/// under-attribute cost than over-attribute). UTF-16 code units match TS's
-/// `string.length`, keeping ASCII fixtures bit-for-bit equivalent and
-/// preserving the same surrogate-pair behavior on emoji.
-fn estimate_tokens(text: &str) -> u64 {
-    let utf16_len = text.encode_utf16().count() as u64;
-    utf16_len.div_ceil(CHARS_PER_TOKEN)
 }
 
 /// Shared shape for the simple aggregations: filter attributions by a key
