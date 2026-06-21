@@ -594,6 +594,63 @@ fn sum_cost_for_turns(turns: &[&TurnRecord], pricing: &PricingTable) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Shared streak-accumulation skeleton
+// ---------------------------------------------------------------------------
+
+/// How the streak runner should treat the current element relative to the
+/// streak built so far.
+enum StreakOp {
+    /// Append this element to the current streak.
+    Extend,
+    /// Commit the current streak, then start a fresh streak holding this
+    /// element (a same-tool retry streak hitting a different tool).
+    Rotate,
+    /// Commit the current streak and drop this element (a boundary marker).
+    Break,
+}
+
+/// Walk `elements` in order, asking `classify` how each one relates to the
+/// in-progress streak, and run `commit` at every streak boundary (and once at
+/// the end). `commit` returns `Some(finding)` for a qualifying streak or `None`
+/// to drop it, so the per-detector minimum-length and shape guards live there.
+///
+/// This centralizes the commit-on-boundary control flow that the retry,
+/// failure, and cancellation detectors all share; each detector supplies its
+/// own `classify` (what extends/breaks a streak) and `commit` (how a streak
+/// becomes a finding) over its own element type — the graph detectors over
+/// `ToolResultEventRef`, the flat ones over `ToolCallRef`.
+fn detect_streaks<E, T>(
+    elements: impl IntoIterator<Item = E>,
+    classify: impl Fn(Option<&E>, &E) -> StreakOp,
+    mut commit: impl FnMut(&[E]) -> Option<T>,
+) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    let mut streak: Vec<E> = Vec::new();
+    for elem in elements {
+        match classify(streak.first(), &elem) {
+            StreakOp::Extend => streak.push(elem),
+            StreakOp::Rotate => {
+                if let Some(found) = commit(&streak) {
+                    out.push(found);
+                }
+                streak.clear();
+                streak.push(elem);
+            }
+            StreakOp::Break => {
+                if let Some(found) = commit(&streak) {
+                    out.push(found);
+                }
+                streak.clear();
+            }
+        }
+    }
+    if let Some(found) = commit(&streak) {
+        out.push(found);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Graph-backed detectors
 // ---------------------------------------------------------------------------
 
@@ -603,57 +660,48 @@ fn detect_graph_retry_loops_for_session<'a>(
     pricing: &PricingTable,
     content_index: Option<&ContentIndex>,
 ) -> Vec<RetryLoop> {
-    let mut loops: Vec<RetryLoop> = Vec::new();
-    let mut streak: Vec<ToolResultEventRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolResultEventRef<'a>>, out: &mut Vec<RetryLoop>| {
-        if streak.len() < MIN_RETRY_LEN {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let contributing = dedup_defined_turns(streak);
-        let mut loop_ = RetryLoop {
-            session_id: session_id.to_string(),
-            tool: first.tool.clone(),
-            target: first.target.clone(),
-            args_hash: first.args_hash.clone().unwrap_or_default(),
-            attempts: streak.len() as u64,
-            start_turn_index: first.turn_index,
-            end_turn_index: last.turn_index,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signature: None,
-            event_source: Some(coalesce_event_source(streak)),
-        };
-        let call_refs = event_refs_to_tool_call_refs(streak);
-        if let Some(sig) = retry_loop_signature(&call_refs, content_index) {
-            loop_.error_signature = Some(sig);
-        }
-        out.push(loop_);
-    };
-
-    for r in refs {
-        let is_errored = matches!(r.event.status, ToolResultStatus::Errored);
-        if !is_errored || r.call.is_none() || r.args_hash.is_none() {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            continue;
-        }
-        if streak.is_empty() {
-            streak.push(r.clone());
-            continue;
-        }
-        let head = streak.first().unwrap();
-        if head.tool == r.tool && head.args_hash == r.args_hash {
-            streak.push(r.clone());
-        } else {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            streak.push(r.clone());
-        }
-    }
-    commit(&mut streak, &mut loops);
-    loops
+    detect_streaks(
+        refs.iter().cloned(),
+        |head, r| {
+            let is_errored = matches!(r.event.status, ToolResultStatus::Errored);
+            if !is_errored || r.call.is_none() || r.args_hash.is_none() {
+                StreakOp::Break
+            } else if let Some(head) = head {
+                if head.tool == r.tool && head.args_hash == r.args_hash {
+                    StreakOp::Extend
+                } else {
+                    StreakOp::Rotate
+                }
+            } else {
+                StreakOp::Extend
+            }
+        },
+        |streak| {
+            if streak.len() < MIN_RETRY_LEN {
+                return None;
+            }
+            let first = streak.first().unwrap();
+            let last = streak.last().unwrap();
+            let contributing = dedup_defined_turns(streak);
+            let mut loop_ = RetryLoop {
+                session_id: session_id.to_string(),
+                tool: first.tool.clone(),
+                target: first.target.clone(),
+                args_hash: first.args_hash.clone().unwrap_or_default(),
+                attempts: streak.len() as u64,
+                start_turn_index: first.turn_index,
+                end_turn_index: last.turn_index,
+                cost: sum_cost_for_turns(&contributing, pricing),
+                error_signature: None,
+                event_source: Some(coalesce_event_source(streak)),
+            };
+            let call_refs = event_refs_to_tool_call_refs(streak);
+            if let Some(sig) = retry_loop_signature(&call_refs, content_index) {
+                loop_.error_signature = Some(sig);
+            }
+            Some(loop_)
+        },
+    )
 }
 
 fn detect_graph_failure_runs_for_session<'a>(
@@ -662,66 +710,62 @@ fn detect_graph_failure_runs_for_session<'a>(
     pricing: &PricingTable,
     content_index: Option<&ContentIndex>,
 ) -> Vec<FailureRun> {
-    let mut runs: Vec<FailureRun> = Vec::new();
-    let mut streak: Vec<ToolResultEventRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolResultEventRef<'a>>, out: &mut Vec<FailureRun>| {
-        if streak.len() < MIN_FAILURE_RUN_LEN {
-            return;
-        }
-        let mut keys: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            keys.insert(status_pattern_key(r));
-        }
-        let has_non_tool_result = streak
-            .iter()
-            .any(|r| !matches!(r.event.event_source, ToolResultEventSource::ToolResult));
-        // A same-(tool,args) tool_result run is a retry loop. Non-tool_result
-        // terminal events (notably subagent notifications) remain failure
-        // runs — they represent child invocations ending badly, not a parent
-        // retry loop. Mirrors patterns.ts:706-710.
-        if keys.len() < 2 && !has_non_tool_result {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        // First-seen unique tool order.
-        let mut tools: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            if seen.insert(r.tool.clone()) {
-                tools.push(r.tool.clone());
+    detect_streaks(
+        refs.iter().cloned(),
+        |_head, r| {
+            if matches!(r.event.status, ToolResultStatus::Errored) {
+                StreakOp::Extend
+            } else {
+                StreakOp::Break
             }
-        }
-        let contributing = dedup_defined_turns(streak);
-        let mut run = FailureRun {
-            session_id: session_id.to_string(),
-            length: streak.len() as u64,
-            start_turn_index: first.turn_index,
-            end_turn_index: last.turn_index,
-            tools_involved: tools,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signatures: None,
-            event_source: Some(coalesce_event_source(streak)),
-        };
-        let call_refs = event_refs_to_tool_call_refs(streak);
-        let sigs = failure_run_signatures(&call_refs, content_index);
-        if !sigs.is_empty() {
-            run.error_signatures = Some(sigs);
-        }
-        out.push(run);
-    };
-
-    for r in refs {
-        if matches!(r.event.status, ToolResultStatus::Errored) {
-            streak.push(r.clone());
-        } else {
-            commit(&mut streak, &mut runs);
-            streak.clear();
-        }
-    }
-    commit(&mut streak, &mut runs);
-    runs
+        },
+        |streak| {
+            if streak.len() < MIN_FAILURE_RUN_LEN {
+                return None;
+            }
+            let mut keys: HashSet<String> = HashSet::new();
+            for r in streak.iter() {
+                keys.insert(status_pattern_key(r));
+            }
+            let has_non_tool_result = streak
+                .iter()
+                .any(|r| !matches!(r.event.event_source, ToolResultEventSource::ToolResult));
+            // A same-(tool,args) tool_result run is a retry loop. Non-tool_result
+            // terminal events (notably subagent notifications) remain failure
+            // runs — they represent child invocations ending badly, not a parent
+            // retry loop. Mirrors patterns.ts:706-710.
+            if keys.len() < 2 && !has_non_tool_result {
+                return None;
+            }
+            let first = streak.first().unwrap();
+            let last = streak.last().unwrap();
+            // First-seen unique tool order.
+            let mut tools: Vec<String> = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            for r in streak.iter() {
+                if seen.insert(r.tool.clone()) {
+                    tools.push(r.tool.clone());
+                }
+            }
+            let contributing = dedup_defined_turns(streak);
+            let mut run = FailureRun {
+                session_id: session_id.to_string(),
+                length: streak.len() as u64,
+                start_turn_index: first.turn_index,
+                end_turn_index: last.turn_index,
+                tools_involved: tools,
+                cost: sum_cost_for_turns(&contributing, pricing),
+                error_signatures: None,
+                event_source: Some(coalesce_event_source(streak)),
+            };
+            let call_refs = event_refs_to_tool_call_refs(streak);
+            let sigs = failure_run_signatures(&call_refs, content_index);
+            if !sigs.is_empty() {
+                run.error_signatures = Some(sigs);
+            }
+            Some(run)
+        },
+    )
 }
 
 fn detect_graph_cancellation_runs_for_session<'a>(
@@ -729,44 +773,40 @@ fn detect_graph_cancellation_runs_for_session<'a>(
     refs: &[ToolResultEventRef<'a>],
     pricing: &PricingTable,
 ) -> Vec<CancellationRun> {
-    let mut runs: Vec<CancellationRun> = Vec::new();
-    let mut streak: Vec<ToolResultEventRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolResultEventRef<'a>>, out: &mut Vec<CancellationRun>| {
-        if streak.is_empty() {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let mut tools: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            if seen.insert(r.tool.clone()) {
-                tools.push(r.tool.clone());
+    detect_streaks(
+        refs.iter().cloned(),
+        |_head, r| {
+            if matches!(r.event.status, ToolResultStatus::Cancelled) {
+                StreakOp::Extend
+            } else {
+                StreakOp::Break
             }
-        }
-        let contributing = dedup_defined_turns(streak);
-        out.push(CancellationRun {
-            session_id: session_id.to_string(),
-            length: streak.len() as u64,
-            start_turn_index: first.turn_index,
-            end_turn_index: last.turn_index,
-            tools_involved: tools,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            event_source: coalesce_event_source(streak),
-        });
-    };
-
-    for r in refs {
-        if matches!(r.event.status, ToolResultStatus::Cancelled) {
-            streak.push(r.clone());
-        } else {
-            commit(&mut streak, &mut runs);
-            streak.clear();
-        }
-    }
-    commit(&mut streak, &mut runs);
-    runs
+        },
+        |streak| {
+            if streak.is_empty() {
+                return None;
+            }
+            let first = streak.first().unwrap();
+            let last = streak.last().unwrap();
+            let mut tools: Vec<String> = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            for r in streak.iter() {
+                if seen.insert(r.tool.clone()) {
+                    tools.push(r.tool.clone());
+                }
+            }
+            let contributing = dedup_defined_turns(streak);
+            Some(CancellationRun {
+                session_id: session_id.to_string(),
+                length: streak.len() as u64,
+                start_turn_index: first.turn_index,
+                end_turn_index: last.turn_index,
+                tools_involved: tools,
+                cost: sum_cost_for_turns(&contributing, pricing),
+                event_source: coalesce_event_source(streak),
+            })
+        },
+    )
 }
 
 fn status_pattern_key(r: &ToolResultEventRef<'_>) -> String {
@@ -787,58 +827,47 @@ pub(crate) fn detect_retry_loops_for_session<'a>(
     pricing: &PricingTable,
     content_index: Option<&ContentIndex>,
 ) -> Vec<RetryLoop> {
-    let flat = flatten_tool_calls(turns);
-    let mut loops: Vec<RetryLoop> = Vec::new();
-    let mut streak: Vec<ToolCallRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolCallRef<'a>>, out: &mut Vec<RetryLoop>| {
-        if streak.len() < MIN_RETRY_LEN {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let turns_in_streak: Vec<&TurnRecord> = streak.iter().map(|r| r.turn).collect();
-        let contributing = dedup_turns(turns_in_streak);
-        let mut loop_ = RetryLoop {
-            session_id: session_id.to_string(),
-            tool: first.call.name.clone(),
-            target: first.call.target.clone(),
-            args_hash: first.call.args_hash.clone(),
-            attempts: streak.len() as u64,
-            start_turn_index: first.turn.turn_index,
-            end_turn_index: last.turn.turn_index,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signature: None,
-            event_source: None,
-        };
-        if let Some(sig) = retry_loop_signature(streak, content_index) {
-            loop_.error_signature = Some(sig);
-        }
-        out.push(loop_);
-    };
-
-    for r in &flat {
-        let is_errored = r.call.is_error == Some(true);
-        if !is_errored {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            continue;
-        }
-        if streak.is_empty() {
-            streak.push(*r);
-            continue;
-        }
-        let head = streak.first().unwrap().call;
-        if head.name == r.call.name && head.args_hash == r.call.args_hash {
-            streak.push(*r);
-        } else {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            streak.push(*r);
-        }
-    }
-    commit(&mut streak, &mut loops);
-    loops
+    detect_streaks(
+        flatten_tool_calls(turns),
+        |head, r| {
+            if r.call.is_error != Some(true) {
+                StreakOp::Break
+            } else if let Some(head) = head {
+                if head.call.name == r.call.name && head.call.args_hash == r.call.args_hash {
+                    StreakOp::Extend
+                } else {
+                    StreakOp::Rotate
+                }
+            } else {
+                StreakOp::Extend
+            }
+        },
+        |streak| {
+            if streak.len() < MIN_RETRY_LEN {
+                return None;
+            }
+            let first = streak.first().unwrap();
+            let last = streak.last().unwrap();
+            let turns_in_streak: Vec<&TurnRecord> = streak.iter().map(|r| r.turn).collect();
+            let contributing = dedup_turns(turns_in_streak);
+            let mut loop_ = RetryLoop {
+                session_id: session_id.to_string(),
+                tool: first.call.name.clone(),
+                target: first.call.target.clone(),
+                args_hash: first.call.args_hash.clone(),
+                attempts: streak.len() as u64,
+                start_turn_index: first.turn.turn_index,
+                end_turn_index: last.turn.turn_index,
+                cost: sum_cost_for_turns(&contributing, pricing),
+                error_signature: None,
+                event_source: None,
+            };
+            if let Some(sig) = retry_loop_signature(streak, content_index) {
+                loop_.error_signature = Some(sig);
+            }
+            Some(loop_)
+        },
+    )
 }
 
 fn retry_loop_signature(
@@ -876,61 +905,56 @@ pub(crate) fn detect_failure_runs_for_session<'a>(
     pricing: &PricingTable,
     content_index: Option<&ContentIndex>,
 ) -> Vec<FailureRun> {
-    let flat = flatten_tool_calls(turns);
-    let mut runs: Vec<FailureRun> = Vec::new();
-    let mut streak: Vec<ToolCallRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolCallRef<'a>>, out: &mut Vec<FailureRun>| {
-        if streak.len() < MIN_FAILURE_RUN_LEN {
-            return;
-        }
-        let mut keys: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            keys.insert(format!("{}|{}", r.call.name, r.call.args_hash));
-        }
-        // Same-(tool,args) run is a retry loop, not a failure run. See
-        // patterns.ts:868-872.
-        if keys.len() < 2 {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let mut tools: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            if seen.insert(r.call.name.clone()) {
-                tools.push(r.call.name.clone());
+    detect_streaks(
+        flatten_tool_calls(turns),
+        |_head, r| {
+            if r.call.is_error == Some(true) {
+                StreakOp::Extend
+            } else {
+                StreakOp::Break
             }
-        }
-        let turns_in_streak: Vec<&TurnRecord> = streak.iter().map(|r| r.turn).collect();
-        let contributing = dedup_turns(turns_in_streak);
-        let mut run = FailureRun {
-            session_id: session_id.to_string(),
-            length: streak.len() as u64,
-            start_turn_index: first.turn.turn_index,
-            end_turn_index: last.turn.turn_index,
-            tools_involved: tools,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signatures: None,
-            event_source: None,
-        };
-        let sigs = failure_run_signatures(streak, content_index);
-        if !sigs.is_empty() {
-            run.error_signatures = Some(sigs);
-        }
-        out.push(run);
-    };
-
-    for r in &flat {
-        if r.call.is_error == Some(true) {
-            streak.push(*r);
-        } else {
-            commit(&mut streak, &mut runs);
-            streak.clear();
-        }
-    }
-    commit(&mut streak, &mut runs);
-    runs
+        },
+        |streak| {
+            if streak.len() < MIN_FAILURE_RUN_LEN {
+                return None;
+            }
+            let mut keys: HashSet<String> = HashSet::new();
+            for r in streak.iter() {
+                keys.insert(format!("{}|{}", r.call.name, r.call.args_hash));
+            }
+            // Same-(tool,args) run is a retry loop, not a failure run. See
+            // patterns.ts:868-872.
+            if keys.len() < 2 {
+                return None;
+            }
+            let first = streak.first().unwrap();
+            let last = streak.last().unwrap();
+            let mut tools: Vec<String> = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            for r in streak.iter() {
+                if seen.insert(r.call.name.clone()) {
+                    tools.push(r.call.name.clone());
+                }
+            }
+            let turns_in_streak: Vec<&TurnRecord> = streak.iter().map(|r| r.turn).collect();
+            let contributing = dedup_turns(turns_in_streak);
+            let mut run = FailureRun {
+                session_id: session_id.to_string(),
+                length: streak.len() as u64,
+                start_turn_index: first.turn.turn_index,
+                end_turn_index: last.turn.turn_index,
+                tools_involved: tools,
+                cost: sum_cost_for_turns(&contributing, pricing),
+                error_signatures: None,
+                event_source: None,
+            };
+            let sigs = failure_run_signatures(streak, content_index);
+            if !sigs.is_empty() {
+                run.error_signatures = Some(sigs);
+            }
+            Some(run)
+        },
+    )
 }
 
 fn failure_run_signatures(
