@@ -78,6 +78,27 @@ pub fn cost_for_turn(turn: &TurnRecord, pricing: &PricingTable) -> Option<CostBr
     cost_for_usage(&turn.usage, &turn.model, pricing, opts)
 }
 
+/// Total USD cost of a single turn, treating an unpriced turn as `$0`.
+/// Shorthand for the `cost_for_turn(...).map(|c| c.total).unwrap_or(0.0)`
+/// idiom used wherever a caller needs only the scalar total, not the breakdown.
+pub fn total_cost_for_turn(turn: &TurnRecord, pricing: &PricingTable) -> f64 {
+    cost_for_turn(turn, pricing).map_or(0.0, |c| c.total)
+}
+
+/// Sum [`total_cost_for_turn`] over a set of turns; unpriced turns contribute
+/// `$0`. Accumulates in iteration order so callers that care about
+/// floating-point reproducibility get the same result as the equivalent loop.
+pub fn sum_turn_costs<'a, I>(turns: I, pricing: &PricingTable) -> f64
+where
+    I: IntoIterator<Item = &'a TurnRecord>,
+{
+    let mut sum = 0.0;
+    for t in turns {
+        sum += total_cost_for_turn(t, pricing);
+    }
+    sum
+}
+
 fn reasoning_cost(reasoning_tokens: u64, rate: &ModelCost, mode: ReasoningMode) -> f64 {
     match mode {
         // Already billed inside `usage.output` — informational only.

@@ -22,7 +22,9 @@ use crate::reader::{
 };
 use serde_json::Value;
 
-use crate::analyze::cost::{cost_for_turn, cost_for_usage, CostForUsageOptions};
+use crate::analyze::cost::{
+    cost_for_usage, sum_turn_costs, total_cost_for_turn, CostForUsageOptions,
+};
 use crate::analyze::findings::{
     CancellationRun, CompactionLoss, CompactionLostWork, EditHeavySession, EditPreview,
     EditRevertCycle, EditRevertSamplePreview, FailureRun, FailureRunErrorSignature,
@@ -588,13 +590,7 @@ fn extract_edit_preview(input: Option<&BTreeMap<String, Value>>) -> Option<EditP
 }
 
 fn sum_cost_for_turns(turns: &[&TurnRecord], pricing: &PricingTable) -> f64 {
-    let mut sum = 0.0;
-    for t in turns {
-        if let Some(c) = cost_for_turn(t, pricing) {
-            sum += c.total;
-        }
-    }
-    sum
+    sum_turn_costs(turns.iter().copied(), pricing)
 }
 
 // ---------------------------------------------------------------------------
@@ -1267,17 +1263,13 @@ pub(crate) fn detect_skill_pruning_protection_for_session(
             if t.usage.cache_read > 0 {
                 riding_turns += 1;
                 last_cached_turn_index = t.turn_index;
-                if let Some(c) = cost_for_turn(t, pricing) {
-                    riding_cost += c.total;
-                }
+                riding_cost += total_cost_for_turn(t, pricing);
             }
         }
         if riding_turns == 0 {
             continue;
         }
-        let invoke_cost = cost_for_turn(r.turn, pricing)
-            .map(|c| c.total)
-            .unwrap_or(0.0);
+        let invoke_cost = total_cost_for_turn(r.turn, pricing);
         out.push(SkillPruningProtection {
             session_id: session_id.to_string(),
             skill_name,
@@ -1330,9 +1322,7 @@ pub(crate) fn detect_system_prompt_tax_for_session(
         }
         if t.usage.cache_read > 0 {
             riding_turns += 1;
-            if let Some(c) = cost_for_turn(t, pricing) {
-                total_cost += c.total;
-            }
+            total_cost += total_cost_for_turn(t, pricing);
         }
     }
     if riding_turns == 0 {

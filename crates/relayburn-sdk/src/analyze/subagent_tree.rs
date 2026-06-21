@@ -11,7 +11,7 @@ use crate::reader::{RelationshipType, SessionRelationshipRecord, TurnRecord};
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::cost::cost_for_turn;
+use crate::analyze::cost::total_cost_for_turn;
 use crate::analyze::pricing::PricingTable;
 use crate::analyze::util::{group_turns_by_session, percentile};
 
@@ -149,7 +149,7 @@ fn build_session_tree(
     let mut unresolved_created = false;
 
     for t in turns {
-        let cost = cost_for_turn(t, pricing).map(|c| c.total).unwrap_or(0.0);
+        let cost = total_cost_for_turn(t, pricing);
         let Some(sub) = &t.subagent else {
             let node = nodes.get_mut(session_id).unwrap();
             node.self_turns += 1;
@@ -506,7 +506,7 @@ fn collect_attached_child_ids(state: &GraphState) -> IndexSet<String> {
 fn attach_turn_costs(state: &mut GraphState, turns: &[TurnRecord], pricing: &PricingTable) {
     let mut unresolved_by_parent: IndexMap<String, String> = IndexMap::new();
     for t in turns {
-        let cost = cost_for_turn(t, pricing).map(|c| c.total).unwrap_or(0.0);
+        let cost = total_cost_for_turn(t, pricing);
         let sub = t.subagent.as_ref();
         if let Some(s) = sub {
             if s.agent_id.is_none() {
@@ -784,9 +784,7 @@ pub fn aggregate_subagent_type_stats(
             inv.ty = ty;
         }
         inv.turns += 1;
-        inv.cost += cost_for_turn(t, opts.pricing)
-            .map(|c| c.total)
-            .unwrap_or(0.0);
+        inv.cost += total_cost_for_turn(t, opts.pricing);
     }
     let mut by_type: IndexMap<String, Vec<f64>> = IndexMap::new();
     let mut totals_by_type: IndexMap<String, (u64, f64)> = IndexMap::new();
