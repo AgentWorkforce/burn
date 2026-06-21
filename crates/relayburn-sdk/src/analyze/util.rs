@@ -21,7 +21,13 @@ where
 {
     let mut by_session: IndexMap<String, Vec<&'a TurnRecord>> = IndexMap::new();
     for t in turns {
-        by_session.entry(t.session_id.clone()).or_default().push(t);
+        // Clone the session id only on first insert (once per session) rather
+        // than on every turn, which `entry()` would force.
+        if let Some(bucket) = by_session.get_mut(&t.session_id) {
+            bucket.push(t);
+        } else {
+            by_session.insert(t.session_id.clone(), vec![t]);
+        }
     }
     by_session
 }

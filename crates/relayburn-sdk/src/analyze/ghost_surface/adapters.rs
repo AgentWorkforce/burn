@@ -38,15 +38,8 @@ where
 {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(err) => {
-            // ENOENT / ENOTDIR: surface no entries.
-            if err.kind() == std::io::ErrorKind::NotFound
-                || err.kind() == std::io::ErrorKind::NotADirectory
-            {
-                return Vec::new();
-            }
-            return Vec::new();
-        }
+        // A missing/non-dir/unreadable path just means no surface to enumerate.
+        Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
     for entry in entries.flatten() {

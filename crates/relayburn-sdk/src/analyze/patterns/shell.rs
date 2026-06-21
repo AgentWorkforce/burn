@@ -196,27 +196,13 @@ fn has_shell_file_operand(command: &str, tokens: &[String]) -> bool {
 
 fn is_redirect_open(token: &str) -> bool {
     // matches `^\d*>` (zero or more digits followed by '>')
-    let mut chars = token.chars();
-    let mut saw_any = false;
-    let mut found_gt = false;
-    let mut leading_digits = 0_usize;
-    for c in chars.by_ref() {
-        if c.is_ascii_digit() && !found_gt {
-            leading_digits += 1;
+    for c in token.chars() {
+        if c.is_ascii_digit() {
             continue;
         }
-        if c == '>' {
-            found_gt = true;
-            saw_any = true;
-            break;
-        }
-        break;
+        return c == '>';
     }
-    let _ = leading_digits;
-    if found_gt {
-        return saw_any;
-    }
-    token.starts_with('>')
+    false
 }
 
 fn is_pure_redirect(token: &str) -> bool {
@@ -229,35 +215,22 @@ fn is_pure_redirect(token: &str) -> bool {
     if i == bytes.len() {
         return false;
     }
-    let mut saw_gt = false;
+    // At least one byte remains; it's a pure redirect iff all remaining
+    // bytes are '>'.
     while i < bytes.len() {
         if bytes[i] != b'>' {
-            return false;
-        }
-        saw_gt = true;
-        i += 1;
-    }
-    saw_gt
-}
-
-fn is_signed_integer(token: &str) -> bool {
-    // matches `/^[+-]?\d+$/`
-    let bytes = token.as_bytes();
-    if bytes.is_empty() {
-        return false;
-    }
-    let mut i = 0_usize;
-    if bytes[0] == b'+' || bytes[0] == b'-' {
-        i = 1;
-    }
-    if i == bytes.len() {
-        return false;
-    }
-    while i < bytes.len() {
-        if !bytes[i].is_ascii_digit() {
             return false;
         }
         i += 1;
     }
     true
+}
+
+fn is_signed_integer(token: &str) -> bool {
+    // matches `/^[+-]?\d+$/`
+    let digits = match token.strip_prefix(['+', '-']) {
+        Some(rest) => rest,
+        None => token,
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
