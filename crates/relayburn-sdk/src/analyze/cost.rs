@@ -41,7 +41,9 @@ pub struct CostForUsageOptions {
     pub reasoning_mode: Option<ReasoningMode>,
 }
 
-const PER_MILLION: f64 = 1_000_000.0;
+/// Tokens-per-million divisor shared by every per-token cost calc in the
+/// analyze module. Prices in the pricing table are quoted per million tokens.
+pub(crate) const PER_MILLION: f64 = 1_000_000.0;
 
 pub fn cost_for_usage(
     usage: &Usage,

@@ -16,13 +16,10 @@ use crate::reader::{
 use indexmap::IndexMap;
 use phf::phf_set;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::analyze::cost::{cost_for_turn, lookup_model_rate};
+use crate::analyze::cost::{cost_for_turn, lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
-
-const PER_MILLION: f64 = 1_000_000.0;
-const CHARS_PER_TOKEN: u64 = 4;
+use crate::analyze::util::{group_turns_by_session, stringify_tool_result, tokens_from_utf16_len};
 
 /// How a session's attribution loop allocated cost across tool calls.
 ///
@@ -275,10 +272,7 @@ pub fn attribute_hotspots(turns: &[TurnRecord], opts: &HotspotsOptions<'_>) -> H
     // First-seen session ordering matches the TS `Map` iteration semantics.
     // Borrow turns rather than cloning — nothing below mutates them and the
     // input slice outlives every aggregation step.
-    let mut by_session: IndexMap<String, Vec<&TurnRecord>> = IndexMap::new();
-    for t in turns {
-        by_session.entry(t.session_id.clone()).or_default().push(t);
-    }
+    let by_session = group_turns_by_session(turns);
 
     let mut attributions: Vec<ToolAttribution> = Vec::new();
     let mut session_totals: Vec<SessionTotals> = Vec::new();
@@ -432,7 +426,7 @@ fn attribute_session(
                 if size_by_tool_use_id.contains_key(tu) {
                     continue;
                 }
-                size_by_tool_use_id.insert(tu.clone(), estimate_tokens(text));
+                size_by_tool_use_id.insert(tu.clone(), tokens_from_utf16_len(text));
             }
         }
     }
@@ -640,53 +634,6 @@ fn index_tool_results(
     by_turn
 }
 
-fn stringify_tool_result(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.clone(),
-        Value::Null => String::new(),
-        Value::Array(arr) => {
-            let mut parts: Vec<String> = Vec::new();
-            for block in arr {
-                match block {
-                    Value::Object(obj) => {
-                        let kind = obj.get("type").and_then(Value::as_str);
-                        let text = obj.get("text").and_then(Value::as_str);
-                        if kind == Some("text") {
-                            if let Some(t) = text {
-                                parts.push(t.to_string());
-                                continue;
-                            }
-                        }
-                        parts.push(serde_json::to_string(block).unwrap_or_default());
-                    }
-                    // Arrays match `typeof === 'object'` in JS, so JSON.stringify them.
-                    Value::Array(_) => {
-                        parts.push(serde_json::to_string(block).unwrap_or_default());
-                    }
-                    Value::String(s) => parts.push(s.clone()),
-                    // Numbers, booleans, null: TS skips (`block && typeof === 'object'` is false
-                    // and `typeof === 'string'` is false).
-                    _ => {}
-                }
-            }
-            parts.join("\n")
-        }
-        // `JSON.stringify(undefined)` is `undefined` in JS; serde_json can
-        // still serialize numbers / booleans / objects deterministically.
-        _ => serde_json::to_string(content).unwrap_or_default(),
-    }
-}
-
-/// Standard chars-per-token heuristic. Anthropic's BPE averages ~3.5–4
-/// chars/token for English; we use 4 to slightly under-estimate (better to
-/// under-attribute cost than over-attribute). UTF-16 code units match TS's
-/// `string.length`, keeping ASCII fixtures bit-for-bit equivalent and
-/// preserving the same surrogate-pair behavior on emoji.
-fn estimate_tokens(text: &str) -> u64 {
-    let utf16_len = text.encode_utf16().count() as u64;
-    utf16_len.div_ceil(CHARS_PER_TOKEN)
-}
-
 /// Shared shape for the simple aggregations: filter attributions by a key
 /// extractor, accumulate into a per-key row, and sort by `total_cost` desc.
 /// `aggregate_by_bash_verb` does not use this because it tracks distinct
@@ -714,6 +661,26 @@ where
     let mut out: Vec<R> = by_key.into_values().collect();
     out.sort_by(|a, b| cost(b).total_cmp(&cost(a)));
     out
+}
+
+/// Fold one tool call's output-byte metrics into a rollup row's running
+/// `(total_output_bytes, max_output_bytes, truncated_count)` triple (#436).
+/// Shared by the file / bash / bash-verb / subagent aggregations, which all
+/// carry these three fields.
+fn accumulate_output_bytes(
+    total: &mut u64,
+    max: &mut u64,
+    truncated: &mut u32,
+    a: &ToolAttribution,
+) {
+    let bytes = a.output_bytes.unwrap_or(0);
+    *total = total.saturating_add(bytes);
+    if bytes > *max {
+        *max = bytes;
+    }
+    if a.output_truncated == Some(true) {
+        *truncated = truncated.saturating_add(1);
+    }
 }
 
 /// Roll up file-touching tool attributions (`Read | Edit | Write |
@@ -750,14 +717,12 @@ pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregatio
             row.persistence_tokens += a.persistence_tokens;
             row.riding_turns += a.riding_turns;
             row.total_cost += a.total_cost;
-            let bytes = a.output_bytes.unwrap_or(0);
-            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-            if bytes > row.max_output_bytes {
-                row.max_output_bytes = bytes;
-            }
-            if a.output_truncated == Some(true) {
-                row.truncated_count = row.truncated_count.saturating_add(1);
-            }
+            accumulate_output_bytes(
+                &mut row.total_output_bytes,
+                &mut row.max_output_bytes,
+                &mut row.truncated_count,
+                a,
+            );
             if a.emit_ts < row.first_emit_ts {
                 row.first_emit_ts = a.emit_ts.clone();
                 row.first_emit_turn_index = a.emit_turn_index;
@@ -791,14 +756,12 @@ pub fn aggregate_by_bash(attributions: &[ToolAttribution]) -> Vec<BashAggregatio
             row.total_cost += a.total_cost;
             row.initial_tokens += a.initial_tokens;
             row.persistence_tokens += a.persistence_tokens;
-            let bytes = a.output_bytes.unwrap_or(0);
-            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-            if bytes > row.max_output_bytes {
-                row.max_output_bytes = bytes;
-            }
-            if a.output_truncated == Some(true) {
-                row.truncated_count = row.truncated_count.saturating_add(1);
-            }
+            accumulate_output_bytes(
+                &mut row.total_output_bytes,
+                &mut row.max_output_bytes,
+                &mut row.truncated_count,
+                a,
+            );
         },
         |row| row.total_cost,
     )
@@ -875,14 +838,12 @@ where
         row.initial_tokens += a.initial_tokens;
         row.persistence_tokens += a.persistence_tokens;
         row.riding_turns += a.riding_turns;
-        let bytes = a.output_bytes.unwrap_or(0);
-        row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-        if bytes > row.max_output_bytes {
-            row.max_output_bytes = bytes;
-        }
-        if a.output_truncated == Some(true) {
-            row.truncated_count = row.truncated_count.saturating_add(1);
-        }
+        accumulate_output_bytes(
+            &mut row.total_output_bytes,
+            &mut row.max_output_bytes,
+            &mut row.truncated_count,
+            a,
+        );
         row.hashes.insert(a.args_hash.clone(), ());
 
         let example = row
@@ -982,14 +943,12 @@ pub fn aggregate_by_subagent(attributions: &[ToolAttribution]) -> Vec<SubagentAg
             row.total_cost += a.total_cost;
             row.initial_tokens += a.initial_tokens;
             row.persistence_tokens += a.persistence_tokens;
-            let bytes = a.output_bytes.unwrap_or(0);
-            row.total_output_bytes = row.total_output_bytes.saturating_add(bytes);
-            if bytes > row.max_output_bytes {
-                row.max_output_bytes = bytes;
-            }
-            if a.output_truncated == Some(true) {
-                row.truncated_count = row.truncated_count.saturating_add(1);
-            }
+            accumulate_output_bytes(
+                &mut row.total_output_bytes,
+                &mut row.max_output_bytes,
+                &mut row.truncated_count,
+                a,
+            );
         },
         |row| row.total_cost,
     )

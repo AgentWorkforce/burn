@@ -19,11 +19,9 @@ use indexmap::IndexMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::cost::lookup_model_rate;
+use crate::analyze::cost::{lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
-
-const PER_MILLION: f64 = 1_000_000.0;
-const CHARS_PER_TOKEN: u64 = 4;
+use crate::analyze::util::{group_turns_by_session, tokens_from_bytes};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,11 +129,7 @@ pub fn parse_claude_md(file_path: &str, text: &str) -> ParsedClaudeMd {
     };
     let total_lines = lines.len() as u64;
     let total_bytes = normalized.len() as u64;
-    let tokens = if total_bytes == 0 {
-        0
-    } else {
-        total_bytes.div_ceil(CHARS_PER_TOKEN)
-    };
+    let tokens = tokens_from_bytes(total_bytes);
 
     let line_bytes: Vec<u64> = lines.iter().map(|l| l.len() as u64).collect();
     let line_with_newline_weight = |idx: usize| -> u64 {
@@ -205,7 +199,7 @@ pub fn parse_claude_md(file_path: &str, text: &str) -> ParsedClaudeMd {
                 start_line: 1,
                 end_line: first_start - 1,
                 bytes: pb_bytes,
-                tokens: ceil_div(pb_bytes, CHARS_PER_TOKEN),
+                tokens: tokens_from_bytes(pb_bytes),
             });
         }
     }
@@ -224,7 +218,7 @@ pub fn parse_claude_md(file_path: &str, text: &str) -> ParsedClaudeMd {
             start_line: h.line,
             end_line,
             bytes: sec_bytes,
-            tokens: ceil_div(sec_bytes, CHARS_PER_TOKEN),
+            tokens: tokens_from_bytes(sec_bytes),
         });
     }
 
@@ -235,14 +229,6 @@ pub fn parse_claude_md(file_path: &str, text: &str) -> ParsedClaudeMd {
         tokens,
         sections,
         grouping_level,
-    }
-}
-
-fn ceil_div(a: u64, b: u64) -> u64 {
-    if a == 0 {
-        0
-    } else {
-        a.div_ceil(b)
     }
 }
 
@@ -339,10 +325,7 @@ pub(crate) fn attribute_claude_md_refs(
         };
     }
 
-    let mut by_session: IndexMap<String, Vec<&TurnRecord>> = IndexMap::new();
-    for t in turns {
-        by_session.entry(t.session_id.clone()).or_default().push(*t);
-    }
+    let by_session = group_turns_by_session(turns.iter().copied());
 
     let mut session_costs: Vec<SessionClaudeMdCost> = Vec::new();
     let mut total_cost = 0.0_f64;

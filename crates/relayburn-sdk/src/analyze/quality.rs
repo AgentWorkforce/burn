@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 
+use crate::analyze::util::group_turns_by_session;
 use crate::reader::{ContentKind, ContentRecord, ContentRole, StopReason, TurnRecord};
 use serde::{Deserialize, Serialize};
 
@@ -111,19 +112,7 @@ const LONG_CONVERSATION_THRESHOLD: usize = 10;
 const FAILURE_STREAK_THRESHOLD: u64 = 3;
 
 pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> QualityResult {
-    // Preserve TS Map iteration order: insertion-order across sessionIds.
-    // Borrow rather than clone — nothing here mutates the turns and the
-    // input slice outlives every per-session aggregation.
-    let mut by_session: Vec<(String, Vec<&TurnRecord>)> = Vec::new();
-    let mut idx: HashMap<String, usize> = HashMap::new();
-    for t in turns {
-        if let Some(&i) = idx.get(&t.session_id) {
-            by_session[i].1.push(t);
-        } else {
-            idx.insert(t.session_id.clone(), by_session.len());
-            by_session.push((t.session_id.clone(), vec![t]));
-        }
-    }
+    let by_session = group_turns_by_session(turns);
 
     let now = opts.now_ms.unwrap_or_else(now_ms_system);
 

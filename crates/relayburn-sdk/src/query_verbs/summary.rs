@@ -1176,16 +1176,10 @@ fn compute_summary_subagent_counts(
     let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
         std::path::PathBuf::from(p)
     } else {
-        // `HOME` is unset on stock Windows shells (`USERPROFILE` carries
-        // the user home there). Fall back to it before degenerating to
-        // `.` so a Claude Code install on Windows still resolves to
-        // `%USERPROFILE%\.claude\projects` without the caller having
-        // to set `BURN_CLAUDE_PROJECTS_DIR` explicitly.
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        home.join(".claude").join("projects")
+        // Defaults to `~/.claude/projects` (HOME, then USERPROFILE on
+        // Windows — see crate::util::home_dir) when
+        // `BURN_CLAUDE_PROJECTS_DIR` is unset.
+        crate::util::home_dir().join(".claude").join("projects")
     };
     count_subagents_under(&root, session_filter)
 }

@@ -40,12 +40,6 @@ pub const BASH_MAX_OUTPUT_ENV_KEY: &str = "BASH_MAX_OUTPUT_LENGTH";
 /// content rides in cache for every subsequent turn until compaction.
 pub const DEFAULT_BLOAT_TOKEN_THRESHOLD: u64 = 15_000;
 
-/// Inverse of `bytes_to_tokens` (kept in lockstep). Used by Signal A to
-/// surface a character-unit safe ceiling for `BASH_MAX_OUTPUT_LENGTH`, and
-/// by the finding adapter so the paste fix is in the unit `settings.json`
-/// speaks.
-const BYTES_PER_TOKEN: u64 = 4;
-
 /// Minimum number of oversized events before we surface a (source, tool)
 /// bucket as a finding. A single oversized result is genuine waste, just
 /// lower-severity.
@@ -57,33 +51,8 @@ const DEFAULT_MIN_OCCURRENCES: u64 = 1;
 /// floor.
 const P95_SAMPLE_FLOOR: usize = 20;
 
-/// `bytes / 4` heuristic, rounded up. Matches `bytesToApproxTokens` in
-/// `relayburn-reader::user_turn`.
-fn bytes_to_tokens(bytes: u64) -> u64 {
-    if bytes == 0 {
-        return 0;
-    }
-    bytes.div_ceil(BYTES_PER_TOKEN)
-}
-
-const SEVERITY_HIGH_USD: f64 = 0.5;
-const SEVERITY_WARN_USD: f64 = 0.05;
-
-fn severity_from_usd(usd: f64) -> WasteSeverity {
-    if usd >= SEVERITY_HIGH_USD {
-        WasteSeverity::High
-    } else if usd >= SEVERITY_WARN_USD {
-        WasteSeverity::Warn
-    } else {
-        WasteSeverity::Info
-    }
-}
-
-fn fmt_usd(n: f64) -> String {
-    format!("${:.4}", n)
-}
-
-use super::util::format_with_commas;
+use super::findings::severity_from_usd;
+use super::util::{bytes_from_tokens, fmt_usd, format_with_commas, tokens_from_bytes};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -128,14 +97,12 @@ pub struct LoadedClaudeSettings {
     pub settings: ClaudeSettings,
 }
 
-/// Resolve the user-level settings file (`$HOME/.claude/settings.json`).
-/// Honors `HOME` (POSIX) so tests can inject an isolated home dir; falls
-/// back to `USERPROFILE` for parity with Node's `os.homedir()`.
+/// Resolve the user-level settings file (`~/.claude/settings.json`). Home
+/// resolution honors `HOME`, then `USERPROFILE` — see [`crate::util::home_dir`].
 pub fn user_claude_settings_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .unwrap_or_default();
-    PathBuf::from(home).join(".claude").join("settings.json")
+    crate::util::home_dir()
+        .join(".claude")
+        .join("settings.json")
 }
 
 /// Resolve the project-level settings file relative to `cwd`. Project
@@ -202,7 +169,7 @@ pub fn detect_static_config_bloat(opts: &DetectStaticConfigBloatOptions) -> Vec<
     let Ok(numeric_chars) = parse_int_lenient(raw) else {
         return Vec::new();
     };
-    let numeric_tokens = bytes_to_tokens(numeric_chars);
+    let numeric_tokens = tokens_from_bytes(numeric_chars);
     if numeric_tokens <= threshold {
         return Vec::new();
     }
@@ -239,7 +206,7 @@ fn parse_int_lenient(s: &str) -> Result<u64, ()> {
         return Err(());
     }
     // Negative values are not meaningful here; treat as parse failure
-    // (`bytes_to_tokens` would clamp them to 0 anyway).
+    // (`tokens_from_bytes` would clamp them to 0 anyway).
     if negative {
         return Err(());
     }
@@ -346,7 +313,7 @@ fn size_event_tokens(e: &ToolResultEventRecord, lookup: &ToolUseLookup) -> Optio
         }
     }
     match e.content_length {
-        Some(cl) if cl > 0 => Some(bytes_to_tokens(cl)),
+        Some(cl) if cl > 0 => Some(tokens_from_bytes(cl)),
         _ => None,
     }
 }
@@ -526,7 +493,7 @@ pub fn tool_output_bloat_to_finding(bloat: &ToolOutputBloat) -> WasteFinding {
     let session_id = bloat.evidence.first().cloned().unwrap_or_default();
 
     if bloat.kind == ToolOutputBloatKind::StaticConfig {
-        let safe_chars = DEFAULT_BLOAT_TOKEN_THRESHOLD * BYTES_PER_TOKEN;
+        let safe_chars = bytes_from_tokens(DEFAULT_BLOAT_TOKEN_THRESHOLD);
         let action = WasteAction::Paste {
             label: "Reduce in settings.json".to_string(),
             text: format!("\"{BASH_MAX_OUTPUT_ENV_KEY}\": \"{safe_chars}\""),
