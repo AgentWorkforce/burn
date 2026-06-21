@@ -16,11 +16,10 @@ use crate::reader::{
 use indexmap::IndexMap;
 use phf::phf_set;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::analyze::cost::{cost_for_turn, lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session, tokens_from_utf16_len};
+use crate::analyze::util::{group_turns_by_session, stringify_tool_result, tokens_from_utf16_len};
 
 /// How a session's attribution loop allocated cost across tool calls.
 ///
@@ -633,43 +632,6 @@ fn index_tool_results(
         bucket.tool_result_text.insert(tr.tool_use_id.clone(), text);
     }
     by_turn
-}
-
-fn stringify_tool_result(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.clone(),
-        Value::Null => String::new(),
-        Value::Array(arr) => {
-            let mut parts: Vec<String> = Vec::new();
-            for block in arr {
-                match block {
-                    Value::Object(obj) => {
-                        let kind = obj.get("type").and_then(Value::as_str);
-                        let text = obj.get("text").and_then(Value::as_str);
-                        if kind == Some("text") {
-                            if let Some(t) = text {
-                                parts.push(t.to_string());
-                                continue;
-                            }
-                        }
-                        parts.push(serde_json::to_string(block).unwrap_or_default());
-                    }
-                    // Arrays match `typeof === 'object'` in JS, so JSON.stringify them.
-                    Value::Array(_) => {
-                        parts.push(serde_json::to_string(block).unwrap_or_default());
-                    }
-                    Value::String(s) => parts.push(s.clone()),
-                    // Numbers, booleans, null: TS skips (`block && typeof === 'object'` is false
-                    // and `typeof === 'string'` is false).
-                    _ => {}
-                }
-            }
-            parts.join("\n")
-        }
-        // `JSON.stringify(undefined)` is `undefined` in JS; serde_json can
-        // still serialize numbers / booleans / objects deterministically.
-        _ => serde_json::to_string(content).unwrap_or_default(),
-    }
 }
 
 /// Shared shape for the simple aggregations: filter attributions by a key

@@ -30,7 +30,7 @@ use crate::analyze::findings::{
     SkillRecallDup, SystemPromptTax,
 };
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::group_turns_by_session;
+use crate::analyze::util::{group_turns_by_session, stringify_tool_result};
 
 mod shell;
 use shell::shell_command_has_file_read;
@@ -526,37 +526,9 @@ fn build_content_index(records: Option<&[ContentRecord]>) -> Option<ContentIndex
     Some(idx)
 }
 
-// Stringify a tool_result content block to plain text for signature
-// extraction. Mirrors `stringifyToolResult` in patterns.ts:567-587.
-fn stringify_tool_result_content(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.clone(),
-        Value::Null => String::new(),
-        Value::Array(arr) => {
-            let mut parts: Vec<String> = Vec::new();
-            for block in arr {
-                match block {
-                    Value::Object(map) => {
-                        let kind = map.get("type").and_then(|v| v.as_str());
-                        let text = map.get("text").and_then(|v| v.as_str());
-                        match (kind, text) {
-                            (Some("text"), Some(t)) => parts.push(t.to_string()),
-                            _ => parts.push(serde_json::to_string(block).unwrap_or_default()),
-                        }
-                    }
-                    Value::String(s) => parts.push(s.clone()),
-                    _ => parts.push(serde_json::to_string(block).unwrap_or_default()),
-                }
-            }
-            parts.join("\n")
-        }
-        other => serde_json::to_string(other).unwrap_or_default(),
-    }
-}
-
 fn extract_error_signature(tool_result: Option<&ContentToolResult>) -> Option<String> {
     let tool_result = tool_result?;
-    let text = stringify_tool_result_content(&tool_result.content);
+    let text = stringify_tool_result(&tool_result.content);
     if text.is_empty() {
         return None;
     }

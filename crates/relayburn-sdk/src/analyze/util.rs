@@ -1,7 +1,9 @@
 //! Shared helpers for the analyze module: money/number formatting, the
-//! approximate token<->byte heuristic, and turn grouping.
+//! approximate token<->byte heuristic, turn grouping, and tool-result
+//! stringification.
 
 use indexmap::IndexMap;
+use serde_json::Value;
 
 use crate::reader::TurnRecord;
 
@@ -75,4 +77,50 @@ pub(crate) fn format_with_commas(n: u64) -> String {
         out.push(b as char);
     }
     out
+}
+
+/// Flatten a `tool_result.content` value to a plain string, mirroring the TS
+/// `stringifyToolResult` (identical across the hotspots and patterns ports).
+///
+/// A bare string passes through; an array of content blocks joins each block
+/// with `\n`, taking `{type:"text"}.text` verbatim and JSON-stringifying any
+/// other object or nested array. Bare scalars inside the array (number /
+/// bool / null) are skipped, matching JS where the block is neither
+/// `typeof === 'object'` nor `typeof === 'string'`. Any other top-level value
+/// is JSON-serialized.
+pub(crate) fn stringify_tool_result(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        Value::Array(arr) => {
+            let mut parts: Vec<String> = Vec::new();
+            for block in arr {
+                match block {
+                    Value::Object(obj) => {
+                        let kind = obj.get("type").and_then(Value::as_str);
+                        let text = obj.get("text").and_then(Value::as_str);
+                        if kind == Some("text") {
+                            if let Some(t) = text {
+                                parts.push(t.to_string());
+                                continue;
+                            }
+                        }
+                        parts.push(serde_json::to_string(block).unwrap_or_default());
+                    }
+                    // Arrays match `typeof === 'object'` in JS, so JSON.stringify them.
+                    Value::Array(_) => {
+                        parts.push(serde_json::to_string(block).unwrap_or_default());
+                    }
+                    Value::String(s) => parts.push(s.clone()),
+                    // Numbers, booleans, null: TS skips (`block && typeof === 'object'` is false
+                    // and `typeof === 'string'` is false).
+                    _ => {}
+                }
+            }
+            parts.join("\n")
+        }
+        // `JSON.stringify(undefined)` is `undefined` in JS; serde_json can
+        // still serialize numbers / booleans / objects deterministically.
+        _ => serde_json::to_string(content).unwrap_or_default(),
+    }
 }
