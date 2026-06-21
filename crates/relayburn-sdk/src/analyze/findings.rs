@@ -314,6 +314,54 @@ pub(crate) fn hotspots_action(session_id: &str) -> WasteAction {
     }
 }
 
+impl WasteFinding {
+    /// Build a cost-driven, session-scoped finding: severity derived from
+    /// `cost` via [`severity_from_usd`], a `usd_per_session` saving of `cost`,
+    /// and the standard "inspect this session" hotspots action. Adapters that
+    /// match this shape construct here and then override `severity`,
+    /// `event_source`, or extra savings via the `with_*` chainers below.
+    ///
+    /// Detectors with bespoke actions or a severity that is decoupled from the
+    /// savings figure (ghost surface, tool-output bloat) build the struct
+    /// directly rather than overriding every default.
+    pub(crate) fn session_cost(
+        kind: &str,
+        session_id: &str,
+        cost: f64,
+        title: String,
+        detail: String,
+    ) -> Self {
+        WasteFinding {
+            kind: kind.to_string(),
+            severity: severity_from_usd(cost),
+            session_id: session_id.to_string(),
+            title,
+            detail,
+            estimated_savings: EstimatedSavings {
+                usd_per_session: Some(cost),
+                ..Default::default()
+            },
+            actions: vec![hotspots_action(session_id)],
+            event_source: None,
+        }
+    }
+
+    pub(crate) fn with_severity(mut self, severity: WasteSeverity) -> Self {
+        self.severity = severity;
+        self
+    }
+
+    pub(crate) fn with_event_source(mut self, event_source: Option<PatternEventSource>) -> Self {
+        self.event_source = event_source;
+        self
+    }
+
+    pub(crate) fn with_tokens_per_session(mut self, tokens: u64) -> Self {
+        self.estimated_savings.tokens_per_session = Some(tokens);
+        self
+    }
+}
+
 use super::util::{fmt_usd, format_with_commas};
 
 pub fn retry_loop_to_finding(loop_: &RetryLoop) -> WasteFinding {
@@ -325,33 +373,24 @@ pub fn retry_loop_to_finding(loop_: &RetryLoop) -> WasteFinding {
         Some(sig) => format!(": '{sig}'"),
         None => String::new(),
     };
-    WasteFinding {
-        kind: "retry-loop".to_string(),
-        severity: severity_from_usd(loop_.cost),
-        session_id: loop_.session_id.clone(),
-        title: format!(
-            "Retry loop: {tool}{target} failed {attempts}× in a row{title_suffix}",
-            tool = loop_.tool,
-            target = target,
-            attempts = loop_.attempts,
-            title_suffix = title_suffix,
-        ),
-        detail: format!(
-            "Turns {start}-{end} are {attempts} consecutive errored {tool} calls with the same arguments. \
+    let title = format!(
+        "Retry loop: {tool}{target} failed {attempts}× in a row{title_suffix}",
+        tool = loop_.tool,
+        target = target,
+        attempts = loop_.attempts,
+        title_suffix = title_suffix,
+    );
+    let detail = format!(
+        "Turns {start}-{end} are {attempts} consecutive errored {tool} calls with the same arguments. \
 Cumulative turn cost {cost} — the agent kept retrying without changing inputs.",
-            start = loop_.start_turn_index,
-            end = loop_.end_turn_index,
-            attempts = loop_.attempts,
-            tool = loop_.tool,
-            cost = fmt_usd(loop_.cost),
-        ),
-        estimated_savings: EstimatedSavings {
-            usd_per_session: Some(loop_.cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&loop_.session_id)],
-        event_source: loop_.event_source,
-    }
+        start = loop_.start_turn_index,
+        end = loop_.end_turn_index,
+        attempts = loop_.attempts,
+        tool = loop_.tool,
+        cost = fmt_usd(loop_.cost),
+    );
+    WasteFinding::session_cost("retry-loop", &loop_.session_id, loop_.cost, title, detail)
+        .with_event_source(loop_.event_source)
 }
 
 pub fn failure_run_to_finding(run: &FailureRun) -> WasteFinding {
@@ -365,70 +404,45 @@ pub fn failure_run_to_finding(run: &FailureRun) -> WasteFinding {
         }
         _ => String::new(),
     };
-    WasteFinding {
-        kind: "failure-run".to_string(),
-        severity: severity_from_usd(run.cost),
-        session_id: run.session_id.clone(),
-        title: format!(
-            "Failure run: {len} consecutive failed tool calls",
-            len = run.length
-        ),
-        detail: format!(
-            "Turns {start}-{end} failed across {n_tools} distinct tool(s) ({tools}). \
+    let title = format!(
+        "Failure run: {len} consecutive failed tool calls",
+        len = run.length
+    );
+    let detail = format!(
+        "Turns {start}-{end} failed across {n_tools} distinct tool(s) ({tools}). \
 Cumulative turn cost {cost} — agent likely stuck without recovering or asking for help.{sig}",
-            start = run.start_turn_index,
-            end = run.end_turn_index,
-            n_tools = run.tools_involved.len(),
-            tools = run.tools_involved.join(", "),
-            cost = fmt_usd(run.cost),
-            sig = sig_detail,
-        ),
-        estimated_savings: EstimatedSavings {
-            usd_per_session: Some(run.cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&run.session_id)],
-        event_source: run.event_source,
-    }
+        start = run.start_turn_index,
+        end = run.end_turn_index,
+        n_tools = run.tools_involved.len(),
+        tools = run.tools_involved.join(", "),
+        cost = fmt_usd(run.cost),
+        sig = sig_detail,
+    );
+    WasteFinding::session_cost("failure-run", &run.session_id, run.cost, title, detail)
+        .with_event_source(run.event_source)
 }
 
 pub fn cancellation_run_to_finding(run: &CancellationRun) -> WasteFinding {
     let tool_list = run.tools_involved.join(", ");
     let plural = if run.length == 1 { "" } else { "s" };
-    WasteFinding {
-        kind: "cancellation-run".to_string(),
-        severity: severity_from_usd(run.cost),
-        session_id: run.session_id.clone(),
-        title: format!(
-            "Cancellation run: {len} cancelled tool call{plural}",
-            len = run.length,
-            plural = plural,
-        ),
-        detail: format!(
-            "Turns {start}-{end} ended with cancelled tool/subagent status ({tools}). \
+    let title = format!(
+        "Cancellation run: {len} cancelled tool call{plural}",
+        len = run.length,
+        plural = plural,
+    );
+    let detail = format!(
+        "Turns {start}-{end} ended with cancelled tool/subagent status ({tools}). \
 Cumulative turn cost {cost}.",
-            start = run.start_turn_index,
-            end = run.end_turn_index,
-            tools = tool_list,
-            cost = fmt_usd(run.cost),
-        ),
-        estimated_savings: EstimatedSavings {
-            usd_per_session: Some(run.cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&run.session_id)],
-        event_source: Some(run.event_source),
-    }
+        start = run.start_turn_index,
+        end = run.end_turn_index,
+        tools = tool_list,
+        cost = fmt_usd(run.cost),
+    );
+    WasteFinding::session_cost("cancellation-run", &run.session_id, run.cost, title, detail)
+        .with_event_source(Some(run.event_source))
 }
 
 pub fn compaction_loss_to_finding(loss: &CompactionLoss) -> WasteFinding {
-    let mut savings = EstimatedSavings {
-        usd_per_session: Some(loss.cache_lost_cost),
-        ..Default::default()
-    };
-    if loss.tokens_before_compact > 0 {
-        savings.tokens_per_session = Some(loss.tokens_before_compact);
-    }
     let lost_work_detail = match &loss.lost_work {
         Some(work) => {
             let mut s = format!(
@@ -452,25 +466,24 @@ pub fn compaction_loss_to_finding(loss: &CompactionLoss) -> WasteFinding {
         }
         None => String::new(),
     };
-    WasteFinding {
-        kind: "compaction-loss".to_string(),
-        severity: severity_from_usd(loss.cache_lost_cost),
-        session_id: loss.session_id.clone(),
-        title: format!(
-            "Compaction lost {tokens} cached tokens",
-            tokens = format_with_commas(loss.tokens_before_compact)
-        ),
-        detail: format!(
-            "A compaction at {ts} discarded {tokens} tokens of cache. \
+    let title = format!(
+        "Compaction lost {tokens} cached tokens",
+        tokens = format_with_commas(loss.tokens_before_compact)
+    );
+    let detail = format!(
+        "A compaction at {ts} discarded {tokens} tokens of cache. \
 Pre-compact cacheRead cost {cost} — that cache won't be reused on subsequent turns.{lost}",
-            ts = loss.ts,
-            tokens = format_with_commas(loss.tokens_before_compact),
-            cost = fmt_usd(loss.cache_lost_cost),
-            lost = lost_work_detail,
-        ),
-        estimated_savings: savings,
-        actions: vec![hotspots_action(&loss.session_id)],
-        event_source: None,
+        ts = loss.ts,
+        tokens = format_with_commas(loss.tokens_before_compact),
+        cost = fmt_usd(loss.cache_lost_cost),
+        lost = lost_work_detail,
+    );
+    let finding =
+        WasteFinding::session_cost("compaction-loss", &loss.session_id, loss.cache_lost_cost, title, detail);
+    if loss.tokens_before_compact > 0 {
+        finding.with_tokens_per_session(loss.tokens_before_compact)
+    } else {
+        finding
     }
 }
 
@@ -485,28 +498,18 @@ pub fn edit_revert_to_finding(cycle: &EditRevertCycle) -> WasteFinding {
         ),
         None => String::new(),
     };
-    WasteFinding {
-        kind: "edit-revert".to_string(),
-        severity: severity_from_usd(cycle.cost),
-        session_id: cycle.session_id.clone(),
-        title: format!("Edit revert on {path}", path = cycle.file_path),
-        detail: format!(
-            "Turn {first} edited {path}; turn {revert} restored a prior file state {span} turns later. \
+    let title = format!("Edit revert on {path}", path = cycle.file_path);
+    let detail = format!(
+        "Turn {first} edited {path}; turn {revert} restored a prior file state {span} turns later. \
 Cumulative anchor-turn cost {cost} — the intermediate work was erased.{preview}",
-            first = cycle.first_edit_turn_index,
-            path = cycle.file_path,
-            revert = cycle.revert_turn_index,
-            span = cycle.span_turns,
-            cost = fmt_usd(cycle.cost),
-            preview = preview_detail,
-        ),
-        estimated_savings: EstimatedSavings {
-            usd_per_session: Some(cycle.cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&cycle.session_id)],
-        event_source: None,
-    }
+        first = cycle.first_edit_turn_index,
+        path = cycle.file_path,
+        revert = cycle.revert_turn_index,
+        span = cycle.span_turns,
+        cost = fmt_usd(cycle.cost),
+        preview = preview_detail,
+    );
+    WasteFinding::session_cost("edit-revert", &cycle.session_id, cycle.cost, title, detail)
 }
 
 pub fn edit_heavy_to_finding(session: &EditHeavySession) -> WasteFinding {
@@ -515,131 +518,92 @@ pub fn edit_heavy_to_finding(session: &EditHeavySession) -> WasteFinding {
     } else {
         "∞".to_string()
     };
-    let raw_severity = severity_from_usd(session.cost);
-    let severity = if raw_severity == WasteSeverity::High {
-        WasteSeverity::Warn
-    } else {
-        raw_severity
+    // Edit-heavy never escalates to High: it is an advisory signal, so cap a
+    // High cost-derived severity at Warn.
+    let severity = match severity_from_usd(session.cost) {
+        WasteSeverity::High => WasteSeverity::Warn,
+        other => other,
     };
     // Render the source's kebab-case label so the detail string matches TS's
     // `${session.source}` (which uses the same string set).
     let source_str = session.source.wire_str();
-    WasteFinding {
-        kind: "edit-heavy".to_string(),
-        severity,
-        session_id: session.session_id.clone(),
-        title: format!(
-            "Edit-heavy session: {edits} edits / {reads} reads (ratio {ratio})",
-            edits = session.edit_count,
-            reads = session.read_count,
-            ratio = ratio_str,
-        ),
-        detail: format!(
-            "{source} session has {edits} edit-tool calls against only {reads} read-tool calls \
+    let title = format!(
+        "Edit-heavy session: {edits} edits / {reads} reads (ratio {ratio})",
+        edits = session.edit_count,
+        reads = session.read_count,
+        ratio = ratio_str,
+    );
+    let detail = format!(
+        "{source} session has {edits} edit-tool calls against only {reads} read-tool calls \
 (ratio {ratio}, threshold 4×). {retries} edit→bash→edit retry pattern(s) observed. \
 Edit-bearing turn cost {cost} — careless editing without first reading surrounding context.",
-            source = source_str,
-            edits = session.edit_count,
-            reads = session.read_count,
-            ratio = ratio_str,
-            retries = session.likely_retries,
-            cost = fmt_usd(session.cost),
-        ),
-        estimated_savings: EstimatedSavings {
-            usd_per_session: Some(session.cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&session.session_id)],
-        event_source: None,
-    }
+        source = source_str,
+        edits = session.edit_count,
+        reads = session.read_count,
+        ratio = ratio_str,
+        retries = session.likely_retries,
+        cost = fmt_usd(session.cost),
+    );
+    WasteFinding::session_cost("edit-heavy", &session.session_id, session.cost, title, detail)
+        .with_severity(severity)
 }
 
 pub fn skill_recall_dup_to_finding(dup: &SkillRecallDup) -> WasteFinding {
-    WasteFinding {
-        kind: "skill-recall-dup".to_string(),
-        severity: severity_from_usd(dup.cost),
-        session_id: dup.session_id.clone(),
-        title: format!(
-            "OpenCode skill \"{name}\" called {count}× without dedup",
-            name = dup.skill_name,
-            count = dup.call_count,
-        ),
-        detail: format!(
-            "OpenCode does not deduplicate skill tool results, so each of the {count} calls \
+    let title = format!(
+        "OpenCode skill \"{name}\" called {count}× without dedup",
+        name = dup.skill_name,
+        count = dup.call_count,
+    );
+    let detail = format!(
+        "OpenCode does not deduplicate skill tool results, so each of the {count} calls \
 (turns {first}-{last}) re-injects the full SKILL.md content into context. \
 Cumulative turn cost {cost}.",
-            count = dup.call_count,
-            first = dup.first_turn_index,
-            last = dup.last_turn_index,
-            cost = fmt_usd(dup.cost),
-        ),
-        estimated_savings: EstimatedSavings {
-            usd_per_session: Some(dup.cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&dup.session_id)],
-        event_source: None,
-    }
+        count = dup.call_count,
+        first = dup.first_turn_index,
+        last = dup.last_turn_index,
+        cost = fmt_usd(dup.cost),
+    );
+    WasteFinding::session_cost("skill-recall-dup", &dup.session_id, dup.cost, title, detail)
 }
 
 pub fn skill_pruning_protection_to_finding(prot: &SkillPruningProtection) -> WasteFinding {
-    WasteFinding {
-        kind: "skill-pruning-protection".to_string(),
-        severity: severity_from_usd(prot.cost),
-        session_id: prot.session_id.clone(),
-        title: format!(
-            "OpenCode skill \"{name}\" rode in cache {turns} turn(s)",
-            name = prot.skill_name,
-            turns = prot.riding_turns,
-        ),
-        detail: format!(
-            "Skill tool results are listed in OpenCode's PRUNE_PROTECTED_TOOLS and never evict during compaction. \
+    let title = format!(
+        "OpenCode skill \"{name}\" rode in cache {turns} turn(s)",
+        name = prot.skill_name,
+        turns = prot.riding_turns,
+    );
+    let detail = format!(
+        "Skill tool results are listed in OpenCode's PRUNE_PROTECTED_TOOLS and never evict during compaction. \
 Invoked at turn {invoked}; still in cacheRead at turn {last}. \
 Invoke + riding-turn cost {cost}.",
-            invoked = prot.invoked_turn_index,
-            last = prot.last_cached_turn_index,
-            cost = fmt_usd(prot.cost),
-        ),
-        estimated_savings: EstimatedSavings {
-            usd_per_session: Some(prot.cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&prot.session_id)],
-        event_source: None,
-    }
+        invoked = prot.invoked_turn_index,
+        last = prot.last_cached_turn_index,
+        cost = fmt_usd(prot.cost),
+    );
+    WasteFinding::session_cost("skill-pruning-protection", &prot.session_id, prot.cost, title, detail)
 }
 
 pub fn system_prompt_tax_to_finding(tax: &SystemPromptTax) -> WasteFinding {
     let riding_tokens = tax
         .estimated_system_prompt_tokens
         .saturating_mul(tax.riding_turns);
-    WasteFinding {
-        kind: "system-prompt-tax".to_string(),
-        severity: severity_from_usd(tax.total_cost),
-        session_id: tax.session_id.clone(),
-        title: format!(
-            "OpenCode system prompt tax: ~{tokens} tokens × {turns} turn(s)",
-            tokens = format_with_commas(tax.estimated_system_prompt_tokens),
-            turns = tax.riding_turns,
-        ),
-        detail: format!(
-            "First-turn cacheCreate of {first} tokens minus the first user message ({user}) \
+    let title = format!(
+        "OpenCode system prompt tax: ~{tokens} tokens × {turns} turn(s)",
+        tokens = format_with_commas(tax.estimated_system_prompt_tokens),
+        turns = tax.riding_turns,
+    );
+    let detail = format!(
+        "First-turn cacheCreate of {first} tokens minus the first user message ({user}) \
 leaves ~{est} tokens of system prompt + skill catalog riding cacheRead across {turns} subsequent turn(s). \
 Total cost {cost}.",
-            first = format_with_commas(tax.first_turn_cache_create),
-            user = format_with_commas(tax.first_user_message_tokens),
-            est = format_with_commas(tax.estimated_system_prompt_tokens),
-            turns = tax.riding_turns,
-            cost = fmt_usd(tax.total_cost),
-        ),
-        estimated_savings: EstimatedSavings {
-            tokens_per_session: Some(riding_tokens),
-            usd_per_session: Some(tax.total_cost),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&tax.session_id)],
-        event_source: None,
-    }
+        first = format_with_commas(tax.first_turn_cache_create),
+        user = format_with_commas(tax.first_user_message_tokens),
+        est = format_with_commas(tax.estimated_system_prompt_tokens),
+        turns = tax.riding_turns,
+        cost = fmt_usd(tax.total_cost),
+    );
+    WasteFinding::session_cost("system-prompt-tax", &tax.session_id, tax.total_cost, title, detail)
+        .with_tokens_per_session(riding_tokens)
 }
 
 /// Roll the full PatternsResult into a single severity-ranked list. Within

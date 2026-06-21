@@ -16,7 +16,7 @@ use phf::phf_set;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::lookup_model_rate;
-use crate::analyze::findings::{severity_from_usd, EstimatedSavings, WasteFinding};
+use crate::analyze::findings::WasteFinding;
 use crate::analyze::pricing::PricingTable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -448,7 +448,6 @@ only the PR fields the agent reads.",
     }
 }
 
-use super::findings::hotspots_action;
 use super::util::{fmt_usd, format_with_commas, group_turns_by_session};
 
 pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFinding {
@@ -473,33 +472,29 @@ pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFi
         Ok(serde_json::Value::String(s)) => s,
         _ => String::new(),
     };
-    WasteFinding {
-        kind: "tool-call-pattern".to_string(),
-        severity: severity_from_usd(finding.estimated_usd_saved),
-        session_id: finding.session_id.clone(),
-        title: format!(
-            "{}: {}×",
-            category_title(finding.category),
-            finding.occurrence_count
-        ),
-        detail: format!(
-            "{reason} Observed {n} occurrence(s) in this {source} session. \
+    let title = format!(
+        "{}: {}×",
+        category_title(finding.category),
+        finding.occurrence_count
+    );
+    let detail = format!(
+        "{reason} Observed {n} occurrence(s) in this {source} session. \
 Estimated overhead: {tokens} tokens ({usd} at this session's input rate).{evidence}",
-            reason = category_reason(finding.category),
-            n = finding.occurrence_count,
-            source = source_str,
-            tokens = format_with_commas(finding.estimated_tokens_saved),
-            usd = fmt_usd(finding.estimated_usd_saved),
-            evidence = evidence_str,
-        ),
-        estimated_savings: EstimatedSavings {
-            tokens_per_session: Some(finding.estimated_tokens_saved),
-            usd_per_session: Some(finding.estimated_usd_saved),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&finding.session_id)],
-        event_source: None,
-    }
+        reason = category_reason(finding.category),
+        n = finding.occurrence_count,
+        source = source_str,
+        tokens = format_with_commas(finding.estimated_tokens_saved),
+        usd = fmt_usd(finding.estimated_usd_saved),
+        evidence = evidence_str,
+    );
+    WasteFinding::session_cost(
+        "tool-call-pattern",
+        &finding.session_id,
+        finding.estimated_usd_saved,
+        title,
+        detail,
+    )
+    .with_tokens_per_session(finding.estimated_tokens_saved)
 }
 
 #[cfg(test)]
