@@ -36,7 +36,7 @@
 
 use std::collections::HashMap;
 
-use crate::analyze::span_tree::{AttrValue, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
+use crate::analyze::{AttrValue, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
 use crate::reader::inference::{Inference, InferenceKeySource, InferenceKind, ToolUseRef};
 use crate::reader::types::{
     StopReason, ToolCall, ToolResultEventRecord, ToolResultStatus, TurnRecord,
