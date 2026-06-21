@@ -69,6 +69,27 @@ pub(crate) fn bytes_from_tokens(tokens: u64) -> u64 {
     tokens * APPROX_BYTES_PER_TOKEN
 }
 
+/// Nearest-rank percentile over an already-sorted slice, with `p` expressed as
+/// a fraction in `[0, 1]` (e.g. `0.95` for p95). Empty input yields the type's
+/// default (`0` / `0.0`); a single element is returned as-is. The index is
+/// `ceil(p * len) - 1`, clamped into range — the rank convention the TS analyze
+/// port uses for per-session cost percentiles.
+///
+/// Callers must pass a sorted slice. Note this differs from the byte-oriented
+/// percentile in `tool_output_bloat`, which sorts internally and scales `p`
+/// over `0..=100`.
+pub(crate) fn percentile<T: Copy + Default>(sorted: &[T], p: f64) -> T {
+    if sorted.is_empty() {
+        return T::default();
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let raw = (p * sorted.len() as f64).ceil() as i64 - 1;
+    let idx = raw.clamp(0, sorted.len() as i64 - 1) as usize;
+    sorted[idx]
+}
+
 /// Format an integer with thousands separators, matching JS
 /// `Number.prototype.toLocaleString()` output for the en-US locale.
 pub(crate) fn format_with_commas(n: u64) -> String {

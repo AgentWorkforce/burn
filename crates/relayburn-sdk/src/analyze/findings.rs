@@ -307,7 +307,7 @@ pub(crate) fn severity_from_usd(usd: f64) -> WasteSeverity {
     }
 }
 
-fn hotspots_action(session_id: &str) -> WasteAction {
+pub(crate) fn hotspots_action(session_id: &str) -> WasteAction {
     WasteAction::Command {
         label: "Inspect this session".to_string(),
         text: format!("burn hotspots --session {session_id}"),

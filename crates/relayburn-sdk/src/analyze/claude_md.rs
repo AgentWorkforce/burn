@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::{lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session, tokens_from_bytes};
+use crate::analyze::util::{group_turns_by_session, percentile, tokens_from_bytes};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -415,18 +415,6 @@ fn pick_dominant_model(counts: &IndexMap<String, u64>) -> String {
         }
     }
     best_model
-}
-
-fn percentile(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    if sorted.len() == 1 {
-        return sorted[0];
-    }
-    let raw = (p * sorted.len() as f64).ceil() as i64 - 1;
-    let idx = raw.clamp(0, sorted.len() as i64 - 1) as usize;
-    sorted[idx]
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

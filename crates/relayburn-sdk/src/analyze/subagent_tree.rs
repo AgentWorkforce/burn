@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::cost_for_turn;
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::group_turns_by_session;
+use crate::analyze::util::{group_turns_by_session, percentile};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -821,17 +821,6 @@ pub fn aggregate_subagent_type_stats(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     out
-}
-
-fn percentile(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let len = sorted.len();
-    // Nearest-rank with clamp.
-    let raw = (p * len as f64).ceil() as i64 - 1;
-    let rank = raw.clamp(0, len as i64 - 1) as usize;
-    sorted[rank]
 }
 
 #[cfg(test)]

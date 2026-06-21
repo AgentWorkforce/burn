@@ -16,7 +16,7 @@ use phf::phf_set;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::lookup_model_rate;
-use crate::analyze::findings::{severity_from_usd, EstimatedSavings, WasteAction, WasteFinding};
+use crate::analyze::findings::{severity_from_usd, EstimatedSavings, WasteFinding};
 use crate::analyze::pricing::PricingTable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -448,13 +448,7 @@ only the PR fields the agent reads.",
     }
 }
 
-fn hotspots_action(session_id: &str) -> WasteAction {
-    WasteAction::Command {
-        label: "Inspect this session".to_string(),
-        text: format!("burn hotspots --session {session_id}"),
-    }
-}
-
+use super::findings::hotspots_action;
 use super::util::{fmt_usd, format_with_commas, group_turns_by_session};
 
 pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFinding {
@@ -511,7 +505,7 @@ Estimated overhead: {tokens} tokens ({usd} at this session's input rate).{eviden
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyze::findings::WasteSeverity;
+    use crate::analyze::findings::{WasteAction, WasteSeverity};
     use crate::analyze::pricing::load_builtin_pricing;
     use crate::reader::{SourceKind, Usage};
 
