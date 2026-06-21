@@ -7,7 +7,7 @@ extension ProviderName {
     var brandColor: Color {
         switch self {
         case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)   // Claude coral #D97757
-        case .codex: return Color(red: 0.06, green: 0.64, blue: 0.50)    // OpenAI green #10A37F
+        case .codex: return Color(red: 0.36, green: 0.42, blue: 1.0)     // Codex blue/purple #5B6CFF
         }
     }
 

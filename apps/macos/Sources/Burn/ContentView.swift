@@ -30,8 +30,9 @@ struct ContentView: View {
 
     init(viewModel: UsageViewModel) {
         self.viewModel = viewModel
-        _liveViewModel = StateObject(
-            wrappedValue: LiveBurnViewModel(provider: viewModel.selectedProvider))
+        // The live view shows all providers at once (its own per-provider
+        // toggles), independent of the Usage tab's single-select provider.
+        _liveViewModel = StateObject(wrappedValue: LiveBurnViewModel())
     }
 
     var body: some View {
@@ -52,10 +53,6 @@ struct ContentView: View {
         .padding(16)
         .frame(width: 380)
         .background(quitShortcut)
-        // Keep the live stream tracking whichever provider the picker selects.
-        .onChange(of: viewModel.selectedProvider) { provider in
-            liveViewModel.select(provider)
-        }
     }
 
     /// Segmented switch between the usage burndown and the live stream. Lives in
