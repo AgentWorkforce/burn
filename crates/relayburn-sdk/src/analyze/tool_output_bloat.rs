@@ -97,14 +97,10 @@ pub struct LoadedClaudeSettings {
     pub settings: ClaudeSettings,
 }
 
-/// Resolve the user-level settings file (`$HOME/.claude/settings.json`).
-/// Honors `HOME` (POSIX) so tests can inject an isolated home dir; falls
-/// back to `USERPROFILE` for parity with Node's `os.homedir()`.
+/// Resolve the user-level settings file (`~/.claude/settings.json`). Home
+/// resolution honors `HOME`, then `USERPROFILE` — see [`crate::util::home_dir`].
 pub fn user_claude_settings_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .unwrap_or_default();
-    PathBuf::from(home).join(".claude").join("settings.json")
+    crate::util::home_dir().join(".claude").join("settings.json")
 }
 
 /// Resolve the project-level settings file relative to `cwd`. Project

@@ -49,6 +49,7 @@ use crate::ingest::pending_stamps::{
 };
 use crate::ingest::reingest::derive_codex_session_id;
 use crate::ingest::walk::{list_dirs, list_jsonl_files, walk_jsonl, walk_opencode_sessions};
+use crate::util::home_dir;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,12 +116,6 @@ pub struct IngestRoots {
     pub claude_projects_dir: Option<PathBuf>,
     pub codex_sessions_dir: Option<PathBuf>,
     pub opencode_storage_dir: Option<PathBuf>,
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub(crate) fn claude_projects_dir(roots: &IngestRoots) -> PathBuf {

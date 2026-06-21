@@ -728,18 +728,10 @@ pub fn detect_ghost_surface_with_adapters(
 // ---------------------------------------------------------------------------
 
 use super::findings::severity_from_usd;
+use crate::util::home_dir;
 
 fn default_archive_dir() -> PathBuf {
     crate::ledger::ledger_home().join("ghost-archive")
-}
-
-fn home_dir() -> PathBuf {
-    if let Ok(h) = std::env::var("HOME") {
-        if !h.is_empty() {
-            return PathBuf::from(h);
-        }
-    }
-    PathBuf::from(".")
 }
 
 /// POSIX shell single-quote escape: wrap in single quotes and replace each
