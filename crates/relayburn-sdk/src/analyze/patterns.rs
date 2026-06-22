@@ -28,7 +28,9 @@ use crate::analyze::findings::{
     SkillRecallDup, SystemPromptTax,
 };
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session_sorted, stringify_tool_result, truncate_chars};
+use crate::analyze::util::{
+    first_seen_unique_by, group_turns_by_session_sorted, stringify_tool_result, truncate_chars,
+};
 
 mod shell;
 
@@ -617,16 +619,8 @@ fn detect_streaks<E, T>(
 // Misc helpers
 // ---------------------------------------------------------------------------
 
-fn dedup_turns<'a>(turns: Vec<&'a TurnRecord>) -> Vec<&'a TurnRecord> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out: Vec<&'a TurnRecord> = Vec::new();
-    for t in turns {
-        let key = format!("{}|{}", t.session_id, t.message_id);
-        if seen.insert(key) {
-            out.push(t);
-        }
-    }
-    out
+fn dedup_turns(turns: Vec<&TurnRecord>) -> Vec<&TurnRecord> {
+    first_seen_unique_by(turns, |t| format!("{}|{}", t.session_id, t.message_id))
 }
 
 #[allow(clippy::too_many_arguments)]

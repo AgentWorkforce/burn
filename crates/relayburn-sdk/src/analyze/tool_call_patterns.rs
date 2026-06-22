@@ -7,7 +7,7 @@
 //! overhead estimate. Reads only `TurnRecord.tool_calls` so it runs on any
 //! slice with `has_tool_calls` coverage.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::reader::{
     normalize_tool_name, parse_bash_command, BashParse, SourceKind, ToolCall, TurnRecord,
@@ -390,26 +390,13 @@ fn price_tokens(tokens: u64, rate_per_token: f64) -> f64 {
 }
 
 fn dedup_numbers(xs: &[u64]) -> Vec<u64> {
-    let mut seen: HashSet<u64> = HashSet::new();
-    let mut out: Vec<u64> = Vec::new();
-    for &x in xs {
-        if seen.insert(x) {
-            out.push(x);
-        }
-    }
+    let mut out = first_seen_unique(xs.iter().copied());
     out.sort_unstable();
     out
 }
 
 fn dedup_strings(xs: &[String]) -> Vec<String> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out: Vec<String> = Vec::new();
-    for x in xs {
-        if seen.insert(x.clone()) {
-            out.push(x.clone());
-        }
-    }
-    out
+    first_seen_unique(xs.iter().cloned())
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +434,7 @@ only the PR fields the agent reads.",
     }
 }
 
-use super::util::{fmt_usd, format_with_commas, group_turns_by_session_sorted};
+use super::util::{first_seen_unique, fmt_usd, format_with_commas, group_turns_by_session_sorted};
 
 pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFinding {
     let evidence_str = if finding.evidence.is_empty() {

@@ -6,6 +6,7 @@ use crate::reader::{ToolResultEventRecord, ToolResultEventSource, ToolResultStat
 
 use crate::analyze::findings::{CancellationRun, FailureRun, FailureRunErrorSignature, RetryLoop};
 use crate::analyze::pricing::PricingTable;
+use crate::analyze::util::first_seen_unique;
 
 pub(super) struct GraphStatusPatterns {
     pub(super) retry_loops: Vec<RetryLoop>,
@@ -128,13 +129,7 @@ fn detect_graph_failure_runs_for_session<'a>(
             let first = streak.first().unwrap();
             let last = streak.last().unwrap();
             // First-seen unique tool order.
-            let mut tools: Vec<String> = Vec::new();
-            let mut seen: HashSet<String> = HashSet::new();
-            for r in streak.iter() {
-                if seen.insert(r.tool.clone()) {
-                    tools.push(r.tool.clone());
-                }
-            }
+            let tools = first_seen_unique(streak.iter().map(|r| r.tool.clone()));
             let contributing = dedup_defined_turns(streak);
             let mut run = FailureRun {
                 session_id: session_id.to_string(),
@@ -313,13 +308,7 @@ pub(crate) fn detect_failure_runs_for_session<'a>(
             }
             let first = streak.first().unwrap();
             let last = streak.last().unwrap();
-            let mut tools: Vec<String> = Vec::new();
-            let mut seen: HashSet<String> = HashSet::new();
-            for r in streak.iter() {
-                if seen.insert(r.call.name.clone()) {
-                    tools.push(r.call.name.clone());
-                }
-            }
+            let tools = first_seen_unique(streak.iter().map(|r| r.call.name.clone()));
             let turns_in_streak: Vec<&TurnRecord> = streak.iter().map(|r| r.turn).collect();
             let contributing = dedup_turns(turns_in_streak);
             let mut run = FailureRun {

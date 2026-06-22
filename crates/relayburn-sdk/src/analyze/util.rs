@@ -2,10 +2,40 @@
 //! approximate token<->byte heuristic, turn grouping, and tool-result
 //! stringification.
 
+use std::collections::HashSet;
+use std::hash::Hash;
+
 use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::reader::TurnRecord;
+
+/// Collect items in first-seen order, dropping later duplicates as judged by
+/// `key`. The first occurrence of each distinct key is kept, in input order —
+/// the "first-seen-unique" pattern several detectors use to build
+/// `tools_involved`-style lists.
+pub(crate) fn first_seen_unique_by<T, K, F>(items: impl IntoIterator<Item = T>, key: F) -> Vec<T>
+where
+    K: Hash + Eq,
+    F: Fn(&T) -> K,
+{
+    let mut seen: HashSet<K> = HashSet::new();
+    let mut out: Vec<T> = Vec::new();
+    for item in items {
+        if seen.insert(key(&item)) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+/// [`first_seen_unique_by`] keyed on the item itself, for hashable values.
+pub(crate) fn first_seen_unique<T>(items: impl IntoIterator<Item = T>) -> Vec<T>
+where
+    T: Clone + Hash + Eq,
+{
+    first_seen_unique_by(items, |x| x.clone())
+}
 
 /// Bucket turns by `session_id`, preserving first-seen (insertion) order so
 /// the result iterates in the same order as the TS `Map<sessionId,
