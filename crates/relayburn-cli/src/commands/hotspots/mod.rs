@@ -78,7 +78,7 @@ pub struct HotspotsArgs {
     #[arg(long = "group-by", value_name = "DIM")]
     pub group_by: Option<String>,
 
-    /// Comma-separated waste-pattern detectors to run instead of the
+    /// Comma-separated hotspot-pattern detectors to run instead of the
     /// attribution view. Pass without a value to enable every detector.
     #[arg(long, value_name = "PATTERNS", num_args = 0..=1, default_missing_value = "")]
     pub patterns: Option<String>,
