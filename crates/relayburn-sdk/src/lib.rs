@@ -105,8 +105,7 @@ pub use crate::analyze::{
     FileAggregation, MarkdownSection, McpServerAggregation, ModelCost, OneShotMetrics,
     OutcomeLabel, OverheadFileKind, QualityResult, ReasoningMode, ReplacementSavingsSummary,
     RowCoverage, SessionClaudeMdCost, SessionOutcome, SubagentAggregation, SubagentTreeNode,
-    SubagentTypeStats, TurnProvider, UsageCostAggregateRow, WasteFinding, WasteSeverity,
-    DEFAULT_MIN_SAMPLE,
+    SubagentTypeStats, UsageCostAggregateRow, WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
 };
 
 // Span tree primitives (issue #430). Re-exported at the SDK root so

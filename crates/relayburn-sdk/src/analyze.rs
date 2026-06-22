@@ -89,9 +89,7 @@ pub(crate) use provider::{
     aggregate_by_provider, AggregateByProviderOptions, ProviderAggregateRow,
 };
 pub(crate) use provider::{provider_for, ProviderFilter};
-pub use provider::{
-    CoverageField, FieldCoverage, RowCoverage, TurnProvider, UsageCostAggregateRow,
-};
+pub use provider::{CoverageField, FieldCoverage, RowCoverage, UsageCostAggregateRow};
 pub(crate) use quality::{compute_quality, ComputeQualityOptions};
 pub use quality::{OneShotMetrics, OutcomeLabel, QualityResult, SessionOutcome};
 pub(crate) use replacement_savings::summarize_replacement_savings;

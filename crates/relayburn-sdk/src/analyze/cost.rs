@@ -20,7 +20,7 @@ use crate::analyze::provider_reattribution::{resolve_provider, strip_provider_pr
 pub struct CostBreakdown {
     /// Model identifier this breakdown is attributed to. Uses
     /// `Cow<'static, str>` so common labels like `"aggregate"` (from
-    /// [`sum_costs`]) can be carried as a `'static` borrow with no allocation,
+    /// `sum_costs`) can be carried as a `'static` borrow with no allocation,
     /// while per-turn breakdowns can still own a `String`.
     pub model: Cow<'static, str>,
     pub total: f64,

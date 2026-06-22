@@ -24,7 +24,7 @@ use crate::analyze::provider_reattribution::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnProvider {
+pub(crate) struct TurnProvider {
     pub provider: String,
     pub raw_model: String,
     pub normalized_model: String,
