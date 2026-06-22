@@ -1,8 +1,9 @@
 //! `burn compare <model_a,model_b[,...]>` — per-(model, activity) cost
-//! comparison table. Thin presenter over the
-//! `relayburn_sdk::analyze::compare` building blocks (`build_compare_table`
-//! plus `compare_from_archive`); the heavy lifting lives in the SDK so the
-//! MCP server can reuse it.
+//! comparison table. Thin presenter over the `LedgerHandle::compare` /
+//! `compare_timeseries` SDK verbs; the full pipeline (query → provider filter
+//! → fidelity gate → pricing → per-cell aggregation) lives in the SDK so the
+//! MCP server can reuse it. This file only adapts the verb's `CompareResult`
+//! into the JSON / CSV / TTY wire shapes.
 //!
 //! TS source of truth: `packages/cli/src/commands/compare.ts`. The wire
 //! shape (cells ordering, rounding rules, fidelity-summary key order)
@@ -21,21 +22,21 @@
 //!    `burn ingest && burn compare`; the steady-state setup is to run
 //!    `burn ingest --watch` once per host so every read verb sees current data.
 //!
-//! Filter wiring: `--project` / `--session` / `--since` lower into the
-//! `Query` struct directly; `--workflow` / `--agent` fold through
-//! `Query.enrichment` (`workflowId` / `agentId` keys, both required when
-//! both flags are passed); `--provider` is a post-query CSV allow-list
-//! resolved via `provider_for`, matching `summary --by-provider`'s
-//! synthetic-rule-aware classification.
+//! Filter wiring: `--project` / `--session` / `--since` / `--workflow` /
+//! `--agent` / `--provider` all flow into the verb's `CompareOptions`. The
+//! verb lowers `--workflow` / `--agent` through stamp enrichment
+//! (`workflowId` / `agentId` keys, both required when both flags are passed)
+//! and applies `--provider` as a post-query CSV allow-list resolved via
+//! `provider_for`, matching `summary --by-provider`'s synthetic-rule-aware
+//! classification.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{anyhow, Result};
 use relayburn_sdk::{
-    build_compare_table, has_minimum_fidelity, load_pricing, normalize_since, provider_for,
-    summarize_fidelity, AnalyzeCompareOptions as CompareOptions, CompareCell, CompareTable,
-    EnrichedTurn, FidelityClass, FidelitySummary, Ledger, LedgerOpenOptions, ProviderFilter, Query,
-    UsageGranularity, DEFAULT_MIN_SAMPLE,
+    normalize_since, CompareCellResult, CompareExcludedBreakdown, CompareOptions, CompareResult,
+    FidelityClass, FidelitySummary, Ledger, LedgerOpenOptions, UsageGranularity,
+    DEFAULT_MIN_SAMPLE,
 };
 use serde_json::{json, Value};
 
@@ -51,14 +52,6 @@ const FIDELITY_CHOICES: &[&str] = &[
     "aggregate-only",
     "cost-only",
     "partial",
-];
-
-const FIDELITY_ORDER: &[&str] = &[
-    "cost-only",
-    "aggregate-only",
-    "partial",
-    "usage-only",
-    "full",
 ];
 
 const NEEDS_MODELS_MSG: &str =
@@ -148,8 +141,10 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     }
 
     // 4. Provider filter. Lower-cased CSV; turns whose effective provider
-    //    (per `provider_for`) isn't in the set get dropped after the ledger
-    //    query but before the fidelity gate, matching the TS pipeline order.
+    //    (resolved inside the verb via `provider_for`) get dropped after the
+    //    ledger query but before the fidelity gate, matching the TS pipeline
+    //    order. Parsed here so a malformed `--provider` routes through the
+    //    same error envelope as the other argument validations.
     let provider_filter = parse_provider_filter(args.provider.as_deref())?;
 
     // 5. min-sample.
@@ -162,33 +157,13 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     //    the Rust SDK is SQLite-native and has no archive layer to bypass.
     let _ = args.no_archive;
 
-    // 7. Build the Query.
-    let mut q = Query::default();
-    if let Some(s) = normalize_since(args.since.as_deref())? {
-        q.since = Some(s);
-    }
-    if let Some(p) = args.project.as_deref() {
-        q.project = Some(p.to_string());
-    }
-    if let Some(s) = args.session.as_deref() {
-        q.session_id = Some(s.to_string());
-    }
-    // `workflow` / `agent` fold through stamp enrichment. Both keys live in
-    // the same `Enrichment` map (`workflowId`, `agentId`), and the ledger's
-    // `Query.enrichment` predicate requires every key/value pair to match —
-    // so passing both narrows to the intersection.
-    let mut enrichment = BTreeMap::new();
-    if let Some(workflow) = args.workflow.as_deref() {
-        enrichment.insert("workflowId".to_string(), workflow.to_string());
-    }
-    if let Some(agent) = args.agent.as_deref() {
-        enrichment.insert("agentId".to_string(), agent.to_string());
-    }
-    if !enrichment.is_empty() {
-        q.enrichment = Some(enrichment);
-    }
+    // 7. Validate `--since` up front so a malformed duration routes through
+    //    the same error envelope as the other argument validations. The verb
+    //    re-parses it internally from `opts.since`; this is purely the
+    //    early-fail gate (the parsed value is discarded).
+    let _ = normalize_since(args.since.as_deref())?;
 
-    // 8. Open ledger and walk turns.
+    // 8. Open ledger.
     let progress = TaskProgress::new(globals, "compare");
     let ledger_opts = match globals.ledger_path.as_deref() {
         Some(p) => LedgerOpenOptions::with_home(p),
@@ -200,20 +175,17 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     // `--bucket` switches to a per-bucket time-series via the SDK verb.
     // Parsing/validation already happened above, before the ledger was opened.
     if let Some(bucket_secs) = bucket_secs {
-        let provider = provider_filter
-            .as_ref()
-            .map(|f| f.iter().cloned().collect::<Vec<_>>());
         progress.set_task("building comparison time-series");
         let series = handle
             .compare_timeseries(
-                relayburn_sdk::CompareOptions {
+                CompareOptions {
                     models: models.clone(),
                     session: args.session.clone(),
                     project: args.project.clone(),
                     since: args.since.clone(),
                     workflow: args.workflow.clone(),
                     agent: args.agent.clone(),
-                    provider,
+                    provider: provider_filter.clone(),
                     min_sample: Some(min_sample),
                     min_fidelity: Some(min_fidelity),
                     ledger_home: None,
@@ -241,65 +213,40 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    progress.set_task("loading turns");
-    let queried_turns: Vec<EnrichedTurn> = handle.raw().query_turns(&q)?;
-
-    // 9. Drop turns whose effective provider isn't in the allow-list. The
-    //    provider is resolved via `provider_for` (synthetic-rule first,
-    //    then `provider/model` prefix, then collector-implied) so the CLI
-    //    matches `summary --by-provider` semantics 1:1.
-    let filtered_by_provider: Vec<EnrichedTurn> = match provider_filter.as_ref() {
-        Some(filter) => queried_turns
-            .into_iter()
-            .filter(|et| {
-                let provider = provider_for(&et.turn).provider;
-                filter.contains(&provider.to_ascii_lowercase())
-            })
-            .collect(),
-        None => queried_turns,
-    };
-
-    // 10. Fidelity summary is computed BEFORE the fidelity gate so the
-    //     `summary` block in the JSON envelope reflects the queried slice.
-    let fidelity_summary = summarize_fidelity(
-        &filtered_by_provider
-            .iter()
-            .map(|et| et.turn.clone())
-            .collect::<Vec<_>>(),
-    );
-    let filtered_turns: Vec<EnrichedTurn> = if matches!(min_fidelity, FidelityClass::Partial) {
-        filtered_by_provider
-    } else {
-        filtered_by_provider
-            .into_iter()
-            .filter(|et| has_minimum_fidelity(et.turn.fidelity.as_ref(), min_fidelity))
-            .collect()
-    };
-    let analyzed_turns = filtered_turns.len();
-
-    // 11. Build the compare table.
-    let pricing = load_pricing(None);
-    let opts = CompareOptions {
-        pricing: &pricing,
-        models: Some(models.clone()),
-        min_sample: Some(min_sample),
-    };
+    // 9. Run the comparison through the SDK verb. The verb owns the full
+    //    pipeline — query → provider filter (`provider_for`) → fidelity
+    //    summary (over the post-provider, pre-gate slice) → fidelity gate →
+    //    pricing → per-cell aggregation — so the CLI is a pure presenter over
+    //    the returned `CompareResult`.
     progress.set_task("building comparison");
-    let table = build_compare_table(&filtered_turns, &opts);
+    let result = handle
+        .compare(CompareOptions {
+            models: models.clone(),
+            session: args.session.clone(),
+            project: args.project.clone(),
+            since: args.since.clone(),
+            workflow: args.workflow.clone(),
+            agent: args.agent.clone(),
+            provider: provider_filter,
+            min_sample: Some(min_sample),
+            min_fidelity: Some(min_fidelity),
+            ledger_home: None,
+        })
+        .inspect_err(|_| progress.finish_and_clear())?;
     progress.finish_and_clear();
 
-    // 12. Render.
+    // 10. Render.
     if globals.json {
-        let v = build_json(&table, analyzed_turns, min_fidelity, &fidelity_summary);
+        let v = build_json(&result);
         render_json(&v)?;
         return Ok(0);
     }
     if args.csv {
-        let csv = render_csv(&table);
+        let csv = render_csv(&result);
         print!("{csv}");
         return Ok(0);
     }
-    let tty = render_tty(&table, analyzed_turns, min_fidelity, &fidelity_summary);
+    let tty = render_tty(&result);
     print!("{tty}");
     Ok(0)
 }
@@ -308,16 +255,19 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
 // helpers
 // ---------------------------------------------------------------------------
 
-/// Parse `--provider` CSV → lower-cased `ProviderFilter`. Mirrors the
-/// `summary --provider` parser: trim entries, drop empties, lower-case for
-/// case-insensitive matches, and reject an all-empty list with the same
-/// error shape (`burn: --provider requires a value`). Returns `Ok(None)`
-/// when the flag wasn't passed.
-fn parse_provider_filter(raw: Option<&str>) -> Result<Option<ProviderFilter>> {
+/// Parse `--provider` CSV → lower-cased allow-list passed to the verb's
+/// `CompareOptions.provider`. Mirrors the `summary --provider` parser: trim
+/// entries, drop empties, lower-case for case-insensitive matches, and reject
+/// an all-empty list with the same error shape
+/// (`burn: --provider requires a value`). Returns `Ok(None)` when the flag
+/// wasn't passed. The verb re-normalizes (trim / lowercase / dedupe)
+/// internally, so this only needs to reject the all-empty case here to keep
+/// the argument-validation error envelope.
+fn parse_provider_filter(raw: Option<&str>) -> Result<Option<Vec<String>>> {
     let Some(raw) = raw else {
         return Ok(None);
     };
-    let providers: ProviderFilter = raw
+    let providers: Vec<String> = raw
         .split(',')
         .map(|s| s.trim().to_ascii_lowercase())
         .filter(|s| !s.is_empty())
@@ -422,70 +372,60 @@ fn round_opt(n: Option<f64>, digits: usize) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// CompareExcludedBreakdown
+// cell lookup helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Default)]
-struct ExcludedBreakdown {
-    total: u64,
-    aggregate_only: u64,
-    cost_only: u64,
-    partial: u64,
-    usage_only: u64,
+/// Empty-cell stand-in for `(model, category)` pairs the verb didn't emit.
+/// `build_compare_table` seeds every pair, so in practice this is only a
+/// defensive fallback (mirrors the analyze-layer `empty_cell`).
+fn empty_cell(model: &str, category: &str) -> CompareCellResult {
+    CompareCellResult {
+        model: model.to_string(),
+        category: category.to_string(),
+        turns: 0,
+        edit_turns: 0,
+        one_shot_turns: 0,
+        priced_turns: 0,
+        total_cost: 0.0,
+        cost_per_turn: None,
+        one_shot_rate: None,
+        cache_hit_rate: None,
+        median_retries: None,
+        no_data: true,
+        insufficient_sample: false,
+    }
 }
 
-fn compute_excluded(summary: &FidelitySummary, minimum: FidelityClass) -> ExcludedBreakdown {
-    let mut out = ExcludedBreakdown::default();
-    if matches!(minimum, FidelityClass::Partial) {
-        return out;
-    }
-    let need = FIDELITY_ORDER
+/// Index the verb's flat `cells` vec by `(model, category)` so the renderers
+/// can look up the same per-cell data the nested analyze-layer `CompareTable`
+/// used to provide.
+fn index_cells(result: &CompareResult) -> HashMap<(&str, &str), &CompareCellResult> {
+    result
+        .cells
         .iter()
-        .position(|c| *c == minimum.wire_str())
-        .unwrap_or(0);
-    for (i, key) in FIDELITY_ORDER.iter().enumerate() {
-        if i >= need {
-            continue;
-        }
-        let cls = parse_fidelity(key).unwrap();
-        let n = summary.by_class.get(&cls).copied().unwrap_or(0);
-        if n == 0 {
-            continue;
-        }
-        out.total += n;
-        match *key {
-            "aggregate-only" => out.aggregate_only += n,
-            "cost-only" => out.cost_only += n,
-            "partial" => out.partial += n,
-            "usage-only" => out.usage_only += n,
-            _ => {}
-        }
-    }
-    out
+        .map(|c| ((c.model.as_str(), c.category.as_str()), c))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
 // JSON envelope
 // ---------------------------------------------------------------------------
 
-fn build_json(
-    table: &CompareTable,
-    analyzed_turns: usize,
-    minimum: FidelityClass,
-    summary: &FidelitySummary,
-) -> Value {
-    let excluded = compute_excluded(summary, minimum);
+fn build_json(result: &CompareResult) -> Value {
+    let index = index_cells(result);
     // Cells in (model × category) iteration order; matches the TS
     // `for m of models / for cat of categories` walk.
-    let mut cells: Vec<Value> = Vec::with_capacity(table.models.len() * table.categories.len());
-    for m in &table.models {
-        for cat in &table.categories {
-            let c = table
-                .cells
-                .get(m)
-                .and_then(|by_cat| by_cat.get(cat))
-                .cloned()
-                .unwrap_or_else(empty_cell);
+    let mut cells: Vec<Value> = Vec::with_capacity(result.models.len() * result.categories.len());
+    for m in &result.models {
+        for cat in &result.categories {
+            let owned;
+            let c = match index.get(&(m.as_str(), cat.as_str())) {
+                Some(c) => *c,
+                None => {
+                    owned = empty_cell(m, cat);
+                    &owned
+                }
+            };
             cells.push(json!({
                 "model": m,
                 "category": cat,
@@ -508,26 +448,30 @@ fn build_json(
     // preserves insertion order). Build with a serde_json::Map so the
     // `preserve_order` feature on serde_json keeps insertion order.
     let mut totals = serde_json::Map::new();
-    for m in &table.models {
-        let totals_for = table.totals.get(m).cloned().unwrap_or_default();
+    for m in &result.models {
+        let totals_for = result.totals.get(m);
+        let (turns, total_cost) = totals_for
+            .map(|t| (t.turns, t.total_cost))
+            .unwrap_or((0, 0.0));
         totals.insert(
             m.clone(),
             json!({
-                "turns": totals_for.turns,
-                "totalCost": f64_to_json(totals_for.total_cost),
+                "turns": turns,
+                "totalCost": f64_to_json(total_cost),
             }),
         );
     }
 
+    let excluded = &result.fidelity.excluded;
     json!({
-        "analyzedTurns": analyzed_turns,
-        "minSample": table.min_sample,
-        "models": &table.models,
-        "categories": &table.categories,
+        "analyzedTurns": result.analyzed_turns,
+        "minSample": result.min_sample,
+        "models": &result.models,
+        "categories": &result.categories,
         "totals": Value::Object(totals),
         "cells": cells,
         "fidelity": {
-            "minimum": minimum.wire_str(),
+            "minimum": result.fidelity.minimum.wire_str(),
             "excluded": {
                 "total": excluded.total,
                 "aggregateOnly": excluded.aggregate_only,
@@ -535,7 +479,7 @@ fn build_json(
                 "partial": excluded.partial,
                 "usageOnly": excluded.usage_only,
             },
-            "summary": fidelity_summary_to_value(summary),
+            "summary": fidelity_summary_to_value(&result.fidelity.summary),
         }
     })
 }
@@ -602,27 +546,12 @@ fn fidelity_summary_to_value(s: &FidelitySummary) -> Value {
     Value::Object(out)
 }
 
-fn empty_cell() -> CompareCell {
-    CompareCell {
-        turns: 0,
-        edit_turns: 0,
-        one_shot_turns: 0,
-        priced_turns: 0,
-        total_cost: 0.0,
-        cost_per_turn: None,
-        one_shot_rate: None,
-        cache_hit_rate: None,
-        median_retries: None,
-        no_data: true,
-        insufficient_sample: false,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // CSV
 // ---------------------------------------------------------------------------
 
-fn render_csv(table: &CompareTable) -> String {
+fn render_csv(result: &CompareResult) -> String {
+    let index = index_cells(result);
     let header = [
         "model",
         "category",
@@ -640,14 +569,16 @@ fn render_csv(table: &CompareTable) -> String {
     ];
     let mut rows: Vec<String> = Vec::new();
     rows.push(header.join(","));
-    for m in &table.models {
-        for cat in &table.categories {
-            let c = table
-                .cells
-                .get(m)
-                .and_then(|by_cat| by_cat.get(cat))
-                .cloned()
-                .unwrap_or_else(empty_cell);
+    for m in &result.models {
+        for cat in &result.categories {
+            let owned;
+            let c = match index.get(&(m.as_str(), cat.as_str())) {
+                Some(c) => *c,
+                None => {
+                    owned = empty_cell(m, cat);
+                    &owned
+                }
+            };
             let row = vec![
                 csv_cell(m),
                 csv_cell(cat),
@@ -699,7 +630,7 @@ fn num_csv(n: f64, digits: usize) -> String {
 // TTY
 // ---------------------------------------------------------------------------
 
-fn cell_fields(c: &CompareCell) -> [String; 3] {
+fn cell_fields(c: &CompareCellResult) -> [String; 3] {
     if c.no_data {
         return [DASH.to_string(), DASH.to_string(), DASH.to_string()];
     }
@@ -715,52 +646,44 @@ fn cell_fields(c: &CompareCell) -> [String; 3] {
     [turns, cost, one_shot]
 }
 
-fn render_tty(
-    table: &CompareTable,
-    analyzed_turns: usize,
-    minimum: FidelityClass,
-    summary: &FidelitySummary,
-) -> String {
+fn render_tty(result: &CompareResult) -> String {
+    let minimum = result.fidelity.minimum;
+    let index = index_cells(result);
+    // `(model, category)` lookup with an empty-cell fallback for pairs the
+    // verb didn't emit (it always emits the full grid, so this is defensive).
+    let cell_for = |m: &str, cat: &str| -> CompareCellResult {
+        index
+            .get(&(m, cat))
+            .map(|c| (*c).clone())
+            .unwrap_or_else(|| empty_cell(m, cat))
+    };
+
     let mut lines: Vec<String> = Vec::new();
     lines.push(String::new());
     lines.push(format!(
         "turns analyzed: {}",
-        format_uint(analyzed_turns as u64)
+        format_uint(result.analyzed_turns)
     ));
 
-    let excluded = compute_excluded(summary, minimum);
+    let excluded = &result.fidelity.excluded;
     if excluded.total > 0 {
-        lines.push(format_excluded_note(&excluded, minimum));
+        lines.push(format_excluded_note(excluded, minimum));
     }
     lines.push(String::new());
 
-    if table.models.is_empty() || table.categories.is_empty() {
+    if result.models.is_empty() || result.categories.is_empty() {
         lines
             .push("no data to compare (need turns spanning ≥1 model and ≥1 activity).".to_string());
         lines.push(String::new());
         return lines.join("\n");
     }
 
-    let sub_header = build_sub_header(&table.models);
-
-    let owned_empty = empty_cell();
-    let cell_for = |m: &str, cat: &str| -> CompareCell {
-        table
-            .cells
-            .get(m)
-            .and_then(|by| by.get(cat))
-            .cloned()
-            .unwrap_or_else(empty_cell)
-    };
-    // Suppress the unused-variable warning on `owned_empty`; it's only
-    // referenced when we run a corner case where neither cells.get nor
-    // by_cat.get is hit, which the table builder doesn't produce today.
-    let _ = &owned_empty;
+    let sub_header = build_sub_header(&result.models);
 
     let mut data_rows: Vec<Vec<String>> = Vec::new();
-    for cat in &table.categories {
+    for cat in &result.categories {
         let mut row: Vec<String> = vec![cat.clone()];
-        for m in &table.models {
+        for m in &result.models {
             let cell = cell_for(m, cat);
             let [a, b, c] = cell_fields(&cell);
             row.push(a);
@@ -781,11 +704,11 @@ fn render_tty(
 
     // Widen the last column of each model's group to fit the (possibly
     // longer) display name. Mirrors the TS path's group-line padding.
-    for mi in 0..table.models.len() {
+    for mi in 0..result.models.len() {
         let start = 1 + mi * 3;
         let group_width =
             widths[start] + SEP.len() + widths[start + 1] + SEP.len() + widths[start + 2];
-        let name = display_model_name(&table.models[mi]);
+        let name = display_model_name(&result.models[mi]);
         let name_w = display_width(name);
         if name_w > group_width {
             widths[start + 2] += name_w - group_width;
@@ -794,11 +717,11 @@ fn render_tty(
 
     // Group-name line.
     let mut group_line: Vec<String> = vec![pad_end("", widths[0])];
-    for mi in 0..table.models.len() {
+    for mi in 0..result.models.len() {
         let start = 1 + mi * 3;
         let group_width =
             widths[start] + SEP.len() + widths[start + 1] + SEP.len() + widths[start + 2];
-        let name = display_model_name(&table.models[mi]);
+        let name = display_model_name(&result.models[mi]);
         group_line.push(pad_end(name, group_width));
     }
     lines.push(rstrip(&group_line.join(SEP)));
@@ -813,12 +736,12 @@ fn render_tty(
 
     // Coverage notes.
     let mut notes: Vec<String> = Vec::new();
-    for cat in &table.categories {
-        let any_has_data = table.models.iter().any(|m| !cell_for(m, cat).no_data);
+    for cat in &result.categories {
+        let any_has_data = result.models.iter().any(|m| !cell_for(m, cat).no_data);
         if !any_has_data {
             continue;
         }
-        for m in &table.models {
+        for m in &result.models {
             let cell = cell_for(m, cat);
             if cell.no_data {
                 notes.push(format!(
@@ -830,7 +753,7 @@ fn render_tty(
                     "low {} sample in '{cat}' ({} turns < {}) — treat as indicative.",
                     display_model_name(m),
                     cell.turns,
-                    table.min_sample
+                    result.min_sample
                 ));
             }
         }
@@ -851,17 +774,21 @@ fn render_tty(
 
     // Per-model totals.
     lines.push(String::new());
-    for m in &table.models {
-        let tot = table.totals.get(m).cloned().unwrap_or_default();
-        let total_cost = if tot.turns > 0 {
-            format_usd(tot.total_cost)
+    for m in &result.models {
+        let (turns, total_cost_raw) = result
+            .totals
+            .get(m)
+            .map(|t| (t.turns, t.total_cost))
+            .unwrap_or((0, 0.0));
+        let total_cost = if turns > 0 {
+            format_usd(total_cost_raw)
         } else {
             DASH.to_string()
         };
         lines.push(format!(
             "{}: {} turns, {} total",
             display_model_name(m),
-            format_uint(tot.turns),
+            format_uint(turns),
             total_cost
         ));
     }
@@ -916,7 +843,7 @@ fn display_model_name(m: &str) -> &str {
     }
 }
 
-fn format_excluded_note(excluded: &ExcludedBreakdown, minimum: FidelityClass) -> String {
+fn format_excluded_note(excluded: &CompareExcludedBreakdown, minimum: FidelityClass) -> String {
     let mut parts: Vec<String> = Vec::new();
     if excluded.aggregate_only > 0 {
         parts.push(format!("{} aggregate-only", excluded.aggregate_only));
@@ -969,13 +896,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_provider_filter_trims_lowercases_and_dedupes() {
+    fn parse_provider_filter_trims_lowercases_and_drops_empties() {
+        // The CLI parser trims / lowercases / drops empties; deduping is left
+        // to the verb's `normalize_provider_filter`, so the raw entries
+        // (including the repeat) flow through as a `Vec`.
         let got = parse_provider_filter(Some(" Anthropic,OPENAI ,, anthropic"))
             .unwrap()
             .unwrap();
-        assert!(got.contains("anthropic"));
-        assert!(got.contains("openai"));
-        assert_eq!(got.len(), 2, "duplicates should collapse: got {got:?}");
+        assert_eq!(got, vec!["anthropic", "openai", "anthropic"]);
     }
 
     #[test]

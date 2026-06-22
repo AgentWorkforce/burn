@@ -92,16 +92,21 @@ pub use crate::analyze::{
     OwnerRail as ContextDeltaOwnerRail, ReminderSource,
 };
 
+// NOTE: the low-level `compare` building blocks (`build_compare_table`,
+// `CompareTable` / `CompareCell` / `CompareTotals`, and the
+// `CompareOptions` aliased internally as `AnalyzeCompareOptions`) and the
+// helpers `load_pricing` / `provider_for` / `has_minimum_fidelity` /
+// `ProviderFilter` are deliberately NOT re-exported — they are `pub(crate)`
+// internals of the compare verb. The public compare surface is the
+// `LedgerHandle::compare` / `compare_timeseries` verbs (see `query_verbs`).
 pub use crate::analyze::{
-    build_compare_table, compare_from_archive, cost_for_turn, describe_applies_to,
-    has_minimum_fidelity, load_pricing, provider_for, summarize_fidelity, AttributionMethod,
-    BashAggregation, BashVerbAggregation, CompareCategory, CompareCell, CompareFromArchiveResult,
-    CompareOptions as AnalyzeCompareOptions, CompareTable, CompareTotals, CostBreakdown,
-    CoverageField, FidelitySummary, FieldCoverage, FileAggregation, MarkdownSection,
-    McpServerAggregation, ModelCost, OneShotMetrics, OutcomeLabel, OverheadFileKind,
-    ProviderFilter, QualityResult, ReasoningMode, ReplacementSavingsSummary, RowCoverage,
-    SessionClaudeMdCost, SessionOutcome, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
-    TurnProvider, UsageCostAggregateRow, WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
+    cost_for_turn, describe_applies_to, summarize_fidelity, AttributionMethod, BashAggregation,
+    BashVerbAggregation, CostBreakdown, CoverageField, FidelitySummary, FieldCoverage,
+    FileAggregation, MarkdownSection, McpServerAggregation, ModelCost, OneShotMetrics,
+    OutcomeLabel, OverheadFileKind, QualityResult, ReasoningMode, ReplacementSavingsSummary,
+    RowCoverage, SessionClaudeMdCost, SessionOutcome, SubagentAggregation, SubagentTreeNode,
+    SubagentTypeStats, TurnProvider, UsageCostAggregateRow, WasteFinding, WasteSeverity,
+    DEFAULT_MIN_SAMPLE,
 };
 
 // Span tree primitives (issue #430). Re-exported at the SDK root so

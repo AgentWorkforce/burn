@@ -44,19 +44,20 @@ mod util;
 // surface).
 pub(crate) use claude_md::{build_trim_recommendations, render_unified_diff_for_recommendation};
 pub use claude_md::{MarkdownSection, SessionClaudeMdCost};
-pub use compare::{
-    build_compare_table, compare_from_archive, CompareCategory, CompareCell,
-    CompareFromArchiveResult, CompareOptions, CompareTable, CompareTotals, DEFAULT_MIN_SAMPLE,
-};
+// The low-level compare building blocks are internal: the public compare
+// surface is the `LedgerHandle::compare` / `compare_timeseries` verbs in
+// `query_verbs::compare`, which wrap these. Only `DEFAULT_MIN_SAMPLE` stays
+// public (the CLI uses it as the default `--min-sample`).
+pub use compare::DEFAULT_MIN_SAMPLE;
+pub(crate) use compare::{build_compare_table, CompareOptions, CompareTable};
 pub(crate) use context_delta::deltas_for_session;
 pub use context_delta::{
     ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail, ReminderSource,
 };
 pub(crate) use cost::sum_costs;
 pub use cost::{cost_for_turn, tally_unpriced, CostBreakdown};
-pub use fidelity::{
-    has_minimum_fidelity, summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary,
-};
+pub(crate) use fidelity::has_minimum_fidelity;
+pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary};
 pub(crate) use findings::findings_from_patterns;
 pub use findings::{sort_findings, WasteFinding, WasteSeverity};
 pub use flow_graph::{
@@ -82,14 +83,14 @@ pub(crate) use overhead::{
 pub use overhead::{describe_applies_to, OverheadFileKind};
 pub(crate) use patterns::detect_patterns;
 pub use patterns::DetectPatternsOptions;
-pub(crate) use pricing::PricingTable;
-pub use pricing::{load_pricing, ModelCost, ReasoningMode};
+pub(crate) use pricing::{load_pricing, PricingTable};
+pub use pricing::{ModelCost, ReasoningMode};
 pub(crate) use provider::{
     aggregate_by_provider, AggregateByProviderOptions, ProviderAggregateRow,
 };
+pub(crate) use provider::{provider_for, ProviderFilter};
 pub use provider::{
-    provider_for, CoverageField, FieldCoverage, ProviderFilter, RowCoverage, TurnProvider,
-    UsageCostAggregateRow,
+    CoverageField, FieldCoverage, RowCoverage, TurnProvider, UsageCostAggregateRow,
 };
 pub(crate) use quality::{compute_quality, ComputeQualityOptions};
 pub use quality::{OneShotMetrics, OutcomeLabel, QualityResult, SessionOutcome};
