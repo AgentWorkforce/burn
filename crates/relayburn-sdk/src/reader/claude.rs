@@ -1443,6 +1443,322 @@ fn record_root_incremental(
     out.push((line_offset, row));
 }
 
+/// Owns the mutable working state threaded through the Claude incremental
+/// parser's streaming loop, mirroring the codex decomposition's
+/// `CodexParseState`. The driver (`run_incremental`) constructs one, dispatches
+/// each parsed line to `handle_assistant` / `handle_user` / `handle_system`,
+/// then assembles the result from this state's accumulated fields after the
+/// loop closes. Field names and initializers reproduce the prior inline locals
+/// verbatim.
+struct ClaudeParseState {
+    file_session_id: Option<String>,
+    evidence: ClaudeRelationshipEvidence,
+    nodes_by_uuid: HashMap<String, LineNode>,
+    invocation_cache: HashMap<String, Option<InvocationInfo>>,
+    tool_result_counters: HashMap<String, u64>,
+    next_event_index: u64,
+    last_assistant_message_id: Option<String>,
+    // -1 sentinel: resume marker came from the prescan (definitely emit).
+    // u64::MAX sentinel: no resume marker yet seen.
+    // Otherwise: byte offset of the line that first set the marker on this pass.
+    resume_marker_offset: u64,
+    current_user_text: String,
+    working: HashMap<String, WorkingRecord>,
+    order: Vec<String>,
+    message_id_first_offset: HashMap<String, u64>,
+    // Legacy file-order map kept as a fallback when the assistant row
+    // lacks a `uuid` or its parent chain doesn't terminate at a known
+    // user prompt. The preferred lookup is `user_text_by_uuid` walked
+    // via `nearest_user_prompt_root` (#433).
+    user_text_by_message_id: HashMap<String, String>,
+    // User-prompt text keyed by the user line's own `uuid` — read by the
+    // parent-chain walker during turn classification. Populated only for
+    // real user prompts (task notifications excluded; empty bodies
+    // excluded).
+    user_text_by_uuid: HashMap<String, String>,
+    errored_tool_use_ids: HashSet<String>,
+    replacement_meta_by_tool_use_id: HashMap<String, ReplacementMeta>,
+    // Slash-command triad detection (#438) needs a flat slice of user-typed
+    // rows to look up the parent-UUID chain shape. We accumulate only the
+    // minimal field set the detector reads (`type`, `uuid`, `parentUuid`,
+    // `message.content`) so memory stays bounded — three rows per triad,
+    // and only user-typed rows are stored. Detection runs once after the
+    // streaming loop closes; the resulting `skill_uuids` set is consulted
+    // by `apply_classification` to override the activity to `Skill`.
+    user_rows_for_triad: Vec<serde_json::Map<String, Value>>,
+    events: Vec<(u64, CompactionEvent)>,
+    pending_user_content: Vec<(u64, ContentRecord)>,
+    pending_tool_result_events: Vec<(u64, ToolResultEventRecord)>,
+    pending_relationships: Vec<(u64, SessionRelationshipRecord)>,
+    pending_user_turns: Vec<(u64, UserTurnRecord)>,
+    seen_root_session_ids: HashSet<String>,
+    seen_explicit_relationship_ids: HashSet<RelationshipKey>,
+    pending_user_turn_inc_idx: Option<usize>,
+}
+
+impl ClaudeParseState {
+    /// Initialize working state, reproducing the prior inline initializers
+    /// verbatim — including the `prescan_nodes` wiring (run only when
+    /// `start_offset > 0`) and the `resume_marker_offset` sentinel derivation
+    /// off `evidence.has_resume_marker`.
+    fn new(
+        path: &Path,
+        start_offset: u64,
+        file_session_id: Option<String>,
+        last_user_text: Option<&str>,
+    ) -> std::io::Result<Self> {
+        let mut evidence = new_evidence(file_session_id.clone());
+
+        let mut nodes_by_uuid: HashMap<String, LineNode> = HashMap::new();
+        let mut tool_result_counters: HashMap<String, u64> = HashMap::new();
+        let mut next_event_index: u64 = 0;
+        let mut last_assistant_message_id: Option<String> = None;
+
+        if start_offset > 0 {
+            let pre = prescan_nodes(
+                path,
+                start_offset,
+                &mut nodes_by_uuid,
+                &mut evidence,
+                &mut tool_result_counters,
+            )?;
+            last_assistant_message_id = pre.last_assistant_message_id;
+            next_event_index = pre.next_event_index;
+        }
+
+        // -1 sentinel: resume marker came from the prescan (definitely emit).
+        // u64::MAX sentinel: no resume marker yet seen.
+        // Otherwise: byte offset of the line that first set the marker on this pass.
+        let resume_marker_offset: u64 = if evidence.has_resume_marker {
+            0
+        } else {
+            u64::MAX
+        };
+
+        Ok(Self {
+            file_session_id,
+            evidence,
+            nodes_by_uuid,
+            invocation_cache: HashMap::new(),
+            tool_result_counters,
+            next_event_index,
+            last_assistant_message_id,
+            resume_marker_offset,
+            current_user_text: last_user_text.map(str::to_string).unwrap_or_default(),
+            working: HashMap::new(),
+            order: Vec::new(),
+            message_id_first_offset: HashMap::new(),
+            user_text_by_message_id: HashMap::new(),
+            user_text_by_uuid: HashMap::new(),
+            errored_tool_use_ids: HashSet::new(),
+            replacement_meta_by_tool_use_id: HashMap::new(),
+            user_rows_for_triad: Vec::new(),
+            events: Vec::new(),
+            pending_user_content: Vec::new(),
+            pending_tool_result_events: Vec::new(),
+            pending_relationships: Vec::new(),
+            pending_user_turns: Vec::new(),
+            seen_root_session_ids: HashSet::new(),
+            seen_explicit_relationship_ids: HashSet::new(),
+            pending_user_turn_inc_idx: None,
+        })
+    }
+
+    fn handle_assistant(
+        &mut self,
+        parsed: &Value,
+        obj: &serde_json::Map<String, Value>,
+        line_start_offset: u64,
+    ) {
+        let mid = obj
+            .get("message")
+            .and_then(|m| m.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if let Some(ref mid_str) = mid {
+            if let Some(idx) = self.pending_user_turn_inc_idx {
+                if !self.message_id_first_offset.contains_key(mid_str) {
+                    self.pending_user_turns[idx].1.following_message_id = Some(mid_str.clone());
+                    self.pending_user_turn_inc_idx = None;
+                }
+            }
+            self.message_id_first_offset
+                .entry(mid_str.clone())
+                .or_insert(line_start_offset);
+            self.user_text_by_message_id
+                .entry(mid_str.clone())
+                .or_insert_with(|| self.current_user_text.clone());
+            self.last_assistant_message_id = Some(mid_str.clone());
+        }
+        let session_id = string_field(obj, SESSION_ID_KEYS, false);
+        let timestamp = string_field(obj, TIMESTAMP_KEYS, false);
+        if let Some(ref sid) = session_id {
+            if !sid.is_empty() {
+                record_root_incremental(
+                    &mut self.pending_relationships,
+                    &mut self.seen_root_session_ids,
+                    sid,
+                    timestamp.as_deref(),
+                    line_start_offset,
+                    self.file_session_id.as_deref(),
+                );
+                collect_explicit_claude_relationships_incremental(
+                    obj,
+                    &mut self.evidence,
+                    &mut self.pending_relationships,
+                    &mut self.seen_explicit_relationship_ids,
+                    self.file_session_id.as_deref().unwrap_or(sid.as_str()),
+                    timestamp.as_deref(),
+                    line_start_offset,
+                );
+            }
+        }
+        record_evidence_from_line(&mut self.evidence, parsed);
+        ingest_assistant_record(
+            parsed,
+            obj,
+            &mut self.working,
+            &mut self.order,
+            &mut self.nodes_by_uuid,
+        );
+    }
+
+    fn handle_user<C: TokenCounter + ?Sized>(
+        &mut self,
+        parsed: &Value,
+        obj: &serde_json::Map<String, Value>,
+        line_start_offset: u64,
+        counter: &C,
+        capture_content: bool,
+    ) {
+        // Slash-command triad detector (#438) keeps a slim copy of
+        // every user-typed row so a post-loop pass can find the
+        // caveat → invocation → stdout chain shape. We clone the
+        // row before the rest of the branch consumes it; the
+        // detector only reads four fields so memory stays modest
+        // (one entry per user row, dropped at function exit).
+        self.user_rows_for_triad.push(obj.clone());
+        // Harness-injected `<task-notification>` rows share the user
+        // envelope but represent system events, not real prompts.
+        // Detecting them here keeps them out of `current_user_text`
+        // (so the classifier doesn't get task-notification text as
+        // "user intent") and out of `pending_user_turns` (so
+        // user-turn aggregates aren't inflated). Side effects like
+        // session-relationship discovery still run because those
+        // are independent of "is this a real user prompt". See
+        // AgentWorkforce/burn#439.
+        let task_notification = is_task_notification(obj);
+        let user_text = if task_notification {
+            None
+        } else {
+            extract_plain_user_text_from_obj(obj).filter(|s| !s.is_empty())
+        };
+        let is_user_prompt = user_text.is_some();
+        register_user_node(parsed, &mut self.nodes_by_uuid, is_user_prompt);
+        if let Some(ref text) = user_text {
+            self.current_user_text = text.clone();
+            // Index by the user line's UUID for the parent-chain
+            // walker (#433). Falls back to no-op when the row
+            // lacks a `uuid`, in which case file-order remains
+            // the only association mechanism for downstream
+            // assistants.
+            if let Some(uuid) = obj.get("uuid").and_then(Value::as_str) {
+                if !uuid.is_empty() {
+                    self.user_text_by_uuid
+                        .entry(uuid.to_string())
+                        .or_insert_with(|| text.clone());
+                }
+            }
+        }
+        collect_errored_tool_use_ids(obj, &mut self.errored_tool_use_ids);
+        collect_replacement_meta(obj, &mut self.replacement_meta_by_tool_use_id);
+        let session_id = string_field(obj, SESSION_ID_KEYS, false);
+        let timestamp = string_field(obj, TIMESTAMP_KEYS, false);
+        if let Some(ref sid) = session_id {
+            if !sid.is_empty() {
+                record_root_incremental(
+                    &mut self.pending_relationships,
+                    &mut self.seen_root_session_ids,
+                    sid,
+                    timestamp.as_deref(),
+                    line_start_offset,
+                    self.file_session_id.as_deref(),
+                );
+                collect_explicit_claude_relationships_incremental(
+                    obj,
+                    &mut self.evidence,
+                    &mut self.pending_relationships,
+                    &mut self.seen_explicit_relationship_ids,
+                    self.file_session_id.as_deref().unwrap_or(sid.as_str()),
+                    timestamp.as_deref(),
+                    line_start_offset,
+                );
+            }
+        }
+        record_evidence_from_line(&mut self.evidence, parsed);
+        let had_resume_before = self.evidence.has_resume_marker;
+        record_resume_marker(&mut self.evidence, obj);
+        if !had_resume_before && self.evidence.has_resume_marker {
+            self.resume_marker_offset = line_start_offset;
+        }
+        let mut harvested: Vec<ToolResultEventRecord> = Vec::new();
+        self.next_event_index = collect_tool_result_events(
+            obj,
+            &mut harvested,
+            &mut self.tool_result_counters,
+            self.next_event_index,
+        );
+        for ev in harvested {
+            self.pending_tool_result_events
+                .push((line_start_offset, ev));
+        }
+        if !task_notification {
+            if let Some(record) =
+                build_user_turn_record(obj, self.last_assistant_message_id.as_deref(), counter)
+            {
+                let idx = self.pending_user_turns.len();
+                self.pending_user_turns.push((line_start_offset, record));
+                self.pending_user_turn_inc_idx = Some(idx);
+            }
+        }
+        if capture_content {
+            for c in extract_user_content(obj) {
+                self.pending_user_content.push((line_start_offset, c));
+            }
+        }
+    }
+
+    fn handle_system(&mut self, obj: &serde_json::Map<String, Value>, line_start_offset: u64) {
+        if obj.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
+            let session_id = string_field(obj, SESSION_ID_KEYS, false).unwrap_or_default();
+            let ts = string_field(obj, TIMESTAMP_KEYS, false).unwrap_or_default();
+            if !session_id.is_empty() {
+                let mut ev = CompactionEvent {
+                    v: 1,
+                    source: SourceKind::ClaudeCode,
+                    session_id,
+                    ts,
+                    preceding_message_id: None,
+                    tokens_before_compact: None,
+                };
+                if let Some(ref last) = self.last_assistant_message_id {
+                    ev.preceding_message_id = Some(last.clone());
+                }
+                self.events.push((line_start_offset, ev));
+            }
+        }
+        if let Some(ev) = build_claude_system_tool_result_event(
+            obj,
+            &mut self.tool_result_counters,
+            self.next_event_index,
+        ) {
+            self.pending_tool_result_events
+                .push((line_start_offset, ev));
+            self.next_event_index += 1;
+        }
+    }
+}
+
 fn run_incremental<C: TokenCounter + ?Sized>(
     path: &Path,
     options: &ParseIncrementalOptions,
@@ -1457,7 +1773,6 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         options.file_session_id.as_deref(),
         options.session_path.as_deref(),
     );
-    let mut evidence = new_evidence(file_session_id.clone());
 
     let metadata = std::fs::metadata(path)?;
     let size = metadata.len();
@@ -1472,70 +1787,16 @@ fn run_incremental<C: TokenCounter + ?Sized>(
             request_id_lookup: RequestIdLookup::new(),
             end_offset: start_offset,
             last_user_text: options.last_user_text.clone().unwrap_or_default(),
-            evidence,
+            evidence: new_evidence(file_session_id),
         });
     }
 
-    let mut nodes_by_uuid: HashMap<String, LineNode> = HashMap::new();
-    let mut invocation_cache: HashMap<String, Option<InvocationInfo>> = HashMap::new();
-    let mut tool_result_counters: HashMap<String, u64> = HashMap::new();
-    let mut next_event_index: u64 = 0;
-    let mut last_assistant_message_id: Option<String> = None;
-
-    if start_offset > 0 {
-        let pre = prescan_nodes(
-            path,
-            start_offset,
-            &mut nodes_by_uuid,
-            &mut evidence,
-            &mut tool_result_counters,
-        )?;
-        last_assistant_message_id = pre.last_assistant_message_id;
-        next_event_index = pre.next_event_index;
-    }
-
-    // -1 sentinel: resume marker came from the prescan (definitely emit).
-    // u64::MAX sentinel: no resume marker yet seen.
-    // Otherwise: byte offset of the line that first set the marker on this pass.
-    let mut resume_marker_offset: u64 = if evidence.has_resume_marker {
-        0
-    } else {
-        u64::MAX
-    };
-
-    let mut current_user_text = options.last_user_text.clone().unwrap_or_default();
-
-    let mut working: HashMap<String, WorkingRecord> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
-    let mut message_id_first_offset: HashMap<String, u64> = HashMap::new();
-    // Legacy file-order map kept as a fallback when the assistant row
-    // lacks a `uuid` or its parent chain doesn't terminate at a known
-    // user prompt. The preferred lookup is `user_text_by_uuid` walked
-    // via `nearest_user_prompt_root` (#433).
-    let mut user_text_by_message_id: HashMap<String, String> = HashMap::new();
-    // User-prompt text keyed by the user line's own `uuid` — read by the
-    // parent-chain walker during turn classification. Populated only for
-    // real user prompts (task notifications excluded; empty bodies
-    // excluded).
-    let mut user_text_by_uuid: HashMap<String, String> = HashMap::new();
-    let mut errored_tool_use_ids: HashSet<String> = HashSet::new();
-    let mut replacement_meta_by_tool_use_id: HashMap<String, ReplacementMeta> = HashMap::new();
-    // Slash-command triad detection (#438) needs a flat slice of user-typed
-    // rows to look up the parent-UUID chain shape. We accumulate only the
-    // minimal field set the detector reads (`type`, `uuid`, `parentUuid`,
-    // `message.content`) so memory stays bounded — three rows per triad,
-    // and only user-typed rows are stored. Detection runs once after the
-    // streaming loop closes; the resulting `skill_uuids` set is consulted
-    // by `apply_classification` to override the activity to `Skill`.
-    let mut user_rows_for_triad: Vec<serde_json::Map<String, Value>> = Vec::new();
-    let mut events: Vec<(u64, CompactionEvent)> = Vec::new();
-    let mut pending_user_content: Vec<(u64, ContentRecord)> = Vec::new();
-    let mut pending_tool_result_events: Vec<(u64, ToolResultEventRecord)> = Vec::new();
-    let mut pending_relationships: Vec<(u64, SessionRelationshipRecord)> = Vec::new();
-    let mut pending_user_turns: Vec<(u64, UserTurnRecord)> = Vec::new();
-    let mut seen_root_session_ids: HashSet<String> = HashSet::new();
-    let mut seen_explicit_relationship_ids: HashSet<RelationshipKey> = HashSet::new();
-    let mut pending_user_turn_inc_idx: Option<usize> = None;
+    let mut state = ClaudeParseState::new(
+        path,
+        start_offset,
+        file_session_id,
+        options.last_user_text.as_deref(),
+    )?;
 
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(start_offset))?;
@@ -1588,186 +1849,42 @@ fn run_incremental<C: TokenCounter + ?Sized>(
         };
         let line_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
         match line_type {
-            "assistant" => {
-                let mid = obj
-                    .get("message")
-                    .and_then(|m| m.get("id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                if let Some(ref mid_str) = mid {
-                    if let Some(idx) = pending_user_turn_inc_idx {
-                        if !message_id_first_offset.contains_key(mid_str) {
-                            pending_user_turns[idx].1.following_message_id = Some(mid_str.clone());
-                            pending_user_turn_inc_idx = None;
-                        }
-                    }
-                    message_id_first_offset
-                        .entry(mid_str.clone())
-                        .or_insert(line_start_offset);
-                    user_text_by_message_id
-                        .entry(mid_str.clone())
-                        .or_insert_with(|| current_user_text.clone());
-                    last_assistant_message_id = Some(mid_str.clone());
-                }
-                let session_id = string_field(&obj, SESSION_ID_KEYS, false);
-                let timestamp = string_field(&obj, TIMESTAMP_KEYS, false);
-                if let Some(ref sid) = session_id {
-                    if !sid.is_empty() {
-                        record_root_incremental(
-                            &mut pending_relationships,
-                            &mut seen_root_session_ids,
-                            sid,
-                            timestamp.as_deref(),
-                            line_start_offset,
-                            file_session_id.as_deref(),
-                        );
-                        collect_explicit_claude_relationships_incremental(
-                            &obj,
-                            &mut evidence,
-                            &mut pending_relationships,
-                            &mut seen_explicit_relationship_ids,
-                            file_session_id.as_deref().unwrap_or(sid.as_str()),
-                            timestamp.as_deref(),
-                            line_start_offset,
-                        );
-                    }
-                }
-                record_evidence_from_line(&mut evidence, &parsed);
-                ingest_assistant_record(
-                    &parsed,
-                    &obj,
-                    &mut working,
-                    &mut order,
-                    &mut nodes_by_uuid,
-                );
-            }
-            "user" => {
-                // Slash-command triad detector (#438) keeps a slim copy of
-                // every user-typed row so a post-loop pass can find the
-                // caveat → invocation → stdout chain shape. We clone the
-                // row before the rest of the branch consumes it; the
-                // detector only reads four fields so memory stays modest
-                // (one entry per user row, dropped at function exit).
-                user_rows_for_triad.push(obj.clone());
-                // Harness-injected `<task-notification>` rows share the user
-                // envelope but represent system events, not real prompts.
-                // Detecting them here keeps them out of `current_user_text`
-                // (so the classifier doesn't get task-notification text as
-                // "user intent") and out of `pending_user_turns` (so
-                // user-turn aggregates aren't inflated). Side effects like
-                // session-relationship discovery still run because those
-                // are independent of "is this a real user prompt". See
-                // AgentWorkforce/burn#439.
-                let task_notification = is_task_notification(&obj);
-                let user_text = if task_notification {
-                    None
-                } else {
-                    extract_plain_user_text_from_obj(&obj).filter(|s| !s.is_empty())
-                };
-                let is_user_prompt = user_text.is_some();
-                register_user_node(&parsed, &mut nodes_by_uuid, is_user_prompt);
-                if let Some(ref text) = user_text {
-                    current_user_text = text.clone();
-                    // Index by the user line's UUID for the parent-chain
-                    // walker (#433). Falls back to no-op when the row
-                    // lacks a `uuid`, in which case file-order remains
-                    // the only association mechanism for downstream
-                    // assistants.
-                    if let Some(uuid) = obj.get("uuid").and_then(Value::as_str) {
-                        if !uuid.is_empty() {
-                            user_text_by_uuid
-                                .entry(uuid.to_string())
-                                .or_insert_with(|| text.clone());
-                        }
-                    }
-                }
-                collect_errored_tool_use_ids(&obj, &mut errored_tool_use_ids);
-                collect_replacement_meta(&obj, &mut replacement_meta_by_tool_use_id);
-                let session_id = string_field(&obj, SESSION_ID_KEYS, false);
-                let timestamp = string_field(&obj, TIMESTAMP_KEYS, false);
-                if let Some(ref sid) = session_id {
-                    if !sid.is_empty() {
-                        record_root_incremental(
-                            &mut pending_relationships,
-                            &mut seen_root_session_ids,
-                            sid,
-                            timestamp.as_deref(),
-                            line_start_offset,
-                            file_session_id.as_deref(),
-                        );
-                        collect_explicit_claude_relationships_incremental(
-                            &obj,
-                            &mut evidence,
-                            &mut pending_relationships,
-                            &mut seen_explicit_relationship_ids,
-                            file_session_id.as_deref().unwrap_or(sid.as_str()),
-                            timestamp.as_deref(),
-                            line_start_offset,
-                        );
-                    }
-                }
-                record_evidence_from_line(&mut evidence, &parsed);
-                let had_resume_before = evidence.has_resume_marker;
-                record_resume_marker(&mut evidence, &obj);
-                if !had_resume_before && evidence.has_resume_marker {
-                    resume_marker_offset = line_start_offset;
-                }
-                let mut harvested: Vec<ToolResultEventRecord> = Vec::new();
-                next_event_index = collect_tool_result_events(
-                    &obj,
-                    &mut harvested,
-                    &mut tool_result_counters,
-                    next_event_index,
-                );
-                for ev in harvested {
-                    pending_tool_result_events.push((line_start_offset, ev));
-                }
-                if !task_notification {
-                    if let Some(record) =
-                        build_user_turn_record(&obj, last_assistant_message_id.as_deref(), counter)
-                    {
-                        let idx = pending_user_turns.len();
-                        pending_user_turns.push((line_start_offset, record));
-                        pending_user_turn_inc_idx = Some(idx);
-                    }
-                }
-                if capture_content {
-                    for c in extract_user_content(&obj) {
-                        pending_user_content.push((line_start_offset, c));
-                    }
-                }
-            }
-            "system" => {
-                if obj.get("subtype").and_then(Value::as_str) == Some("compact_boundary") {
-                    let session_id = string_field(&obj, SESSION_ID_KEYS, false).unwrap_or_default();
-                    let ts = string_field(&obj, TIMESTAMP_KEYS, false).unwrap_or_default();
-                    if !session_id.is_empty() {
-                        let mut ev = CompactionEvent {
-                            v: 1,
-                            source: SourceKind::ClaudeCode,
-                            session_id,
-                            ts,
-                            preceding_message_id: None,
-                            tokens_before_compact: None,
-                        };
-                        if let Some(ref last) = last_assistant_message_id {
-                            ev.preceding_message_id = Some(last.clone());
-                        }
-                        events.push((line_start_offset, ev));
-                    }
-                }
-                if let Some(ev) = build_claude_system_tool_result_event(
-                    &obj,
-                    &mut tool_result_counters,
-                    next_event_index,
-                ) {
-                    pending_tool_result_events.push((line_start_offset, ev));
-                    next_event_index += 1;
-                }
-            }
+            "assistant" => state.handle_assistant(&parsed, &obj, line_start_offset),
+            "user" => state.handle_user(&parsed, &obj, line_start_offset, counter, capture_content),
+            "system" => state.handle_system(&obj, line_start_offset),
             _ => {}
         }
     }
+
+    // Move the accumulated working state out of `state` so the post-loop
+    // assembly below reads the same locals the prior inline body did.
+    let ClaudeParseState {
+        file_session_id: _,
+        evidence,
+        nodes_by_uuid,
+        mut invocation_cache,
+        tool_result_counters: _,
+        next_event_index: _,
+        last_assistant_message_id: _,
+        resume_marker_offset,
+        current_user_text,
+        working,
+        order,
+        message_id_first_offset,
+        user_text_by_message_id,
+        user_text_by_uuid,
+        errored_tool_use_ids,
+        replacement_meta_by_tool_use_id,
+        user_rows_for_triad,
+        events,
+        pending_user_content,
+        pending_tool_result_events,
+        pending_relationships,
+        pending_user_turns,
+        seen_root_session_ids: _,
+        seen_explicit_relationship_ids: _,
+        pending_user_turn_inc_idx: _,
+    } = state;
 
     // end_offset = byte position of the earliest in-progress messageId, or
     // cursor_offset (= position past the last complete newline) when all
