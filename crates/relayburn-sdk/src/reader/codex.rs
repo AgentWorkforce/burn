@@ -28,7 +28,9 @@ use crate::reader::types::{
     ToolResultStatus, TurnRecord, Usage, UsageGranularity, UserTurnBlock, UserTurnBlockKind,
     UserTurnRecord,
 };
-use crate::reader::user_turn::{HeuristicCounter, UserTurnTokenizer};
+use crate::reader::user_turn::{
+    join_nonempty, resolve_token_counter, HeuristicCounter, UserTurnTokenizer,
+};
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -1219,22 +1221,6 @@ fn parse_codex_buffer<R: BufRead>(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Resolves the requested tokenizer to a concrete counter. `None` and
-/// `Some(Heuristic)` map to [`HeuristicCounter`]; `Some(Cl100k)` is rejected
-/// with an explicit error until the cl100k counter is wired up (see #246) so
-/// callers don't silently get bytes/4 sizing when they asked for cl100k.
-fn resolve_token_counter(
-    tokenizer: Option<UserTurnTokenizer>,
-) -> std::io::Result<HeuristicCounter> {
-    match tokenizer {
-        None | Some(UserTurnTokenizer::Heuristic) => Ok(HeuristicCounter),
-        Some(UserTurnTokenizer::Cl100k) => Err(std::io::Error::other(
-            "cl100k tokenizer is not yet available in the Rust port; \
-             omit `tokenizer` or pass `Some(Heuristic)` (see AgentWorkforce/burn#246)",
-        )),
-    }
-}
-
 fn session_meta_payload_id(payload: &Value) -> Option<String> {
     let id = payload.get("id")?.as_str()?;
     if id.is_empty() {
@@ -1316,16 +1302,6 @@ fn append_text(existing: &str, next: &str) -> String {
     } else {
         format!("{}\n{}", existing, next)
     }
-}
-
-fn join_nonempty(parts: &[&str], sep: &str) -> String {
-    let mut out: Vec<&str> = Vec::with_capacity(parts.len());
-    for p in parts {
-        if !p.is_empty() {
-            out.push(p);
-        }
-    }
-    out.join(sep)
 }
 
 fn safe_parse_json_object(s: &str) -> Option<serde_json::Map<String, Value>> {

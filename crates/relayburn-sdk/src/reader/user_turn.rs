@@ -118,6 +118,38 @@ pub fn bytes_to_approx_tokens(byte_len: u64) -> u64 {
     }
 }
 
+/// Resolves the requested tokenizer to a concrete counter. `None` and
+/// `Some(Heuristic)` map to [`HeuristicCounter`]; `Some(Cl100k)` is rejected
+/// with an explicit error until the cl100k counter is wired up (see #246) so
+/// callers don't silently get bytes/4 sizing when they asked for cl100k.
+///
+/// Shared by the codex and opencode readers, which validate the requested
+/// tokenizer at their public entry points.
+pub(crate) fn resolve_token_counter(
+    tokenizer: Option<UserTurnTokenizer>,
+) -> std::io::Result<HeuristicCounter> {
+    match tokenizer {
+        None | Some(UserTurnTokenizer::Heuristic) => Ok(HeuristicCounter),
+        Some(UserTurnTokenizer::Cl100k) => Err(std::io::Error::other(
+            "cl100k tokenizer is not yet available in the Rust port; \
+             omit `tokenizer` or pass `Some(Heuristic)` (see AgentWorkforce/burn#246)",
+        )),
+    }
+}
+
+/// Join the non-empty entries of `parts` with `sep`, skipping empties so an
+/// absent half (e.g. a user turn with no assistant text) doesn't leave a
+/// dangling separator. Used by the readers to assemble combined user-turn text.
+pub(crate) fn join_nonempty(parts: &[&str], sep: &str) -> String {
+    let mut out: Vec<&str> = Vec::with_capacity(parts.len());
+    for p in parts {
+        if !p.is_empty() {
+            out.push(p);
+        }
+    }
+    out.join(sep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
