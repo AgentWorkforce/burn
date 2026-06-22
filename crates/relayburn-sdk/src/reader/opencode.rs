@@ -859,7 +859,9 @@ fn build_opencode_relationships(
     assistants: &[AssistantMessage],
 ) -> Vec<SessionRelationshipRecord> {
     let mut out = Vec::new();
-    let first_ts = assistants.first().map(|a| crate::util::time::format_iso_ms(a.time_created));
+    let first_ts = assistants
+        .first()
+        .map(|a| crate::util::time::format_iso_ms(a.time_created));
     let mut root = SessionRelationshipRecord {
         v: 1,
         source: RelationshipSourceKind::Opencode,
