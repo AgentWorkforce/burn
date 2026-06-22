@@ -602,31 +602,14 @@ impl LedgerHandle {
         );
         let turns = summary_turns_from_enriched(&enriched);
 
-        let Some(anchor) = super::bucket_anchor_secs(
-            q.since.as_deref(),
-            turns
-                .iter()
-                .filter_map(|t| super::iso_z_to_epoch_secs(&t.ts)),
-        ) else {
+        let Some((buckets, per_bucket)) =
+            super::partition_into_buckets(turns, q.since.as_deref(), bucket_secs, |t| &t.ts)?
+        else {
             return Ok(SummaryTimeseries {
                 bucket_secs,
                 buckets: Vec::new(),
             });
         };
-        let now = super::system_now_secs() as i64;
-        super::ensure_bucket_span(anchor, now, bucket_secs)?;
-        let buckets = super::Buckets::new(anchor, now, bucket_secs);
-        let n = buckets.len();
-
-        let mut per_bucket: Vec<Vec<TurnRecord>> = (0..n).map(|_| Vec::new()).collect();
-        for t in turns {
-            let Some(ep) = super::iso_z_to_epoch_secs(&t.ts) else {
-                continue;
-            };
-            if let Some(i) = buckets.index_for(ep) {
-                per_bucket[i].push(t);
-            }
-        }
 
         let group_by = if by_provider {
             SummaryGroupBy::Provider

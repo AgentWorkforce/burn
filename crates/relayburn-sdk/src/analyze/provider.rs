@@ -20,7 +20,7 @@ use crate::reader::{Coverage, SourceKind, TurnRecord, Usage};
 use crate::analyze::cost::{cost_for_turn, CostBreakdown};
 use crate::analyze::pricing::PricingTable;
 use crate::analyze::provider_reattribution::{
-    default_rules, resolve_provider_with_rules, ProviderRule,
+    default_rules, resolve_provider_with_rules, strip_provider_prefix, ProviderRule,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,13 +327,6 @@ fn provider_from_model_prefix(model: &str) -> Option<String> {
         return None;
     }
     Some(model[..i].to_lowercase())
-}
-
-fn strip_provider_prefix(model: &str) -> &str {
-    match model.find('/') {
-        Some(i) => &model[i + 1..],
-        None => model,
-    }
 }
 
 fn provider_from_source(source: SourceKind) -> String {

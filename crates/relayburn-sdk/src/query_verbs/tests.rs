@@ -216,7 +216,7 @@ fn normalize_since_cutoff_lex_compatible_with_ledger_rows() {
 fn ymd_days_round_trip() {
     for (y, m, d) in &[(1970, 1, 1), (2026, 5, 6), (2000, 2, 29), (1999, 12, 31)] {
         let days = ymd_to_days(*y, *m, *d).unwrap();
-        let (ry, rm, rd) = days_to_ymd(days);
+        let (ry, rm, rd) = crate::util::time::days_to_ymd(days);
         assert_eq!((*y, *m, *d), (ry, rm, rd));
     }
 }
@@ -1806,7 +1806,7 @@ fn duration_to_since_iso_emits_canonical_zulu_ms() {
 /// asserts the seed `query_turns(&since_scoped)` actually narrows.
 #[test]
 fn context_delta_since_filter_excludes_old_sessions() {
-    use crate::analyze::context_delta::ContextDeltaOpts;
+    use crate::analyze::ContextDeltaOpts;
     let (_dir, handle) = multi_session_handle();
     let opts = ContextDeltaOpts {
         since: Some(std::time::Duration::from_secs(1)),
@@ -2194,7 +2194,7 @@ fn fingerprint_perf_target_under_10ms_on_100k_rows() {
 /// Claude turns into the test ledger.
 #[test]
 fn session_span_trees_round_trips_two_turn_fixture() {
-    use crate::analyze::span_tree::{SpanKind, SpanStatus};
+    use crate::analyze::{SpanKind, SpanStatus};
 
     let (_dir, handle) = fixture_handle();
     let trees = handle.session_span_trees("sess-a").expect("trees");
@@ -2390,7 +2390,7 @@ fn bucket_subagents_paired_and_orphan_each_land_in_one_turn() {
 /// orchestration path.
 #[test]
 fn session_span_trees_orphan_subagent_not_duplicated_across_turns() {
-    use crate::analyze::span_tree::SpanKind;
+    use crate::analyze::SpanKind;
 
     let (_dir, handle) = fixture_handle();
     // Both fixture turns have no Task tool_use ids matching the
@@ -2423,7 +2423,7 @@ fn session_span_trees_orphan_subagent_not_duplicated_across_turns() {
                     c.kind == SpanKind::Subagent
                         && matches!(
                             c.attributes.get("unattached"),
-                            Some(crate::analyze::span_tree::AttrValue::Bool(true))
+                            Some(crate::analyze::AttrValue::Bool(true))
                         )
                 })
                 .count()

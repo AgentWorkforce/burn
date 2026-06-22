@@ -22,22 +22,24 @@ use crate::analyze::{
     aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
     attribute_hotspots, attribute_overhead, build_compare_table, build_ghost_surface_inputs,
     build_subagent_tree, build_trim_recommendations, compute_quality, cost_for_turn,
-    detect_ghost_surface, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
-    find_overhead_files, findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity,
-    load_claude_settings, load_overhead_file, load_pricing, project_claude_settings_path,
-    provider_for, render_unified_diff_for_recommendation, sort_findings, sum_costs,
-    summarize_fidelity, summarize_fidelity_from_iter, summarize_replacement_savings,
-    tally_unpriced, tool_call_pattern_to_finding, tool_output_bloat_to_finding,
-    user_claude_settings_path, AggregateByProviderOptions, AttributeOverheadInput,
-    AttributionMethod, BashAggregation, BashVerbAggregation, BuildSubagentTreeOptions,
-    CompareOptions as AnalyzeCompareOptions, CompareTable, ComputeQualityOptions, CostBreakdown,
+    deltas_for_session, detect_ghost_surface, detect_patterns, detect_tool_call_patterns,
+    detect_tool_output_bloat, find_overhead_files, findings_from_patterns,
+    ghost_surface_to_finding, has_minimum_fidelity, load_claude_settings, load_overhead_file,
+    load_pricing, project_claude_settings_path, provider_for,
+    render_unified_diff_for_recommendation, sort_findings, sum_costs, summarize_fidelity,
+    summarize_fidelity_from_iter, summarize_replacement_savings, tally_unpriced,
+    tool_call_pattern_to_finding, tool_output_bloat_to_finding, user_claude_settings_path,
+    AggregateByProviderOptions, AttributeOverheadInput, AttributionMethod, BashAggregation,
+    BashVerbAggregation, BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions,
+    CompareTable, ComputeQualityOptions, ContextDelta, ContextDeltaOpts, CostBreakdown,
     CoverageField, DetectPatternsOptions, DetectToolCallPatternsOptions,
     DetectToolOutputBloatOptions, FidelitySummary, FieldCoverage, FileAggregation,
     GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings,
-    MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind, ParsedOverheadFile,
-    PricingTable, ProviderAggregateRow, ProviderFilter, QualityResult, ReplacementSavingsSummary,
-    RowCoverage, SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
-    ToolSavingsAggregate, UsageCostAggregateRow, WasteFinding,
+    MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind, OwnerRail,
+    ParsedOverheadFile, PricingTable, ProviderAggregateRow, ProviderFilter, QualityResult,
+    ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SubagentAggregation,
+    SubagentTreeNode, SubagentTypeStats, ToolSavingsAggregate, TurnSpanTree, UsageCostAggregateRow,
+    WasteFinding,
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
@@ -247,45 +249,20 @@ fn normalize_iso_to_utc_z(s: &str) -> Option<String> {
     Some(format_iso_z_ms(utc_secs, millis))
 }
 
+/// Adapt the `(whole seconds, millis)` shape used by the since/bucket paths to
+/// the shared [`crate::util::time::format_iso_ms`] formatter.
 fn format_iso_z_ms(secs: i64, millis: u32) -> String {
-    let total_days = secs.div_euclid(86_400);
-    let secs_in_day = secs.rem_euclid(86_400) as u32;
-    let hour = secs_in_day / 3_600;
-    let minute = (secs_in_day / 60) % 60;
-    let second = secs_in_day % 60;
-    let (year, month, day) = days_to_ymd(total_days);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
+    crate::util::time::format_iso_ms(secs * 1_000 + millis as i64)
 }
 
-/// Civil-date → days-from-Unix-epoch (Howard Hinnant's algorithm, proleptic
-/// Gregorian). Inverse of [`days_to_ymd`].
+/// Range-checking wrapper over [`crate::util::time::ymd_to_days`]: rejects
+/// out-of-range month/day (since this parses untrusted `since` strings),
+/// then defers to the shared Hinnant primitive.
 fn ymd_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    let m = month as i64;
-    let d = day as i64;
-    let y = if m <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
-    let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era * 146_097 + (doe as i64) - 719_468)
-}
-
-fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {
-    let z = days_from_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if m <= 2 { y + 1 } else { y };
-    (year, m as u32, d as u32)
+    Some(crate::util::time::ymd_to_days(year, month, day))
 }
 
 // ---------------------------------------------------------------------------
@@ -419,6 +396,39 @@ pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Res
         );
     }
     Ok(())
+}
+
+/// Partition `items` into time buckets by their timestamp string. Returns the
+/// `Buckets` window plus a per-bucket vector of items, or `Ok(None)` when there
+/// is no anchor (no `--since` and no parseable timestamps) so each caller can
+/// return its own empty-timeseries shape. `ts_of` extracts the ISO timestamp
+/// from an item (`|t| &t.ts` for `TurnRecord`, `|t| &t.turn.ts` for
+/// `EnrichedTurn`). Shared by the `summary` and `compare` `--bucket` paths.
+pub(crate) fn partition_into_buckets<T>(
+    items: Vec<T>,
+    since: Option<&str>,
+    bucket_secs: u64,
+    ts_of: impl Fn(&T) -> &str,
+) -> Result<Option<(Buckets, Vec<Vec<T>>)>> {
+    let Some(anchor) = bucket_anchor_secs(
+        since,
+        items.iter().filter_map(|t| iso_z_to_epoch_secs(ts_of(t))),
+    ) else {
+        return Ok(None);
+    };
+    let now = system_now_secs() as i64;
+    ensure_bucket_span(anchor, now, bucket_secs)?;
+    let buckets = Buckets::new(anchor, now, bucket_secs);
+    let mut per_bucket: Vec<Vec<T>> = (0..buckets.len()).map(|_| Vec::new()).collect();
+    for t in items {
+        let Some(ep) = iso_z_to_epoch_secs(ts_of(&t)) else {
+            continue;
+        };
+        if let Some(i) = buckets.index_for(ep) {
+            per_bucket[i].push(t);
+        }
+    }
+    Ok(Some((buckets, per_bucket)))
 }
 
 // ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::analyze::util::group_turns_by_session;
+use crate::analyze::util::group_turns_by_session_sorted;
 use crate::reader::{ContentKind, ContentRecord, ContentRole, StopReason, TurnRecord};
 use serde::{Deserialize, Serialize};
 
@@ -112,14 +112,13 @@ const LONG_CONVERSATION_THRESHOLD: usize = 10;
 const FAILURE_STREAK_THRESHOLD: u64 = 3;
 
 pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> QualityResult {
-    let by_session = group_turns_by_session(turns);
+    let by_session = group_turns_by_session_sorted(turns);
 
     let now = opts.now_ms.unwrap_or_else(now_ms_system);
 
     let mut outcomes = Vec::with_capacity(by_session.len());
     let mut one_shot = Vec::with_capacity(by_session.len());
-    for (session_id, mut session_turns) in by_session {
-        session_turns.sort_by_key(|t| t.turn_index);
+    for (session_id, session_turns) in by_session {
         outcomes.push(infer_outcome_refs(
             &session_id,
             &session_turns,
@@ -364,6 +363,15 @@ fn now_ms_system() -> i64 {
 /// readers and the test fixtures: `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
 /// Returns milliseconds since the Unix epoch, or `None` when the input fails
 /// to match — mirroring `Number.isFinite(Date.parse(...))` in TS.
+///
+/// Deliberately *not* folded into [`crate::util::time::parse_iso_ms`]: this
+/// variant is a strict superset — it applies `±HH:MM` timezone offsets,
+/// rejects out-of-range components (month/day/hour/minute/second) and trailing
+/// garbage, because outcome inference compares these timestamps against `now`
+/// and a lenient parse would misclassify `is_recent`. The shared parser is
+/// consumed by the readers/ledger on the hot ingest path and intentionally
+/// stays lean; unifying them would mean widening that shared parser's
+/// behavior for every caller, which is out of scope here.
 fn parse_iso8601_ms(s: &str) -> Option<i64> {
     let bytes = s.as_bytes();
     if bytes.len() < 19 {

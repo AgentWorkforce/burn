@@ -7,7 +7,7 @@
 //! overhead estimate. Reads only `TurnRecord.tool_calls` so it runs on any
 //! slice with `has_tool_calls` coverage.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::reader::{
     normalize_tool_name, parse_bash_command, BashParse, SourceKind, ToolCall, TurnRecord,
@@ -16,7 +16,7 @@ use phf::phf_set;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::lookup_model_rate;
-use crate::analyze::findings::{severity_from_usd, EstimatedSavings, WasteAction, WasteFinding};
+use crate::analyze::findings::WasteFinding;
 use crate::analyze::pricing::PricingTable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -73,8 +73,7 @@ pub fn detect_tool_call_patterns(
     opts: &DetectToolCallPatternsOptions<'_>,
 ) -> Vec<ToolCallPatternFinding> {
     let mut out: Vec<ToolCallPatternFinding> = Vec::new();
-    for (sid, mut sess) in group_turns_by_session(turns) {
-        sess.sort_by_key(|t| t.turn_index);
+    for (sid, sess) in group_turns_by_session_sorted(turns) {
         out.extend(detect_for_session(&sid, &sess, opts.pricing));
     }
     // Sort: usd desc, then tokens desc.
@@ -391,26 +390,13 @@ fn price_tokens(tokens: u64, rate_per_token: f64) -> f64 {
 }
 
 fn dedup_numbers(xs: &[u64]) -> Vec<u64> {
-    let mut seen: HashSet<u64> = HashSet::new();
-    let mut out: Vec<u64> = Vec::new();
-    for &x in xs {
-        if seen.insert(x) {
-            out.push(x);
-        }
-    }
+    let mut out = first_seen_unique(xs.iter().copied());
     out.sort_unstable();
     out
 }
 
 fn dedup_strings(xs: &[String]) -> Vec<String> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out: Vec<String> = Vec::new();
-    for x in xs {
-        if seen.insert(x.clone()) {
-            out.push(x.clone());
-        }
-    }
-    out
+    first_seen_unique(xs.iter().cloned())
 }
 
 // ---------------------------------------------------------------------------
@@ -448,14 +434,7 @@ only the PR fields the agent reads.",
     }
 }
 
-fn hotspots_action(session_id: &str) -> WasteAction {
-    WasteAction::Command {
-        label: "Inspect this session".to_string(),
-        text: format!("burn hotspots --session {session_id}"),
-    }
-}
-
-use super::util::{fmt_usd, format_with_commas, group_turns_by_session};
+use super::util::{first_seen_unique, fmt_usd, format_with_commas, group_turns_by_session_sorted};
 
 pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFinding {
     let evidence_str = if finding.evidence.is_empty() {
@@ -479,39 +458,35 @@ pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFi
         Ok(serde_json::Value::String(s)) => s,
         _ => String::new(),
     };
-    WasteFinding {
-        kind: "tool-call-pattern".to_string(),
-        severity: severity_from_usd(finding.estimated_usd_saved),
-        session_id: finding.session_id.clone(),
-        title: format!(
-            "{}: {}×",
-            category_title(finding.category),
-            finding.occurrence_count
-        ),
-        detail: format!(
-            "{reason} Observed {n} occurrence(s) in this {source} session. \
+    let title = format!(
+        "{}: {}×",
+        category_title(finding.category),
+        finding.occurrence_count
+    );
+    let detail = format!(
+        "{reason} Observed {n} occurrence(s) in this {source} session. \
 Estimated overhead: {tokens} tokens ({usd} at this session's input rate).{evidence}",
-            reason = category_reason(finding.category),
-            n = finding.occurrence_count,
-            source = source_str,
-            tokens = format_with_commas(finding.estimated_tokens_saved),
-            usd = fmt_usd(finding.estimated_usd_saved),
-            evidence = evidence_str,
-        ),
-        estimated_savings: EstimatedSavings {
-            tokens_per_session: Some(finding.estimated_tokens_saved),
-            usd_per_session: Some(finding.estimated_usd_saved),
-            ..Default::default()
-        },
-        actions: vec![hotspots_action(&finding.session_id)],
-        event_source: None,
-    }
+        reason = category_reason(finding.category),
+        n = finding.occurrence_count,
+        source = source_str,
+        tokens = format_with_commas(finding.estimated_tokens_saved),
+        usd = fmt_usd(finding.estimated_usd_saved),
+        evidence = evidence_str,
+    );
+    WasteFinding::session_cost(
+        "tool-call-pattern",
+        &finding.session_id,
+        finding.estimated_usd_saved,
+        title,
+        detail,
+    )
+    .with_tokens_per_session(finding.estimated_tokens_saved)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyze::findings::WasteSeverity;
+    use crate::analyze::findings::{WasteAction, WasteSeverity};
     use crate::analyze::pricing::load_builtin_pricing;
     use crate::reader::{SourceKind, Usage};
 

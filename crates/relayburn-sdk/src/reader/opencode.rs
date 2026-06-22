@@ -204,7 +204,7 @@ pub fn parse_opencode_session_incremental(
                 merge_usage_coverage(&usage_coverage, &coverage_from_tokens(Some(&sf)));
         }
 
-        let ts = ms_to_iso(m.time_created);
+        let ts = crate::util::time::format_iso_ms(m.time_created);
         let mut record = TurnRecord {
             v: 1,
             source: SourceKind::Opencode,
@@ -285,7 +285,7 @@ pub fn parse_opencode_session_incremental(
         if capture_content {
             let assistant_ts = ts.clone();
             if let Some(um) = user_msg.as_ref() {
-                let user_ts = ms_to_iso(um.time_created);
+                let user_ts = crate::util::time::format_iso_ms(um.time_created);
                 for t in read_user_text_parts(&storage_root, &um.id) {
                     content_out.push(ContentRecord {
                         v: 1,
@@ -321,7 +321,7 @@ pub fn parse_opencode_session_incremental(
             v: 1,
             source: SourceKind::Opencode,
             session_id: session.id.clone(),
-            ts: ms_to_iso(u.time_created),
+            ts: crate::util::time::format_iso_ms(u.time_created),
             preceding_message_id: None,
             tokens_before_compact: None,
         };
@@ -859,7 +859,9 @@ fn build_opencode_relationships(
     assistants: &[AssistantMessage],
 ) -> Vec<SessionRelationshipRecord> {
     let mut out = Vec::new();
-    let first_ts = assistants.first().map(|a| ms_to_iso(a.time_created));
+    let first_ts = assistants
+        .first()
+        .map(|a| crate::util::time::format_iso_ms(a.time_created));
     let mut root = SessionRelationshipRecord {
         v: 1,
         source: RelationshipSourceKind::Opencode,
@@ -936,7 +938,7 @@ fn build_opencode_user_turn_record<C: TokenCounter + ?Sized>(
     }
 
     let mut ts = user_msg
-        .map(|u| ms_to_iso(u.time_created))
+        .map(|u| crate::util::time::format_iso_ms(u.time_created))
         .unwrap_or_default();
     if let Some(um) = user_msg {
         let user_parts = read_parts(storage_root, &um.id);
@@ -956,7 +958,7 @@ fn build_opencode_user_turn_record<C: TokenCounter + ?Sized>(
         return None;
     }
     if ts.is_empty() {
-        ts = ms_to_iso(next.time_created);
+        ts = crate::util::time::format_iso_ms(next.time_created);
     }
     let user_uuid = match user_msg {
         Some(um) => um.id.clone(),
@@ -1278,41 +1280,6 @@ fn join_nonempty(parts: &[&str], sep: &str) -> String {
         }
     }
     out.join(sep)
-}
-
-fn ms_to_iso(ms: i64) -> String {
-    // `new Date(ms).toISOString()` — UTC with millisecond precision.
-    const MS_PER_DAY: i64 = 86_400_000;
-    let total_days_since_epoch = ms.div_euclid(MS_PER_DAY);
-    let ms_in_day = ms.rem_euclid(MS_PER_DAY);
-    let (y, mo, d) = days_to_ymd(total_days_since_epoch);
-    let h = ms_in_day / 3_600_000;
-    let m = (ms_in_day / 60_000) % 60;
-    let s = (ms_in_day / 1_000) % 60;
-    let frac = ms_in_day % 1_000;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        y, mo, d, h, m, s, frac
-    )
-}
-
-fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
-    // Hinnant's days-from-civil inverse.
-    let z = days_since_epoch + 719_468;
-    let era = if z >= 0 {
-        z / 146_097
-    } else {
-        (z - 146_096) / 146_097
-    };
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
 }
 
 fn resolve_token_counter(

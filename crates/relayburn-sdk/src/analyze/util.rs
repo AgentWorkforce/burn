@@ -2,10 +2,40 @@
 //! approximate token<->byte heuristic, turn grouping, and tool-result
 //! stringification.
 
+use std::collections::HashSet;
+use std::hash::Hash;
+
 use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::reader::TurnRecord;
+
+/// Collect items in first-seen order, dropping later duplicates as judged by
+/// `key`. The first occurrence of each distinct key is kept, in input order —
+/// the "first-seen-unique" pattern several detectors use to build
+/// `tools_involved`-style lists.
+pub(crate) fn first_seen_unique_by<T, K, F>(items: impl IntoIterator<Item = T>, key: F) -> Vec<T>
+where
+    K: Hash + Eq,
+    F: Fn(&T) -> K,
+{
+    let mut seen: HashSet<K> = HashSet::new();
+    let mut out: Vec<T> = Vec::new();
+    for item in items {
+        if seen.insert(key(&item)) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+/// [`first_seen_unique_by`] keyed on the item itself, for hashable values.
+pub(crate) fn first_seen_unique<T>(items: impl IntoIterator<Item = T>) -> Vec<T>
+where
+    T: Clone + Hash + Eq,
+{
+    first_seen_unique_by(items, |x| x.clone())
+}
 
 /// Bucket turns by `session_id`, preserving first-seen (insertion) order so
 /// the result iterates in the same order as the TS `Map<sessionId,
@@ -28,6 +58,25 @@ where
         } else {
             by_session.insert(t.session_id.clone(), vec![t]);
         }
+    }
+    by_session
+}
+
+/// Like [`group_turns_by_session`], but stable-sorts each session's bucket by
+/// `turn_index` before returning. Most detectors want chronological order
+/// within a session; this folds the repeated post-grouping
+/// `bucket.sort_by_key(|t| t.turn_index)` into one place. The sort is stable,
+/// so it preserves input order among equal `turn_index` values — matching the
+/// TS `Array.prototype.sort` contract the detectors mirror.
+pub(crate) fn group_turns_by_session_sorted<'a, I>(
+    turns: I,
+) -> IndexMap<String, Vec<&'a TurnRecord>>
+where
+    I: IntoIterator<Item = &'a TurnRecord>,
+{
+    let mut by_session = group_turns_by_session(turns);
+    for bucket in by_session.values_mut() {
+        bucket.sort_by_key(|t| t.turn_index);
     }
     by_session
 }
@@ -67,6 +116,40 @@ pub(crate) fn tokens_from_utf16_len(text: &str) -> u64 {
 /// count. Used where a token threshold needs a character-unit ceiling.
 pub(crate) fn bytes_from_tokens(tokens: u64) -> u64 {
     tokens * APPROX_BYTES_PER_TOKEN
+}
+
+/// Truncate `s` to at most `max` characters, appending `…` when it was longer
+/// (the ellipsis takes the `max`-th slot, so the result is exactly `max`
+/// chars). Counts by `char` to avoid splitting a multi-byte sequence mid-
+/// codepoint; for the ASCII fixtures this matches the TS `string.length` /
+/// `slice` truncation semantics.
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max - 1).collect();
+    format!("{truncated}…")
+}
+
+/// Nearest-rank percentile over an already-sorted slice, with `p` expressed as
+/// a fraction in `[0, 1]` (e.g. `0.95` for p95). Empty input yields the type's
+/// default (`0` / `0.0`); a single element is returned as-is. The index is
+/// `ceil(p * len) - 1`, clamped into range — the rank convention the TS analyze
+/// port uses for per-session cost percentiles.
+///
+/// Callers must pass a sorted slice. Note this differs from the byte-oriented
+/// percentile in `tool_output_bloat`, which sorts internally and scales `p`
+/// over `0..=100`.
+pub(crate) fn percentile<T: Copy + Default>(sorted: &[T], p: f64) -> T {
+    if sorted.is_empty() {
+        return T::default();
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let raw = (p * sorted.len() as f64).ceil() as i64 - 1;
+    let idx = raw.clamp(0, sorted.len() as i64 - 1) as usize;
+    sorted[idx]
 }
 
 /// Format an integer with thousands separators, matching JS

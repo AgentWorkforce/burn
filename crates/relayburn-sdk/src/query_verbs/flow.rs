@@ -33,11 +33,7 @@ impl LedgerHandle {
     /// 5. Dispatching to the per-harness builder.
     ///
     /// Returns an error when the requested turn isn't on the ledger.
-    pub fn turn_span_tree(
-        &self,
-        session_id: &str,
-        turn_id: &str,
-    ) -> Result<crate::analyze::span_tree::TurnSpanTree> {
+    pub fn turn_span_tree(&self, session_id: &str, turn_id: &str) -> Result<TurnSpanTree> {
         let trees = self.session_span_trees(session_id)?;
         trees
             .into_iter()
@@ -54,10 +50,7 @@ impl LedgerHandle {
     /// than calling [`Self::turn_span_tree`] in a loop when the caller
     /// wants the whole session. Identical contract otherwise: pure
     /// derivation, no caching, no writes.
-    pub fn session_span_trees(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<crate::analyze::span_tree::TurnSpanTree>> {
+    pub fn session_span_trees(&self, session_id: &str) -> Result<Vec<TurnSpanTree>> {
         let session_q = Query {
             session_id: Some(session_id.to_string()),
             ..Default::default()
@@ -216,7 +209,7 @@ pub(crate) fn bucket_subagents_per_turn(
     // search. Cheap — one parse per turn.
     let turn_starts: Vec<i64> = turns
         .iter()
-        .map(|t| parse_iso_ms_compat(&t.ts).unwrap_or(0))
+        .map(|t| crate::util::time::parse_iso_ms(&t.ts).unwrap_or(0))
         .collect();
 
     for (sa_idx, sa) in subagents.iter().enumerate() {
@@ -263,7 +256,7 @@ fn first_record_ts_ms(records: &[serde_json::Value]) -> Option<i64> {
             .and_then(|v| v.as_str())
             .or_else(|| rec.get("ts").and_then(|v| v.as_str()));
         if let Some(s) = ts_str {
-            if let Some(ms) = parse_iso_ms_compat(s) {
+            if let Some(ms) = crate::util::time::parse_iso_ms(s) {
                 earliest = Some(match earliest {
                     Some(e) => e.min(ms),
                     None => ms,
@@ -272,12 +265,6 @@ fn first_record_ts_ms(records: &[serde_json::Value]) -> Option<i64> {
         }
     }
     earliest
-}
-
-/// ISO-8601 parser thin wrapper. Reuses the shared `crate::util::time`
-/// helper so all four ex-copies stay in sync.
-fn parse_iso_ms_compat(s: &str) -> Option<i64> {
-    crate::util::time::parse_iso_ms(s)
 }
 
 /// Resolve the Claude projects root and discover + pair subagent
@@ -359,7 +346,7 @@ pub fn turn_span_tree(
     session_id: &str,
     turn_id: &str,
     ledger_home: Option<PathBuf>,
-) -> Result<crate::analyze::span_tree::TurnSpanTree> {
+) -> Result<TurnSpanTree> {
     let handle = open_with(ledger_home.as_deref())?;
     handle.turn_span_tree(session_id, turn_id)
 }
@@ -368,7 +355,7 @@ pub fn turn_span_tree(
 pub fn session_span_trees(
     session_id: &str,
     ledger_home: Option<PathBuf>,
-) -> Result<Vec<crate::analyze::span_tree::TurnSpanTree>> {
+) -> Result<Vec<TurnSpanTree>> {
     let handle = open_with(ledger_home.as_deref())?;
     handle.session_span_trees(session_id)
 }
@@ -415,12 +402,10 @@ pub(crate) fn duration_to_since_iso(d: std::time::Duration) -> String {
 /// Lex key for sorting cross-session [`ContextDelta`] rows by owner_rail
 /// when other tie-breakers are equal. Mirrors the per-session helper in
 /// `analyze::context_delta`.
-fn owner_rail_str(rail: &crate::analyze::context_delta::OwnerRail) -> (&str, &str) {
+fn owner_rail_str(rail: &OwnerRail) -> (&str, &str) {
     match rail {
-        crate::analyze::context_delta::OwnerRail::Main => ("main", ""),
-        crate::analyze::context_delta::OwnerRail::Subagent { agent_id } => {
-            ("subagent", agent_id.as_str())
-        }
+        OwnerRail::Main => ("main", ""),
+        OwnerRail::Subagent { agent_id } => ("subagent", agent_id.as_str()),
     }
 }
 
@@ -441,10 +426,7 @@ impl LedgerHandle {
     /// whose latest activity falls outside the window are skipped before any
     /// span trees get loaded. The same window is then applied to the
     /// returned [`Vec<ContextDelta>`] cap.
-    pub fn context_delta(
-        &self,
-        opts: crate::analyze::context_delta::ContextDeltaOpts,
-    ) -> Result<Vec<crate::analyze::context_delta::ContextDelta>> {
+    pub fn context_delta(&self, opts: ContextDeltaOpts) -> Result<Vec<ContextDelta>> {
         let pricing = load_pricing(None);
 
         // Build the seed `since` filter from `opts.since`. We always have a
@@ -475,7 +457,7 @@ impl LedgerHandle {
             }
         };
 
-        let mut out: Vec<crate::analyze::context_delta::ContextDelta> = Vec::new();
+        let mut out: Vec<ContextDelta> = Vec::new();
         for session_id in session_ids {
             let trees = self.session_span_trees(&session_id)?;
             if trees.is_empty() {
@@ -485,12 +467,7 @@ impl LedgerHandle {
                 session_id: Some(session_id.clone()),
                 ..Default::default()
             })?;
-            let per_session = crate::analyze::context_delta::deltas_for_session(
-                &trees,
-                &compactions,
-                &pricing,
-                &opts,
-            );
+            let per_session = deltas_for_session(&trees, &compactions, &pricing, &opts);
             out.extend(per_session);
         }
 
@@ -517,9 +494,9 @@ impl LedgerHandle {
 
 /// Free-function form of [`LedgerHandle::context_delta`].
 pub fn context_delta(
-    opts: crate::analyze::context_delta::ContextDeltaOpts,
+    opts: ContextDeltaOpts,
     ledger_home: Option<PathBuf>,
-) -> Result<Vec<crate::analyze::context_delta::ContextDelta>> {
+) -> Result<Vec<ContextDelta>> {
     let handle = open_with(ledger_home.as_deref())?;
     handle.context_delta(opts)
 }

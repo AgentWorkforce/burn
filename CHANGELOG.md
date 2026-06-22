@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn` subagent-tree views now require a re-ingest to render pre-Root-emission event logs (legacy reconstruction path removed).
+
 ## [3.4.0] - 2026-06-20
 
 - `burn summary` and `burn compare` accept `--bucket <DURATION>` to emit a per-bucket time-series across the `--since` window instead of a single total (`{ "bucketSeconds": N, "buckets": [...] }` in JSON). Bucket units: `30s` / `5m` / `1h` / `12h` / `1d` / `7d` — note `m` is minutes here, unlike `--since` where `m` is months. `summary --bucket` supports only the default grouped (`byModel` / `--by-provider`) modes; `hotspots` / `overhead` are unchanged.

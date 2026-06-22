@@ -13,27 +13,42 @@
 //! in `findings.rs` per AgentWorkforce/burn#268's deferred-types decision,
 //! so this module re-exports them rather than redefining the same shapes.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::reader::{
-    count_retries, normalize_tool_name, CompactionEvent, ContentKind, ContentRecord,
-    ContentToolResult, ContentToolUse, SourceKind, ToolCall, ToolResultEventRecord,
-    ToolResultEventSource, ToolResultStatus, TurnRecord, UserTurnRecord,
+    CompactionEvent, ContentKind, ContentRecord, ContentToolResult, ContentToolUse, ToolCall,
+    ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord, UserTurnRecord,
 };
 use serde_json::Value;
 
-use crate::analyze::cost::{cost_for_turn, cost_for_usage, CostForUsageOptions};
+use crate::analyze::cost::sum_turn_costs;
 use crate::analyze::findings::{
-    CancellationRun, CompactionLoss, CompactionLostWork, EditHeavySession, EditPreview,
-    EditRevertCycle, EditRevertSamplePreview, FailureRun, FailureRunErrorSignature,
+    CancellationRun, CompactionLoss, EditHeavySession, EditPreview, EditRevertCycle, FailureRun,
     PatternEventSource, PatternsResult, RetryLoop, SessionPatternSummary, SkillPruningProtection,
     SkillRecallDup, SystemPromptTax,
 };
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session, stringify_tool_result};
+use crate::analyze::util::{
+    first_seen_unique_by, group_turns_by_session_sorted, stringify_tool_result, truncate_chars,
+};
 
 mod shell;
-use shell::shell_command_has_file_read;
+
+mod compaction;
+mod edits;
+mod skills;
+mod streaks;
+
+use compaction::detect_compaction_losses;
+use edits::{detect_edit_heavy_for_session, detect_edit_reverts_for_session};
+use skills::{
+    detect_skill_pruning_protection_for_session, detect_skill_recall_dups_for_session,
+    detect_system_prompt_tax_for_session,
+};
+use streaks::{
+    detect_failure_runs_for_session, detect_graph_status_patterns_for_session,
+    detect_retry_loops_for_session,
+};
 
 // ---------------------------------------------------------------------------
 // Hardcoded thresholds. Each constant cites the TS source line so future
@@ -127,7 +142,7 @@ impl<'a> DetectPatternsOptions<'a> {
 /// Run every detector across the supplied turn stream. Mirrors the TS
 /// `detectPatterns` orchestrator (patterns.ts:273-345).
 pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -> PatternsResult {
-    let by_session = group_turns_by_session(turns);
+    let by_session = group_turns_by_session_sorted(turns);
     let events_by_session = group_tool_result_events_by_session(opts.tool_result_events);
 
     let mut retry_loops: Vec<RetryLoop> = Vec::new();
@@ -141,10 +156,7 @@ pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -
 
     // Iterate sessions in insertion (= first-seen) order so output ordering
     // matches the TS `Map` iteration contract.
-    for (session_id, mut session_turns) in by_session {
-        // TS sorts each per-session bucket by turn_index in place. Mirror that.
-        session_turns.sort_by_key(|t| t.turn_index);
-
+    for (session_id, session_turns) in by_session {
         let content_index = build_content_index(
             opts.content_by_session
                 .and_then(|m| m.get(&session_id))
@@ -294,41 +306,6 @@ struct ToolResultEventRef<'a> {
     target: Option<String>,
     args_hash: Option<String>,
     turn_index: u64,
-}
-
-struct GraphStatusPatterns {
-    retry_loops: Vec<RetryLoop>,
-    failure_runs: Vec<FailureRun>,
-    cancelled_runs: Vec<CancellationRun>,
-}
-
-fn detect_graph_status_patterns_for_session<'a>(
-    session_id: &str,
-    turns: &[&'a TurnRecord],
-    events: &[&'a ToolResultEventRecord],
-    pricing: &PricingTable,
-    content_index: Option<&ContentIndex>,
-) -> GraphStatusPatterns {
-    let terminal_refs = build_terminal_event_refs(session_id, turns, events);
-    GraphStatusPatterns {
-        retry_loops: detect_graph_retry_loops_for_session(
-            session_id,
-            &terminal_refs,
-            pricing,
-            content_index,
-        ),
-        failure_runs: detect_graph_failure_runs_for_session(
-            session_id,
-            &terminal_refs,
-            pricing,
-            content_index,
-        ),
-        cancelled_runs: detect_graph_cancellation_runs_for_session(
-            session_id,
-            &terminal_refs,
-            pricing,
-        ),
-    }
 }
 
 fn build_terminal_event_refs<'a>(
@@ -541,23 +518,13 @@ fn extract_error_signature(tool_result: Option<&ContentToolResult>) -> Option<St
         // fixtures this is identical to the byte-/char-count. We use chars()
         // to avoid splitting multi-byte sequences mid-codepoint while keeping
         // the same threshold semantics for ASCII inputs.
-        let char_count = line.chars().count();
-        if char_count <= ERROR_SIGNATURE_MAX_CHARS {
-            return Some(line.to_string());
-        }
-        let truncated: String = line.chars().take(ERROR_SIGNATURE_MAX_CHARS - 1).collect();
-        return Some(format!("{truncated}…"));
+        return Some(truncate_chars(line, ERROR_SIGNATURE_MAX_CHARS));
     }
     None
 }
 
 fn truncate_for_preview(s: &str) -> String {
-    let char_count = s.chars().count();
-    if char_count <= SAMPLE_PREVIEW_MAX_CHARS {
-        return s.to_string();
-    }
-    let truncated: String = s.chars().take(SAMPLE_PREVIEW_MAX_CHARS - 1).collect();
-    format!("{truncated}…")
+    truncate_chars(s, SAMPLE_PREVIEW_MAX_CHARS)
 }
 
 fn extract_edit_preview(input: Option<&BTreeMap<String, Value>>) -> Option<EditPreview> {
@@ -588,853 +555,72 @@ fn extract_edit_preview(input: Option<&BTreeMap<String, Value>>) -> Option<EditP
 }
 
 fn sum_cost_for_turns(turns: &[&TurnRecord], pricing: &PricingTable) -> f64 {
-    let mut sum = 0.0;
-    for t in turns {
-        if let Some(c) = cost_for_turn(t, pricing) {
-            sum += c.total;
-        }
-    }
-    sum
+    sum_turn_costs(turns.iter().copied(), pricing)
 }
 
 // ---------------------------------------------------------------------------
-// Graph-backed detectors
+// Shared streak-accumulation skeleton
 // ---------------------------------------------------------------------------
 
-fn detect_graph_retry_loops_for_session<'a>(
-    session_id: &str,
-    refs: &[ToolResultEventRef<'a>],
-    pricing: &PricingTable,
-    content_index: Option<&ContentIndex>,
-) -> Vec<RetryLoop> {
-    let mut loops: Vec<RetryLoop> = Vec::new();
-    let mut streak: Vec<ToolResultEventRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolResultEventRef<'a>>, out: &mut Vec<RetryLoop>| {
-        if streak.len() < MIN_RETRY_LEN {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let contributing = dedup_defined_turns(streak);
-        let mut loop_ = RetryLoop {
-            session_id: session_id.to_string(),
-            tool: first.tool.clone(),
-            target: first.target.clone(),
-            args_hash: first.args_hash.clone().unwrap_or_default(),
-            attempts: streak.len() as u64,
-            start_turn_index: first.turn_index,
-            end_turn_index: last.turn_index,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signature: None,
-            event_source: Some(coalesce_event_source(streak)),
-        };
-        let call_refs = event_refs_to_tool_call_refs(streak);
-        if let Some(sig) = retry_loop_signature(&call_refs, content_index) {
-            loop_.error_signature = Some(sig);
-        }
-        out.push(loop_);
-    };
-
-    for r in refs {
-        let is_errored = matches!(r.event.status, ToolResultStatus::Errored);
-        if !is_errored || r.call.is_none() || r.args_hash.is_none() {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            continue;
-        }
-        if streak.is_empty() {
-            streak.push(r.clone());
-            continue;
-        }
-        let head = streak.first().unwrap();
-        if head.tool == r.tool && head.args_hash == r.args_hash {
-            streak.push(r.clone());
-        } else {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            streak.push(r.clone());
-        }
-    }
-    commit(&mut streak, &mut loops);
-    loops
+/// How the streak runner should treat the current element relative to the
+/// streak built so far.
+enum StreakOp {
+    /// Append this element to the current streak.
+    Extend,
+    /// Commit the current streak, then start a fresh streak holding this
+    /// element (a same-tool retry streak hitting a different tool).
+    Rotate,
+    /// Commit the current streak and drop this element (a boundary marker).
+    Break,
 }
 
-fn detect_graph_failure_runs_for_session<'a>(
-    session_id: &str,
-    refs: &[ToolResultEventRef<'a>],
-    pricing: &PricingTable,
-    content_index: Option<&ContentIndex>,
-) -> Vec<FailureRun> {
-    let mut runs: Vec<FailureRun> = Vec::new();
-    let mut streak: Vec<ToolResultEventRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolResultEventRef<'a>>, out: &mut Vec<FailureRun>| {
-        if streak.len() < MIN_FAILURE_RUN_LEN {
-            return;
-        }
-        let mut keys: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            keys.insert(status_pattern_key(r));
-        }
-        let has_non_tool_result = streak
-            .iter()
-            .any(|r| !matches!(r.event.event_source, ToolResultEventSource::ToolResult));
-        // A same-(tool,args) tool_result run is a retry loop. Non-tool_result
-        // terminal events (notably subagent notifications) remain failure
-        // runs — they represent child invocations ending badly, not a parent
-        // retry loop. Mirrors patterns.ts:706-710.
-        if keys.len() < 2 && !has_non_tool_result {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        // First-seen unique tool order.
-        let mut tools: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            if seen.insert(r.tool.clone()) {
-                tools.push(r.tool.clone());
-            }
-        }
-        let contributing = dedup_defined_turns(streak);
-        let mut run = FailureRun {
-            session_id: session_id.to_string(),
-            length: streak.len() as u64,
-            start_turn_index: first.turn_index,
-            end_turn_index: last.turn_index,
-            tools_involved: tools,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signatures: None,
-            event_source: Some(coalesce_event_source(streak)),
-        };
-        let call_refs = event_refs_to_tool_call_refs(streak);
-        let sigs = failure_run_signatures(&call_refs, content_index);
-        if !sigs.is_empty() {
-            run.error_signatures = Some(sigs);
-        }
-        out.push(run);
-    };
-
-    for r in refs {
-        if matches!(r.event.status, ToolResultStatus::Errored) {
-            streak.push(r.clone());
-        } else {
-            commit(&mut streak, &mut runs);
-            streak.clear();
-        }
-    }
-    commit(&mut streak, &mut runs);
-    runs
-}
-
-fn detect_graph_cancellation_runs_for_session<'a>(
-    session_id: &str,
-    refs: &[ToolResultEventRef<'a>],
-    pricing: &PricingTable,
-) -> Vec<CancellationRun> {
-    let mut runs: Vec<CancellationRun> = Vec::new();
-    let mut streak: Vec<ToolResultEventRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolResultEventRef<'a>>, out: &mut Vec<CancellationRun>| {
-        if streak.is_empty() {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let mut tools: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            if seen.insert(r.tool.clone()) {
-                tools.push(r.tool.clone());
-            }
-        }
-        let contributing = dedup_defined_turns(streak);
-        out.push(CancellationRun {
-            session_id: session_id.to_string(),
-            length: streak.len() as u64,
-            start_turn_index: first.turn_index,
-            end_turn_index: last.turn_index,
-            tools_involved: tools,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            event_source: coalesce_event_source(streak),
-        });
-    };
-
-    for r in refs {
-        if matches!(r.event.status, ToolResultStatus::Cancelled) {
-            streak.push(r.clone());
-        } else {
-            commit(&mut streak, &mut runs);
-            streak.clear();
-        }
-    }
-    commit(&mut streak, &mut runs);
-    runs
-}
-
-fn status_pattern_key(r: &ToolResultEventRef<'_>) -> String {
-    let args = r
-        .args_hash
-        .clone()
-        .unwrap_or_else(|| r.event.tool_use_id.clone());
-    format!("{}|{}", r.tool, args)
-}
-
-// ---------------------------------------------------------------------------
-// Legacy fallback detectors (no event chronology)
-// ---------------------------------------------------------------------------
-
-pub(crate) fn detect_retry_loops_for_session<'a>(
-    session_id: &str,
-    turns: &'a [&'a TurnRecord],
-    pricing: &PricingTable,
-    content_index: Option<&ContentIndex>,
-) -> Vec<RetryLoop> {
-    let flat = flatten_tool_calls(turns);
-    let mut loops: Vec<RetryLoop> = Vec::new();
-    let mut streak: Vec<ToolCallRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolCallRef<'a>>, out: &mut Vec<RetryLoop>| {
-        if streak.len() < MIN_RETRY_LEN {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let turns_in_streak: Vec<&TurnRecord> = streak.iter().map(|r| r.turn).collect();
-        let contributing = dedup_turns(turns_in_streak);
-        let mut loop_ = RetryLoop {
-            session_id: session_id.to_string(),
-            tool: first.call.name.clone(),
-            target: first.call.target.clone(),
-            args_hash: first.call.args_hash.clone(),
-            attempts: streak.len() as u64,
-            start_turn_index: first.turn.turn_index,
-            end_turn_index: last.turn.turn_index,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signature: None,
-            event_source: None,
-        };
-        if let Some(sig) = retry_loop_signature(streak, content_index) {
-            loop_.error_signature = Some(sig);
-        }
-        out.push(loop_);
-    };
-
-    for r in &flat {
-        let is_errored = r.call.is_error == Some(true);
-        if !is_errored {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            continue;
-        }
-        if streak.is_empty() {
-            streak.push(*r);
-            continue;
-        }
-        let head = streak.first().unwrap().call;
-        if head.name == r.call.name && head.args_hash == r.call.args_hash {
-            streak.push(*r);
-        } else {
-            commit(&mut streak, &mut loops);
-            streak.clear();
-            streak.push(*r);
-        }
-    }
-    commit(&mut streak, &mut loops);
-    loops
-}
-
-fn retry_loop_signature(
-    streak: &[ToolCallRef<'_>],
-    content_index: Option<&ContentIndex>,
-) -> Option<String> {
-    let idx = content_index?;
-    let mut first_sig: Option<String> = None;
-    let mut diverged = false;
-    for r in streak {
-        let result = idx.tool_results.get(&r.call.id);
-        let sig = extract_error_signature(result);
-        let Some(sig) = sig else { continue };
-        match &first_sig {
-            None => first_sig = Some(sig),
-            Some(existing) => {
-                if existing != &sig {
-                    diverged = true;
-                    break;
+/// Walk `elements` in order, asking `classify` how each one relates to the
+/// in-progress streak, and run `commit` at every streak boundary (and once at
+/// the end). `commit` returns `Some(finding)` for a qualifying streak or `None`
+/// to drop it, so the per-detector minimum-length and shape guards live there.
+///
+/// This centralizes the commit-on-boundary control flow that the retry,
+/// failure, and cancellation detectors all share; each detector supplies its
+/// own `classify` (what extends/breaks a streak) and `commit` (how a streak
+/// becomes a finding) over its own element type — the graph detectors over
+/// `ToolResultEventRef`, the flat ones over `ToolCallRef`.
+fn detect_streaks<E, T>(
+    elements: impl IntoIterator<Item = E>,
+    classify: impl Fn(Option<&E>, &E) -> StreakOp,
+    mut commit: impl FnMut(&[E]) -> Option<T>,
+) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    let mut streak: Vec<E> = Vec::new();
+    for elem in elements {
+        match classify(streak.first(), &elem) {
+            StreakOp::Extend => streak.push(elem),
+            StreakOp::Rotate => {
+                if let Some(found) = commit(&streak) {
+                    out.push(found);
                 }
+                streak.clear();
+                streak.push(elem);
+            }
+            StreakOp::Break => {
+                if let Some(found) = commit(&streak) {
+                    out.push(found);
+                }
+                streak.clear();
             }
         }
     }
-    let first = first_sig?;
-    if diverged {
-        Some(format!("{first} (signatures diverged)"))
-    } else {
-        Some(first)
-    }
-}
-
-pub(crate) fn detect_failure_runs_for_session<'a>(
-    session_id: &str,
-    turns: &'a [&'a TurnRecord],
-    pricing: &PricingTable,
-    content_index: Option<&ContentIndex>,
-) -> Vec<FailureRun> {
-    let flat = flatten_tool_calls(turns);
-    let mut runs: Vec<FailureRun> = Vec::new();
-    let mut streak: Vec<ToolCallRef<'a>> = Vec::new();
-
-    let commit = |streak: &mut Vec<ToolCallRef<'a>>, out: &mut Vec<FailureRun>| {
-        if streak.len() < MIN_FAILURE_RUN_LEN {
-            return;
-        }
-        let mut keys: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            keys.insert(format!("{}|{}", r.call.name, r.call.args_hash));
-        }
-        // Same-(tool,args) run is a retry loop, not a failure run. See
-        // patterns.ts:868-872.
-        if keys.len() < 2 {
-            return;
-        }
-        let first = streak.first().unwrap();
-        let last = streak.last().unwrap();
-        let mut tools: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for r in streak.iter() {
-            if seen.insert(r.call.name.clone()) {
-                tools.push(r.call.name.clone());
-            }
-        }
-        let turns_in_streak: Vec<&TurnRecord> = streak.iter().map(|r| r.turn).collect();
-        let contributing = dedup_turns(turns_in_streak);
-        let mut run = FailureRun {
-            session_id: session_id.to_string(),
-            length: streak.len() as u64,
-            start_turn_index: first.turn.turn_index,
-            end_turn_index: last.turn.turn_index,
-            tools_involved: tools,
-            cost: sum_cost_for_turns(&contributing, pricing),
-            error_signatures: None,
-            event_source: None,
-        };
-        let sigs = failure_run_signatures(streak, content_index);
-        if !sigs.is_empty() {
-            run.error_signatures = Some(sigs);
-        }
-        out.push(run);
-    };
-
-    for r in &flat {
-        if r.call.is_error == Some(true) {
-            streak.push(*r);
-        } else {
-            commit(&mut streak, &mut runs);
-            streak.clear();
-        }
-    }
-    commit(&mut streak, &mut runs);
-    runs
-}
-
-fn failure_run_signatures(
-    streak: &[ToolCallRef<'_>],
-    content_index: Option<&ContentIndex>,
-) -> Vec<FailureRunErrorSignature> {
-    let Some(idx) = content_index else {
-        return Vec::new();
-    };
-    let mut out: Vec<FailureRunErrorSignature> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for r in streak {
-        if seen.contains(&r.call.name) {
-            continue;
-        }
-        let result = idx.tool_results.get(&r.call.id);
-        let Some(sig) = extract_error_signature(result) else {
-            continue;
-        };
-        out.push(FailureRunErrorSignature {
-            tool: r.call.name.clone(),
-            first_line: sig,
-        });
-        seen.insert(r.call.name.clone());
+    if let Some(found) = commit(&streak) {
+        out.push(found);
     }
     out
-}
-
-// ---------------------------------------------------------------------------
-// Edit revert detector
-// ---------------------------------------------------------------------------
-
-pub(crate) fn detect_edit_reverts_for_session<'a>(
-    session_id: &str,
-    turns: &'a [&'a TurnRecord],
-    pricing: &PricingTable,
-    content_index: Option<&ContentIndex>,
-) -> Vec<EditRevertCycle> {
-    struct EditSlot<'a> {
-        pre_hash: Option<String>,
-        post_hash: Option<String>,
-        turn: &'a TurnRecord,
-        tool_use_id: String,
-    }
-    let mut by_file: HashMap<String, Vec<EditSlot<'a>>> = HashMap::new();
-    let mut cycles: Vec<EditRevertCycle> = Vec::new();
-
-    let flat = flatten_tool_calls(turns);
-    for r in &flat {
-        let call = r.call;
-        let Some(target) = call.target.as_deref() else {
-            continue;
-        };
-        if call.name != "Edit" && call.name != "Write" && call.name != "NotebookEdit" {
-            continue;
-        }
-        // Failed edits don't actually change file state. Mirrors patterns.ts:951-952.
-        if call.is_error == Some(true) {
-            continue;
-        }
-        let slot = EditSlot {
-            pre_hash: call.edit_pre_hash.clone(),
-            post_hash: call.edit_post_hash.clone(),
-            turn: r.turn,
-            tool_use_id: call.id.clone(),
-        };
-        let history = by_file.entry(target.to_string()).or_default();
-        if let Some(post_hash) = &slot.post_hash {
-            let match_idx = history
-                .iter()
-                .position(|prior| prior.pre_hash.as_deref() == Some(post_hash.as_str()));
-            if let Some(idx) = match_idx {
-                let first = &history[idx];
-                let mut cycle = EditRevertCycle {
-                    session_id: session_id.to_string(),
-                    file_path: target.to_string(),
-                    first_edit_turn_index: first.turn.turn_index,
-                    revert_turn_index: r.turn.turn_index,
-                    span_turns: r.turn.turn_index - first.turn.turn_index,
-                    cost: sum_cost_for_turns(&dedup_turns(vec![first.turn, r.turn]), pricing),
-                    sample_preview: None,
-                };
-                if let Some(content_idx) = content_index {
-                    let first_edit = extract_edit_preview(
-                        content_idx
-                            .tool_uses
-                            .get(&first.tool_use_id)
-                            .map(|tu| &tu.input),
-                    );
-                    let revert = extract_edit_preview(
-                        content_idx
-                            .tool_uses
-                            .get(&slot.tool_use_id)
-                            .map(|tu| &tu.input),
-                    );
-                    if let (Some(first_edit), Some(revert)) = (first_edit, revert) {
-                        cycle.sample_preview = Some(EditRevertSamplePreview { first_edit, revert });
-                    }
-                }
-                cycles.push(cycle);
-                // Reset the file's history. patterns.ts:982-984.
-                by_file.insert(target.to_string(), Vec::new());
-                continue;
-            }
-        }
-        history.push(slot);
-    }
-    cycles
-}
-
-// ---------------------------------------------------------------------------
-// Compaction loss detector
-// ---------------------------------------------------------------------------
-
-fn detect_compaction_losses(
-    events: &[CompactionEvent],
-    turns: &[TurnRecord],
-    pricing: &PricingTable,
-    content_by_session: Option<&HashMap<String, Vec<ContentRecord>>>,
-) -> Vec<CompactionLoss> {
-    // turn_by_message_id over the full input for cache pricing lookup.
-    let mut turn_by_message_id: HashMap<&str, &TurnRecord> = HashMap::new();
-    for t in turns {
-        turn_by_message_id.insert(t.message_id.as_str(), t);
-    }
-
-    // Group events by session in arrival order.
-    let mut events_order: Vec<String> = Vec::new();
-    let mut events_by_session: HashMap<String, Vec<&CompactionEvent>> = HashMap::new();
-    for e in events {
-        if !events_by_session.contains_key(&e.session_id) {
-            events_order.push(e.session_id.clone());
-        }
-        events_by_session
-            .entry(e.session_id.clone())
-            .or_default()
-            .push(e);
-    }
-    for list in events_by_session.values_mut() {
-        list.sort_by(|a, b| a.ts.cmp(&b.ts));
-    }
-
-    // Sort turns by session, then turn_index.
-    let mut turns_by_session: HashMap<String, Vec<&TurnRecord>> = HashMap::new();
-    for t in turns {
-        turns_by_session
-            .entry(t.session_id.clone())
-            .or_default()
-            .push(t);
-    }
-    for list in turns_by_session.values_mut() {
-        list.sort_by_key(|t| t.turn_index);
-    }
-
-    let mut prev_boundary_ts: HashMap<String, String> = HashMap::new();
-    let mut out: Vec<CompactionLoss> = Vec::new();
-
-    for sid in &events_order {
-        let session_events = events_by_session.get(sid).unwrap();
-        for e in session_events {
-            let tokens = e.tokens_before_compact.unwrap_or(0);
-            let mut cache_lost_cost = 0.0_f64;
-            if tokens > 0 {
-                if let Some(precid) = e.preceding_message_id.as_deref() {
-                    if let Some(preceding) = turn_by_message_id.get(precid) {
-                        let usage = crate::reader::Usage {
-                            input: 0,
-                            output: 0,
-                            reasoning: 0,
-                            cache_read: tokens,
-                            cache_create_5m: 0,
-                            cache_create_1h: 0,
-                        };
-                        if let Some(priced) = cost_for_usage(
-                            &usage,
-                            &preceding.model,
-                            pricing,
-                            CostForUsageOptions::default(),
-                        ) {
-                            cache_lost_cost = priced.total;
-                        }
-                    }
-                }
-            }
-            let mut loss = CompactionLoss {
-                session_id: e.session_id.clone(),
-                ts: e.ts.clone(),
-                preceding_message_id: e.preceding_message_id.clone(),
-                tokens_before_compact: tokens,
-                cache_lost_cost,
-                lost_work: None,
-            };
-            // Gate on content-sidecar presence — `lost_work` is the "with
-            // content" enrichment. Mirrors patterns.ts:1066-1074.
-            if let Some(map) = content_by_session {
-                if map.contains_key(&e.session_id) {
-                    let session_turns = turns_by_session
-                        .get(&e.session_id)
-                        .map(|v| v.as_slice())
-                        .unwrap_or(&[]);
-                    let window_start = prev_boundary_ts.get(&e.session_id).cloned();
-                    loss.lost_work = Some(summarize_compacted_window(
-                        session_turns,
-                        window_start.as_deref(),
-                        &e.ts,
-                    ));
-                }
-            }
-            out.push(loss);
-            prev_boundary_ts.insert(e.session_id.clone(), e.ts.clone());
-        }
-    }
-    out
-}
-
-fn summarize_compacted_window(
-    session_turns: &[&TurnRecord],
-    window_start: Option<&str>,
-    boundary_ts: &str,
-) -> CompactionLostWork {
-    let mut bash_count: u64 = 0;
-    let mut edit_count: u64 = 0;
-    let mut read_count: u64 = 0;
-    let mut files: BTreeSet<String> = BTreeSet::new();
-    for t in session_turns {
-        if let Some(ws) = window_start {
-            if t.ts.as_str() <= ws {
-                continue;
-            }
-        }
-        if t.ts.as_str() > boundary_ts {
-            continue;
-        }
-        for call in &t.tool_calls {
-            let name = normalize_tool_name(&call.name);
-            if name == "Bash" {
-                bash_count += 1;
-            } else if is_edit_tool(name) {
-                edit_count += 1;
-                if let Some(target) = &call.target {
-                    files.insert(target.clone());
-                }
-            } else if is_read_tool(name) {
-                read_count += 1;
-            }
-        }
-    }
-    CompactionLostWork {
-        files: files.into_iter().collect(),
-        bash_count,
-        edit_count,
-        read_count,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// OpenCode skill detectors
-// ---------------------------------------------------------------------------
-
-pub(crate) fn detect_skill_recall_dups_for_session(
-    session_id: &str,
-    turns: &[&TurnRecord],
-    pricing: &PricingTable,
-) -> Vec<SkillRecallDup> {
-    if turns.is_empty() || turns[0].source != SourceKind::Opencode {
-        return Vec::new();
-    }
-    let mut order: Vec<String> = Vec::new();
-    let mut by_name: HashMap<String, Vec<ToolCallRef<'_>>> = HashMap::new();
-    let flat = flatten_tool_calls(turns);
-    for r in &flat {
-        if r.call.name != "skill" {
-            continue;
-        }
-        let Some(skill_name) = r.call.skill_name.as_deref() else {
-            continue;
-        };
-        if !by_name.contains_key(skill_name) {
-            order.push(skill_name.to_string());
-        }
-        by_name.entry(skill_name.to_string()).or_default().push(*r);
-    }
-    let mut out: Vec<SkillRecallDup> = Vec::new();
-    for name in order {
-        let refs = by_name.get(&name).unwrap();
-        if refs.len() < 2 {
-            continue;
-        }
-        let first = refs.first().unwrap();
-        let last = refs.last().unwrap();
-        let turns_in_streak: Vec<&TurnRecord> = refs.iter().map(|r| r.turn).collect();
-        let contributing = dedup_turns(turns_in_streak);
-        out.push(SkillRecallDup {
-            session_id: session_id.to_string(),
-            skill_name: name,
-            call_count: refs.len() as u64,
-            first_turn_index: first.turn.turn_index,
-            last_turn_index: last.turn.turn_index,
-            cost: sum_cost_for_turns(&contributing, pricing),
-        });
-    }
-    out
-}
-
-pub(crate) fn detect_skill_pruning_protection_for_session(
-    session_id: &str,
-    turns: &[&TurnRecord],
-    pricing: &PricingTable,
-) -> Vec<SkillPruningProtection> {
-    if turns.is_empty() || turns[0].source != SourceKind::Opencode {
-        return Vec::new();
-    }
-    let mut out: Vec<SkillPruningProtection> = Vec::new();
-    let flat = flatten_tool_calls(turns);
-    for r in &flat {
-        if r.call.name != "skill" {
-            continue;
-        }
-        let Some(skill_name) = r.call.skill_name.clone() else {
-            continue;
-        };
-        let invoke_index = r.turn.turn_index;
-        let mut riding_turns = 0_u64;
-        let mut last_cached_turn_index = invoke_index;
-        let mut riding_cost = 0.0_f64;
-        for t in turns {
-            if t.turn_index <= invoke_index {
-                continue;
-            }
-            if t.usage.cache_read > 0 {
-                riding_turns += 1;
-                last_cached_turn_index = t.turn_index;
-                if let Some(c) = cost_for_turn(t, pricing) {
-                    riding_cost += c.total;
-                }
-            }
-        }
-        if riding_turns == 0 {
-            continue;
-        }
-        let invoke_cost = cost_for_turn(r.turn, pricing)
-            .map(|c| c.total)
-            .unwrap_or(0.0);
-        out.push(SkillPruningProtection {
-            session_id: session_id.to_string(),
-            skill_name,
-            invoked_turn_index: invoke_index,
-            riding_turns,
-            last_cached_turn_index,
-            cost: invoke_cost + riding_cost,
-        });
-    }
-    out
-}
-
-pub(crate) fn detect_system_prompt_tax_for_session(
-    session_id: &str,
-    turns: &[&TurnRecord],
-    pricing: &PricingTable,
-    user_turns: Option<&[UserTurnRecord]>,
-) -> Vec<SystemPromptTax> {
-    if turns.is_empty() || turns[0].source != SourceKind::Opencode {
-        return Vec::new();
-    }
-    let first_turn = turns[0];
-    let first_cache_create = first_turn.usage.cache_create_5m + first_turn.usage.cache_create_1h;
-    if first_cache_create == 0 {
-        return Vec::new();
-    }
-    let mut first_user_tokens = 0_u64;
-    if let Some(ut) = user_turns {
-        if let Some(first_user_turn) = ut.first() {
-            for block in &first_user_turn.blocks {
-                first_user_tokens += block.approx_tokens;
-            }
-        }
-    }
-    if first_user_tokens == 0 {
-        return Vec::new();
-    }
-    let system_prompt_tokens = first_cache_create.saturating_sub(first_user_tokens);
-    if system_prompt_tokens == 0 {
-        return Vec::new();
-    }
-
-    let mut riding_turns = 0_u64;
-    let mut total_cost = 0.0_f64;
-    for t in turns {
-        // Skip the first turn — its cost is the cacheCreate, not the riding
-        // tax (patterns.ts:1241-1243).
-        if t.message_id == first_turn.message_id && t.turn_index == first_turn.turn_index {
-            continue;
-        }
-        if t.usage.cache_read > 0 {
-            riding_turns += 1;
-            if let Some(c) = cost_for_turn(t, pricing) {
-                total_cost += c.total;
-            }
-        }
-    }
-    if riding_turns == 0 {
-        return Vec::new();
-    }
-    vec![SystemPromptTax {
-        session_id: session_id.to_string(),
-        first_turn_cache_create: first_cache_create,
-        first_user_message_tokens: first_user_tokens,
-        estimated_system_prompt_tokens: system_prompt_tokens,
-        riding_turns,
-        total_cost,
-    }]
-}
-
-// ---------------------------------------------------------------------------
-// Edit-heavy detector
-// ---------------------------------------------------------------------------
-
-pub(crate) fn detect_edit_heavy_for_session(
-    session_id: &str,
-    turns: &[&TurnRecord],
-    pricing: &PricingTable,
-) -> Vec<EditHeavySession> {
-    if turns.is_empty() {
-        return Vec::new();
-    }
-    let mut read_count: u64 = 0;
-    let mut edit_count: u64 = 0;
-    let mut likely_retries: u64 = 0;
-    let mut edit_turns: Vec<&TurnRecord> = Vec::new();
-
-    for t in turns {
-        let mut turn_has_edit = false;
-        for call in &t.tool_calls {
-            let name = normalize_tool_name(&call.name);
-            if is_read_for_edit_heavy(call, t.source) {
-                read_count += 1;
-            } else if is_edit_tool(name) {
-                edit_count += 1;
-                turn_has_edit = true;
-            }
-        }
-        if turn_has_edit {
-            edit_turns.push(*t);
-        }
-        likely_retries += count_retries(&t.tool_calls);
-    }
-
-    if edit_count < EDIT_HEAVY_MIN_EDITS {
-        return Vec::new();
-    }
-    let ratio = if read_count == 0 {
-        f64::INFINITY
-    } else {
-        edit_count as f64 / read_count as f64
-    };
-    if ratio <= EDIT_HEAVY_RATIO {
-        return Vec::new();
-    }
-    vec![EditHeavySession {
-        source: turns[0].source,
-        session_id: session_id.to_string(),
-        read_count,
-        edit_count,
-        ratio,
-        likely_retries,
-        cost: sum_cost_for_turns(&dedup_turns(edit_turns), pricing),
-    }]
-}
-
-fn is_read_for_edit_heavy(call: &ToolCall, source: SourceKind) -> bool {
-    if is_read_tool(normalize_tool_name(&call.name)) {
-        return true;
-    }
-    source == SourceKind::Codex && is_codex_shell_file_read(call)
-}
-
-fn is_codex_shell_file_read(call: &ToolCall) -> bool {
-    if !is_codex_shell_name(&call.name) {
-        return false;
-    }
-    let Some(target) = call.target.as_deref() else {
-        return false;
-    };
-    shell_command_has_file_read(target)
 }
 
 // ---------------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------------
 
-fn dedup_turns<'a>(turns: Vec<&'a TurnRecord>) -> Vec<&'a TurnRecord> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out: Vec<&'a TurnRecord> = Vec::new();
-    for t in turns {
-        let key = format!("{}|{}", t.session_id, t.message_id);
-        if seen.insert(key) {
-            out.push(t);
-        }
-    }
-    out
+fn dedup_turns(turns: Vec<&TurnRecord>) -> Vec<&TurnRecord> {
+    first_seen_unique_by(turns, |t| format!("{}|{}", t.session_id, t.message_id))
 }
 
 #[allow(clippy::too_many_arguments)]

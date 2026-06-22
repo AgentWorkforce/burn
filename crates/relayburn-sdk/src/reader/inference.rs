@@ -30,6 +30,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::reader::types::{SourceKind, TurnRecord, Usage};
+use crate::util::time::parse_iso_ms;
 
 /// Coarse classification of an [`Inference`]'s content blocks.
 ///
@@ -389,71 +390,6 @@ fn composite_storage_key(turn: &TurnRecord, key: &KeyPair) -> String {
     )
 }
 
-/// Parse an ISO-8601 / RFC-3339 timestamp `YYYY-MM-DDTHH:MM:SS[.sss]Z`
-/// into Unix milliseconds. Returns `None` for inputs that don't match the
-/// canonical ledger shape; callers fall back to `0`. We hand-roll this
-/// rather than pull in a calendar crate because:
-///
-/// - The function is used for ordering / span widths, not absolute
-///   instants; sub-millisecond accuracy is irrelevant.
-/// - The ledger normalizes every `ts` to `YYYY-MM-DDTHH:MM:SS.mmmZ`
-///   on write, so the parser only needs to handle that shape plus the
-///   handful of legacy strings (`...Z`, no fraction; date-only).
-fn parse_iso_ms(s: &str) -> Option<i64> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    if !(bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && (bytes[10] == b'T' || bytes[10] == b' ')
-        && bytes[13] == b':'
-        && bytes[16] == b':')
-    {
-        return None;
-    }
-    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
-    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
-    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
-    let hour: u32 = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
-    let minute: u32 = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
-    let second: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
-    let mut millis: i64 = 0;
-    let mut idx = 19;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        idx += 1;
-        let frac_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        let mut frac = std::str::from_utf8(&bytes[frac_start..idx])
-            .ok()?
-            .to_string();
-        if frac.len() > 3 {
-            frac.truncate(3);
-        }
-        while frac.len() < 3 {
-            frac.push('0');
-        }
-        millis = frac.parse().ok()?;
-    }
-    // Howard Hinnant civil-from-fields. Same math as
-    // `query_verbs::ymd_to_days` — duplicated here to keep `reader` free
-    // of an upward dependency on `query_verbs`.
-    let m = month as i64;
-    let d = day as i64;
-    let y = if m <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
-    let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days_from_epoch = era * 146_097 + (doe as i64) - 719_468;
-    let secs =
-        days_from_epoch * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
-    Some(secs * 1_000 + millis)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,24 +423,6 @@ mod tests {
             has_edits: None,
             fidelity: None,
         }
-    }
-
-    #[test]
-    fn parses_iso_with_millis() {
-        // 2026-04-20T00:00:01.500Z = Unix epoch ms 1_776_643_201_500.
-        // Cross-check: 20566 days from 1970-01-01 to 2026-04-20 ×
-        // 86_400_000 = 1_776_902_400_000; reverse-confirm by computing
-        // the integer-day offset directly inside `parse_iso_ms` (Howard
-        // Hinnant). The exact value is what the function returns; the
-        // contract is "round-trippable monotonic millisecond clock".
-        let ms = parse_iso_ms("2026-04-20T00:00:01.500Z").unwrap();
-        assert_eq!(ms, 1_776_643_201_500);
-    }
-
-    #[test]
-    fn parses_iso_without_millis() {
-        let ms = parse_iso_ms("2026-04-20T00:00:01Z").unwrap();
-        assert_eq!(ms, 1_776_643_201_000);
     }
 
     #[test]
