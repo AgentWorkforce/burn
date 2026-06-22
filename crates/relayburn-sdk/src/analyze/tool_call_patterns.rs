@@ -73,8 +73,7 @@ pub fn detect_tool_call_patterns(
     opts: &DetectToolCallPatternsOptions<'_>,
 ) -> Vec<ToolCallPatternFinding> {
     let mut out: Vec<ToolCallPatternFinding> = Vec::new();
-    for (sid, mut sess) in group_turns_by_session(turns) {
-        sess.sort_by_key(|t| t.turn_index);
+    for (sid, sess) in group_turns_by_session_sorted(turns) {
         out.extend(detect_for_session(&sid, &sess, opts.pricing));
     }
     // Sort: usd desc, then tokens desc.
@@ -448,7 +447,7 @@ only the PR fields the agent reads.",
     }
 }
 
-use super::util::{fmt_usd, format_with_commas, group_turns_by_session};
+use super::util::{fmt_usd, format_with_commas, group_turns_by_session_sorted};
 
 pub fn tool_call_pattern_to_finding(finding: &ToolCallPatternFinding) -> WasteFinding {
     let evidence_str = if finding.evidence.is_empty() {

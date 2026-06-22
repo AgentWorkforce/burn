@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::analyze::util::group_turns_by_session;
+use crate::analyze::util::group_turns_by_session_sorted;
 use crate::reader::{ContentKind, ContentRecord, ContentRole, StopReason, TurnRecord};
 use serde::{Deserialize, Serialize};
 
@@ -112,14 +112,13 @@ const LONG_CONVERSATION_THRESHOLD: usize = 10;
 const FAILURE_STREAK_THRESHOLD: u64 = 3;
 
 pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> QualityResult {
-    let by_session = group_turns_by_session(turns);
+    let by_session = group_turns_by_session_sorted(turns);
 
     let now = opts.now_ms.unwrap_or_else(now_ms_system);
 
     let mut outcomes = Vec::with_capacity(by_session.len());
     let mut one_shot = Vec::with_capacity(by_session.len());
-    for (session_id, mut session_turns) in by_session {
-        session_turns.sort_by_key(|t| t.turn_index);
+    for (session_id, session_turns) in by_session {
         outcomes.push(infer_outcome_refs(
             &session_id,
             &session_turns,

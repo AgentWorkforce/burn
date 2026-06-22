@@ -2,13 +2,9 @@ use super::*;
 
 use std::collections::HashSet;
 
-use crate::reader::{
-    ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord,
-};
+use crate::reader::{ToolResultEventRecord, ToolResultEventSource, ToolResultStatus, TurnRecord};
 
-use crate::analyze::findings::{
-    CancellationRun, FailureRun, FailureRunErrorSignature, RetryLoop,
-};
+use crate::analyze::findings::{CancellationRun, FailureRun, FailureRunErrorSignature, RetryLoop};
 use crate::analyze::pricing::PricingTable;
 
 pub(super) struct GraphStatusPatterns {

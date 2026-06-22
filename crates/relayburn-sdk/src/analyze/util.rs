@@ -32,6 +32,25 @@ where
     by_session
 }
 
+/// Like [`group_turns_by_session`], but stable-sorts each session's bucket by
+/// `turn_index` before returning. Most detectors want chronological order
+/// within a session; this folds the repeated post-grouping
+/// `bucket.sort_by_key(|t| t.turn_index)` into one place. The sort is stable,
+/// so it preserves input order among equal `turn_index` values — matching the
+/// TS `Array.prototype.sort` contract the detectors mirror.
+pub(crate) fn group_turns_by_session_sorted<'a, I>(
+    turns: I,
+) -> IndexMap<String, Vec<&'a TurnRecord>>
+where
+    I: IntoIterator<Item = &'a TurnRecord>,
+{
+    let mut by_session = group_turns_by_session(turns);
+    for bucket in by_session.values_mut() {
+        bucket.sort_by_key(|t| t.turn_index);
+    }
+    by_session
+}
+
 /// Format a USD amount to 4 decimal places (`$0.1234`), matching the TS
 /// finding adapters' money formatting.
 pub(crate) fn fmt_usd(n: f64) -> String {

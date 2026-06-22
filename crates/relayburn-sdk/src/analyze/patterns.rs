@@ -28,7 +28,7 @@ use crate::analyze::findings::{
     SkillRecallDup, SystemPromptTax,
 };
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session, stringify_tool_result, truncate_chars};
+use crate::analyze::util::{group_turns_by_session_sorted, stringify_tool_result, truncate_chars};
 
 mod shell;
 
@@ -140,7 +140,7 @@ impl<'a> DetectPatternsOptions<'a> {
 /// Run every detector across the supplied turn stream. Mirrors the TS
 /// `detectPatterns` orchestrator (patterns.ts:273-345).
 pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -> PatternsResult {
-    let by_session = group_turns_by_session(turns);
+    let by_session = group_turns_by_session_sorted(turns);
     let events_by_session = group_tool_result_events_by_session(opts.tool_result_events);
 
     let mut retry_loops: Vec<RetryLoop> = Vec::new();
@@ -154,10 +154,7 @@ pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -
 
     // Iterate sessions in insertion (= first-seen) order so output ordering
     // matches the TS `Map` iteration contract.
-    for (session_id, mut session_turns) in by_session {
-        // TS sorts each per-session bucket by turn_index in place. Mirror that.
-        session_turns.sort_by_key(|t| t.turn_index);
-
+    for (session_id, session_turns) in by_session {
         let content_index = build_content_index(
             opts.content_by_session
                 .and_then(|m| m.get(&session_id))

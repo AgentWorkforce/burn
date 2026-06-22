@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::{lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session, percentile, tokens_from_bytes};
+use crate::analyze::util::{group_turns_by_session_sorted, percentile, tokens_from_bytes};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -325,13 +325,11 @@ pub(crate) fn attribute_claude_md_refs(
         };
     }
 
-    let by_session = group_turns_by_session(turns.iter().copied());
+    let by_session = group_turns_by_session_sorted(turns.iter().copied());
 
     let mut session_costs: Vec<SessionClaudeMdCost> = Vec::new();
     let mut total_cost = 0.0_f64;
     for (session_id, turns) in by_session {
-        let mut turns = turns;
-        turns.sort_by_key(|t| t.turn_index);
         let mut cost = 0.0_f64;
         let mut riding_turns: u64 = 0;
         let mut model_counts: IndexMap<String, u64> = IndexMap::new();
