@@ -363,6 +363,15 @@ fn now_ms_system() -> i64 {
 /// readers and the test fixtures: `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
 /// Returns milliseconds since the Unix epoch, or `None` when the input fails
 /// to match — mirroring `Number.isFinite(Date.parse(...))` in TS.
+///
+/// Deliberately *not* folded into [`crate::util::time::parse_iso_ms`]: this
+/// variant is a strict superset — it applies `±HH:MM` timezone offsets,
+/// rejects out-of-range components (month/day/hour/minute/second) and trailing
+/// garbage, because outcome inference compares these timestamps against `now`
+/// and a lenient parse would misclassify `is_recent`. The shared parser is
+/// consumed by the readers/ledger on the hot ingest path and intentionally
+/// stays lean; unifying them would mean widening that shared parser's
+/// behavior for every caller, which is out of scope here.
 fn parse_iso8601_ms(s: &str) -> Option<i64> {
     let bytes = s.as_bytes();
     if bytes.len() < 19 {
