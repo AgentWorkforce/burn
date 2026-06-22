@@ -482,7 +482,7 @@ pub fn ghost_surface_to_finding(
         ""
     };
     let sessions_clause = if ghost.session_count > 0 {
-        let source_str = source_kind_str(ghost.source);
+        let source_str = ghost.source.wire_str();
         format!(
             " Observed across {n} {src} session(s) in the lookback window.",
             n = ghost.session_count,
@@ -493,7 +493,7 @@ pub fn ghost_surface_to_finding(
     };
     let title_basename = basename_of(&ghost.path);
     let title_basename = title_basename.split('#').next().unwrap_or(&title_basename);
-    let source_str = source_kind_str(ghost.source);
+    let source_str = ghost.source.wire_str();
     WasteFinding {
         kind: kind_label.to_string(),
         severity,
@@ -521,17 +521,6 @@ pub fn ghost_surface_to_finding(
         },
         actions: vec![action],
         event_source: None,
-    }
-}
-
-fn source_kind_str(source: SourceKind) -> &'static str {
-    match source {
-        SourceKind::ClaudeCode => "claude-code",
-        SourceKind::Codex => "codex",
-        SourceKind::Opencode => "opencode",
-        SourceKind::AnthropicApi => "anthropic-api",
-        SourceKind::OpenaiApi => "openai-api",
-        SourceKind::GeminiApi => "gemini-api",
     }
 }
 

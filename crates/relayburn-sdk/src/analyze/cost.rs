@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::reader::{SourceKind, TurnRecord, Usage};
 
 use crate::analyze::pricing::{ModelCost, PricingTable, ReasoningMode};
-use crate::analyze::provider_reattribution::resolve_provider;
+use crate::analyze::provider_reattribution::{resolve_provider, strip_provider_prefix};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,13 +160,6 @@ fn pricing_model_alias(model: &str) -> Option<&'static str> {
         // report labels as `codex-auto-review` for attribution.
         "codex-auto-review" => Some("gpt-5.2-codex"),
         _ => None,
-    }
-}
-
-fn strip_provider_prefix(model: &str) -> &str {
-    match model.find('/') {
-        Some(i) => &model[i + 1..],
-        None => model,
     }
 }
 

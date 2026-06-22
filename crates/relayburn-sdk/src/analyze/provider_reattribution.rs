@@ -148,6 +148,17 @@ pub fn resolve_provider(model: &str) -> ProviderResolution {
     resolve_provider_with_rules(model, default_rules())
 }
 
+/// Strip a leading `provider/` prefix from a model id, returning the bare
+/// model name. `anthropic/claude-x` → `claude-x`; an id with no `/` is
+/// returned unchanged. Shared by the cost lookup and provider aggregation
+/// paths so both strip prefixes identically.
+pub(crate) fn strip_provider_prefix(model: &str) -> &str {
+    match model.find('/') {
+        Some(i) => &model[i + 1..],
+        None => model,
+    }
+}
+
 /// Like [`resolve_provider`] but uses an explicit rule set — used by the
 /// public analyzer surface to thread `AggregateByProviderOptions::rules`
 /// through, and by tests to exercise extension scenarios.

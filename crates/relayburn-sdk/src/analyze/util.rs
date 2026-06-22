@@ -69,6 +69,19 @@ pub(crate) fn bytes_from_tokens(tokens: u64) -> u64 {
     tokens * APPROX_BYTES_PER_TOKEN
 }
 
+/// Truncate `s` to at most `max` characters, appending `…` when it was longer
+/// (the ellipsis takes the `max`-th slot, so the result is exactly `max`
+/// chars). Counts by `char` to avoid splitting a multi-byte sequence mid-
+/// codepoint; for the ASCII fixtures this matches the TS `string.length` /
+/// `slice` truncation semantics.
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(max - 1).collect();
+    format!("{truncated}…")
+}
+
 /// Nearest-rank percentile over an already-sorted slice, with `p` expressed as
 /// a fraction in `[0, 1]` (e.g. `0.95` for p95). Empty input yields the type's
 /// default (`0` / `0.0`); a single element is returned as-is. The index is

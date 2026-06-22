@@ -28,7 +28,7 @@ use crate::analyze::findings::{
     SkillRecallDup, SystemPromptTax,
 };
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session, stringify_tool_result};
+use crate::analyze::util::{group_turns_by_session, stringify_tool_result, truncate_chars};
 
 mod shell;
 
@@ -519,23 +519,13 @@ fn extract_error_signature(tool_result: Option<&ContentToolResult>) -> Option<St
         // fixtures this is identical to the byte-/char-count. We use chars()
         // to avoid splitting multi-byte sequences mid-codepoint while keeping
         // the same threshold semantics for ASCII inputs.
-        let char_count = line.chars().count();
-        if char_count <= ERROR_SIGNATURE_MAX_CHARS {
-            return Some(line.to_string());
-        }
-        let truncated: String = line.chars().take(ERROR_SIGNATURE_MAX_CHARS - 1).collect();
-        return Some(format!("{truncated}…"));
+        return Some(truncate_chars(line, ERROR_SIGNATURE_MAX_CHARS));
     }
     None
 }
 
 fn truncate_for_preview(s: &str) -> String {
-    let char_count = s.chars().count();
-    if char_count <= SAMPLE_PREVIEW_MAX_CHARS {
-        return s.to_string();
-    }
-    let truncated: String = s.chars().take(SAMPLE_PREVIEW_MAX_CHARS - 1).collect();
-    format!("{truncated}…")
+    truncate_chars(s, SAMPLE_PREVIEW_MAX_CHARS)
 }
 
 fn extract_edit_preview(input: Option<&BTreeMap<String, Value>>) -> Option<EditPreview> {
