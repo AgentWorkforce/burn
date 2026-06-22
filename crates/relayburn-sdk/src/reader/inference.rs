@@ -390,17 +390,6 @@ fn composite_storage_key(turn: &TurnRecord, key: &KeyPair) -> String {
     )
 }
 
-/// Parse an ISO-8601 / RFC-3339 timestamp `YYYY-MM-DDTHH:MM:SS[.sss]Z`
-/// into Unix milliseconds. Returns `None` for inputs that don't match the
-/// canonical ledger shape; callers fall back to `0`. We hand-roll this
-/// rather than pull in a calendar crate because:
-///
-/// - The function is used for ordering / span widths, not absolute
-///   instants; sub-millisecond accuracy is irrelevant.
-/// - The ledger normalizes every `ts` to `YYYY-MM-DDTHH:MM:SS.mmmZ`
-///   on write, so the parser only needs to handle that shape plus the
-///   handful of legacy strings (`...Z`, no fraction; date-only).
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -72,6 +72,21 @@ pub(crate) fn ymd_to_days(year: i64, month: u32, day: u32) -> i64 {
     era * 146_097 + (doe as i64) - 719_468
 }
 
+/// Format Unix milliseconds as a canonical UTC ISO-8601 string
+/// (`YYYY-MM-DDTHH:MM:SS.mmmZ`), matching JS `new Date(ms).toISOString()`.
+/// The single source of truth for the SDK's wire timestamp format.
+pub(crate) fn format_iso_ms(ms: i64) -> String {
+    const MS_PER_DAY: i64 = 86_400_000;
+    let total_days = ms.div_euclid(MS_PER_DAY);
+    let ms_in_day = ms.rem_euclid(MS_PER_DAY);
+    let (year, month, day) = days_to_ymd(total_days);
+    let hour = ms_in_day / 3_600_000;
+    let minute = (ms_in_day / 60_000) % 60;
+    let second = (ms_in_day / 1_000) % 60;
+    let millis = ms_in_day % 1_000;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
+}
+
 /// Days from the Unix epoch → `(year, month, day)` (Howard Hinnant's
 /// `civil_from_days`). Inverse of [`ymd_to_days`].
 pub(crate) fn days_to_ymd(days_from_epoch: i64) -> (i64, u32, u32) {

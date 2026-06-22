@@ -249,14 +249,10 @@ fn normalize_iso_to_utc_z(s: &str) -> Option<String> {
     Some(format_iso_z_ms(utc_secs, millis))
 }
 
+/// Adapt the `(whole seconds, millis)` shape used by the since/bucket paths to
+/// the shared [`crate::util::time::format_iso_ms`] formatter.
 fn format_iso_z_ms(secs: i64, millis: u32) -> String {
-    let total_days = secs.div_euclid(86_400);
-    let secs_in_day = secs.rem_euclid(86_400) as u32;
-    let hour = secs_in_day / 3_600;
-    let minute = (secs_in_day / 60) % 60;
-    let second = secs_in_day % 60;
-    let (year, month, day) = days_to_ymd(total_days);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
+    crate::util::time::format_iso_ms(secs * 1_000 + millis as i64)
 }
 
 /// Range-checking wrapper over [`crate::util::time::ymd_to_days`]: rejects
@@ -268,8 +264,6 @@ fn ymd_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
     }
     Some(crate::util::time::ymd_to_days(year, month, day))
 }
-
-use crate::util::time::days_to_ymd;
 
 // ---------------------------------------------------------------------------
 // time-bucketing — shared by `--bucket` on summary / compare / hotspots / overhead

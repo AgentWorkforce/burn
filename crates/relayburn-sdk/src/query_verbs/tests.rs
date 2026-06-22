@@ -216,7 +216,7 @@ fn normalize_since_cutoff_lex_compatible_with_ledger_rows() {
 fn ymd_days_round_trip() {
     for (y, m, d) in &[(1970, 1, 1), (2026, 5, 6), (2000, 2, 29), (1999, 12, 31)] {
         let days = ymd_to_days(*y, *m, *d).unwrap();
-        let (ry, rm, rd) = days_to_ymd(days);
+        let (ry, rm, rd) = crate::util::time::days_to_ymd(days);
         assert_eq!((*y, *m, *d), (ry, rm, rd));
     }
 }
