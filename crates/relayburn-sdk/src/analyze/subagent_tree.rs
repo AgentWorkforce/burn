@@ -1,11 +1,12 @@
 //! Subagent tree / per-type rollups — Rust port of
 //! `packages/analyze/src/subagent-tree.ts`.
 //!
-//! Walks the parent-uuid chains in `TurnRecord.subagent` (or
-//! `SessionRelationshipRecord` rows when supplied) to build one tree per
-//! session, with cost rolled up from leaves. The relationship-row path is
-//! the primary substrate for newer ingests; the legacy path falls back to
-//! `TurnRecord.subagent` only.
+//! Builds one tree per session from `SessionRelationshipRecord` rows, with
+//! cost rolled up from leaves. Per-turn `TurnRecord.subagent` fields are folded
+//! in to attach turn cost and to fill gaps for sessions whose relationship rows
+//! are sparse (so a ledger with only the always-emitted Root rows still
+//! reconstructs its subagent sidechains). Callers that pass no relationship
+//! rows get a tree built from `TurnRecord.subagent` alone.
 
 use crate::reader::{RelationshipType, SessionRelationshipRecord, TurnRecord};
 use indexmap::{IndexMap, IndexSet};
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyze::cost::total_cost_for_turn;
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::{group_turns_by_session, percentile};
+use crate::analyze::util::percentile;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,12 +64,8 @@ pub fn build_subagent_tree(
     turns: &[TurnRecord],
     opts: &BuildSubagentTreeOptions<'_>,
 ) -> IndexMap<String, SubagentTreeNode> {
-    if let Some(rels) = opts.relationships {
-        if !rels.is_empty() {
-            return build_relationship_trees(turns, rels, opts.pricing);
-        }
-    }
-    build_legacy_subagent_trees(turns, opts.pricing)
+    let relationships = opts.relationships.unwrap_or(&[]);
+    build_relationship_trees(turns, relationships, opts.pricing)
 }
 
 #[derive(Debug)]
@@ -110,158 +107,6 @@ struct GraphState {
     node_by_id: IndexMap<String, MutableNode>,
     models_by_node: IndexMap<String, IndexSet<String>>,
     parent_by_node: IndexMap<String, String>,
-}
-
-fn build_legacy_subagent_trees(
-    turns: &[TurnRecord],
-    pricing: &PricingTable,
-) -> IndexMap<String, SubagentTreeNode> {
-    let by_session = group_turns_by_session(turns);
-    let mut out: IndexMap<String, SubagentTreeNode> = IndexMap::new();
-    for (session_id, session_turns) in by_session {
-        let root = build_session_tree(&session_id, &session_turns, pricing);
-        out.insert(session_id, root);
-    }
-    out
-}
-
-fn build_session_tree(
-    session_id: &str,
-    turns: &[&TurnRecord],
-    pricing: &PricingTable,
-) -> SubagentTreeNode {
-    let mut nodes: IndexMap<String, MutableNode> = IndexMap::new();
-    let mut models: IndexMap<String, IndexSet<String>> = IndexMap::new();
-    nodes.insert(
-        session_id.to_string(),
-        MutableNode {
-            depth: 0,
-            ..MutableNode::new(
-                session_id.to_string(),
-                "main".to_string(),
-                RelationshipType::Root,
-            )
-        },
-    );
-    models.insert(session_id.to_string(), IndexSet::new());
-
-    let unresolved_id = format!("{session_id}:__unresolved");
-    let mut unresolved_created = false;
-
-    for t in turns {
-        let cost = total_cost_for_turn(t, pricing);
-        let Some(sub) = &t.subagent else {
-            let node = nodes.get_mut(session_id).unwrap();
-            node.self_turns += 1;
-            node.self_cost += cost;
-            if !t.model.is_empty() {
-                models.get_mut(session_id).unwrap().insert(t.model.clone());
-            }
-            continue;
-        };
-        let Some(agent_id) = &sub.agent_id else {
-            if !unresolved_created {
-                let mut un = MutableNode::new(
-                    unresolved_id.clone(),
-                    "(unresolved)".to_string(),
-                    RelationshipType::Subagent,
-                );
-                un.depth = 1;
-                nodes.insert(unresolved_id.clone(), un);
-                models.insert(unresolved_id.clone(), IndexSet::new());
-                nodes
-                    .get_mut(session_id)
-                    .unwrap()
-                    .children
-                    .push(unresolved_id.clone());
-                unresolved_created = true;
-            }
-            let n = nodes.get_mut(&unresolved_id).unwrap();
-            n.self_turns += 1;
-            n.self_cost += cost;
-            if !t.model.is_empty() {
-                models
-                    .get_mut(&unresolved_id)
-                    .unwrap()
-                    .insert(t.model.clone());
-            }
-            continue;
-        };
-        if !nodes.contains_key(agent_id) {
-            let mut n = MutableNode::new(
-                agent_id.clone(),
-                sub.subagent_type
-                    .clone()
-                    .unwrap_or_else(|| "(unknown)".to_string()),
-                RelationshipType::Subagent,
-            );
-            n.subagent_type = sub.subagent_type.clone();
-            n.description = sub.description.clone();
-            nodes.insert(agent_id.clone(), n);
-            models.insert(agent_id.clone(), IndexSet::new());
-        } else {
-            let n = nodes.get_mut(agent_id).unwrap();
-            if n.subagent_type.is_none() {
-                if let Some(st) = &sub.subagent_type {
-                    n.subagent_type = Some(st.clone());
-                    if n.label == "(unknown)" {
-                        n.label = st.clone();
-                    }
-                }
-            }
-            if n.description.is_none() {
-                if let Some(d) = &sub.description {
-                    n.description = Some(d.clone());
-                }
-            }
-        }
-        let n = nodes.get_mut(agent_id).unwrap();
-        n.self_turns += 1;
-        n.self_cost += cost;
-        if !t.model.is_empty() {
-            models.get_mut(agent_id).unwrap().insert(t.model.clone());
-        }
-    }
-
-    // Build parent map (insertion order = first-encounter order in turns).
-    let mut parent_by_node: IndexMap<String, String> = IndexMap::new();
-    for t in turns {
-        let Some(sub) = &t.subagent else { continue };
-        let Some(agent_id) = &sub.agent_id else {
-            continue;
-        };
-        if parent_by_node.contains_key(agent_id) {
-            continue;
-        }
-        let pid = sub
-            .parent_agent_id
-            .clone()
-            .unwrap_or_else(|| session_id.to_string());
-        parent_by_node.insert(agent_id.clone(), pid);
-    }
-
-    // Attach children, redirecting cycles / self-parents to the session root.
-    for (id, parent_id) in parent_by_node.clone() {
-        if !nodes.contains_key(&id) {
-            continue;
-        }
-        let resolved = resolve_parent_or_root(&id, &parent_id, &parent_by_node, session_id);
-        let parent_target = if nodes.contains_key(&resolved) {
-            resolved
-        } else {
-            session_id.to_string()
-        };
-        let parent_node = nodes.get_mut(&parent_target).unwrap();
-        parent_node.children.push(id);
-    }
-
-    // BFS depth assignment.
-    assign_depth(&mut nodes, session_id);
-
-    fold_cumulative(&mut nodes, session_id);
-    sort_tree(&mut nodes, session_id);
-
-    materialize_session_tree(&nodes, &models, session_id)
 }
 
 fn build_relationship_trees(
@@ -583,27 +428,6 @@ fn finalize_tree(state: &mut GraphState, root_id: &str) {
     sort_tree(&mut state.node_by_id, root_id);
 }
 
-fn assign_depth(nodes: &mut IndexMap<String, MutableNode>, root_id: &str) {
-    let mut queue: std::collections::VecDeque<(String, i32)> = std::collections::VecDeque::new();
-    queue.push_back((root_id.to_string(), 0));
-    let mut seen: IndexSet<String> = IndexSet::new();
-    while let Some((id, depth)) = queue.pop_front() {
-        if seen.contains(&id) {
-            continue;
-        }
-        seen.insert(id.clone());
-        let children = if let Some(n) = nodes.get_mut(&id) {
-            n.depth = depth;
-            n.children.clone()
-        } else {
-            continue;
-        };
-        for c in children {
-            queue.push_back((c, depth + 1));
-        }
-    }
-}
-
 fn fold_cumulative(nodes: &mut IndexMap<String, MutableNode>, root_id: &str) {
     let order = topo_post_order(nodes, root_id);
     for id in order {
@@ -660,31 +484,6 @@ fn sort_tree(nodes: &mut IndexMap<String, MutableNode>, root_id: &str) {
         });
         nodes.get_mut(&id).unwrap().children = children;
     }
-}
-
-fn resolve_parent_or_root(
-    id: &str,
-    parent_id: &str,
-    parent_by_node: &IndexMap<String, String>,
-    session_id: &str,
-) -> String {
-    if parent_id == id {
-        return session_id.to_string();
-    }
-    let mut seen: IndexSet<String> = IndexSet::new();
-    seen.insert(id.to_string());
-    let mut cursor = parent_id.to_string();
-    while cursor != session_id {
-        if seen.contains(&cursor) {
-            return session_id.to_string();
-        }
-        seen.insert(cursor.clone());
-        match parent_by_node.get(&cursor) {
-            Some(next) => cursor = next.clone(),
-            None => return parent_id.to_string(),
-        }
-    }
-    parent_id.to_string()
 }
 
 fn resolve_graph_parent(

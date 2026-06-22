@@ -285,8 +285,12 @@ fn builds_the_same_claude_tree_from_session_relationship_records() {
         ),
     ];
 
-    let legacy_opts = BuildSubagentTreeOptions::new(&pricing);
-    let legacy = build_subagent_tree(&turns, &legacy_opts)
+    // The tree built from `TurnRecord.subagent` alone (no relationship rows)
+    // must match the tree built with explicit relationship rows — the
+    // invariant that lets the no-relationship fallback stand in for the
+    // removed legacy builder.
+    let subagent_only_opts = BuildSubagentTreeOptions::new(&pricing);
+    let subagent_only = build_subagent_tree(&turns, &subagent_only_opts)
         .get(session_id)
         .unwrap()
         .clone();
@@ -295,7 +299,7 @@ fn builds_the_same_claude_tree_from_session_relationship_records() {
         .get(session_id)
         .unwrap()
         .clone();
-    assert_eq!(graph, legacy);
+    assert_eq!(graph, subagent_only);
     assert_eq!(graph.relationship_type, RelationshipType::Root);
     assert_eq!(
         graph.children[0].relationship_type,
