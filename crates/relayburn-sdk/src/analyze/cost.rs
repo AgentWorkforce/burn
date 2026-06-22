@@ -45,7 +45,7 @@ pub struct CostForUsageOptions {
 /// analyze module. Prices in the pricing table are quoted per million tokens.
 pub(crate) const PER_MILLION: f64 = 1_000_000.0;
 
-pub fn cost_for_usage(
+pub(crate) fn cost_for_usage(
     usage: &Usage,
     model: &str,
     pricing: &PricingTable,
@@ -180,7 +180,7 @@ pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec
     (count, models)
 }
 
-pub fn sum_costs<I, B>(costs: I) -> CostBreakdown
+pub(crate) fn sum_costs<I, B>(costs: I) -> CostBreakdown
 where
     I: IntoIterator<Item = B>,
     B: std::borrow::Borrow<CostBreakdown>,

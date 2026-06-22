@@ -125,23 +125,12 @@ pub struct DetectPatternsOptions<'a> {
     pub tool_result_events: Option<&'a [ToolResultEventRecord]>,
 }
 
-impl<'a> DetectPatternsOptions<'a> {
-    /// Convenience constructor used by tests and embedders that only need
-    /// to supply pricing.
-    pub fn with_pricing(pricing: &'a PricingTable) -> Self {
-        Self {
-            pricing,
-            compactions: None,
-            user_turns_by_session: None,
-            content_by_session: None,
-            tool_result_events: None,
-        }
-    }
-}
-
 /// Run every detector across the supplied turn stream. Mirrors the TS
 /// `detectPatterns` orchestrator (patterns.ts:273-345).
-pub fn detect_patterns(turns: &[TurnRecord], opts: &DetectPatternsOptions<'_>) -> PatternsResult {
+pub(crate) fn detect_patterns(
+    turns: &[TurnRecord],
+    opts: &DetectPatternsOptions<'_>,
+) -> PatternsResult {
     let by_session = group_turns_by_session_sorted(turns);
     let events_by_session = group_tool_result_events_by_session(opts.tool_result_events);
 

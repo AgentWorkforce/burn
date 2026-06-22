@@ -50,7 +50,7 @@ pub enum AttributionMethod {
 /// turns' `cacheRead`. `total_cost` is `initial_cost + persistence_cost`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolAttribution {
+pub(crate) struct ToolAttribution {
     pub tool_use_id: String,
     pub tool_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +97,7 @@ pub struct ToolAttribution {
 /// the 1e-9 USD precision contract.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionTotals {
+pub(crate) struct SessionTotals {
     pub session_id: String,
     pub grand_cost: f64,
     pub attributed_cost: f64,
@@ -270,7 +270,10 @@ static FILE_TOOLS: phf::Set<&'static str> = phf_set! {
 /// `grand_total` and per-session `grand_cost` route through `cost_for_turn`,
 /// so anything outside the attributable surface (system prompts, reasoning
 /// charged via Codex `included_in_output`, etc.) lands in `unattributed_*`.
-pub fn attribute_hotspots(turns: &[TurnRecord], opts: &HotspotsOptions<'_>) -> HotspotsResult {
+pub(crate) fn attribute_hotspots(
+    turns: &[TurnRecord],
+    opts: &HotspotsOptions<'_>,
+) -> HotspotsResult {
     // First-seen session ordering matches the TS `Map` iteration semantics.
     // Borrow turns rather than cloning — nothing below mutates them and the
     // input slice outlives every aggregation step.
@@ -685,7 +688,7 @@ fn accumulate_output_bytes(
 /// Roll up file-touching tool attributions (`Read | Edit | Write |
 /// NotebookEdit`) by their target path. Rows missing or with an empty target
 /// are skipped. Output is sorted by `total_cost` descending.
-pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregation> {
+pub(crate) fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregation> {
     aggregate(
         attributions,
         |a| {
@@ -735,7 +738,7 @@ pub fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregatio
 /// invocations of the same canonicalized command into a single row. The
 /// representative `command` is the first-seen literal target. Output is
 /// sorted by `total_cost` descending.
-pub fn aggregate_by_bash(attributions: &[ToolAttribution]) -> Vec<BashAggregation> {
+pub(crate) fn aggregate_by_bash(attributions: &[ToolAttribution]) -> Vec<BashAggregation> {
     aggregate(
         attributions,
         |a| (a.tool_name == "Bash").then(|| a.args_hash.clone()),
@@ -800,7 +803,7 @@ struct BashVerbExample {
 /// up to three highest-cost representative commands (cost desc, then command
 /// asc as tiebreaker). Output is sorted by `total_cost` desc, then `verb`
 /// asc.
-pub fn aggregate_by_bash_verb<F>(
+pub(crate) fn aggregate_by_bash_verb<F>(
     attributions: &[ToolAttribution],
     parse: F,
 ) -> Vec<BashVerbAggregation>
@@ -914,7 +917,7 @@ fn parse_mcp_tool_name(name: &str) -> Option<(&str, &str)> {
 /// Roll up `Agent` / `Task` spawn attributions by `subagent_type`. Spawns
 /// without a resolved type bucket under `"(unknown)"`. Output is sorted by
 /// `total_cost` descending.
-pub fn aggregate_by_subagent(attributions: &[ToolAttribution]) -> Vec<SubagentAggregation> {
+pub(crate) fn aggregate_by_subagent(attributions: &[ToolAttribution]) -> Vec<SubagentAggregation> {
     aggregate(
         attributions,
         |a| {
@@ -971,7 +974,9 @@ struct McpServerAccumulator {
 /// tools (and malformed `mcp__…` names that fail to split into a
 /// non-empty server + tool) are skipped. Output is sorted by `total_cost`
 /// desc, then `server` asc as a stable tiebreaker.
-pub fn aggregate_by_mcp_server(attributions: &[ToolAttribution]) -> Vec<McpServerAggregation> {
+pub(crate) fn aggregate_by_mcp_server(
+    attributions: &[ToolAttribution],
+) -> Vec<McpServerAggregation> {
     let mut by_server: IndexMap<String, McpServerAccumulator> = IndexMap::new();
     for a in attributions {
         let Some((server, tool)) = parse_mcp_tool_name(&a.tool_name) else {

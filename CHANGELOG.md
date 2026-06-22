@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports ~44 low-level `analyze`-layer internals — detector/aggregator functions (`detect_patterns`, `attribute_hotspots`, `compute_quality`, `find_overhead_files`, the `aggregate_by_*` family, …) and helper types (`PricingTable`, `ComputeQualityOptions`, `OverheadFile`, `ProviderRule`, `SessionTotals`, …). These were never the intended embedding surface; embed through the verb layer (`LedgerHandle` methods / `summary_report` / `hotspots` / `compare` / …). The `AnalyzeHotspotsOptions`/`AnalyzeHotspotsResult` aliases are gone. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.
 - `burn` subagent-tree views now require a re-ingest to render pre-Root-emission event logs (legacy reconstruction path removed).
 
 ## [3.4.0] - 2026-06-20

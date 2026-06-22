@@ -105,7 +105,7 @@ pub struct UsageCostAggregateRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProviderAggregateRow {
+pub(crate) struct ProviderAggregateRow {
     pub provider: String,
     pub label: String,
     pub turns: u64,
@@ -115,7 +115,7 @@ pub struct ProviderAggregateRow {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct AggregateByProviderOptions<'a> {
+pub(crate) struct AggregateByProviderOptions<'a> {
     pub pricing: &'a PricingTable,
     /// `None` defers to [`default_rules`].
     pub rules: Option<&'a [ProviderRule]>,
@@ -180,7 +180,8 @@ pub fn provider_for_model_with_rules(
 
 /// Filter turns to those whose effective provider (lower-cased) is in
 /// `filter`. Returns the input slice unchanged when `filter` is `None`.
-pub fn filter_turns_by_provider<'a, T>(
+#[cfg(test)]
+pub(crate) fn filter_turns_by_provider<'a, T>(
     turns: &'a [T],
     filter: Option<&ProviderFilter>,
 ) -> Vec<&'a T>
@@ -190,7 +191,8 @@ where
     filter_turns_by_provider_with_rules(turns, filter, default_rules())
 }
 
-pub fn filter_turns_by_provider_with_rules<'a, T>(
+#[cfg(test)]
+pub(crate) fn filter_turns_by_provider_with_rules<'a, T>(
     turns: &'a [T],
     filter: Option<&ProviderFilter>,
     rules: &[ProviderRule],
@@ -215,11 +217,13 @@ where
 /// 'source'>`. Implemented for [`TurnRecord`] out of the box; downstream
 /// callers can implement it for their own row types if they want to share
 /// [`filter_turns_by_provider`].
-pub trait AsTurnLike {
+#[cfg(test)]
+pub(crate) trait AsTurnLike {
     fn model_str(&self) -> &str;
     fn source_kind(&self) -> SourceKind;
 }
 
+#[cfg(test)]
 impl AsTurnLike for TurnRecord {
     fn model_str(&self) -> &str {
         &self.model
@@ -229,7 +233,7 @@ impl AsTurnLike for TurnRecord {
     }
 }
 
-pub fn aggregate_by_provider(
+pub(crate) fn aggregate_by_provider(
     turns: &[TurnRecord],
     opts: AggregateByProviderOptions<'_>,
 ) -> Vec<ProviderAggregateRow> {

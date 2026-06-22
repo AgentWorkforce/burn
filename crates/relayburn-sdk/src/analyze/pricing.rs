@@ -46,7 +46,7 @@ pub struct ModelCost {
     pub reasoning_mode: ReasoningMode,
 }
 
-pub type PricingTable = HashMap<String, ModelCost>;
+pub(crate) type PricingTable = HashMap<String, ModelCost>;
 
 #[derive(Debug, Default, Deserialize)]
 struct ModelsDevModel {

@@ -27,7 +27,7 @@ pub enum OverheadFileKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct OverheadFile {
+pub(crate) struct OverheadFile {
     pub kind: OverheadFileKind,
     pub path: String,
     /// Which agent sources read this file into their cached context. A turn's
@@ -36,20 +36,20 @@ pub struct OverheadFile {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParsedOverheadFile {
+pub(crate) struct ParsedOverheadFile {
     pub file: OverheadFile,
     pub parsed: ParsedClaudeMd,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct OverheadFileAttribution {
+pub(crate) struct OverheadFileAttribution {
     pub file: OverheadFile,
     pub parsed: ParsedClaudeMd,
     pub attribution: ClaudeMdAttributionResult,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct OverheadAttribution {
+pub(crate) struct OverheadAttribution {
     pub per_file: Vec<OverheadFileAttribution>,
     pub grand_total: f64,
     /// Count of distinct turns that contributed to at least one file's cost.
@@ -59,7 +59,7 @@ pub struct OverheadAttribution {
     pub total_riding_turns: u64,
 }
 
-pub struct AttributeOverheadInput<'a> {
+pub(crate) struct AttributeOverheadInput<'a> {
     pub files: &'a [ParsedOverheadFile],
     pub turns: &'a [TurnRecord],
     pub pricing: &'a PricingTable,
@@ -89,7 +89,7 @@ const CANDIDATES: &[Candidate] = &[
     },
 ];
 
-pub fn find_overhead_files(project_path: &Path) -> Vec<OverheadFile> {
+pub(crate) fn find_overhead_files(project_path: &Path) -> Vec<OverheadFile> {
     let mut out = Vec::new();
     for c in CANDIDATES {
         let mut abs = project_path.to_path_buf();
@@ -110,12 +110,12 @@ pub fn find_overhead_files(project_path: &Path) -> Vec<OverheadFile> {
     out
 }
 
-pub fn load_overhead_file(file: OverheadFile) -> std::io::Result<ParsedOverheadFile> {
+pub(crate) fn load_overhead_file(file: OverheadFile) -> std::io::Result<ParsedOverheadFile> {
     let parsed = load_claude_md_file(Path::new(&file.path))?;
     Ok(ParsedOverheadFile { file, parsed })
 }
 
-pub fn attribute_overhead(input: AttributeOverheadInput<'_>) -> OverheadAttribution {
+pub(crate) fn attribute_overhead(input: AttributeOverheadInput<'_>) -> OverheadAttribution {
     let mut per_file: Vec<OverheadFileAttribution> = Vec::new();
     // Per-session max riding-turns across every file. The eviction check is
     // `cache_read >= file_tokens`, so a smaller file's rides are a strict

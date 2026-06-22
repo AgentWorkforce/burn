@@ -68,7 +68,7 @@ static BASH_RAW_NAMES: phf::Set<&'static str> = phf_set! {
     "Bash", "bash", "exec_command", "shell"
 };
 
-pub fn detect_tool_call_patterns(
+pub(crate) fn detect_tool_call_patterns(
     turns: &[TurnRecord],
     opts: &DetectToolCallPatternsOptions<'_>,
 ) -> Vec<ToolCallPatternFinding> {

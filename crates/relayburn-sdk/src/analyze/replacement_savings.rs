@@ -141,7 +141,7 @@ pub fn estimate_savings_for_tool_call(
     })
 }
 
-pub fn summarize_replacement_savings(
+pub(crate) fn summarize_replacement_savings(
     turns: &[TurnRecord],
     options: Option<&ReplacementSavingsOptions>,
 ) -> ReplacementSavingsSummary {

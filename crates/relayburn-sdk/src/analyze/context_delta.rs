@@ -267,7 +267,7 @@ impl ContextDeltaOpts {
 /// `curr` inference's model. Models the pricing table doesn't recognize
 /// charge `0.0` (matching the rest of the analyze surface, which never
 /// surfaces costs it can't price).
-pub fn deltas_for_session(
+pub(crate) fn deltas_for_session(
     trees: &[TurnSpanTree],
     compactions: &[CompactionEvent],
     pricing: &PricingTable,
