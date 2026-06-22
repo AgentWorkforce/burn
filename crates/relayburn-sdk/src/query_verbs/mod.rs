@@ -398,6 +398,39 @@ pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Res
     Ok(())
 }
 
+/// Partition `items` into time buckets by their timestamp string. Returns the
+/// `Buckets` window plus a per-bucket vector of items, or `Ok(None)` when there
+/// is no anchor (no `--since` and no parseable timestamps) so each caller can
+/// return its own empty-timeseries shape. `ts_of` extracts the ISO timestamp
+/// from an item (`|t| &t.ts` for `TurnRecord`, `|t| &t.turn.ts` for
+/// `EnrichedTurn`). Shared by the `summary` and `compare` `--bucket` paths.
+pub(crate) fn partition_into_buckets<T>(
+    items: Vec<T>,
+    since: Option<&str>,
+    bucket_secs: u64,
+    ts_of: impl Fn(&T) -> &str,
+) -> Result<Option<(Buckets, Vec<Vec<T>>)>> {
+    let Some(anchor) = bucket_anchor_secs(
+        since,
+        items.iter().filter_map(|t| iso_z_to_epoch_secs(ts_of(t))),
+    ) else {
+        return Ok(None);
+    };
+    let now = system_now_secs() as i64;
+    ensure_bucket_span(anchor, now, bucket_secs)?;
+    let buckets = Buckets::new(anchor, now, bucket_secs);
+    let mut per_bucket: Vec<Vec<T>> = (0..buckets.len()).map(|_| Vec::new()).collect();
+    for t in items {
+        let Some(ep) = iso_z_to_epoch_secs(ts_of(&t)) else {
+            continue;
+        };
+        if let Some(i) = buckets.index_for(ep) {
+            per_bucket[i].push(t);
+        }
+    }
+    Ok(Some((buckets, per_bucket)))
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers — query construction + hotspots coverage gate
 // ---------------------------------------------------------------------------
