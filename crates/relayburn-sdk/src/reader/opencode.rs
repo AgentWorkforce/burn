@@ -1285,7 +1285,7 @@ fn ms_to_iso(ms: i64) -> String {
     const MS_PER_DAY: i64 = 86_400_000;
     let total_days_since_epoch = ms.div_euclid(MS_PER_DAY);
     let ms_in_day = ms.rem_euclid(MS_PER_DAY);
-    let (y, mo, d) = days_to_ymd(total_days_since_epoch);
+    let (y, mo, d) = crate::util::time::days_to_ymd(total_days_since_epoch);
     let h = ms_in_day / 3_600_000;
     let m = (ms_in_day / 60_000) % 60;
     let s = (ms_in_day / 1_000) % 60;
@@ -1294,25 +1294,6 @@ fn ms_to_iso(ms: i64) -> String {
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
         y, mo, d, h, m, s, frac
     )
-}
-
-fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
-    // Hinnant's days-from-civil inverse.
-    let z = days_since_epoch + 719_468;
-    let era = if z >= 0 {
-        z / 146_097
-    } else {
-        (z - 146_096) / 146_097
-    };
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
 }
 
 fn resolve_token_counter(
