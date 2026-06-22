@@ -209,7 +209,7 @@ pub(crate) fn bucket_subagents_per_turn(
     // search. Cheap — one parse per turn.
     let turn_starts: Vec<i64> = turns
         .iter()
-        .map(|t| parse_iso_ms_compat(&t.ts).unwrap_or(0))
+        .map(|t| crate::util::time::parse_iso_ms(&t.ts).unwrap_or(0))
         .collect();
 
     for (sa_idx, sa) in subagents.iter().enumerate() {
@@ -256,7 +256,7 @@ fn first_record_ts_ms(records: &[serde_json::Value]) -> Option<i64> {
             .and_then(|v| v.as_str())
             .or_else(|| rec.get("ts").and_then(|v| v.as_str()));
         if let Some(s) = ts_str {
-            if let Some(ms) = parse_iso_ms_compat(s) {
+            if let Some(ms) = crate::util::time::parse_iso_ms(s) {
                 earliest = Some(match earliest {
                     Some(e) => e.min(ms),
                     None => ms,
@@ -265,12 +265,6 @@ fn first_record_ts_ms(records: &[serde_json::Value]) -> Option<i64> {
         }
     }
     earliest
-}
-
-/// ISO-8601 parser thin wrapper. Reuses the shared `crate::util::time`
-/// helper so all four ex-copies stay in sync.
-fn parse_iso_ms_compat(s: &str) -> Option<i64> {
-    crate::util::time::parse_iso_ms(s)
 }
 
 /// Resolve the Claude projects root and discover + pair subagent
