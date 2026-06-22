@@ -6,6 +6,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports ~50 low-level `analyze`-layer internals — detector/aggregator functions (`detect_patterns`, `attribute_hotspots`, `compute_quality`, `find_overhead_files`, the `aggregate_by_*` family, `build_compare_table`, …) and helper types (`PricingTable`, `ComputeQualityOptions`, `OverheadFile`, `ProviderRule`, `SessionTotals`, `CompareTable`, `CompareCell`, …). These were never the intended embedding surface; embed through the verb layer (`LedgerHandle` methods / `summary_report` / `hotspots` / `compare` / …). The `AnalyzeHotspotsOptions`/`AnalyzeHotspotsResult`/`AnalyzeCompareOptions` aliases are gone. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.
 - `burn compare` cost figures now use canonical decimal rounding (`{:.N}`/`toFixed` semantics) instead of float-multiply rounding, so cells/totals/buckets can shift by one in the last reported digit at exact ties; affects the `compare` verb's JSON for all consumers (CLI, MCP, `@relayburn/sdk`).
+- Fidelity summaries (`fidelity` block in `summary`/`compare` JSON) now emit `byClass` / `byGranularity` / `missingCoverage` keys in a stable order instead of a randomized per-run order, so output is reproducible across runs (diff-, cache-, and snapshot-friendly).
 - `burn` subagent-tree views now require a re-ingest to render pre-Root-emission event logs (legacy reconstruction path removed).
 
 ## [3.4.0] - 2026-06-20

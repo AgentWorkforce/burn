@@ -4,7 +4,7 @@
 //! Higher-level aggregators (compare, hotspots) use this to refuse stats on
 //! undersized fixtures, so it lands before them.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::Serialize;
 
@@ -54,29 +54,29 @@ fn coverage_get(c: &Coverage, field: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct FidelitySummary {
     pub total: u64,
-    pub by_class: HashMap<FidelityClass, u64>,
-    pub by_granularity: HashMap<UsageGranularity, u64>,
-    pub missing_coverage: HashMap<&'static str, u64>,
+    pub by_class: BTreeMap<FidelityClass, u64>,
+    pub by_granularity: BTreeMap<UsageGranularity, u64>,
+    pub missing_coverage: BTreeMap<&'static str, u64>,
     /// Records with no `fidelity` field at all — emitted by older ledger
     /// writers. Counted separately so we don't pretend they're "full".
     pub unknown: u64,
 }
 
 pub fn empty_fidelity_summary() -> FidelitySummary {
-    let mut by_class = HashMap::new();
+    let mut by_class = BTreeMap::new();
     by_class.insert(FidelityClass::Full, 0);
     by_class.insert(FidelityClass::UsageOnly, 0);
     by_class.insert(FidelityClass::AggregateOnly, 0);
     by_class.insert(FidelityClass::CostOnly, 0);
     by_class.insert(FidelityClass::Partial, 0);
 
-    let mut by_granularity = HashMap::new();
+    let mut by_granularity = BTreeMap::new();
     by_granularity.insert(UsageGranularity::PerTurn, 0);
     by_granularity.insert(UsageGranularity::PerMessage, 0);
     by_granularity.insert(UsageGranularity::PerSessionAggregate, 0);
     by_granularity.insert(UsageGranularity::CostOnly, 0);
 
-    let mut missing_coverage: HashMap<&'static str, u64> = HashMap::new();
+    let mut missing_coverage: BTreeMap<&'static str, u64> = BTreeMap::new();
     for field in COVERAGE_FIELDS {
         missing_coverage.insert(*field, 0);
     }
