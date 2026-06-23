@@ -46,12 +46,16 @@ let loadError = null;
 function tryRequire(specifier, localFile) {
   // Prefer the optional-dep platform package; fall back to a sibling .node
   // that `napi build --release` drops next to this loader during local dev.
-  const localPath = localFile ? join(__dirname, '..', localFile) : null;
-  if (localPath && existsSync(localPath)) {
-    try {
-      return require(localPath);
-    } catch (e) {
-      loadError = e;
+  const localPaths = localFile
+    ? [join(__dirname, localFile), join(__dirname, '..', localFile)]
+    : [];
+  for (const localPath of localPaths) {
+    if (existsSync(localPath)) {
+      try {
+        return require(localPath);
+      } catch (e) {
+        loadError = e;
+      }
     }
   }
   try {
@@ -63,13 +67,13 @@ function tryRequire(specifier, localFile) {
 }
 
 if (platform === 'darwin' && arch === 'arm64') {
-  nativeBinding = tryRequire('@relayburn/sdk-darwin-arm64', 'relayburn-sdk.darwin-arm64.node');
+  nativeBinding = tryRequire('@relayburn/sdk-darwin-arm64', 'index.darwin-arm64.node');
 } else if (platform === 'darwin' && arch === 'x64') {
-  nativeBinding = tryRequire('@relayburn/sdk-darwin-x64', 'relayburn-sdk.darwin-x64.node');
+  nativeBinding = tryRequire('@relayburn/sdk-darwin-x64', 'index.darwin-x64.node');
 } else if (platform === 'linux' && arch === 'arm64' && !isMusl()) {
-  nativeBinding = tryRequire('@relayburn/sdk-linux-arm64-gnu', 'relayburn-sdk.linux-arm64-gnu.node');
+  nativeBinding = tryRequire('@relayburn/sdk-linux-arm64-gnu', 'index.linux-arm64-gnu.node');
 } else if (platform === 'linux' && arch === 'x64' && !isMusl()) {
-  nativeBinding = tryRequire('@relayburn/sdk-linux-x64-gnu', 'relayburn-sdk.linux-x64-gnu.node');
+  nativeBinding = tryRequire('@relayburn/sdk-linux-x64-gnu', 'index.linux-x64-gnu.node');
 }
 
 if (!nativeBinding) {

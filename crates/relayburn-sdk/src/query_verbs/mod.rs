@@ -39,8 +39,8 @@ use crate::analyze::{
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
-    parse_bash_command, resolve_project, BashParse, FidelityClass, RelationshipType, SourceKind,
-    StopReason, TurnRecord, UsageGranularity, UserTurnRecord,
+    parse_bash_command, resolve_project, BashParse, ContentKind, ContentRole, FidelityClass,
+    RelationshipType, SourceKind, StopReason, TurnRecord, UsageGranularity, UserTurnRecord,
 };
 // Re-exported only for the `tests` submodule, which reaches these names
 // through `use super::*`. The non-test query-verb code no longer references
@@ -73,7 +73,15 @@ use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
 ///
 /// Garbage inputs error out; `None` / empty inputs return `Ok(None)`.
 pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
-    let Some(raw) = since else {
+    normalize_time_bound("since", since)
+}
+
+fn normalize_until(until: Option<&str>) -> Result<Option<String>> {
+    normalize_time_bound("until", until)
+}
+
+fn normalize_time_bound(label: &str, value: Option<&str>) -> Result<Option<String>> {
+    let Some(raw) = value else {
         return Ok(None);
     };
     if raw.is_empty() {
@@ -96,7 +104,7 @@ pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
     if let Some(canonical) = normalize_iso_to_utc_z(raw) {
         return Ok(Some(canonical));
     }
-    anyhow::bail!("invalid since: {raw} (expected ISO timestamp or relative range like 7d)");
+    anyhow::bail!("invalid {label}: {raw} (expected ISO timestamp or relative range like 7d)");
 }
 
 fn parse_relative(s: &str) -> Option<(u64, char)> {
@@ -409,6 +417,7 @@ pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Res
 pub(crate) fn partition_into_buckets<T>(
     items: Vec<T>,
     since: Option<&str>,
+    until: Option<&str>,
     bucket_secs: u64,
     ts_of: impl Fn(&T) -> &str,
 ) -> Result<Option<(Buckets, Vec<Vec<T>>)>> {
@@ -418,9 +427,14 @@ pub(crate) fn partition_into_buckets<T>(
     ) else {
         return Ok(None);
     };
-    let now = system_now_secs() as i64;
-    ensure_bucket_span(anchor, now, bucket_secs)?;
-    let buckets = Buckets::new(anchor, now, bucket_secs);
+    let end = until
+        .and_then(iso_z_to_epoch_secs)
+        // `Query::until` is inclusive. Buckets are `[start, end)`, so include
+        // the final until second by making the partition end exclusive.
+        .map(|secs| secs.saturating_add(1))
+        .unwrap_or_else(|| system_now_secs() as i64);
+    ensure_bucket_span(anchor, end, bucket_secs)?;
+    let buckets = Buckets::new(anchor, end, bucket_secs);
     let mut per_bucket: Vec<Vec<T>> = (0..buckets.len()).map(|_| Vec::new()).collect();
     for t in items {
         let Some(ep) = iso_z_to_epoch_secs(ts_of(&t)) else {
@@ -437,7 +451,12 @@ pub(crate) fn partition_into_buckets<T>(
 // Shared helpers — query construction + hotspots coverage gate
 // ---------------------------------------------------------------------------
 
-fn build_query(session: Option<&str>, project: Option<&str>, since: Option<&str>) -> Result<Query> {
+fn build_query(
+    session: Option<&str>,
+    project: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Result<Query> {
     let mut q = Query::default();
     if let Some(s) = session {
         q.session_id = Some(s.to_string());
@@ -447,6 +466,9 @@ fn build_query(session: Option<&str>, project: Option<&str>, since: Option<&str>
     }
     if let Some(since_norm) = normalize_since(since)? {
         q.since = Some(since_norm);
+    }
+    if let Some(until_norm) = normalize_until(until)? {
+        q.until = Some(until_norm);
     }
     Ok(q)
 }
