@@ -32,7 +32,7 @@ path = "src/lib.rs"
 # the workspace MAJOR.MINOR on every release so the local workspace
 # path (currently 1.10.0) and the published `relayburn-sdk` on
 # crates.io always satisfy the dep at publish time.
-relayburn-sdk = { path = "../relayburn-sdk", version = "3.4" }
+relayburn-sdk = { path = "../relayburn-sdk", version = "4.0" }
 
 # clap v4 derive — argument parsing root and subcommand dispatch. The
 # scaffold defines globals + subcommand stubs only; per-command flag

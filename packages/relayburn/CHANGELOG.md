@@ -4,6 +4,8 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-06-23
+
 - `burn compare` cost figures now use canonical decimal rounding (`{:.N}`/`toFixed` semantics), so cells/totals/buckets can shift by one in the last reported digit at exact ties.
 - `fidelity` blocks in `summary` / `compare` JSON now emit `byClass` / `byGranularity` / `missingCoverage` keys in a stable order, so output is reproducible across runs.
 
