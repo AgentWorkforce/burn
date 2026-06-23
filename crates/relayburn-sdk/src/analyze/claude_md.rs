@@ -417,7 +417,7 @@ fn pick_dominant_model(counts: &IndexMap<String, u64>) -> String {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TrimRecommendation {
+pub(crate) struct TrimRecommendation {
     pub file_path: String,
     pub section: MarkdownSection,
     pub projected_savings_per_session: f64,
@@ -425,7 +425,7 @@ pub struct TrimRecommendation {
     pub token_share: f64,
 }
 
-pub fn build_trim_recommendations(
+pub(crate) fn build_trim_recommendations(
     attribution: &ClaudeMdAttributionResult,
     top_n: usize,
 ) -> Vec<TrimRecommendation> {
@@ -444,7 +444,7 @@ pub fn build_trim_recommendations(
         .collect()
 }
 
-pub fn render_unified_diff_for_recommendation(
+pub(crate) fn render_unified_diff_for_recommendation(
     file_path: &str,
     file_text: &str,
     rec: &TrimRecommendation,

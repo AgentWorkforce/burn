@@ -20,7 +20,7 @@ use crate::analyze::provider_reattribution::{resolve_provider, strip_provider_pr
 pub struct CostBreakdown {
     /// Model identifier this breakdown is attributed to. Uses
     /// `Cow<'static, str>` so common labels like `"aggregate"` (from
-    /// [`sum_costs`]) can be carried as a `'static` borrow with no allocation,
+    /// `sum_costs`) can be carried as a `'static` borrow with no allocation,
     /// while per-turn breakdowns can still own a `String`.
     pub model: Cow<'static, str>,
     pub total: f64,
@@ -45,7 +45,7 @@ pub struct CostForUsageOptions {
 /// analyze module. Prices in the pricing table are quoted per million tokens.
 pub(crate) const PER_MILLION: f64 = 1_000_000.0;
 
-pub fn cost_for_usage(
+pub(crate) fn cost_for_usage(
     usage: &Usage,
     model: &str,
     pricing: &PricingTable,
@@ -180,7 +180,7 @@ pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec
     (count, models)
 }
 
-pub fn sum_costs<I, B>(costs: I) -> CostBreakdown
+pub(crate) fn sum_costs<I, B>(costs: I) -> CostBreakdown
 where
     I: IntoIterator<Item = B>,
     B: std::borrow::Borrow<CostBreakdown>,

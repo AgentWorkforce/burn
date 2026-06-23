@@ -55,7 +55,7 @@ pub const RAIL_GAP: i32 = 32;
 /// Default `--max-turns` cap — see the CLI surface. Layouts wider than
 /// ~50 columns get unreadable in static SVG / Mermaid; embedders that
 /// want the full session can pass [`FlowOpts::max_turns`] explicitly.
-pub const DEFAULT_MAX_TURNS: u32 = 50;
+pub(crate) const DEFAULT_MAX_TURNS: u32 = 50;
 
 /// What kind of node a [`FlowNode`] represents in the flow DAG. Mirrors
 /// agent-profiler's node-kind registry so embedders that ship their own

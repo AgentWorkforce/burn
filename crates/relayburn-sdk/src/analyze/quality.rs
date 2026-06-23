@@ -84,7 +84,7 @@ pub struct QualityResult {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ComputeQualityOptions<'a> {
+pub(crate) struct ComputeQualityOptions<'a> {
     /// Optional content sidecar records. When provided, give-up phrase
     /// matching on the last assistant text downgrades assistant-ended
     /// sessions from `completed/medium` to `completed/low`. Without content,
@@ -111,7 +111,7 @@ const SHORT_CONVERSATION_THRESHOLD: usize = 3;
 const LONG_CONVERSATION_THRESHOLD: usize = 10;
 const FAILURE_STREAK_THRESHOLD: u64 = 3;
 
-pub fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> QualityResult {
+pub(crate) fn compute_quality(turns: &[TurnRecord], opts: &ComputeQualityOptions) -> QualityResult {
     let by_session = group_turns_by_session_sorted(turns);
 
     let now = opts.now_ms.unwrap_or_else(now_ms_system);

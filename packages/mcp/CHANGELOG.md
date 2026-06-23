@@ -4,6 +4,8 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- `compare` / `summary` tool output reflects the SDK's canonical compare-cost rounding (`toFixed` semantics; ties shift by one in the last digit) and a stable, deterministic fidelity-summary key order.
+
 ## [3.0.0] - 2026-05-26
 
 ### Added

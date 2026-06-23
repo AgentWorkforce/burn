@@ -88,32 +88,24 @@ pub use crate::ledger::{
 };
 
 pub use crate::analyze::{
-    deltas_for_session, ContextDelta, ContextDeltaOpts, InterveningStep,
-    OwnerFilter as ContextDeltaOwnerFilter, OwnerRail as ContextDeltaOwnerRail, ReminderSource,
+    ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter as ContextDeltaOwnerFilter,
+    OwnerRail as ContextDeltaOwnerRail, ReminderSource,
 };
 
+// NOTE: the low-level `compare` building blocks (`build_compare_table`,
+// `CompareTable` / `CompareCell` / `CompareTotals`, and the
+// `CompareOptions` aliased internally as `AnalyzeCompareOptions`) and the
+// helpers `load_pricing` / `provider_for` / `has_minimum_fidelity` /
+// `ProviderFilter` are deliberately NOT re-exported — they are `pub(crate)`
+// internals of the compare verb. The public compare surface is the
+// `LedgerHandle::compare` / `compare_timeseries` verbs (see `query_verbs`).
 pub use crate::analyze::{
-    aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
-    aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
-    attribute_hotspots, attribute_overhead, build_compare_table, build_subagent_tree,
-    build_trim_recommendations, compare_from_archive, compute_quality, cost_for_turn,
-    cost_for_usage, describe_applies_to, detect_patterns, detect_tool_call_patterns,
-    detect_tool_output_bloat, filter_turns_by_provider, filter_turns_by_provider_with_rules,
-    find_overhead_files, findings_from_patterns, has_minimum_fidelity, load_overhead_file,
-    load_pricing, provider_for, render_unified_diff_for_recommendation, sum_costs,
-    summarize_fidelity, summarize_replacement_savings, AggregateByProviderOptions, AsTurnLike,
-    AttributeOverheadInput, AttributionMethod, BashAggregation, BashVerbAggregation,
-    BuildSubagentTreeOptions, CompareCategory, CompareCell, CompareFromArchiveResult,
-    CompareOptions as AnalyzeCompareOptions, CompareTable, CompareTotals, ComputeQualityOptions,
-    CostBreakdown, CoverageField, FidelitySummary, FieldCoverage, FileAggregation,
-    HotspotsOptions as AnalyzeHotspotsOptions, HotspotsResult as AnalyzeHotspotsResult,
-    MarkdownSection, McpServerAggregation, ModelCost, OneShotMetrics, OutcomeLabel,
-    OverheadAttribution, OverheadFile, OverheadFileAttribution, OverheadFileKind,
-    ParsedOverheadFile, PricingTable, ProviderAggregateRow, ProviderFilter, ProviderRule,
-    QualityResult, ReasoningMode, ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost,
-    SessionOutcome, SessionTotals, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
-    ToolAttribution, TrimRecommendation, TurnProvider, UsageCostAggregateRow, WasteFinding,
-    WasteSeverity, DEFAULT_MIN_SAMPLE,
+    cost_for_turn, describe_applies_to, summarize_fidelity, AttributionMethod, BashAggregation,
+    BashVerbAggregation, CostBreakdown, CoverageField, FidelitySummary, FieldCoverage,
+    FileAggregation, MarkdownSection, McpServerAggregation, ModelCost, OneShotMetrics,
+    OutcomeLabel, OverheadFileKind, QualityResult, ReasoningMode, ReplacementSavingsSummary,
+    RowCoverage, SessionClaudeMdCost, SessionOutcome, SubagentAggregation, SubagentTreeNode,
+    SubagentTypeStats, UsageCostAggregateRow, WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
 };
 
 // Span tree primitives (issue #430). Re-exported at the SDK root so
@@ -128,7 +120,7 @@ pub use crate::analyze::{
 // span tree.
 pub use crate::analyze::{
     flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
-    TurnTokens as FlowTurnTokens, FLOW_DEFAULT_MAX_TURNS, INTER_TURN_GAP, RAIL_GAP,
+    TurnTokens as FlowTurnTokens, INTER_TURN_GAP, RAIL_GAP,
 };
 
 pub use crate::ingest::{

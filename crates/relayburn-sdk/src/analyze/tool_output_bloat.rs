@@ -443,21 +443,9 @@ pub struct DetectToolOutputBloatOptions<'a> {
     pub min_occurrences: Option<u64>,
 }
 
-impl<'a> DetectToolOutputBloatOptions<'a> {
-    pub fn new(pricing: &'a PricingTable) -> Self {
-        Self {
-            settings: &[],
-            tool_result_events: &[],
-            user_turns: &[],
-            turns: &[],
-            pricing,
-            threshold: None,
-            min_occurrences: None,
-        }
-    }
-}
-
-pub fn detect_tool_output_bloat(opts: &DetectToolOutputBloatOptions<'_>) -> Vec<ToolOutputBloat> {
+pub(crate) fn detect_tool_output_bloat(
+    opts: &DetectToolOutputBloatOptions<'_>,
+) -> Vec<ToolOutputBloat> {
     let mut out: Vec<ToolOutputBloat> = Vec::new();
     if !opts.settings.is_empty() {
         out.extend(detect_static_config_bloat(

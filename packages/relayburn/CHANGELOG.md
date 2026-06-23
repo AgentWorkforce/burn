@@ -4,6 +4,9 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+- `burn compare` cost figures now use canonical decimal rounding (`{:.N}`/`toFixed` semantics), so cells/totals/buckets can shift by one in the last reported digit at exact ties.
+- `fidelity` blocks in `summary` / `compare` JSON now emit `byClass` / `byGranularity` / `missingCoverage` keys in a stable order, so output is reproducible across runs.
+
 ## [3.4.0] - 2026-06-20
 
 - Added `--bucket <DURATION>` to `burn summary` and `burn compare` for a per-bucket time-series across the `--since` window (`{ bucketSeconds, buckets: [...] }` in `--json`). Grammar: `30s`/`5m`(minutes)/`1h`/`12h`/`1d`/`7d`.

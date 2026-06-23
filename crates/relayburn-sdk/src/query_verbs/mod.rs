@@ -9,44 +9,46 @@
 //! Option<PathBuf>` so callers don't have to mutate process env to point
 //! at a non-default ledger.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
     aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
     attribute_hotspots, attribute_overhead, build_compare_table, build_ghost_surface_inputs,
-    build_subagent_tree, build_trim_recommendations, compute_quality, cost_for_turn,
-    deltas_for_session, detect_ghost_surface, detect_patterns, detect_tool_call_patterns,
-    detect_tool_output_bloat, find_overhead_files, findings_from_patterns,
-    ghost_surface_to_finding, has_minimum_fidelity, load_claude_settings, load_overhead_file,
-    load_pricing, project_claude_settings_path, provider_for,
+    build_subagent_tree, build_trim_recommendations, cost_for_turn, deltas_for_session,
+    detect_ghost_surface, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
+    find_overhead_files, findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity,
+    load_claude_settings, load_overhead_file, load_pricing, project_claude_settings_path,
     render_unified_diff_for_recommendation, sort_findings, sum_costs, summarize_fidelity,
     summarize_fidelity_from_iter, summarize_replacement_savings, tally_unpriced,
     tool_call_pattern_to_finding, tool_output_bloat_to_finding, user_claude_settings_path,
     AggregateByProviderOptions, AttributeOverheadInput, AttributionMethod, BashAggregation,
     BashVerbAggregation, BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions,
-    CompareTable, ComputeQualityOptions, ContextDelta, ContextDeltaOpts, CostBreakdown,
-    CoverageField, DetectPatternsOptions, DetectToolCallPatternsOptions,
-    DetectToolOutputBloatOptions, FidelitySummary, FieldCoverage, FileAggregation,
+    CompareTable, ContextDelta, ContextDeltaOpts, CostBreakdown, DetectPatternsOptions,
+    DetectToolCallPatternsOptions, DetectToolOutputBloatOptions, FidelitySummary, FileAggregation,
     GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings,
     MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind, OwnerRail,
-    ParsedOverheadFile, PricingTable, ProviderAggregateRow, ProviderFilter, QualityResult,
-    ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SubagentAggregation,
-    SubagentTreeNode, SubagentTypeStats, ToolSavingsAggregate, TurnSpanTree, UsageCostAggregateRow,
-    WasteFinding,
+    ParsedOverheadFile, PricingTable, ProviderFilter, QualityResult, ReplacementSavingsSummary,
+    SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
+    ToolSavingsAggregate, TurnSpanTree, UsageCostAggregateRow, WasteFinding,
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
-    parse_bash_command, resolve_project, BashParse, ContentRecord, Coverage, FidelityClass,
-    RelationshipType, SessionRelationshipRecord, SourceKind, StopReason, TurnRecord, Usage,
-    UsageGranularity, UserTurnBlockKind, UserTurnRecord,
+    parse_bash_command, resolve_project, BashParse, FidelityClass, RelationshipType, SourceKind,
+    StopReason, TurnRecord, UsageGranularity, UserTurnRecord,
 };
+// Re-exported only for the `tests` submodule, which reaches these names
+// through `use super::*`. The non-test query-verb code no longer references
+// them directly since the summary compute engine moved into `summary/compute`.
+#[cfg(test)]
+use crate::reader::SessionRelationshipRecord;
+#[cfg(test)]
+use indexmap::IndexMap;
 
 use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
 

@@ -36,7 +36,9 @@ use crate::reader::types::{
     ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UsageAttribution, UsageGranularity,
     UserTurnBlock, UserTurnRecord,
 };
-use crate::reader::user_turn::{HeuristicCounter, TokenCounter, UserTurnTokenizer};
+use crate::reader::user_turn::{
+    join_nonempty, resolve_token_counter, HeuristicCounter, TokenCounter, UserTurnTokenizer,
+};
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -1270,28 +1272,6 @@ fn find_preceding_assistant_by_time(
         }
     }
     best
-}
-
-fn join_nonempty(parts: &[&str], sep: &str) -> String {
-    let mut out: Vec<&str> = Vec::with_capacity(parts.len());
-    for p in parts {
-        if !p.is_empty() {
-            out.push(p);
-        }
-    }
-    out.join(sep)
-}
-
-fn resolve_token_counter(
-    tokenizer: Option<UserTurnTokenizer>,
-) -> std::io::Result<HeuristicCounter> {
-    match tokenizer {
-        None | Some(UserTurnTokenizer::Heuristic) => Ok(HeuristicCounter),
-        Some(UserTurnTokenizer::Cl100k) => Err(std::io::Error::other(
-            "cl100k tokenizer is not yet available in the Rust port; \
-             omit `tokenizer` or pass `Some(Heuristic)` (see AgentWorkforce/burn#246)",
-        )),
-    }
 }
 
 #[cfg(test)]

@@ -38,12 +38,15 @@ pub struct ProviderResolution {
 /// capturing group whose first capture is the normalized model id.
 #[derive(Debug, Clone)]
 pub enum ProviderPattern {
+    // Constructed only via the test-only `ProviderRule::prefix` helper, but
+    // matched by the always-compiled `apply_rule` resolver below.
+    #[cfg_attr(not(test), allow(dead_code))]
     Prefix(String),
     Regex(Regex),
 }
 
 #[derive(Debug, Clone)]
-pub struct ProviderRule {
+pub(crate) struct ProviderRule {
     /// Stable identifier; appears in [`ProviderResolution::matched_rule`] and
     /// is used to dedupe / replace rules when callers extend
     /// [`default_rules`].
@@ -59,7 +62,8 @@ pub struct ProviderRule {
 impl ProviderRule {
     /// Build a literal-prefix rule. The rule fires when the model string
     /// starts with `prefix`; the normalized model is the residual after the
-    /// prefix.
+    /// prefix. Test-only since the published custom-rule surface was retired.
+    #[cfg(test)]
     pub fn prefix(
         name: impl Into<String>,
         provider: impl Into<String>,
@@ -70,20 +74,6 @@ impl ProviderRule {
             provider: provider.into(),
             pattern: ProviderPattern::Prefix(prefix.into()),
         }
-    }
-
-    /// Build a regex-pattern rule. Returns an error if `pattern` doesn't
-    /// compile.
-    pub fn regex(
-        name: impl Into<String>,
-        provider: impl Into<String>,
-        pattern: &str,
-    ) -> Result<Self, regex::Error> {
-        Ok(Self {
-            name: name.into(),
-            provider: provider.into(),
-            pattern: ProviderPattern::Regex(Regex::new(pattern)?),
-        })
     }
 }
 

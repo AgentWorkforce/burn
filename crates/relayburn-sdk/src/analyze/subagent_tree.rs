@@ -36,7 +36,7 @@ pub struct SubagentTreeNode {
 }
 
 #[derive(Debug, Clone)]
-pub struct BuildSubagentTreeOptions<'a> {
+pub(crate) struct BuildSubagentTreeOptions<'a> {
     pub pricing: &'a PricingTable,
     pub relationships: Option<&'a [SessionRelationshipRecord]>,
 }
@@ -60,7 +60,7 @@ impl<'a> BuildSubagentTreeOptions<'a> {
 /// `subagent.agentId`), nested by `parentAgentId`. When relationship rows are
 /// supplied, they are the primary substrate; per-turn `subagent` fields
 /// attach turn cost and fill legacy gaps.
-pub fn build_subagent_tree(
+pub(crate) fn build_subagent_tree(
     turns: &[TurnRecord],
     opts: &BuildSubagentTreeOptions<'_>,
 ) -> IndexMap<String, SubagentTreeNode> {
@@ -553,7 +553,7 @@ pub struct SubagentTypeStats {
 /// Aggregate subagent invocations across sessions by `subagentType`. An
 /// invocation is the unique `(sessionId, agentId)` pair so the same agent id
 /// re-used across sessions doesn't collide.
-pub fn aggregate_subagent_type_stats(
+pub(crate) fn aggregate_subagent_type_stats(
     turns: &[TurnRecord],
     opts: &BuildSubagentTreeOptions<'_>,
 ) -> Vec<SubagentTypeStats> {

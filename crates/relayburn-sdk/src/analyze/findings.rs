@@ -632,7 +632,7 @@ Total cost {cost}.",
 /// Roll the full PatternsResult into a single severity-ranked list. Within
 /// the same severity tier, sort by `usdPerSession` descending so the most
 /// expensive findings surface first.
-pub fn findings_from_patterns(result: &PatternsResult) -> Vec<WasteFinding> {
+pub(crate) fn findings_from_patterns(result: &PatternsResult) -> Vec<WasteFinding> {
     let mut findings: Vec<WasteFinding> = Vec::new();
     for r in &result.retry_loops {
         findings.push(retry_loop_to_finding(r));

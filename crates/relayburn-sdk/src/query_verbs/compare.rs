@@ -371,7 +371,13 @@ fn fidelity_rank(class: FidelityClass) -> u8 {
     }
 }
 
+/// Round to `digits` decimal places matching JS `Number(n.toFixed(digits))` /
+/// Rust `format!("{n:.digits$}")` semantics (round half-to-even on the decimal
+/// string), rather than `f64::round`'s half-away-from-zero. The presenter
+/// layer re-formats these values with `format!("{:.N}")`, so rounding the same
+/// way here keeps that second pass idempotent — at exact ties the two
+/// rounding modes otherwise disagree in the last digit.
 fn round_digits(n: f64, digits: i32) -> f64 {
-    let scale = 10_f64.powi(digits);
-    (n * scale).round() / scale
+    let s = format!("{n:.*}", digits.max(0) as usize);
+    s.parse().unwrap_or(n)
 }
