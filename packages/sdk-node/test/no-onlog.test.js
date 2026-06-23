@@ -11,7 +11,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,8 +50,13 @@ test('verbs tolerate a stray onLog property at runtime', async (t) => {
   }
   // Cast through any-shape to bypass the now-stricter option types: the
   // contract under test is the runtime forgiveness, not the TS shape.
-  const stray = { onLog: () => {} };
-  await assert.doesNotReject(() => sdk.summary(stray));
-  await assert.doesNotReject(() => sdk.sessionCost(stray));
-  await assert.doesNotReject(() => sdk.hotspots(stray));
+  const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-sdk-onlog-'));
+  try {
+    const stray = { ledgerHome, onLog: () => {} };
+    await assert.doesNotReject(() => sdk.summary(stray));
+    await assert.doesNotReject(() => sdk.sessionCost(stray));
+    await assert.doesNotReject(() => sdk.hotspots(stray));
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
 });

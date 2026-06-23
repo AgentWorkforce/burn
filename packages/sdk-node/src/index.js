@@ -100,6 +100,18 @@ export async function summary(opts) {
   return coerceBigInts(await binding.summary(opts));
 }
 
+export async function summaryReport(opts) {
+  return coerceBigInts(await binding.summaryReport(opts));
+}
+
+export async function summaryTimeseries(opts) {
+  return coerceBigInts(await binding.summaryTimeseries(opts));
+}
+
+export function capabilities() {
+  return coerceBigInts(binding.capabilities());
+}
+
 export async function sessionCost(opts) {
   return coerceBigInts(await binding.sessionCost(opts));
 }

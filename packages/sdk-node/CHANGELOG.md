@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Added `summaryReport()`, `summaryTimeseries()`, and `capabilities()` APIs for the SDK-owned versioned summary report contract.
+
 ## [4.0.0] - 2026-06-23
 
 - `compare()` cost figures now use canonical decimal rounding (`toFixed` semantics) instead of float-multiply rounding, so cells/totals can shift by one in the last reported digit at exact ties.

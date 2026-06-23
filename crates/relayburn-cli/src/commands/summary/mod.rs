@@ -313,6 +313,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         session: args.session,
         project: args.project,
         since: args.since,
+        until: None,
         workflow: args.workflow,
         tags: if tag_filter.is_empty() {
             None

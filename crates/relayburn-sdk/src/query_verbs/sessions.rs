@@ -115,6 +115,7 @@ impl LedgerHandle {
             opts.session.as_deref(),
             opts.project.as_deref(),
             opts.since.as_deref(),
+            None,
         )?;
         Ok(self.inner.query_inferences(&q)?)
     }
@@ -194,7 +195,7 @@ impl LedgerHandle {
     /// every other read verb already trusts).
     pub fn sessions_list(&self, opts: SessionsListOptions) -> Result<SessionsListResult> {
         let limit = opts.limit.unwrap_or(SESSIONS_LIST_DEFAULT_LIMIT);
-        let q = build_query(None, opts.project.as_deref(), opts.since.as_deref())?;
+        let q = build_query(None, opts.project.as_deref(), opts.since.as_deref(), None)?;
         let turns = collect_turns(self, &q)?;
 
         let pricing = load_pricing(None);

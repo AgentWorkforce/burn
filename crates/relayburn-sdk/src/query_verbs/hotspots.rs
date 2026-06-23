@@ -194,6 +194,7 @@ impl LedgerHandle {
             opts.session.as_deref(),
             opts.project.as_deref(),
             opts.since.as_deref(),
+            None,
         )?;
         if let Some(workflow) = opts.workflow.as_ref() {
             let mut enrichment = q.enrichment.unwrap_or_default();
@@ -282,6 +283,7 @@ fn run_hotspots_attribution(
     let side_q = Query {
         session_id: q.session_id.clone(),
         since: q.since.clone(),
+        until: q.until.clone(),
         enrichment: q.enrichment.clone(),
         ..Default::default()
     };
@@ -491,6 +493,7 @@ fn run_hotspots_findings(
     let side_q = Query {
         session_id: q.session_id.clone(),
         since: q.since.clone(),
+        until: q.until.clone(),
         enrichment: q.enrichment.clone(),
         ..Default::default()
     };
@@ -545,7 +548,7 @@ fn run_hotspots_findings(
     }
 
     if wanted_set.contains("ghost-surface") {
-        let inputs = build_ghost_surface_inputs(turns, pricing, None);
+        let inputs = build_hotspots_ghost_surface_inputs(handle, turns, pricing, &side_q);
         let ghosts = detect_ghost_surface(&inputs);
         let options = GhostSurfaceFindingOptions::default();
         for g in ghosts {
@@ -570,6 +573,50 @@ fn run_hotspots_findings(
         findings,
         summary: fidelity_summary_to_value(&summarize_fidelity(turns)),
     })
+}
+
+pub(super) fn build_hotspots_ghost_surface_inputs(
+    handle: &LedgerHandle,
+    turns: &[TurnRecord],
+    pricing: &PricingTable,
+    q: &Query,
+) -> crate::analyze::ghost_surface::GhostSurfaceInputs {
+    let user_turn_text_by_session = load_ghost_surface_user_text_by_session(handle, turns, q);
+    build_ghost_surface_inputs(turns, pricing, Some(user_turn_text_by_session))
+}
+
+fn load_ghost_surface_user_text_by_session(
+    handle: &LedgerHandle,
+    turns: &[TurnRecord],
+    q: &Query,
+) -> HashMap<SourceKind, HashMap<String, Vec<String>>> {
+    let session_sources: HashSet<(SourceKind, String)> = turns
+        .iter()
+        .map(|turn| (turn.source, turn.session_id.clone()))
+        .collect();
+    let mut out: HashMap<SourceKind, HashMap<String, Vec<String>>> = HashMap::new();
+    for (source, session_id) in session_sources {
+        let records = match handle.inner.query_content(&Query {
+            session_id: Some(session_id.clone()),
+            source: Some(source),
+            since: q.since.clone(),
+            until: q.until.clone(),
+            ..Default::default()
+        }) {
+            Ok(records) => records,
+            Err(_) => continue,
+        };
+        let texts: Vec<String> = records
+            .into_iter()
+            .filter(|record| record.role == ContentRole::User && record.kind == ContentKind::Text)
+            .filter_map(|record| record.text)
+            .filter(|text| !text.is_empty())
+            .collect();
+        if !texts.is_empty() {
+            out.entry(source).or_default().insert(session_id, texts);
+        }
+    }
+    out
 }
 
 fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Value {

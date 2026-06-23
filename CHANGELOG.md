@@ -4,6 +4,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-sdk` now exposes SDK-owned summary report/time-series envelopes with schema/version, capability, and normalized window metadata for app and presenter consumers.
+- `burn hotspots --findings` ghost-surface results now account for user-text slash-command invocations, so active Claude/Codex commands and prompts are no longer flagged as unused when they do not appear as tool calls.
+
 ## [4.0.0] - 2026-06-23
 
 - **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports its low-level `analyze`-layer internals (detector/aggregator functions and helper types such as `PricingTable`, `CompareTable`, `CompareCell`) — these were never the intended embedding surface. Embed through the verb layer instead: `LedgerHandle` methods / `summary_report` / `hotspots` / `compare`. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.

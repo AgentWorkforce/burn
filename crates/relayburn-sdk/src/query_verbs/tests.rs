@@ -6,7 +6,11 @@ use super::summary::{
     SummaryRelationshipMatch,
 };
 use super::*;
-use crate::reader::{RelationshipSourceKind, ToolCall, Usage, UserTurnBlock, UserTurnBlockKind};
+use crate::reader::{
+    ContentKind, ContentRecord, ContentRole, RelationshipSourceKind, ToolCall, Usage,
+    UserTurnBlock, UserTurnBlockKind,
+};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn fixture_handle() -> (TempDir, LedgerHandle) {
@@ -97,6 +101,69 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         .append_turns(&[turn1, turn2])
         .expect("append turns");
     (dir, handle)
+}
+
+fn ghost_surface_fixture_root() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests")
+        .join("fixtures")
+        .join("ghost-surface")
+}
+
+fn ghost_surface_turn(source: SourceKind, session_id: &str, message_id: &str) -> TurnRecord {
+    TurnRecord {
+        v: 1,
+        source,
+        session_id: session_id.into(),
+        session_path: None,
+        message_id: message_id.into(),
+        turn_index: 0,
+        ts: "2026-04-23T00:00:00.000Z".into(),
+        model: "claude-sonnet-4-6".into(),
+        project: Some("/tmp/proj".into()),
+        project_key: None,
+        usage: Usage {
+            input: 1000,
+            output: 100,
+            reasoning: 0,
+            cache_read: 1000,
+            cache_create_5m: 0,
+            cache_create_1h: 0,
+        },
+        tool_calls: Vec::new(),
+        files_touched: None,
+        subagent: None,
+        stop_reason: None,
+        activity: None,
+        retries: None,
+        has_edits: None,
+        fidelity: None,
+    }
+}
+
+fn user_content(
+    source: SourceKind,
+    session_id: &str,
+    message_id: &str,
+    text: &str,
+) -> ContentRecord {
+    ContentRecord {
+        v: 1,
+        source,
+        session_id: session_id.into(),
+        message_id: message_id.into(),
+        ts: "2026-04-23T00:00:00.000Z".into(),
+        role: ContentRole::User,
+        kind: ContentKind::Text,
+        text: Some(text.into()),
+        tool_use: None,
+        tool_result: None,
+    }
 }
 
 #[test]
@@ -264,6 +331,67 @@ fn summary_report_grouped_owns_rows_and_stable_fidelity_shape() {
     assert_eq!(grouped.rows[0].label, "claude-sonnet-4-6");
     assert_eq!(grouped.per_cell_fidelity["groupBy"], "model");
     assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
+}
+
+#[test]
+fn summary_report_envelope_carries_schema_capabilities_and_window() {
+    let (_dir, handle) = fixture_handle();
+    let envelope = handle
+        .summary_report_envelope(SummaryReportOptions {
+            since: Some("2026-04-23T00:00:00Z".into()),
+            until: Some("2026-04-23T00:00:30Z".into()),
+            ..SummaryReportOptions::default()
+        })
+        .expect("summary report envelope");
+
+    assert_eq!(envelope.schema.name, SUMMARY_REPORT_SCHEMA_NAME);
+    assert_eq!(envelope.schema.version, REPORT_SCHEMA_VERSION);
+    assert_eq!(envelope.capabilities.package_name, "relayburn-sdk");
+    assert!(envelope
+        .capabilities
+        .features
+        .contains(&"summaryReportEnvelope".to_string()));
+    assert_eq!(
+        envelope.window.since.as_deref(),
+        Some("2026-04-23T00:00:00.000Z")
+    );
+    assert_eq!(
+        envelope.window.until.as_deref(),
+        Some("2026-04-23T00:00:30.000Z")
+    );
+    assert!(envelope.window.bucket.is_none());
+
+    let SummaryReport::Grouped(grouped) = envelope.report else {
+        panic!("expected grouped report");
+    };
+    assert_eq!(grouped.turn_count, 1);
+}
+
+#[test]
+fn summary_timeseries_envelope_applies_until_and_declares_bucket() {
+    let (_dir, handle) = fixture_handle();
+    let envelope = handle
+        .summary_timeseries_envelope(
+            SummaryReportOptions {
+                since: Some("2026-04-23T00:00:00Z".into()),
+                until: Some("2026-04-23T00:00:30Z".into()),
+                mode: SummaryReportMode::Grouped { by_provider: false },
+                ..SummaryReportOptions::default()
+            },
+            60,
+        )
+        .expect("summary timeseries envelope");
+
+    assert_eq!(envelope.schema.name, SUMMARY_TIMESERIES_SCHEMA_NAME);
+    assert_eq!(envelope.window.bucket.as_ref().map(|b| b.seconds), Some(60));
+    assert_eq!(
+        envelope.window.until.as_deref(),
+        Some("2026-04-23T00:00:30.000Z")
+    );
+    assert_eq!(envelope.timeseries.bucket_secs, 60);
+    assert_eq!(envelope.timeseries.buckets.len(), 1);
+    assert_eq!(envelope.timeseries.buckets[0].turn_count, 1);
+    assert_eq!(envelope.timeseries.buckets[0].total_tokens, 1_500);
 }
 
 /// Acceptance test for issue #437: a turn carrying `stop_reason:
@@ -595,6 +723,13 @@ fn summary_subagent_session_filter_treats_every_filter_as_scoping() {
             "since",
             SummaryReportOptions {
                 since: Some("24h".into()),
+                ..SummaryReportOptions::default()
+            },
+        ),
+        (
+            "until",
+            SummaryReportOptions {
+                until: Some("2026-04-23T00:00:30.000Z".into()),
                 ..SummaryReportOptions::default()
             },
         ),
@@ -1050,6 +1185,130 @@ fn hotspots_group_by_findings_honors_patterns_filter() {
         }
         other => panic!("expected findings, got {other:?}"),
     }
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_deghost_claude_command_from_user_text() {
+    let (_dir, mut handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::ClaudeCode, "ghost-claude", "ghost-claude-turn");
+    handle
+        .raw_mut()
+        .append_turns(std::slice::from_ref(&turn))
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[user_content(
+            SourceKind::ClaudeCode,
+            "ghost-claude",
+            "ghost-claude-user",
+            "<command-name>/openspec-apply</command-name>\nApply the latest proposal.",
+        )])
+        .unwrap();
+
+    let pricing = load_pricing(None);
+    let mut inputs = super::hotspots::build_hotspots_ghost_surface_inputs(
+        &handle,
+        &[turn],
+        &pricing,
+        &Query::default(),
+    );
+    let root = ghost_surface_fixture_root();
+    inputs.claude_home = Some(root.join("claude"));
+    inputs.codex_home = Some(root.join("missing-codex"));
+    inputs.opencode_projects = Some(vec![root.join("missing-opencode")]);
+
+    let ghosts = crate::analyze::ghost_surface::detect_ghost_surface(&inputs);
+    let claude_ghosts: Vec<_> = ghosts
+        .iter()
+        .filter(|g| g.source == SourceKind::ClaudeCode)
+        .collect();
+    assert!(
+        !claude_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-apply.md")),
+        "Claude openspec-apply should be de-ghosted by user text"
+    );
+    assert!(
+        claude_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-archive.md")),
+        "unused Claude command should remain ghost"
+    );
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_deghost_codex_command_from_user_text() {
+    let (_dir, mut handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::Codex, "ghost-codex", "ghost-codex-turn");
+    handle
+        .raw_mut()
+        .append_turns(std::slice::from_ref(&turn))
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[user_content(
+            SourceKind::Codex,
+            "ghost-codex",
+            "ghost-codex-user",
+            "/openspec-apply\nApply the latest proposal please.",
+        )])
+        .unwrap();
+
+    let pricing = load_pricing(None);
+    let mut inputs = super::hotspots::build_hotspots_ghost_surface_inputs(
+        &handle,
+        &[turn],
+        &pricing,
+        &Query::default(),
+    );
+    let root = ghost_surface_fixture_root();
+    inputs.claude_home = Some(root.join("missing-claude"));
+    inputs.codex_home = Some(root.join("codex"));
+    inputs.opencode_projects = Some(vec![root.join("missing-opencode")]);
+
+    let ghosts = crate::analyze::ghost_surface::detect_ghost_surface(&inputs);
+    let codex_ghosts: Vec<_> = ghosts
+        .iter()
+        .filter(|g| g.source == SourceKind::Codex)
+        .collect();
+    assert!(
+        !codex_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-apply.md")),
+        "Codex openspec-apply should be de-ghosted by user text"
+    );
+    assert!(
+        codex_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-archive.md")),
+        "unused Codex command should remain ghost"
+    );
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_fall_back_when_content_missing() {
+    let (_dir, handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::Codex, "ghost-empty", "ghost-empty-turn");
+    let pricing = load_pricing(None);
+    let mut inputs = super::hotspots::build_hotspots_ghost_surface_inputs(
+        &handle,
+        &[turn],
+        &pricing,
+        &Query::default(),
+    );
+    let root = ghost_surface_fixture_root();
+    inputs.claude_home = Some(root.join("missing-claude"));
+    inputs.codex_home = Some(root.join("codex"));
+    inputs.opencode_projects = Some(vec![root.join("missing-opencode")]);
+
+    assert!(inputs.user_turn_text_by_session.is_none());
+    let ghosts = crate::analyze::ghost_surface::detect_ghost_surface(&inputs);
+    assert!(
+        ghosts
+            .iter()
+            .any(|g| g.source == SourceKind::Codex && g.path.ends_with("openspec-apply.md")),
+        "missing content should preserve tool-call-only ghost behavior"
+    );
 }
 
 #[test]

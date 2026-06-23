@@ -62,6 +62,9 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'Ledger',
     'ingest',
     'summary',
+    'summaryReport',
+    'summaryTimeseries',
+    'capabilities',
     'sessionCost',
     'fingerprint',
     'overhead',
@@ -170,6 +173,32 @@ test('2.x extension verbs return stable shapes against the fixture ledger', asyn
 
     const stampRows = await sdk.exportStamps({ ledgerHome });
     assert.ok(Array.isArray(stampRows));
+
+    const capabilities = sdk.capabilities();
+    assert.equal(capabilities.packageName, 'relayburn-sdk');
+    assert.ok(capabilities.features.includes('summaryReportEnvelope'));
+
+    const summaryReport = await sdk.summaryReport({
+      ledgerHome,
+      since: '2026-04-23T00:00:00Z',
+      until: '2026-04-24T00:00:00Z',
+    });
+    assert.equal(summaryReport.schema.name, 'relayburn.report.summary.v1');
+    assert.equal(summaryReport.schema.version, 1);
+    assert.equal(summaryReport.window.since, '2026-04-23T00:00:00.000Z');
+    assert.equal(summaryReport.window.until, '2026-04-24T00:00:00.000Z');
+    assert.ok(summaryReport.report.grouped);
+
+    const summaryTimeseries = await sdk.summaryTimeseries({
+      ledgerHome,
+      since: '2026-04-23T00:00:00Z',
+      until: '2026-04-24T00:00:00Z',
+      bucketSeconds: 3600,
+    });
+    assert.equal(summaryTimeseries.schema.name, 'relayburn.report.summaryTimeseries.v1');
+    assert.equal(summaryTimeseries.window.bucket.seconds, 3600);
+    assert.equal(summaryTimeseries.timeseries.bucketSeconds, 3600);
+    assert.ok(Array.isArray(summaryTimeseries.timeseries.buckets));
 
     const excluded = sdk.computeCompareExcluded(
       {
