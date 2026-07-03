@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 /// This-period and previous-period spend (USD) for one usage window, from the
 /// burn ledger.
@@ -112,6 +113,8 @@ final class UsageViewModel: ObservableObject {
     func refresh(force: Bool = false) async {
         guard let provider = providers[selectedProvider] else { return }
         if !force, let until = backoffUntil, Date() < until { return }
+        let refreshSignpost = Signposts.refresh.beginInterval("usageRefresh")
+        defer { Signposts.refresh.endInterval("usageRefresh", refreshSignpost) }
         isLoading = true
         let result = await provider.fetch()
         let now = Date()
@@ -177,6 +180,8 @@ final class UsageViewModel: ObservableObject {
         if let last = lastSpendAt, Date().timeIntervalSince(last) < spendInterval {
             return
         }
+        let spendSignpost = Signposts.refresh.beginInterval("loadSpend")
+        defer { Signposts.refresh.endInterval("loadSpend", spendSignpost) }
         lastSpendAt = Date()
         let burnProvider = BurnLedger.burnProvider(for: provider)
         var result: [String: PeriodSpend] = [:]
