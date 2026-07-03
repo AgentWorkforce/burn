@@ -129,7 +129,15 @@ final class LiveBurnViewModel: ObservableObject {
     /// Test hook: whether the refresh timer is currently scheduled.
     var isRefreshTimerActive: Bool { timerBox.isActive }
 
-    deinit { timerBox.invalidate() }
+    deinit {
+        timerBox.invalidate()
+        // Also stop the long-lived `burn ingest --watch` child, which would
+        // otherwise outlive the model when `stop()` never ran (e.g. a missed
+        // `.onDisappear`). Capture the ledger into a local — deinit may read
+        // stored properties but must not touch actor-isolated state directly.
+        let ledger = self.ledger
+        Task { await ledger.stopIngestWatch() }
+    }
 
     func isEnabled(_ provider: ProviderName) -> Bool { enabled.contains(provider) }
 
