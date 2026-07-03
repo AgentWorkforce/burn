@@ -125,6 +125,39 @@ final class UsageHistoryStoreTests: XCTestCase {
         }
     }
 
+    func testOversizedLegacySeriesIsCappedOnFirstRecord() throws {
+        // Seed the file with a legacy series far above the cap (a weekly window
+        // sampled every 60s ≈ 10k samples). A single record() must bound it —
+        // one decimation pass only trims to ~75%, so the cap requires looping.
+        let cap = UsageHistoryStore.maxSamplesPerSeries
+        let legacyCount = 10_000
+        let futureReset = base.addingTimeInterval(10 * 365 * 24 * 3600)
+        let key = timestampedKey(.claude, "Legacy", reset: futureReset)
+
+        var legacy: [UsageSample] = []
+        legacy.reserveCapacity(legacyCount)
+        for i in 0..<legacyCount {
+            legacy.append(UsageSample(date: base.addingTimeInterval(Double(i) * 60),
+                                      percentage: Double(i)))
+        }
+        try JSONEncoder().encode([key: legacy]).write(to: fileURL)
+
+        let store = UsageHistoryStore(fileURL: fileURL)
+        let newDate = base.addingTimeInterval(Double(legacyCount) * 60)
+        let series = store.record(provider: .claude,
+                                  metric: metric("Legacy", 99, resetsAt: futureReset),
+                                  at: newDate)
+
+        XCTAssertLessThanOrEqual(series.count, cap,
+                                 "one record() must bound an oversized legacy series")
+        XCTAssertEqual(series.first?.date, base, "first-ever sample must be retained")
+        XCTAssertEqual(series.last?.date, newDate)
+        XCTAssertEqual(series.last?.percentage, 99)
+        for i in 1..<series.count {
+            XCTAssertLessThan(series[i - 1].date, series[i].date)
+        }
+    }
+
     // MARK: - 4. Duplicate collapse within 1s (existing behavior)
 
     func testDuplicateCollapse() {

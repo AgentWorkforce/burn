@@ -21,6 +21,11 @@ final class UsageHistoryStore {
     static let maxSamplesPerSeries = 2_000
 
     private let queue = DispatchQueue(label: "com.agentworkforce.burn.history")
+    /// Dedicated serial I/O queue for the actual disk writes. Writes must not
+    /// run on `queue`: `record()` enters `queue` synchronously from the main
+    /// actor, so a slow write there would block the next refresh.
+    private static let writeQueue = DispatchQueue(
+        label: "com.agentworkforce.burn.history.write", qos: .utility)
     private var cache: [String: [UsageSample]] = [:]
     private let fileURL: URL
 
@@ -67,7 +72,11 @@ final class UsageHistoryStore {
             }
 
             // Keep each series bounded so long-lived windows can't grow forever.
-            if samples.count > Self.maxSamplesPerSeries {
+            // One decimation pass only trims to ~75%, so loop until under the
+            // cap — an oversized legacy history must be bounded immediately, not
+            // over many future appends. Each pass strictly shrinks the series,
+            // so this terminates.
+            while samples.count > Self.maxSamplesPerSeries {
                 samples = decimated(samples)
             }
 
@@ -78,13 +87,14 @@ final class UsageHistoryStore {
         }
     }
 
-    /// Synchronously flushes any pending debounced write. Exposed for tests that
-    /// need deterministic on-disk state without waiting for the debounce timer.
+    /// Synchronously flushes any pending debounced write; the file is guaranteed
+    /// to be on disk when this returns. Exposed for tests that need deterministic
+    /// on-disk state without waiting for the debounce timer.
     func flushForTesting() {
         queue.sync {
             pendingWrite?.cancel()
             pendingWrite = nil
-            persist()
+            persist(synchronously: true)
         }
     }
 
@@ -121,7 +131,9 @@ final class UsageHistoryStore {
             guard let last = k.split(separator: "|").last else { continue }
 
             if last == "none" {
-                if let newest = cache[k]?.last?.date,
+                // Use the max date, not `.last`, so pruning stays correct even
+                // if a series is ever not strictly chronological.
+                if let newest = cache[k]?.map(\.date).max(),
                    newest < reference.addingTimeInterval(-86_400) {
                     cache.removeValue(forKey: k)
                 }
@@ -137,8 +149,8 @@ final class UsageHistoryStore {
     }
 
     /// Coalesces disk writes: cancels any pending write and schedules a fresh one
-    /// `persistDebounce` seconds out on the private queue, so a burst of records
-    /// results in a single encode+write off the caller's (main-actor) path.
+    /// `persistDebounce` seconds out, so a burst of records results in a single
+    /// encode (on `queue`) whose write is handed off to `writeQueue`.
     private func schedulePersist() {
         pendingWrite?.cancel()
         let item = DispatchWorkItem { [weak self] in
@@ -150,10 +162,26 @@ final class UsageHistoryStore {
         queue.asyncAfter(deadline: .now() + persistDebounce, execute: item)
     }
 
-    /// Encodes and writes the cache. Always invoked on `queue`. Writes atomically
-    /// so a crash mid-write can't corrupt the existing history file.
-    private func persist() {
+    /// Encodes the cache (on `queue`, for thread safety) and hands the bytes to
+    /// the dedicated I/O queue so the disk write never blocks `record()`'s
+    /// `queue.sync`. Writes atomically so a crash mid-write can't corrupt the
+    /// existing history file.
+    ///
+    /// Always invoked on `queue`. `writeQueue` is serial, so writes land in the
+    /// order they were encoded and a `synchronously: true` flush both waits for
+    /// any in-flight async write and then supersedes it with the newest data
+    /// before returning.
+    private func persist(synchronously: Bool = false) {
         guard let data = try? JSONEncoder().encode(cache) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        let url = fileURL
+        if synchronously {
+            Self.writeQueue.sync {
+                try? data.write(to: url, options: .atomic)
+            }
+        } else {
+            Self.writeQueue.async {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
     }
 }
