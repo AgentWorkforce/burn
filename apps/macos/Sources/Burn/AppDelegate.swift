@@ -12,6 +12,7 @@ import Combine
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let viewModel = UsageViewModel()
+    private let updater = AppUpdater()
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private var iconObserver: AnyCancellable?
@@ -32,7 +33,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(
-            rootView: ContentView(viewModel: viewModel))
+            rootView: ContentView(viewModel: viewModel, updater: updater))
+
+        // Silent update checks (signed installs only); the Settings tab's
+        // "Check for Updates" button works regardless.
+        updater.startPeriodicChecks()
 
         // Mirror the cached flame onto the status button whenever it changes.
         iconObserver = viewModel.$menuBarIcon.sink { [weak item] image in

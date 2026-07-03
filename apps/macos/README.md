@@ -24,6 +24,10 @@ you're ahead of or behind your usage pace before you hit a wall — and pulls
   rate-limits (it keeps showing your last reading instead of erroring out).
 - Under each window, shows **spend this period vs. last period** ($), read from
   the burn ledger via the `burn` CLI. Hidden if `burn` isn't installed.
+- **Updates itself**: installed builds silently check GitHub Releases every 6
+  hours; when a new build is out, Settings (⚙) shows an **Update Now** button
+  that downloads it, verifies the signature, and offers **Restart Now**. A
+  manual **Check for Updates** button lives in the same place.
 
 ## How it reads your usage
 
@@ -105,6 +109,7 @@ Sources/Burn/
   Burndown.swift              Turns samples into chart data
   Models.swift                Shared types
   BurnLedger.swift            Reads spend from the bundled/PATH `burn` binary
+  AppUpdater.swift            In-app updates from the macos-v* GitHub Releases
   Resources/                  claude.svg, openai.svg (lobe-icons, MIT)
 ```
 
@@ -123,10 +128,18 @@ To cut a release, go to **Actions → "Release (macOS app)" → Run workflow**. 
 2. generates release notes from commits since the last `macos-v*` tag;
 3. builds the app **and the native `burn` helper** (`cargo build -p
    relayburn-cli`), bundles + signs both with a hardened runtime, notarizes via
-   the App Store Connect API key, staples, and packages `BurnOSX-arm64.dmg`;
+   the App Store Connect API key, staples, and packages `BurnOSX-arm64.dmg`
+   plus `BurnOSX-arm64.zip` (the in-app updater's download artifact);
 4. publishes a versioned release (history) and moves a `macos-latest` pointer so
    `releases/download/macos-latest/BurnOSX-arm64.dmg` is a stable link. It is
    **not** marked the repo's "latest" — that belongs to burn's CLI releases.
+
+Cutting a release is also what feeds the **in-app updater**: `AppUpdater` polls
+the releases feed for the newest `macos-v*` tag, compares it against the stamped
+`CFBundleShortVersionString`, downloads the zip, verifies the payload's
+Developer ID signature matches the running app's team, swaps the bundle, and
+relaunches. Unsigned dev builds skip the silent checks and refuse the install
+step (there's no team to pin the download against).
 
 `release.sh` runs the same build/sign/notarize/package steps locally (set
 `VERSION` and the Apple env vars listed at the top of the script). It needs both
