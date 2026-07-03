@@ -40,11 +40,6 @@ final class AppUpdater: ObservableObject {
     /// placeholder, which is why scheduled checks are gated on a signed install.
     let currentVersion: String
 
-    /// GitHub releases feed for this repo. `per_page=100` comfortably covers
-    /// the newest `macos-v*` release even with CLI releases interleaved.
-    static let releasesURL = URL(
-        string: "https://api.github.com/repos/AgentWorkforce/burn/releases?per_page=100")!
-
     /// The zip asset release.sh publishes for this machine's architecture.
     static var assetName: String {
         #if arch(x86_64)
@@ -86,7 +81,11 @@ final class AppUpdater: ObservableObject {
             self.timerBox.timer = Timer.scheduledTimer(
                 withTimeInterval: Self.checkInterval, repeats: true
             ) { [weak self] _ in
-                Task { @MainActor in await self?.check(silently: true) }
+                // Rebind strongly before hopping into the task: capturing the
+                // weak `self` var inside the concurrent closure is a Swift 6
+                // isolation error.
+                guard let self else { return }
+                Task { @MainActor in await self.check(silently: true) }
             }
             await self.check(silently: true)
         }
@@ -263,6 +262,12 @@ final class AppUpdater: ObservableObject {
     }
 
     nonisolated private static func fetchLatestUpdate(assetName: String) async throws -> AppUpdate? {
+        // GitHub releases feed for this repo. `per_page=100` comfortably covers
+        // the newest `macos-v*` release even with CLI releases interleaved.
+        // (Local so it stays off the @MainActor class — a nonisolated context
+        // can't read the class's isolated statics.)
+        let releasesURL = URL(
+            string: "https://api.github.com/repos/AgentWorkforce/burn/releases?per_page=100")!
         var request = URLRequest(url: releasesURL)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
