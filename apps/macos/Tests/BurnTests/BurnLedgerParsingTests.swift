@@ -34,8 +34,7 @@ final class BurnLedgerParsingTests: XCTestCase {
 
     func testCostParsesTotal() async throws {
         let ledger = BurnLedger(runner: FakeRunner(output: #"{"totalCost": {"total": 1.23}}"#))
-        let maybeCost = await ledger.cost(provider: "anthropic", since: epoch)
-        let cost = try XCTUnwrap(maybeCost)
+        let cost = try XCTUnwrap(await ledger.cost(provider: "anthropic", since: epoch))
         XCTAssertEqual(cost, 1.23, accuracy: 0.0001)
     }
 
@@ -77,8 +76,7 @@ final class BurnLedgerParsingTests: XCTestCase {
         }
         """
         let ledger = BurnLedger(runner: FakeRunner(output: json))
-        let maybeSummary = await ledger.summary(provider: "anthropic", since: epoch)
-        let summary = try XCTUnwrap(maybeSummary)
+        let summary = try XCTUnwrap(await ledger.summary(provider: "anthropic", since: epoch))
         XCTAssertEqual(summary.cost, 2.5, accuracy: 0.0001)
         // 10+20+5+1+2+3 = 41 in the first row, 100 in the second → 141.
         XCTAssertEqual(summary.tokens, 141)
@@ -86,8 +84,7 @@ final class BurnLedgerParsingTests: XCTestCase {
 
     func testSummaryZeroTokensWhenNoModelRows() async throws {
         let ledger = BurnLedger(runner: FakeRunner(output: #"{"totalCost": {"total": 0.5}}"#))
-        let maybeSummary = await ledger.summary(provider: "anthropic", since: epoch)
-        let summary = try XCTUnwrap(maybeSummary)
+        let summary = try XCTUnwrap(await ledger.summary(provider: "anthropic", since: epoch))
         XCTAssertEqual(summary.cost, 0.5, accuracy: 0.0001)
         XCTAssertEqual(summary.tokens, 0)
     }
@@ -110,8 +107,7 @@ final class BurnLedgerParsingTests: XCTestCase {
         }
         """
         let ledger = BurnLedger(runner: FakeRunner(output: json))
-        let maybePoints = await ledger.timeseries(provider: "anthropic", since: epoch, bucket: "1h")
-        let points = try XCTUnwrap(maybePoints)
+        let points = try XCTUnwrap(await ledger.timeseries(provider: "anthropic", since: epoch, bucket: "1h"))
         XCTAssertEqual(points.count, 2)
         // Fractional-second timestamp parsed by the .withFractionalSeconds formatter.
         XCTAssertEqual(points[0].tokens, 42)
@@ -132,8 +128,7 @@ final class BurnLedgerParsingTests: XCTestCase {
         }
         """
         let ledger = BurnLedger(runner: FakeRunner(output: json))
-        let maybePoints = await ledger.timeseries(provider: "openai", since: epoch, bucket: "30s")
-        let points = try XCTUnwrap(maybePoints)
+        let points = try XCTUnwrap(await ledger.timeseries(provider: "openai", since: epoch, bucket: "30s"))
         XCTAssertEqual(points.count, 1)
         XCTAssertEqual(points[0].tokens, 9)
     }

@@ -233,19 +233,13 @@ actor BurnLedger {
     /// keeps the ledger fresh incrementally (FS-event driven, ~1s poll), so the
     /// live view's summary polls stay fast.
     private var watchProcess: Process?
-    /// True between start and stop requests. Actor methods are reentrant across
-    /// awaits, so a stop can interleave while start is suspended resolving the
-    /// binary; start rechecks this before spawning so the stop wins.
-    private var watchDesired = false
 
     /// Starts a background `burn ingest --watch` if one isn't already running.
     /// Only runs with the bundled native helper (a login-shell child can't be
     /// cleanly managed); the live chart still polls either way.
     func startIngestWatch() async {
         guard watchProcess == nil else { return }
-        watchDesired = true
         guard let url = await runner.bundledBinaryURL() else { return }
-        guard watchDesired, watchProcess == nil else { return }
         let process = Process()
         process.executableURL = url
         process.arguments = ["ingest", "--watch", "--quiet"]
@@ -259,10 +253,8 @@ actor BurnLedger {
         }
     }
 
-    /// Terminates the background watch process, if running, and cancels any
-    /// start that is still resolving the binary.
+    /// Terminates the background watch process, if running.
     func stopIngestWatch() {
-        watchDesired = false
         watchProcess?.terminate()
         watchProcess = nil
     }
