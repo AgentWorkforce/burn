@@ -1,9 +1,15 @@
 import SwiftUI
+import os
 
 /// One bucket of the burn series for a provider: the per-bucket burn rate plus
 /// the running cumulative totals across the selected range.
 struct LiveBurnSample: Identifiable {
-    let id = UUID()
+    /// Identity is the bucket's date, not a fresh `UUID` per refresh. Series are
+    /// stored per-provider and each chart `ForEach` iterates a single provider's
+    /// array, where bucket dates are unique — so this is stable across the ~3s
+    /// refresh. A per-refresh `UUID` forced Swift Charts to rebuild every mark
+    /// instead of diffing, which showed up as churn/flicker on the live tab.
+    var id: Date { date }
     let date: Date
     /// Cumulative cost (USD) across the range up to and including this bucket.
     let cost: Double
@@ -164,6 +170,9 @@ final class LiveBurnViewModel: ObservableObject {
         }
         refreshing = true
         defer { refreshing = false }
+
+        let interval = Signposts.refresh.beginInterval("liveRefresh")
+        defer { Signposts.refresh.endInterval("liveRefresh", interval) }
 
         repeat {
             refreshAgain = false
