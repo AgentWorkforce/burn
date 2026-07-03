@@ -1,15 +1,137 @@
 import Foundation
 
+/// Runs the `burn` CLI and returns its stdout. A seam so tests can inject a fake
+/// that returns canned JSON without spawning a subprocess.
+protocol BurnRunner: Sendable {
+    /// Runs `burn` with the given arguments, returning stdout on success or nil
+    /// on failure/timeout/missing binary.
+    func run(_ args: [String]) async -> String?
+
+    /// URL of the bundled native `burn` helper, when this runner is backed by a
+    /// real app bundle. The long-lived ingest watch needs a directly spawnable
+    /// binary (a login-shell child can't be cleanly managed), so it only starts
+    /// when this is non-nil. Defaults to `nil` for fakes / PATH-only setups.
+    func bundledBinaryURL() async -> URL?
+}
+
+extension BurnRunner {
+    func bundledBinaryURL() async -> URL? { nil }
+}
+
+/// Production `BurnRunner`: resolves and spawns the real `burn` binary. Prefers
+/// the native helper bundled inside the app (so spend works with no separate
+/// install), and falls back to a `burn` on `PATH` for dev builds run via
+/// `swift run`. An actor because it caches the resolved `Tool`.
+actor SystemBurnRunner: BurnRunner {
+    private enum Tool {
+        case unknown
+        case bundled(URL) // self-contained native binary in the app bundle
+        case path         // a `burn` on PATH (resolved via a login shell)
+        case missing
+    }
+    private var tool: Tool = .unknown
+
+    func run(_ args: [String]) async -> String? {
+        switch resolveTool() {
+        case .bundled(let url):
+            // Self-contained Rust binary — exec directly, no shell needed.
+            return capture { $0.executableURL = url; $0.arguments = args }
+        case .path:
+            // Run through a login shell so nvm/Homebrew PATH (and the `node` the
+            // npm `burn` shim needs) resolve even when launched from Finder.
+            let command = "burn " + args.map(shellQuote).joined(separator: " ")
+            return loginShell(command)
+        case .missing, .unknown:
+            return nil
+        }
+    }
+
+    func bundledBinaryURL() async -> URL? {
+        if case .bundled(let url) = resolveTool() { return url }
+        return nil
+    }
+
+    private func resolveTool() -> Tool {
+        if case .unknown = tool {
+            if let url = Bundle.main.url(forAuxiliaryExecutable: "burn"),
+               FileManager.default.isExecutableFile(atPath: url.path) {
+                tool = .bundled(url)
+            } else if !(loginShell("command -v burn")?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty {
+                tool = .path
+            } else {
+                tool = .missing
+            }
+        }
+        return tool
+    }
+
+    private func loginShell(_ command: String) -> String? {
+        capture {
+            $0.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            $0.arguments = ["-lc", command]
+        }
+    }
+
+    /// Runs a configured process and returns stdout, or `nil` on failure /
+    /// nonzero exit / timeout. The timeout stops a hung `burn` from wedging the
+    /// actor and queuing follow-up spend requests behind it.
+    private func capture(_ configure: (Process) -> Void, timeout: TimeInterval = 30) -> String? {
+        let process = Process()
+        configure(process)
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        // Read stdout to EOF (which arrives when the process exits) and reap it
+        // on a background queue; bound the wait with a timeout. This blocks the
+        // runner actor until the process truly finishes or is killed — which,
+        // because the actor serializes calls, guarantees only one `burn`
+        // subprocess can ever be alive at a time (no pile-up). Avoids the
+        // `terminationHandler` race that could let capture() return while the
+        // child kept running.
+        let group = DispatchGroup()
+        group.enter()
+        var output = Data()
+        DispatchQueue.global(qos: .utility).async {
+            output = stdout.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            group.leave()
+        }
+        if group.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()                       // SIGTERM…
+            usleep(200_000)
+            if process.isRunning {                    // …then SIGKILL if it ignores it
+                kill(process.processIdentifier, SIGKILL)
+            }
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        return String(data: output, encoding: .utf8)
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}
+
 /// Reads authoritative spend figures from the burn ledger. Cost is *not* stored
 /// in the ledger — burn computes it from its pricing table — so we invoke the
-/// `burn` binary rather than re-derive pricing here.
+/// `burn` binary (via a `BurnRunner`) rather than re-derive pricing here.
 ///
-/// Prefers the native `burn` helper bundled inside the app (so spend works with
-/// no separate install), and falls back to a `burn` on `PATH` for dev builds
-/// run via `swift run`. Returns `nil` when neither is available, letting the UI
-/// hide the spend line.
+/// Returns `nil` when burn is unavailable, letting the UI hide the spend line.
 actor BurnLedger {
     static let shared = BurnLedger()
+
+    private let runner: BurnRunner
+
+    init(runner: BurnRunner = SystemBurnRunner()) {
+        self.runner = runner
+    }
 
     /// burn's provider name for one of our providers.
     static func burnProvider(for name: ProviderName) -> String {
@@ -19,20 +141,12 @@ actor BurnLedger {
         }
     }
 
-    private enum Tool {
-        case unknown
-        case bundled(URL) // self-contained native binary in the app bundle
-        case path         // a `burn` on PATH (resolved via a login shell)
-        case missing
-    }
-    private var tool: Tool = .unknown
-
     /// Total USD spend for `provider` since `since`, or `nil` if burn is
     /// unavailable or the query fails.
     func cost(provider: String, since: Date) async -> Double? {
         let iso = ISO8601DateFormatter().string(from: since)
         let args = ["summary", "--provider", provider, "--since", iso, "--json"]
-        guard let output = runBurn(args),
+        guard let output = await runner.run(args),
               let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let totalCost = json["totalCost"] as? [String: Any],
@@ -56,7 +170,7 @@ actor BurnLedger {
     func summary(provider: String, since: Date) async -> Summary? {
         let iso = ISO8601DateFormatter().string(from: since)
         let args = ["summary", "--provider", provider, "--since", iso, "--json"]
-        guard let output = runBurn(args),
+        guard let output = await runner.run(args),
               let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -91,7 +205,7 @@ actor BurnLedger {
     func timeseries(provider: String, since: Date, bucket: String) async -> [TimeseriesPoint]? {
         let iso = ISO8601DateFormatter().string(from: since)
         let args = ["summary", "--provider", provider, "--since", iso, "--bucket", bucket, "--json"]
-        guard let output = runBurn(args),
+        guard let output = await runner.run(args),
               let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let buckets = json["buckets"] as? [[String: Any]]
@@ -123,9 +237,9 @@ actor BurnLedger {
     /// Starts a background `burn ingest --watch` if one isn't already running.
     /// Only runs with the bundled native helper (a login-shell child can't be
     /// cleanly managed); the live chart still polls either way.
-    func startIngestWatch() {
+    func startIngestWatch() async {
         guard watchProcess == nil else { return }
-        guard case .bundled(let url) = resolveTool() else { return }
+        guard let url = await runner.bundledBinaryURL() else { return }
         let process = Process()
         process.executableURL = url
         process.arguments = ["ingest", "--watch", "--quiet"]
@@ -143,89 +257,5 @@ actor BurnLedger {
     func stopIngestWatch() {
         watchProcess?.terminate()
         watchProcess = nil
-    }
-
-    // MARK: - Resolution & invocation
-
-    private func resolveTool() -> Tool {
-        if case .unknown = tool {
-            if let url = Bundle.main.url(forAuxiliaryExecutable: "burn"),
-               FileManager.default.isExecutableFile(atPath: url.path) {
-                tool = .bundled(url)
-            } else if !(loginShell("command -v burn")?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty {
-                tool = .path
-            } else {
-                tool = .missing
-            }
-        }
-        return tool
-    }
-
-    private func runBurn(_ args: [String]) -> String? {
-        switch resolveTool() {
-        case .bundled(let url):
-            // Self-contained Rust binary — exec directly, no shell needed.
-            return capture { $0.executableURL = url; $0.arguments = args }
-        case .path:
-            // Run through a login shell so nvm/Homebrew PATH (and the `node` the
-            // npm `burn` shim needs) resolve even when launched from Finder.
-            let command = "burn " + args.map(shellQuote).joined(separator: " ")
-            return loginShell(command)
-        case .missing, .unknown:
-            return nil
-        }
-    }
-
-    private func loginShell(_ command: String) -> String? {
-        capture {
-            $0.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            $0.arguments = ["-lc", command]
-        }
-    }
-
-    /// Runs a configured process and returns stdout, or `nil` on failure /
-    /// nonzero exit / timeout. The timeout stops a hung `burn` from wedging the
-    /// actor and queuing follow-up spend requests behind it.
-    private func capture(_ configure: (Process) -> Void, timeout: TimeInterval = 30) -> String? {
-        let process = Process()
-        configure(process)
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        // Read stdout to EOF (which arrives when the process exits) and reap it
-        // on a background queue; bound the wait with a timeout. This blocks the
-        // BurnLedger actor until the process truly finishes or is killed — which,
-        // because the actor serializes calls, guarantees only one `burn`
-        // subprocess can ever be alive at a time (no pile-up). Avoids the
-        // `terminationHandler` race that could let capture() return while the
-        // child kept running.
-        let group = DispatchGroup()
-        group.enter()
-        var output = Data()
-        DispatchQueue.global(qos: .utility).async {
-            output = stdout.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            group.leave()
-        }
-        if group.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()                       // SIGTERM…
-            usleep(200_000)
-            if process.isRunning {                    // …then SIGKILL if it ignores it
-                kill(process.processIdentifier, SIGKILL)
-            }
-            return nil
-        }
-        guard process.terminationStatus == 0 else { return nil }
-        return String(data: output, encoding: .utf8)
-    }
-
-    private func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

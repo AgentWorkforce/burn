@@ -32,12 +32,27 @@ final class UsageViewModel: ObservableObject {
     /// While set, scheduled (non-forced) refreshes are skipped to let a 429 clear.
     private var backoffUntil: Date?
     private var consecutiveRateLimits = 0
-    private let providers: [ProviderName: UsageProvider] = [
-        .claude: ClaudeProvider(),
-        .codex: CodexProvider(),
-    ]
+    private let providers: [ProviderName: UsageProvider]
+    private let history: UsageHistoryStore
+    private let ledger: BurnLedger
 
-    init() {
+    /// - Parameters:
+    ///   - providers: usage providers to poll (default: the real Claude/Codex
+    ///     providers). Tests inject fakes.
+    ///   - history: the sample store to record into (default `.shared`).
+    ///   - ledger: the burn ledger for spend (default `.shared`).
+    ///   - autostart: when `false`, skips `start()` so tests can construct the
+    ///     model without kicking off timers/network.
+    init(providers: [ProviderName: UsageProvider]? = nil,
+         history: UsageHistoryStore = .shared,
+         ledger: BurnLedger = .shared,
+         autostart: Bool = true) {
+        self.providers = providers ?? [
+            .claude: ClaudeProvider(),
+            .codex: CodexProvider(),
+        ]
+        self.history = history
+        self.ledger = ledger
         if let raw = UserDefaults.standard.string(forKey: "selectedProvider"),
            let provider = ProviderName(rawValue: raw) {
             selectedProvider = provider
@@ -45,7 +60,7 @@ final class UsageViewModel: ObservableObject {
             selectedProvider = .codex
         }
         menuBarIcon = MenuBarIcon.render(usage: nil, offTarget: false)
-        start()
+        if autostart { start() }
     }
 
     /// Recomputes the cached menu bar flame from the current headline state, but
@@ -121,7 +136,7 @@ final class UsageViewModel: ObservableObject {
         var built: [(metric: UsageMetric, data: BurndownData?)] = []
         if result.status == .ok || result.status == .warning {
             for metric in result.metrics {
-                let samples = UsageHistoryStore.shared.record(provider: result.provider, metric: metric, at: now)
+                let samples = history.record(provider: result.provider, metric: metric, at: now)
                 let data = BurndownBuilder.build(metric: metric, samples: samples, now: now)
                 built.append((metric, data))
             }
@@ -160,12 +175,12 @@ final class UsageViewModel: ObservableObject {
             guard let resetsAt = metric.resetsAt, metric.periodSeconds > 0 else { continue }
             let thisStart = resetsAt.addingTimeInterval(-metric.periodSeconds)
             let lastStart = resetsAt.addingTimeInterval(-2 * metric.periodSeconds)
-            guard let thisCost = await BurnLedger.shared.cost(provider: burnProvider, since: thisStart) else {
+            guard let thisCost = await ledger.cost(provider: burnProvider, since: thisStart) else {
                 return // burn unavailable — keep whatever we had
             }
             // "Last period" = [lastStart, thisStart): spend since lastStart minus
             // spend since thisStart (burn has no --until).
-            let lastCost = await BurnLedger.shared.cost(provider: burnProvider, since: lastStart)
+            let lastCost = await ledger.cost(provider: burnProvider, since: lastStart)
                 .map { max(0, $0 - thisCost) }
             result[metric.name] = PeriodSpend(thisPeriod: thisCost, lastPeriod: lastCost)
         }
