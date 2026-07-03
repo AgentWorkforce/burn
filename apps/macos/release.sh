@@ -90,7 +90,14 @@ rm -f "${ZIP}"
 # 5. Staple the ticket onto the .app so Gatekeeper passes it offline.
 xcrun stapler staple "${APP_DIR}"
 
-# 6. Package a DMG (app + /Applications drop target) from the stapled app.
+# 6. Package a stapled zip — the in-app updater's download artifact. (The
+#    notarization zip above predates the staple, so re-archive here.)
+UPDATE_ZIP="dist/${APP_NAME}-${ARCH}.zip"
+echo "Building ${UPDATE_ZIP}…"
+rm -f "${UPDATE_ZIP}"
+/usr/bin/ditto -c -k --keepParent "${APP_DIR}" "${UPDATE_ZIP}"
+
+# 7. Package a DMG (app + /Applications drop target) from the stapled app.
 echo "Building ${DMG}…"
 rm -f "${DMG}"
 STAGING="dist/dmg-staging"
@@ -101,4 +108,4 @@ hdiutil create -volname "${APP_NAME}" -srcfolder "${STAGING}" -ov -format UDZO "
 rm -rf "${STAGING}"
 
 echo
-echo "Built ${DMG}"
+echo "Built ${DMG} and ${UPDATE_ZIP}"

@@ -101,9 +101,13 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           DMG="dist/BurnOSX-arm64.dmg"
+          # The zip is the in-app updater's download artifact (AppUpdater reads
+          # the releases feed and fetches BurnOSX-arm64.zip from the macos-v*
+          # release it picks).
+          ZIP="dist/BurnOSX-arm64.zip"
           # Versioned release (history). Not marked --latest: burn's own v* CLI
           # releases own the repo's "latest" pointer.
-          gh release create "${TAG}" "${DMG}" \
+          gh release create "${TAG}" "${DMG}" "${ZIP}" \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "Burn for Mac ${{ steps.version.outputs.version }}" \
@@ -111,7 +115,7 @@ jobs:
           # Moving pointer for a stable download URL:
           #   releases/download/macos-latest/BurnOSX-arm64.dmg
           gh release delete macos-latest --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag || true
-          gh release create macos-latest "${DMG}" \
+          gh release create macos-latest "${DMG}" "${ZIP}" \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
             --title "Burn for Mac (latest)" \
@@ -122,6 +126,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: agentlimit-macos-${{ github.run_id }}
-          path: apps/macos/dist/*.dmg
+          path: |
+            apps/macos/dist/*.dmg
+            apps/macos/dist/*.zip
           if-no-files-found: warn
           retention-days: 30
