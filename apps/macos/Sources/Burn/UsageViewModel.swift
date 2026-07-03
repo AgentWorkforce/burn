@@ -47,18 +47,27 @@ final class UsageViewModel: ObservableObject {
          history: UsageHistoryStore = .shared,
          ledger: BurnLedger = .shared,
          autostart: Bool = true) {
-        self.providers = providers ?? [
+        let resolvedProviders = providers ?? [
             .claude: ClaudeProvider(),
             .codex: CodexProvider(),
         ]
+        self.providers = resolvedProviders
         self.history = history
         self.ledger = ledger
+        var selected: ProviderName = .codex
         if let raw = UserDefaults.standard.string(forKey: "selectedProvider"),
            let provider = ProviderName(rawValue: raw) {
-            selectedProvider = provider
-        } else {
-            selectedProvider = .codex
+            selected = provider
         }
+        // The saved (or default) selection may not exist in an injected provider
+        // map; normalize to an available provider so refresh() isn't a no-op.
+        // (Computed on locals: `self` is off-limits until all stored properties
+        // are initialized.)
+        if resolvedProviders[selected] == nil,
+           let fallback = ProviderName.allCases.first(where: { resolvedProviders[$0] != nil }) {
+            selected = fallback
+        }
+        selectedProvider = selected
         menuBarIcon = MenuBarIcon.render(usage: nil, offTarget: false)
         if autostart { start() }
     }

@@ -11,8 +11,7 @@ final class FakeRunner: BurnRunner, @unchecked Sendable {
 
     /// Every arg vector passed to `run(_:)`, in call order.
     var capturedArgs: [[String]] {
-        lock.lock(); defer { lock.unlock() }
-        return recorded
+        withLock { recorded }
     }
 
     init(output: String?) {
@@ -20,10 +19,16 @@ final class FakeRunner: BurnRunner, @unchecked Sendable {
     }
 
     func run(_ args: [String]) async -> String? {
-        lock.lock()
-        recorded.append(args)
-        lock.unlock()
+        withLock { recorded.append(args) }
         return output
+    }
+
+    /// NSLock's lock()/unlock() are `noasync`; scope them inside a synchronous
+    /// helper so `run` stays callable from async contexts under Swift 6.
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
     }
 }
 
