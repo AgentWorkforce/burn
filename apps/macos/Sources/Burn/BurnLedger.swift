@@ -80,8 +80,9 @@ actor SystemBurnRunner: BurnRunner {
         let process = Process()
         configure(process)
         let stdout = Pipe()
+        let stderr = Pipe()
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        process.standardError = stderr
         do {
             try process.run()
         } catch {
@@ -96,11 +97,16 @@ actor SystemBurnRunner: BurnRunner {
         // child kept running.
         let group = DispatchGroup()
         group.enter()
-        var output = Data()
+        let output = DataBox()
         DispatchQueue.global(qos: .utility).async {
-            output = stdout.fileHandleForReading.readDataToEndOfFile()
+            output.data = stdout.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             group.leave()
+        }
+        // Drain stderr separately: an undrained pipe fills at ~64KB and blocks
+        // the child's writes, turning a chatty failure into a timeout.
+        DispatchQueue.global(qos: .utility).async {
+            _ = stderr.fileHandleForReading.readDataToEndOfFile()
         }
         if group.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()                       // SIGTERM…
@@ -111,7 +117,13 @@ actor SystemBurnRunner: BurnRunner {
             return nil
         }
         guard process.terminationStatus == 0 else { return nil }
-        return String(data: output, encoding: .utf8)
+        return String(data: output.data, encoding: .utf8)
+    }
+
+    /// Mutable holder the background reader fills in; capturing a `var` for
+    /// mutation in concurrently-executing code is an error under Swift 6.
+    private final class DataBox: @unchecked Sendable {
+        var data = Data()
     }
 
     private func shellQuote(_ value: String) -> String {

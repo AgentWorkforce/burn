@@ -59,6 +59,12 @@ final class UsageViewModel: ObservableObject {
         } else {
             selectedProvider = .codex
         }
+        // The saved (or default) selection may not exist in an injected provider
+        // map; normalize to an available provider so refresh() isn't a no-op.
+        if self.providers[selectedProvider] == nil,
+           let fallback = ProviderName.allCases.first(where: { self.providers[$0] != nil }) {
+            selectedProvider = fallback
+        }
         menuBarIcon = MenuBarIcon.render(usage: nil, offTarget: false)
         if autostart { start() }
     }
