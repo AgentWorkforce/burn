@@ -18,13 +18,17 @@ final class UsageHistoryStore {
     private var cache: [String: [UsageSample]] = [:]
     private let fileURL: URL
 
-    private init() {
+    private convenience init() {
         let dir = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Burn", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("history.json")
+        self.init(fileURL: dir.appendingPathComponent("history.json"))
+    }
 
+    /// Backs the store with an explicit file (tests point this at a temp file).
+    init(fileURL: URL) {
+        self.fileURL = fileURL
         if let data = try? Data(contentsOf: fileURL),
            let decoded = try? JSONDecoder().decode([String: [UsageSample]].self, from: data) {
             cache = decoded

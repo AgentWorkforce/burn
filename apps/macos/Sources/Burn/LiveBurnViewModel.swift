@@ -95,16 +95,23 @@ final class LiveBurnViewModel: ObservableObject {
     @Published private(set) var unavailable = false
 
     private let providers = ProviderName.allCases
+    private let ledger: BurnLedger
     private var timer: Timer?
     private var refreshing = false
     /// Set when a refresh is requested while one is in flight, so the running
     /// one does another pass (for the latest range) instead of being dropped.
     private var refreshAgain = false
 
+    /// - Parameter ledger: the burn ledger to query (default `.shared`). Tests
+    ///   inject a ledger backed by a fake runner.
+    init(ledger: BurnLedger = .shared) {
+        self.ledger = ledger
+    }
+
     /// Begins the refresh loop and the background ingest watch. Idempotent.
     func start() {
         guard timer == nil else { return }
-        Task { await BurnLedger.shared.startIngestWatch() }
+        Task { await ledger.startIngestWatch() }
         Task { await refresh() }
         scheduleTimer()
     }
@@ -113,7 +120,7 @@ final class LiveBurnViewModel: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
-        Task { await BurnLedger.shared.stopIngestWatch() }
+        Task { await ledger.stopIngestWatch() }
     }
 
     func isEnabled(_ provider: ProviderName) -> Bool { enabled.contains(provider) }
@@ -167,7 +174,7 @@ final class LiveBurnViewModel: ObservableObject {
 
             for provider in providers {
                 let burnProvider = BurnLedger.burnProvider(for: provider)
-                guard let points = await BurnLedger.shared.timeseries(
+                guard let points = await ledger.timeseries(
                     provider: burnProvider, since: since, bucket: range.bucketArg
                 ) else { continue }
                 gotAny = true

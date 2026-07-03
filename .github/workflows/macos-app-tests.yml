@@ -1,0 +1,35 @@
+name: macOS app tests
+
+# Build + unit-test the apps/macos menu bar app (BurnOSX) on a macOS runner.
+# Only the Rust CLI is exercised on Linux in ci.yml; the Swift package needs
+# AppKit/SwiftUI, so it can only build and test on macOS.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/macos/**'
+      - '.github/workflows/macos-app-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-app-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: swift build --package-path apps/macos
+
+      - name: Test
+        run: swift test --package-path apps/macos

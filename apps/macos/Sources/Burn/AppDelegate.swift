@@ -2,33 +2,26 @@ import SwiftUI
 import AppKit
 import Combine
 
-@main
-struct BurnApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-
-    var body: some Scene {
-        // No SwiftUI scene drives the menu bar. The status item is created once,
-        // imperatively, by AppDelegate. SwiftUI's `MenuBarExtra` can duplicate
-        // its status item when the app's scene body re-evaluates — that runaway
-        // ("endless menu bar flames") panicked the machine. An AppKit
-        // NSStatusItem created a single time cannot be duplicated.
-        Settings { EmptyView() }
-    }
-}
-
 /// Owns the single menu bar status item and its popover. Created once in
 /// `applicationDidFinishLaunching`; the flame image is mirrored from the view
 /// model's cached icon. No SwiftUI rendering touches the status item, so there
 /// is no render path that can storm or duplicate it.
+///
+/// `public` so the thin `Burn` executable target's `@main` can adopt it via
+/// `@NSApplicationDelegateAdaptor`.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let viewModel = UsageViewModel()
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private var iconObserver: AnyCancellable?
     private var appearanceObserver: NSObjectProtocol?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public override init() {
+        super.init()
+    }
+
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // menu-bar-only, no Dock icon
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
