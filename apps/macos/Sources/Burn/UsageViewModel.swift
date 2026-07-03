@@ -29,7 +29,10 @@ final class UsageViewModel: ObservableObject {
 
     let refreshInterval: TimeInterval = 60
 
-    private var timer: Timer?
+    /// The repeating refresh timer, held in a box so `deinit` (nonisolated) can
+    /// invalidate it without touching `@MainActor` state. Previously the timer
+    /// was never invalidated, so a closed popover left it firing forever.
+    private let timerBox = TimerBox()
     /// While set, scheduled (non-forced) refreshes are skipped to let a 429 clear.
     private var backoffUntil: Date?
     private var consecutiveRateLimits = 0
@@ -86,12 +89,29 @@ final class UsageViewModel: ObservableObject {
         menuBarIcon = MenuBarIcon.render(usage: usage, offTarget: offTarget)
     }
 
-    private func start() {
+    /// Kicks off the first refresh and starts the repeating refresh timer.
+    /// Idempotent: a second call while the timer is live is a no-op. Internal
+    /// (not private) so lifecycle tests can drive it with `autostart: false`.
+    func start() {
+        guard timerBox.timer == nil else { return }
         Task { await refresh(force: true) }
-        timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        timerBox.timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
     }
+
+    /// Invalidates the refresh timer. Call when the model is no longer needed so
+    /// no orphaned timer keeps firing on the main run loop. `deinit` also does
+    /// this as a backstop when the view forgets (an NSPopover close may not fire
+    /// SwiftUI's `.onDisappear`).
+    func stop() {
+        timerBox.invalidate()
+    }
+
+    /// Test hook: whether the repeating refresh timer is currently scheduled.
+    var isRefreshTimerActive: Bool { timerBox.isActive }
+
+    deinit { timerBox.invalidate() }
 
     func select(_ provider: ProviderName) {
         guard provider != selectedProvider else { return }

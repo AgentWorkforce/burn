@@ -102,7 +102,11 @@ final class LiveBurnViewModel: ObservableObject {
 
     private let providers = ProviderName.allCases
     private let ledger: BurnLedger
-    private var timer: Timer?
+    /// The refresh timer, held in a box so `deinit` (nonisolated) can invalidate
+    /// it without touching `@MainActor` state — a backstop for when the view's
+    /// `.onDisappear` doesn't fire (e.g. an NSPopover closing) and `stop()` is
+    /// never called.
+    private let timerBox = TimerBox()
     private var refreshing = false
     /// Set when a refresh is requested while one is in flight, so the running
     /// one does another pass (for the latest range) instead of being dropped.
@@ -116,7 +120,7 @@ final class LiveBurnViewModel: ObservableObject {
 
     /// Begins the refresh loop and the background ingest watch. Idempotent.
     func start() {
-        guard timer == nil else { return }
+        guard timerBox.timer == nil else { return }
         Task { await ledger.startIngestWatch() }
         Task { await refresh() }
         scheduleTimer()
@@ -124,8 +128,20 @@ final class LiveBurnViewModel: ObservableObject {
 
     /// Stops the loop and the watch.
     func stop() {
-        timer?.invalidate()
-        timer = nil
+        timerBox.invalidate()
+        Task { await ledger.stopIngestWatch() }
+    }
+
+    /// Test hook: whether the refresh timer is currently scheduled.
+    var isRefreshTimerActive: Bool { timerBox.isActive }
+
+    deinit {
+        timerBox.invalidate()
+        // Also stop the long-lived `burn ingest --watch` child, which would
+        // otherwise outlive the model when `stop()` never ran (e.g. a missed
+        // `.onDisappear`). Capture the ledger into a local — deinit may read
+        // stored properties but must not touch actor-isolated state directly.
+        let ledger = self.ledger
         Task { await ledger.stopIngestWatch() }
     }
 
@@ -147,13 +163,13 @@ final class LiveBurnViewModel: ObservableObject {
         guard newRange != range else { return }
         range = newRange
         series = [:]
-        if timer != nil { scheduleTimer() } // only retime when running
+        if timerBox.timer != nil { scheduleTimer() } // only retime when running
         Task { await refresh() }
     }
 
     private func scheduleTimer() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: range.refreshInterval, repeats: true) { [weak self] _ in
+        timerBox.invalidate()
+        timerBox.timer = Timer.scheduledTimer(withTimeInterval: range.refreshInterval, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
     }
