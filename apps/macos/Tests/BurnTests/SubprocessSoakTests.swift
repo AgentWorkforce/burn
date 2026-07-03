@@ -115,15 +115,16 @@ final class SubprocessSoakTests: XCTestCase {
 
         // The child is SIGTERM'd (then SIGKILL'd); give the background reader a
         // beat to hit EOF and release the pipe fds.
-        try await Task.sleep(nanoseconds: 1_000_000_000)
+        try await Task.sleep(for: .seconds(1))
 
         let fdDelta = openFDCount() - fdBaseline
         XCTAssertLessThan(fdDelta, 10, "fds not reclaimed after a timeout kill: delta \(fdDelta)")
     }
 
-    /// 10 concurrent callers hitting the actor must all complete without a
-    /// subprocess pile-up (the actor serializes capture, so only one child is
-    /// ever live). fd/memory deltas stay bounded afterward.
+    /// 10 concurrent callers hitting the runner must all complete without a
+    /// subprocess pile-up (captures are serialized on the runner's serial exec
+    /// queue, so only one child is ever live). fd/memory deltas stay bounded
+    /// afterward.
     func testConcurrentCallersSerializeWithoutPileup() async throws {
         let script = try makeEchoScript()
         defer { try? FileManager.default.removeItem(at: script) }
@@ -147,7 +148,7 @@ final class SubprocessSoakTests: XCTestCase {
         XCTAssertTrue(results.allSatisfy { $0 != nil }, "every concurrent run should complete with output")
 
         // Let any just-finished captures release their pipes before snapshotting.
-        try await Task.sleep(nanoseconds: 300_000_000)
+        try await Task.sleep(for: .milliseconds(300))
 
         let fdDelta = openFDCount() - fdBaseline
         let memDeltaMB = footprintDeltaMB(memBaseline)

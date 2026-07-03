@@ -41,6 +41,15 @@ actor SystemBurnRunner: BurnRunner {
     /// the timeout/reap path without waiting the production 30s.
     private let captureTimeout: TimeInterval
 
+    /// Serial queue the blocking subprocess work runs on. `capture` awaits a
+    /// continuation resumed from here instead of blocking inside the actor, so
+    /// the cooperative-pool thread is released for the (up to `captureTimeout`)
+    /// duration of the child's run. Because the queue is serial, only one
+    /// `burn` subprocess is ever alive at a time — the same invariant the
+    /// blocking actor used to provide — even though the actor is reentrant at
+    /// the await.
+    private let execQueue = DispatchQueue(label: "com.agentworkforce.burn.subprocess", qos: .utility)
+
     /// - Parameters:
     ///   - explicitBinaryURL: a `burn`-compatible executable to run directly,
     ///     bypassing resolution (default `nil` → normal resolution).
@@ -52,26 +61,26 @@ actor SystemBurnRunner: BurnRunner {
 
     func run(_ args: [String]) async -> String? {
         let label = args.first ?? "burn"
-        switch resolveTool() {
+        switch await resolveTool() {
         case .bundled(let url):
             // Self-contained Rust binary — exec directly, no shell needed.
-            return capture(label: label) { $0.executableURL = url; $0.arguments = args }
+            return await capture(label: label) { $0.executableURL = url; $0.arguments = args }
         case .path:
             // Run through a login shell so nvm/Homebrew PATH (and the `node` the
             // npm `burn` shim needs) resolve even when launched from Finder.
             let command = "burn " + args.map(shellQuote).joined(separator: " ")
-            return loginShell(command, label: label)
+            return await loginShell(command, label: label)
         case .missing, .unknown:
             return nil
         }
     }
 
     func bundledBinaryURL() async -> URL? {
-        if case .bundled(let url) = resolveTool() { return url }
+        if case .bundled(let url) = await resolveTool() { return url }
         return nil
     }
 
-    private func resolveTool() -> Tool {
+    private func resolveTool() async -> Tool {
         // Explicit binary short-circuits resolution: run it directly like a
         // bundled helper. Preserves normal resolution when unset.
         if let explicit = explicitBinaryURL {
@@ -81,75 +90,108 @@ actor SystemBurnRunner: BurnRunner {
             if let url = Bundle.main.url(forAuxiliaryExecutable: "burn"),
                FileManager.default.isExecutableFile(atPath: url.path) {
                 tool = .bundled(url)
-            } else if !(loginShell("command -v burn")?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty {
-                tool = .path
             } else {
-                tool = .missing
+                // The actor is reentrant across this await, so two concurrent
+                // first calls may both run the PATH probe. That's benign: both
+                // converge on the same value and the probe is idempotent.
+                let probe = (await loginShell("command -v burn"))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                tool = probe.isEmpty ? .missing : .path
             }
         }
         return tool
     }
 
-    private func loginShell(_ command: String, label: String = "shell") -> String? {
-        capture(label: label) {
+    private func loginShell(_ command: String, label: String = "shell") async -> String? {
+        await capture(label: label) {
             $0.executableURL = URL(fileURLWithPath: "/bin/zsh")
             $0.arguments = ["-lc", command]
         }
     }
 
-    /// Runs a configured process and returns stdout, or `nil` on failure /
-    /// nonzero exit / timeout. The timeout (`captureTimeout`) stops a hung
-    /// `burn` from wedging the actor and queuing follow-up spend requests behind
-    /// it. `label` names the subprocess in the Instruments signpost interval.
-    private func capture(label: String, _ configure: (Process) -> Void) -> String? {
+    /// Runs a configured process on the serial exec queue and returns stdout,
+    /// or `nil` on failure / nonzero exit / timeout. The timeout
+    /// (`captureTimeout`) stops a hung `burn` from wedging the queue and piling
+    /// follow-up spend requests behind it. Awaiting the queue keeps the
+    /// cooperative pool free while the child runs. `label` names the subprocess
+    /// in the Instruments signpost interval, which spans queue wait + run.
+    private func capture(label: String, _ configure: @escaping @Sendable (Process) -> Void) async -> String? {
         let signpostID = Signposts.subprocess.makeSignpostID()
         let interval = Signposts.subprocess.beginInterval(
             "capture", id: signpostID, "\(label, privacy: .public)"
         )
         defer { Signposts.subprocess.endInterval("capture", interval) }
 
-        let process = Process()
-        configure(process)
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        // Read stdout to EOF (which arrives when the process exits) and reap it
-        // on a background queue; bound the wait with a timeout. This blocks the
-        // runner actor until the process truly finishes or is killed — which,
-        // because the actor serializes calls, guarantees only one `burn`
-        // subprocess can ever be alive at a time (no pile-up). Avoids the
-        // `terminationHandler` race that could let capture() return while the
-        // child kept running.
-        let group = DispatchGroup()
-        group.enter()
-        let output = DataBox()
-        DispatchQueue.global(qos: .utility).async {
-            output.data = stdout.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            group.leave()
-        }
-        // Drain stderr separately: an undrained pipe fills at ~64KB and blocks
-        // the child's writes, turning a chatty failure into a timeout.
-        DispatchQueue.global(qos: .utility).async {
-            _ = stderr.fileHandleForReading.readDataToEndOfFile()
-        }
-        if group.wait(timeout: .now() + captureTimeout) == .timedOut {
-            process.terminate()                       // SIGTERM…
-            usleep(200_000)
-            if process.isRunning {                    // …then SIGKILL if it ignores it
-                kill(process.processIdentifier, SIGKILL)
+        let timeout = captureTimeout
+        return await withCheckedContinuation { continuation in
+            execQueue.async {
+                continuation.resume(returning: Self.blockingCapture(timeout: timeout, configure))
             }
-            return nil
         }
-        guard process.terminationStatus == 0 else { return nil }
-        return String(data: output.data, encoding: .utf8)
+    }
+
+    /// The synchronous Process/Pipe body. Pure — touches no actor state — so it
+    /// runs on the exec queue, off the cooperative pool.
+    ///
+    /// Descriptor hygiene matters here: the parent-side `Pipe`/`FileHandle`
+    /// objects are Obj-C autoreleased, and on GCD threads the pool drains
+    /// lazily — without the explicit `close()`s and per-call `autoreleasepool`
+    /// each spawn leaked ~2 fds long after the child exited (caught by
+    /// `SubprocessSoakTests`; with a spawn every 3s on the live tab this is a
+    /// real production leak, not test noise).
+    private static func blockingCapture(timeout: TimeInterval, _ configure: (Process) -> Void) -> String? {
+        autoreleasepool { () -> String? in
+            let process = Process()
+            configure(process)
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+            do {
+                try process.run()
+            } catch {
+                return nil
+            }
+            // Read stdout to EOF (which arrives when the process exits) and reap
+            // it on a background queue; bound the wait with a timeout. This
+            // blocks the exec queue until the process truly finishes or is
+            // killed — which, because that queue is serial, guarantees only one
+            // `burn` subprocess can ever be alive at a time (no pile-up). Avoids
+            // the `terminationHandler` race that could let capture() return
+            // while the child kept running.
+            let group = DispatchGroup()
+            group.enter()
+            let output = DataBox()
+            DispatchQueue.global(qos: .utility).async {
+                output.data = stdout.fileHandleForReading.readDataToEndOfFile()
+                try? stdout.fileHandleForReading.close()
+                process.waitUntilExit()
+                group.leave()
+            }
+            // Drain stderr separately: an undrained pipe fills at ~64KB and
+            // blocks the child's writes, turning a chatty failure into a timeout.
+            DispatchQueue.global(qos: .utility).async {
+                _ = stderr.fileHandleForReading.readDataToEndOfFile()
+                try? stderr.fileHandleForReading.close()
+            }
+            if group.wait(timeout: .now() + timeout) == .timedOut {
+                process.terminate()                       // SIGTERM…
+                usleep(200_000)
+                if process.isRunning {                    // …then SIGKILL if it ignores it
+                    kill(process.processIdentifier, SIGKILL)
+                }
+                // The kill closes the child's write ends, so the background
+                // readers hit EOF, return, and close their handles. Give them a
+                // bounded beat (avoids closing under an in-flight legacy read),
+                // then close defensively — double-closes throw and are swallowed.
+                _ = group.wait(timeout: .now() + 1)
+                try? stdout.fileHandleForReading.close()
+                try? stderr.fileHandleForReading.close()
+                return nil
+            }
+            guard process.terminationStatus == 0 else { return nil }
+            return String(data: output.data, encoding: .utf8)
+        }
     }
 
     /// Mutable holder the background reader fills in; capturing a `var` for

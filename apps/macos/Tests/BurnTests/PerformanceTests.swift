@@ -71,8 +71,9 @@ final class PerformanceTests: XCTestCase {
             .appendingPathComponent("burn-history-perf-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: seedFile) }
 
-        // Future reset so the store's stale-window pruning keeps every series.
-        let reset = Int(Date().addingTimeInterval(3_600).timeIntervalSince1970)
+        // Far-future reset so the store's stale-window pruning keeps every
+        // series across all measured iterations (which advance the clock below).
+        let reset = Int(Date().addingTimeInterval(86_400).timeIntervalSince1970)
         let base = Date().addingTimeInterval(-3_000)
         var seed: [String: [UsageSample]] = [:]
         for series in 0..<50 {
@@ -93,8 +94,13 @@ final class PerformanceTests: XCTestCase {
             periodSeconds: 18_000
         )
 
+        // Deterministic advancing clock: each iteration records 61s after the
+        // previous one, so no iteration hits the store's <1s duplicate-collapse
+        // path — every measured call does the same append + full-rewrite work.
+        var recordAt = Date()
         measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {
-            _ = store.record(provider: .codex, metric: metric, at: Date())
+            recordAt = recordAt.addingTimeInterval(61)
+            _ = store.record(provider: .codex, metric: metric, at: recordAt)
         }
     }
 }
