@@ -112,8 +112,9 @@ actor SystemBurnRunner: BurnRunner {
         let process = Process()
         configure(process)
         let stdout = Pipe()
+        let stderr = Pipe()
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        process.standardError = stderr
         do {
             try process.run()
         } catch {
@@ -128,11 +129,16 @@ actor SystemBurnRunner: BurnRunner {
         // child kept running.
         let group = DispatchGroup()
         group.enter()
-        var output = Data()
+        let output = DataBox()
         DispatchQueue.global(qos: .utility).async {
-            output = stdout.fileHandleForReading.readDataToEndOfFile()
+            output.data = stdout.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             group.leave()
+        }
+        // Drain stderr separately: an undrained pipe fills at ~64KB and blocks
+        // the child's writes, turning a chatty failure into a timeout.
+        DispatchQueue.global(qos: .utility).async {
+            _ = stderr.fileHandleForReading.readDataToEndOfFile()
         }
         if group.wait(timeout: .now() + captureTimeout) == .timedOut {
             process.terminate()                       // SIGTERM…
@@ -143,7 +149,13 @@ actor SystemBurnRunner: BurnRunner {
             return nil
         }
         guard process.terminationStatus == 0 else { return nil }
-        return String(data: output, encoding: .utf8)
+        return String(data: output.data, encoding: .utf8)
+    }
+
+    /// Mutable holder the background reader fills in; capturing a `var` for
+    /// mutation in concurrently-executing code is an error under Swift 6.
+    private final class DataBox: @unchecked Sendable {
+        var data = Data()
     }
 
     private func shellQuote(_ value: String) -> String {
@@ -265,13 +277,19 @@ actor BurnLedger {
     /// keeps the ledger fresh incrementally (FS-event driven, ~1s poll), so the
     /// live view's summary polls stay fast.
     private var watchProcess: Process?
+    /// True between start and stop requests. Actor methods are reentrant across
+    /// awaits, so a stop can interleave while start is suspended resolving the
+    /// binary; start rechecks this before spawning so the stop wins.
+    private var watchDesired = false
 
     /// Starts a background `burn ingest --watch` if one isn't already running.
     /// Only runs with the bundled native helper (a login-shell child can't be
     /// cleanly managed); the live chart still polls either way.
     func startIngestWatch() async {
         guard watchProcess == nil else { return }
+        watchDesired = true
         guard let url = await runner.bundledBinaryURL() else { return }
+        guard watchDesired, watchProcess == nil else { return }
         let process = Process()
         process.executableURL = url
         process.arguments = ["ingest", "--watch", "--quiet"]
@@ -285,8 +303,10 @@ actor BurnLedger {
         }
     }
 
-    /// Terminates the background watch process, if running.
+    /// Terminates the background watch process, if running, and cancels any
+    /// start that is still resolving the binary.
     func stopIngestWatch() {
+        watchDesired = false
         watchProcess?.terminate()
         watchProcess = nil
     }
