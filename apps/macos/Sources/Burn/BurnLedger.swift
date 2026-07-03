@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Runs the `burn` CLI and returns its stdout. A seam so tests can inject a fake
 /// that returns canned JSON without spawning a subprocess.
@@ -31,16 +32,35 @@ actor SystemBurnRunner: BurnRunner {
     }
     private var tool: Tool = .unknown
 
+    /// When set, resolution is skipped and this URL is executed directly (no
+    /// login shell), exactly like the bundled case. Lets tests drive the real
+    /// Process/Pipe/timeout machinery against a fake `burn` script. `nil`
+    /// preserves the normal bundled→PATH→missing resolution.
+    private let explicitBinaryURL: URL?
+    /// The `capture` timeout (see `capture`). Injectable so tests can exercise
+    /// the timeout/reap path without waiting the production 30s.
+    private let captureTimeout: TimeInterval
+
+    /// - Parameters:
+    ///   - explicitBinaryURL: a `burn`-compatible executable to run directly,
+    ///     bypassing resolution (default `nil` → normal resolution).
+    ///   - timeout: per-invocation capture timeout in seconds (default `30`).
+    init(explicitBinaryURL: URL? = nil, timeout: TimeInterval = 30) {
+        self.explicitBinaryURL = explicitBinaryURL
+        self.captureTimeout = timeout
+    }
+
     func run(_ args: [String]) async -> String? {
+        let label = args.first ?? "burn"
         switch resolveTool() {
         case .bundled(let url):
             // Self-contained Rust binary — exec directly, no shell needed.
-            return capture { $0.executableURL = url; $0.arguments = args }
+            return capture(label: label) { $0.executableURL = url; $0.arguments = args }
         case .path:
             // Run through a login shell so nvm/Homebrew PATH (and the `node` the
             // npm `burn` shim needs) resolve even when launched from Finder.
             let command = "burn " + args.map(shellQuote).joined(separator: " ")
-            return loginShell(command)
+            return loginShell(command, label: label)
         case .missing, .unknown:
             return nil
         }
@@ -52,6 +72,11 @@ actor SystemBurnRunner: BurnRunner {
     }
 
     private func resolveTool() -> Tool {
+        // Explicit binary short-circuits resolution: run it directly like a
+        // bundled helper. Preserves normal resolution when unset.
+        if let explicit = explicitBinaryURL {
+            return .bundled(explicit)
+        }
         if case .unknown = tool {
             if let url = Bundle.main.url(forAuxiliaryExecutable: "burn"),
                FileManager.default.isExecutableFile(atPath: url.path) {
@@ -66,17 +91,24 @@ actor SystemBurnRunner: BurnRunner {
         return tool
     }
 
-    private func loginShell(_ command: String) -> String? {
-        capture {
+    private func loginShell(_ command: String, label: String = "shell") -> String? {
+        capture(label: label) {
             $0.executableURL = URL(fileURLWithPath: "/bin/zsh")
             $0.arguments = ["-lc", command]
         }
     }
 
     /// Runs a configured process and returns stdout, or `nil` on failure /
-    /// nonzero exit / timeout. The timeout stops a hung `burn` from wedging the
-    /// actor and queuing follow-up spend requests behind it.
-    private func capture(_ configure: (Process) -> Void, timeout: TimeInterval = 30) -> String? {
+    /// nonzero exit / timeout. The timeout (`captureTimeout`) stops a hung
+    /// `burn` from wedging the actor and queuing follow-up spend requests behind
+    /// it. `label` names the subprocess in the Instruments signpost interval.
+    private func capture(label: String, _ configure: (Process) -> Void) -> String? {
+        let signpostID = Signposts.subprocess.makeSignpostID()
+        let interval = Signposts.subprocess.beginInterval(
+            "capture", id: signpostID, "\(label, privacy: .public)"
+        )
+        defer { Signposts.subprocess.endInterval("capture", interval) }
+
         let process = Process()
         configure(process)
         let stdout = Pipe()
@@ -102,7 +134,7 @@ actor SystemBurnRunner: BurnRunner {
             process.waitUntilExit()
             group.leave()
         }
-        if group.wait(timeout: .now() + timeout) == .timedOut {
+        if group.wait(timeout: .now() + captureTimeout) == .timedOut {
             process.terminate()                       // SIGTERM…
             usleep(200_000)
             if process.isRunning {                    // …then SIGKILL if it ignores it
