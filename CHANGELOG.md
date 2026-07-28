@@ -4,6 +4,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn summary` marks unpriced model rows and labels totals as priced-only; JSON adds `unpricedTurns` and `unpricedModels` so unknown-model spend is never mistaken for free usage.
+- Pricing: refreshed the vendored models.dev snapshot, including `gpt-5.6-sol`.
+
 ## [4.0.0] - 2026-06-23
 
 - **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports its low-level `analyze`-layer internals (detector/aggregator functions and helper types such as `PricingTable`, `CompareTable`, `CompareCell`) — these were never the intended embedding surface. Embed through the verb layer instead: `LedgerHandle` methods / `summary_report` / `hotspots` / `compare`. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.

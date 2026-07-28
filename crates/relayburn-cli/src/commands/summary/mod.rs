@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn grouped_json_includes_quality_when_report_has_it() {
+    fn grouped_json_includes_quality_and_unpriced_usage() {
         let report = SummaryGroupedReport {
             group_by: SummaryGroupBy::Model,
             tag_key: None,
@@ -480,13 +480,41 @@ mod tests {
             stop_reasons: relayburn_sdk::StopReasonCounts::default(),
             subagents: SubagentCounts::default(),
             quality: Some(QualityResult::default()),
-            unpriced_turns: 0,
-            unpriced_models: Vec::new(),
+            unpriced_turns: 2,
+            unpriced_models: vec!["made-up-model-xyz".into()],
         };
 
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
         assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
+        assert_eq!(value["unpricedTurns"], 2);
+        assert_eq!(value["unpricedModels"], json!(["made-up-model-xyz"]));
+    }
+
+    #[test]
+    fn grouped_cost_cell_marks_unpriced_model() {
+        let unpriced_models = vec!["made-up-model-xyz".to_string()];
+        assert_eq!(
+            grouped_cost_cell(
+                SummaryGroupBy::Model,
+                &unpriced_models,
+                "made-up-model-xyz",
+                0.0,
+            ),
+            "unpriced"
+        );
+        assert_eq!(
+            grouped_cost_cell(SummaryGroupBy::Model, &[], "free-model", 0.0),
+            "$0.00"
+        );
+        assert_eq!(
+            grouped_cost_cell(SummaryGroupBy::Provider, &unpriced_models, "openai", 1.25,),
+            "$1.25"
+        );
+        assert_eq!(
+            unpriced_turns_line(2, &unpriced_models),
+            "2 turns unpriced: made-up-model-xyz (total excludes their cost)"
+        );
     }
 
     #[test]

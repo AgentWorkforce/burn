@@ -101,6 +101,8 @@ pub(super) fn grouped_json_value(
         "totalCost".into(),
         cost_breakdown_to_json(&report.total_cost),
     );
+    payload.insert("unpricedTurns".into(), json!(report.unpriced_turns));
+    payload.insert("unpricedModels".into(), json!(&report.unpriced_models));
     payload.insert(key.into(), Value::Array(group_rows));
     payload.insert(
         "fidelity".into(),
