@@ -5,7 +5,6 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn summary` marks unpriced model rows and labels totals as priced-only; JSON adds `unpricedTurns` and `unpricedModels` so unknown-model spend is never mistaken for free usage.
-- Pricing: refreshed the vendored models.dev snapshot, including `gpt-5.6-sol`.
 
 ## [4.0.0] - 2026-06-23
 
