@@ -4,7 +4,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- Pricing: refreshed the vendored models.dev snapshot, adding `gpt-5.6-sol` (previously unpriced and reported as $0.00).
+- Pricing: refreshed the vendored models.dev snapshot. Adds `gpt-5.6-sol` (previously unpriced
+  and reported as $0.00). Also changes pricing for models already in use: `claude-sonnet-4-6`
+  reasoning switches from being billed at the output rate to a separate tariff
+  (`reasoning_mode` `SameAsOutput` -> `Separate`), and `gpt-5.5` input drops from 5.0 to 1.5.
+  Both alter previously-reported costs for existing usage.
 
 ## [4.0.0] - 2026-06-23
 
