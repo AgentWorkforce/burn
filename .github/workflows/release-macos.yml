@@ -114,12 +114,77 @@ jobs:
             --notes-file "${{ steps.changelog.outputs.notes_file }}"
           # Moving pointer for a stable download URL:
           #   releases/download/macos-latest/BurnOSX-arm64.dmg
-          gh release delete macos-latest --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag || true
-          gh release create macos-latest "${DMG}" "${ZIP}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --title "Burn for Mac (latest)" \
-            --notes "Latest macOS app build — points at ${TAG}."
+          # Preserve the live pointer until its replacement artifacts exist.
+          # Only a verified 404 permits creation; auth, rate-limit, and other
+          # probe failures stop the workflow instead of masquerading as absence.
+          RELEASE_PROBE="${RUNNER_TEMP}/macos-latest-release.txt"
+          RELEASE_PROBE_ERROR="${RUNNER_TEMP}/macos-latest-release-error.txt"
+          if gh api --include \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/macos-latest" \
+            > "${RELEASE_PROBE}" 2> "${RELEASE_PROBE_ERROR}"; then
+            BACKUP_DIR="${RUNNER_TEMP}/macos-latest-backup"
+            BACKUP_DMG="${BACKUP_DIR}/$(basename "${DMG}")"
+            BACKUP_ZIP="${BACKUP_DIR}/$(basename "${ZIP}")"
+            mkdir -p "${BACKUP_DIR}"
+            gh release download macos-latest \
+              --repo "${GITHUB_REPOSITORY}" \
+              --dir "${BACKUP_DIR}" \
+              --pattern "$(basename "${DMG}")" \
+              --pattern "$(basename "${ZIP}")"
+            test -s "${BACKUP_DMG}"
+            test -s "${BACKUP_ZIP}"
+
+            upload_succeeded=false
+            for attempt in 1 2 3; do
+              if gh release upload macos-latest "${DMG}" "${ZIP}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --clobber; then
+                upload_succeeded=true
+                break
+              fi
+              echo "macos-latest replacement upload attempt ${attempt} failed"
+            done
+            if [ "${upload_succeeded}" != true ]; then
+              echo "replacement failed; restoring the previously downloaded assets" >&2
+              restore_succeeded=false
+              for attempt in 1 2 3; do
+                if gh release upload macos-latest "${BACKUP_DMG}" "${BACKUP_ZIP}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --clobber; then
+                  restore_succeeded=true
+                  break
+                fi
+                echo "macos-latest rollback attempt ${attempt} failed" >&2
+              done
+              if [ "${restore_succeeded}" != true ]; then
+                echo "macos-latest rollback failed; prior assets remain in ${BACKUP_DIR}" >&2
+              fi
+              exit 1
+            fi
+
+            gh release edit macos-latest \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "Burn for Mac (latest)" \
+              --notes "Latest macOS app build — points at ${TAG}."
+            # `release edit --target` updates release metadata but does not move
+            # an existing Git tag. Retarget the lightweight tag in place only
+            # after the replacement assets are live.
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/macos-latest" \
+              -F "sha=${GITHUB_SHA}" \
+              -F force=true \
+              --silent
+          elif grep -Eq '^HTTP/[0-9.]+ 404 ' "${RELEASE_PROBE}"; then
+            gh release create macos-latest "${DMG}" "${ZIP}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "Burn for Mac (latest)" \
+              --notes "Latest macOS app build — points at ${TAG}."
+          else
+            cat "${RELEASE_PROBE_ERROR}" >&2
+            exit 1
+          fi
 
       - name: Upload build artifacts
         if: always()
