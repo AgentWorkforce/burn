@@ -137,9 +137,12 @@ jobs:
           fi
 
           if gh release view macos-latest --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload macos-latest "${DMG}" "${ZIP}" \
+            if ! gh release upload macos-latest "${DMG}" "${ZIP}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --clobber
+              --clobber; then
+              echo "macos-latest tag moved to ${GITHUB_SHA}, but release assets were not updated" >&2
+              exit 1
+            fi
             gh release edit macos-latest \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
