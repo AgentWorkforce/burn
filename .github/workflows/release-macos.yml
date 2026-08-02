@@ -114,12 +114,44 @@ jobs:
             --notes-file "${{ steps.changelog.outputs.notes_file }}"
           # Moving pointer for a stable download URL:
           #   releases/download/macos-latest/BurnOSX-arm64.dmg
-          gh release delete macos-latest --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag || true
-          gh release create macos-latest "${DMG}" "${ZIP}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --title "Burn for Mac (latest)" \
-            --notes "Latest macOS app build — points at ${TAG}."
+          ACTUAL_TAG_SHA="$(git ls-remote --tags origin refs/tags/macos-latest | awk 'NR == 1 { print $1 }')"
+          if [ -n "${ACTUAL_TAG_SHA}" ]; then
+            # Updating a release's targetCommitish does not move an existing tag.
+            # This force update is intentionally destructive: macos-latest is a
+            # moving pointer, so moving its tag is the contract. The versioned
+            # macos-v* releases remain immutable history.
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/macos-latest" \
+              -f "sha=${GITHUB_SHA}" \
+              -F force=true >/dev/null
+          else
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/macos-latest" \
+              -f "sha=${GITHUB_SHA}" >/dev/null
+          fi
+          ACTUAL_TAG_SHA="$(git ls-remote --tags origin refs/tags/macos-latest | awk 'NR == 1 { print $1 }')"
+          if [ "${ACTUAL_TAG_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "macos-latest tag mismatch: expected ${GITHUB_SHA}, got ${ACTUAL_TAG_SHA:-<missing>}" >&2
+            exit 1
+          fi
+
+          if gh release view macos-latest --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload macos-latest "${DMG}" "${ZIP}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            gh release edit macos-latest \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "Burn for Mac (latest)" \
+              --notes "Latest macOS app build — points at ${TAG}."
+          else
+            gh release create macos-latest "${DMG}" "${ZIP}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "Burn for Mac (latest)" \
+              --notes "Latest macOS app build — points at ${TAG}."
+          fi
 
       - name: Upload build artifacts
         if: always()
