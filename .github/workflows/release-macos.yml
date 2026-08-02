@@ -38,11 +38,18 @@ jobs:
           MONTH="$((10#$(date +%m)))"
           MATCHING_TAGS="$(git ls-remote --tags origin 'refs/tags/macos-v*' | \
             awk -v sha="${GITHUB_SHA}" '
-              $1 == sha && $2 ~ /^refs\/tags\/macos-v[0-9]+\.[0-9]+\.[0-9]+$/ {
-                sub(/^refs\/tags\//, "", $2)
-                print $2
+              $2 ~ /^refs\/tags\/macos-v[0-9]+\.[0-9]+\.[0-9]+(\^\{\})?$/ {
+                ref = $2
+                peeled = sub(/\^\{\}$/, "", ref)
+                sub(/^refs\/tags\//, "", ref)
+                if (peeled || !(ref in resolved)) resolved[ref] = $1
               }
-            ')"
+              END {
+                for (ref in resolved) {
+                  if (resolved[ref] == sha) print ref
+                }
+              }
+            ' | sort)"
           MATCHING_COUNT="$(printf '%s\n' "${MATCHING_TAGS}" | sed '/^$/d' | wc -l | tr -d ' ')"
           if [ "${MATCHING_COUNT}" -gt 1 ]; then
             echo "multiple macos-v* tags already point at ${GITHUB_SHA}; refusing an ambiguous rerun:" >&2
@@ -58,7 +65,7 @@ jobs:
             N="$(git ls-remote --tags origin "${PREFIX}*" | awk -v prefix="${PREFIX}" '
               index($2, prefix) == 1 {
                 suffix = substr($2, length(prefix) + 1)
-                if (suffix ~ /^[0-9]+$/ && suffix > max) max = suffix
+                if (suffix ~ /^[0-9]+$/ && (suffix + 0) > max) max = suffix + 0
               }
               END { print max + 1 }
             ')"
@@ -136,7 +143,8 @@ jobs:
           # release it picks).
           ZIP="dist/BurnOSX-arm64.zip"
           print_latest_recovery() {
-            echo "macos-latest tag is ${GITHUB_SHA}. Asset replacement was attempted, but the current asset contents are indeterminate." >&2
+            local asset_state="${1:-Asset replacement was attempted, but the current asset contents are indeterminate.}"
+            echo "macos-latest tag is ${GITHUB_SHA}. ${asset_state}" >&2
             echo "After this run finishes, establish the current state by comparing it with the retained build artifact:" >&2
             echo "  gh run download ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --name agentlimit-macos-${GITHUB_RUN_ID} --dir macos-recovery" >&2
             echo "  gh release download macos-latest --repo ${GITHUB_REPOSITORY} --pattern 'BurnOSX-arm64.*' --dir macos-current --clobber" >&2
@@ -147,10 +155,34 @@ jobs:
             echo "  gh release edit macos-latest --repo ${GITHUB_REPOSITORY} --target ${GITHUB_SHA} --title 'Burn for Mac (latest)' --notes 'Latest macOS app build — points at ${TAG}.'" >&2
             echo "  test \"\$(git ls-remote --tags https://github.com/${GITHUB_REPOSITORY}.git refs/tags/macos-latest | awk 'NR == 1 { print \$1 }')\" = ${GITHUB_SHA}" >&2
           }
+          print_latest_lookup_recovery() {
+            echo "macos-latest tag is ${GITHUB_SHA}. Release lookup failed before asset replacement; this run did not inspect or change the release assets." >&2
+            echo "After restoring GitHub API access, download the retained build artifact:" >&2
+            echo "  gh run download ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --name agentlimit-macos-${GITHUB_RUN_ID} --dir macos-recovery" >&2
+            echo "Then establish whether the release exists:" >&2
+            echo "  gh release view macos-latest --repo ${GITHUB_REPOSITORY}" >&2
+            echo "If it exists, compare and replace its assets with the retained build as needed, then repair its metadata:" >&2
+            echo "  gh release download macos-latest --repo ${GITHUB_REPOSITORY} --pattern 'BurnOSX-arm64.*' --dir macos-current --clobber" >&2
+            echo "  shasum -a 256 macos-recovery/BurnOSX-arm64.dmg macos-current/BurnOSX-arm64.dmg" >&2
+            echo "  shasum -a 256 macos-recovery/BurnOSX-arm64.zip macos-current/BurnOSX-arm64.zip" >&2
+            echo "  gh release upload macos-latest macos-recovery/BurnOSX-arm64.dmg macos-recovery/BurnOSX-arm64.zip --repo ${GITHUB_REPOSITORY} --clobber" >&2
+            echo "  gh release edit macos-latest --repo ${GITHUB_REPOSITORY} --target ${GITHUB_SHA} --title 'Burn for Mac (latest)' --notes 'Latest macOS app build — points at ${TAG}.'" >&2
+            echo "If it is confirmed absent, create it from the retained build instead:" >&2
+            echo "  gh release create macos-latest macos-recovery/BurnOSX-arm64.dmg macos-recovery/BurnOSX-arm64.zip --repo ${GITHUB_REPOSITORY} --target ${GITHUB_SHA} --title 'Burn for Mac (latest)' --notes 'Latest macOS app build — points at ${TAG}.'" >&2
+            echo "Finally verify the moving tag directly:" >&2
+            echo "  test \"\$(git ls-remote --tags https://github.com/${GITHUB_REPOSITORY}.git refs/tags/macos-latest | awk 'NR == 1 { print \$1 }')\" = ${GITHUB_SHA}" >&2
+          }
           # Versioned release (history). Not marked --latest: burn's own v* CLI
           # releases own the repo's "latest" pointer.
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            VERSIONED_TAG_SHA="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk 'NR == 1 { print $1 }')"
+            VERSIONED_TAG_SHA="$(git ls-remote --tags origin "refs/tags/${TAG}*" | awk -v ref="refs/tags/${TAG}" '
+              $2 == ref { direct = $1 }
+              $2 == ref "^{}" { peeled = $1 }
+              END {
+                if (peeled != "") print peeled
+                else print direct
+              }
+            ')"
             if [ "${VERSIONED_TAG_SHA}" != "${GITHUB_SHA}" ]; then
               echo "existing ${TAG} points at ${VERSIONED_TAG_SHA:-<missing>}, not ${GITHUB_SHA}; refusing to rewrite immutable history" >&2
               exit 1
@@ -195,7 +227,23 @@ jobs:
             exit 1
           fi
 
-          if gh release view macos-latest --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          set +e
+          LATEST_RELEASE_LOOKUP="$(gh api --include \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/macos-latest" 2>&1)"
+          LATEST_RELEASE_STATUS=$?
+          set -e
+          if [ "${LATEST_RELEASE_STATUS}" -eq 0 ]; then
+            LATEST_RELEASE_EXISTS=true
+          elif printf '%s\n' "${LATEST_RELEASE_LOOKUP}" | grep -Eq '^HTTP/[0-9.]+ 404([[:space:]]|$)'; then
+            LATEST_RELEASE_EXISTS=false
+          else
+            echo "macos-latest release lookup failed; its existence is indeterminate, so refusing to create or replace assets" >&2
+            printf '%s\n' "${LATEST_RELEASE_LOOKUP}" >&2
+            print_latest_lookup_recovery
+            exit 1
+          fi
+
+          if [ "${LATEST_RELEASE_EXISTS}" = true ]; then
             if ! gh release upload macos-latest "${DMG}" "${ZIP}" \
               --repo "${GITHUB_REPOSITORY}" \
               --clobber; then
