@@ -7,6 +7,10 @@ name: Release (macOS app)
 on:
   workflow_dispatch:
 
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -105,6 +109,14 @@ jobs:
           # the releases feed and fetches BurnOSX-arm64.zip from the macos-v*
           # release it picks).
           ZIP="dist/BurnOSX-arm64.zip"
+          print_latest_recovery() {
+            echo "macos-latest may contain a mix of old and new assets. Do not rerun this workflow: the versioned ${TAG} release already exists." >&2
+            echo "After this run finishes, recover from the retained artifact with:" >&2
+            echo "  gh run download ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --name agentlimit-macos-${GITHUB_RUN_ID} --dir macos-recovery" >&2
+            echo "  gh release upload macos-latest macos-recovery/BurnOSX-arm64.dmg macos-recovery/BurnOSX-arm64.zip --repo ${GITHUB_REPOSITORY} --clobber" >&2
+            echo "  gh release edit macos-latest --repo ${GITHUB_REPOSITORY} --target ${GITHUB_SHA} --title 'Burn for Mac (latest)' --notes 'Latest macOS app build — points at ${TAG}.'" >&2
+            echo "  test \"\$(git ls-remote --tags https://github.com/${GITHUB_REPOSITORY}.git refs/tags/macos-latest | awk 'NR == 1 { print \$1 }')\" = ${GITHUB_SHA}" >&2
+          }
           # Versioned release (history). Not marked --latest: burn's own v* CLI
           # releases own the repo's "latest" pointer.
           gh release create "${TAG}" "${DMG}" "${ZIP}" \
@@ -140,20 +152,30 @@ jobs:
             if ! gh release upload macos-latest "${DMG}" "${ZIP}" \
               --repo "${GITHUB_REPOSITORY}" \
               --clobber; then
-              echo "macos-latest tag moved to ${GITHUB_SHA}, but release assets were not updated" >&2
+              echo "macos-latest tag moved to ${GITHUB_SHA}, but its two assets may now be only partially updated" >&2
+              print_latest_recovery
               exit 1
             fi
-            gh release edit macos-latest \
+            if ! gh release edit macos-latest \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
               --title "Burn for Mac (latest)" \
-              --notes "Latest macOS app build — points at ${TAG}."
+              --notes "Latest macOS app build — points at ${TAG}."; then
+              echo "macos-latest assets were replaced, but its release metadata was not updated" >&2
+              print_latest_recovery
+              exit 1
+            fi
           else
             gh release create macos-latest "${DMG}" "${ZIP}" \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
               --title "Burn for Mac (latest)" \
               --notes "Latest macOS app build — points at ${TAG}."
+          fi
+          ACTUAL_TAG_SHA="$(git ls-remote --tags origin refs/tags/macos-latest | awk 'NR == 1 { print $1 }')"
+          if [ "${ACTUAL_TAG_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "macos-latest changed during publication: expected ${GITHUB_SHA}, got ${ACTUAL_TAG_SHA:-<missing>}" >&2
+            exit 1
           fi
 
       - name: Upload build artifacts
