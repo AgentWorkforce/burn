@@ -28,9 +28,7 @@ pub const DEFAULT_SEARCH_LIMIT: usize = 25;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
-    #[serde(alias = "session_id")]
     pub session_id: String,
-    #[serde(alias = "message_id")]
     pub message_id: String,
     pub source: String,
     /// FTS5 BM25 rank (lower = better match).
@@ -56,7 +54,13 @@ impl<'a> SearchOptions<'a> {
 }
 
 pub(crate) fn search(conn: &Connection, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {
-    let limit = opts.limit.max(1) as i64;
+    let requested_limit = opts.limit.max(1);
+    let limit = i64::try_from(requested_limit).map_err(|_| {
+        crate::ledger::error::LedgerError::Other(format!(
+            "search limit {requested_limit} exceeds SQLite maximum {}",
+            i64::MAX
+        ))
+    })?;
     let mut sql = String::from(
         "SELECT c.session_id, c.message_id, c.source, bm25(content_fts), \
                 snippet(content_fts, 0, '<b>', '</b>', '…', 16) \

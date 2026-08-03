@@ -5,7 +5,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn search <query>` searches ingested session content with FTS5, with session scoping, result limits, optional highlighted snippets, and JSON output.
-- `relayburn-sdk` search hits serialize `sessionId` and `messageId` consistently with the SDK's camelCase JSON contract.
+- **BREAKING (`relayburn-sdk`):** search-hit JSON fields are now `sessionId` and `messageId` instead of `session_id` and `message_id`, consistently with the SDK's camelCase JSON contract.
 
 ## [4.0.0] - 2026-06-23
 

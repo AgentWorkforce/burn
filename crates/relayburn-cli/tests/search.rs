@@ -191,6 +191,18 @@ fn search_rejects_zero_limit_and_invalid_fts_without_panicking() {
             "--ledger-path",
             home.path().to_str().unwrap(),
             "search",
+            "needle",
+            "--limit",
+            "9223372036854775808",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("limit must not exceed"));
+    burn()
+        .args([
+            "--ledger-path",
+            home.path().to_str().unwrap(),
+            "search",
             "\"unbalanced",
         ])
         .assert()

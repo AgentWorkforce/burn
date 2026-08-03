@@ -1,6 +1,6 @@
 //! `burn search <query>` — thin CLI presenter over the SDK FTS5 verb.
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 
 use anyhow::bail;
 use relayburn_sdk::{
@@ -19,6 +19,7 @@ use crate::render::ux;
 pub fn run(globals: &GlobalArgs, args: SearchArgs) -> i32 {
     match run_inner(globals, args) {
         Ok(code) => code,
+        Err(err) if is_broken_pipe(&err) => 0,
         Err(err) => report_error(&err, globals),
     }
 }
@@ -68,10 +69,15 @@ fn run_inner(globals: &GlobalArgs, args: SearchArgs) -> anyhow::Result<i32> {
             applied_limit,
             args.session.as_deref(),
             args.snippet,
-            io::stdout().is_terminal() && ux::colors_enabled(globals),
+            ux::stdout_is_pretty(globals) && ux::colors_enabled(globals),
         )?;
     }
     Ok(0)
+}
+
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<io::Error>()
+        .is_some_and(|io_err| io_err.kind() == io::ErrorKind::BrokenPipe)
 }
 
 fn emit_json(result: &SearchResult, limit: usize, session: Option<&str>) -> std::io::Result<()> {
@@ -177,5 +183,12 @@ mod tests {
             render_snippet("<b>needle</b>", true),
             "\u{1b}[1mneedle\u{1b}[0m"
         );
+    }
+
+    #[test]
+    fn broken_pipe_errors_are_recognized_for_quiet_exit() {
+        let err = anyhow::Error::from(io::Error::from(io::ErrorKind::BrokenPipe));
+        assert!(is_broken_pipe(&err));
+        assert!(!is_broken_pipe(&anyhow::anyhow!("other")));
     }
 }

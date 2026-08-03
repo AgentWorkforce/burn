@@ -144,12 +144,27 @@ pub struct SearchArgs {
     pub session: Option<String>,
 
     /// Maximum number of hits. Defaults to 25.
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", value_parser = parse_search_limit)]
     pub limit: Option<std::num::NonZeroUsize>,
 
     /// Include highlighted content excerpts in human output.
     #[arg(long)]
     pub snippet: bool,
+}
+
+fn parse_search_limit(raw: &str) -> Result<std::num::NonZeroUsize, String> {
+    let parsed = raw
+        .parse::<u64>()
+        .map_err(|_| "limit must be a positive integer".to_string())?;
+    if parsed == 0 {
+        return Err("limit must be greater than zero".into());
+    }
+    if parsed > i64::MAX as u64 {
+        return Err(format!("limit must not exceed {}", i64::MAX));
+    }
+    let value =
+        usize::try_from(parsed).map_err(|_| "limit is too large for this platform".to_string())?;
+    std::num::NonZeroUsize::new(value).ok_or_else(|| "limit must be greater than zero".into())
 }
 
 /// Per-command flags for `burn update`.

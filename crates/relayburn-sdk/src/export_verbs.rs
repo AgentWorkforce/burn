@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn search_hit_serializes_camel_case_and_accepts_legacy_snake_case() {
+    fn search_hit_serializes_camel_case() {
         let hit = SearchHit {
             session_id: "ses_a".into(),
             message_id: "m1".into(),
@@ -278,16 +278,22 @@ mod tests {
         assert_eq!(value["sessionId"], "ses_a");
         assert_eq!(value["messageId"], "m1");
         assert!(value.get("session_id").is_none());
+    }
 
-        let legacy = serde_json::json!({
-            "session_id": "ses_a",
-            "message_id": "m1",
-            "source": "claude-code",
-            "rank": -1.0,
-            "snippet": "<b>needle</b>"
-        });
-        let decoded: SearchHit = serde_json::from_value(legacy).unwrap();
-        assert_eq!(decoded, hit);
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn search_rejects_limits_above_sqlite_signed_range() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let handle = open_handle(&tmp);
+        let err = handle
+            .search(SearchQueryOptions {
+                query: "needle".into(),
+                limit: Some(usize::MAX),
+                session_id: None,
+                ledger_home: None,
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds SQLite maximum"));
     }
 
     #[test]
