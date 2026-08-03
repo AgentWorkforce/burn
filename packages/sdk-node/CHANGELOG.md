@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- `summary()` now returns context tokens per normalized generated-output token (including reasoning) plus p50/p95/max context sizes for the ten highest-ratio sessions above 1M context, where context is input + cache-read + cache-creation tokens; `hotspots()` accepts ratio and minimum-context options for the new cost-independent finding (defaults: 382:1 inclusive and 1M context tokens).
+- `summary()` now returns context tokens per normalized generated-output token (including reasoning) plus p50/p95/max context sizes for the ten highest-ratio sessions, where context is input + cache-read + cache-creation tokens; `hotspots()` accepts ratio and minimum-context options for the new cost-independent finding (defaults: 382:1 inclusive and 1M context tokens).
 
 ## [4.0.0] - 2026-06-23
 

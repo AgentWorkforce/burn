@@ -124,9 +124,9 @@ export interface ContextEfficiencySummary {
   zeroOutputTurnsWithContext: number | bigint;
   /** All distinct sessions in the filtered slice. */
   totalSessions: number | bigint;
-  /** Sessions meeting the default 1M-context headline floor. */
+  /** Sessions meeting the default 1M-context findings eligibility floor. */
   eligibleSessions: number | bigint;
-  /** At most the ten highest-ratio eligible sessions. */
+  /** At most the ten highest-ratio sessions. */
   sessions: SessionContextEfficiency[];
 }
 

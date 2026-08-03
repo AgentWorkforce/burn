@@ -539,9 +539,9 @@ pub(super) fn emit_human(
 
     if !report.context_efficiency.sessions.is_empty() {
         lines.push(format!(
-            "highest context-efficiency sessions ({} of {} at/above 1M context):",
+            "highest context-efficiency sessions ({} of {} sessions):",
             format_uint(report.context_efficiency.sessions.len() as u64),
-            format_uint(report.context_efficiency.eligible_sessions),
+            format_uint(report.context_efficiency.total_sessions),
         ));
         let mut context_rows = vec![vec![
             "session".into(),

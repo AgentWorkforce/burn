@@ -241,7 +241,8 @@ fn summary_aggregates_two_turns() {
     );
     assert_eq!(s.context_efficiency.total_sessions, 1);
     assert_eq!(s.context_efficiency.eligible_sessions, 0);
-    assert!(s.context_efficiency.sessions.is_empty());
+    assert_eq!(s.context_efficiency.sessions.len(), 1);
+    assert_eq!(s.context_efficiency.sessions[0].context_tokens, 2_000);
 }
 
 #[test]
@@ -273,7 +274,8 @@ fn summary_report_grouped_owns_rows_and_stable_fidelity_shape() {
     assert_eq!(grouped.rows[0].label, "claude-sonnet-4-6");
     assert_eq!(grouped.context_efficiency.context_tokens, 2_000);
     assert_eq!(grouped.context_efficiency.total_sessions, 1);
-    assert!(grouped.context_efficiency.sessions.is_empty());
+    assert_eq!(grouped.context_efficiency.sessions.len(), 1);
+    assert_eq!(grouped.context_efficiency.sessions[0].context_tokens, 2_000);
     assert_eq!(grouped.per_cell_fidelity["groupBy"], "model");
     assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
 }

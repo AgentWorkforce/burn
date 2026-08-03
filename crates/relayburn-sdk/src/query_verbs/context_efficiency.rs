@@ -80,10 +80,10 @@ pub struct ContextEfficiencySummary {
     pub zero_output_turns_with_context: u64,
     /// Distinct sessions in the filtered summary, including zero-token rows.
     pub total_sessions: u64,
-    /// Sessions meeting the default 1M-context headline eligibility floor.
+    /// Sessions meeting the default 1M-context findings eligibility floor.
     pub eligible_sessions: u64,
     /// Session distributions. The default summary verbs keep only the ten
-    /// highest-ratio eligible sessions; the full compute helper returns all.
+    /// highest-ratio sessions; the full compute helper returns all.
     pub sessions: Vec<SessionContextEfficiency>,
 }
 
@@ -210,16 +210,13 @@ pub fn compute_context_efficiency(turns: &[TurnRecord]) -> ContextEfficiencySumm
 }
 
 /// Compute the bounded context-efficiency projection shipped by default
-/// summary surfaces. It applies the calibrated 1M context floor and retains
-/// only the ten highest-ratio sessions, preventing all-time summaries from
-/// materializing tens of thousands of per-session objects.
+/// summary surfaces. It retains only the ten highest-ratio sessions,
+/// preventing all-time summaries from materializing tens of thousands of
+/// per-session objects without hiding distributions for lower-volume ledgers.
 pub(crate) fn compute_context_efficiency_for_summary(
     turns: &[TurnRecord],
 ) -> ContextEfficiencySummary {
     let mut summary = compute_context_efficiency(turns);
-    summary
-        .sessions
-        .retain(|session| session.context_tokens >= DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS);
     summary.sessions.truncate(SUMMARY_CONTEXT_SESSION_LIMIT);
     summary
 }
@@ -653,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_projection_applies_volume_floor_and_caps_session_rows() {
+    fn summary_projection_keeps_low_volume_sessions_and_caps_rows() {
         let mut turns = Vec::new();
         turns.push(turn(
             "tiny-high-ratio",
@@ -681,10 +678,6 @@ mod tests {
         assert_eq!(summary.eligible_sessions, 12);
         assert_eq!(summary.sessions.len(), SUMMARY_CONTEXT_SESSION_LIMIT);
         assert!(summary
-            .sessions
-            .iter()
-            .all(|session| session.context_tokens >= DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS));
-        assert!(!summary
             .sessions
             .iter()
             .any(|session| session.session_id == "tiny-high-ratio"));
