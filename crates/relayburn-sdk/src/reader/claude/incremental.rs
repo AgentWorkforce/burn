@@ -717,6 +717,7 @@ pub(super) fn run_incremental<C: TokenCounter + ?Sized>(
             session_path: options.session_path.clone(),
             message_id: w.message_id.clone(),
             turn_index: i as u64,
+            request_count: 1,
             ts: w.first_ts.clone(),
             model: w.model.clone(),
             project: None,

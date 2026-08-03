@@ -261,14 +261,20 @@ fn run_hotspots_attribution(
     if !turns.is_empty() && eligible.is_empty() {
         let refusal = format!(
             "{}/{} turns lack tool-call/tool-result coverage required for hotspots attribution",
-            turns.len(),
-            turns.len()
+            turns
+                .iter()
+                .map(TurnRecord::effective_request_count)
+                .sum::<u64>(),
+            turns
+                .iter()
+                .map(TurnRecord::effective_request_count)
+                .sum::<u64>()
         );
         let group = group_by.unwrap_or(HotspotsGroupBy::Attribution);
         return Ok(refused_for_group(
             group,
             refusal,
-            turns.len() as u64,
+            turns.iter().map(TurnRecord::effective_request_count).sum(),
             summary_value,
             excluded_by_source,
         ));
@@ -363,7 +369,10 @@ fn run_hotspots_attribution(
 
     Ok(HotspotsResult::Attribution(Box::new(
         HotspotsAttributionResult {
-            turns_analyzed: eligible.len() as u64,
+            turns_analyzed: eligible
+                .iter()
+                .map(TurnRecord::effective_request_count)
+                .sum(),
             grand_total: result.grand_total,
             attributed_total: result.attributed_total,
             unattributed_total: result.unattributed_total,

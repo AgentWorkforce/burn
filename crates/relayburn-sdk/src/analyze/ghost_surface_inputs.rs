@@ -136,6 +136,7 @@ mod tests {
             session_path: None,
             message_id: format!("msg-{session_id}"),
             turn_index: 0,
+            request_count: 1,
             ts: "2026-04-20T00:00:00.000Z".to_string(),
             model: model.to_string(),
             project: None,

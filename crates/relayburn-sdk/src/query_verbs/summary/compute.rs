@@ -314,7 +314,7 @@ pub(crate) fn summary_aggregate_by_tag(
             order.push(value.clone());
             summary_empty_row(&label)
         });
-        row.turns += 1;
+        row.turns += enriched.turn.effective_request_count();
         row.usage.input += enriched.turn.usage.input;
         row.usage.output += enriched.turn.usage.output;
         row.usage.reasoning += enriched.turn.usage.reasoning;
@@ -367,7 +367,7 @@ pub(crate) fn summary_aggregate_by_model(
         let row = by_model
             .entry(key.clone())
             .or_insert_with(|| summary_empty_row(&key));
-        row.turns += 1;
+        row.turns += t.effective_request_count();
         row.usage.input += t.usage.input;
         row.usage.output += t.usage.output;
         row.usage.reasoning += t.usage.reasoning;
@@ -500,7 +500,7 @@ pub(crate) fn compute_summary_by_tool_report(
         })
         .collect();
     Ok(SummaryByToolReport {
-        turn_count: turns.len() as u64,
+        turn_count: turns.iter().map(TurnRecord::effective_request_count).sum(),
         rows,
         unattributed_cost,
         fidelity,
@@ -749,7 +749,10 @@ pub(crate) fn match_summary_relationships_to_turns(
             relationship_type: r.relationship_type,
             session_id: r.session_id.clone(),
             subagent_type: summary_relationship_subagent_type(r, &matched_turns),
-            turn_count: matched_turns.len() as u64,
+            turn_count: matched_turns
+                .iter()
+                .map(|t| t.effective_request_count())
+                .sum(),
             cost,
         });
     }

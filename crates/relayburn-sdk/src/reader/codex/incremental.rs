@@ -204,6 +204,7 @@ impl CodexParseState {
                         i.get("total_token_usage")
                     }
                 }) {
+                    let before = self.cumulative.clone();
                     let input_total = total
                         .get("input_tokens")
                         .and_then(|v| v.as_i64())
@@ -224,6 +225,9 @@ impl CodexParseState {
                         .unwrap_or(0);
                     if let Some(open) = self.open_turn.as_mut() {
                         open.usage_observed = true;
+                        if self.cumulative.advanced_from(&before) {
+                            open.request_count += 1;
+                        }
                     }
                 }
             }
@@ -259,6 +263,7 @@ impl CodexParseState {
                         .unwrap_or_default(),
                     project,
                     start_cumulative: self.cumulative.clone(),
+                    request_count: 0,
                     tool_calls: vec![],
                     seen_call_ids: BTreeSet::new(),
                     files_touched: BTreeSet::new(),
@@ -925,6 +930,7 @@ pub(super) fn parse_codex_buffer<R: BufRead>(
             session_path: options.session_path.clone(),
             message_id: f.turn_id.clone(),
             turn_index: i as u64,
+            request_count: f.request_count,
             ts: f.ts.clone(),
             model: f.model.clone(),
             project: None,

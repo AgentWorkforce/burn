@@ -214,6 +214,7 @@ pub fn parse_opencode_session_incremental(
             session_path: options.session_path.clone(),
             message_id: m.id.clone(),
             turn_index: i as u64,
+            request_count: 1,
             ts: ts.clone(),
             model,
             project: None,

@@ -537,6 +537,7 @@ mod tests {
             session_path: None,
             message_id: o.message_id,
             turn_index: o.turn_index,
+            request_count: 1,
             ts: o
                 .ts
                 .unwrap_or_else(|| "2026-04-20T00:00:00.000Z".to_string()),

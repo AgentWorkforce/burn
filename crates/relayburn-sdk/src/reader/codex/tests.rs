@@ -98,6 +98,7 @@ fn parses_simple_one_turn_session() {
     assert_eq!(t.session_id, "sess_simple_1");
     assert_eq!(t.message_id, "turn_simple_1");
     assert_eq!(t.turn_index, 0);
+    assert_eq!(t.request_count, 1);
     assert_eq!(t.model, "gpt-5.4");
     assert_eq!(t.ts, "2026-04-20T00:00:00.200Z");
     assert_eq!(t.usage.input, 600);
@@ -141,6 +142,7 @@ fn computes_per_turn_usage_as_delta_of_cumulative_totals() {
     let t1 = &r.turns[0];
     assert_eq!(t1.message_id, "turn_multi_1");
     assert_eq!(t1.turn_index, 0);
+    assert_eq!(t1.request_count, 1);
     assert_eq!(t1.model, "gpt-5.4");
     assert_eq!(t1.usage.input, 2000);
     assert_eq!(t1.usage.output, 200);
@@ -149,6 +151,7 @@ fn computes_per_turn_usage_as_delta_of_cumulative_totals() {
     let t2 = &r.turns[1];
     assert_eq!(t2.message_id, "turn_multi_2");
     assert_eq!(t2.turn_index, 1);
+    assert_eq!(t2.request_count, 1);
     assert_eq!(t2.model, "gpt-5.3-codex");
     assert_eq!(t2.usage.input, 2500);
     assert_eq!(t2.usage.output, 500);
@@ -157,6 +160,18 @@ fn computes_per_turn_usage_as_delta_of_cumulative_totals() {
     assert_eq!(t2.tool_calls.len(), 1);
     assert_eq!(t2.tool_calls[0].name, "exec_command");
     assert_eq!(t2.tool_calls[0].target.as_deref(), Some("ls"));
+}
+
+#[test]
+fn counts_advancing_usage_snapshots_as_requests_without_changing_token_totals() {
+    let r = parse("many-requests-one-turn.jsonl");
+    assert_eq!(r.turns.len(), 1, "the Codex task remains one logical turn");
+    let turn = &r.turns[0];
+    assert_eq!(turn.request_count, 4);
+    assert_eq!(turn.usage.input, 1_080);
+    assert_eq!(turn.usage.cache_read, 720);
+    assert_eq!(turn.usage.output, 180);
+    assert_eq!(turn.usage.reasoning, 45);
 }
 
 #[test]

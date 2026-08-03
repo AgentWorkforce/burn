@@ -409,6 +409,7 @@ mod tests {
             session_path: None,
             message_id: msg.to_string(),
             turn_index: 0,
+            request_count: 1,
             ts: ts.to_string(),
             model: "claude-sonnet-4-6".to_string(),
             project: None,

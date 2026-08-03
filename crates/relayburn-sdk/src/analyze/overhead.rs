@@ -199,6 +199,7 @@ mod tests {
             session_path: None,
             message_id: format!("m-{}", idx),
             turn_index: idx,
+            request_count: 1,
             ts: "2026-04-23T00:00:00.000Z".to_string(),
             model: "claude-sonnet-4-6".to_string(),
             project: None,

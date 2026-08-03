@@ -48,12 +48,21 @@ pub struct ParseCodexIncrementalOptions {
     pub resume: Option<CodexResumeState>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CumulativeUsage {
     pub input: i64,
     pub output: i64,
     pub cache_read: i64,
     pub reasoning: i64,
+}
+
+impl CumulativeUsage {
+    fn advanced_from(&self, prior: &Self) -> bool {
+        self.input > prior.input
+            || self.output > prior.output
+            || self.cache_read > prior.cache_read
+            || self.reasoning > prior.reasoning
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -250,6 +259,7 @@ pub(in crate::reader::codex) struct OpenTurn {
     pub(in crate::reader::codex) model: String,
     pub(in crate::reader::codex) project: Option<String>,
     pub(in crate::reader::codex) start_cumulative: CumulativeUsage,
+    pub(in crate::reader::codex) request_count: u64,
     pub(in crate::reader::codex) tool_calls: Vec<ToolCall>,
     pub(in crate::reader::codex) seen_call_ids: BTreeSet<String>,
     pub(in crate::reader::codex) files_touched: BTreeSet<String>,
@@ -268,6 +278,7 @@ pub(in crate::reader::codex) struct FinalizedTurn {
     pub(in crate::reader::codex) ts: String,
     pub(in crate::reader::codex) model: String,
     pub(in crate::reader::codex) project: Option<String>,
+    pub(in crate::reader::codex) request_count: u64,
     pub(in crate::reader::codex) tool_calls: Vec<ToolCall>,
     pub(in crate::reader::codex) files_touched: Vec<String>,
     pub(in crate::reader::codex) user_text: String,
@@ -297,6 +308,7 @@ pub(in crate::reader::codex) fn finalize_turn(
         ts: open.ts,
         model: open.model,
         project: open.project,
+        request_count: open.request_count.max(1),
         tool_calls: open.tool_calls,
         files_touched: files,
         user_text: open.user_text,

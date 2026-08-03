@@ -151,11 +151,12 @@ pub fn build_compare_table(turns: &[EnrichedTurn], opts: &CompareOptions<'_>) ->
             .expect("model just inserted");
         let acc = by_cat.entry(cat).or_default();
 
-        acc.turns += 1;
+        let request_count = t.effective_request_count();
+        acc.turns += request_count;
         let mt = model_totals.get_mut(model).expect("model just inserted");
-        mt.turns += 1;
+        mt.turns += request_count;
         if let Some(c) = cost_for_turn(t, opts.pricing) {
-            acc.priced_turns += 1;
+            acc.priced_turns += request_count;
             acc.total_cost += c.total;
             mt.total_cost += c.total;
         }
@@ -340,6 +341,7 @@ mod tests {
                 session_path: None,
                 message_id: id,
                 turn_index: 0,
+                request_count: 1,
                 ts: "2026-04-20T00:00:00.000Z".into(),
                 model: model.into(),
                 project: None,
@@ -636,6 +638,26 @@ mod tests {
         assert_eq!(cell.turns, 2);
         let cpt = cell.cost_per_turn.expect("priced");
         assert!((cpt - cell.total_cost / 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn uses_request_count_as_codex_cost_per_turn_denominator() {
+        let pricing = load_builtin_pricing();
+        let mut turns = vec![turn(
+            "claude-sonnet-4-6",
+            Some(ActivityCategory::Coding),
+            default_usage(),
+            Some(false),
+            None,
+        )];
+        turns[0].turn.source = SourceKind::Codex;
+        turns[0].turn.request_count = 7;
+
+        let t = build_compare_table(&turns, &CompareOptions::new(&pricing));
+        let cell = &t.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 7);
+        assert_eq!(cell.priced_turns, 7);
+        assert_eq!(cell.cost_per_turn, Some(cell.total_cost / 7.0));
     }
 
     #[test]

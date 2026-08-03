@@ -137,7 +137,7 @@ impl LedgerHandle {
         );
         Ok(shape_compare_result(
             table,
-            turns.len() as u64,
+            turns.iter().map(|t| t.turn.effective_request_count()).sum(),
             min_fidelity,
             fidelity_summary,
         ))
@@ -213,7 +213,10 @@ impl LedgerHandle {
                 );
                 let result = shape_compare_result(
                     table,
-                    bturns.len() as u64,
+                    bturns
+                        .iter()
+                        .map(|t| t.turn.effective_request_count())
+                        .sum(),
                     min_fidelity,
                     fidelity_summary,
                 );

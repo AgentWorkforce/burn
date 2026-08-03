@@ -324,6 +324,7 @@ mod tests {
             session_path: None,
             message_id: "msg-codex-1".into(),
             turn_index: 3,
+            request_count: 1,
             ts: "2026-04-20T00:00:01.000Z".into(),
             model: "gpt-5".into(),
             project: None,
