@@ -272,8 +272,9 @@ fn ratio(context: u64, output: u64) -> Option<f64> {
 }
 
 fn context_percentile(sorted: &[u64], percentile: f64) -> u64 {
-    let values: Vec<f64> = sorted.iter().map(|value| *value as f64).collect();
-    super::summary::summary_percentile(&values, percentile) as u64
+    super::summary::summary_percentile_index(sorted.len(), percentile)
+        .map(|rank| sorted[rank])
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

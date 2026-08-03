@@ -246,6 +246,20 @@ fn summary_aggregates_two_turns() {
 }
 
 #[test]
+fn summary_deserializes_payload_without_context_efficiency() {
+    let (_dir, handle) = fixture_handle();
+    let summary = handle.summary(SummaryOptions::default()).unwrap();
+    let mut value = serde_json::to_value(summary).unwrap();
+    value.as_object_mut().unwrap().remove("contextEfficiency");
+
+    let decoded: Summary = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        decoded.context_efficiency,
+        ContextEfficiencySummary::default()
+    );
+}
+
+#[test]
 fn summary_session_filter_narrows_to_session() {
     let (_dir, handle) = fixture_handle();
     let s = handle
@@ -1073,7 +1087,7 @@ fn hotspots_context_output_ratio_threshold_override_reaches_finding_rule() {
     let findings = handle
         .hotspots(HotspotsOptions {
             patterns: Some(vec!["context-output-ratio".into()]),
-            context_output_ratio_threshold: Some(2.0),
+            context_output_ratio_threshold: Some(2.125),
             context_output_min_tokens: Some(0),
             ..HotspotsOptions::default()
         })
@@ -1083,6 +1097,7 @@ fn hotspots_context_output_ratio_threshold_override_reaches_finding_rule() {
             assert_eq!(findings.len(), 1);
             assert_eq!(findings[0].kind, "context-output-ratio");
             assert_eq!(findings[0].session_id, "sess-a");
+            assert!(findings[0].detail.contains("threshold 2.125:1"));
         }
         other => panic!("expected findings, got {other:?}"),
     }
@@ -1138,7 +1153,7 @@ fn hotspots_default_context_rule_flags_382_to_one_high_volume_session() {
                 .contains("3000 generated output tokens (including reasoning)"));
             assert!(findings[0]
                 .detail
-                .contains("threshold 382.0:1 with 1000000 minimum context tokens"));
+                .contains("threshold 382:1 with 1000000 minimum context tokens"));
         }
         other => panic!("expected findings, got {other:?}"),
     }

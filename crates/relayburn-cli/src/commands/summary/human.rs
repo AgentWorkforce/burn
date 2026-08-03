@@ -552,7 +552,7 @@ pub(super) fn emit_human(
             "p95 context".into(),
             "max context".into(),
         ]];
-        for session in report.context_efficiency.sessions.iter().take(10) {
+        for session in &report.context_efficiency.sessions {
             context_rows.push(vec![
                 session.session_id.clone(),
                 format_uint(session.turn_count),

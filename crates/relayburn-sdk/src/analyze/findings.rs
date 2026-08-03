@@ -339,7 +339,7 @@ pub(crate) fn context_output_ratio_finding(
         session_id: input.session_id.to_string(),
         title: format!("{} context-to-output ratio", input.ratio_label),
         detail: format!(
-            "{} context tokens (input + cache reads + cache creation) / {} generated output tokens (including reasoning); flat inspection threshold {:.1}:1 with {} minimum context tokens (not length-normalized)",
+            "{} context tokens (input + cache reads + cache creation) / {} generated output tokens (including reasoning); flat inspection threshold {}:1 with {} minimum context tokens (not length-normalized)",
             input.context_tokens,
             input.output_tokens,
             input.threshold,

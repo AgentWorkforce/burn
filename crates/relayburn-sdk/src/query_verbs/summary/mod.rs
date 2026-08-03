@@ -121,6 +121,7 @@ pub struct Summary {
     pub turn_count: u64,
     /// Context-window work per completion token, including cache reads and
     /// cache creation, plus per-session context-size distributions.
+    #[serde(default)]
     pub context_efficiency: ContextEfficiencySummary,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,

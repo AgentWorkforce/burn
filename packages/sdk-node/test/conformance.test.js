@@ -125,6 +125,7 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
     const hotspotFindings = await sdk.hotspots({
       ledgerHome,
       groupBy: sdk.HotspotsGroupBy.Findings,
+      contextOutputMinTokens: 1_000_000,
     });
     assert.equal(hotspotFindings.kind, 'findings');
     assert.ok(Array.isArray(hotspotFindings.findings));

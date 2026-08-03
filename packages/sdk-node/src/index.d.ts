@@ -315,7 +315,7 @@ export interface HotspotsOptions {
   /** Context:output ratio threshold for findings; defaults to 382. */
   contextOutputRatioThreshold?: number;
   /** Minimum session context-token volume for ratio findings; defaults to 1,000,000. */
-  contextOutputMinTokens?: bigint;
+  contextOutputMinTokens?: number | bigint;
   ledgerHome?: string;
 }
 
