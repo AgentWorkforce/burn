@@ -4,7 +4,6 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
-- `burn__overhead` discovers active user, ancestor, and project instruction chains and labels each file with its scope.
 - Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
 
 ## [4.0.0] - 2026-06-23
