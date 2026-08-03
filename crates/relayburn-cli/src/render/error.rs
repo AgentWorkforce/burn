@@ -61,19 +61,20 @@ pub fn report_error<E: std::fmt::Display + 'static>(err: &E, globals: &GlobalArg
     report(globals, &err.to_string(), EXIT_GENERIC_ERROR)
 }
 
-/// Recognize output pipes closed by an early-exiting consumer. Presenter
-/// functions return either a direct `io::Error` or an `anyhow::Error` that
-/// retains it in its chain, so cover both shapes at the shared boundary.
+/// Recognize stdout pipes closed by an early-exiting consumer. JSON writers
+/// mark those errors before returning either a direct `io::Error` or an
+/// `anyhow::Error` that retains it in its chain. File/FIFO errors lack that
+/// marker and remain failures.
 fn is_broken_pipe<E: 'static>(err: &E) -> bool {
     let err = err as &dyn Any;
     if let Some(err) = err.downcast_ref::<io::Error>() {
-        return err.kind() == io::ErrorKind::BrokenPipe;
+        return crate::render::json::is_stdout_broken_pipe(err);
     }
     if let Some(err) = err.downcast_ref::<anyhow::Error>() {
         return err.chain().any(|cause| {
             cause
                 .downcast_ref::<io::Error>()
-                .is_some_and(|err| err.kind() == io::ErrorKind::BrokenPipe)
+                .is_some_and(crate::render::json::is_stdout_broken_pipe)
         });
     }
     false
@@ -120,9 +121,13 @@ fn report(globals: &GlobalArgs, message: &str, code: i32) -> i32 {
 fn write_json_envelope(value: &serde_json::Value) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    serde_json::to_writer(&mut handle, value).map_err(crate::render::json::serde_error_to_io)?;
-    handle.write_all(b"\n")?;
-    handle.flush()
+    serde_json::to_writer(&mut handle, value)
+        .map_err(crate::render::json::serde_error_to_io)
+        .map_err(crate::render::json::stdout_error)?;
+    handle
+        .write_all(b"\n")
+        .map_err(crate::render::json::stdout_error)?;
+    handle.flush().map_err(crate::render::json::stdout_error)
 }
 
 #[cfg(test)]
@@ -168,11 +173,23 @@ mod tests {
 
     #[test]
     fn broken_pipe_exits_zero_without_reporting() {
-        let direct = io::Error::from(io::ErrorKind::BrokenPipe);
+        let direct = crate::render::json::stdout_error(io::Error::from(io::ErrorKind::BrokenPipe));
         assert_eq!(report_error(&direct, &human_globals()), 0);
 
-        let wrapped = anyhow::Error::from(io::Error::from(io::ErrorKind::BrokenPipe));
+        let wrapped = anyhow::Error::from(crate::render::json::stdout_error(io::Error::from(
+            io::ErrorKind::BrokenPipe,
+        )));
         assert_eq!(report_error(&wrapped, &json_globals()), 0);
+    }
+
+    #[test]
+    fn non_stdout_broken_pipe_remains_an_error() {
+        let err = io::Error::from(io::ErrorKind::BrokenPipe);
+        assert_eq!(report_error(&err, &human_globals()), EXIT_GENERIC_ERROR);
+
+        let wrapped = anyhow::Error::from(io::Error::from(io::ErrorKind::BrokenPipe))
+            .context("failed to write export file");
+        assert_eq!(report_error(&wrapped, &human_globals()), EXIT_GENERIC_ERROR);
     }
 
     #[test]

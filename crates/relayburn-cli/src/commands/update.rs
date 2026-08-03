@@ -150,8 +150,11 @@ fn unknown_channel_error() -> anyhow::Error {
 fn print_json(value: &serde_json::Value) -> std::io::Result<()> {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
-    serde_json::to_writer(&mut out, value).map_err(crate::render::json::serde_error_to_io)?;
+    serde_json::to_writer(&mut out, value)
+        .map_err(crate::render::json::serde_error_to_io)
+        .map_err(crate::render::json::stdout_error)?;
     out.write_all(b"\n")
+        .map_err(crate::render::json::stdout_error)
 }
 
 fn now_unix() -> i64 {

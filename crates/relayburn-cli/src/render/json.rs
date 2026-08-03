@@ -10,6 +10,8 @@
 //! whole-valued `f64`s print as bare integers) should run their value
 //! through [`crate::render::format::coerce_whole_f64_to_int`] first.
 
+use std::error::Error;
+use std::fmt;
 use std::io::{self, Write};
 
 use serde::Serialize;
@@ -21,12 +23,44 @@ pub fn render_json<T: Serialize + ?Sized>(value: &T) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     write_json_pretty(&mut handle, value)?;
-    handle.write_all(b"\n")?;
-    handle.flush()
+    handle.write_all(b"\n").map_err(stdout_error)?;
+    handle.flush().map_err(stdout_error)
 }
 
 fn write_json_pretty<W: Write, T: Serialize + ?Sized>(writer: &mut W, value: &T) -> io::Result<()> {
-    serde_json::to_writer_pretty(writer, value).map_err(serde_error_to_io)
+    serde_json::to_writer_pretty(writer, value)
+        .map_err(serde_error_to_io)
+        .map_err(stdout_error)
+}
+
+#[derive(Debug)]
+struct StdoutError(io::Error);
+
+impl fmt::Display for StdoutError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl Error for StdoutError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// Mark an I/O error as originating from the process stdout renderer while
+/// retaining its kind. The marker lets shared reporting distinguish a normal
+/// early-closing pipeline from an EPIPE raised by a file or FIFO writer.
+pub(crate) fn stdout_error(err: io::Error) -> io::Error {
+    let kind = err.kind();
+    io::Error::new(kind, StdoutError(err))
+}
+
+pub(crate) fn is_stdout_broken_pipe(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::BrokenPipe
+        && err
+            .get_ref()
+            .is_some_and(|source| source.is::<StdoutError>())
 }
 
 /// Convert a serde failure back to an I/O error without erasing the error
