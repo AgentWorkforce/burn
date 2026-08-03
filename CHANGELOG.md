@@ -4,6 +4,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- Pricing recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs over reseller duplicates, and applies long-context price tiers.
+- `burn hotspots --findings` surfaces unknown model pricing explicitly and ranks unpriced sessions by token volume instead of treating them as $0.00.
+
 ## [4.0.0] - 2026-06-23
 
 - **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports its low-level `analyze`-layer internals (detector/aggregator functions and helper types such as `PricingTable`, `CompareTable`, `CompareCell`) — these were never the intended embedding surface. Embed through the verb layer instead: `LedgerHandle` methods / `summary_report` / `hotspots` / `compare`. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.
