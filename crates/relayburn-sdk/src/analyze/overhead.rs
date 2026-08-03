@@ -204,16 +204,23 @@ fn add_file(
     // separate rows: a root `CLAUDE.md -> AGENTS.md` represents disjoint
     // harness conventions even though the bytes happen to share a target.
     let identity = file_identity(path);
-    if let Some(existing) = out
-        .iter_mut()
-        .find(|entry| entry.identity == identity && entry.file.kind == kind)
-    {
+    if let Some(existing) = out.iter_mut().find(|entry| {
+        entry.identity == identity
+            && entry.file.kind == kind
+            && entry.file.content_bytes == content_bytes
+    }) {
         if !existing.file.applies_to.contains(&source) {
             existing.file.applies_to.push(source);
         }
-        // A physical file can be full for one harness but truncated by
-        // Codex's aggregate budget. The shorter prefix is conservative for a
-        // merged row and can never over-attribute either harness.
+        return;
+    }
+    if let Some(existing) = out.iter_mut().find(|entry| {
+        entry.identity == identity
+            && entry.file.kind == kind
+            && entry.file.applies_to.contains(&source)
+    }) {
+        // The same harness can encounter a physical file through aliases.
+        // Charge it once, using the shortest prefix that harness injects.
         existing.file.content_bytes = existing.file.content_bytes.min(content_bytes);
         return;
     }
@@ -792,14 +799,24 @@ mod tests {
 
         let files = discover_fixture(home, &cwd);
         let cwd_path = cwd.join("AGENTS.md").to_string_lossy().into_owned();
-        let file = files.iter().find(|f| f.path == cwd_path).unwrap().clone();
-        assert_eq!(file.content_bytes, 8);
-        assert_eq!(
-            file.applies_to,
-            vec![SourceKind::Codex, SourceKind::Opencode]
-        );
-        let parsed = load_overhead_file(file).unwrap();
+        let cwd_files: Vec<_> = files.iter().filter(|f| f.path == cwd_path).collect();
+        assert_eq!(cwd_files.len(), 2);
+
+        let codex = cwd_files
+            .iter()
+            .find(|f| f.applies_to == vec![SourceKind::Codex])
+            .unwrap();
+        assert_eq!(codex.content_bytes, 8);
+        let parsed = load_overhead_file((*codex).clone()).unwrap();
         assert_eq!(parsed.parsed.bytes, 8);
+
+        let opencode = cwd_files
+            .iter()
+            .find(|f| f.applies_to == vec![SourceKind::Opencode])
+            .unwrap();
+        assert_eq!(opencode.content_bytes, "12345678ignored-tail".len());
+        let parsed = load_overhead_file((*opencode).clone()).unwrap();
+        assert_eq!(parsed.parsed.bytes, "12345678ignored-tail".len() as u64);
     }
 
     #[cfg(unix)]

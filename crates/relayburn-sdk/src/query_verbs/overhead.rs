@@ -12,7 +12,7 @@ pub struct OverheadOptions {
     pub kind: Option<OverheadFileKind>,
     pub ledger_home: Option<PathBuf>,
     /// Override the harness configuration home (`~/.claude`, `~/.codex`,
-    /// `~/.config/opencode`). Primarily useful for hermetic embeddings/tests.
+    /// `~/.config/opencode`). This does not bound Claude's ancestor walk.
     pub harness_home: Option<PathBuf>,
 }
 
@@ -169,7 +169,18 @@ fn gather_overhead(
 
     let mut parsed_files: Vec<ParsedOverheadFile> = Vec::with_capacity(found.len());
     for f in found {
-        parsed_files.push(load_overhead_file(f)?);
+        // Files can disappear or become unreadable between discovery and
+        // loading. One raced file must not suppress the rest of the report.
+        if let Ok(parsed) = load_overhead_file(f) {
+            parsed_files.push(parsed);
+        }
+    }
+    if parsed_files.is_empty() {
+        return Ok(GatheredOverhead {
+            project_path,
+            files: Vec::new(),
+            attribution: None,
+        });
     }
 
     let resolved = resolve_project(&project_path.to_string_lossy());
