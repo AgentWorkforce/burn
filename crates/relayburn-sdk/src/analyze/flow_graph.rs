@@ -30,7 +30,8 @@
 //!
 //! # Edge semantics
 //!
-//! - [`FlowEdgeKind::Default`] — sequential within a rail.
+//! - [`FlowEdgeKind::Default`] — sequential within a rail, including
+//!   main-rail continuity across turn boundaries.
 //! - [`FlowEdgeKind::Dispatch`] — main rail's `Task` `ToolUse` →
 //!   first node on the spawned subagent rail.
 //! - [`FlowEdgeKind::Return`] — last node of a subagent rail → the
@@ -177,7 +178,7 @@ pub struct FlowNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlowEdgeKind {
-    /// Sequential within a rail.
+    /// Sequential within a rail, including the main rail across turns.
     Default,
     /// Main rail → subagent rail at the dispatching `Task` `ToolUse`.
     Dispatch,
@@ -232,7 +233,7 @@ pub struct FlowGraph {
     pub truncated: bool,
     /// All nodes, in causal (turn → rail → in-rail) order.
     pub nodes: Vec<FlowNode>,
-    /// All edges. Order is: per-turn sequential edges first, then
+    /// All edges. Order is: sequential rail edges first, then
     /// dispatch / return edges, then unattached edges.
     pub edges: Vec<FlowEdge>,
 }
@@ -292,17 +293,21 @@ struct Builder {
     /// session. Rails are session-scoped — every subagent dispatch
     /// gets a fresh rail rather than reusing.
     next_rail: u32,
-    /// Tracks the last node id emitted on the main rail across turns,
-    /// so a subagent rail's `Return` edge can target the first node
-    /// of the *next* main-rail inference.
-    last_main_node_per_turn: Vec<(u32, String)>,
+    /// Last node emitted on the session's main rail. Seeded into each
+    /// turn so the next main-rail entry gets a `Default` edge from the
+    /// previous turn's terminal node. Empty turns leave it unchanged.
+    last_main_id: Option<String>,
 }
 
 impl Builder {
     fn add_turn(&mut self, tree: &TurnSpanTree) {
         let turn_x = (tree.turn_number as i32) * INTER_TURN_GAP;
         let main_rail = 0;
-        let mut prev_main_id: Option<String> = None;
+        // The main rail is session-scoped. Carry its terminal node into
+        // this turn so the first emitted main node continues the chain.
+        // If the turn has no main nodes, the carried value survives for
+        // the next non-empty turn.
+        let mut prev_main_id = self.last_main_id.clone();
         let mut inference_index: u32 = 0;
         let mut main_node_y: i32 = 0;
 
@@ -431,11 +436,7 @@ impl Builder {
                     let first_id =
                         self.emit_subagent_rail(tree, child, rail, turn_x, unattached_y, None);
                     if let Some(first_id) = first_id {
-                        let anchor = prev_main_id.clone().or_else(|| {
-                            self.last_main_node_per_turn
-                                .last()
-                                .map(|(_, id)| id.clone())
-                        });
+                        let anchor = prev_main_id.clone();
                         if let Some(from) = anchor {
                             self.unattached_edges.push(FlowEdge {
                                 from,
@@ -452,9 +453,7 @@ impl Builder {
             }
         }
 
-        if let Some(id) = prev_main_id {
-            self.last_main_node_per_turn.push((tree.turn_number, id));
-        }
+        self.last_main_id = prev_main_id;
     }
 
     /// Walk a subagent's children and emit a sequential rail. Returns
@@ -826,6 +825,54 @@ mod tests {
         assert_eq!(graph.edges[0].kind, FlowEdgeKind::Default);
         assert_eq!(graph.edges[0].from, "msg-0:inf-0");
         assert_eq!(graph.edges[0].to, "msg-0:inf-1");
+    }
+
+    #[test]
+    fn two_plain_turns_are_connected_by_default_edge() {
+        let mut root0 = turn_root();
+        root0.children.push(inference("claude-sonnet", "req-1"));
+        let mut root1 = turn_root();
+        root1.children.push(inference("claude-sonnet", "req-2"));
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[make_tree(0, root0), make_tree(1, root1)],
+            FlowOpts::default(),
+        );
+
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(
+            graph.edges[0],
+            FlowEdge {
+                from: "msg-0:inf-0".into(),
+                to: "msg-1:inf-0".into(),
+                kind: FlowEdgeKind::Default,
+            }
+        );
+    }
+
+    #[test]
+    fn empty_turn_does_not_break_main_rail_continuity() {
+        let mut root0 = turn_root();
+        root0.children.push(inference("claude-sonnet", "req-1"));
+        let root1 = turn_root();
+        let mut root2 = turn_root();
+        root2.children.push(inference("claude-sonnet", "req-2"));
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[
+                make_tree(0, root0),
+                make_tree(1, root1),
+                make_tree(2, root2),
+            ],
+            FlowOpts::default(),
+        );
+
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].from, "msg-0:inf-0");
+        assert_eq!(graph.edges[0].to, "msg-2:inf-0");
+        assert_eq!(graph.edges[0].kind, FlowEdgeKind::Default);
     }
 
     #[test]
