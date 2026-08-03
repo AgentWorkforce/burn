@@ -244,7 +244,9 @@ impl LedgerHandle {
     }
 }
 
-/// Shared staleness flag returned to SDK, Node, and MCP consumers.
+/// Shared staleness flag returned to SDK, Node, and MCP consumers. Its clock
+/// tracks event/derived-row writes in `burn.sqlite`, not content-sidecar-only
+/// persistence in `content.sqlite`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LedgerFreshness {

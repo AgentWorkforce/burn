@@ -801,8 +801,8 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             INSERT INTO turns (source, session_id, message_id, ts,
                 project, project_key, record_json, content_fingerprint)
             VALUES ('claude-code', 'legacy-sess', 'legacy-msg',
-                '2025-01-01T00:00:00Z', NULL, NULL,
-                '{\"v\":1,\"source\":\"claude-code\",\"sessionId\":\"legacy-sess\",\"messageId\":\"legacy-msg\",\"turnIndex\":0,\"ts\":\"2025-01-01T00:00:00Z\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cacheRead\":0,\"cacheCreate5m\":0,\"cacheCreate1h\":0},\"toolCalls\":[]}',
+                '2025-01-01T00:00:00.123Z', NULL, NULL,
+                '{\"v\":1,\"source\":\"claude-code\",\"sessionId\":\"legacy-sess\",\"messageId\":\"legacy-msg\",\"turnIndex\":0,\"ts\":\"2025-01-01T00:00:00.123Z\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cacheRead\":0,\"cacheCreate5m\":0,\"cacheCreate1h\":0},\"toolCalls\":[]}',
                 'legacy-fp');
             ",
         )
@@ -850,6 +850,11 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     assert!(
         archive_cols.iter().any(|c| c == "last_write_at_ms"),
         "v7 migration must add archive_state.last_write_at_ms"
+    );
+    assert_eq!(
+        l.last_write_at_ms().unwrap(),
+        Some(1_735_689_600_123),
+        "v7 migration must preserve event timestamp milliseconds"
     );
 
     let column_names: Vec<String> = l
@@ -911,6 +916,36 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     // skips the ALTER, version stays at the current SCHEMA_VERSION.
     drop(l);
     let _ = Ledger::open(&layout.burn, &layout.content).unwrap();
+}
+
+#[test]
+fn v7_migration_seeds_inference_only_activity() {
+    let tmp = TempDir::new().unwrap();
+    let layout = LedgerLayout::under(tmp.path());
+    drop(Ledger::open(&layout.burn, &layout.content).unwrap());
+
+    {
+        let conn = rusqlite::Connection::open(&layout.burn).unwrap();
+        conn.execute(
+            "INSERT INTO inferences
+                 (source, session_id, request_id, request_id_source, turn_id,
+                  model, kind, start_ts, end_ts, record_json)
+             VALUES ('codex', 's1', 'r1', 'explicit', 't1', 'gpt-5', 'text',
+                     '2025-01-01T00:00:00.100Z', '2025-01-01T00:00:00.987Z', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE archive_state
+             SET schema_version = 6, last_write_at_ms = NULL
+             WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    }
+
+    let ledger = Ledger::open(&layout.burn, &layout.content).unwrap();
+    assert_eq!(ledger.last_write_at_ms().unwrap(), Some(1_735_689_600_987));
 }
 
 #[test]

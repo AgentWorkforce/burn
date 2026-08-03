@@ -37,7 +37,9 @@ export function createFingerprintTool(deps: FingerprintDeps = {}): ToolDefinitio
       'Cheap polling primitive over the burn ledger. Returns ' +
       '`{count}:{maxMtimeUnix}:{totalBytes}` joined by colons. ' +
       "Clients keep the last-seen value and skip re-querying when it's " +
-      'unchanged. Optionally scoped to a session id or project path. Read-only.',
+      'unchanged. The response also includes ledgerFreshness; check ' +
+      'ledgerFreshness.stale before relying on ledger reads. Optionally scoped ' +
+      'to a session id or project path. Read-only.',
     inputSchema: {
       type: 'object',
       properties: {

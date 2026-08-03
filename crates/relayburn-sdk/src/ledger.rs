@@ -84,8 +84,10 @@ impl Ledger {
         &self.conns.content_path
     }
 
-    /// Wall-clock time of the most recent derived-ledger mutation, in Unix
-    /// milliseconds. `None` means the ledger has never received data.
+    /// Wall-clock time of the most recent event/derived-row mutation in
+    /// `burn.sqlite`, in Unix milliseconds. Content-sidecar-only writes are
+    /// excluded because report freshness tracks ingested activity rather than
+    /// blob persistence. `None` means the ledger has never received activity.
     pub fn last_write_at_ms(&self) -> Result<Option<u64>> {
         let value: Option<i64> = self.conns.burn.query_row(
             "SELECT last_write_at_ms FROM archive_state WHERE id = 1",
@@ -364,8 +366,11 @@ impl Ledger {
     // --- state rebuild -----------------------------------------------
 
     /// Drop the derivable tables in `burn.sqlite` and the entire
-    /// `content.sqlite`, then re-create them empty. Stamps, archive
-    /// state, and ingest cursors are preserved.
+    /// `content.sqlite`, then re-create them empty. Stamps and ingest cursors
+    /// are preserved; archive timestamps remain except for
+    /// `last_write_at_ms`, which is cleared until re-ingest writes derived
+    /// rows again. The source fingerprint is also cleared so re-ingest cannot
+    /// incorrectly short-circuit.
     ///
     /// Returns the path to the (now-empty) content DB so the caller can
     /// move on to re-ingest from upstream files. Re-ingest is the
@@ -442,7 +447,7 @@ impl Ledger {
 
     /// Snapshot the single-row `archive_state` table as a JSON object —
     /// `{ schema_version, upstream_cursors_json, last_built_at,
-    /// last_rebuild_at }`. Powers `state_status`'s `archive` block; kept
+    /// last_rebuild_at, last_write_at_ms }`. Powers `state_status`'s `archive` block; kept
     /// here rather than at the SDK verb so callers don't have to bind
     /// to rusqlite directly to read first-party rows.
     pub fn read_archive_state_json(&self) -> Result<String> {

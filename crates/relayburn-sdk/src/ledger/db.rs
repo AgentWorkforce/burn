@@ -259,11 +259,18 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
             "UPDATE archive_state
              SET last_write_at_ms = (
                  SELECT MAX(ms) FROM (
-                     SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000 AS ms FROM turns
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000 FROM compactions
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000 FROM relationships
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000 FROM tool_result_events
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000 FROM user_turns
+                     SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) AS ms FROM turns
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM compactions
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM relationships
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM tool_result_events
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM user_turns
+                     UNION ALL SELECT CAST(strftime('%s', MAX(end_ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(end_ts)), 4, 3) AS INTEGER) FROM inferences
                  )
              ), schema_version = 7
              WHERE id = 1",
