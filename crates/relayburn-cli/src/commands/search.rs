@@ -12,6 +12,7 @@ use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, render_table};
 use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
+use crate::render::ux;
 
 pub fn run(globals: &GlobalArgs, args: SearchArgs) -> i32 {
     match run_inner(globals, args) {
@@ -65,7 +66,7 @@ fn run_inner(globals: &GlobalArgs, args: SearchArgs) -> anyhow::Result<i32> {
             applied_limit,
             args.session.as_deref(),
             args.snippet,
-            color_enabled(globals),
+            ux::colors_enabled(globals),
         );
     }
     Ok(0)
@@ -141,10 +142,6 @@ fn render_snippet(snippet: &str, color: bool) -> String {
     } else {
         snippet.replace("<b>", "").replace("</b>", "")
     }
-}
-
-fn color_enabled(globals: &GlobalArgs) -> bool {
-    !globals.no_color && std::env::var_os("NO_COLOR").is_none()
 }
 
 #[cfg(test)]
