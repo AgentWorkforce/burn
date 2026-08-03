@@ -1815,46 +1815,59 @@ fn context_delta_since_filter_excludes_old_sessions() {
 }
 
 fn context_delta_filter_handle(alpha_project: &str) -> (TempDir, LedgerHandle) {
+    context_delta_filter_handle_with_key(alpha_project, None)
+}
+
+fn context_delta_filter_handle_with_key(
+    alpha_project: &str,
+    alpha_project_key: Option<&str>,
+) -> (TempDir, LedgerHandle) {
     let dir = tempfile::tempdir().unwrap();
     let opts = LedgerOpenOptions::with_home(dir.path());
     let mut handle = Ledger::open(opts).expect("open ledger");
-    let turn =
-        |session: &str, project: &str, index: u64, ts: &str, message_id: &str, input: u64| {
-            TurnRecord {
-                v: 1,
-                source: SourceKind::ClaudeCode,
-                session_id: session.into(),
-                session_path: None,
-                message_id: message_id.into(),
-                turn_index: index,
-                ts: ts.into(),
-                model: "claude-sonnet-4-6".into(),
-                project: Some(project.into()),
-                project_key: None,
-                usage: Usage {
-                    input,
-                    output: 0,
-                    reasoning: 0,
-                    cache_read: 0,
-                    cache_create_5m: 0,
-                    cache_create_1h: 0,
-                },
-                tool_calls: vec![],
-                files_touched: None,
-                subagent: None,
-                stop_reason: None,
-                activity: None,
-                retries: None,
-                has_edits: None,
-                fidelity: None,
-            }
-        };
+    let turn = |session: &str,
+                project: &str,
+                project_key: Option<&str>,
+                index: u64,
+                ts: &str,
+                message_id: &str,
+                input: u64| {
+        TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: session.into(),
+            session_path: None,
+            message_id: message_id.into(),
+            turn_index: index,
+            ts: ts.into(),
+            model: "claude-sonnet-4-6".into(),
+            project: Some(project.into()),
+            project_key: project_key.map(str::to_owned),
+            usage: Usage {
+                input,
+                output: 0,
+                reasoning: 0,
+                cache_read: 0,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        }
+    };
     handle
         .raw_mut()
         .append_turns(&[
             turn(
                 "sess-alpha",
                 alpha_project,
+                alpha_project_key,
                 0,
                 "2026-04-20T10:00:00.000Z",
                 "alpha-1",
@@ -1863,6 +1876,7 @@ fn context_delta_filter_handle(alpha_project: &str) -> (TempDir, LedgerHandle) {
             turn(
                 "sess-alpha",
                 alpha_project,
+                alpha_project_key,
                 1,
                 "2026-04-21T10:00:00.000Z",
                 "alpha-2",
@@ -1871,6 +1885,7 @@ fn context_delta_filter_handle(alpha_project: &str) -> (TempDir, LedgerHandle) {
             turn(
                 "sess-alpha",
                 alpha_project,
+                alpha_project_key,
                 2,
                 "2026-07-20T10:00:00.000Z",
                 "alpha-3",
@@ -1879,6 +1894,7 @@ fn context_delta_filter_handle(alpha_project: &str) -> (TempDir, LedgerHandle) {
             turn(
                 "sess-beta",
                 "/tmp/proj-beta",
+                None,
                 0,
                 "2026-07-19T10:00:00.000Z",
                 "beta-1",
@@ -1887,6 +1903,7 @@ fn context_delta_filter_handle(alpha_project: &str) -> (TempDir, LedgerHandle) {
             turn(
                 "sess-beta",
                 "/tmp/proj-beta",
+                None,
                 1,
                 "2026-07-20T11:00:00.000Z",
                 "beta-2",
@@ -1908,6 +1925,35 @@ fn context_delta_project_filter_actually_filters_sessions() {
             ..ContextDeltaOpts::default()
         })
         .expect("context_delta");
+    assert!(!deltas.is_empty());
+    assert!(deltas.iter().all(|delta| delta.session_id == "sess-alpha"));
+}
+
+#[test]
+fn context_delta_project_path_matches_resolved_git_project_key() {
+    let project = tempfile::tempdir().expect("project root");
+    let git_dir = project.path().join(".git");
+    std::fs::create_dir_all(&git_dir).expect("create git dir");
+    std::fs::write(
+        git_dir.join("config"),
+        "[remote \"origin\"]\n\turl = git@github.com:example/context-deltas.git\n",
+    )
+    .expect("write git config");
+    let nested = project.path().join("crates").join("sdk");
+    std::fs::create_dir_all(&nested).expect("create nested project path");
+
+    let (_dir, handle) = context_delta_filter_handle_with_key(
+        "/different/checkout/subdirectory",
+        Some("github.com/example/context-deltas"),
+    );
+    let deltas = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(nested.to_string_lossy().into_owned()),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("project-key context_delta");
+
     assert!(!deltas.is_empty());
     assert!(deltas.iter().all(|delta| delta.session_id == "sess-alpha"));
 }

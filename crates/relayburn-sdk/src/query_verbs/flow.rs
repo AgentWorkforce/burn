@@ -401,16 +401,28 @@ fn owner_rail_str(rail: &OwnerRail) -> (&str, &str) {
 
 /// Project spellings that may already exist in the ledger. Ingest preserves
 /// the harness cwd verbatim, so historical rows can contain a symlinked path
-/// while callers may supply that raw path or its canonical target. Query both
-/// without discarding the literal value the caller provided.
+/// while callers may supply that raw path or its canonical target. Turns from
+/// another checkout can instead share the Git-derived project key. Query each
+/// available spelling without discarding the literal value the caller provided.
 fn project_filter_variants(project: Option<&str>) -> Vec<Option<String>> {
     let Some(raw) = project else {
         return vec![None];
     };
     let mut variants = vec![Some(raw.to_string())];
+    if let Some(project_key) = resolve_project(raw).project_key {
+        if !variants
+            .iter()
+            .any(|variant| variant.as_deref() == Some(&project_key))
+        {
+            variants.push(Some(project_key));
+        }
+    }
     if let Ok(canonical) = std::fs::canonicalize(raw) {
         let canonical = canonical.to_string_lossy().into_owned();
-        if canonical != raw {
+        if !variants
+            .iter()
+            .any(|variant| variant.as_deref() == Some(&canonical))
+        {
             variants.push(Some(canonical));
         }
     }

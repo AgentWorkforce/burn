@@ -5,7 +5,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - **BREAKING (`relayburn-sdk`):** `ContextDeltaOpts::since` is now a relative-range or ISO-timestamp string instead of `Duration`; context-delta queries also accept `project` and apply the cutoff to returned deltas in both all-session and session-specific modes.
-- `burn overhead deltas` now honors `--project`, accepts relative or ISO `--since` values with explicit errors for invalid input, and no longer advertises or silently ignores the unsupported `--kind` flag.
+- `burn overhead deltas` now honors `--project`, accepts relative or ISO `--since` values with explicit errors for invalid input, and rejects the unsupported `--kind` flag.
 - `--since` parsing now rejects overflowing relative ranges with an error instead of panicking.
 
 ## [4.0.0] - 2026-06-23

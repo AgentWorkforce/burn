@@ -220,9 +220,9 @@ pub struct ContextDeltaOpts {
     /// in the ledger window contributes.
     pub session: Option<String>,
     /// Project filter. Matches the ledger's `project` or `project_key` value;
-    /// path inputs also try their canonical spelling so ledgers containing
-    /// either raw or symlink-resolved cwd values remain queryable. When
-    /// `None`, every project contributes.
+    /// path inputs also try their canonical spelling and resolved Git project
+    /// key so ledgers containing a raw cwd, symlink-resolved cwd, or stable
+    /// repository key remain queryable. When `None`, every project contributes.
     pub project: Option<String>,
     /// Inclusive lower bound for the current inference in each delta.
     /// Accepts a relative range (`24h`, `7d`, `4w`, `2m`) or ISO timestamp;
