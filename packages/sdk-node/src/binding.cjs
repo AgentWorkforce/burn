@@ -1,26 +1,22 @@
-// Native-binding loader. At publish time, `napi build` (via `@napi-rs/cli`)
-// regenerates this file to dispatch to the right per-platform package
+// Native-binding loader. Dispatches to a local napi build when present, then
+// falls back to the matching per-platform package
 // (`@relayburn/sdk-darwin-arm64`, `@relayburn/sdk-linux-x64-gnu`, etc.) based
-// on `process.platform` + `process.arch` + libc detection. The generated
-// version pulls the prebuilt `.node` file out of `optionalDependencies` so
-// installs don't need a Rust toolchain.
+// on `process.platform` + `process.arch` + libc detection. Published installs
+// pull the prebuilt `.node` file out of `optionalDependencies`, so consumers
+// don't need a Rust toolchain.
 //
 // **File extension note:** this file is `.cjs` (not `.js`) because the
 // umbrella package is `"type": "module"`, which would make Node treat a
 // bare `.js` as ESM and reject the `module.exports` below at load time.
-// `napi build` is invoked with `--js src/binding.cjs` (see
-// `package.json` scripts + `.github/workflows/napi-build.yml`) so the
-// regeneration writes back to the `.cjs` path; both `src/index.js`
-// (ESM facade) and `src/index.cjs` (CJS facade) `require('./binding.cjs')`.
+// Both `src/index.js` (ESM facade) and `src/index.cjs` (CJS facade)
+// `require('./binding.cjs')`.
 //
-// This stub matches the napi-rs-generated dispatcher *shape* so the umbrella
-// package's TS facade (`src/index.js`) can import from it during local dev /
-// CI conformance scaffolding before the prebuilt binaries exist. While
-// #247-a is in flight, we throw a clear "binding not built" error instead of
-// requiring `*.node` artifacts that don't exist yet.
+// This hand-written dispatcher matches the napi-rs loader shape while keeping
+// a clear error for fresh checkouts where neither a local build nor a
+// platform package is available.
 //
-// Once `napi build` runs in CI for the first time, this file is overwritten;
-// see `.github/workflows/napi-build.yml`.
+// `napi build ... src` emits `src/index.<target>.node` next to this loader;
+// see the package scripts and `.github/workflows/napi-build.yml`.
 
 const { existsSync, readFileSync } = require('node:fs');
 const { join } = require('node:path');
@@ -44,9 +40,9 @@ let nativeBinding = null;
 let loadError = null;
 
 function tryRequire(specifier, localFile) {
-  // Prefer the optional-dep platform package; fall back to a sibling .node
-  // that `napi build --release` drops next to this loader during local dev.
-  const localPath = localFile ? join(__dirname, '..', localFile) : null;
+  // Prefer the sibling .node emitted by a local build; published installs
+  // fall back to the optional-dependency platform package.
+  const localPath = localFile ? join(__dirname, localFile) : null;
   if (localPath && existsSync(localPath)) {
     try {
       return require(localPath);
@@ -63,20 +59,18 @@ function tryRequire(specifier, localFile) {
 }
 
 if (platform === 'darwin' && arch === 'arm64') {
-  nativeBinding = tryRequire('@relayburn/sdk-darwin-arm64', 'relayburn-sdk.darwin-arm64.node');
+  nativeBinding = tryRequire('@relayburn/sdk-darwin-arm64', 'index.darwin-arm64.node');
 } else if (platform === 'darwin' && arch === 'x64') {
-  nativeBinding = tryRequire('@relayburn/sdk-darwin-x64', 'relayburn-sdk.darwin-x64.node');
+  nativeBinding = tryRequire('@relayburn/sdk-darwin-x64', 'index.darwin-x64.node');
 } else if (platform === 'linux' && arch === 'arm64' && !isMusl()) {
-  nativeBinding = tryRequire('@relayburn/sdk-linux-arm64-gnu', 'relayburn-sdk.linux-arm64-gnu.node');
+  nativeBinding = tryRequire('@relayburn/sdk-linux-arm64-gnu', 'index.linux-arm64-gnu.node');
 } else if (platform === 'linux' && arch === 'x64' && !isMusl()) {
-  nativeBinding = tryRequire('@relayburn/sdk-linux-x64-gnu', 'relayburn-sdk.linux-x64-gnu.node');
+  nativeBinding = tryRequire('@relayburn/sdk-linux-x64-gnu', 'index.linux-x64-gnu.node');
 }
 
 if (!nativeBinding) {
-  // Surface a clear actionable error. While #247-a is still merging, this is
-  // the failure mode CI / dev machines will hit; the conformance test
-  // `test/conformance.test.js` checks for it and skips so the suite stays
-  // green until bindings land.
+  // Surface a clear actionable error for fresh local checkouts and broken
+  // optional-dependency installs.
   const detail = loadError
     ? `\nUnderlying error: ${loadError.message}`
     : '';

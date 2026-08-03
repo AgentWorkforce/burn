@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Local napi builds load ahead of installed platform packages, so development and conformance tests use the current checkout's native binding.
 - Cost calculations recognize Claude 5 and GPT-5.6 models, prefer first-party tariffs, and apply long-context price tiers.
 - `hotspots()` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
 

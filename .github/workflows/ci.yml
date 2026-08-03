@@ -37,8 +37,21 @@ jobs:
       - name: Build npm wrappers
         run: pnpm -r --if-present run build
 
+      - name: Build native Node SDK binding
+        # The release/cross-platform napi matrix is path-filtered and does not
+        # run for changes such as MCP-only PRs. Build one native debug binding
+        # here so the always-on Node test job exercises the SDK facade without
+        # adding an uncached release build to its critical path.
+        run: pnpm run build:napi:debug
+
       - name: Run npm tests
-        run: pnpm run test
+        env:
+          HOME: ${{ runner.temp }}/relayburn-node-tests/home
+          RELAYBURN_HOME: ${{ runner.temp }}/relayburn-node-tests/ledger
+          RELAYBURN_SDK_NAPI_BUILT: '1'
+        run: |
+          mkdir -p "$HOME" "$RELAYBURN_HOME"
+          pnpm run test
 
   cargo-build-and-test:
     runs-on: ubuntu-latest
