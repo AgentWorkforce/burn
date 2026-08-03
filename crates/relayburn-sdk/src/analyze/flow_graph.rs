@@ -278,6 +278,9 @@ impl FlowOpts {
 ///
 /// `session_id` is captured on the returned graph; when `trees` is
 /// non-empty the first tree's `session_id` will match.
+/// Trees are projected in ascending [`TurnSpanTree::turn_number`] order
+/// regardless of caller-provided slice order, and `max_turns` retains
+/// the earliest turns in that chronology.
 pub fn flow_graph_from_trees(
     session_id: &str,
     trees: &[TurnSpanTree],
@@ -713,12 +716,18 @@ fn span_duration(node: &SpanNode) -> i64 {
 /// public entrypoints so the projection contract has one home.
 fn build_with_finalize(session_id: &str, trees: &[TurnSpanTree], opts: FlowOpts) -> FlowGraph {
     let total_turn_count = u32::try_from(trees.len()).unwrap_or(u32::MAX);
+    // Public callers can construct trees directly and need not inherit
+    // the ledger query's chronological ordering. Normalize before both
+    // truncation and edge emission so main-rail Default edges and the
+    // turn-number-based Return timeline use the same direction.
+    let mut trees: Vec<&TurnSpanTree> = trees.iter().collect();
+    trees.sort_by_key(|tree| tree.turn_number);
     let max_turns = opts.effective_max_turns();
     let take = match max_turns {
         Some(cap) => (cap as usize).min(trees.len()),
         None => trees.len(),
     };
-    let trees = &trees[..take];
+    trees.truncate(take);
     let turn_count = u32::try_from(trees.len()).unwrap_or(u32::MAX);
     let truncated = turn_count < total_turn_count;
 
@@ -1019,6 +1028,42 @@ mod tests {
             FlowOpts::default(),
         );
 
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Default
+                && edge.from == "msg-0:tu-tu-task"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Return
+                && edge.from == "msg-0:sa-agent-1"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert_acyclic(&graph);
+    }
+
+    #[test]
+    fn unsorted_trees_are_normalized_before_cross_turn_edges() {
+        let mut root1 = turn_root();
+        root1.children.push(inference("claude-sonnet", "req-2"));
+
+        let mut task = tool_use("Task", "tu-task");
+        task.children.push(subagent("agent-1", false));
+        let mut inf = inference("claude-sonnet", "req-1");
+        inf.children.push(task);
+        let mut root0 = turn_root();
+        root0.children.push(inf);
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            // Deliberately reverse chronological order. If Default
+            // edges followed this slice while Return edges followed
+            // turn_number, the dispatch diamond would contain a cycle.
+            &[make_tree(1, root1), make_tree(0, root0)],
+            FlowOpts::default(),
+        );
+
+        let emitted_turns: Vec<u32> = graph.nodes.iter().map(|node| node.turn_number).collect();
+        assert!(emitted_turns.windows(2).all(|pair| pair[0] <= pair[1]));
         assert!(graph.edges.iter().any(|edge| {
             edge.kind == FlowEdgeKind::Default
                 && edge.from == "msg-0:tu-tu-task"
