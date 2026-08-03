@@ -58,8 +58,8 @@ pub(crate) use cost::sum_costs;
 pub use cost::{cost_for_turn, tally_unpriced, CostBreakdown};
 pub(crate) use fidelity::has_minimum_fidelity;
 pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary};
-pub(crate) use findings::findings_from_patterns;
-pub use findings::{sort_findings, WasteFinding, WasteSeverity};
+pub(crate) use findings::{findings_from_patterns, unpriced_usage_findings};
+pub use findings::{sort_findings, FindingPricingStatus, WasteFinding, WasteSeverity};
 pub use flow_graph::{
     flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
     TurnTokens, INTER_TURN_GAP, RAIL_GAP,

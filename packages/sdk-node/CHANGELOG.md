@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `hotspots()` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
+
 ## [4.0.0] - 2026-06-23
 
 - `compare()` cost figures now use canonical decimal rounding (`toFixed` semantics) instead of float-multiply rounding, so cells/totals can shift by one in the last reported digit at exact ties.

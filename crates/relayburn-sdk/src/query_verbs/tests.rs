@@ -6,6 +6,7 @@ use super::summary::{
     SummaryRelationshipMatch,
 };
 use super::*;
+use crate::analyze::FindingPricingStatus;
 use crate::reader::{RelationshipSourceKind, ToolCall, Usage, UserTurnBlock, UserTurnBlockKind};
 use tempfile::TempDir;
 
@@ -1050,6 +1051,63 @@ fn hotspots_group_by_findings_honors_patterns_filter() {
         }
         other => panic!("expected findings, got {other:?}"),
     }
+}
+
+#[test]
+fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
+    let (_dir, mut handle) = fixture_handle();
+    handle
+        .raw_mut()
+        .append_turns(&[TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "sess-unpriced".into(),
+            session_path: None,
+            message_id: "m-unpriced".into(),
+            turn_index: 0,
+            ts: "2026-04-23T00:02:00.000Z".into(),
+            model: "future-model-without-a-price".into(),
+            project: Some("/tmp/proj".into()),
+            project_key: None,
+            usage: Usage {
+                input: 400_000,
+                output: 20_000,
+                reasoning: 10_000,
+                cache_read: 13_000,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: Vec::new(),
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        }])
+        .expect("append unpriced turn");
+
+    let result = handle
+        .hotspots(HotspotsOptions {
+            patterns: Some(vec!["unpriced-usage".into()]),
+            ..HotspotsOptions::default()
+        })
+        .unwrap();
+
+    let HotspotsResult::Findings { findings, .. } = result else {
+        panic!("expected findings result");
+    };
+    assert_eq!(findings.len(), 1);
+    let finding = &findings[0];
+    assert_eq!(finding.kind, "unpriced-usage");
+    assert_eq!(finding.pricing_status, FindingPricingStatus::Unpriced);
+    assert_eq!(finding.estimated_savings.usd_per_session, None);
+    assert_eq!(finding.estimated_savings.tokens_per_session, Some(443_000));
+    assert!(finding.detail.contains("future-model-without-a-price"));
+    let json = serde_json::to_value(finding).unwrap();
+    assert_eq!(json["pricingStatus"], "unpriced");
+    assert!(json["estimatedSavings"].get("usdPerSession").is_none());
 }
 
 #[test]

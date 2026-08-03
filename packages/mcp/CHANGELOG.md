@@ -4,6 +4,8 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- `burn__hotspots` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
+
 ## [4.0.0] - 2026-06-23
 
 - `compare` / `summary` tool output reflects the SDK's canonical compare-cost rounding (`toFixed` semantics; ties shift by one in the last digit) and a stable, deterministic fidelity-summary key order.

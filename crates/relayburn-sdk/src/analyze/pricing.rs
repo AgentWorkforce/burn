@@ -5,7 +5,7 @@
 //! `load_pricing` accepts an optional override path that, when present,
 //! shallow-merges over the builtin (override entries win on collision).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -77,10 +77,15 @@ struct ModelsDevProvider {
     models: Option<IndexMap<String, ModelsDevModel>>,
 }
 
-// Same reason as `ModelsDevProvider::models`: providers iterate in file
-// order so a duplicate model id encountered under a later provider block
-// overwrites the earlier one, matching the TS `Object.values(root)` walk.
+// Providers iterate in file order so duplicate non-primary model ids retain
+// deterministic last-wins behavior. Primary vendor entries are protected
+// from later reseller copies in `flatten`.
 type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
+
+/// Primary model vendors whose own tariff should win over reseller/router
+/// copies with the same bare model id. models.dev regularly adds new provider
+/// blocks and their order is not a pricing-precedence contract.
+const PRIMARY_PRICING_PROVIDERS: &[&str] = &["anthropic", "openai"];
 
 /// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`,
 /// which writes through to the SDK crate's `data/` copy. Vendoring inside the
@@ -134,11 +139,16 @@ fn parse_pricing(raw: &str) -> serde_json::Result<PricingTable> {
 /// half-priced models.
 fn flatten(root: &ModelsDevRoot) -> PricingTable {
     let mut out = PricingTable::new();
-    for provider in root.values() {
+    let mut primary_models: HashSet<String> = HashSet::new();
+    for (provider_id, provider) in root {
         let Some(models) = provider.models.as_ref() else {
             continue;
         };
         for (id, model) in models {
+            let primary_provider = PRIMARY_PRICING_PROVIDERS.contains(&provider_id.as_str());
+            if !primary_provider && primary_models.contains(id) {
+                continue;
+            }
             let Some(cost) = model.cost.as_ref() else {
                 continue;
             };
@@ -162,6 +172,9 @@ fn flatten(root: &ModelsDevRoot) -> PricingTable {
                 },
             };
             out.insert(id.clone(), entry);
+            if primary_provider {
+                primary_models.insert(id.clone());
+            }
         }
     }
     out
@@ -199,6 +212,20 @@ mod tests {
         assert_eq!(cost.input, 5.0);
         assert_eq!(cost.cache_read, 0.5);
         assert_eq!(cost.output, 30.0);
+    }
+
+    #[test]
+    fn builtin_snapshot_has_current_generation_models() {
+        let table = load_builtin_pricing();
+        for model in [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "gpt-5.6-sol",
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+        ] {
+            assert!(table.contains_key(model), "{model} present");
+        }
     }
 
     #[test]
@@ -270,6 +297,27 @@ mod tests {
             assert_eq!(entry.input, 9.0);
             assert_eq!(entry.output, 8.0);
         }
+    }
+
+    #[test]
+    fn flatten_prefers_primary_vendor_over_later_reseller_copy() {
+        let raw = r#"{
+            "openai": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 5, "output": 30 } }
+                }
+            },
+            "reseller": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 1.5, "output": 12, "reasoning": 12 } }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("gpt-example").unwrap();
+        assert_eq!(cost.input, 5.0);
+        assert_eq!(cost.output, 30.0);
+        assert_eq!(cost.reasoning_mode, ReasoningMode::SameAsOutput);
     }
 
     #[test]
