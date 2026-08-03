@@ -30,8 +30,10 @@
 //!
 //! # Edge semantics
 //!
-//! - [`FlowEdgeKind::Default`] — sequential within a rail, including
-//!   main-rail continuity across turn boundaries.
+//! - [`FlowEdgeKind::Default`] — sequential within a rail. Within one
+//!   turn this is model-driven continuation; across turns it spans an
+//!   intervening user prompt and does **not** imply autonomous model
+//!   continuation.
 //! - [`FlowEdgeKind::Dispatch`] — main rail's `Task` `ToolUse` →
 //!   first node on the spawned subagent rail.
 //! - [`FlowEdgeKind::Return`] — last node of a subagent rail → the
@@ -40,6 +42,13 @@
 //! - [`FlowEdgeKind::Unattached`] — connects the synthetic turn anchor
 //!   to a `Subagent` flagged `attributes["unattached"] = true`. Surfaces
 //!   the orphan case loudly so renderers can highlight it.
+//!
+//! When a turn's terminal main-rail tool dispatches a subagent, both
+//! the tool's cross-turn `Default` edge and the subagent's `Return`
+//! edge target the next main inference. This intentional diamond keeps
+//! main-rail continuity and cross-rail completion as independent causal
+//! paths rather than treating the dispatched branch as a replacement
+//! for the user-mediated main rail.
 
 use serde::{Deserialize, Serialize};
 
@@ -178,7 +187,8 @@ pub struct FlowNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlowEdgeKind {
-    /// Sequential within a rail, including the main rail across turns.
+    /// Sequential within a rail. Across main-rail turns, spans the
+    /// intervening user prompt rather than autonomous continuation.
     Default,
     /// Main rail → subagent rail at the dispatching `Task` `ToolUse`.
     Dispatch,
@@ -739,6 +749,8 @@ fn build_with_finalize(session_id: &str, trees: &[TurnSpanTree], opts: FlowOpts)
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, VecDeque};
+
     use super::*;
     use crate::analyze::span_tree::{SpanKind, SpanNode, SpanStatus};
 
@@ -783,6 +795,44 @@ mod tests {
 
     fn turn_root() -> SpanNode {
         SpanNode::new(SpanKind::Turn, "turn")
+    }
+
+    fn assert_acyclic(graph: &FlowGraph) {
+        let mut indegree: HashMap<&str, usize> = graph
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), 0))
+            .collect();
+        let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &graph.edges {
+            *indegree
+                .get_mut(edge.to.as_str())
+                .expect("edge target should be a graph node") += 1;
+            outgoing
+                .entry(edge.from.as_str())
+                .or_default()
+                .push(edge.to.as_str());
+        }
+
+        let mut ready: VecDeque<&str> = indegree
+            .iter()
+            .filter_map(|(&id, &degree)| (degree == 0).then_some(id))
+            .collect();
+        let mut visited = 0;
+        while let Some(id) = ready.pop_front() {
+            visited += 1;
+            for &next in outgoing.get(id).into_iter().flatten() {
+                let degree = indegree
+                    .get_mut(next)
+                    .expect("edge target should be a graph node");
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.push_back(next);
+                }
+            }
+        }
+
+        assert_eq!(visited, graph.nodes.len(), "flow graph contains a cycle");
     }
 
     #[test]
@@ -949,6 +999,37 @@ mod tests {
             .find(|e| e.kind == FlowEdgeKind::Return)
             .unwrap();
         assert_eq!(return_edge.to, "msg-1:inf-0");
+    }
+
+    #[test]
+    fn terminal_dispatch_keeps_main_continuity_and_subagent_return_paths() {
+        let mut task = tool_use("Task", "tu-task");
+        task.children.push(subagent("agent-1", false));
+        let mut inf = inference("claude-sonnet", "req-1");
+        inf.children.push(task);
+        let mut root0 = turn_root();
+        root0.children.push(inf);
+
+        let mut root1 = turn_root();
+        root1.children.push(inference("claude-sonnet", "req-2"));
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[make_tree(0, root0), make_tree(1, root1)],
+            FlowOpts::default(),
+        );
+
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Default
+                && edge.from == "msg-0:tu-tu-task"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Return
+                && edge.from == "msg-0:sa-agent-1"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert_acyclic(&graph);
     }
 
     #[test]
