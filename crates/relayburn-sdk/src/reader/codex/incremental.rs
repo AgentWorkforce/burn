@@ -252,7 +252,7 @@ impl CodexParseState {
                                 } else {
                                     InferenceKind::Message
                                 }
-                            } else if usage.output > 0 || usage.reasoning > 0 {
+                            } else if usage.reasoning > 0 {
                                 InferenceKind::Mixed
                             } else {
                                 InferenceKind::ToolUse

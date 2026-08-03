@@ -136,10 +136,11 @@ pub enum InferenceKeySource {
     /// Came from the upstream `requestId` field (Claude Code).
     RequestId,
     /// Fell back to the harness `message_id` because no `requestId` was
-    /// present (Codex, opencode, old Claude versions, sidechains).
+    /// present (opencode, old Claude versions, sidechains).
     MessageId,
-    /// Final fallback when neither key was usable — synthesized from the
-    /// row's session_id + index.
+    /// Synthesized locally. Codex uses a stable task-local request index;
+    /// generic inference construction also uses this as the final fallback
+    /// when neither an upstream request id nor a message id is usable.
     RowSynthetic,
 }
 

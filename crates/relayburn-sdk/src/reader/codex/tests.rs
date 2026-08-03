@@ -207,6 +207,25 @@ fn preserves_zero_requests_for_a_completed_task_without_usage() {
 }
 
 #[test]
+fn classifies_tool_only_request_without_reasoning_as_tool_use() {
+    let tmp = tempdir().unwrap();
+    let path = write_jsonl(
+        tmp.path(),
+        "tool-only.jsonl",
+        &[
+            json!({"timestamp":"2026-07-29T00:00:00Z","type":"session_meta","payload":{"id":"sess_tool_only"}}),
+            json!({"timestamp":"2026-07-29T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_tool_only"}}),
+            json!({"timestamp":"2026-07-29T00:00:02Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}","call_id":"call_tool_only"}}),
+            json!({"timestamp":"2026-07-29T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":0}}}}),
+            json!({"timestamp":"2026-07-29T00:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_tool_only"}}),
+        ],
+    );
+    let r = parse_codex_session(&path, &ParseCodexOptions::default()).unwrap();
+    assert_eq!(r.inferences.len(), 1);
+    assert_eq!(r.inferences[0].kind, crate::reader::InferenceKind::ToolUse);
+}
+
+#[test]
 fn emits_compaction_event_anchored_to_preceding_turn() {
     let r = parse("compaction.jsonl");
     assert_eq!(r.turns.len(), 2);
