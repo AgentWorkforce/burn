@@ -312,6 +312,8 @@ jobs:
         run: rustup toolchain install
 
       - name: Cargo build + test
+        env:
+          BURN_GOLDEN: '1'
         run: |
           cargo build --workspace --all-targets
           cargo test --workspace
