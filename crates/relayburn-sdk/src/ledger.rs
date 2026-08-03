@@ -35,8 +35,8 @@ use rusqlite::params;
 pub(crate) use crate::ledger::config::CONFIG_ENV_LOCK;
 pub use crate::ledger::config::{
     config_path, config_path_at_home, load_config, load_config_at, load_config_with_home,
-    BurnConfig, ContentConfig, Retention, StalenessConfig, DEFAULT_RETENTION_DAYS,
-    DEFAULT_STALE_AFTER_HOURS,
+    load_staleness_config, load_staleness_config_at, load_staleness_config_with_home, BurnConfig,
+    ContentConfig, Retention, StalenessConfig, DEFAULT_RETENTION_DAYS, DEFAULT_STALE_AFTER_HOURS,
 };
 pub use crate::ledger::content::{PruneStats, SearchHit, SearchOptions};
 pub use crate::ledger::error::{LedgerError, Result};

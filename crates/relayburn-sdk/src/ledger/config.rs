@@ -70,13 +70,20 @@ pub struct ContentConfig {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BurnConfig {
     pub content: ContentConfig,
-    pub staleness: StalenessConfig,
 }
 
 /// Controls when read/report surfaces flag the ledger as stale.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StalenessConfig {
     pub threshold_hours: f64,
+}
+
+impl Default for StalenessConfig {
+    fn default() -> Self {
+        Self {
+            threshold_hours: DEFAULT_STALE_AFTER_HOURS,
+        }
+    }
 }
 
 impl Default for BurnConfig {
@@ -87,9 +94,6 @@ impl Default for BurnConfig {
             content: ContentConfig {
                 store: ContentStoreMode::Full,
                 retention_days: Retention::Days(DEFAULT_RETENTION_DAYS),
-            },
-            staleness: StalenessConfig {
-                threshold_hours: DEFAULT_STALE_AFTER_HOURS,
             },
         }
     }
@@ -110,10 +114,10 @@ pub fn config_path_at_home(home: &Path) -> PathBuf {
     home.join("config.json")
 }
 
-/// Load the user config: read the JSON file (if present), then layer the
-/// `RELAYBURN_CONTENT_STORE`, `RELAYBURN_CONTENT_TTL_DAYS`, and
-/// `RELAYBURN_STALE_AFTER_HOURS` env vars on
-/// top, falling back to [`BurnConfig::default`].
+/// Load the content config: read the JSON file (if present), then layer the
+/// `RELAYBURN_CONTENT_STORE` and `RELAYBURN_CONTENT_TTL_DAYS` env vars on top,
+/// falling back to [`BurnConfig::default`]. Use [`load_staleness_config`] for
+/// the separately version-compatible read/report threshold.
 ///
 /// Mirrors the TS `loadConfig()` precedence: env overrides file overrides
 /// default. A missing file is the common case and not an error; malformed
@@ -136,6 +140,39 @@ pub fn load_config_with_home(home: Option<&Path>) -> Result<BurnConfig> {
     }
 }
 
+/// Load the read/report staleness settings from the default config path.
+///
+/// This is separate from [`BurnConfig`] so adding the optional staleness
+/// feature does not break embedders that construct that public type with a
+/// struct literal.
+pub fn load_staleness_config() -> Result<StalenessConfig> {
+    load_staleness_config_at(&config_path())
+}
+
+/// Like [`load_staleness_config`], but resolves the config under an explicit
+/// ledger home when supplied.
+pub fn load_staleness_config_with_home(home: Option<&Path>) -> Result<StalenessConfig> {
+    match home {
+        Some(h) => load_staleness_config_at(&config_path_at_home(h)),
+        None => load_staleness_config(),
+    }
+}
+
+/// Load staleness settings from an explicit config path.
+pub fn load_staleness_config_at(path: &Path) -> Result<StalenessConfig> {
+    let from_file = read_config_file(path);
+    Ok(StalenessConfig {
+        threshold_hours: pick_staleness_threshold(
+            std::env::var("RELAYBURN_STALE_AFTER_HOURS").ok().as_deref(),
+            from_file
+                .as_ref()
+                .and_then(|c| c.staleness.as_ref())
+                .and_then(|c| c.threshold_hours.as_ref()),
+            DEFAULT_STALE_AFTER_HOURS,
+        ),
+    })
+}
+
 /// Load with an explicit config path. Tests use this to avoid touching
 /// `$HOME/.agentworkforce/burn/config.json`.
 pub fn load_config_at(path: &Path) -> Result<BurnConfig> {
@@ -154,21 +191,10 @@ pub fn load_config_at(path: &Path) -> Result<BurnConfig> {
             .and_then(|c| c.content.as_ref())
             .and_then(|c| c.retention_days.as_ref()),
     );
-    let stale_after_hours = pick_staleness_threshold(
-        std::env::var("RELAYBURN_STALE_AFTER_HOURS").ok().as_deref(),
-        from_file
-            .as_ref()
-            .and_then(|c| c.staleness.as_ref())
-            .and_then(|c| c.threshold_hours.as_ref()),
-        DEFAULT_STALE_AFTER_HOURS,
-    );
     Ok(BurnConfig {
         content: ContentConfig {
             store,
             retention_days: retention,
-        },
-        staleness: StalenessConfig {
-            threshold_hours: stale_after_hours,
         },
     })
 }
@@ -361,9 +387,25 @@ mod tests {
             let cfg = load_config_at(&tmp.path().join("config.json")).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::Full);
             assert_eq!(cfg.content.retention_days, Retention::Days(90.0));
-            assert_eq!(cfg.staleness.threshold_hours, 24.0);
+            assert_eq!(
+                load_staleness_config_at(&tmp.path().join("config.json"))
+                    .unwrap()
+                    .threshold_hours,
+                24.0
+            );
             assert_eq!(cfg, BurnConfig::default());
         });
+    }
+
+    #[test]
+    fn burn_config_preserves_the_public_struct_literal_shape() {
+        let cfg = BurnConfig {
+            content: ContentConfig {
+                store: ContentStoreMode::Full,
+                retention_days: Retention::Days(90.0),
+            },
+        };
+        assert_eq!(cfg, BurnConfig::default());
     }
 
     #[test]
@@ -433,12 +475,12 @@ mod tests {
             let path = tmp.path().join("config.json");
             std::fs::write(&path, r#"{"staleness":{"thresholdHours":6}}"#).unwrap();
             assert_eq!(
-                load_config_at(&path).unwrap().staleness.threshold_hours,
+                load_staleness_config_at(&path).unwrap().threshold_hours,
                 6.0
             );
             std::env::set_var("RELAYBURN_STALE_AFTER_HOURS", "2.5");
             assert_eq!(
-                load_config_at(&path).unwrap().staleness.threshold_hours,
+                load_staleness_config_at(&path).unwrap().threshold_hours,
                 2.5
             );
         });
@@ -451,7 +493,7 @@ mod tests {
             let path = tmp.path().join("config.json");
             std::fs::write(&path, r#"{"staleness":{"thresholdHours":-10}}"#).unwrap();
             assert_eq!(
-                load_config_at(&path).unwrap().staleness.threshold_hours,
+                load_staleness_config_at(&path).unwrap().threshold_hours,
                 -10.0
             );
         });

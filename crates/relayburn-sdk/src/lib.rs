@@ -84,10 +84,12 @@ pub use crate::reader::{
 
 pub use crate::ledger::{
     burn_sqlite_path, config_path, config_path_at_home, content_sqlite_path, is_valid_session_id,
-    ledger_home, load_config, load_config_with_home, BurnConfig, ContentConfig, EnrichedTurn,
-    Enrichment, Ledger as RawLedger, LedgerError, LedgerFingerprintScope, MessageRange, PruneStats,
-    Query, RebuildSummary, ResetSummary, Retention, SearchHit, SearchOptions, StalenessConfig,
-    Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS, DEFAULT_STALE_AFTER_HOURS,
+    ledger_home, load_config, load_config_with_home, load_staleness_config,
+    load_staleness_config_at, load_staleness_config_with_home, BurnConfig, ContentConfig,
+    EnrichedTurn, Enrichment, Ledger as RawLedger, LedgerError, LedgerFingerprintScope,
+    MessageRange, PruneStats, Query, RebuildSummary, ResetSummary, Retention, SearchHit,
+    SearchOptions, StalenessConfig, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
+    DEFAULT_STALE_AFTER_HOURS,
 };
 
 pub use crate::analyze::{
@@ -222,12 +224,12 @@ impl LedgerHandle {
     /// Deterministic variant of [`Self::ledger_freshness`] for callers that
     /// already own a clock and for threshold-boundary tests.
     pub fn ledger_freshness_at(&self, now_ms: u64) -> anyhow::Result<LedgerFreshness> {
-        let config = load_config_with_home(Some(&self.config_home))?;
-        let disabled = config.staleness.threshold_hours < 0.0;
+        let config = load_staleness_config_with_home(Some(&self.config_home))?;
+        let disabled = config.threshold_hours < 0.0;
         let stale_after_ms = if disabled {
             None
         } else {
-            Some((config.staleness.threshold_hours * 3_600_000.0) as u64)
+            Some((config.threshold_hours * 3_600_000.0) as u64)
         };
         let last_write_at_ms = self.inner.last_write_at_ms()?;
         let stale = !disabled

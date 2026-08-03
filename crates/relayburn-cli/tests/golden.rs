@@ -274,6 +274,29 @@ fn normalize(text: &str, ledger_home: &Path, project_dir: &Path) -> String {
     out = squash_numeric_field(&out, "ledgerMtimeMsCurrent", "${MTIME}");
     out = squash_numeric_field(&out, "lastBuiltAt", "${TS}");
     out = squash_numeric_field(&out, "lastRebuildAt", "${TS}");
+    out = squash_numeric_field(&out, "lastWriteAtMs", "${TS}");
+    out = squash_line_value(&out, "  last write:", "${TS}");
+    out
+}
+
+/// Replace the value after a human-output label while preserving the label's
+/// padding. This keeps wall-clock fields deterministic in golden snapshots.
+fn squash_line_value(text: &str, label: &str, placeholder: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for segment in text.split_inclusive('\n') {
+        let (line, newline) = segment
+            .strip_suffix('\n')
+            .map_or((segment, ""), |line| (line, "\n"));
+        if let Some(rest) = line.strip_prefix(label) {
+            let padding_len = rest.len() - rest.trim_start().len();
+            out.push_str(label);
+            out.push_str(&rest[..padding_len]);
+            out.push_str(placeholder);
+        } else {
+            out.push_str(line);
+        }
+        out.push_str(newline);
+    }
     out
 }
 
@@ -380,7 +403,7 @@ fn tempdir_under(parent: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::squash_numeric_field;
+    use super::{squash_line_value, squash_numeric_field};
 
     #[test]
     fn squash_numeric_field_matches_space_and_tab() {
@@ -416,5 +439,14 @@ mod tests {
         let input = r#"{"lastBuiltAt": null}"#;
         let out = squash_numeric_field(input, "lastBuiltAt", "${TS}");
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn squash_line_value_preserves_padding_and_trailing_newline() {
+        let input = "archive state:\n  last write:   2026-08-03T04:00:00Z\nconfig:\n";
+        assert_eq!(
+            squash_line_value(input, "  last write:", "${TS}"),
+            "archive state:\n  last write:   ${TS}\nconfig:\n"
+        );
     }
 }
