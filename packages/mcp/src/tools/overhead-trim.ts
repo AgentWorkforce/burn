@@ -5,7 +5,7 @@ import type { ToolDefinition } from '../types.js';
 import {
   optionalBoolean,
   optionalEnum,
-  optionalNonNegativeInteger,
+  optionalPositiveInteger,
   optionalString,
   validateObjectInput,
 } from './input.js';
@@ -39,7 +39,7 @@ export function createOverheadTrimTool(deps: OverheadTrimDeps = {}): ToolDefinit
         project: { type: 'string', description: 'Project path or key. The SDK defaults to the current project.' },
         since: { type: 'string', description: 'ISO timestamp or relative range such as 24h or 7d.' },
         kind: { type: 'string', enum: KINDS, description: 'Restrict to one instruction-file kind.' },
-        top: { type: 'integer', minimum: 0, description: 'Maximum number of recommendations.' },
+        top: { type: 'integer', minimum: 1, description: 'Maximum number of recommendations.' },
         includeDiff: { type: 'boolean', description: 'Include a suggested edit diff for each recommendation.' },
       },
       required: [],
@@ -51,7 +51,7 @@ export function createOverheadTrimTool(deps: OverheadTrimDeps = {}): ToolDefinit
       const project = optionalString(raw, 'project', 'overhead trim');
       const since = optionalString(raw, 'since', 'overhead trim');
       const kind = optionalEnum(raw, 'kind', 'overhead trim', KINDS);
-      const top = optionalNonNegativeInteger(raw, 'top', 'overhead trim');
+      const top = optionalPositiveInteger(raw, 'top', 'overhead trim');
       const includeDiff = optionalBoolean(raw, 'includeDiff', 'overhead trim');
       if (project !== undefined) opts.project = project;
       if (since !== undefined) opts.since = since;

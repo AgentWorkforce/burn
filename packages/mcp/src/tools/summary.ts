@@ -30,11 +30,14 @@ export function createSummaryTool(deps: SummaryDeps): ToolDefinition {
   return {
     name: 'burn__summary',
     description:
-      'Summarize token use and cost by tool and model, optionally filtered by session, project, time window, or enrichment tags. Read-only.',
+      'Summarize token use and cost by tool and model, optionally filtered by session, project, time window, or enrichment tags. When the server has a registered default session, omitting session restricts the query to it. Read-only.',
     inputSchema: {
       type: 'object',
       properties: {
-        session: { type: 'string', description: 'Restrict to one session id.' },
+        session: {
+          type: 'string',
+          description: 'Restrict to one session id. Omit to use the server registered session when present.',
+        },
         project: { type: 'string', description: 'Restrict to one project path or key.' },
         since: { type: 'string', description: 'ISO timestamp or relative range such as 24h or 7d.' },
         tags: {

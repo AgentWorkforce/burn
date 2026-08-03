@@ -130,6 +130,7 @@ describe('end-to-end: read tool catalog over stdio', () => {
       [11, 'burn__overheadTrim', { top: -1 }],
       [12, 'burn__compare', { models: ['only-one'] }],
       [13, 'burn__summary', { unknown: true }],
+      [14, 'burn__hotspots', { groupBy: 'file', patterns: ['retry-loop'] }],
     ] as const;
     for (const [id, name, args] of invalid) {
       send(input, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });

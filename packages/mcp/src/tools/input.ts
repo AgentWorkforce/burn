@@ -47,6 +47,16 @@ export function optionalNonNegativeInteger(
   return value;
 }
 
+export function optionalPositiveInteger(
+  raw: Record<string, unknown>,
+  key: string,
+  tool: string,
+): number | undefined {
+  const value = optionalNonNegativeInteger(raw, key, tool);
+  if (value === 0) throw new Error(`${tool}: ${key} must be a positive safe integer`);
+  return value;
+}
+
 export function optionalStringArray(
   raw: Record<string, unknown>,
   key: string,

@@ -34,11 +34,14 @@ export function createHotspotsTool(deps: HotspotsDeps): ToolDefinition {
   return {
     name: 'burn__hotspots',
     description:
-      'Find expensive tool-output persistence and repeated workflow patterns, with attribution or grouped findings views. Read-only.',
+      'Find expensive tool-output persistence and repeated workflow patterns, with attribution or grouped findings views. When the server has a registered default session, omitting session restricts the query to it. Read-only.',
     inputSchema: {
       type: 'object',
       properties: {
-        session: { type: 'string', description: 'Restrict to one session id.' },
+        session: {
+          type: 'string',
+          description: 'Restrict to one session id. Omit to use the server registered session when present.',
+        },
         project: { type: 'string', description: 'Restrict to one project path or key.' },
         since: { type: 'string', description: 'ISO timestamp or relative range such as 24h or 7d.' },
         groupBy: { type: 'string', enum: GROUP_BY, description: 'Select the hotspot result view.' },
@@ -59,6 +62,9 @@ export function createHotspotsTool(deps: HotspotsDeps): ToolDefinition {
       const patterns = optionalStringArray(raw, 'patterns', 'hotspots');
       const workflow = optionalString(raw, 'workflow', 'hotspots');
       const provider = optionalStringArray(raw, 'provider', 'hotspots');
+      if (patterns !== undefined && patterns.length > 0 && groupBy !== undefined && groupBy !== 'findings') {
+        throw new Error('hotspots: patterns can only be combined with groupBy findings');
+      }
       if (session !== undefined) opts.session = session;
       if (project !== undefined) opts.project = project;
       if (since !== undefined) opts.since = since;
