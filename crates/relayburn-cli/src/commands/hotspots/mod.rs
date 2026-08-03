@@ -67,6 +67,23 @@ pub struct HotspotsArgs {
     #[arg(long, value_name = "PROVIDERS")]
     pub provider: Option<String>,
 
+    /// Flag sessions at or above this context-token/output-token ratio.
+    /// Context includes input, cache-read, and cache-creation tokens.
+    #[arg(
+        long = "context-output-ratio-threshold",
+        value_name = "RATIO",
+        default_value_t = relayburn_sdk::DEFAULT_CONTEXT_OUTPUT_RATIO_THRESHOLD
+    )]
+    pub context_output_ratio_threshold: f64,
+
+    /// Ignore ratio findings below this session context-token volume.
+    #[arg(
+        long = "context-output-min-tokens",
+        value_name = "TOKENS",
+        default_value_t = relayburn_sdk::DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS
+    )]
+    pub context_output_min_tokens: u64,
+
     /// Show all rows in human mode instead of capping at the default
     /// top-N (10).
     #[arg(long)]
@@ -130,6 +147,7 @@ pub enum RankBy {
 // the same set, so this list has to use the finding-kind spelling on every
 // row.
 const PATTERN_KINDS: &[&str] = &[
+    "context-output-ratio",
     "retry-loop",
     "failure-run",
     "cancellation-run",
@@ -280,6 +298,8 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         patterns: patterns_selection,
         workflow: args.workflow.clone(),
         provider: provider_filter,
+        context_output_ratio_threshold: Some(args.context_output_ratio_threshold),
+        context_output_min_tokens: Some(args.context_output_min_tokens),
         ledger_home,
     })?;
     progress.finish_and_clear();

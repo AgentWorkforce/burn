@@ -464,6 +464,7 @@ mod tests {
             tag_key: None,
             tag_values: Vec::new(),
             turn_count: 0,
+            context_efficiency: relayburn_sdk::ContextEfficiencySummary::default(),
             rows: Vec::new(),
             total_cost: CostBreakdown {
                 model: String::new().into(),
@@ -487,6 +488,17 @@ mod tests {
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
         assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
+        assert_eq!(
+            value["contextEfficiency"],
+            json!({
+                "contextTokens": 0,
+                "outputTokens": 0,
+                "contextTokensPerOutputToken": null,
+                "unbounded": false,
+                "zeroOutputTurnsWithContext": 0,
+                "sessions": [],
+            })
+        );
     }
 
     #[test]
@@ -519,6 +531,7 @@ mod tests {
             tag_key: None,
             tag_values: Vec::new(),
             turn_count: 0,
+            context_efficiency: relayburn_sdk::ContextEfficiencySummary::default(),
             rows: Vec::new(),
             total_cost: CostBreakdown {
                 model: String::new().into(),

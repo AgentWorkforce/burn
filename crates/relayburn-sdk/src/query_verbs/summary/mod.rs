@@ -119,6 +119,9 @@ pub struct Summary {
     pub total_tokens: u64,
     pub total_cost: f64,
     pub turn_count: u64,
+    /// Context-window work per completion token, including cache reads and
+    /// cache creation, plus per-session context-size distributions.
+    pub context_efficiency: ContextEfficiencySummary,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,6 +254,7 @@ pub(crate) fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> S
         total_tokens,
         total_cost,
         turn_count: turns.len() as u64,
+        context_efficiency: compute_context_efficiency(turns),
         by_tool: by_tool_order
             .into_iter()
             .map(|k| by_tool.remove(&k).unwrap())
@@ -415,6 +419,9 @@ pub struct SummaryGroupedReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tag_values: Vec<Option<String>>,
     pub turn_count: u64,
+    /// Headline context-to-output ratio and per-session p50/p95/max context
+    /// sizes. Computed in the SDK so all presenters share the definition.
+    pub context_efficiency: ContextEfficiencySummary,
     pub rows: Vec<UsageCostAggregateRow>,
     pub total_cost: CostBreakdown,
     pub fidelity: FidelitySummary,
@@ -756,6 +763,7 @@ impl LedgerHandle {
                     tag_key,
                     tag_values,
                     turn_count: turns.len() as u64,
+                    context_efficiency: compute_context_efficiency(&turns),
                     rows,
                     total_cost,
                     fidelity,

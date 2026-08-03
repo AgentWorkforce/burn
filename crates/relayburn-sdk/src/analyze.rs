@@ -54,11 +54,14 @@ pub(crate) use context_delta::deltas_for_session;
 pub use context_delta::{
     ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail, ReminderSource,
 };
+pub(crate) use cost::reasoning_mode_for_source;
 pub(crate) use cost::sum_costs;
 pub use cost::{cost_for_turn, tally_unpriced, CostBreakdown};
 pub(crate) use fidelity::has_minimum_fidelity;
 pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary};
-pub(crate) use findings::findings_from_patterns;
+pub(crate) use findings::{
+    context_output_ratio_finding, findings_from_patterns, ContextOutputRatioFindingInput,
+};
 pub use findings::{sort_findings, WasteFinding, WasteSeverity};
 pub use flow_graph::{
     flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,

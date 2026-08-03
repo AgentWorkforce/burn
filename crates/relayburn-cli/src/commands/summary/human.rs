@@ -483,6 +483,7 @@ pub(super) fn emit_human(
         "turns analyzed: {}",
         format_uint(report.turn_count)
     ));
+    lines.push(format_context_efficiency_line(&report.context_efficiency));
     lines.push(String::new());
 
     if report.rows.is_empty() {
@@ -535,6 +536,28 @@ pub(super) fn emit_human(
     }
     lines.push(render_table(&rendered));
     lines.push(String::new());
+
+    if !report.context_efficiency.sessions.is_empty() {
+        lines.push("highest context-efficiency sessions:".to_string());
+        let mut context_rows = vec![vec![
+            "session".into(),
+            "context:output".into(),
+            "p50 context".into(),
+            "p95 context".into(),
+            "max context".into(),
+        ]];
+        for session in report.context_efficiency.sessions.iter().take(10) {
+            context_rows.push(vec![
+                session.session_id.clone(),
+                format_context_ratio(session.context_tokens_per_output_token, session.unbounded),
+                format_uint(session.context_size.p50),
+                format_uint(session.context_size.p95),
+                format_uint(session.context_size.max),
+            ]);
+        }
+        lines.push(render_table(&context_rows));
+        lines.push(String::new());
+    }
     lines.push(format!(
         "total cost: {}",
         format_usd(report.total_cost.total)
@@ -596,6 +619,34 @@ pub(super) fn emit_human(
         eprintln!(
             "         Update the snapshot (pnpm run pricing:update) or add an override at $RELAYBURN_HOME/models.dev.json.",
         );
+    }
+}
+
+fn format_context_efficiency_line(efficiency: &relayburn_sdk::ContextEfficiencySummary) -> String {
+    format!(
+        "context efficiency: {} ({} context / {} output; {} zero-output turn{})",
+        format_context_ratio(
+            efficiency.context_tokens_per_output_token,
+            efficiency.unbounded,
+        ),
+        format_uint(efficiency.context_tokens),
+        format_uint(efficiency.output_tokens),
+        format_uint(efficiency.zero_output_turns_with_context),
+        if efficiency.zero_output_turns_with_context == 1 {
+            ""
+        } else {
+            "s"
+        },
+    )
+}
+
+fn format_context_ratio(ratio: Option<f64>, unbounded: bool) -> String {
+    if unbounded {
+        "unbounded".to_string()
+    } else {
+        ratio
+            .map(|value| format!("{value:.1}:1"))
+            .unwrap_or_else(|| "—".to_string())
     }
 }
 

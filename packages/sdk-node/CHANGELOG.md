@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `summary()` now returns context tokens per normalized generated-output token (including reasoning) and per-session p50/p95/max context sizes, where context is input + cache-read + cache-creation tokens; `hotspots()` accepts ratio and minimum-context options for the new cost-independent finding (defaults: 382:1 inclusive and 1M context tokens).
+
 ## [4.0.0] - 2026-06-23
 
 - `compare()` cost figures now use canonical decimal rounding (`toFixed` semantics) instead of float-multiply rounding, so cells/totals can shift by one in the last reported digit at exact ties.
