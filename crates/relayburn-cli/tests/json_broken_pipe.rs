@@ -3,7 +3,9 @@
 use std::io::Read;
 use std::process::{Command, Stdio};
 
-use relayburn_sdk::{Ledger, LedgerOpenOptions, SourceKind, TurnRecord, Usage};
+use relayburn_sdk::{
+    Enrichment, Ledger, LedgerOpenOptions, SourceKind, Stamp, StampSelector, TurnRecord, Usage,
+};
 
 const SESSION_COUNT: usize = 4_096;
 
@@ -80,6 +82,54 @@ fn large_json_output_exits_zero_when_consumer_closes_early() {
     assert!(
         output.status.success(),
         "early pipe closure should exit 0, got {:?}; stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn large_jsonl_export_exits_zero_when_consumer_closes_early() {
+    let home = tempfile::TempDir::new().expect("temporary ledger home");
+    let mut ledger = Ledger::open(LedgerOpenOptions::with_home(home.path())).expect("open ledger");
+    for index in 0..2_048 {
+        let mut enrichment = Enrichment::new();
+        enrichment.insert("payload".into(), "x".repeat(2_048));
+        let stamp = Stamp::new(
+            "2026-08-03T00:00:00.000Z",
+            StampSelector {
+                session_id: Some(format!("session_{index:04}")),
+                ..Default::default()
+            },
+            enrichment,
+        )
+        .expect("valid stamp");
+        ledger.raw_mut().append_stamp(&stamp).expect("append stamp");
+    }
+    drop(ledger);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_burn"))
+        .args([
+            "--ledger-path",
+            home.path().to_str().expect("UTF-8 temp path"),
+            "stamps",
+            "export",
+        ])
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn burn");
+
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut prefix = [0_u8; 2];
+    stdout.read_exact(&mut prefix).expect("read JSONL prefix");
+    assert_eq!(&prefix, b"{\"");
+    drop(stdout);
+
+    let output = child.wait_with_output().expect("wait for burn");
+    assert!(
+        output.status.success(),
+        "early JSONL pipe closure should exit 0, got {:?}; stderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr),
     );

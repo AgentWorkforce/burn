@@ -22,15 +22,13 @@ use serde::Serialize;
 pub fn render_json<T: Serialize + ?Sized>(value: &T) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    write_json_pretty(&mut handle, value)?;
+    write_json_pretty(&mut handle, value).map_err(stdout_error)?;
     handle.write_all(b"\n").map_err(stdout_error)?;
     handle.flush().map_err(stdout_error)
 }
 
 fn write_json_pretty<W: Write, T: Serialize + ?Sized>(writer: &mut W, value: &T) -> io::Result<()> {
-    serde_json::to_writer_pretty(writer, value)
-        .map_err(serde_error_to_io)
-        .map_err(stdout_error)
+    serde_json::to_writer_pretty(writer, value).map_err(serde_error_to_io)
 }
 
 #[derive(Debug)]
