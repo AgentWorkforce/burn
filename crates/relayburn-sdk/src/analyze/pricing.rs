@@ -335,6 +335,28 @@ mod tests {
     }
 
     #[test]
+    fn builtin_primary_models_are_all_recorded_in_ownership_history() {
+        let root: ModelsDevRoot = serde_json::from_str(BUILTIN_PRICING_JSON).unwrap();
+        let protected: HashSet<String> =
+            serde_json::from_str(BUILTIN_PRIMARY_MODEL_IDS_JSON).unwrap();
+
+        for provider_id in PRIMARY_PRICING_PROVIDERS {
+            let Some(models) = root
+                .get(*provider_id)
+                .and_then(|provider| provider.models.as_ref())
+            else {
+                continue;
+            };
+            for model_id in models.keys() {
+                assert!(
+                    protected.contains(model_id),
+                    "primary model {provider_id}/{model_id} is missing from primary-model-ids.json"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn flatten_preserves_separate_reasoning_tariff() {
         let raw = r#"{
             "acme": {
