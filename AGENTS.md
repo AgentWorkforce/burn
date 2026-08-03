@@ -6,8 +6,7 @@ how to work on it.
 
 ## Layout
 
-The repo is Rust-first. The old TypeScript 1.x implementation packages have
-been removed; `crates/` is the source of truth.
+The repo is Rust-first. `crates/` is the source of truth.
 
 ### Rust crates (`crates/`)
 
@@ -37,7 +36,7 @@ rather than duplicating query logic.
 
 ### npm packages (`packages/`)
 
-The npm workspace now contains wrappers and platform package manifests only:
+The npm workspace contains wrappers and platform package manifests only:
 
 ```
 packages/sdk-node          — @relayburn/sdk Node facade over relayburn-sdk-node.
@@ -47,9 +46,8 @@ packages/relayburn         — unscoped npm install wrapper exposing `burn`.
 packages/relayburn/npm/*   — @relayburn/cli-<platform> prebuilt binary packages.
 ```
 
-Do not recreate the old standalone reader/ledger/analyze/ingest/cli TypeScript
-packages. If a 1.x feature is missing from 2.x, add it to the Rust SDK/CLI/MCP
-presenter surface as appropriate.
+Add query behavior to the Rust SDK/CLI/MCP presenter surface as appropriate;
+the npm workspace contains wrappers and native-package manifests only.
 
 ## Common commands
 
@@ -70,10 +68,6 @@ When debugging CLI behavior locally, prefer the Rust binary:
 ```bash
 cargo run -p relayburn-cli -- summary --since 24h
 ```
-
-Terminology note: the old `waste` / `diagnose` names are now `hotspots`, and
-the old `context` / `context advise` surface is now `overhead` /
-`overhead trim`. Do not add compatibility aliases for the old names.
 
 ## Changelog
 
@@ -105,37 +99,31 @@ the npm platform packages, publishes the umbrellas (`relayburn`,
 `@relayburn/sdk`, `@relayburn/mcp`) and their optional dependencies, then tags
 each published target.
 
-## Adding a harness
+## Adding ingest support
 
-`burn run <harness>` dispatches through a `HarnessAdapter` registered in
-`crates/relayburn-cli/src/harnesses/registry.rs`. Adding a new harness is a
-new adapter module plus a registration entry.
+`burn ingest` owns session import: no flags scans all known session stores
+once, `--watch` follows them, and `--hook claude --quiet` handles Claude hook
+payloads from stdin. Harness readers and ingest orchestration live under
+`crates/relayburn-sdk/src/{reader,ingest}/`; the CLI presenter lives at
+`crates/relayburn-cli/src/commands/ingest.rs`.
 
-Key files:
-
-- `crates/relayburn-cli/src/harnesses/mod.rs` — trait definitions and shared
-  harness types.
-- `crates/relayburn-cli/src/harnesses/registry.rs` — lazy adapter lookup and
-  `list_harness_names()`.
-- `crates/relayburn-cli/src/harnesses/pending_stamp.rs` — shared shape for
-  harnesses that need pending-stamp manifests and a watch loop.
-
-The CLI help block reads `list_harness_names()` so it updates automatically.
-
-`burn ingest` owns passive ingest modes: no flags scans all session stores
-once, `--watch` keeps polling, and `--hook claude --quiet` is the stdin-driven
-Claude hook path. The reusable polling controller lives at
-`crates/relayburn-sdk/src/ingest/watch_loop.rs`.
+Add a harness reader to the SDK and include its source root in `IngestRoots`.
+Launchers that cannot provide a session ID before spawn use the pending-stamp
+API in `crates/relayburn-sdk/src/ingest/pending_stamps.rs`.
 
 ## When in doubt
 
 - **Architecture / API surface:** read `README.md`, then
   `crates/relayburn-sdk/src/lib.rs` for the Rust public surface and
   `packages/sdk-node/src/index.d.ts` for the Node facade.
+- **CLI commands and flags:** read `crates/relayburn-cli/src/cli.rs` and verify
+  the rendered surface with `cargo run -p relayburn-cli -- --help` plus the
+  relevant subcommand `--help`. CLI registration expectations live in
+  `crates/relayburn-cli/tests/smoke.rs`.
 - **Activity classifier rules:** the rule tables (`TEST_PATTERNS`,
   `EDIT_TOOLS`, `TOOL_ALIASES`, etc.) live at
-  `crates/relayburn-sdk/src/reader/classifier.rs`. Adding a new harness means
-  adding entries to `TOOL_ALIASES`; adding a new category means updating
+  `crates/relayburn-sdk/src/reader/classifier.rs`. New harness tool names need
+  entries in `TOOL_ALIASES`; a new category requires updating
   `ActivityCategory` in `crates/relayburn-sdk/src/reader/types.rs` and adding
   its rule plus tests.
 - **Derived state commands:** status, rebuild targets, and content pruning live
@@ -146,5 +134,5 @@ Claude hook path. The reusable polling controller lives at
   `crates/relayburn-sdk/src/ledger/schema.rs` defines the SQLite layout. Bump
   schema/versioning deliberately when the on-disk shape changes.
 - **Concurrency:** use the SDK ledger APIs and SQLite transactions. The 2.x
-  steady-state layout is `burn.sqlite` plus `content.sqlite` in WAL mode; do
-  not reintroduce JSONL file-lock write paths.
+  storage layout is `burn.sqlite` plus `content.sqlite`; WAL mode serializes
+  concurrent writers and permits concurrent readers.
