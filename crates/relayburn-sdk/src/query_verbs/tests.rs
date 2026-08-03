@@ -476,6 +476,44 @@ fn summary_report_grouped_tracks_unpriced_turns_and_models() {
     );
 }
 
+#[test]
+fn ledger_home_pricing_override_restores_retired_model_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("models.dev.json"),
+        r#"{
+            "user": {
+                "models": {
+                    "gpt-5-codex": {
+                        "cost": { "input": 7, "output": 11, "cache_read": 0.7, "cache_write": 8 }
+                    }
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+    let mut turn = bucket_test_turn(
+        "override-session",
+        "override-message",
+        "2026-05-01T00:00:00.000Z",
+        1_000_000,
+    );
+    turn.model = "gpt-5-codex".into();
+    turn.usage.output = 1_000_000;
+    handle.raw_mut().append_turns(&[turn]).unwrap();
+
+    let SummaryReport::Grouped(report) = handle
+        .summary_report(SummaryReportOptions::default())
+        .unwrap()
+    else {
+        panic!("expected grouped report");
+    };
+    assert_eq!(report.unpriced_turns, 0);
+    assert!(report.unpriced_models.is_empty());
+    assert_eq!(report.total_cost.total, 18.0);
+}
+
 /// Acceptance test for issue #437: the legacy `LedgerHandle::summary`
 /// surface (the slim one) also exposes the new counts. Verifies a turn
 /// without a stop_reason field round-trips to `None`/`none` rather
@@ -1272,6 +1310,34 @@ fn compare_returns_flat_cells_and_absent_models() {
     let json = serde_json::to_value(&r).unwrap();
     assert!(json["fidelity"]["summary"]["byClass"].is_object());
     assert!(json["fidelity"]["summary"]["missingCoverage"].is_object());
+}
+
+#[test]
+fn compare_surfaces_unpriced_requested_model() {
+    let (_dir, mut handle) = fixture_handle();
+    let mut turn = bucket_test_turn(
+        "retired-session",
+        "retired-message",
+        "2026-04-23T00:02:00.000Z",
+        1_000,
+    );
+    turn.model = "gpt-5-codex".into();
+    handle.raw_mut().append_turns(&[turn]).unwrap();
+
+    let result = handle
+        .compare(CompareOptions {
+            models: vec!["claude-sonnet-4-6".into(), "gpt-5-codex".into()],
+            min_fidelity: Some(FidelityClass::Partial),
+            ..CompareOptions::default()
+        })
+        .unwrap();
+
+    assert_eq!(result.unpriced_turns, 1);
+    assert_eq!(result.unpriced_models, vec!["gpt-5-codex"]);
+    assert!(result
+        .cells
+        .iter()
+        .any(|cell| cell.model == "gpt-5-codex" && cell.turns == 1 && cell.priced_turns == 0));
 }
 
 #[test]
@@ -2820,12 +2886,11 @@ fn summary_timeseries_places_turns_in_buckets_and_sums_to_total() {
     let now = super::system_now_secs() as i64;
     let ts_recent = super::format_iso_z_ms(now - 180, 0); // 3m ago
     let ts_older = super::format_iso_z_ms(now - 720, 0); // 12m ago
+    let mut retired = bucket_test_turn("s1", "m1", &ts_recent, 1_000);
+    retired.model = "gpt-5-codex".into();
     handle
         .raw_mut()
-        .append_turns(&[
-            bucket_test_turn("s1", "m1", &ts_recent, 1_000),
-            bucket_test_turn("s1", "m2", &ts_older, 2_000),
-        ])
+        .append_turns(&[retired, bucket_test_turn("s1", "m2", &ts_older, 2_000)])
         .expect("append");
 
     let series = handle
@@ -2847,6 +2912,10 @@ fn summary_timeseries_places_turns_in_buckets_and_sums_to_total() {
         "two turns 9m apart -> two distinct 5m buckets"
     );
     assert!(nonempty.iter().all(|b| b.turn_count == 1));
+    assert_eq!(nonempty.iter().map(|b| b.unpriced_turns).sum::<u64>(), 1);
+    assert!(nonempty
+        .iter()
+        .any(|b| b.unpriced_models == ["gpt-5-codex"]));
 
     // Per-bucket totals reconcile with the un-bucketed total.
     let total_tokens: u64 = series.buckets.iter().map(|b| b.total_tokens).sum();

@@ -130,11 +130,12 @@ type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
 const PRIMARY_PRICING_PROVIDERS: &[&str] =
     &["anthropic", "openai", "google", "google-vertex", "xai"];
 
-/// Bare model IDs observed under a primary pricing provider. Unlike the
-/// models.dev snapshot, this set is append-only: `pnpm run pricing:update`
-/// unions the outgoing and incoming primary-provider IDs before replacing the
-/// snapshot. That history prevents a retired first-party model from silently
-/// inheriting a reseller tariff after its primary entry disappears.
+/// Bare model IDs owned by a primary pricing provider, plus burn's aliases for
+/// those IDs. Unlike the models.dev snapshot, this set is append-only:
+/// `pnpm run pricing:update` retains the existing catalog and unions the
+/// outgoing and incoming primary-provider IDs before replacing the snapshot.
+/// That history prevents a retired first-party model or its logged alias from
+/// silently inheriting a reseller tariff after its primary entry disappears.
 const BUILTIN_PRIMARY_MODEL_IDS_JSON: &str = include_str!("../../data/primary-model-ids.json");
 
 /// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`,
@@ -504,6 +505,22 @@ mod tests {
             !table.contains_key("retired-primary"),
             "a reseller entry without cache tariffs must not become a ModelCost"
         );
+    }
+
+    #[test]
+    fn protected_internal_alias_never_takes_a_direct_reseller_price() {
+        let raw = r#"{
+            "reseller": {
+                "models": {
+                    "codex-auto-review": { "cost": { "input": 2.7, "output": 13.5 } }
+                }
+            }
+        }"#;
+        let protected: HashSet<String> =
+            serde_json::from_str(BUILTIN_PRIMARY_MODEL_IDS_JSON).unwrap();
+        assert!(protected.contains("codex-auto-review"));
+        let table = parse_pricing_with_protected_models(raw, &protected).unwrap();
+        assert!(!table.contains_key("codex-auto-review"));
     }
 
     #[test]

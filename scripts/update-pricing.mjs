@@ -37,6 +37,8 @@ if (!res.ok) {
 const body = await res.text();
 const incoming = JSON.parse(body);
 const outgoing = JSON.parse(await readFile(OUTS[0], 'utf8'));
+// Retain the full ownership catalog, including burn-defined aliases such as
+// codex-auto-review, then add every outgoing/incoming first-party snapshot ID.
 const retained = JSON.parse(await readFile(PRIMARY_MODEL_IDS, 'utf8'));
 const primaryIds = [
   ...new Set([

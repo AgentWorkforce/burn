@@ -66,6 +66,8 @@ pub struct CompareFidelityBlock {
 #[serde(rename_all = "camelCase")]
 pub struct CompareResult {
     pub analyzed_turns: u64,
+    pub unpriced_turns: u64,
+    pub unpriced_models: Vec<String>,
     pub min_sample: u64,
     pub models: Vec<String>,
     pub categories: Vec<String>,
@@ -126,7 +128,9 @@ impl LedgerHandle {
             turns.retain(|t| has_minimum_fidelity(t.turn.fidelity.as_ref(), min_fidelity));
         }
 
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
+        let (unpriced_turns, unpriced_models) =
+            tally_compared_unpriced(&turns, &opts.models, &pricing);
         let table = build_compare_table(
             &turns,
             &AnalyzeCompareOptions {
@@ -140,6 +144,8 @@ impl LedgerHandle {
             turns.len() as u64,
             min_fidelity,
             fidelity_summary,
+            unpriced_turns,
+            unpriced_models,
         ))
     }
 
@@ -183,7 +189,7 @@ impl LedgerHandle {
                 filter.contains(&provider.to_ascii_lowercase())
             });
         }
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
 
         let Some((buckets, per_bucket)) =
             super::partition_into_buckets(turns, q.since.as_deref(), bucket_secs, |t| &t.turn.ts)?
@@ -203,6 +209,8 @@ impl LedgerHandle {
                 if min_fidelity != FidelityClass::Partial {
                     bturns.retain(|t| has_minimum_fidelity(t.turn.fidelity.as_ref(), min_fidelity));
                 }
+                let (unpriced_turns, unpriced_models) =
+                    tally_compared_unpriced(&bturns, &models, &pricing);
                 let table = build_compare_table(
                     &bturns,
                     &AnalyzeCompareOptions {
@@ -216,6 +224,8 @@ impl LedgerHandle {
                     bturns.len() as u64,
                     min_fidelity,
                     fidelity_summary,
+                    unpriced_turns,
+                    unpriced_models,
                 );
                 CompareBucket {
                     start: buckets.start_iso(i),
@@ -306,6 +316,8 @@ fn shape_compare_result(
     analyzed_turns: u64,
     minimum: FidelityClass,
     summary: FidelitySummary,
+    unpriced_turns: u64,
+    unpriced_models: Vec<String>,
 ) -> CompareResult {
     let mut totals = BTreeMap::new();
     for (model, total) in &table.totals {
@@ -348,6 +360,8 @@ fn shape_compare_result(
     let excluded = compute_compare_excluded(&summary, minimum);
     CompareResult {
         analyzed_turns,
+        unpriced_turns,
+        unpriced_models,
         min_sample: table.min_sample,
         models: table.models,
         categories: table.categories,
@@ -359,6 +373,19 @@ fn shape_compare_result(
             summary,
         },
     }
+}
+
+fn tally_compared_unpriced(
+    turns: &[EnrichedTurn],
+    models: &[String],
+    pricing: &PricingTable,
+) -> (u64, Vec<String>) {
+    let selected = turns
+        .iter()
+        .filter(|turn| models.iter().any(|model| model == &turn.turn.model))
+        .map(|turn| turn.turn.clone())
+        .collect::<Vec<_>>();
+    tally_unpriced(&selected, pricing)
 }
 
 fn fidelity_rank(class: FidelityClass) -> u8 {

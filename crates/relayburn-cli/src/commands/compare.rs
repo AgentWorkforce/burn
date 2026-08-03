@@ -204,10 +204,11 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         }
         for bucket in &series.buckets {
             println!(
-                "{}  {:>5} turns  {} models",
+                "{}  {:>5} turns  {} models{}",
                 bucket.start,
                 bucket.result.analyzed_turns,
                 bucket.result.models.len(),
+                unpriced_suffix(&bucket.result),
             );
         }
         return Ok(0);
@@ -242,6 +243,7 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
         return Ok(0);
     }
     if args.csv {
+        emit_unpriced_warning(&result);
         let csv = render_csv(&result);
         print!("{csv}");
         return Ok(0);
@@ -254,6 +256,28 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+fn unpriced_suffix(result: &CompareResult) -> String {
+    if result.unpriced_turns == 0 {
+        String::new()
+    } else {
+        format!(
+            "  [UNPRICED: {} turns; {}]",
+            format_uint(result.unpriced_turns),
+            result.unpriced_models.join(", ")
+        )
+    }
+}
+
+fn emit_unpriced_warning(result: &CompareResult) {
+    if result.unpriced_turns > 0 {
+        eprintln!(
+            "warning: {} compared turns are unpriced across {}; CSV cost conclusions exclude them",
+            format_uint(result.unpriced_turns),
+            result.unpriced_models.join(", ")
+        );
+    }
+}
 
 /// Parse `--provider` CSV → lower-cased allow-list passed to the verb's
 /// `CompareOptions.provider`. Mirrors the `summary --provider` parser: trim
@@ -465,6 +489,8 @@ fn build_json(result: &CompareResult) -> Value {
     let excluded = &result.fidelity.excluded;
     json!({
         "analyzedTurns": result.analyzed_turns,
+        "unpricedTurns": result.unpriced_turns,
+        "unpricedModels": &result.unpriced_models,
         "minSample": result.min_sample,
         "models": &result.models,
         "categories": &result.categories,
@@ -664,6 +690,13 @@ fn render_tty(result: &CompareResult) -> String {
         "turns analyzed: {}",
         format_uint(result.analyzed_turns)
     ));
+    if result.unpriced_turns > 0 {
+        lines.push(format!(
+            "UNPRICED: {} compared turns across {} — cost conclusions exclude them.",
+            format_uint(result.unpriced_turns),
+            result.unpriced_models.join(", ")
+        ));
+    }
 
     let excluded = &result.fidelity.excluded;
     if excluded.total > 0 {
