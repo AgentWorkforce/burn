@@ -1131,7 +1131,14 @@ fn hotspots_default_context_rule_flags_382_to_one_high_volume_session() {
         HotspotsResult::Findings { findings, .. } => {
             assert_eq!(findings.len(), 1);
             assert_eq!(findings[0].session_id, "incident-382");
-            assert!(!findings[0].detail.contains("169/6,348"));
+            assert_eq!(findings[0].kind, "context-output-ratio");
+            assert!(findings[0].detail.contains("1146000 context tokens"));
+            assert!(findings[0]
+                .detail
+                .contains("3000 generated output tokens (including reasoning)"));
+            assert!(findings[0]
+                .detail
+                .contains("threshold 382.0:1 with 1000000 minimum context tokens"));
         }
         other => panic!("expected findings, got {other:?}"),
     }
