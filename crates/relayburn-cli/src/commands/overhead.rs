@@ -212,6 +212,28 @@ fn resolve_project(project: Option<&Path>) -> PathBuf {
     }
 }
 
+fn resolve_deltas_project(project: &Path) -> PathBuf {
+    if project.is_absolute() {
+        project.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| {
+                let mut resolved = PathBuf::new();
+                for component in cwd.join(project).components() {
+                    match component {
+                        std::path::Component::CurDir => {}
+                        std::path::Component::ParentDir => {
+                            resolved.pop();
+                        }
+                        other => resolved.push(other.as_os_str()),
+                    }
+                }
+                resolved
+            })
+            .unwrap_or_else(|_| project.to_path_buf())
+    }
+}
+
 fn kind_to_str(k: crate::cli::OverheadKind) -> &'static str {
     match k {
         crate::cli::OverheadKind::ClaudeMd => "claude-md",
@@ -419,7 +441,7 @@ fn run_deltas(
         session: args.session.clone(),
         project: project
             .as_deref()
-            .map(|path| resolve_project(Some(path)).to_string_lossy().into_owned()),
+            .map(|path| resolve_deltas_project(path).to_string_lossy().into_owned()),
         since,
         top: args.top,
         min_delta: args.min_delta,
@@ -684,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_project_canonicalizes_relative_paths_for_ledger_matching() {
+    fn resolve_deltas_project_absolutizes_without_resolving_symlinks() {
         let dir = tempfile::Builder::new()
             .prefix("relayburn-project-")
             .tempdir_in(".")
@@ -692,8 +714,28 @@ mod tests {
         let input = Path::new(dir.path().file_name().expect("temp project name"));
         assert!(!input.is_absolute());
         assert_eq!(
-            resolve_project(Some(input)),
-            std::fs::canonicalize(input).expect("canonical project")
+            resolve_deltas_project(input),
+            std::env::current_dir().expect("cwd").join(input)
         );
+        assert_eq!(
+            resolve_deltas_project(Path::new(".")),
+            std::env::current_dir().expect("cwd")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_deltas_project_preserves_absolute_symlink_spelling() {
+        use std::os::unix::fs::symlink;
+
+        let target = tempfile::tempdir().expect("project target");
+        let links = tempfile::tempdir().expect("symlink parent");
+        let link = links.path().join("project-link");
+        symlink(target.path(), &link).expect("project symlink");
+        assert_ne!(
+            link,
+            std::fs::canonicalize(&link).expect("canonical project")
+        );
+        assert_eq!(resolve_deltas_project(&link), link);
     }
 }

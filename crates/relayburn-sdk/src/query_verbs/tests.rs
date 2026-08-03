@@ -1814,7 +1814,7 @@ fn context_delta_since_filter_excludes_old_sessions() {
     );
 }
 
-fn context_delta_filter_handle() -> (TempDir, LedgerHandle) {
+fn context_delta_filter_handle(alpha_project: &str) -> (TempDir, LedgerHandle) {
     let dir = tempfile::tempdir().unwrap();
     let opts = LedgerOpenOptions::with_home(dir.path());
     let mut handle = Ledger::open(opts).expect("open ledger");
@@ -1854,7 +1854,7 @@ fn context_delta_filter_handle() -> (TempDir, LedgerHandle) {
         .append_turns(&[
             turn(
                 "sess-alpha",
-                "/tmp/proj-alpha",
+                alpha_project,
                 0,
                 "2026-04-20T10:00:00.000Z",
                 "alpha-1",
@@ -1862,7 +1862,7 @@ fn context_delta_filter_handle() -> (TempDir, LedgerHandle) {
             ),
             turn(
                 "sess-alpha",
-                "/tmp/proj-alpha",
+                alpha_project,
                 1,
                 "2026-04-21T10:00:00.000Z",
                 "alpha-2",
@@ -1870,7 +1870,7 @@ fn context_delta_filter_handle() -> (TempDir, LedgerHandle) {
             ),
             turn(
                 "sess-alpha",
-                "/tmp/proj-alpha",
+                alpha_project,
                 2,
                 "2026-07-20T10:00:00.000Z",
                 "alpha-3",
@@ -1899,7 +1899,7 @@ fn context_delta_filter_handle() -> (TempDir, LedgerHandle) {
 
 #[test]
 fn context_delta_project_filter_actually_filters_sessions() {
-    let (_dir, handle) = context_delta_filter_handle();
+    let (_dir, handle) = context_delta_filter_handle("/tmp/proj-alpha");
     let deltas = handle
         .context_delta(ContextDeltaOpts {
             project: Some("/tmp/proj-alpha".into()),
@@ -1912,9 +1912,52 @@ fn context_delta_project_filter_actually_filters_sessions() {
     assert!(deltas.iter().all(|delta| delta.session_id == "sess-alpha"));
 }
 
+#[cfg(unix)]
+#[test]
+fn context_delta_project_filter_matches_literal_and_canonical_symlink_paths() {
+    use std::os::unix::fs::symlink;
+
+    let target = tempfile::tempdir().expect("project target");
+    let links = tempfile::tempdir().expect("symlink parent");
+    let link = links.path().join("project-link");
+    symlink(target.path(), &link).expect("project symlink");
+    let raw = link.to_string_lossy().into_owned();
+    let canonical = std::fs::canonicalize(&link)
+        .expect("canonical project")
+        .to_string_lossy()
+        .into_owned();
+    assert_ne!(raw, canonical, "fixture must exercise distinct spellings");
+
+    let (_raw_dir, raw_handle) = context_delta_filter_handle(&raw);
+    let raw_match = raw_handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(raw.clone()),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("literal project match");
+    assert!(!raw_match.is_empty());
+    assert!(raw_match
+        .iter()
+        .all(|delta| delta.session_id == "sess-alpha"));
+
+    let (_canonical_dir, canonical_handle) = context_delta_filter_handle(&canonical);
+    let canonical_match = canonical_handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(raw),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("canonical project alias match");
+    assert!(!canonical_match.is_empty());
+    assert!(canonical_match
+        .iter()
+        .all(|delta| delta.session_id == "sess-alpha"));
+}
+
 #[test]
 fn context_delta_iso_since_filters_rows_and_matches_session_mode() {
-    let (_dir, handle) = context_delta_filter_handle();
+    let (_dir, handle) = context_delta_filter_handle("/tmp/proj-alpha");
     let since = Some("2026-07-01T00:00:00Z".into());
     let all = handle
         .context_delta(ContextDeltaOpts {
@@ -1944,7 +1987,7 @@ fn context_delta_iso_since_filters_rows_and_matches_session_mode() {
 
 #[test]
 fn context_delta_invalid_since_returns_error() {
-    let (_dir, handle) = context_delta_filter_handle();
+    let (_dir, handle) = context_delta_filter_handle("/tmp/proj-alpha");
     let err = handle
         .context_delta(ContextDeltaOpts {
             since: Some("last-tuesday-ish".into()),

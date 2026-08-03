@@ -399,6 +399,24 @@ fn owner_rail_str(rail: &OwnerRail) -> (&str, &str) {
     }
 }
 
+/// Project spellings that may already exist in the ledger. Ingest preserves
+/// the harness cwd verbatim, so historical rows can contain a symlinked path
+/// while callers may supply that raw path or its canonical target. Query both
+/// without discarding the literal value the caller provided.
+fn project_filter_variants(project: Option<&str>) -> Vec<Option<String>> {
+    let Some(raw) = project else {
+        return vec![None];
+    };
+    let mut variants = vec![Some(raw.to_string())];
+    if let Ok(canonical) = std::fs::canonicalize(raw) {
+        let canonical = canonical.to_string_lossy().into_owned();
+        if canonical != raw {
+            variants.push(Some(canonical));
+        }
+    }
+    variants
+}
+
 impl LedgerHandle {
     /// Per-inference context-window deltas.
     ///
@@ -427,29 +445,31 @@ impl LedgerHandle {
         // inference in the window. We intentionally inspect timestamps in
         // memory instead of pushing `since` into SQL: the ledger query omits
         // unknown timestamps, while deltas preserve those rows by contract.
-        let session_query = Query {
-            project: opts.project.clone(),
-            session_id: opts.session.clone(),
-            ..Default::default()
-        };
         let timestamp_passes = |ms: i64| since_ms.is_none_or(|cutoff| ms == 0 || ms >= cutoff);
         let mut ids: BTreeSet<String> = BTreeSet::new();
-        for enriched in self.inner.query_turns(&session_query)? {
-            let ms = crate::util::time::parse_iso_ms(&enriched.turn.ts).unwrap_or(0);
-            if timestamp_passes(ms) {
-                ids.insert(enriched.turn.session_id);
-            }
-        }
-        match self.inner.query_inferences(&session_query) {
-            Ok(inferences) => {
-                for inference in inferences {
-                    if timestamp_passes(inference.start_ms) {
-                        ids.insert(inference.session_id);
-                    }
+        for project in project_filter_variants(opts.project.as_deref()) {
+            let session_query = Query {
+                project,
+                session_id: opts.session.clone(),
+                ..Default::default()
+            };
+            for enriched in self.inner.query_turns(&session_query)? {
+                let ms = crate::util::time::parse_iso_ms(&enriched.turn.ts).unwrap_or(0);
+                if timestamp_passes(ms) {
+                    ids.insert(enriched.turn.session_id);
                 }
             }
-            Err(err) if is_schema_missing(&err) => {}
-            Err(err) => return Err(err.into()),
+            match self.inner.query_inferences(&session_query) {
+                Ok(inferences) => {
+                    for inference in inferences {
+                        if timestamp_passes(inference.start_ms) {
+                            ids.insert(inference.session_id);
+                        }
+                    }
+                }
+                Err(err) if is_schema_missing(&err) => {}
+                Err(err) => return Err(err.into()),
+            }
         }
         let session_ids: Vec<String> = ids.into_iter().collect();
 

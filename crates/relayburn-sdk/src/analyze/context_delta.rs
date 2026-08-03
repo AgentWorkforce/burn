@@ -219,8 +219,10 @@ pub struct ContextDeltaOpts {
     /// When set, narrow to a single session. When `None`, every session
     /// in the ledger window contributes.
     pub session: Option<String>,
-    /// Project filter. Matches the ledger's canonical `project` or
-    /// `project_key` value. When `None`, every project contributes.
+    /// Project filter. Matches the ledger's `project` or `project_key` value;
+    /// path inputs also try their canonical spelling so ledgers containing
+    /// either raw or symlink-resolved cwd values remain queryable. When
+    /// `None`, every project contributes.
     pub project: Option<String>,
     /// Inclusive lower bound for the current inference in each delta.
     /// Accepts a relative range (`24h`, `7d`, `4w`, `2m`) or ISO timestamp;
@@ -265,16 +267,6 @@ impl ContextDeltaOpts {
 /// `curr` inference's model. Models the pricing table doesn't recognize
 /// charge `0.0` (matching the rest of the analyze surface, which never
 /// surfaces costs it can't price).
-#[cfg(test)]
-pub(crate) fn deltas_for_session(
-    trees: &[TurnSpanTree],
-    compactions: &[CompactionEvent],
-    pricing: &PricingTable,
-    opts: &ContextDeltaOpts,
-) -> Vec<ContextDelta> {
-    deltas_for_session_since(trees, compactions, pricing, opts, None)
-}
-
 /// Time-filtered form used by the ledger verb after it has normalized the
 /// user-facing `since` expression. A delta is retained when its current
 /// inference is on/after `since_ms`. Inferences with an unknown timestamp

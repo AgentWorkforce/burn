@@ -73,7 +73,7 @@ fn bash_blowup_surfaces_as_top_delta_with_bash_driver() {
     let tree = turn_tree("sess-1", "msg-1", root);
     let pricing = crate::analyze::pricing::load_builtin_pricing();
     let opts = ContextDeltaOpts::default();
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
     assert_eq!(deltas.len(), 1, "one pairwise delta expected");
     let d = &deltas[0];
     assert_eq!(d.session_id, "sess-1");
@@ -142,7 +142,7 @@ fn compaction_replaces_negative_delta() {
         min_delta: Some(0),
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(&[tree], &[compaction], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[compaction], &pricing, &opts, None);
     assert_eq!(deltas.len(), 1);
     let d = &deltas[0];
     assert_eq!(d.delta_tokens, 0, "compaction clamps to 0");
@@ -200,7 +200,7 @@ fn subagent_isolation_main_rail_excludes_subagent_results() {
         min_delta: Some(0),
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
 
     // We expect one main-rail delta and one subagent-rail delta.
     let main_delta = deltas
@@ -245,7 +245,8 @@ fn single_inference_yields_no_delta() {
     root.children.push(inf1);
     let tree = turn_tree("sess-1", "msg-1", root);
     let pricing = crate::analyze::pricing::load_builtin_pricing();
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &ContextDeltaOpts::default());
+    let deltas =
+        deltas_for_session_since(&[tree], &[], &pricing, &ContextDeltaOpts::default(), None);
     assert!(
         deltas.is_empty(),
         "single inference must not emit a pairwise delta"
@@ -312,7 +313,8 @@ fn min_delta_filters_small_jumps() {
     let tree = turn_tree("sess-1", "msg-1", root);
     let pricing = crate::analyze::pricing::load_builtin_pricing();
     // Default min_delta is 1000; 500 < 1000 → filtered out.
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &ContextDeltaOpts::default());
+    let deltas =
+        deltas_for_session_since(&[tree], &[], &pricing, &ContextDeltaOpts::default(), None);
     assert!(deltas.is_empty(), "500 token jump must be filtered");
 
     // Lower the threshold to 100 → row appears.
@@ -320,11 +322,12 @@ fn min_delta_filters_small_jumps() {
         min_delta: Some(100),
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(
+    let deltas = deltas_for_session_since(
         &[turn_tree("sess-1", "msg-1", root_with_two_infs(1000, 1500))],
         &[],
         &pricing,
         &opts,
+        None,
     );
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].delta_tokens, 500);
@@ -359,7 +362,7 @@ fn top_caps_output() {
         min_delta: Some(0),
         ..ContextDeltaOpts::default()
     };
-    let all = deltas_for_session(std::slice::from_ref(&tree), &[], &pricing, &opts);
+    let all = deltas_for_session_since(std::slice::from_ref(&tree), &[], &pricing, &opts, None);
     assert_eq!(all.len(), 4);
 
     // Cap at 2 → only the top 2 deltas.
@@ -368,7 +371,7 @@ fn top_caps_output() {
         top: Some(2),
         ..ContextDeltaOpts::default()
     };
-    let top2 = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let top2 = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
     assert_eq!(top2.len(), 2);
 }
 
@@ -402,7 +405,7 @@ fn owner_filter_main_excludes_subagent_rail() {
         owner: OwnerFilter::Main,
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
     for d in &deltas {
         assert_eq!(
             d.owner_rail,
