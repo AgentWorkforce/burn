@@ -103,7 +103,7 @@ pub use crate::analyze::{
     cost_for_turn, describe_applies_to, summarize_fidelity, AttributionMethod, BashAggregation,
     BashVerbAggregation, CostBreakdown, CoverageField, FidelitySummary, FieldCoverage,
     FileAggregation, FindingPricingStatus, MarkdownSection, McpServerAggregation, ModelCost,
-    OneShotMetrics, OutcomeLabel, OverheadFileKind, QualityResult, ReasoningMode,
+    ModelCostTier, OneShotMetrics, OutcomeLabel, OverheadFileKind, QualityResult, ReasoningMode,
     ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SessionOutcome,
     SubagentAggregation, SubagentTreeNode, SubagentTypeStats, UsageCostAggregateRow, WasteFinding,
     WasteSeverity, DEFAULT_MIN_SAMPLE,

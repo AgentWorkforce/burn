@@ -398,6 +398,18 @@ pub(crate) fn unpriced_usage_findings(
     turns: &[TurnRecord],
     pricing: &PricingTable,
 ) -> Vec<WasteFinding> {
+    let by_session = unpriced_usage_by_session(turns, pricing);
+
+    by_session
+        .into_iter()
+        .map(|(session_id, usage)| unpriced_usage_finding(session_id, usage))
+        .collect()
+}
+
+fn unpriced_usage_by_session<'a>(
+    turns: &'a [TurnRecord],
+    pricing: &PricingTable,
+) -> IndexMap<&'a str, UnpricedSessionUsage> {
     let mut by_session: IndexMap<&str, UnpricedSessionUsage> = IndexMap::new();
     for turn in turns {
         if cost_for_turn(turn, pricing).is_some() {
@@ -420,40 +432,66 @@ pub(crate) fn unpriced_usage_findings(
     }
 
     by_session
-        .into_iter()
-        .map(|(session_id, usage)| {
-            let turn_word = if usage.turns == 1 { "turn" } else { "turns" };
-            let model_word = if usage.models.len() == 1 {
-                "model"
-            } else {
-                "models"
-            };
-            WasteFinding {
-                kind: "unpriced-usage".to_string(),
-                severity: WasteSeverity::Info,
-                session_id: session_id.to_string(),
-                title: format!(
-                    "Unpriced usage: {} tokens across {} {}",
-                    format_with_commas(usage.tokens),
-                    format_with_commas(usage.turns),
-                    turn_word,
-                ),
-                detail: format!(
-                    "No pricing is available for {}: {}. Dollar cost is unknown; this finding is ranked by token volume.",
-                    model_word,
-                    usage.models.join(", "),
-                ),
-                estimated_savings: EstimatedSavings {
-                    tokens_per_session: Some(usage.tokens),
-                    usd_per_session: None,
-                    usd_per_month: None,
-                },
-                pricing_status: FindingPricingStatus::Unpriced,
-                actions: vec![hotspots_action(session_id)],
-                event_source: None,
-            }
-        })
-        .collect()
+}
+
+fn unpriced_usage_finding(session_id: &str, usage: UnpricedSessionUsage) -> WasteFinding {
+    let turn_word = if usage.turns == 1 { "turn" } else { "turns" };
+    let model_word = if usage.models.len() == 1 {
+        "model"
+    } else {
+        "models"
+    };
+    WasteFinding {
+        kind: "unpriced-usage".to_string(),
+        severity: WasteSeverity::Info,
+        session_id: session_id.to_string(),
+        title: format!(
+            "Unpriced usage: {} tokens across {} {}",
+            format_with_commas(usage.tokens),
+            format_with_commas(usage.turns),
+            turn_word,
+        ),
+        detail: format!(
+            "No pricing is available for {}: {}. Dollar cost is unknown; this finding is ranked by token volume.",
+            model_word,
+            usage.models.join(", "),
+        ),
+        estimated_savings: EstimatedSavings {
+            tokens_per_session: Some(usage.tokens),
+            usd_per_session: None,
+            usd_per_month: None,
+        },
+        pricing_status: FindingPricingStatus::Unpriced,
+        actions: vec![hotspots_action(session_id)],
+        event_source: None,
+    }
+}
+
+/// Detector costs cannot be complete when any turn in their session has no
+/// tariff. Mark those findings unpriced too so the response never presents a
+/// partial or zero dollar estimate as authoritative.
+pub(crate) fn mark_findings_with_unpriced_sessions(
+    findings: &mut [WasteFinding],
+    turns: &[TurnRecord],
+    pricing: &PricingTable,
+) {
+    let by_session = unpriced_usage_by_session(turns, pricing);
+    for finding in findings {
+        if finding.pricing_status == FindingPricingStatus::Unpriced {
+            continue;
+        }
+        let Some(usage) = by_session.get(finding.session_id.as_str()) else {
+            continue;
+        };
+        finding.pricing_status = FindingPricingStatus::Unpriced;
+        finding.estimated_savings.usd_per_session = None;
+        finding.estimated_savings.tokens_per_session = Some(usage.tokens);
+        finding.detail.push_str(&format!(
+            " Pricing is unavailable for model(s) {}; the dollar estimate is unknown and this finding is ranked by the session's {} unpriced tokens.",
+            usage.models.join(", "),
+            format_with_commas(usage.tokens),
+        ));
+    }
 }
 
 use super::util::{fmt_usd, format_with_commas};
@@ -1060,6 +1098,54 @@ mod tests {
 
         let kinds: Vec<&str> = findings.iter().map(|f| f.kind.as_str()).collect();
         assert_eq!(kinds, vec!["large", "small", "priced"]);
+    }
+
+    #[test]
+    fn detector_finding_in_unpriced_session_drops_false_usd_estimate() {
+        let turn = TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "unknown-session".to_string(),
+            session_path: None,
+            message_id: "m1".to_string(),
+            turn_index: 0,
+            ts: "2026-08-01T00:00:00.000Z".to_string(),
+            model: "future-unpriced-model".to_string(),
+            project: None,
+            project_key: None,
+            usage: crate::reader::Usage {
+                input: 400_000,
+                output: 20_000,
+                reasoning: 10_000,
+                cache_read: 13_000,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: Vec::new(),
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        };
+        let mut findings = vec![finding_with(
+            "retry-loop",
+            WasteSeverity::Info,
+            "unknown-session",
+            0.0,
+        )];
+
+        mark_findings_with_unpriced_sessions(&mut findings, &[turn], &PricingTable::new());
+
+        assert_eq!(findings[0].pricing_status, FindingPricingStatus::Unpriced);
+        assert_eq!(findings[0].estimated_savings.usd_per_session, None);
+        assert_eq!(
+            findings[0].estimated_savings.tokens_per_session,
+            Some(443_000)
+        );
+        assert!(findings[0].detail.contains("future-unpriced-model"));
     }
 
     #[test]

@@ -565,6 +565,8 @@ fn run_hotspots_findings(
         findings.extend(unpriced_usage_findings(turns, pricing));
     }
 
+    mark_findings_with_unpriced_sessions(&mut findings, turns, pricing);
+
     // `findings_from_patterns` already sorts the slice it returns, but the
     // tool-output-bloat / ghost-surface / tool-call-pattern batches above
     // are appended afterwards. Re-sort once so the global slice is

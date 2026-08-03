@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Cost calculations recognize Claude 5 and GPT-5.6 models, prefer first-party tariffs, and apply long-context price tiers.
 - `hotspots()` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
 
 ## [4.0.0] - 2026-06-23

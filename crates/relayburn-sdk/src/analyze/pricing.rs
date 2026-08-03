@@ -44,6 +44,22 @@ pub struct ModelCost {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<f64>,
     pub reasoning_mode: ReasoningMode,
+    /// Higher tariffs selected when the turn's input context exceeds the
+    /// tier threshold. Ordered by ascending threshold.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_tiers: Vec<ModelCostTier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCostTier {
+    pub context_tokens: u64,
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<f64>,
 }
 
 pub(crate) type PricingTable = HashMap<String, ModelCost>;
@@ -66,6 +82,32 @@ struct ModelsDevCost {
     cache_write: Option<f64>,
     #[serde(default)]
     reasoning: Option<f64>,
+    #[serde(default)]
+    tiers: Vec<ModelsDevCostTier>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ModelsDevCostTier {
+    #[serde(default)]
+    input: Option<f64>,
+    #[serde(default)]
+    output: Option<f64>,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
+    #[serde(default)]
+    reasoning: Option<f64>,
+    #[serde(default)]
+    tier: ModelsDevTierCondition,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ModelsDevTierCondition {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -85,7 +127,8 @@ type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
 /// Primary model vendors whose own tariff should win over reseller/router
 /// copies with the same bare model id. models.dev regularly adds new provider
 /// blocks and their order is not a pricing-precedence contract.
-const PRIMARY_PRICING_PROVIDERS: &[&str] = &["anthropic", "openai"];
+const PRIMARY_PRICING_PROVIDERS: &[&str] =
+    &["anthropic", "openai", "google", "google-vertex", "xai"];
 
 /// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`,
 /// which writes through to the SDK crate's `data/` copy. Vendoring inside the
@@ -170,6 +213,7 @@ fn flatten(root: &ModelsDevRoot) -> PricingTable {
                 } else {
                     ReasoningMode::SameAsOutput
                 },
+                context_tiers: context_tiers(cost),
             };
             out.insert(id.clone(), entry);
             if primary_provider {
@@ -178,6 +222,31 @@ fn flatten(root: &ModelsDevRoot) -> PricingTable {
         }
     }
     out
+}
+
+fn context_tiers(cost: &ModelsDevCost) -> Vec<ModelCostTier> {
+    let mut tiers: Vec<ModelCostTier> = cost
+        .tiers
+        .iter()
+        .filter_map(|tier| {
+            if tier.tier.kind != "context" {
+                return None;
+            }
+            let context_tokens = tier.tier.size?;
+            let input = tier.input?;
+            let output = tier.output?;
+            Some(ModelCostTier {
+                context_tokens,
+                input,
+                output,
+                cache_read: tier.cache_read.unwrap_or(0.0),
+                cache_write: tier.cache_write.unwrap_or(input),
+                reasoning: tier.reasoning,
+            })
+        })
+        .collect();
+    tiers.sort_by_key(|tier| tier.context_tokens);
+    tiers
 }
 
 #[cfg(test)]
@@ -226,6 +295,11 @@ mod tests {
         ] {
             assert!(table.contains_key(model), "{model} present");
         }
+        let sol = table.get("gpt-5.6-sol").unwrap();
+        assert_eq!(sol.context_tiers.len(), 1);
+        assert_eq!(sol.context_tiers[0].context_tokens, 272_000);
+        assert_eq!(sol.context_tiers[0].input, 10.0);
+        assert_eq!(sol.context_tiers[0].output, 45.0);
     }
 
     #[test]
@@ -318,6 +392,26 @@ mod tests {
         assert_eq!(cost.input, 5.0);
         assert_eq!(cost.output, 30.0);
         assert_eq!(cost.reasoning_mode, ReasoningMode::SameAsOutput);
+    }
+
+    #[test]
+    fn flatten_prefers_google_over_later_reseller_copy() {
+        let raw = r#"{
+            "google": {
+                "models": {
+                    "gemini-example": { "cost": { "input": 0.5, "output": 60 } }
+                }
+            },
+            "reseller": {
+                "models": {
+                    "gemini-example": { "cost": { "input": 0.5, "output": 3 } }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("gemini-example").unwrap();
+        assert_eq!(cost.input, 0.5);
+        assert_eq!(cost.output, 60.0);
     }
 
     #[test]

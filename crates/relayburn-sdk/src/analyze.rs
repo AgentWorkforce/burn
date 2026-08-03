@@ -58,7 +58,9 @@ pub(crate) use cost::sum_costs;
 pub use cost::{cost_for_turn, tally_unpriced, CostBreakdown};
 pub(crate) use fidelity::has_minimum_fidelity;
 pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary};
-pub(crate) use findings::{findings_from_patterns, unpriced_usage_findings};
+pub(crate) use findings::{
+    findings_from_patterns, mark_findings_with_unpriced_sessions, unpriced_usage_findings,
+};
 pub use findings::{sort_findings, FindingPricingStatus, WasteFinding, WasteSeverity};
 pub use flow_graph::{
     flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
@@ -84,7 +86,7 @@ pub use overhead::{describe_applies_to, OverheadFileKind};
 pub(crate) use patterns::detect_patterns;
 pub use patterns::DetectPatternsOptions;
 pub(crate) use pricing::{load_pricing, PricingTable};
-pub use pricing::{ModelCost, ReasoningMode};
+pub use pricing::{ModelCost, ModelCostTier, ReasoningMode};
 pub(crate) use provider::{
     aggregate_by_provider, AggregateByProviderOptions, ProviderAggregateRow,
 };
