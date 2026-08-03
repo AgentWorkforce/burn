@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn mcp-server` now exposes summary, hotspots, overhead attribution,
+  overhead trimming, and model comparison through validated read-only tools.
 - Pricing recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs over reseller duplicates, and applies long-context price tiers.
 - `burn hotspots --findings` surfaces unknown model pricing explicitly and ranks unpriced sessions by token volume instead of treating them as $0.00.
 
