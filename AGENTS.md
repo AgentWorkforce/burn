@@ -46,8 +46,7 @@ packages/relayburn         — unscoped npm install wrapper exposing `burn`.
 packages/relayburn/npm/*   — @relayburn/cli-<platform> prebuilt binary packages.
 ```
 
-Add query behavior to the Rust SDK/CLI/MCP presenter surface as appropriate;
-the npm workspace contains wrappers and native-package manifests only.
+Add query behavior to the Rust SDK/CLI/MCP presenter surface as appropriate.
 
 ## Common commands
 

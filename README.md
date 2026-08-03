@@ -31,6 +31,10 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
 | [`burn update`](#burn-update) | Check for releases, install an update, or configure automatic checks. |
 
+Every command accepts `--json` for machine-readable output,
+`--ledger-path <path>` to select a Burn home for that invocation, and
+`--no-color` to disable ANSI styling.
+
 ## `burn summary`
 
 Use `burn summary` when you want the fast answer: how many turns ran, how many
@@ -41,6 +45,7 @@ tokens they used, and what they cost.
 | `--since <range>` | Limit to a relative range like `24h`, `7d`, or `4w`, or an ISO timestamp. |
 | `--project <path>` | Limit to a project path or git-canonical project key. |
 | `--session <id>` | Limit to one session. |
+| `--workflow <id>` | Limit to turns folded under a `workflowId` enrichment stamp. |
 | `--tag k=v` | Filter by folded enrichment tag. Repeatable; all tags must match. |
 | `--group-by-tag <key>` | Group totals by a folded enrichment tag value. |
 | `--by-provider` | Group totals by provider instead of model. |
@@ -48,10 +53,12 @@ tokens they used, and what they cost.
 | `--by-subagent-type` | Group totals by subagent type. |
 | `--by-relationship [subagent]` | Group by session relationship, optionally drilling into subagent leaves. |
 | `--subagent-tree [session]` | Render the subagent spawn tree. Uses `--session` when passed without a value. |
+| `--agent <id>` | Limit subagent-tree or relationship views to one agent. |
 | `--provider <csv>` | Limit results to effective providers. |
 | `--quality` | Append one-shot and completion-outcome metrics. |
 | `--bucket <duration>` | Emit fixed-width time buckets across the `--since` window. |
 | `--ingest` | Run one ingest sweep before querying. |
+| `--no-archive` | Accepted for CLI parity; it is a no-op because the Rust SDK is SQLite-native. |
 | `--json` | Emit machine-readable output. |
 
 | Example | Result |
@@ -85,8 +92,9 @@ subagents.
 | `--group-by <dim>` | Focus one rollup: `attribution`, `bash`, `bash-verb`, `file`, or `subagent`. |
 | `--patterns [csv]` | Run hotspot-pattern detectors instead of the attribution view. Pass without a value to enable every detector, or pass a CSV (e.g. `retry-loop,failure-run`). |
 | `--findings` | Emit the unified findings table instead of the per-detector grouping. Implies `--patterns` if not already set. |
-| `--rank-by <cost|bytes>` | Rank per-tool tables by USD or raw output bytes. Default: `cost`. |
+| `--rank-by <cost\|bytes>` | Rank per-tool tables by USD or raw output bytes. Default: `cost`. |
 | `--ingest` | Run one ingest sweep before querying. |
+| `--explain-drift` | Reserved for relationship-drift analysis; currently exits with a directed unsupported message. |
 | `--json` | Emit machine-readable output. |
 
 | Example | Result |
@@ -113,7 +121,12 @@ attributes cached prompt cost to files and headed sections.
 | `--project <path>` | Project to inspect. Defaults to the current directory. |
 | `--since <range>` | Limit attribution to a time window. |
 | `--kind <k>` | Limit to `claude-md` or `agents-md`. |
-| `--top <n>` | In `trim` mode, recommendations per file. |
+| `trim --top <n>` | Recommendations per file. Default: `3`. |
+| `deltas --session <id>` | Limit context deltas to one session. |
+| `deltas --top <n>` | Context-delta row cap. Default: `20`. |
+| `deltas --min-delta <tokens>` | Hide smaller increases. Default: `1000`; compactions always remain visible. |
+| `deltas --owner <all\|main\|subagent>` | Select inference rails. Default: `all`. |
+| `deltas --explain` | Expand the intervening steps behind each delta. |
 | `--json` | Emit machine-readable attribution for report mode or structured trim recommendations in `trim` mode. |
 
 | Example | Result |
@@ -124,10 +137,6 @@ attributes cached prompt cost to files and headed sections.
 | `burn overhead trim --top 3` | Top three trim recommendations per file. |
 | `burn overhead trim --json` | Structured trim recommendations with projected savings and unified diffs. |
 | `burn overhead deltas --top 10 --owner main` | Largest context-window increases on the main conversation rail. |
-
-`burn overhead deltas` also accepts `--session`, `--min-delta`, and `--explain`.
-Use `--owner main`, `--owner subagent`, or `--owner all` to choose which
-inference rails contribute.
 
 Harnesses pay for different files: Claude Code pays for `CLAUDE.md`; Codex and
 OpenCode pay for `AGENTS.md`.
@@ -153,6 +162,7 @@ testing, review, exploration, docs, and refactoring.
 | `--json` | Emit a stable JSON object. |
 | `--csv` | Emit one row per model/activity pair. |
 | `--bucket <duration>` | Emit a time series across `--since` instead of one comparison. |
+| `--no-archive` | Accepted for CLI parity; it is a no-op because the Rust SDK is SQLite-native. |
 
 `burn compare` reads the ledger as-is — it does not run an ingest sweep first.
 Run `burn ingest && burn compare claude-sonnet-4-6,claude-haiku-4-5 --since
@@ -195,7 +205,8 @@ MCP. The server is stdio-only and read-only.
 
 | Option | What it does |
 |---|---|
-| `--session-id <uuid>` | Default session ID used by MCP tools when the caller omits one. |
+| `--session-id <id>` | Default session ID for `burn__sessionCost` when the caller omits one. |
+| `--debug` | Emit protocol diagnostics to stderr. |
 
 | Tool | What it returns |
 |---|---|
@@ -217,10 +228,10 @@ content/search data in `content.sqlite`.
 |---|---|
 | `burn state` or `burn state status` | Print status for indexes, content, classifier, and archive. |
 | `--json` | Emit machine-readable output. |
-| `fingerprint [--session <id> | --project <path>]` | Print a low-cost change token for polling the ledger. |
-| `rebuild index|classify|content|archive|all` | Drop derivable rows and stage the ledger for a fresh ingest. All targets use the same SQLite rebuild transaction. |
-| `prune [--days <n|forever>]` | Delete content rows older than the retention window. |
-| `reset [--force] [--reingest] [--json]` | Wipe derived state. Dry-run without `--force`; preserves config, pricing overrides, and source harness logs. |
+| `fingerprint [--session <id> \| --project <path>]` | Print a low-cost change token for polling the ledger. |
+| `rebuild index\|classify\|content\|archive\|all` | Drop derivable rows and stage the ledger for a fresh ingest. All targets use the same SQLite rebuild transaction. |
+| `prune [--days <n\|forever>]` | Delete content rows older than the retention window. |
+| `reset [--force] [--reingest] [--json]` | Preview or perform a wipe of derived events, stamps, content, and ingest cursors. Config, pricing overrides, and source harness logs remain. |
 
 | Example | Result |
 |---|---|
@@ -231,7 +242,9 @@ content/search data in `content.sqlite`.
 | `burn state prune --days 30` | Prune content older than 30 days. |
 
 Follow any `state rebuild` command with `burn ingest` to repopulate derived
-tables from the harness session stores.
+tables from the harness session stores. Before a forced reset, back up
+enrichment with `burn stamps export`; ingest cannot reconstruct stamps from
+harness logs.
 
 ## `burn sessions`
 
@@ -252,7 +265,8 @@ The full session IDs copy directly into `summary --session`, `hotspots
 
 `burn flow --session <id>` emits a Mermaid inference-flow DAG to stdout. Use
 `--output <path>` for SVG, `--json` for the graph payload, and `--max-turns`
-to cap wide sessions (default: 50; `0` disables the cap).
+to cap wide sessions (default: 50; `0` disables the cap). `--mermaid` forces
+Mermaid on stdout even when `--output` also writes an SVG.
 
 ```bash
 burn flow --session demo-session --json
@@ -271,8 +285,10 @@ burn stamps export
 
 `burn update --check` reports whether a release is available without
 installing it. Bare `burn update` installs the latest release through the
-package manager that installed Burn. Automatic launch checks are controlled by
-`burn update toggle-auto-update --on` and `--off`.
+package manager that installed Burn; `--force` reinstalls the latest release
+when already current. Automatic launch checks are controlled by
+`burn update toggle-auto-update --on` and
+`burn update toggle-auto-update --off`.
 
 ```bash
 burn update --check
@@ -295,8 +311,8 @@ search content from the compact analytical rows.
 | `RELAYBURN_HOME` | Override the whole Burn data directory. |
 | `RELAYBURN_SQLITE_PATH` | Override the events database path. |
 | `RELAYBURN_CONTENT_PATH` | Override the content database path. |
-| `RELAYBURN_CONTENT_STORE=full|hash-only|off` | Control content payload storage. Default: `full`. |
-| `RELAYBURN_CONTENT_TTL_DAYS=<days|forever>` | Content retention. Default: `90`. |
+| `RELAYBURN_CONTENT_STORE=full\|hash-only\|off` | Control content payload storage. Default: `full`. |
+| `RELAYBURN_CONTENT_TTL_DAYS=<days\|forever>` | Content retention. Default: `90`. |
 
 `RELAYBURN_HOME` relocates the complete layout. The two per-database overrides
 can place event and content data on different volumes. SQLite may create
