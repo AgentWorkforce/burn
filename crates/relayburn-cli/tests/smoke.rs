@@ -53,6 +53,12 @@ fn burn() -> Command {
     Command::cargo_bin("burn").expect("`burn` binary must build for the smoke test")
 }
 
+fn burn_without_stale_threshold_env() -> Command {
+    let mut command = burn();
+    command.env_remove("RELAYBURN_STALE_AFTER_HOURS");
+    command
+}
+
 fn seed_one_turn(home: &std::path::Path) {
     let mut handle = relayburn_sdk::Ledger::open(relayburn_sdk::LedgerOpenOptions::with_home(home))
         .expect("open test ledger");
@@ -88,7 +94,7 @@ fn stale_warning_is_uniform_across_requested_read_surface() {
         vec!["hotspots", "--findings"],
         vec!["sessions", "list", "--since", "12m"],
     ] {
-        burn()
+        burn_without_stale_threshold_env()
             .args(["--ledger-path", home.path().to_str().expect("utf-8 path")])
             .args(&args)
             .assert()
@@ -101,7 +107,7 @@ fn stale_warning_is_uniform_across_requested_read_surface() {
 fn fresh_ledger_does_not_warn() {
     let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
     seed_one_turn(home.path());
-    burn()
+    burn_without_stale_threshold_env()
         .args([
             "--ledger-path",
             home.path().to_str().expect("utf-8 path"),
@@ -115,7 +121,7 @@ fn fresh_ledger_does_not_warn() {
 #[test]
 fn never_written_ledger_warns() {
     let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
-    burn()
+    burn_without_stale_threshold_env()
         .args([
             "--ledger-path",
             home.path().to_str().expect("utf-8 path"),

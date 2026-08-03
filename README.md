@@ -217,7 +217,7 @@ content/search data in `content.sqlite`.
 | `RELAYBURN_HOME` | Override the whole Burn data directory. |
 | `RELAYBURN_SQLITE_PATH` | Override the events database path. |
 | `RELAYBURN_CONTENT_PATH` | Override the content database path. |
-| `RELAYBURN_CONTENT_STORE=full|hash-only|off` | Control content sidecar storage. Default: `full`. |
+| `RELAYBURN_CONTENT_STORE=full\|hash-only\|off` | Control content sidecar storage. Default: `full`. |
 | `RELAYBURN_CONTENT_TTL_DAYS=<n>` | Sidecar retention. Default: `90`. |
 | `RELAYBURN_STALE_AFTER_HOURS=<n>` | Age after which reads warn that the ledger is stale. Default: `24`; set `-1` to disable. |
 

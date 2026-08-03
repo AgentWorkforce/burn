@@ -15,7 +15,20 @@ describe('createFingerprintTool', () => {
     });
     const result = (await tool.handler({})) as FingerprintResult;
     assert.equal(result.fingerprint, '42:1700000000:9876');
-    assert.equal(result.ledgerFreshness.stale, false);
+    assert.deepEqual(result.ledgerFreshness, {
+      lastWriteAtMs: 1,
+      staleAfterMs: 86_400_000,
+      stale: false,
+    });
+  });
+
+  it('returns stale freshness metadata unchanged', async () => {
+    const tool = createFingerprintTool({
+      ledgerFreshness: async () => ({ lastWriteAtMs: 1, staleAfterMs: 2, stale: true }),
+      fingerprint: async () => ({ fingerprint: '1:1:1' }),
+    });
+    const result = (await tool.handler({})) as FingerprintResult;
+    assert.deepEqual(result.ledgerFreshness, { lastWriteAtMs: 1, staleAfterMs: 2, stale: true });
   });
 
   it('passes sessionId through as session', async () => {

@@ -531,6 +531,31 @@ fn stamp_synthesizes_spawn_env_relationship() {
     assert_eq!(rels[0].relationship_type, RelationshipType::Subagent);
     assert_eq!(rels[0].related_session_id.as_deref(), Some("parent-1"));
     assert_eq!(rels[0].agent_id.as_deref(), Some("child-1"));
+    assert!(
+        l.last_write_at_ms().unwrap().is_some(),
+        "a newly synthesized derived relationship should refresh ledger freshness"
+    );
+}
+
+#[test]
+fn annotation_only_stamp_does_not_refresh_ledger_freshness() {
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+    let mut enrichment = BTreeMap::new();
+    enrichment.insert("role".into(), "fix-bug".into());
+    let stamp = Stamp::new(
+        "2025-01-01T00:00:00Z",
+        StampSelector {
+            session_id: Some("s1".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+
+    l.append_stamp(&stamp).unwrap();
+
+    assert_eq!(l.last_write_at_ms().unwrap(), None);
 }
 
 #[test]

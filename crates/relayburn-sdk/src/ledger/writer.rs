@@ -322,6 +322,7 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
 
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let written_at = now_lex_token();
+    let mut derived_rows_written = false;
     {
         tx.prepare(
             "INSERT INTO stamps (source, session_id, ts, selector_json, enrichment_json, written_at)
@@ -338,24 +339,28 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
         if let Some(rel) = synthesized {
             let id = relationship_id_fingerprint(&rel);
             let json = serde_json::to_string(&rel)?;
-            tx.prepare(
-                "INSERT OR IGNORE INTO relationships
+            let changed = tx
+                .prepare(
+                    "INSERT OR IGNORE INTO relationships
                      (id_fingerprint, source, session_id, related_session_id,
                       relationship_type, ts, record_json)
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
-            )?
-            .execute(params![
-                id,
-                rel.source.wire_str(),
-                rel.session_id,
-                rel.related_session_id,
-                rel.relationship_type.wire_str(),
-                rel.ts,
-                json,
-            ])?;
+                )?
+                .execute(params![
+                    id,
+                    rel.source.wire_str(),
+                    rel.session_id,
+                    rel.related_session_id,
+                    rel.relationship_type.wire_str(),
+                    rel.ts,
+                    json,
+                ])?;
+            derived_rows_written = changed > 0;
         }
     }
-    touch_last_write(&tx)?;
+    if derived_rows_written {
+        touch_last_write(&tx)?;
+    }
     tx.commit()?;
     Ok(())
 }
