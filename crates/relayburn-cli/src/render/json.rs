@@ -20,9 +20,23 @@ use serde::Serialize;
 pub fn render_json<T: Serialize + ?Sized>(value: &T) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    serde_json::to_writer_pretty(&mut handle, value).map_err(io::Error::other)?;
+    write_json_pretty(&mut handle, value)?;
     handle.write_all(b"\n")?;
     handle.flush()
+}
+
+fn write_json_pretty<W: Write, T: Serialize + ?Sized>(writer: &mut W, value: &T) -> io::Result<()> {
+    serde_json::to_writer_pretty(writer, value).map_err(serde_error_to_io)
+}
+
+/// Convert a serde failure back to an I/O error without erasing the error
+/// kind reported by the writer. In particular, callers rely on
+/// `BrokenPipe` to treat an early-closing pipeline as a successful exit.
+pub(crate) fn serde_error_to_io(err: serde_json::Error) -> io::Error {
+    match err.io_error_kind() {
+        Some(kind) => io::Error::new(kind, err),
+        None => io::Error::other(err),
+    }
 }
 
 #[cfg(test)]
@@ -30,11 +44,30 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    struct BrokenPipeWriter;
+
+    impl Write for BrokenPipeWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     // Smoke test: the helper should accept anything `Serialize` and
     // not panic. Real I/O assertions live in the integration smoke
     // test under `tests/smoke.rs` which drives the binary end-to-end.
     #[test]
     fn render_json_accepts_arbitrary_serialize_input() {
         assert!(render_json(&json!({ "ok": true, "rows": [1, 2, 3] })).is_ok());
+    }
+
+    #[test]
+    fn json_writer_preserves_broken_pipe_kind() {
+        let err = write_json_pretty(&mut BrokenPipeWriter, &json!({ "ok": true }))
+            .expect_err("writer should close early");
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 }

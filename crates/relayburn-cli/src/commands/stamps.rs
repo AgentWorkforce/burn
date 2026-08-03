@@ -11,6 +11,7 @@
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
+use anyhow::Context;
 use relayburn_sdk::{ExportStampsOptions, Ledger, LedgerOpenOptions};
 
 use crate::cli::{GlobalArgs, StampsArgs};
@@ -85,14 +86,11 @@ fn write_jsonl<W: Write, I: IntoIterator<Item = serde_json::Value>>(
     let mut count: usize = 0;
     for val in iter {
         serde_json::to_writer(&mut *writer, &val)
-            .map_err(|err| anyhow::anyhow!("failed to serialize stamp: {}", err))?;
-        writer
-            .write_all(b"\n")
-            .map_err(|err| anyhow::anyhow!("failed to write stamp: {}", err))?;
+            .map_err(crate::render::json::serde_error_to_io)
+            .context("failed to serialize stamp")?;
+        writer.write_all(b"\n").context("failed to write stamp")?;
         count += 1;
     }
-    writer
-        .flush()
-        .map_err(|err| anyhow::anyhow!("failed to flush output: {}", err))?;
+    writer.flush().context("failed to flush output")?;
     Ok(count)
 }

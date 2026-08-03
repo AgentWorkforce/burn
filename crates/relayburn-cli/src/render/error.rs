@@ -10,8 +10,8 @@
 //!   stack. Always falls through to a generic `2` exit code with the
 //!   `Display` form of the error on stderr.
 //! - `std::io::Error` — broken pipe / write-to-stdout failures from
-//!   the rendering helpers. Mapped to exit code `2`, EPIPE silenced
-//!   (matches Unix tools-as-citizen conventions).
+//!   the rendering helpers. EPIPE exits quietly with code `0` (matching
+//!   Unix pipeline conventions); other I/O failures map to code `2`.
 //!
 //! Every helper here writes to stderr in human mode and writes a
 //! `{"error": "..."}` envelope to stdout in `--json` mode, then returns
@@ -25,6 +25,7 @@
 
 #![allow(dead_code)]
 
+use std::any::Any;
 use std::io::{self, Write};
 
 use serde_json::json;
@@ -53,8 +54,29 @@ pub fn report_ledger_error(err: &LedgerError, globals: &GlobalArgs) -> i32 {
 /// Map any other error (anyhow, io, etc.) to a stderr message + exit
 /// code. Use this when the error comes from a non-SDK boundary or when
 /// the command handler chose to propagate as `anyhow::Error`.
-pub fn report_error<E: std::fmt::Display>(err: &E, globals: &GlobalArgs) -> i32 {
+pub fn report_error<E: std::fmt::Display + 'static>(err: &E, globals: &GlobalArgs) -> i32 {
+    if is_broken_pipe(err) {
+        return 0;
+    }
     report(globals, &err.to_string(), EXIT_GENERIC_ERROR)
+}
+
+/// Recognize output pipes closed by an early-exiting consumer. Presenter
+/// functions return either a direct `io::Error` or an `anyhow::Error` that
+/// retains it in its chain, so cover both shapes at the shared boundary.
+fn is_broken_pipe<E: 'static>(err: &E) -> bool {
+    let err = err as &dyn Any;
+    if let Some(err) = err.downcast_ref::<io::Error>() {
+        return err.kind() == io::ErrorKind::BrokenPipe;
+    }
+    if let Some(err) = err.downcast_ref::<anyhow::Error>() {
+        return err.chain().any(|cause| {
+            cause
+                .downcast_ref::<io::Error>()
+                .is_some_and(|err| err.kind() == io::ErrorKind::BrokenPipe)
+        });
+    }
+    false
 }
 
 /// `not yet implemented` exit path used by every command stub in this
@@ -98,7 +120,7 @@ fn report(globals: &GlobalArgs, message: &str, code: i32) -> i32 {
 fn write_json_envelope(value: &serde_json::Value) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    serde_json::to_writer(&mut handle, value).map_err(io::Error::other)?;
+    serde_json::to_writer(&mut handle, value).map_err(crate::render::json::serde_error_to_io)?;
     handle.write_all(b"\n")?;
     handle.flush()
 }
@@ -142,6 +164,15 @@ mod tests {
     fn generic_error_uses_exit_two() {
         let err = std::io::Error::other("boom");
         assert_eq!(report_error(&err, &human_globals()), EXIT_GENERIC_ERROR);
+    }
+
+    #[test]
+    fn broken_pipe_exits_zero_without_reporting() {
+        let direct = io::Error::from(io::ErrorKind::BrokenPipe);
+        assert_eq!(report_error(&direct, &human_globals()), 0);
+
+        let wrapped = anyhow::Error::from(io::Error::from(io::ErrorKind::BrokenPipe));
+        assert_eq!(report_error(&wrapped, &json_globals()), 0);
     }
 
     #[test]
