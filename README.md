@@ -67,6 +67,10 @@ prefix terms such as `mem*`.
 | `--snippet` | Include highlighted content excerpts in human output. |
 | `--json` | Emit the query and hits as JSON. Snippets retain `<b>` match markers. |
 
+Search snippets use literal `<b>` markers for matches. Until
+[#516](https://github.com/AgentWorkforce/burn/issues/516) lands, stored content
+that already contains `<b>` tags can display ambiguously in human snippet mode.
+
 | Example | Result |
 |---|---|
 | `burn search 'out of memory' --limit 5 --snippet` | Show up to five matching content records with highlighted excerpts. |

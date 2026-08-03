@@ -35,7 +35,7 @@ pub use crate::ledger::config::{
     config_path, config_path_at_home, load_config, load_config_at, load_config_with_home,
     BurnConfig, ContentConfig, Retention, DEFAULT_RETENTION_DAYS,
 };
-pub use crate::ledger::content::{PruneStats, SearchHit, SearchOptions};
+pub use crate::ledger::content::{PruneStats, SearchHit, SearchOptions, DEFAULT_SEARCH_LIMIT};
 pub use crate::ledger::error::{LedgerError, Result};
 pub use crate::ledger::paths::{
     burn_sqlite_path, content_sqlite_path, is_valid_session_id, ledger_home,

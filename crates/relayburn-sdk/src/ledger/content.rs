@@ -22,6 +22,9 @@ use crate::ledger::paths::is_valid_session_id;
 use crate::ledger::query::Query;
 use crate::reader::ContentRecord;
 
+/// Default number of FTS5 hits returned when callers do not provide a cap.
+pub const DEFAULT_SEARCH_LIMIT: usize = 25;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
@@ -44,7 +47,7 @@ impl<'a> SearchOptions<'a> {
     pub fn new(query: &'a str) -> Self {
         Self {
             query,
-            limit: 25,
+            limit: DEFAULT_SEARCH_LIMIT,
             session_id: None,
         }
     }

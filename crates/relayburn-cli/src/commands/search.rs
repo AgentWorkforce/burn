@@ -3,15 +3,15 @@
 use anyhow::bail;
 use relayburn_sdk::{
     is_valid_session_id, Ledger, LedgerOpenOptions, SearchHit, SearchQueryOptions, SearchResult,
+    DEFAULT_SEARCH_LIMIT,
 };
+use serde_json::json;
 
 use crate::cli::{GlobalArgs, SearchArgs};
 use crate::render::error::report_error;
-use crate::render::format::render_table;
+use crate::render::format::{coerce_whole_f64_to_int, render_table};
 use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
-
-const DEFAULT_LIMIT: usize = 25;
 
 pub fn run(globals: &GlobalArgs, args: SearchArgs) -> i32 {
     match run_inner(globals, args) {
@@ -30,7 +30,8 @@ fn run_inner(globals: &GlobalArgs, args: SearchArgs) -> anyhow::Result<i32> {
         }
     }
 
-    let limit = args.limit.map_or(DEFAULT_LIMIT, |value| value.get());
+    let requested_limit = args.limit.map(|value| value.get());
+    let applied_limit = requested_limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
     let progress = TaskProgress::new(globals, "search");
     progress.set_task("opening content store");
     let handle = Ledger::open(LedgerOpenOptions {
@@ -44,7 +45,7 @@ fn run_inner(globals: &GlobalArgs, args: SearchArgs) -> anyhow::Result<i32> {
     let result = handle
         .search(SearchQueryOptions {
             query: args.query,
-            limit: Some(limit),
+            limit: requested_limit,
             session_id: args.session.clone(),
             ledger_home: None,
         })
@@ -57,17 +58,29 @@ fn run_inner(globals: &GlobalArgs, args: SearchArgs) -> anyhow::Result<i32> {
     progress.finish_and_clear();
 
     if globals.json {
-        render_json(&result)?;
+        emit_json(&result, applied_limit, args.session.as_deref())?;
     } else {
         emit_human(
             &result,
-            limit,
+            applied_limit,
             args.session.as_deref(),
             args.snippet,
             color_enabled(globals),
         );
     }
     Ok(0)
+}
+
+fn emit_json(result: &SearchResult, limit: usize, session: Option<&str>) -> std::io::Result<()> {
+    let mut payload = json!({
+        "query": result.query,
+        "limit": limit,
+        "truncated": result.hits.len() == limit,
+        "session": session,
+        "hits": result.hits,
+    });
+    coerce_whole_f64_to_int(&mut payload);
+    render_json(&payload)
 }
 
 fn emit_human(

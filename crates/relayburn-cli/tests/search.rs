@@ -100,6 +100,9 @@ fn search_json_has_stable_camel_case_sdk_shape() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("search JSON is valid");
     assert_eq!(value["query"], "burnsearchneedle");
+    assert_eq!(value["limit"], 25);
+    assert_eq!(value["truncated"], false);
+    assert!(value["session"].is_null());
     let hits = value["hits"].as_array().expect("hits array");
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0]["sessionId"], "ses_search_alpha");
@@ -137,6 +140,8 @@ fn search_limit_caps_hits() {
 
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     assert_eq!(value["hits"].as_array().unwrap().len(), 2);
+    assert_eq!(value["limit"], 2);
+    assert_eq!(value["truncated"], true);
 }
 
 #[test]
@@ -164,13 +169,21 @@ fn search_session_filter_scopes_hits() {
     let hits = value["hits"].as_array().unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0]["sessionId"], "ses_search_beta");
+    assert_eq!(value["session"], "ses_search_beta");
 }
 
 #[test]
 fn search_rejects_zero_limit_and_invalid_fts_without_panicking() {
     let home = seeded_home(&[]);
     burn()
-        .args(["search", "needle", "--limit", "0"])
+        .args([
+            "--ledger-path",
+            home.path().to_str().unwrap(),
+            "search",
+            "needle",
+            "--limit",
+            "0",
+        ])
         .assert()
         .failure();
     burn()
@@ -185,7 +198,14 @@ fn search_rejects_zero_limit_and_invalid_fts_without_panicking() {
         .stderr(predicate::str::contains("content search failed"));
 
     burn()
-        .args(["search", "needle", "--session", "../not-a-session"])
+        .args([
+            "--ledger-path",
+            home.path().to_str().unwrap(),
+            "search",
+            "needle",
+            "--session",
+            "../not-a-session",
+        ])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("invalid session id"));
