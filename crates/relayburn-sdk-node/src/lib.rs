@@ -910,6 +910,7 @@ pub struct OverheadOptions {
     pub since: Option<String>,
     pub kind: Option<OverheadFileKind>,
     pub ledger_home: Option<String>,
+    pub harness_home: Option<String>,
 }
 
 /// Per-file + per-section overhead cost attribution. Powers `burn overhead`.
@@ -925,12 +926,14 @@ pub fn overhead(opts: Option<OverheadOptions>) -> Result<BigIntPromoting, BurnEr
         since: None,
         kind: None,
         ledger_home: None,
+        harness_home: None,
     });
     let raw = sdk::OverheadOptions {
         project: maybe_path(opts.project),
         since: opts.since,
         kind: opts.kind.map(Into::into),
         ledger_home: maybe_path(opts.ledger_home),
+        harness_home: maybe_path(opts.harness_home),
     };
     let result = sdk::overhead(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result)
@@ -950,6 +953,7 @@ pub struct OverheadTrimOptions {
     pub top: Option<u32>,
     /// Include the unified-diff text per recommendation. Default true.
     pub include_diff: Option<bool>,
+    pub harness_home: Option<String>,
 }
 
 /// Trim recommendations for high-cost overhead-file sections. Powers
@@ -967,6 +971,7 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
         ledger_home: None,
         top: None,
         include_diff: None,
+        harness_home: None,
     });
     let raw = sdk::OverheadTrimOptions {
         project: maybe_path(opts.project),
@@ -975,6 +980,7 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
         ledger_home: maybe_path(opts.ledger_home),
         top: opts.top.map(u64::from),
         include_diff: opts.include_diff,
+        harness_home: maybe_path(opts.harness_home),
     };
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result)

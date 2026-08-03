@@ -46,6 +46,7 @@ fn run_report(
         since: since.clone(),
         kind: kind.map(Into::into),
         ledger_home: globals.ledger_path.clone(),
+        harness_home: None,
     };
     let progress = TaskProgress::new(globals, "overhead");
     progress.set_task("analyzing overhead files");
@@ -66,7 +67,7 @@ fn run_report(
                 project_path.display()
             ),
             None => format!(
-                "no overhead files found at {} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n",
+                "no overhead files found at {} (looked for active CLAUDE.md, CLAUDE.local.md, and AGENTS.md instruction chains)\n",
                 project_path.display()
             ),
         };
@@ -107,6 +108,7 @@ fn run_trim(
         ledger_home: globals.ledger_path.clone(),
         top,
         include_diff: None,
+        harness_home: None,
     };
     let progress = TaskProgress::new(globals, "overhead");
     progress.set_task("finding trim candidates");
@@ -127,7 +129,7 @@ fn run_trim(
                 project_path.display()
             ),
             None => format!(
-                "no overhead files found at {} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n",
+                "no overhead files found at {} (looked for active CLAUDE.md, CLAUDE.local.md, and AGENTS.md instruction chains)\n",
                 project_path.display()
             ),
         };
@@ -225,9 +227,10 @@ fn push_file_block(
     let display = format_file_display(&parsed.path);
     let applies_to = describe_applies_to(&parsed.applies_to);
     lines.push(format!(
-        "{display} — {} lines, ~{} tokens — applies to: {applies_to}",
+        "{display} — {} lines, ~{} tokens — scope: {} — applies to: {applies_to}",
         format_uint(parsed.total_lines),
         format_tokens(parsed.tokens),
+        parsed.scope.wire_str(),
     ));
     if parsed.tokens == 0 {
         lines.push("  (empty file — no attribution)".to_string());

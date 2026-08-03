@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- `overhead()` discovers active user, ancestor, and project instruction chains and labels each file with its scope.
 - Cost calculations recognize Claude 5 and GPT-5.6 models, prefer first-party tariffs, and apply long-context price tiers.
 - `hotspots()` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
 

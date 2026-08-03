@@ -194,6 +194,7 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     let oh = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..Default::default()
         })
         .expect("handle overhead");
@@ -202,6 +203,7 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     let _oh2 = overhead(OverheadOptions {
         project: Some(project.path().to_path_buf()),
         ledger_home: Some(home.path().to_path_buf()),
+        harness_home: Some(project.path().join("empty-home")),
         ..Default::default()
     })
     .expect("free overhead");
@@ -211,6 +213,7 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     let trim = handle
         .overhead_trim(OverheadTrimOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..Default::default()
         })
         .expect("handle overhead_trim");
@@ -219,6 +222,7 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     let _trim2 = overhead_trim(OverheadTrimOptions {
         project: Some(project.path().to_path_buf()),
         ledger_home: Some(home.path().to_path_buf()),
+        harness_home: Some(project.path().join("empty-home")),
         ..Default::default()
     })
     .expect("free overhead_trim");

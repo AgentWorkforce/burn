@@ -905,6 +905,7 @@ fn overhead_returns_empty_when_no_files_present() {
     let r = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadOptions::default()
         })
         .unwrap();
@@ -922,6 +923,7 @@ fn overhead_attributes_when_claude_md_present() {
     let r = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadOptions::default()
         })
         .unwrap();
@@ -944,6 +946,7 @@ fn overhead_trim_emits_summary_when_claude_md_present() {
         .overhead_trim(OverheadTrimOptions {
             project: Some(project.path().to_path_buf()),
             top: Some(1),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadTrimOptions::default()
         })
         .unwrap();
