@@ -395,6 +395,27 @@ mod tests {
     }
 
     #[test]
+    fn flatten_prefers_primary_vendor_when_reseller_is_listed_first() {
+        let raw = r#"{
+            "reseller": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 1.5, "output": 12, "reasoning": 12 } }
+                }
+            },
+            "openai": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 5, "output": 30 } }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("gpt-example").unwrap();
+        assert_eq!(cost.input, 5.0);
+        assert_eq!(cost.output, 30.0);
+        assert_eq!(cost.reasoning_mode, ReasoningMode::SameAsOutput);
+    }
+
+    #[test]
     fn flatten_prefers_google_over_later_reseller_copy() {
         let raw = r#"{
             "google": {

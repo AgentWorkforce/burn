@@ -5,7 +5,6 @@ All notable changes to `@relayburn/mcp`.
 ## [Unreleased]
 
 - Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
-- `burn__hotspots` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
 
 ## [4.0.0] - 2026-06-23
 

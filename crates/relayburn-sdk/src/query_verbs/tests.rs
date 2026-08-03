@@ -1058,34 +1058,64 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
     let (_dir, mut handle) = fixture_handle();
     handle
         .raw_mut()
-        .append_turns(&[TurnRecord {
-            v: 1,
-            source: SourceKind::ClaudeCode,
-            session_id: "sess-unpriced".into(),
-            session_path: None,
-            message_id: "m-unpriced".into(),
-            turn_index: 0,
-            ts: "2026-04-23T00:02:00.000Z".into(),
-            model: "future-model-without-a-price".into(),
-            project: Some("/tmp/proj".into()),
-            project_key: None,
-            usage: Usage {
-                input: 400_000,
-                output: 20_000,
-                reasoning: 10_000,
-                cache_read: 13_000,
-                cache_create_5m: 0,
-                cache_create_1h: 0,
+        .append_turns(&[
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: "sess-unpriced".into(),
+                session_path: None,
+                message_id: "m-unpriced".into(),
+                turn_index: 0,
+                ts: "2026-04-23T00:02:00.000Z".into(),
+                model: "future-model-without-a-price".into(),
+                project: Some("/tmp/proj".into()),
+                project_key: None,
+                usage: Usage {
+                    input: 400_000,
+                    output: 20_000,
+                    reasoning: 10_000,
+                    cache_read: 13_000,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: Vec::new(),
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
             },
-            tool_calls: Vec::new(),
-            files_touched: None,
-            subagent: None,
-            stop_reason: None,
-            activity: None,
-            retries: None,
-            has_edits: None,
-            fidelity: None,
-        }])
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: "sess-unpriced-small".into(),
+                session_path: None,
+                message_id: "m-unpriced-small".into(),
+                turn_index: 0,
+                ts: "2026-04-23T00:03:00.000Z".into(),
+                model: "another-future-model".into(),
+                project: Some("/tmp/proj".into()),
+                project_key: None,
+                usage: Usage {
+                    input: 1_000,
+                    output: 100,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: Vec::new(),
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            },
+        ])
         .expect("append unpriced turn");
 
     let result = handle
@@ -1098,7 +1128,9 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
     let HotspotsResult::Findings { findings, .. } = result else {
         panic!("expected findings result");
     };
-    assert_eq!(findings.len(), 1);
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].session_id, "sess-unpriced");
+    assert_eq!(findings[1].session_id, "sess-unpriced-small");
     let finding = &findings[0];
     assert_eq!(finding.kind, "unpriced-usage");
     assert_eq!(finding.pricing_status, FindingPricingStatus::Unpriced);
