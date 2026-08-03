@@ -103,8 +103,8 @@ export interface SessionContextEfficiency {
   contextTokens: number | bigint;
   /** All generated tokens, with separately reported reasoning included. */
   outputTokens: number | bigint;
-  /** Null/undefined when outputTokens is zero; inspect `unbounded` to distinguish context-consuming 0-output sessions. */
-  contextTokensPerOutputToken?: number;
+  /** Null when outputTokens is zero; inspect `unbounded` to distinguish context-consuming 0-output sessions. */
+  contextTokensPerOutputToken: number | null;
   unbounded: boolean;
   zeroOutputTurnsWithContext: number | bigint;
   contextSize: ContextSizeDistribution;
@@ -119,7 +119,7 @@ export interface ContextEfficiencySummary {
   contextTokens: number | bigint;
   /** All generated tokens, with separately reported reasoning included. */
   outputTokens: number | bigint;
-  contextTokensPerOutputToken?: number;
+  contextTokensPerOutputToken: number | null;
   unbounded: boolean;
   zeroOutputTurnsWithContext: number | bigint;
   /** All distinct sessions in the filtered slice. */
