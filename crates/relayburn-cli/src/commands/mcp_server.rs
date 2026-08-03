@@ -623,7 +623,7 @@ fn tool_catalog() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "project": { "type": "string", "description": "Project path or key. The SDK defaults to the current project." },
+                    "project": { "type": "string", "description": "Project filesystem path. The Rust SDK defaults to the current directory; project keys are not accepted." },
                     "since": { "type": "string", "description": "ISO timestamp or relative range such as 24h or 7d." },
                     "kind": { "type": "string", "enum": ["claude-md", "agents-md"], "description": "Restrict to one instruction-file kind." }
                 },
@@ -636,7 +636,7 @@ fn tool_catalog() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "project": { "type": "string", "description": "Project path or key. The SDK defaults to the current project." },
+                    "project": { "type": "string", "description": "Project filesystem path. The Rust SDK defaults to the current directory; project keys are not accepted." },
                     "since": { "type": "string", "description": "ISO timestamp or relative range such as 24h or 7d." },
                     "kind": { "type": "string", "enum": ["claude-md", "agents-md"], "description": "Restrict to one instruction-file kind." },
                     "top": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64, "description": "Maximum number of recommendations." },
