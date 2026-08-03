@@ -254,7 +254,7 @@ pub(crate) fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> S
         total_tokens,
         total_cost,
         turn_count: turns.len() as u64,
-        context_efficiency: compute_context_efficiency(turns),
+        context_efficiency: compute_context_efficiency_for_summary(turns),
         by_tool: by_tool_order
             .into_iter()
             .map(|k| by_tool.remove(&k).unwrap())
@@ -763,7 +763,7 @@ impl LedgerHandle {
                     tag_key,
                     tag_values,
                     turn_count: turns.len() as u64,
-                    context_efficiency: compute_context_efficiency(&turns),
+                    context_efficiency: compute_context_efficiency_for_summary(&turns),
                     rows,
                     total_cost,
                     fidelity,

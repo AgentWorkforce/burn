@@ -538,9 +538,15 @@ pub(super) fn emit_human(
     lines.push(String::new());
 
     if !report.context_efficiency.sessions.is_empty() {
-        lines.push("highest context-efficiency sessions:".to_string());
+        lines.push(format!(
+            "highest context-efficiency sessions ({} of {} at/above 1M context):",
+            format_uint(report.context_efficiency.sessions.len() as u64),
+            format_uint(report.context_efficiency.eligible_sessions),
+        ));
         let mut context_rows = vec![vec![
             "session".into(),
+            "turns".into(),
+            "total context".into(),
             "context:output".into(),
             "p50 context".into(),
             "p95 context".into(),
@@ -549,6 +555,8 @@ pub(super) fn emit_human(
         for session in report.context_efficiency.sessions.iter().take(10) {
             context_rows.push(vec![
                 session.session_id.clone(),
+                format_uint(session.turn_count),
+                format_uint(session.context_tokens),
                 format_context_ratio(session.context_tokens_per_output_token, session.unbounded),
                 format_uint(session.context_size.p50),
                 format_uint(session.context_size.p95),

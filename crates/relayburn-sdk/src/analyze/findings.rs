@@ -324,16 +324,11 @@ pub(crate) struct ContextOutputRatioFindingInput<'a> {
     pub output_tokens: u64,
     pub threshold: f64,
     pub min_context_tokens: u64,
-    pub calibration_note: Option<&'a str>,
 }
 
 pub(crate) fn context_output_ratio_finding(
     input: ContextOutputRatioFindingInput<'_>,
 ) -> WasteFinding {
-    let calibration = input
-        .calibration_note
-        .map(|note| format!("; {note}"))
-        .unwrap_or_default();
     WasteFinding {
         kind: "context-output-ratio".to_string(),
         severity: if input.high {
@@ -344,7 +339,7 @@ pub(crate) fn context_output_ratio_finding(
         session_id: input.session_id.to_string(),
         title: format!("{} context-to-output ratio", input.ratio_label),
         detail: format!(
-            "{} context tokens (input + cache reads + cache creation) / {} generated output tokens (including reasoning); flat inspection threshold {:.1}:1 with {} minimum context tokens (not length-normalized){calibration}",
+            "{} context tokens (input + cache reads + cache creation) / {} generated output tokens (including reasoning); flat inspection threshold {:.1}:1 with {} minimum context tokens (not length-normalized)",
             input.context_tokens,
             input.output_tokens,
             input.threshold,

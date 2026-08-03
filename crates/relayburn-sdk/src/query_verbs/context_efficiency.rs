@@ -11,6 +11,10 @@ pub const DEFAULT_CONTEXT_OUTPUT_RATIO_THRESHOLD: f64 = 382.0;
 /// dollar cost. Set the corresponding option to zero to disable the floor.
 pub const DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS: u64 = 1_000_000;
 
+/// Maximum per-session distribution rows included in default summary
+/// surfaces. The full set remains available to internal findings evaluation.
+pub const SUMMARY_CONTEXT_SESSION_LIMIT: usize = 10;
+
 /// Context-window size percentiles across the turns in one session.
 ///
 /// Percentiles use the nearest-rank rule (`ceil(p * n) - 1`) used by the
@@ -74,6 +78,12 @@ pub struct ContextEfficiencySummary {
     pub context_tokens_per_output_token: Option<f64>,
     pub unbounded: bool,
     pub zero_output_turns_with_context: u64,
+    /// Distinct sessions in the filtered summary, including zero-token rows.
+    pub total_sessions: u64,
+    /// Sessions meeting the default 1M-context headline eligibility floor.
+    pub eligible_sessions: u64,
+    /// Session distributions. The default summary verbs keep only the ten
+    /// highest-ratio eligible sessions; the full compute helper returns all.
     pub sessions: Vec<SessionContextEfficiency>,
 }
 
@@ -181,14 +191,37 @@ pub fn compute_context_efficiency(turns: &[TurnRecord]) -> ContextEfficiencySumm
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
 
+    let total_sessions = sessions.len() as u64;
+    let eligible_sessions = sessions
+        .iter()
+        .filter(|session| session.context_tokens >= DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS)
+        .count() as u64;
+
     ContextEfficiencySummary {
         context_tokens: total.context_tokens,
         output_tokens: total.output_tokens,
         context_tokens_per_output_token: ratio(total.context_tokens, total.output_tokens),
         unbounded: total.context_tokens > 0 && total.output_tokens == 0,
         zero_output_turns_with_context: total.zero_output_turns_with_context,
+        total_sessions,
+        eligible_sessions,
         sessions,
     }
+}
+
+/// Compute the bounded context-efficiency projection shipped by default
+/// summary surfaces. It applies the calibrated 1M context floor and retains
+/// only the ten highest-ratio sessions, preventing all-time summaries from
+/// materializing tens of thousands of per-session objects.
+pub(crate) fn compute_context_efficiency_for_summary(
+    turns: &[TurnRecord],
+) -> ContextEfficiencySummary {
+    let mut summary = compute_context_efficiency(turns);
+    summary
+        .sessions
+        .retain(|session| session.context_tokens >= DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS);
+    summary.sessions.truncate(SUMMARY_CONTEXT_SESSION_LIMIT);
+    summary
 }
 
 pub(crate) fn validate_context_output_ratio_threshold(threshold: f64) -> Result<()> {
@@ -231,11 +264,6 @@ pub(crate) fn context_output_ratio_findings(
                     output_tokens: session.output_tokens,
                     threshold,
                     min_context_tokens,
-                    calibration_note: (threshold == DEFAULT_CONTEXT_OUTPUT_RATIO_THRESHOLD
-                    && min_context_tokens == DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS)
-                    .then_some(
-                        "default calibration flagged 169/6,348 output-bearing reference sessions (2.66%) and 37.3% of eligible 21+ turn sessions",
-                    ),
                 },
             )
         })
@@ -622,6 +650,44 @@ mod tests {
         assert_eq!(findings.len() as f64 / summary.sessions.len() as f64, 0.5);
         assert!(findings.iter().any(|f| f.session_id == "incident"));
         assert!(findings.iter().any(|f| f.session_id == "long-high"));
+    }
+
+    #[test]
+    fn summary_projection_applies_volume_floor_and_caps_session_rows() {
+        let mut turns = Vec::new();
+        turns.push(turn(
+            "tiny-high-ratio",
+            0,
+            Usage {
+                input: 20_000,
+                output: 1,
+                ..Usage::default()
+            },
+        ));
+        for index in 0..12 {
+            turns.push(turn(
+                &format!("eligible-{index:02}"),
+                0,
+                Usage {
+                    input: 1_000_000 + index,
+                    output: 1_000 + index,
+                    ..Usage::default()
+                },
+            ));
+        }
+
+        let summary = compute_context_efficiency_for_summary(&turns);
+        assert_eq!(summary.total_sessions, 13);
+        assert_eq!(summary.eligible_sessions, 12);
+        assert_eq!(summary.sessions.len(), SUMMARY_CONTEXT_SESSION_LIMIT);
+        assert!(summary
+            .sessions
+            .iter()
+            .all(|session| session.context_tokens >= DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS));
+        assert!(!summary
+            .sessions
+            .iter()
+            .any(|session| session.session_id == "tiny-high-ratio"));
     }
 
     #[test]

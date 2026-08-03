@@ -239,8 +239,9 @@ fn summary_aggregates_two_turns() {
         s.context_efficiency.context_tokens_per_output_token,
         Some(2_000.0 / 900.0)
     );
-    assert_eq!(s.context_efficiency.sessions[0].context_size.p50, 1_000);
-    assert_eq!(s.context_efficiency.sessions[0].context_size.p95, 1_000);
+    assert_eq!(s.context_efficiency.total_sessions, 1);
+    assert_eq!(s.context_efficiency.eligible_sessions, 0);
+    assert!(s.context_efficiency.sessions.is_empty());
 }
 
 #[test]
@@ -271,7 +272,8 @@ fn summary_report_grouped_owns_rows_and_stable_fidelity_shape() {
     assert_eq!(grouped.rows.len(), 1);
     assert_eq!(grouped.rows[0].label, "claude-sonnet-4-6");
     assert_eq!(grouped.context_efficiency.context_tokens, 2_000);
-    assert_eq!(grouped.context_efficiency.sessions.len(), 1);
+    assert_eq!(grouped.context_efficiency.total_sessions, 1);
+    assert!(grouped.context_efficiency.sessions.is_empty());
     assert_eq!(grouped.per_cell_fidelity["groupBy"], "model");
     assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
 }
@@ -1127,7 +1129,7 @@ fn hotspots_default_context_rule_flags_382_to_one_high_volume_session() {
         HotspotsResult::Findings { findings, .. } => {
             assert_eq!(findings.len(), 1);
             assert_eq!(findings[0].session_id, "incident-382");
-            assert!(findings[0].detail.contains("169/6,348"));
+            assert!(!findings[0].detail.contains("169/6,348"));
         }
         other => panic!("expected findings, got {other:?}"),
     }

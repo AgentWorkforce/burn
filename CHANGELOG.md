@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- `summary` now reports context tokens per generated output token and each session's p50/p95/max context size; context tokens are input + cache-read + cache-creation tokens, while the denominator includes reasoning whether a harness folds it into output (Codex) or reports it separately.
+- `summary` now reports context tokens per generated output token and p50/p95/max context size for the ten highest-ratio sessions consuming at least 1M context tokens; context is input + cache-read + cache-creation tokens, while the denominator includes reasoning whether a harness folds it into output (Codex) or reports it separately.
 - `hotspots --findings` now flags high-volume sessions at or above a configurable context-to-output ratio (default 382:1 inclusive, with a configurable 1M-context-token floor), independently of dollar cost. Calibrated against the 6,348 output-bearing reference sessions, the default is an inspection signal—not a length-normalized anomaly score—and selects 169 sessions (2.66%) and 37.3% of eligible 21+ turn sessions.
 
 ## [4.0.0] - 2026-06-23

@@ -715,6 +715,8 @@ pub struct ContextEfficiencySummary {
     pub context_tokens_per_output_token: Option<f64>,
     pub unbounded: bool,
     pub zero_output_turns_with_context: BigInt,
+    pub total_sessions: BigInt,
+    pub eligible_sessions: BigInt,
     pub sessions: Vec<SessionContextEfficiency>,
 }
 
@@ -726,6 +728,8 @@ impl From<sdk::ContextEfficiencySummary> for ContextEfficiencySummary {
             context_tokens_per_output_token: value.context_tokens_per_output_token,
             unbounded: value.unbounded,
             zero_output_turns_with_context: u64_to_bigint(value.zero_output_turns_with_context),
+            total_sessions: u64_to_bigint(value.total_sessions),
+            eligible_sessions: u64_to_bigint(value.eligible_sessions),
             sessions: value
                 .sessions
                 .into_iter()

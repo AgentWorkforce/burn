@@ -496,6 +496,8 @@ mod tests {
                 "contextTokensPerOutputToken": null,
                 "unbounded": false,
                 "zeroOutputTurnsWithContext": 0,
+                "totalSessions": 0,
+                "eligibleSessions": 0,
                 "sessions": [],
             })
         );
