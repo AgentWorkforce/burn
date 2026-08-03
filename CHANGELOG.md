@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- `burn --json` commands now exit quietly when a downstream pipe closes early instead of reporting the pipe closure as a generic error.
+- `burn --json` commands and stdout `burn stamps export` streams now exit quietly when a downstream pipe closes early instead of reporting the pipe closure as a generic error.
 - Pricing recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs over reseller duplicates, and applies long-context price tiers.
 - `burn hotspots --findings` surfaces unknown model pricing explicitly and ranks unpriced sessions by token volume instead of treating them as $0.00.
 
