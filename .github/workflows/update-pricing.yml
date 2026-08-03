@@ -158,7 +158,8 @@ jobs:
           if (rawBody.length > maxBodyLength) {
             const target = maxBodyLength - truncationNotice.length;
             const boundary = rawBody.lastIndexOf('\n', target);
-            body = rawBody.slice(0, boundary) + truncationNotice;
+            const cut = boundary > 0 ? boundary : target;
+            body = rawBody.slice(0, cut) + truncationNotice;
           }
 
           fs.writeFileSync(bodyPath, body);
