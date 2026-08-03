@@ -490,6 +490,39 @@ mod tests {
     }
 
     #[test]
+    fn grouped_json_surfaces_unpriced_turns_and_models() {
+        let report = SummaryGroupedReport {
+            group_by: SummaryGroupBy::Model,
+            tag_key: None,
+            tag_values: Vec::new(),
+            turn_count: 1,
+            rows: Vec::new(),
+            total_cost: CostBreakdown {
+                model: String::new().into(),
+                total: 0.0,
+                input: 0.0,
+                output: 0.0,
+                reasoning: 0.0,
+                cache_read: 0.0,
+                cache_create: 0.0,
+            },
+            fidelity: relayburn_sdk::summarize_fidelity(&[]),
+            per_cell_fidelity: json!({"groupBy": "model"}),
+            replacement_savings: relayburn_sdk::ReplacementSavingsSummary::default(),
+            stop_reasons: relayburn_sdk::StopReasonCounts::default(),
+            subagents: SubagentCounts::default(),
+            quality: None,
+            unpriced_turns: 1,
+            unpriced_models: vec!["gpt-5-codex".into()],
+        };
+
+        let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
+
+        assert_eq!(value["unpricedTurns"], 1);
+        assert_eq!(value["unpricedModels"], json!(["gpt-5-codex"]));
+    }
+
+    #[test]
     fn subagents_line_renders_only_when_counts_nonzero() {
         // Empty bucket → skipped, line absent (so old summaries keep
         // their byte-identical shape against the existing golden).

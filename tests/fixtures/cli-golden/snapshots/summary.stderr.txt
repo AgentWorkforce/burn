@@ -1,0 +1,2 @@
+warning: 1 turn(s) had no pricing for model(s): gpt-5-codex — their cost is reported as $0.
+         Update the snapshot (pnpm run pricing:update) or add an override at $RELAYBURN_HOME/models.dev.json.
