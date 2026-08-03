@@ -18,7 +18,7 @@
 // `napi build ... src` emits `src/index.<target>.node` next to this loader;
 // see the package scripts and `.github/workflows/napi-build.yml`.
 
-const { existsSync, readFileSync } = require('node:fs');
+const { existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { platform, arch } = process;
 

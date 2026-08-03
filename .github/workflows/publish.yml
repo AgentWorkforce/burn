@@ -311,9 +311,15 @@ jobs:
         run: |
           set -euo pipefail
           sdk_test_dir="/tmp/sdk-artifacts/relayburn-sdk-linux-x64-gnu"
-          sdk_test_node=$(find "$sdk_test_dir" -maxdepth 1 -type f -name '*.node' -print -quit)
+          if [ ! -d "$sdk_test_dir" ]; then
+            echo "::error title=Missing SDK test artifact dir::expected $sdk_test_dir" >&2
+            ls -la /tmp/sdk-artifacts/ 2>/dev/null || true
+            exit 1
+          fi
+          sdk_test_node=$(find "$sdk_test_dir" -maxdepth 2 -type f -name '*.node' -print -quit)
           if [ -z "$sdk_test_node" ]; then
             echo "::error title=Missing SDK test artifact::expected a .node file under $sdk_test_dir" >&2
+            find "$sdk_test_dir" -maxdepth 2 -type f -print >&2 || true
             exit 1
           fi
           cp "$sdk_test_node" packages/sdk-node/src/index.linux-x64-gnu.node

@@ -64,7 +64,8 @@ test('esbuild bundles the @relayburn/sdk umbrella facade cleanly', async (t) => 
   let esbuild;
   try {
     esbuild = await import('esbuild');
-  } catch (_) {
+  } catch (err) {
+    if (process.env.CI) throw err;
     t.skip('esbuild not installed — run `pnpm install` first');
     return;
   }
