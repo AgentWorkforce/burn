@@ -102,9 +102,9 @@ impl LedgerHandle {
         //   - fidelity summary over the *post-provider*, *pre-fidelity-gate*
         //     slice (the TS path calls `summarizeFidelity(turns)` here)
         //   - fidelity-gate filter (a no-op when minimum is `partial`)
-        //   - `analyzedTurns = filteredTurns.length` — i.e. AFTER the
-        //     fidelity gate but BEFORE the model allow-list, which is
-        //     applied inside `build_compare_table`.
+        //   - `analyzedTurns` sums each surviving record's effective request
+        //     count AFTER the fidelity gate but BEFORE the model allow-list,
+        //     which is applied inside `build_compare_table`.
         //
         // Crucially: do NOT pre-filter `turns` by `opts.models`. The TS
         // contract is that `analyzedTurns` and `fidelity.summary` describe

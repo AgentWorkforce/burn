@@ -1233,9 +1233,8 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
     // by these top-level metadata counts. A `claude-opus-4-5` turn that
     // is not in the requested-models list still counts toward
     // `analyzedTurns` and `summary.total`, but does not appear in the
-    // `models` / `totals` rows. This mirrors `packages/sdk/index.js
-    // ::compare` where `analyzedTurns = filteredTurns.length` is taken
-    // before `buildCompareTable` applies the model filter.
+    // `models` / `totals` rows. Request cardinality is summed before
+    // `buildCompareTable` applies the model filter.
     let (_dir, mut handle) = fixture_handle();
     let extra = TurnRecord {
         v: 1,
@@ -1244,7 +1243,7 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
         session_path: None,
         message_id: "m-extra".into(),
         turn_index: 0,
-        request_count: 1,
+        request_count: 3,
         ts: "2026-04-23T00:02:00.000Z".into(),
         model: "claude-opus-4-5".into(),
         project: Some("/tmp/proj".into()),
@@ -1276,7 +1275,7 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
         })
         .unwrap();
 
-    assert_eq!(r.analyzed_turns, 3);
+    assert_eq!(r.analyzed_turns, 5);
     assert_eq!(r.fidelity.summary.total, 3);
     // The unrequested model is excluded from cells/totals/models, even
     // though it counts toward analyzed_turns + fidelity summary above.
@@ -1291,7 +1290,7 @@ fn compare_reports_full_fidelity_summary_when_no_requested_model_appears() {
     // ledger at all, `analyzedTurns` and `fidelity.summary` MUST still
     // describe the underlying slice — not zero. The TS contract from
     // `packages/sdk/index.js::compare` builds these counters from
-    // `filteredTurns.length` (post-fidelity-gate, pre-models-filter);
+    // the post-fidelity-gate, pre-models-filter request-count sum;
     // an earlier Rust implementation pre-filtered by `opts.models`,
     // collapsing the metadata to zeros and breaking the conformance
     // gate even though models extraction worked.

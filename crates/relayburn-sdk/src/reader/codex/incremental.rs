@@ -258,6 +258,7 @@ impl CodexParseState {
                                 InferenceKind::ToolUse
                             };
                             let request_number = open.request_count + 1;
+                            let ts_ms = parse_iso_ms(rec_timestamp).unwrap_or(0);
                             open.inferences.push(Inference {
                                 v: 1,
                                 source: SourceKind::Codex,
@@ -271,8 +272,8 @@ impl CodexParseState {
                                 tool_uses,
                                 start_ts: rec_timestamp.to_string(),
                                 end_ts: rec_timestamp.to_string(),
-                                start_ms: parse_iso_ms(rec_timestamp).unwrap_or(0),
-                                end_ms: parse_iso_ms(rec_timestamp).unwrap_or(0),
+                                start_ms: ts_ms,
+                                end_ms: ts_ms,
                             });
                             open.request_count += 1;
                         }

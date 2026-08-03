@@ -242,7 +242,7 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
     let Some(acc) = acc else {
         return empty_cell();
     };
-    if acc.turns == 0 {
+    if acc.logical_turns == 0 {
         return empty_cell();
     }
     CompareCell {
@@ -664,6 +664,27 @@ mod tests {
             cell.insufficient_sample,
             "request cardinality must not satisfy the logical sample-size gate"
         );
+    }
+
+    #[test]
+    fn zero_request_logical_turn_is_insufficient_not_no_data() {
+        let pricing = load_builtin_pricing();
+        let mut turns = vec![turn(
+            "claude-sonnet-4-6",
+            Some(ActivityCategory::Coding),
+            Usage::default(),
+            Some(false),
+            None,
+        )];
+        turns[0].turn.source = SourceKind::Codex;
+        turns[0].turn.request_count = 0;
+
+        let table = build_compare_table(&turns, &CompareOptions::new(&pricing));
+        let cell = &table.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 0);
+        assert!(!cell.no_data);
+        assert!(cell.insufficient_sample);
+        assert_eq!(cell.cost_per_turn, None);
     }
 
     #[test]

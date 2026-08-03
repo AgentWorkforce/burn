@@ -497,17 +497,13 @@ mod tests {
     #[test]
     fn aggregate_falls_through_to_collector_for_non_synthetic_turns() {
         let pricing = pricing_fixture();
-        let rows = aggregate_by_provider(
-            &[turn(
-                "gpt-5",
-                SourceKind::Codex,
-                one_million_in_one_million_out(),
-            )],
-            AggregateByProviderOptions::new(&pricing),
-        );
+        let mut codex = turn("gpt-5", SourceKind::Codex, one_million_in_one_million_out());
+        codex.request_count = 7;
+        let rows = aggregate_by_provider(&[codex], AggregateByProviderOptions::new(&pricing));
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].provider, "openai");
+        assert_eq!(rows[0].turns, 7);
         assert_eq!(rows[0].cost.total, 9.0);
     }
 
