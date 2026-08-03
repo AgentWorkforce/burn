@@ -89,6 +89,7 @@ impl<'a> CompareOptions<'a> {
 #[derive(Debug, Default)]
 struct Accum {
     turns: u64,
+    logical_turns: u64,
     edit_turns: u64,
     one_shot_turns: u64,
     priced_turns: u64,
@@ -153,6 +154,7 @@ pub fn build_compare_table(turns: &[EnrichedTurn], opts: &CompareOptions<'_>) ->
 
         let request_count = t.effective_request_count();
         acc.turns += request_count;
+        acc.logical_turns += 1;
         let mt = model_totals.get_mut(model).expect("model just inserted");
         mt.turns += request_count;
         if let Some(c) = cost_for_turn(t, opts.pricing) {
@@ -273,7 +275,7 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
             None
         },
         no_data: false,
-        insufficient_sample: acc.turns < min_sample,
+        insufficient_sample: acc.logical_turns < min_sample,
     }
 }
 
@@ -658,6 +660,10 @@ mod tests {
         assert_eq!(cell.turns, 7);
         assert_eq!(cell.priced_turns, 7);
         assert_eq!(cell.cost_per_turn, Some(cell.total_cost / 7.0));
+        assert!(
+            cell.insufficient_sample,
+            "request cardinality must not satisfy the logical sample-size gate"
+        );
     }
 
     #[test]

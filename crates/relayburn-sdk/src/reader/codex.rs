@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::reader::fidelity::classify_fidelity;
 use crate::reader::git::ProjectResolver;
 use crate::reader::hash::content_hash;
+use crate::reader::inference::Inference;
 use crate::reader::types::{
     CompactionEvent, ContentRecord, ContentStoreMode, Coverage, Fidelity, RelationshipSourceKind,
     RelationshipType, SessionRelationshipRecord, SourceKind, ToolCall, ToolResultEventRecord,
@@ -103,6 +104,7 @@ pub struct CodexResumeState {
 #[derive(Debug, Clone, Default)]
 pub struct ParseCodexResult {
     pub turns: Vec<TurnRecord>,
+    pub inferences: Vec<Inference>,
     pub content: Vec<ContentRecord>,
     pub events: Vec<CompactionEvent>,
     pub user_turns: Vec<UserTurnRecord>,
@@ -113,6 +115,7 @@ pub struct ParseCodexResult {
 #[derive(Debug, Clone, Default)]
 pub struct ParseCodexIncrementalResult {
     pub turns: Vec<TurnRecord>,
+    pub inferences: Vec<Inference>,
     pub content: Vec<ContentRecord>,
     pub events: Vec<CompactionEvent>,
     pub user_turns: Vec<UserTurnRecord>,
@@ -169,6 +172,7 @@ impl From<ParseCodexIncrementalResult> for ParseCodexResult {
     fn from(r: ParseCodexIncrementalResult) -> Self {
         Self {
             turns: r.turns,
+            inferences: r.inferences,
             content: r.content,
             events: r.events,
             user_turns: r.user_turns,
@@ -193,6 +197,7 @@ pub fn parse_codex_session_incremental(
     if start_offset >= size {
         return Ok(ParseCodexIncrementalResult {
             turns: vec![],
+            inferences: vec![],
             content: vec![],
             events: vec![],
             user_turns: vec![],
@@ -260,6 +265,8 @@ pub(in crate::reader::codex) struct OpenTurn {
     pub(in crate::reader::codex) project: Option<String>,
     pub(in crate::reader::codex) start_cumulative: CumulativeUsage,
     pub(in crate::reader::codex) request_count: u64,
+    pub(in crate::reader::codex) inferences: Vec<Inference>,
+    pub(in crate::reader::codex) request_tool_call_index: usize,
     pub(in crate::reader::codex) tool_calls: Vec<ToolCall>,
     pub(in crate::reader::codex) seen_call_ids: BTreeSet<String>,
     pub(in crate::reader::codex) files_touched: BTreeSet<String>,
@@ -279,6 +286,7 @@ pub(in crate::reader::codex) struct FinalizedTurn {
     pub(in crate::reader::codex) model: String,
     pub(in crate::reader::codex) project: Option<String>,
     pub(in crate::reader::codex) request_count: u64,
+    pub(in crate::reader::codex) inferences: Vec<Inference>,
     pub(in crate::reader::codex) tool_calls: Vec<ToolCall>,
     pub(in crate::reader::codex) files_touched: Vec<String>,
     pub(in crate::reader::codex) user_text: String,
@@ -308,7 +316,8 @@ pub(in crate::reader::codex) fn finalize_turn(
         ts: open.ts,
         model: open.model,
         project: open.project,
-        request_count: open.request_count.max(1),
+        request_count: open.request_count,
+        inferences: open.inferences,
         tool_calls: open.tool_calls,
         files_touched: files,
         user_text: open.user_text,

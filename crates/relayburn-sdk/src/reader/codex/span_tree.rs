@@ -170,8 +170,8 @@ fn synthesize_inference(turn: &TurnRecord) -> Inference {
         v: 1,
         source: turn.source,
         session_id: turn.session_id.clone(),
-        // Codex has no requestId — fall back to message_id, mirroring
-        // what `build_inferences` does for this harness.
+        // Compatibility fallback for ledgers built before Codex persisted
+        // one synthetic inference key per advancing usage snapshot.
         request_id: turn.message_id.clone(),
         request_id_source: InferenceKeySource::MessageId,
         turn_id: turn.message_id.clone(),

@@ -446,10 +446,11 @@ const fn default_request_count() -> u64 {
 }
 
 impl TurnRecord {
-    /// Request denominator for aggregate metrics. Treat an explicit zero as
-    /// one for malformed/partially-written rows, matching historical data.
+    /// Request denominator for aggregate metrics. Historical rows that omit
+    /// the field deserialize as one; an explicit zero remains zero for a
+    /// completed task that made no model request.
     pub fn effective_request_count(&self) -> u64 {
-        self.request_count.max(1)
+        self.request_count
     }
 }
 

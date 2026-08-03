@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::reader::classifier::{classify_activity, ClassificationInput};
 use crate::reader::git::ProjectResolver;
 use crate::reader::hash::args_hash;
+use crate::reader::inference::{Inference, InferenceKeySource, InferenceKind, ToolUseRef};
 use crate::reader::types::{
     CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
     ContentToolUse, SessionRelationshipRecord, SourceKind, ToolCall, ToolResultEventRecord,
@@ -22,6 +23,7 @@ use crate::reader::types::{
     UserTurnRecord,
 };
 use crate::reader::user_turn::{join_nonempty, HeuristicCounter};
+use crate::util::time::parse_iso_ms;
 
 use super::{
     append_text, build_codex_compaction_event, build_codex_user_turn_record,
@@ -226,6 +228,52 @@ impl CodexParseState {
                     if let Some(open) = self.open_turn.as_mut() {
                         open.usage_observed = true;
                         if self.cumulative.advanced_from(&before) {
+                            let tool_uses = open.tool_calls[open.request_tool_call_index..]
+                                .iter()
+                                .map(|call| ToolUseRef {
+                                    id: call.id.clone(),
+                                    name: call.name.clone(),
+                                })
+                                .collect::<Vec<_>>();
+                            open.request_tool_call_index = open.tool_calls.len();
+                            let usage = crate::reader::types::Usage {
+                                input: (self.cumulative.input - before.input).max(0) as u64,
+                                output: (self.cumulative.output - before.output).max(0) as u64,
+                                reasoning: (self.cumulative.reasoning - before.reasoning).max(0)
+                                    as u64,
+                                cache_read: (self.cumulative.cache_read - before.cache_read).max(0)
+                                    as u64,
+                                cache_create_5m: 0,
+                                cache_create_1h: 0,
+                            };
+                            let kind = if tool_uses.is_empty() {
+                                if usage.reasoning > 0 && usage.output == 0 {
+                                    InferenceKind::Reasoning
+                                } else {
+                                    InferenceKind::Message
+                                }
+                            } else if usage.output > 0 || usage.reasoning > 0 {
+                                InferenceKind::Mixed
+                            } else {
+                                InferenceKind::ToolUse
+                            };
+                            let request_number = open.request_count + 1;
+                            open.inferences.push(Inference {
+                                v: 1,
+                                source: SourceKind::Codex,
+                                session_id: self.session_id.clone(),
+                                request_id: format!("{}:request:{request_number:06}", open.turn_id),
+                                request_id_source: InferenceKeySource::RowSynthetic,
+                                turn_id: open.turn_id.clone(),
+                                model: open.model.clone(),
+                                usage,
+                                kind,
+                                tool_uses,
+                                start_ts: rec_timestamp.to_string(),
+                                end_ts: rec_timestamp.to_string(),
+                                start_ms: parse_iso_ms(rec_timestamp).unwrap_or(0),
+                                end_ms: parse_iso_ms(rec_timestamp).unwrap_or(0),
+                            });
                             open.request_count += 1;
                         }
                     }
@@ -264,6 +312,8 @@ impl CodexParseState {
                     project,
                     start_cumulative: self.cumulative.clone(),
                     request_count: 0,
+                    inferences: vec![],
+                    request_tool_call_index: 0,
                     tool_calls: vec![],
                     seen_call_ids: BTreeSet::new(),
                     files_touched: BTreeSet::new(),
@@ -921,8 +971,10 @@ pub(super) fn parse_codex_buffer<R: BufRead>(
     // Emit only committed turns.
     let committed_turns = &state.finalized[..committed.finalized_count];
     let mut turns: Vec<TurnRecord> = Vec::with_capacity(committed_turns.len());
+    let mut inferences: Vec<Inference> = Vec::new();
     let mut content_out: Vec<ContentRecord> = Vec::new();
     for (i, f) in committed_turns.iter().enumerate() {
+        inferences.extend(f.inferences.iter().cloned());
         let mut record = TurnRecord {
             v: 1,
             source: SourceKind::Codex,
@@ -1009,6 +1061,7 @@ pub(super) fn parse_codex_buffer<R: BufRead>(
 
     Ok(ParseCodexIncrementalResult {
         turns,
+        inferences,
         content: content_out,
         events: events_out,
         user_turns: user_turns_out,

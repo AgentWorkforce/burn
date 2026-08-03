@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- Codex turns now record the number of model API requests represented by advancing usage snapshots, so summary, sessions, hotspots, and compare per-turn metrics use request-level denominators instead of collapsing long agent loops into one turn. Rebuild derived state to correct previously ingested Codex sessions.
+- Codex turns and inference rows now reflect each model API request represented by an advancing usage snapshot, so summary, sessions, and compare per-turn metrics no longer collapse long agent loops into one turn. Run `burn state rebuild` to correct previously ingested Codex sessions.
 
 ## [4.0.0] - 2026-06-23
 
