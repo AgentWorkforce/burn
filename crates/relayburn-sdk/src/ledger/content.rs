@@ -28,7 +28,9 @@ pub const DEFAULT_SEARCH_LIMIT: usize = 25;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
+    #[serde(alias = "session_id")]
     pub session_id: String,
+    #[serde(alias = "message_id")]
     pub message_id: String,
     pub source: String,
     /// FTS5 BM25 rank (lower = better match).

@@ -44,7 +44,6 @@ fn search_human_finds_seeded_content_with_context_and_snippet() {
 
     burn()
         .args([
-            "--no-color",
             "--ledger-path",
             home.path().to_str().unwrap(),
             "search",
@@ -56,7 +55,8 @@ fn search_human_finds_seeded_content_with_context_and_snippet() {
         .stdout(predicate::str::contains("ses_search_alpha"))
         .stdout(predicate::str::contains("msg_1"))
         .stdout(predicate::str::contains("burnsearchneedle"))
-        .stdout(predicate::str::contains("<b>").not());
+        .stdout(predicate::str::contains("<b>").not())
+        .stdout(predicate::str::contains("\u{1b}[").not());
 }
 
 #[test]

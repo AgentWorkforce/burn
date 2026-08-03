@@ -1,5 +1,7 @@
 //! `burn search <query>` — thin CLI presenter over the SDK FTS5 verb.
 
+use std::io::{self, IsTerminal, Write};
+
 use anyhow::bail;
 use relayburn_sdk::{
     is_valid_session_id, Ledger, LedgerOpenOptions, SearchHit, SearchQueryOptions, SearchResult,
@@ -66,8 +68,8 @@ fn run_inner(globals: &GlobalArgs, args: SearchArgs) -> anyhow::Result<i32> {
             applied_limit,
             args.session.as_deref(),
             args.snippet,
-            ux::colors_enabled(globals),
-        );
+            io::stdout().is_terminal() && ux::colors_enabled(globals),
+        )?;
     }
     Ok(0)
 }
@@ -90,30 +92,43 @@ fn emit_human(
     session: Option<&str>,
     include_snippets: bool,
     color: bool,
-) {
+) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
     if result.hits.is_empty() {
         match session {
-            Some(id) => println!("no content matches {:?} in session {id}.", result.query),
-            None => println!("no content matches {:?}.", result.query),
+            Some(id) => writeln!(
+                out,
+                "no content matches {:?} in session {id}.",
+                result.query
+            )?,
+            None => writeln!(out, "no content matches {:?}.", result.query)?,
         }
-        return;
+        return Ok(());
     }
 
-    println!("\nsearch results for {:?}\n", result.query);
-    println!("{}", render_table(&hit_table_rows(&result.hits)));
+    writeln!(out, "\nsearch results for {:?}\n", result.query)?;
+    writeln!(out, "{}", render_table(&hit_table_rows(&result.hits)))?;
 
     if include_snippets {
-        println!();
+        writeln!(out)?;
         for (index, hit) in result.hits.iter().enumerate() {
-            println!("{}. {}", index + 1, render_snippet(&hit.snippet, color));
+            writeln!(
+                out,
+                "{}. {}",
+                index + 1,
+                render_snippet(&hit.snippet, color)
+            )?;
         }
     }
 
-    println!(
+    writeln!(
+        out,
         "\nshowing {} result{} (limit {limit})\n",
         result.hits.len(),
         if result.hits.len() == 1 { "" } else { "s" },
-    );
+    )?;
+    out.flush()
 }
 
 fn hit_table_rows(hits: &[SearchHit]) -> Vec<Vec<String>> {

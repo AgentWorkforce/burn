@@ -265,6 +265,32 @@ mod tests {
     }
 
     #[test]
+    fn search_hit_serializes_camel_case_and_accepts_legacy_snake_case() {
+        let hit = SearchHit {
+            session_id: "ses_a".into(),
+            message_id: "m1".into(),
+            source: "claude-code".into(),
+            rank: -1.0,
+            snippet: "<b>needle</b>".into(),
+        };
+
+        let value = serde_json::to_value(&hit).unwrap();
+        assert_eq!(value["sessionId"], "ses_a");
+        assert_eq!(value["messageId"], "m1");
+        assert!(value.get("session_id").is_none());
+
+        let legacy = serde_json::json!({
+            "session_id": "ses_a",
+            "message_id": "m1",
+            "source": "claude-code",
+            "rank": -1.0,
+            "snippet": "<b>needle</b>"
+        });
+        let decoded: SearchHit = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded, hit);
+    }
+
+    #[test]
     fn search_free_function_opens_its_own_ledger() {
         let tmp = tempfile::TempDir::new().unwrap();
         {
