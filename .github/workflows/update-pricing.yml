@@ -1,0 +1,226 @@
+name: Update models.dev pricing
+
+on:
+  # Scheduled workflows are best-effort and GitHub may disable them after 60
+  # days without repository activity. workflow_dispatch remains available.
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-models-dev-pricing
+  cancel-in-progress: false
+
+jobs:
+  update-pricing:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.14.0'
+
+      - name: Preserve current pricing snapshot
+        run: cp crates/relayburn-sdk/data/models.dev.json "$RUNNER_TEMP/models.dev.before.json"
+
+      - name: Refresh models.dev pricing
+        run: pnpm run pricing:update
+
+      - name: Validate and summarize pricing changes
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const beforePath = path.join(process.env.RUNNER_TEMP, 'models.dev.before.json');
+          const afterPath = 'crates/relayburn-sdk/data/models.dev.json';
+          const bodyPath = path.join(process.env.RUNNER_TEMP, 'pricing-update-body.md');
+
+          function readSnapshot(file) {
+            try {
+              return JSON.parse(fs.readFileSync(file, 'utf8'));
+            } catch (error) {
+              throw new Error(`${file} is not valid JSON: ${error.message}`);
+            }
+          }
+
+          function records(snapshot) {
+            const result = new Map();
+            for (const [providerId, provider] of Object.entries(snapshot)) {
+              for (const [modelId, model] of Object.entries(provider.models ?? {})) {
+                result.set(`${providerId}/${modelId}`, model);
+              }
+            }
+            return result;
+          }
+
+          function countModels(snapshot) {
+            return [...records(snapshot).keys()].length;
+          }
+
+          const before = readSnapshot(beforePath);
+          const after = readSnapshot(afterPath);
+          const beforeProviders = Object.keys(before).length;
+          const afterProviders = Object.keys(after).length;
+          const beforeModels = countModels(before);
+          const afterModels = countModels(after);
+
+          if (afterProviders < beforeProviders) {
+            throw new Error(`provider count regressed from ${beforeProviders} to ${afterProviders}`);
+          }
+          if (afterModels < beforeModels * 0.9) {
+            throw new Error(`model count dropped by more than 10%: ${beforeModels} to ${afterModels}`);
+          }
+
+          for (const [provider, model] of [
+            ['anthropic', 'claude-sonnet-4-6'],
+            ['openai', 'gpt-5.5'],
+          ]) {
+            if (!after[provider]?.models?.[model]) {
+              throw new Error(`critical pricing entry is missing: ${provider}/${model}`);
+            }
+          }
+
+          const oldRecords = records(before);
+          const newRecords = records(after);
+          const added = [...newRecords.keys()].filter((key) => !oldRecords.has(key)).sort();
+          const removed = [...oldRecords.keys()].filter((key) => !newRecords.has(key)).sort();
+          const priceChanges = [];
+          const primaryProviders = new Set(['anthropic', 'openai', 'google', 'google-vertex', 'xai']);
+          const isPrimary = (key) => primaryProviders.has(key.split('/', 1)[0]);
+
+          for (const key of [...newRecords.keys()].filter((key) => oldRecords.has(key)).sort()) {
+            const oldCost = oldRecords.get(key).cost ?? {};
+            const newCost = newRecords.get(key).cost ?? {};
+            const fields = [...new Set([...Object.keys(oldCost), ...Object.keys(newCost)])].sort();
+            const changes = fields
+              .filter((field) => JSON.stringify(oldCost[field]) !== JSON.stringify(newCost[field]))
+              .map((field) => `${field}: \`${JSON.stringify(oldCost[field]) ?? 'missing'}\` → \`${JSON.stringify(newCost[field]) ?? 'missing'}\``);
+            if (changes.length) {
+              priceChanges.push({key, line: `- \`${key}\` — ${changes.join('; ')}`});
+            }
+          }
+
+          const primaryAdded = added.filter(isPrimary);
+          const primaryRemoved = removed.filter(isPrimary);
+          const primaryPriceChanges = priceChanges.filter(({key}) => isPrimary(key));
+          const otherAdded = added.filter((key) => !isPrimary(key));
+          const otherRemoved = removed.filter((key) => !isPrimary(key));
+          const otherPriceChanges = priceChanges.filter(({key}) => !isPrimary(key));
+
+          function section(title, entries, render = (entry) => `- \`${entry}\``, limit = 100) {
+            const shown = entries.slice(0, limit).map(render);
+            if (entries.length > limit) shown.push(`- …and ${entries.length - limit} more`);
+            return [`### ${title} (${entries.length})`, '', ...(shown.length ? shown : ['None.']), ''].join('\n');
+          }
+
+          const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+          const rawBody = [
+            'Refreshes the vendored models.dev pricing snapshot from the upstream API.',
+            '',
+            `Providers: ${beforeProviders} → ${afterProviders}. Models: ${beforeModels} → ${afterModels}.`,
+            '',
+            '### Validation',
+            '',
+            '- The refreshed payload parsed as JSON and passed provider/model count and critical-model integrity checks.',
+            '- `cargo test -p relayburn-sdk` passed with the refreshed snapshot embedded.',
+            '- This PR is created with `GITHUB_TOKEN`, so GitHub does not automatically trigger `pull_request` workflows for it; the full SDK suite ran in the update workflow instead.',
+            '',
+            section('Primary-provider models added', primaryAdded, undefined, 500),
+            section('Other models added', otherAdded),
+            section('Primary-provider models removed', primaryRemoved, undefined, 500),
+            section('Other models removed', otherRemoved),
+            section('Primary-provider price fields changed', primaryPriceChanges, ({line}) => line, 500),
+            section('Other price fields changed', otherPriceChanges, ({line}) => line),
+            `An extended generated list is available in the [workflow run summary](${runUrl}).`,
+            '',
+            'Generated automatically by the weekly pricing refresh workflow.',
+          ].join('\n');
+
+          const maxBodyLength = 60000;
+          const truncationNotice = `\n\n> Change details were truncated to fit GitHub's PR body limit. See the [workflow run summary](${runUrl}) for the extended list.\n`;
+          let body = rawBody;
+          if (rawBody.length > maxBodyLength) {
+            const target = maxBodyLength - truncationNotice.length;
+            const boundary = rawBody.lastIndexOf('\n', target);
+            body = rawBody.slice(0, boundary) + truncationNotice;
+          }
+
+          fs.writeFileSync(bodyPath, body);
+          if (process.env.GITHUB_STEP_SUMMARY) {
+            const fullSummary = [
+              '## models.dev pricing changes',
+              '',
+              `Providers: ${beforeProviders} → ${afterProviders}. Models: ${beforeModels} → ${afterModels}.`,
+              '',
+              section('Models added', added, undefined, 5000),
+              section('Models removed', removed, undefined, 5000),
+              section('Price fields changed', priceChanges, ({line}) => line, 5000),
+            ].join('\n');
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, fullSummary);
+          }
+          console.log(`Providers: ${beforeProviders} -> ${afterProviders}; models: ${beforeModels} -> ${afterModels}.`);
+          console.log(`Summary: ${added.length} added, ${removed.length} removed, ${priceChanges.length} price changes.`);
+          NODE
+
+      - name: Detect snapshot changes
+        id: changes
+        run: |
+          if git diff --quiet -- crates/relayburn-sdk/data/models.dev.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Rust toolchain
+        if: steps.changes.outputs.changed == 'true'
+        # rust-toolchain.toml at the repo root pins the channel + components.
+        # Install unconditionally so a stale preinstalled stable cannot violate
+        # the workspace rust-version.
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+
+      - name: Cache cargo registry + target
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Test Rust SDK with refreshed pricing
+        if: steps.changes.outputs.changed == 'true'
+        run: cargo test -p relayburn-sdk
+
+      - name: Open or update pricing pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          add-paths: crates/relayburn-sdk/data/models.dev.json
+          branch: automation/models-dev-pricing
+          base: main
+          delete-branch: true
+          commit-message: 'chore(pricing): refresh models.dev snapshot'
+          title: 'chore(pricing): refresh models.dev snapshot'
+          body-path: ${{ runner.temp }}/pricing-update-body.md
+          draft: false
