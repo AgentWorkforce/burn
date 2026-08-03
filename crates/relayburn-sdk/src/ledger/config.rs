@@ -154,7 +154,7 @@ pub fn load_config_at(path: &Path) -> Result<BurnConfig> {
             .and_then(|c| c.content.as_ref())
             .and_then(|c| c.retention_days.as_ref()),
     );
-    let stale_after_hours = pick_positive_number(
+    let stale_after_hours = pick_staleness_threshold(
         std::env::var("RELAYBURN_STALE_AFTER_HOURS").ok().as_deref(),
         from_file
             .as_ref()
@@ -321,12 +321,16 @@ fn normalize_retention_f64(f: f64) -> Option<Retention> {
     Some(Retention::Days(f))
 }
 
-fn pick_positive_number(env: Option<&str>, file: Option<&serde_json::Value>, default: f64) -> f64 {
+fn pick_staleness_threshold(
+    env: Option<&str>,
+    file: Option<&serde_json::Value>,
+    default: f64,
+) -> f64 {
     env.and_then(|s| s.trim().parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v >= -1.0)
+        .filter(|v| v.is_finite())
         .or_else(|| {
             file.and_then(serde_json::Value::as_f64)
-                .filter(|v| v.is_finite() && *v >= -1.0)
+                .filter(|v| v.is_finite())
         })
         .unwrap_or(default)
 }
@@ -441,14 +445,14 @@ mod tests {
     }
 
     #[test]
-    fn negative_one_disables_staleness_warning() {
+    fn any_negative_disables_staleness_warning() {
         with_clean_env(|| {
             let tmp = TempDir::new().unwrap();
             let path = tmp.path().join("config.json");
-            std::fs::write(&path, r#"{"staleness":{"thresholdHours":-1}}"#).unwrap();
+            std::fs::write(&path, r#"{"staleness":{"thresholdHours":-10}}"#).unwrap();
             assert_eq!(
                 load_config_at(&path).unwrap().staleness.threshold_hours,
-                -1.0
+                -10.0
             );
         });
     }

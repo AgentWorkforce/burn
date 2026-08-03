@@ -225,14 +225,14 @@ impl LedgerHandle {
         let config = load_config_with_home(Some(&self.config_home))?;
         let disabled = config.staleness.threshold_hours < 0.0;
         let stale_after_ms = if disabled {
-            u64::MAX
+            None
         } else {
-            (config.staleness.threshold_hours * 3_600_000.0) as u64
+            Some((config.staleness.threshold_hours * 3_600_000.0) as u64)
         };
         let last_write_at_ms = self.inner.last_write_at_ms()?;
         let stale = !disabled
             && last_write_at_ms
-                .map(|last| now_ms.saturating_sub(last) > stale_after_ms)
+                .map(|last| now_ms.saturating_sub(last) > stale_after_ms.unwrap_or_default())
                 .unwrap_or(true);
         Ok(LedgerFreshness {
             last_write_at_ms,
@@ -247,7 +247,8 @@ impl LedgerHandle {
 #[serde(rename_all = "camelCase")]
 pub struct LedgerFreshness {
     pub last_write_at_ms: Option<u64>,
-    pub stale_after_ms: u64,
+    /// Configured threshold, or `None` when staleness warnings are disabled.
+    pub stale_after_ms: Option<u64>,
     pub stale: bool,
 }
 
@@ -345,7 +346,7 @@ mod freshness_tests {
         let status = handle
             .ledger_freshness_at(1_000 + 2 * 3_600_000 + 1)
             .unwrap();
-        assert_eq!(status.stale_after_ms, 7_200_000);
+        assert_eq!(status.stale_after_ms, Some(7_200_000));
         assert!(status.stale);
     }
 
@@ -395,11 +396,13 @@ mod freshness_tests {
         let tmp = TempDir::new().unwrap();
         std::fs::write(
             tmp.path().join("config.json"),
-            r#"{"staleness":{"thresholdHours":-1}}"#,
+            r#"{"staleness":{"thresholdHours":-10}}"#,
         )
         .unwrap();
         let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
-        assert!(!handle.ledger_freshness_at(1_000).unwrap().stale);
+        let status = handle.ledger_freshness_at(1_000).unwrap();
+        assert!(!status.stale);
+        assert_eq!(status.stale_after_ms, None);
     }
 
     #[test]

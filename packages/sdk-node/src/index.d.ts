@@ -470,7 +470,8 @@ export interface LedgerFreshnessOptions { ledgerHome?: string }
 export interface LedgerFreshness {
   /** Unix epoch milliseconds of the most recent ledger mutation. */
   lastWriteAtMs?: number;
-  staleAfterMs: number;
+  /** Null when staleness warnings are disabled. */
+  staleAfterMs: number | null;
   stale: boolean;
 }
 

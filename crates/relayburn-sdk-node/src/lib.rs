@@ -382,7 +382,7 @@ pub struct LedgerFreshnessOptions {
 #[napi(object)]
 pub struct LedgerFreshness {
     pub last_write_at_ms: Option<f64>,
-    pub stale_after_ms: f64,
+    pub stale_after_ms: Option<f64>,
     pub stale: bool,
 }
 
@@ -397,7 +397,7 @@ pub fn ledger_freshness(
     let freshness = handle.ledger_freshness().map_err(sdk_err)?;
     Ok(LedgerFreshness {
         last_write_at_ms: freshness.last_write_at_ms.map(|v| v as f64),
-        stale_after_ms: freshness.stale_after_ms as f64,
+        stale_after_ms: freshness.stale_after_ms.map(|v| v as f64),
         stale: freshness.stale,
     })
 }
