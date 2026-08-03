@@ -39,7 +39,12 @@ export function createOverheadTrimTool(deps: OverheadTrimDeps = {}): ToolDefinit
         project: { type: 'string', description: 'Project path or key. The SDK defaults to the current project.' },
         since: { type: 'string', description: 'ISO timestamp or relative range such as 24h or 7d.' },
         kind: { type: 'string', enum: KINDS, description: 'Restrict to one instruction-file kind.' },
-        top: { type: 'integer', minimum: 1, description: 'Maximum number of recommendations.' },
+        top: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 0xffff_ffff,
+          description: 'Maximum number of recommendations.',
+        },
         includeDiff: { type: 'boolean', description: 'Include a suggested edit diff for each recommendation.' },
       },
       required: [],

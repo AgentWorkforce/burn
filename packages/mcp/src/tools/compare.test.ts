@@ -37,15 +37,21 @@ describe('createCompareTool', () => {
     const tool = createCompareTool();
     await assert.rejects(async () => { await tool.handler({}); }, /models must contain at least 2 strings/);
     await assert.rejects(async () => { await tool.handler({ models: ['a'] }); }, /at least 2 strings/);
-    await assert.rejects(async () => { await tool.handler({ models: ['a', 'b'], minSample: -1 }); }, /non-negative/);
+    await assert.rejects(async () => { await tool.handler({ models: ['a', 'b'], minSample: -1 }); }, /32-bit unsigned integer/);
+    await assert.rejects(
+      async () => { await tool.handler({ models: ['a', 'b'], minSample: 0x1_0000_0000 }); },
+      /32-bit unsigned integer/,
+    );
     await assert.rejects(async () => { await tool.handler({ models: ['a', 'b'], minFidelity: 'bogus' }); }, /must be one of/);
   });
 
   it('declares models as required with two items', () => {
     const tool = createCompareTool();
     const models = tool.inputSchema.properties?.models as { minItems: number };
+    const minSample = tool.inputSchema.properties?.minSample as { maximum: number };
     assert.deepEqual(tool.inputSchema.required, ['models']);
     assert.equal(models.minItems, 2);
+    assert.equal(minSample.maximum, 0xffff_ffff);
     assert.equal(tool.name, 'burn__compare');
   });
 });

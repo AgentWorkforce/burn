@@ -107,9 +107,51 @@ describe('end-to-end: read tool catalog over stdio', () => {
     const all = await responses;
     const listed = all.find((r) => r.id === 2)?.result?.tools ?? [];
     assert.deepEqual(listed.map((tool) => tool.name), tools.map((tool) => tool.name));
+    const expectedStructuredContent = new Map<number, unknown>([
+      [3, { sessionId: 'S', totalUSD: 3, totalTokens: 100, turnCount: 1, models: ['a'] }],
+      [4, { fingerprint: '1:2:3' }],
+      [5, { totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [] }],
+      [6, { kind: 'findings', findings: [], summary: { fixture: true } }],
+      [7, { project: '/fixture', files: [], perFile: [], grandTotal: 0 }],
+      [8, {
+        project: '/fixture',
+        since: '24h',
+        recommendations: [],
+        summary: {
+          filesAnalyzed: 0,
+          filesWithRecommendations: 0,
+          totalRecommendations: 0,
+          totalProjectedSavingsPerSession: 0,
+          totalProjectedSavingsAcrossWindow: 0,
+        },
+      }],
+      [9, {
+        analyzedTurns: 0,
+        minSample: 1,
+        models: ['a', 'b'],
+        categories: [],
+        totals: {},
+        cells: [],
+        fidelity: {
+          minimum: 'partial',
+          excluded: { total: 0, aggregateOnly: 0, costOnly: 0, partial: 0, usageOnly: 0 },
+          summary: {
+            total: 0,
+            byClass: { full: 0, 'usage-only': 0, 'aggregate-only': 0, 'cost-only': 0, partial: 0 },
+            unknown: 0,
+            missingCoverage: {},
+          },
+        },
+      }],
+    ]);
     for (const [id] of calls) {
       const response = all.find((r) => r.id === id);
-      assert.ok(response?.result?.structuredContent, `call ${id} returned structured content`);
+      assert.ok(response?.result, `call ${id} returned a result`);
+      assert.deepEqual(
+        response.result.structuredContent,
+        expectedStructuredContent.get(id),
+        `call ${id} returned the expected structured content`,
+      );
       assert.equal(response.result.isError, undefined);
     }
   });
@@ -130,7 +172,6 @@ describe('end-to-end: read tool catalog over stdio', () => {
       [11, 'burn__overheadTrim', { top: -1 }],
       [12, 'burn__compare', { models: ['only-one'] }],
       [13, 'burn__summary', { unknown: true }],
-      [14, 'burn__hotspots', { groupBy: 'file', patterns: ['retry-loop'] }],
     ] as const;
     for (const [id, name, args] of invalid) {
       send(input, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });

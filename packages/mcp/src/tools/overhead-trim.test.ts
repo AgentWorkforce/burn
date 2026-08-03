@@ -33,8 +33,9 @@ describe('createOverheadTrimTool', () => {
   it('rejects zero, negative, fractional, and incorrectly typed options', async () => {
     const tool = createOverheadTrimTool();
     await assert.rejects(async () => { await tool.handler({ top: 0 }); }, /positive safe integer/);
-    await assert.rejects(async () => { await tool.handler({ top: -1 }); }, /non-negative safe integer/);
-    await assert.rejects(async () => { await tool.handler({ top: 1.5 }); }, /non-negative safe integer/);
+    await assert.rejects(async () => { await tool.handler({ top: -1 }); }, /32-bit unsigned integer/);
+    await assert.rejects(async () => { await tool.handler({ top: 1.5 }); }, /32-bit unsigned integer/);
+    await assert.rejects(async () => { await tool.handler({ top: 0x1_0000_0000 }); }, /32-bit unsigned integer/);
     await assert.rejects(async () => { await tool.handler({ includeDiff: 'yes' }); }, /must be a boolean/);
   });
 
@@ -43,6 +44,7 @@ describe('createOverheadTrimTool', () => {
     const props = tool.inputSchema.properties as Record<string, Record<string, unknown>>;
     assert.equal(props.top?.type, 'integer');
     assert.equal(props.top?.minimum, 1);
+    assert.equal(props.top?.maximum, 0xffff_ffff);
     assert.equal(props.includeDiff?.type, 'boolean');
   });
 });

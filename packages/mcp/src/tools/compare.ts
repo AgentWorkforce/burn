@@ -48,7 +48,12 @@ export function createCompareTool(deps: CompareDeps = {}): ToolDefinition {
         workflow: { type: 'string', description: 'Restrict to a folded workflowId enrichment stamp.' },
         agent: { type: 'string', description: 'Restrict to a folded agentId enrichment stamp.' },
         provider: { type: 'array', items: { type: 'string' }, description: 'Case-insensitive provider allow-list.' },
-        minSample: { type: 'integer', minimum: 0, description: 'Minimum observations before a comparison cell is sufficient.' },
+        minSample: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 0xffff_ffff,
+          description: 'Minimum observations before a comparison cell is sufficient.',
+        },
         minFidelity: { type: 'string', enum: FIDELITY, description: 'Minimum accepted telemetry fidelity.' },
       },
       required: ['models'],

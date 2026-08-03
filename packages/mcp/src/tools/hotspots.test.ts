@@ -36,10 +36,6 @@ describe('createHotspotsTool', () => {
     const tool = createHotspotsTool({ defaultSessionId: undefined });
     await assert.rejects(async () => { await tool.handler({ groupBy: 'bogus' }); }, /groupBy must be one of/);
     await assert.rejects(async () => { await tool.handler({ provider: [1] }); }, /array of strings/);
-    await assert.rejects(
-      async () => { await tool.handler({ groupBy: 'file', patterns: ['retry-loop'] }); },
-      /patterns can only be combined with groupBy findings/,
-    );
   });
 
   it('declares findings in the groupBy enum', () => {

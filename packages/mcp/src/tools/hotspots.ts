@@ -45,7 +45,11 @@ export function createHotspotsTool(deps: HotspotsDeps): ToolDefinition {
         project: { type: 'string', description: 'Restrict to one project path or key.' },
         since: { type: 'string', description: 'ISO timestamp or relative range such as 24h or 7d.' },
         groupBy: { type: 'string', enum: GROUP_BY, description: 'Select the hotspot result view.' },
-        patterns: { type: 'array', items: { type: 'string' }, description: 'Only include matching finding patterns.' },
+        patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Only include matching finding patterns. A non-empty list selects findings mode.',
+        },
         workflow: { type: 'string', description: 'Restrict to a folded workflowId enrichment stamp.' },
         provider: { type: 'array', items: { type: 'string' }, description: 'Case-insensitive provider allow-list.' },
       },
@@ -62,9 +66,6 @@ export function createHotspotsTool(deps: HotspotsDeps): ToolDefinition {
       const patterns = optionalStringArray(raw, 'patterns', 'hotspots');
       const workflow = optionalString(raw, 'workflow', 'hotspots');
       const provider = optionalStringArray(raw, 'provider', 'hotspots');
-      if (patterns !== undefined && patterns.length > 0 && groupBy !== undefined && groupBy !== 'findings') {
-        throw new Error('hotspots: patterns can only be combined with groupBy findings');
-      }
       if (session !== undefined) opts.session = session;
       if (project !== undefined) opts.project = project;
       if (since !== undefined) opts.since = since;

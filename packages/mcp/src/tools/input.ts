@@ -41,8 +41,13 @@ export function optionalNonNegativeInteger(
 ): number | undefined {
   const value = raw[key];
   if (value === undefined) return undefined;
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${tool}: ${key} must be a non-negative safe integer`);
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > 0xffff_ffff
+  ) {
+    throw new Error(`${tool}: ${key} must be a 32-bit unsigned integer`);
   }
   return value;
 }
