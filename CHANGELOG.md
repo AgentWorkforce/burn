@@ -4,6 +4,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn search <query>` searches ingested session content with FTS5, with session scoping, result limits, optional highlighted snippets, and JSON output.
+- `relayburn-sdk` search hits serialize `sessionId` and `messageId` consistently with the SDK's camelCase JSON contract.
+
 ## [4.0.0] - 2026-06-23
 
 - **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports its low-level `analyze`-layer internals (detector/aggregator functions and helper types such as `PricingTable`, `CompareTable`, `CompareCell`) — these were never the intended embedding surface. Embed through the verb layer instead: `LedgerHandle` methods / `summary_report` / `hotspots` / `compare`. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.

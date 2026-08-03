@@ -23,6 +23,7 @@ use crate::ledger::query::Query;
 use crate::reader::ContentRecord;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub session_id: String,
     pub message_id: String,
