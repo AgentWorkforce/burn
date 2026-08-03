@@ -395,7 +395,19 @@ impl Server {
                     .or_else(|| self.default_session_id.clone()),
                 project: optional_string(input, "project", "hotspots")?,
                 since: optional_string(input, "since", "hotspots")?,
-                group_by: optional_enum(input, "groupBy", "hotspots")?,
+                group_by: optional_enum(
+                    input,
+                    "groupBy",
+                    "hotspots",
+                    &[
+                        "attribution",
+                        "bash",
+                        "bash-verb",
+                        "file",
+                        "subagent",
+                        "findings",
+                    ],
+                )?,
                 patterns: optional_string_array(input, "patterns", "hotspots")?,
                 workflow: optional_string(input, "workflow", "hotspots")?,
                 provider: optional_string_array(input, "provider", "hotspots")?,
@@ -421,7 +433,7 @@ impl Server {
             Ok(OverheadOptions {
                 project: optional_string(input, "project", "overhead")?.map(Into::into),
                 since: optional_string(input, "since", "overhead")?,
-                kind: optional_enum(input, "kind", "overhead")?,
+                kind: optional_enum(input, "kind", "overhead", &["claude-md", "agents-md"])?,
                 ledger_home: None,
             })
         })() {
@@ -452,7 +464,7 @@ impl Server {
             Ok(OverheadTrimOptions {
                 project: optional_string(input, "project", "overhead trim")?.map(Into::into),
                 since: optional_string(input, "since", "overhead trim")?,
-                kind: optional_enum(input, "kind", "overhead trim")?,
+                kind: optional_enum(input, "kind", "overhead trim", &["claude-md", "agents-md"])?,
                 ledger_home: None,
                 top: top.map(u64::from),
                 include_diff: optional_boolean(input, "includeDiff", "overhead trim")?,
@@ -498,7 +510,18 @@ impl Server {
                 agent: optional_string(input, "agent", "compare")?,
                 provider: optional_string_array(input, "provider", "compare")?,
                 min_sample: optional_u32(input, "minSample", "compare")?.map(u64::from),
-                min_fidelity: optional_enum(input, "minFidelity", "compare")?,
+                min_fidelity: optional_enum(
+                    input,
+                    "minFidelity",
+                    "compare",
+                    &[
+                        "full",
+                        "usage-only",
+                        "aggregate-only",
+                        "cost-only",
+                        "partial",
+                    ],
+                )?,
                 ledger_home: None,
             })
         })() {
@@ -694,7 +717,19 @@ fn optional_u32(input: &Map<String, Value>, key: &str, tool: &str) -> Result<Opt
     let Some(value) = input.get(key) else {
         return Ok(None);
     };
-    let Some(value) = value.as_u64().and_then(|value| u32::try_from(value).ok()) else {
+    let value = value
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .or_else(|| {
+            value.as_f64().and_then(|value| {
+                (value.is_finite()
+                    && value.fract() == 0.0
+                    && value >= 0.0
+                    && value <= f64::from(u32::MAX))
+                .then_some(value as u32)
+            })
+        });
+    let Some(value) = value else {
         return Err(format!("{tool}: {key} must be a 32-bit unsigned integer"));
     };
     Ok(Some(value))
@@ -760,15 +795,26 @@ fn optional_string_record(
     Ok(Some(result))
 }
 
-fn optional_enum<T>(input: &Map<String, Value>, key: &str, tool: &str) -> Result<Option<T>, String>
+fn optional_enum<T>(
+    input: &Map<String, Value>,
+    key: &str,
+    tool: &str,
+    allowed: &[&str],
+) -> Result<Option<T>, String>
 where
     T: DeserializeOwned,
 {
     let Some(value) = input.get(key) else {
         return Ok(None);
     };
-    if !value.is_string() {
+    let Some(raw) = value.as_str() else {
         return Err(format!("{tool}: {key} must be a string"));
+    };
+    if !allowed.contains(&raw) {
+        return Err(format!(
+            "{tool}: {key} must be one of {}",
+            allowed.join(", ")
+        ));
     }
     serde_json::from_value(value.clone())
         .map(Some)
@@ -836,11 +882,11 @@ mod tests {
     use super::*;
     use relayburn_sdk::{SourceKind, ToolCall, TurnRecord, Usage};
 
-    fn fixture_turn(index: u64, model: &str, project: &str) -> TurnRecord {
+    fn fixture_turn(index: u64, session: &str, model: &str, project: &str) -> TurnRecord {
         TurnRecord {
             v: 1,
             source: SourceKind::ClaudeCode,
-            session_id: "fixture-session".to_string(),
+            session_id: session.to_string(),
             session_path: None,
             message_id: format!("message-{index}"),
             turn_index: index,
@@ -890,8 +936,9 @@ mod tests {
         handle
             .raw_mut()
             .append_turns(&[
-                fixture_turn(1, "claude-sonnet-4-6", &project_string),
-                fixture_turn(2, "gpt-5.4", &project_string),
+                fixture_turn(1, "fixture-session", "claude-sonnet-4-6", &project_string),
+                fixture_turn(2, "fixture-session", "gpt-5.4", &project_string),
+                fixture_turn(3, "other-session", "gpt-5.4", &project_string),
             ])
             .expect("append fixture turns");
         (
@@ -977,6 +1024,20 @@ mod tests {
             .await
             .expect("known summary tool");
         assert_eq!(assert_tool_success(&summary)["turnCount"], json!(2));
+        let other_summary = server
+            .call_tool("burn__summary", &json!({ "session": "other-session" }))
+            .await
+            .expect("known summary tool");
+        assert_eq!(assert_tool_success(&other_summary)["turnCount"], json!(1));
+
+        let scoped_hotspots = server
+            .call_tool("burn__hotspots", &json!({}))
+            .await
+            .expect("known hotspots tool");
+        assert_eq!(
+            assert_tool_success(&scoped_hotspots)["turnsAnalyzed"],
+            json!(2)
+        );
 
         let hotspots = server
             .call_tool(
@@ -1015,13 +1076,12 @@ mod tests {
                 "burn__compare",
                 &json!({
                     "models": ["claude-sonnet-4-6", "gpt-5.4"],
-                    "session": "fixture-session",
                     "minFidelity": "partial"
                 }),
             )
             .await
             .expect("known compare tool");
-        assert_eq!(assert_tool_success(&compare)["analyzedTurns"], json!(2));
+        assert_eq!(assert_tool_success(&compare)["analyzedTurns"], json!(3));
     }
 
     #[tokio::test]
@@ -1036,6 +1096,7 @@ mod tests {
             ("burn__hotspots", json!({ "groupBy": "unknown" })),
             ("burn__overhead", json!({ "kind": "readme" })),
             ("burn__overheadTrim", json!({ "top": 0 })),
+            ("burn__overheadTrim", json!({ "top": 1.5 })),
             ("burn__overheadTrim", json!({ "top": 4294967296_u64 })),
             ("burn__compare", json!({ "models": ["one"] })),
             (
@@ -1050,6 +1111,15 @@ mod tests {
             assert!(result.get("structuredContent").is_none(), "{result}");
         }
 
+        let enum_error = server
+            .call_tool("burn__hotspots", &json!({ "groupBy": "bogus" }))
+            .await
+            .expect("known tool");
+        assert_eq!(
+            enum_error["content"][0]["text"],
+            json!("hotspots: groupBy must be one of attribution, bash, bash-verb, file, subagent, findings")
+        );
+
         assert!(server
             .call_tool("burn__doesNotExist", &json!({}))
             .await
@@ -1059,6 +1129,32 @@ mod tests {
             .await
             .expect("known tool after errors");
         assert_eq!(assert_tool_success(&recovered)["turnCount"], json!(2));
+    }
+
+    #[tokio::test]
+    async fn integral_json_floats_match_integer_schema_and_npm_validation() {
+        let (server, _home, project) = fixture_server();
+        let trim = server
+            .call_tool(
+                "burn__overheadTrim",
+                &json!({
+                    "project": project.to_string_lossy(),
+                    "top": 2.0,
+                    "includeDiff": false
+                }),
+            )
+            .await
+            .expect("known overhead trim tool");
+        assert_tool_success(&trim);
+
+        let compare = server
+            .call_tool(
+                "burn__compare",
+                &json!({ "models": ["one", "two"], "minSample": 3.0 }),
+            )
+            .await
+            .expect("known compare tool");
+        assert_eq!(assert_tool_success(&compare)["minSample"], json!(3));
     }
 
     #[tokio::test]
