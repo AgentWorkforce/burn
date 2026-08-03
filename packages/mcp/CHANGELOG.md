@@ -4,6 +4,10 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- Added `burn__summary`, `burn__hotspots`, `burn__overhead`,
+  `burn__overheadTrim`, and `burn__compare` tool factories, exposing the
+  current `@relayburn/sdk` read surface through validated MCP inputs.
+
 ## [4.0.0] - 2026-06-23
 
 - `compare` / `summary` tool output reflects the SDK's canonical compare-cost rounding (`toFixed` semantics; ties shift by one in the last digit) and a stable, deterministic fidelity-summary key order.
