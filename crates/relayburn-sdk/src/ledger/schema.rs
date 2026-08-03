@@ -65,9 +65,9 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   per-file deserialize. Blanked by `state rebuild` / `state reset` so the
 ///   next ingest does not trust source state captured before derived rows were
 ///   wiped. (#468)
-/// - `7`: adds `archive_state.last_write_at_ms INTEGER`, maintained by
-///   triggers on derived ledger tables, so read surfaces can distinguish a
-///   current ledger from one that has not received data recently. (#507)
+/// - `7`: adds `archive_state.last_write_at_ms INTEGER`, updated once per
+///   successful derived-ledger write batch, so read surfaces can distinguish
+///   a current ledger from one that has not received data recently. (#507)
 pub const SCHEMA_VERSION: u32 = 7;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on

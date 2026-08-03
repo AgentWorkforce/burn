@@ -1518,6 +1518,7 @@ fn state_status_reports_zero_rows_on_fresh_ledger() {
     // `tool_result_events.output_bytes` / `output_truncated`) and v2
     // (#437 `turns.stop_reason`).
     assert_eq!(s.archive.schema_version, 7);
+    assert!(s.archive.last_write_at_ms.is_none());
     assert!(s.archive.last_built_at.is_none());
     assert!(s.archive.last_rebuild_at.is_none());
 }

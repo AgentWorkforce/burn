@@ -271,40 +271,6 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
-    // SQLite WAL makes filesystem mtimes unsuitable as a write clock. These
-    // triggers update the durable clock only when a derived row really
-    // changes; ignored dedup inserts do not fire them.
-    for table in [
-        "turns",
-        "compactions",
-        "relationships",
-        "tool_result_events",
-        "user_turns",
-        "inferences",
-        "sessions",
-    ] {
-        conn.execute_batch(&format!(
-            "CREATE TRIGGER IF NOT EXISTS touch_{table}_insert AFTER INSERT ON {table}
-             BEGIN
-               UPDATE archive_state
-               SET last_write_at_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-               WHERE id = 1;
-             END;
-             CREATE TRIGGER IF NOT EXISTS touch_{table}_update AFTER UPDATE ON {table}
-             BEGIN
-               UPDATE archive_state
-               SET last_write_at_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-               WHERE id = 1;
-             END;
-             CREATE TRIGGER IF NOT EXISTS touch_{table}_delete AFTER DELETE ON {table}
-             BEGIN
-               UPDATE archive_state
-               SET last_write_at_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-               WHERE id = 1;
-             END;"
-        ))?;
-    }
-
     // The `idx_turns_stop_reason` index is created here rather than in
     // the static DDL so a legacy v1 table (no `stop_reason` column yet)
     // doesn't fail the DDL pre-pass. By this point the column either

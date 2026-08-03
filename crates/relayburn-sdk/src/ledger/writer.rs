@@ -41,6 +41,18 @@ fn now_lex_token() -> String {
     format!("ts:{:020}.{:09}", secs, nanos_part)
 }
 
+fn touch_last_write(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    tx.execute(
+        "UPDATE archive_state SET last_write_at_ms = ? WHERE id = 1",
+        params![now_ms],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Result<usize> {
     if turns.is_empty() {
         return Ok(0);
@@ -93,6 +105,9 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -121,6 +136,9 @@ pub(crate) fn append_compactions(
                 appended += 1;
             }
         }
+    }
+    if appended > 0 {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -158,6 +176,9 @@ pub(crate) fn append_relationships(
                 appended += 1;
             }
         }
+    }
+    if appended > 0 {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -198,6 +219,9 @@ pub(crate) fn append_tool_result_events(
                 appended += 1;
             }
         }
+    }
+    if appended > 0 {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -242,6 +266,9 @@ pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) ->
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -276,6 +303,9 @@ pub(crate) fn append_user_turns(
                 appended += 1;
             }
         }
+    }
+    if appended > 0 {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -325,6 +355,7 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
             ])?;
         }
     }
+    touch_last_write(&tx)?;
     tx.commit()?;
     Ok(())
 }

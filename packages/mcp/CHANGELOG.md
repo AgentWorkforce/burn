@@ -4,6 +4,8 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- Read-tool responses now include `ledgerFreshness` with the ledger's last-write timestamp, threshold, and stale flag.
+
 ## [4.0.0] - 2026-06-23
 
 - `compare` / `summary` tool output reflects the SDK's canonical compare-cost rounding (`toFixed` semantics; ties shift by one in the last digit) and a stable, deterministic fidelity-summary key order.

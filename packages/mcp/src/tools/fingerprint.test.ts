@@ -3,18 +3,25 @@ import { describe, it } from 'node:test';
 
 import { createFingerprintTool, type FingerprintResult } from './fingerprint.js';
 
+const FRESHNESS_DEP = {
+  ledgerFreshness: async () => ({ lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false }),
+};
+
 describe('createFingerprintTool', () => {
   it('returns the SDK fingerprint string verbatim', async () => {
     const tool = createFingerprintTool({
+      ...FRESHNESS_DEP,
       fingerprint: async () => ({ fingerprint: '42:1700000000:9876' }),
     });
     const result = (await tool.handler({})) as FingerprintResult;
     assert.equal(result.fingerprint, '42:1700000000:9876');
+    assert.equal(result.ledgerFreshness.stale, false);
   });
 
   it('passes sessionId through as session', async () => {
     let captured: { session?: string; project?: string } = {};
     const tool = createFingerprintTool({
+      ...FRESHNESS_DEP,
       fingerprint: async (opts) => {
         captured = opts;
         return { fingerprint: '1:1:1' };
@@ -28,6 +35,7 @@ describe('createFingerprintTool', () => {
   it('passes project through', async () => {
     let captured: { session?: string; project?: string } = {};
     const tool = createFingerprintTool({
+      ...FRESHNESS_DEP,
       fingerprint: async (opts) => {
         captured = opts;
         return { fingerprint: '1:1:1' };
@@ -40,6 +48,7 @@ describe('createFingerprintTool', () => {
 
   it('rejects sessionId + project together', async () => {
     const tool = createFingerprintTool({
+      ...FRESHNESS_DEP,
       fingerprint: async () => ({ fingerprint: 'unreachable' }),
     });
     await assert.rejects(

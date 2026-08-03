@@ -323,10 +323,10 @@ fn normalize_retention_f64(f: f64) -> Option<Retention> {
 
 fn pick_positive_number(env: Option<&str>, file: Option<&serde_json::Value>, default: f64) -> f64 {
     env.and_then(|s| s.trim().parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v >= 0.0)
+        .filter(|v| v.is_finite() && *v >= -1.0)
         .or_else(|| {
             file.and_then(serde_json::Value::as_f64)
-                .filter(|v| v.is_finite() && *v >= 0.0)
+                .filter(|v| v.is_finite() && *v >= -1.0)
         })
         .unwrap_or(default)
 }
@@ -436,6 +436,19 @@ mod tests {
             assert_eq!(
                 load_config_at(&path).unwrap().staleness.threshold_hours,
                 2.5
+            );
+        });
+    }
+
+    #[test]
+    fn negative_one_disables_staleness_warning() {
+        with_clean_env(|| {
+            let tmp = TempDir::new().unwrap();
+            let path = tmp.path().join("config.json");
+            std::fs::write(&path, r#"{"staleness":{"thresholdHours":-1}}"#).unwrap();
+            assert_eq!(
+                load_config_at(&path).unwrap().staleness.threshold_hours,
+                -1.0
             );
         });
     }

@@ -352,6 +352,7 @@ impl Server {
 
         let handle_guard = self.handle.lock().await;
         let result = handle_guard.fingerprint(scope);
+        let freshness = handle_guard.ledger_freshness();
         drop(handle_guard);
 
         let fp = match result {
@@ -367,8 +368,21 @@ impl Server {
                 return;
             }
         };
+        let freshness = match freshness {
+            Ok(value) => value,
+            Err(err) => {
+                write_success(
+                    id,
+                    json!({
+                        "content": [{ "type": "text", "text": err.to_string() }],
+                        "isError": true,
+                    }),
+                );
+                return;
+            }
+        };
 
-        let payload = json!({ "fingerprint": fp.as_str() });
+        let payload = json!({ "fingerprint": fp.as_str(), "ledgerFreshness": freshness });
         let text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
         write_success(
             id,
@@ -404,6 +418,7 @@ impl Server {
         };
         let handle_guard = self.handle.lock().await;
         let result = handle_guard.session_cost(opts);
+        let freshness = handle_guard.ledger_freshness();
         drop(handle_guard);
 
         let mut payload: SessionCostResult = match result {
@@ -434,7 +449,24 @@ impl Server {
                 Some("no session id provided and server was not registered with one".to_string());
         }
 
-        let value = serde_json::to_value(&payload).unwrap_or(Value::Null);
+        let mut value = serde_json::to_value(&payload).unwrap_or(Value::Null);
+        match freshness {
+            Ok(freshness) => {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("ledgerFreshness".to_string(), json!(freshness));
+                }
+            }
+            Err(err) => {
+                write_success(
+                    id,
+                    json!({
+                        "content": [{ "type": "text", "text": err.to_string() }],
+                        "isError": true,
+                    }),
+                );
+                return;
+            }
+        }
         let text = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
         write_success(
             id,

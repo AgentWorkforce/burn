@@ -1,7 +1,9 @@
 use relayburn_sdk::LedgerFreshness;
 
+use crate::cli::GlobalArgs;
+
 /// Present SDK freshness data on stderr without coupling the SDK to a UI.
-pub(crate) fn warn_if_stale(freshness: &LedgerFreshness) {
+pub(crate) fn warn_if_stale(freshness: &LedgerFreshness, globals: &GlobalArgs) {
     if !freshness.stale {
         return;
     }
@@ -14,24 +16,10 @@ pub(crate) fn warn_if_stale(freshness: &LedgerFreshness) {
         })
         .unwrap_or_else(|| "an unknown time".to_string());
     let threshold_hours = freshness.stale_after_ms as f64 / 3_600_000.0;
-    eprintln!(
-        "[burn] warning: ledger data is stale (last write: {last}; threshold: {threshold_hours:.1}h). Run `burn ingest` before relying on this report."
+    crate::render::ux::print_warning(
+        &format!(
+            "ledger data may be stale (last write: {last}; threshold: {threshold_hours:.1}h). If expected activity is missing, run `burn ingest` before relying on this report."
+        ),
+        globals,
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fresh_metadata_needs_no_warning() {
-        // Keep the predicate independently pinned even though stderr capture
-        // belongs in the command integration tests.
-        let freshness = LedgerFreshness {
-            last_write_at_ms: Some(1),
-            stale_after_ms: 1,
-            stale: false,
-        };
-        warn_if_stale(&freshness);
-    }
 }

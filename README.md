@@ -219,7 +219,7 @@ content/search data in `content.sqlite`.
 | `RELAYBURN_CONTENT_PATH` | Override the content database path. |
 | `RELAYBURN_CONTENT_STORE=full|hash-only|off` | Control content sidecar storage. Default: `full`. |
 | `RELAYBURN_CONTENT_TTL_DAYS=<n>` | Sidecar retention. Default: `90`. |
-| `RELAYBURN_STALE_AFTER_HOURS=<n>` | Age after which reads warn that the ledger is stale. Default: `24`. |
+| `RELAYBURN_STALE_AFTER_HOURS=<n>` | Age after which reads warn that the ledger is stale. Default: `24`; set `-1` to disable. |
 
 Reports read local data from the ledger and derived sidecars.
 

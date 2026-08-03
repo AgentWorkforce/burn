@@ -93,7 +93,7 @@ fn stale_warning_is_uniform_across_requested_read_surface() {
             .args(&args)
             .assert()
             .success()
-            .stderr(predicate::str::contains("ledger data is stale"));
+            .stderr(predicate::str::contains("ledger data may be stale"));
     }
 }
 
@@ -109,7 +109,21 @@ fn fresh_ledger_does_not_warn() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("ledger data is stale").not());
+        .stderr(predicate::str::contains("ledger data may be stale").not());
+}
+
+#[test]
+fn never_written_ledger_warns() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    burn()
+        .args([
+            "--ledger-path",
+            home.path().to_str().expect("utf-8 path"),
+            "summary",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ledger data may be stale"));
 }
 
 #[test]

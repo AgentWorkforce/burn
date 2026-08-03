@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- Read/report commands (`summary`, `hotspots`, `findings`, and `sessions list`) now warn when the ledger has not received data within the configurable staleness threshold (24 hours by default); the SDK exposes the same last-write timestamp and stale flag as data.
+- Read/report commands (`summary`, `hotspots`, `hotspots --findings`, and `sessions list`) now warn when the ledger has not received data within the configurable staleness threshold (24 hours by default); SDK and MCP consumers receive the same last-write timestamp and stale flag as data.
 
 ## [4.0.0] - 2026-06-23
 

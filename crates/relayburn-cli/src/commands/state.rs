@@ -136,6 +136,16 @@ fn format_status(s: &StateStatus) -> String {
         "  last rebuild: {}\n",
         s.archive.last_rebuild_at.as_deref().unwrap_or("never")
     ));
+    let last_write = s
+        .archive
+        .last_write_at_ms
+        .map(|ms| {
+            relayburn_cli::util::time::iso_from_system_time(
+                std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms),
+            )
+        })
+        .unwrap_or_else(|| "never".to_string());
+    out.push_str(&format!("  last write:   {last_write}\n"));
     out.push_str("config:\n");
     out.push_str(&format!("  store: {}\n", s.config.store));
     let retention = if s.config.retention_forever {

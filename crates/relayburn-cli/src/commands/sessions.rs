@@ -75,7 +75,7 @@ fn run_list_inner(globals: &GlobalArgs, args: SessionsListArgs) -> anyhow::Resul
     })?;
     let freshness = handle.ledger_freshness()?;
     progress.finish_and_clear();
-    crate::commands::freshness::warn_if_stale(&freshness);
+    crate::commands::freshness::warn_if_stale(&freshness, globals);
 
     if globals.json {
         emit_json(

@@ -223,11 +223,17 @@ impl LedgerHandle {
     /// already own a clock and for threshold-boundary tests.
     pub fn ledger_freshness_at(&self, now_ms: u64) -> anyhow::Result<LedgerFreshness> {
         let config = load_config_with_home(Some(&self.config_home))?;
-        let stale_after_ms = (config.staleness.threshold_hours * 3_600_000.0) as u64;
+        let disabled = config.staleness.threshold_hours < 0.0;
+        let stale_after_ms = if disabled {
+            u64::MAX
+        } else {
+            (config.staleness.threshold_hours * 3_600_000.0) as u64
+        };
         let last_write_at_ms = self.inner.last_write_at_ms()?;
-        let stale = last_write_at_ms
-            .map(|last| now_ms.saturating_sub(last) > stale_after_ms)
-            .unwrap_or(false);
+        let stale = !disabled
+            && last_write_at_ms
+                .map(|last| now_ms.saturating_sub(last) > stale_after_ms)
+                .unwrap_or(true);
         Ok(LedgerFreshness {
             last_write_at_ms,
             stale_after_ms,
@@ -268,6 +274,34 @@ mod freshness_tests {
     use rusqlite::{params, Connection};
     use tempfile::TempDir;
 
+    struct CleanStaleEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl CleanStaleEnv {
+        fn new() -> Self {
+            let lock = crate::ledger::CONFIG_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var_os("RELAYBURN_STALE_AFTER_HOURS");
+            std::env::remove_var("RELAYBURN_STALE_AFTER_HOURS");
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for CleanStaleEnv {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("RELAYBURN_STALE_AFTER_HOURS", value),
+                None => std::env::remove_var("RELAYBURN_STALE_AFTER_HOURS"),
+            }
+        }
+    }
+
     fn set_last_write(home: &std::path::Path, value: u64) {
         let conn = Connection::open(home.join("burn.sqlite")).unwrap();
         conn.execute(
@@ -279,9 +313,7 @@ mod freshness_tests {
 
     #[test]
     fn freshness_is_strictly_past_threshold() {
-        let _env = crate::ledger::CONFIG_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _env = CleanStaleEnv::new();
         let tmp = TempDir::new().unwrap();
         let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
         set_last_write(tmp.path(), 1_000);
@@ -300,9 +332,7 @@ mod freshness_tests {
 
     #[test]
     fn config_override_changes_stale_decision() {
-        let _env = crate::ledger::CONFIG_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _env = CleanStaleEnv::new();
         let tmp = TempDir::new().unwrap();
         std::fs::write(
             tmp.path().join("config.json"),
@@ -320,20 +350,23 @@ mod freshness_tests {
     }
 
     #[test]
-    fn real_ledger_insert_updates_write_clock_and_is_fresh() {
-        let _env = crate::ledger::CONFIG_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+    fn real_ledger_write_batch_updates_clock_and_is_fresh() {
+        let _env = CleanStaleEnv::new();
         let tmp = TempDir::new().unwrap();
-        let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
-        let conn = Connection::open(tmp.path().join("burn.sqlite")).unwrap();
-        conn.execute(
-            "INSERT INTO turns
-             (source, session_id, message_id, ts, record_json, content_fingerprint)
-             VALUES ('codex', 's', 'm', '2026-01-01T00:00:00.000Z', '{}', 'f')",
-            [],
-        )
+        let mut handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        let turn: TurnRecord = serde_json::from_value(serde_json::json!({
+            "v": 1,
+            "source": "codex",
+            "sessionId": "s",
+            "messageId": "m",
+            "turnIndex": 0,
+            "ts": "2026-01-01T00:00:00.000Z",
+            "model": "gpt-5.2-codex",
+            "usage": {"input": 1, "output": 1, "reasoning": 0, "cacheRead": 0, "cacheCreate5m": 0, "cacheCreate1h": 0},
+            "toolCalls": []
+        }))
         .unwrap();
+        handle.raw_mut().append_turns(&[turn]).unwrap();
 
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -342,5 +375,42 @@ mod freshness_tests {
         let status = handle.ledger_freshness_at(now_ms).unwrap();
         assert!(status.last_write_at_ms.is_some());
         assert!(!status.stale);
+    }
+
+    #[test]
+    fn never_written_is_stale_but_future_clock_is_fresh() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        assert!(handle.ledger_freshness_at(1_000).unwrap().stale);
+
+        set_last_write(tmp.path(), 2_000);
+        let future = handle.ledger_freshness_at(1_000).unwrap();
+        assert!(!future.stale);
+    }
+
+    #[test]
+    fn disabled_threshold_suppresses_even_never_written() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("config.json"),
+            r#"{"staleness":{"thresholdHours":-1}}"#,
+        )
+        .unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        assert!(!handle.ledger_freshness_at(1_000).unwrap().stale);
+    }
+
+    #[test]
+    fn reset_clears_write_clock_and_reports_stale() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let mut handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        set_last_write(tmp.path(), 1_000);
+        handle.raw_mut().reset().unwrap();
+        let status = handle.ledger_freshness_at(2_000).unwrap();
+        assert_eq!(status.last_write_at_ms, None);
+        assert!(status.stale);
     }
 }
