@@ -281,19 +281,23 @@ fn normalize(text: &str, ledger_home: &Path, project_dir: &Path) -> String {
 
 /// Replace the value after a human-output label while preserving the label's
 /// padding. This keeps wall-clock fields deterministic in golden snapshots.
+/// The `never` sentinel (a ledger with no write clock) is not a wall-clock
+/// value and passes through unchanged, so goldens can distinguish it from a
+/// real timestamp.
 fn squash_line_value(text: &str, label: &str, placeholder: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for segment in text.split_inclusive('\n') {
         let (line, newline) = segment
             .strip_suffix('\n')
             .map_or((segment, ""), |line| (line, "\n"));
-        if let Some(rest) = line.strip_prefix(label) {
-            let padding_len = rest.len() - rest.trim_start().len();
-            out.push_str(label);
-            out.push_str(&rest[..padding_len]);
-            out.push_str(placeholder);
-        } else {
-            out.push_str(line);
+        match line.strip_prefix(label) {
+            Some(rest) if rest.trim() != "never" => {
+                let padding_len = rest.len() - rest.trim_start().len();
+                out.push_str(label);
+                out.push_str(&rest[..padding_len]);
+                out.push_str(placeholder);
+            }
+            _ => out.push_str(line),
         }
         out.push_str(newline);
     }
@@ -448,5 +452,11 @@ mod tests {
             squash_line_value(input, "  last write:", "${TS}"),
             "archive state:\n  last write:   ${TS}\nconfig:\n"
         );
+    }
+
+    #[test]
+    fn squash_line_value_preserves_never_sentinel() {
+        let input = "archive state:\n  last write:   never\nconfig:\n";
+        assert_eq!(squash_line_value(input, "  last write:", "${TS}"), input);
     }
 }
