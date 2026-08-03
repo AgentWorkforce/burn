@@ -440,3 +440,7 @@ events is safe.
 
 If you don't want to deal with hook config at all, run `burn ingest --watch`
 instead — same data, slightly higher latency.
+
+## License
+
+Apache-2.0 - Copyright 2026 Agent Workforce Incorporated
