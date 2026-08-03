@@ -65,9 +65,11 @@ prefix terms such as `mem*`.
 | `--session <id>` | Restrict matches to one session. |
 | `--limit <n>` | Cap the number of ranked hits. Defaults to 25. |
 | `--snippet` | Include highlighted content excerpts in human output. |
-| `--json` | Emit the query and hits as JSON. Snippets retain `<b>` match markers. |
+| `--json` | Emit the query, applied limit, truncation signal, session filter, and hits as JSON. |
 
-Search snippets use literal `<b>` markers for matches. Until
+In JSON, `truncated: true` means the returned hit count reached `limit`, so
+more matches may exist; it does not guarantee that results were omitted.
+JSON snippets retain literal `<b>` match markers. Until
 [#516](https://github.com/AgentWorkforce/burn/issues/516) lands, stored content
 that already contains `<b>` tags can display ambiguously in human snippet mode.
 
