@@ -1313,7 +1313,7 @@ fn compare_returns_flat_cells_and_absent_models() {
 }
 
 #[test]
-fn compare_surfaces_unpriced_requested_model() {
+fn compare_existing_priced_turns_signal_exposes_unpriced_model() {
     let (_dir, mut handle) = fixture_handle();
     let mut turn = bucket_test_turn(
         "retired-session",
@@ -1332,12 +1332,14 @@ fn compare_surfaces_unpriced_requested_model() {
         })
         .unwrap();
 
-    assert_eq!(result.unpriced_turns, 1);
-    assert_eq!(result.unpriced_models, vec!["gpt-5-codex"]);
-    assert!(result
+    let cell = result
         .cells
         .iter()
-        .any(|cell| cell.model == "gpt-5-codex" && cell.turns == 1 && cell.priced_turns == 0));
+        .find(|cell| cell.model == "gpt-5-codex")
+        .unwrap();
+    assert_eq!(cell.turns, 1);
+    assert_eq!(cell.priced_turns, 0);
+    assert_eq!(cell.cost_per_turn, None);
 }
 
 #[test]
@@ -2913,9 +2915,6 @@ fn summary_timeseries_places_turns_in_buckets_and_sums_to_total() {
     );
     assert!(nonempty.iter().all(|b| b.turn_count == 1));
     assert_eq!(nonempty.iter().map(|b| b.unpriced_turns).sum::<u64>(), 1);
-    assert!(nonempty
-        .iter()
-        .any(|b| b.unpriced_models == ["gpt-5-codex"]));
 
     // Per-bucket totals reconcile with the un-bucketed total.
     let total_tokens: u64 = series.buckets.iter().map(|b| b.total_tokens).sum();

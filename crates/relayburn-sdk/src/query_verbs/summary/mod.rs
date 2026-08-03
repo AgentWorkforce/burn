@@ -543,7 +543,6 @@ pub struct SummaryBucket {
     pub end: String,
     pub turn_count: u64,
     pub unpriced_turns: u64,
-    pub unpriced_models: Vec<String>,
     pub total_tokens: u64,
     pub total_cost: CostBreakdown,
     pub group_by: SummaryGroupBy,
@@ -622,7 +621,7 @@ impl LedgerHandle {
             .into_iter()
             .enumerate()
             .map(|(i, bturns)| {
-                let (unpriced_turns, unpriced_models) = tally_unpriced(&bturns, &pricing);
+                let (unpriced_turns, _) = tally_unpriced(&bturns, &pricing);
                 let rows = if by_provider {
                     aggregate_by_provider(&bturns, AggregateByProviderOptions::new(&pricing))
                         .into_iter()
@@ -638,7 +637,6 @@ impl LedgerHandle {
                     end: buckets.end_iso(i),
                     turn_count: bturns.len() as u64,
                     unpriced_turns,
-                    unpriced_models,
                     total_tokens,
                     total_cost,
                     group_by,

@@ -1,7 +1,5 @@
 {
   "analyzedTurns": 7,
-  "unpricedTurns": 0,
-  "unpricedModels": [],
   "minSample": 5,
   "models": [
     "claude-sonnet-4-6",

@@ -38,20 +38,11 @@ pub(super) fn emit_summary_timeseries(
     }
     for bucket in &series.buckets {
         println!(
-            "{}  {:>5} turns  {:>14} tok  {}{}",
+            "{}  {:>5} turns  {:>14} tok  {}",
             bucket.start,
             bucket.turn_count,
             format_uint(bucket.total_tokens),
             format_usd(bucket.total_cost.total),
-            if bucket.unpriced_turns > 0 {
-                format!(
-                    "  [UNPRICED: {} turns; {}]",
-                    format_uint(bucket.unpriced_turns),
-                    bucket.unpriced_models.join(", ")
-                )
-            } else {
-                String::new()
-            },
         );
     }
     Ok(0)

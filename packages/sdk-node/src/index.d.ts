@@ -440,8 +440,6 @@ export interface CompareOptions {
 
 export interface CompareResult {
   analyzedTurns: number;
-  unpricedTurns: number;
-  unpricedModels: string[];
   minSample: number;
   models: string[];
   categories: string[];
