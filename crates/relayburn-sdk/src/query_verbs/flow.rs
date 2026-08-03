@@ -409,7 +409,11 @@ fn project_filter_variants(project: Option<&str>) -> Vec<Option<String>> {
         return vec![None];
     };
     let mut variants = vec![Some(raw.to_string())];
-    if let Some(project_key) = resolve_project(raw).project_key {
+    if let Some(project_key) = Path::new(raw)
+        .is_dir()
+        .then(|| resolve_project(raw).project_key)
+        .flatten()
+    {
         if !variants
             .iter()
             .any(|variant| variant.as_deref() == Some(&project_key))
@@ -471,16 +475,18 @@ impl LedgerHandle {
                     ids.insert(enriched.turn.session_id);
                 }
             }
-            match self.inner.query_inferences(&session_query) {
-                Ok(inferences) => {
-                    for inference in inferences {
-                        if timestamp_passes(inference.start_ms) {
-                            ids.insert(inference.session_id);
+            if since_ms.is_some() {
+                match self.inner.query_inferences(&session_query) {
+                    Ok(inferences) => {
+                        for inference in inferences {
+                            if timestamp_passes(inference.start_ms) {
+                                ids.insert(inference.session_id);
+                            }
                         }
                     }
+                    Err(err) if is_schema_missing(&err) => {}
+                    Err(err) => return Err(err.into()),
                 }
-                Err(err) if is_schema_missing(&err) => {}
-                Err(err) => return Err(err.into()),
             }
         }
         let session_ids: Vec<String> = ids.into_iter().collect();

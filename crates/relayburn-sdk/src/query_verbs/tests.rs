@@ -1956,6 +1956,19 @@ fn context_delta_project_path_matches_resolved_git_project_key() {
 
     assert!(!deltas.is_empty());
     assert!(deltas.iter().all(|delta| delta.session_id == "sess-alpha"));
+
+    let nonexistent = nested.join("does-not-exist");
+    let deltas = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(nonexistent.to_string_lossy().into_owned()),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("nonexistent project context_delta");
+    assert!(
+        deltas.is_empty(),
+        "a nonexistent path must not widen to its parent repository key"
+    );
 }
 
 #[cfg(unix)]
