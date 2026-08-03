@@ -490,9 +490,12 @@ pub(crate) fn mark_findings_with_unpriced_sessions(
         };
         finding.pricing_status = FindingPricingStatus::Unpriced;
         finding.estimated_savings.usd_per_session = None;
-        finding.estimated_savings.tokens_per_session = Some(usage.tokens);
+        finding
+            .estimated_savings
+            .tokens_per_session
+            .get_or_insert(usage.tokens);
         finding.detail.push_str(&format!(
-            " Pricing is unavailable for model(s) {}; the dollar estimate is unknown and this finding is ranked by the session's {} unpriced tokens.",
+            " Pricing is unavailable for model(s) {}; the dollar estimate is unknown. The session contains {} unpriced tokens.",
             usage.models.join(", "),
             format_with_commas(usage.tokens),
         ));
@@ -1135,12 +1138,13 @@ mod tests {
             has_edits: None,
             fidelity: None,
         };
-        let mut findings = vec![finding_with(
-            "retry-loop",
-            WasteSeverity::Info,
-            "unknown-session",
-            0.0,
-        )];
+        let finding_without_token_savings =
+            finding_with("retry-loop", WasteSeverity::Info, "unknown-session", 0.0);
+        let mut finding_with_token_savings = finding_without_token_savings.clone();
+        finding_with_token_savings
+            .estimated_savings
+            .tokens_per_session = Some(5_000);
+        let mut findings = vec![finding_without_token_savings, finding_with_token_savings];
 
         mark_findings_with_unpriced_sessions(&mut findings, &[turn], &PricingTable::new());
 
@@ -1150,7 +1154,14 @@ mod tests {
             findings[0].estimated_savings.tokens_per_session,
             Some(443_000)
         );
-        assert!(findings[0].detail.contains("future-unpriced-model"));
+        assert_eq!(findings[1].pricing_status, FindingPricingStatus::Unpriced);
+        assert_eq!(findings[1].estimated_savings.usd_per_session, None);
+        assert_eq!(
+            findings[1].estimated_savings.tokens_per_session,
+            Some(5_000)
+        );
+        assert!(findings[1].detail.contains("future-unpriced-model"));
+        assert!(findings[1].detail.contains("443,000 unpriced tokens"));
     }
 
     #[test]
