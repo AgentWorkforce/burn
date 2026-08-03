@@ -437,6 +437,7 @@ export interface CompareOptions {
 }
 
 export interface CompareResult {
+  /** Model-request count; fidelity.summary.total counts logical turn records. */
   analyzedTurns: number;
   minSample: number;
   models: string[];

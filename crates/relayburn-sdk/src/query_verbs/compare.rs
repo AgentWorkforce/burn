@@ -65,6 +65,9 @@ pub struct CompareFidelityBlock {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompareResult {
+    /// Model-request cardinality after provider and fidelity filtering but
+    /// before the model allow-list. This can exceed
+    /// `fidelity.summary.total`, which counts logical turn records.
     pub analyzed_turns: u64,
     pub min_sample: u64,
     pub models: Vec<String>,
