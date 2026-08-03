@@ -20,7 +20,7 @@ fn turn(index: usize) -> TurnRecord {
         session_path: None,
         message_id: format!("message_{index:04}"),
         turn_index: 0,
-        ts: "2026-08-03T00:00:00.000Z".into(),
+        ts: format!("2026-08-03T00:00:00.{index:09}Z"),
         model: "claude-sonnet-4-6".into(),
         project: Some(format!("/tmp/project/{index:04}")),
         project_key: None,
@@ -48,10 +48,11 @@ fn large_json_output_exits_zero_when_consumer_closes_early() {
     let home = tempfile::TempDir::new().expect("temporary ledger home");
     let mut ledger = Ledger::open(LedgerOpenOptions::with_home(home.path())).expect("open ledger");
     let turns: Vec<_> = (0..SESSION_COUNT).map(turn).collect();
-    ledger
+    let appended = ledger
         .raw_mut()
         .append_turns(&turns)
         .expect("seed large session list");
+    assert_eq!(appended, SESSION_COUNT, "fixture rows must not deduplicate");
     drop(ledger);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_burn"))
