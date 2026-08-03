@@ -40,13 +40,15 @@ pub struct CompareCell {
     pub one_shot_rate: Option<f64>,
     pub cache_hit_rate: Option<f64>,
     pub median_retries: Option<f64>,
-    /// True when the cell has zero turns. Distinct from `insufficient_sample`
-    /// so JSON consumers can tell "we never saw this combination" apart
-    /// from "we have data but the sample is small." Only one of `no_data` /
-    /// `insufficient_sample` is ever true at a time.
+    /// True when the cell has zero matching logical turn records. Distinct
+    /// from `insufficient_sample` so JSON consumers can tell "we never saw
+    /// this combination" apart from "we have data but the sample is small."
+    /// Only one of `no_data` / `insufficient_sample` is ever true at a time.
     pub no_data: bool,
-    /// True when `0 < turns < min_sample`. A cell with `no_data == true`
-    /// always has `insufficient_sample == false`.
+    /// True when `0 < logical turn records < min_sample`. This sample gate is
+    /// independent of `turns`, which reports model requests and may be zero
+    /// for an observed Codex record. A cell with `no_data == true` always has
+    /// `insufficient_sample == false`.
     pub insufficient_sample: bool,
 }
 
