@@ -5,6 +5,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - Read/report commands (`summary`, `hotspots`, `hotspots --findings`, and `sessions list`) now warn when the ledger has not received data within the configurable staleness threshold (24 hours by default); SDK and MCP consumers receive the same last-write timestamp and stale flag as data.
+- Pricing recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs over reseller duplicates, and applies long-context price tiers.
+- `burn hotspots --findings` surfaces unknown model pricing explicitly and ranks unpriced sessions by token volume instead of treating them as $0.00.
 
 ## [4.0.0] - 2026-06-23
 

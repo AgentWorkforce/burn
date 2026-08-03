@@ -142,6 +142,7 @@ const PATTERN_KINDS: &[&str] = &[
     "ghost-surface",
     "tool-output-bloat",
     "tool-call-pattern",
+    "unpriced-usage",
 ];
 
 fn resolve_pattern_selection(raw: &str) -> Result<Vec<String>, String> {
