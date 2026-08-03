@@ -51,10 +51,8 @@
 //! approximation; downstream consumers should treat the number as
 //! advisory.
 
-use std::collections::HashMap;
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::analyze::pricing::PricingTable;
 use crate::analyze::span_tree::{AttrValue, SpanKind, SpanNode, TurnSpanTree};
@@ -221,10 +219,14 @@ pub struct ContextDeltaOpts {
     /// When set, narrow to a single session. When `None`, every session
     /// in the ledger window contributes.
     pub session: Option<String>,
-    /// Time window (relative — `Duration::from_secs(24 * 3600)` by
-    /// default). Sessions whose latest activity falls before
-    /// `now - since` are skipped.
-    pub since: Option<Duration>,
+    /// Project filter. Matches the ledger's canonical `project` or
+    /// `project_key` value. When `None`, every project contributes.
+    pub project: Option<String>,
+    /// Inclusive lower bound for the current inference in each delta.
+    /// Accepts a relative range (`24h`, `7d`, `4w`, `2m`) or ISO timestamp;
+    /// invalid values return an error. The preceding baseline inference may
+    /// be older than the cutoff. Defaults to all time.
+    pub since: Option<String>,
     /// Output cap. Defaults to 20.
     pub top: Option<u32>,
     /// Hide deltas below this threshold. Defaults to 1000 tokens — the
@@ -245,10 +247,6 @@ impl ContextDeltaOpts {
     pub fn effective_min_delta(&self) -> u64 {
         self.min_delta.unwrap_or(1000)
     }
-
-    pub fn effective_since(&self) -> Duration {
-        self.since.unwrap_or(Duration::from_secs(24 * 3600))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,11 +265,27 @@ impl ContextDeltaOpts {
 /// `curr` inference's model. Models the pricing table doesn't recognize
 /// charge `0.0` (matching the rest of the analyze surface, which never
 /// surfaces costs it can't price).
+#[cfg(test)]
 pub(crate) fn deltas_for_session(
     trees: &[TurnSpanTree],
     compactions: &[CompactionEvent],
     pricing: &PricingTable,
     opts: &ContextDeltaOpts,
+) -> Vec<ContextDelta> {
+    deltas_for_session_since(trees, compactions, pricing, opts, None)
+}
+
+/// Time-filtered form used by the ledger verb after it has normalized the
+/// user-facing `since` expression. A delta is retained when its current
+/// inference is on/after `since_ms`. Inferences with an unknown timestamp
+/// (`start_ms == 0`) remain eligible, matching ledger query semantics for
+/// records whose timestamp is unavailable.
+pub(crate) fn deltas_for_session_since(
+    trees: &[TurnSpanTree],
+    compactions: &[CompactionEvent],
+    pricing: &PricingTable,
+    opts: &ContextDeltaOpts,
+    since_ms: Option<i64>,
 ) -> Vec<ContextDelta> {
     if trees.is_empty() {
         return Vec::new();
@@ -298,6 +312,12 @@ pub(crate) fn deltas_for_session(
         for (pair_idx, window) in inf_indices.windows(2).enumerate() {
             let prev_pos = window[0];
             let curr_pos = window[1];
+            if let Some(cutoff) = since_ms {
+                let curr_start = timeline[curr_pos].start_ms;
+                if curr_start != 0 && curr_start < cutoff {
+                    continue;
+                }
+            }
             let TimelineKind::Inference {
                 context_tokens: prev_ctx,
                 ..

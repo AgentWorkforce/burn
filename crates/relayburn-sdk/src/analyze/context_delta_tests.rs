@@ -252,6 +252,52 @@ fn single_inference_yields_no_delta() {
     );
 }
 
+#[test]
+fn since_filters_on_current_inference_and_keeps_older_baseline() {
+    let mut inf1 = make_inf("req-1", "claude-sonnet-4-6", 1000, 0, 0);
+    inf1.start_ms = 100;
+    let mut inf2 = make_inf("req-2", "claude-sonnet-4-6", 3000, 0, 0);
+    inf2.start_ms = 200;
+    let mut inf3 = make_inf("req-3", "claude-sonnet-4-6", 6000, 0, 0);
+    inf3.start_ms = 300;
+    let mut root = SpanNode::new(SpanKind::Turn, "turn");
+    root.children.extend([inf1, inf2, inf3]);
+    let tree = turn_tree("sess-1", "msg-1", root);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let opts = ContextDeltaOpts {
+        min_delta: Some(0),
+        ..ContextDeltaOpts::default()
+    };
+
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, Some(200));
+    assert_eq!(
+        deltas.len(),
+        2,
+        "the pair ending exactly at the cutoff qualifies"
+    );
+    assert!(deltas.iter().any(|delta| {
+        delta.prior_context_tokens == 1000 && delta.current_context_tokens == 3000
+    }));
+}
+
+#[test]
+fn since_keeps_delta_when_current_timestamp_is_unknown() {
+    let mut inf1 = make_inf("req-1", "claude-sonnet-4-6", 1000, 0, 0);
+    inf1.start_ms = 100;
+    let inf2 = make_inf("req-2", "claude-sonnet-4-6", 3000, 0, 0);
+    let mut root = SpanNode::new(SpanKind::Turn, "turn");
+    root.children.extend([inf1, inf2]);
+    let tree = turn_tree("sess-1", "msg-1", root);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let opts = ContextDeltaOpts {
+        min_delta: Some(0),
+        ..ContextDeltaOpts::default()
+    };
+
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, Some(10_000));
+    assert_eq!(deltas.len(), 1);
+}
+
 /// `min_delta` filters out small jumps.
 #[test]
 fn min_delta_filters_small_jumps() {

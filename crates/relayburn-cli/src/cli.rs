@@ -325,16 +325,16 @@ pub struct CompareArgs {
 pub struct OverheadArgs {
     /// Project root to scan for overhead files (CLAUDE.md, .claude/CLAUDE.md,
     /// AGENTS.md). Defaults to the current working directory.
-    #[arg(long, value_name = "PATH", global = true)]
+    #[arg(long, value_name = "PATH")]
     pub project: Option<PathBuf>,
 
     /// Time window to attribute over: a relative range (`24h`, `7d`,
     /// `4w`, `2m`) or an ISO timestamp. Defaults to all time.
-    #[arg(long, value_name = "RANGE", global = true)]
+    #[arg(long, value_name = "RANGE")]
     pub since: Option<String>,
 
     /// Narrow to a single overhead-file kind.
-    #[arg(long, value_enum, value_name = "KIND", global = true)]
+    #[arg(long, value_enum, value_name = "KIND")]
     pub kind: Option<OverheadKind>,
 
     #[command(subcommand)]
@@ -375,6 +375,20 @@ pub enum OverheadAction {
 /// `burn overhead trim` flags layered on top of [`OverheadArgs`].
 #[derive(Debug, ClapArgs)]
 pub struct OverheadTrimArgs {
+    /// Project root to scan for overhead files. Defaults to the current
+    /// working directory.
+    #[arg(long, value_name = "PATH")]
+    pub project: Option<PathBuf>,
+
+    /// Time window to attribute over: a relative range (`24h`, `7d`,
+    /// `4w`, `2m`) or an ISO timestamp. Defaults to all time.
+    #[arg(long, value_name = "RANGE")]
+    pub since: Option<String>,
+
+    /// Narrow to a single overhead-file kind.
+    #[arg(long, value_enum, value_name = "KIND")]
+    pub kind: Option<OverheadKind>,
+
     /// Number of recommendations per file. Defaults to 3.
     #[arg(long, value_name = "N")]
     pub top: Option<u64>,
@@ -383,6 +397,17 @@ pub struct OverheadTrimArgs {
 /// `burn overhead deltas` flags layered on top of [`OverheadArgs`].
 #[derive(Debug, ClapArgs)]
 pub struct OverheadDeltasArgs {
+    /// Restrict ledger sessions to this project. Relative paths are resolved
+    /// from the current working directory. Defaults to all projects.
+    #[arg(long, value_name = "PATH")]
+    pub project: Option<PathBuf>,
+
+    /// Inclusive lower bound for the current inference in each delta: a
+    /// relative range (`24h`, `7d`, `4w`, `2m`) or an ISO timestamp. The
+    /// preceding baseline inference may be older. Defaults to all time.
+    #[arg(long, value_name = "RANGE")]
+    pub since: Option<String>,
+
     /// Restrict to a single session id. When unset, every session in the
     /// ledger window contributes.
     #[arg(long, value_name = "ID")]

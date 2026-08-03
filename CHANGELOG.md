@@ -4,6 +4,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- **BREAKING (`relayburn-sdk`):** `ContextDeltaOpts::since` is now a relative-range or ISO-timestamp string instead of `Duration`; context-delta queries also accept `project` and apply the cutoff to returned deltas in both all-session and session-specific modes.
+- `burn overhead deltas` now honors `--project`, accepts relative or ISO `--since` values with explicit errors for invalid input, and no longer advertises or silently ignores the unsupported `--kind` flag.
+
 ## [4.0.0] - 2026-06-23
 
 - **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports its low-level `analyze`-layer internals (detector/aggregator functions and helper types such as `PricingTable`, `CompareTable`, `CompareCell`) — these were never the intended embedding surface. Embed through the verb layer instead: `LedgerHandle` methods / `summary_report` / `hotspots` / `compare`. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.

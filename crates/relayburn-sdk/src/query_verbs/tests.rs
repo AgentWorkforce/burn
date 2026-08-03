@@ -197,6 +197,11 @@ fn normalize_since_rejects_garbage() {
 }
 
 #[test]
+fn normalize_since_rejects_overflowing_relative_range() {
+    assert!(normalize_since(Some("18446744073709551615h")).is_err());
+}
+
+#[test]
 fn normalize_since_returns_none_for_empty() {
     assert!(normalize_since(None).unwrap().is_none());
     assert!(normalize_since(Some("")).unwrap().is_none());
@@ -1786,17 +1791,6 @@ fn compute_summary_replacement_savings_none_when_no_replacement_tools() {
     assert!(result.replacement_savings.is_none());
 }
 
-#[test]
-fn duration_to_since_iso_emits_canonical_zulu_ms() {
-    let iso = super::duration_to_since_iso(std::time::Duration::from_secs(60));
-    // Shape only — actual value depends on system clock. We assert
-    // the canonical lower-bound shape `YYYY-MM-DDTHH:MM:SS.mmmZ`
-    // that `Query::since` lex-compares against ledger rows.
-    assert_eq!(iso.len(), 24, "{iso}");
-    assert!(iso.ends_with(".000Z"));
-    assert!(iso.contains('T'));
-}
-
 /// Regression for the `since`-is-ignored bug: when `opts.since` is
 /// `Some`, sessions whose latest turn is older than the window must
 /// not appear in the deltas output. With a 1-second window and
@@ -1809,7 +1803,7 @@ fn context_delta_since_filter_excludes_old_sessions() {
     use crate::analyze::ContextDeltaOpts;
     let (_dir, handle) = multi_session_handle();
     let opts = ContextDeltaOpts {
-        since: Some(std::time::Duration::from_secs(1)),
+        since: Some("1h".into()),
         ..ContextDeltaOpts::default()
     };
     let deltas = handle.context_delta(opts).expect("context_delta");
@@ -1818,6 +1812,146 @@ fn context_delta_since_filter_excludes_old_sessions() {
         "since=1s must drop fixture sessions whose latest turn is weeks old; got {} deltas",
         deltas.len(),
     );
+}
+
+fn context_delta_filter_handle() -> (TempDir, LedgerHandle) {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = LedgerOpenOptions::with_home(dir.path());
+    let mut handle = Ledger::open(opts).expect("open ledger");
+    let turn =
+        |session: &str, project: &str, index: u64, ts: &str, message_id: &str, input: u64| {
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: session.into(),
+                session_path: None,
+                message_id: message_id.into(),
+                turn_index: index,
+                ts: ts.into(),
+                model: "claude-sonnet-4-6".into(),
+                project: Some(project.into()),
+                project_key: None,
+                usage: Usage {
+                    input,
+                    output: 0,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: vec![],
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            }
+        };
+    handle
+        .raw_mut()
+        .append_turns(&[
+            turn(
+                "sess-alpha",
+                "/tmp/proj-alpha",
+                0,
+                "2026-04-20T10:00:00.000Z",
+                "alpha-1",
+                1_000,
+            ),
+            turn(
+                "sess-alpha",
+                "/tmp/proj-alpha",
+                1,
+                "2026-04-21T10:00:00.000Z",
+                "alpha-2",
+                3_000,
+            ),
+            turn(
+                "sess-alpha",
+                "/tmp/proj-alpha",
+                2,
+                "2026-07-20T10:00:00.000Z",
+                "alpha-3",
+                6_000,
+            ),
+            turn(
+                "sess-beta",
+                "/tmp/proj-beta",
+                0,
+                "2026-07-19T10:00:00.000Z",
+                "beta-1",
+                2_000,
+            ),
+            turn(
+                "sess-beta",
+                "/tmp/proj-beta",
+                1,
+                "2026-07-20T11:00:00.000Z",
+                "beta-2",
+                7_000,
+            ),
+        ])
+        .expect("append turns");
+    (dir, handle)
+}
+
+#[test]
+fn context_delta_project_filter_actually_filters_sessions() {
+    let (_dir, handle) = context_delta_filter_handle();
+    let deltas = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some("/tmp/proj-alpha".into()),
+            min_delta: Some(0),
+            top: Some(20),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("context_delta");
+    assert!(!deltas.is_empty());
+    assert!(deltas.iter().all(|delta| delta.session_id == "sess-alpha"));
+}
+
+#[test]
+fn context_delta_iso_since_filters_rows_and_matches_session_mode() {
+    let (_dir, handle) = context_delta_filter_handle();
+    let since = Some("2026-07-01T00:00:00Z".into());
+    let all = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some("/tmp/proj-alpha".into()),
+            since: since.clone(),
+            min_delta: Some(0),
+            top: Some(20),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("all-session context_delta");
+    let one = handle
+        .context_delta(ContextDeltaOpts {
+            session: Some("sess-alpha".into()),
+            since,
+            min_delta: Some(0),
+            top: Some(20),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("session context_delta");
+
+    assert_eq!(all, one);
+    assert_eq!(all.len(), 1, "the April delta must be filtered out");
+    assert_eq!(all[0].turn_id, "alpha-3");
+    assert_eq!(all[0].prior_context_tokens, 3_000);
+    assert_eq!(all[0].current_context_tokens, 6_000);
+}
+
+#[test]
+fn context_delta_invalid_since_returns_error() {
+    let (_dir, handle) = context_delta_filter_handle();
+    let err = handle
+        .context_delta(ContextDeltaOpts {
+            since: Some("last-tuesday-ish".into()),
+            ..ContextDeltaOpts::default()
+        })
+        .expect_err("invalid since must not widen to all time");
+    assert!(err.to_string().contains("invalid since"), "{err:#}");
 }
 
 fn multi_session_handle() -> (TempDir, LedgerHandle) {

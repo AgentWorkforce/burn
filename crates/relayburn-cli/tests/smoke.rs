@@ -110,6 +110,100 @@ fn overhead_trim_help_exits_zero_with_non_empty_stdout() {
 }
 
 #[test]
+fn overhead_deltas_help_only_advertises_supported_shared_flags() {
+    let output = burn()
+        .args(["overhead", "deltas", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).expect("help should be valid UTF-8");
+    assert!(stdout.contains("--project <PATH>"), "{stdout}");
+    assert!(stdout.contains("--since <RANGE>"), "{stdout}");
+    assert!(!stdout.contains("--kind"), "{stdout}");
+    assert!(stdout.contains("Defaults to all projects"), "{stdout}");
+    assert!(
+        stdout.contains("preceding baseline inference may be older"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn overhead_trim_keeps_post_subcommand_shared_flags() {
+    let ledger = tempfile::TempDir::new().expect("temp ledger");
+    let project = tempfile::TempDir::new().expect("temp project");
+    burn()
+        .args([
+            "--ledger-path",
+            ledger.path().to_str().unwrap(),
+            "overhead",
+            "trim",
+            "--project",
+            project.path().to_str().unwrap(),
+            "--since",
+            "7d",
+            "--kind",
+            "claude-md",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no claude-md overhead files found",
+        ));
+}
+
+#[test]
+fn overhead_deltas_invalid_since_errors_and_iso_works() {
+    let invalid_ledger = tempfile::TempDir::new().expect("temp ledger");
+    burn()
+        .args([
+            "--ledger-path",
+            invalid_ledger.path().to_str().unwrap(),
+            "overhead",
+            "deltas",
+            "--since",
+            "not-a-range",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid since"));
+
+    let iso_ledger = tempfile::TempDir::new().expect("temp ledger");
+    burn()
+        .args([
+            "--ledger-path",
+            iso_ledger.path().to_str().unwrap(),
+            "overhead",
+            "deltas",
+            "--since",
+            "2026-07-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn overhead_deltas_rejects_kind_and_duplicate_since() {
+    burn()
+        .args(["overhead", "deltas", "--kind", "claude-md"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument '--kind'"));
+
+    burn()
+        .args(["overhead", "--kind", "claude-md", "deltas"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--kind is not supported"));
+
+    burn()
+        .args(["overhead", "--since", "7d", "deltas", "--since", "1d"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("both before and after"));
+}
+
+#[test]
 fn update_toggle_auto_update_help_exits_zero_with_non_empty_stdout() {
     let output = burn()
         .args(["update", "toggle-auto-update", "--help"])

@@ -27,10 +27,51 @@ use crate::render::progress::TaskProgress;
 pub fn run(globals: &GlobalArgs, args: OverheadArgs) -> i32 {
     match args.action {
         Some(OverheadAction::Trim(trim)) => {
-            run_trim(globals, args.project, args.since, args.kind, trim.top)
+            let project = match merge_scoped_flag("--project", args.project, trim.project) {
+                Ok(value) => value,
+                Err(err) => return report_error(&err, globals),
+            };
+            let since = match merge_scoped_flag("--since", args.since, trim.since) {
+                Ok(value) => value,
+                Err(err) => return report_error(&err, globals),
+            };
+            let kind = match merge_scoped_flag("--kind", args.kind, trim.kind) {
+                Ok(value) => value,
+                Err(err) => return report_error(&err, globals),
+            };
+            run_trim(globals, project, since, kind, trim.top)
         }
-        Some(OverheadAction::Deltas(deltas)) => run_deltas(globals, args.since, deltas),
+        Some(OverheadAction::Deltas(deltas)) => {
+            if args.kind.is_some() {
+                let err = io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--kind is not supported by `burn overhead deltas`",
+                );
+                return report_error(&err, globals);
+            }
+            let project = match merge_scoped_flag("--project", args.project, deltas.project.clone())
+            {
+                Ok(value) => value,
+                Err(err) => return report_error(&err, globals),
+            };
+            let since = match merge_scoped_flag("--since", args.since, deltas.since.clone()) {
+                Ok(value) => value,
+                Err(err) => return report_error(&err, globals),
+            };
+            run_deltas(globals, project, since, deltas)
+        }
         None => run_report(globals, args.project, args.since, args.kind),
+    }
+}
+
+fn merge_scoped_flag<T>(name: &str, parent: Option<T>, child: Option<T>) -> io::Result<Option<T>> {
+    match (parent, child) {
+        (Some(_), Some(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} was provided both before and after the overhead subcommand"),
+        )),
+        (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
     }
 }
 
@@ -368,10 +409,18 @@ fn format_line_range(start: u64, end: u64) -> String {
 // `burn overhead deltas` (#432)
 // ---------------------------------------------------------------------------
 
-fn run_deltas(globals: &GlobalArgs, since: Option<String>, args: OverheadDeltasArgs) -> i32 {
+fn run_deltas(
+    globals: &GlobalArgs,
+    project: Option<PathBuf>,
+    since: Option<String>,
+    args: OverheadDeltasArgs,
+) -> i32 {
     let opts = ContextDeltaOpts {
         session: args.session.clone(),
-        since: since.as_deref().and_then(parse_since_duration),
+        project: project
+            .as_deref()
+            .map(|path| resolve_project(Some(path)).to_string_lossy().into_owned()),
+        since,
         top: args.top,
         min_delta: args.min_delta,
         owner: args.owner.into(),
@@ -466,36 +515,6 @@ fn render_human_deltas(deltas: &[ContextDelta], explain: bool) -> io::Result<()>
     )?;
     handle.flush()?;
     Ok(())
-}
-
-/// Parse the CLI's relative-range `--since` form (`24h`, `7d`, `4w`, `2m`)
-/// into a [`std::time::Duration`]. ISO-timestamp forms are accepted by the
-/// SDK's `normalize_since` elsewhere, but the deltas verb only takes a
-/// relative window today (`ContextDeltaOpts::since: Option<Duration>`).
-/// Unrecognized inputs fall through to `None` — the SDK then applies the
-/// 24h default.
-fn parse_since_duration(s: &str) -> Option<std::time::Duration> {
-    if s.is_empty() {
-        return None;
-    }
-    let bytes = s.as_bytes();
-    let unit = *bytes.last()? as char;
-    if !matches!(unit, 'h' | 'd' | 'w' | 'm') {
-        return None;
-    }
-    let num = &s[..s.len() - 1];
-    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n: u64 = num.parse().ok()?;
-    let secs = match unit {
-        'h' => n.checked_mul(3_600)?,
-        'd' => n.checked_mul(86_400)?,
-        'w' => n.checked_mul(7 * 86_400)?,
-        'm' => n.checked_mul(30 * 86_400)?,
-        _ => unreachable!(),
-    };
-    Some(std::time::Duration::from_secs(secs))
 }
 
 fn short_turn_label(turn_id: &str) -> String {
@@ -655,5 +674,26 @@ mod tests {
     fn format_signed_tokens_handles_positive_and_zero() {
         assert_eq!(format_signed_tokens(0), "0");
         assert!(format_signed_tokens(5_000).starts_with('+'));
+    }
+
+    #[test]
+    fn duplicate_scoped_flag_is_an_error() {
+        let err = merge_scoped_flag("--since", Some("7d"), Some("1d"))
+            .expect_err("duplicate flag must not pick a winner");
+        assert!(err.to_string().contains("both before and after"));
+    }
+
+    #[test]
+    fn resolve_project_canonicalizes_relative_paths_for_ledger_matching() {
+        let dir = tempfile::Builder::new()
+            .prefix("relayburn-project-")
+            .tempdir_in(".")
+            .expect("temp project");
+        let input = Path::new(dir.path().file_name().expect("temp project name"));
+        assert!(!input.is_absolute());
+        assert_eq!(
+            resolve_project(Some(input)),
+            std::fs::canonicalize(input).expect("canonical project")
+        );
     }
 }
