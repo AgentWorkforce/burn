@@ -31,9 +31,12 @@ use std::path::PathBuf;
 
 use rusqlite::params;
 
+#[cfg(test)]
+pub(crate) use crate::ledger::config::CONFIG_ENV_LOCK;
 pub use crate::ledger::config::{
     config_path, config_path_at_home, load_config, load_config_at, load_config_with_home,
-    BurnConfig, ContentConfig, Retention, DEFAULT_RETENTION_DAYS,
+    BurnConfig, ContentConfig, Retention, StalenessConfig, DEFAULT_RETENTION_DAYS,
+    DEFAULT_STALE_AFTER_HOURS,
 };
 pub use crate::ledger::content::{PruneStats, SearchHit, SearchOptions};
 pub use crate::ledger::error::{LedgerError, Result};
@@ -79,6 +82,17 @@ impl Ledger {
 
     pub fn content_path(&self) -> &Path {
         &self.conns.content_path
+    }
+
+    /// Wall-clock time of the most recent derived-ledger mutation, in Unix
+    /// milliseconds. `None` means the ledger has never received data.
+    pub fn last_write_at_ms(&self) -> Result<Option<u64>> {
+        let value: Option<i64> = self.conns.burn.query_row(
+            "SELECT last_write_at_ms FROM archive_state WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(value.and_then(|v| u64::try_from(v).ok()))
     }
 
     // --- append paths -------------------------------------------------

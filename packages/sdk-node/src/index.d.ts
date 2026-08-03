@@ -466,6 +466,17 @@ export declare function computeCompareExcluded(
 // stack (see issue #374), so there is nothing to log.
 // ---------------------------------------------------------------------------
 
+export interface LedgerFreshnessOptions { ledgerHome?: string }
+export interface LedgerFreshness {
+  /** Unix epoch milliseconds of the most recent ledger mutation. */
+  lastWriteAtMs?: number;
+  staleAfterMs: number;
+  stale: boolean;
+}
+
+/** Inspect whether read/report data is older than the configured threshold. */
+export declare function ledgerFreshness(opts?: LedgerFreshnessOptions): Promise<LedgerFreshness>
+
 export interface SearchQueryOptions {
   /** FTS5 query string. Phrase, boolean, and prefix syntax supported. */
   query: string;

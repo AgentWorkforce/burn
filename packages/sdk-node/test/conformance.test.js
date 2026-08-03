@@ -62,6 +62,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'Ledger',
     'ingest',
     'summary',
+    'ledgerFreshness',
     'sessionCost',
     'fingerprint',
     'overhead',
@@ -85,6 +86,12 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
 
   const ledgerHome = makeLedgerHome();
   try {
+    const freshness = await sdk.ledgerFreshness({ ledgerHome });
+    assert.equal(typeof freshness.stale, 'boolean');
+    assert.equal(typeof freshness.staleAfterMs, 'number');
+    assert.ok(
+      freshness.lastWriteAtMs === undefined || typeof freshness.lastWriteAtMs === 'number',
+    );
     const summary = await sdk.summary({ ledgerHome });
     assert.equal(typeof summary.totalCost, 'number');
     assert.ok(Array.isArray(summary.byModel));

@@ -2,8 +2,8 @@
 //!
 //! Mirrors `packages/ledger/src/config.ts`: a small JSON file at
 //! `$RELAYBURN_HOME/config.json` with environment-variable overrides for
-//! the two knobs ingest cares about (`content.store` and
-//! `content.retentionDays`). The TS source-of-truth co-locates this with
+//! content storage/retention and the read staleness threshold. The
+//! TS source-of-truth co-locates this with
 //! `@relayburn/ledger`, so the Rust port keeps the same home — the
 //! ledger crate already depends on `relayburn-reader` for
 //! [`ContentStoreMode`], and ingest (#277, #278) already depends on the
@@ -23,9 +23,14 @@ use crate::reader::ContentStoreMode;
 use crate::ledger::error::Result;
 use crate::ledger::paths::ledger_home;
 
+#[cfg(test)]
+pub(crate) static CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Default content retention window in days. Matches TS
 /// `DEFAULT_RETENTION_DAYS`.
 pub const DEFAULT_RETENTION_DAYS: f64 = 90.0;
+/// Default age after which read results are considered stale.
+pub const DEFAULT_STALE_AFTER_HOURS: f64 = 24.0;
 
 /// Retention window for content rows. Mirrors the TS
 /// `number | 'forever'` shape; `Forever` disables TTL-based pruning.
@@ -65,6 +70,13 @@ pub struct ContentConfig {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BurnConfig {
     pub content: ContentConfig,
+    pub staleness: StalenessConfig,
+}
+
+/// Controls when read/report surfaces flag the ledger as stale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StalenessConfig {
+    pub threshold_hours: f64,
 }
 
 impl Default for BurnConfig {
@@ -75,6 +87,9 @@ impl Default for BurnConfig {
             content: ContentConfig {
                 store: ContentStoreMode::Full,
                 retention_days: Retention::Days(DEFAULT_RETENTION_DAYS),
+            },
+            staleness: StalenessConfig {
+                threshold_hours: DEFAULT_STALE_AFTER_HOURS,
             },
         }
     }
@@ -96,7 +111,8 @@ pub fn config_path_at_home(home: &Path) -> PathBuf {
 }
 
 /// Load the user config: read the JSON file (if present), then layer the
-/// `RELAYBURN_CONTENT_STORE` and `RELAYBURN_CONTENT_TTL_DAYS` env vars on
+/// `RELAYBURN_CONTENT_STORE`, `RELAYBURN_CONTENT_TTL_DAYS`, and
+/// `RELAYBURN_STALE_AFTER_HOURS` env vars on
 /// top, falling back to [`BurnConfig::default`].
 ///
 /// Mirrors the TS `loadConfig()` precedence: env overrides file overrides
@@ -138,10 +154,21 @@ pub fn load_config_at(path: &Path) -> Result<BurnConfig> {
             .and_then(|c| c.content.as_ref())
             .and_then(|c| c.retention_days.as_ref()),
     );
+    let stale_after_hours = pick_positive_number(
+        std::env::var("RELAYBURN_STALE_AFTER_HOURS").ok().as_deref(),
+        from_file
+            .as_ref()
+            .and_then(|c| c.staleness.as_ref())
+            .and_then(|c| c.threshold_hours.as_ref()),
+        DEFAULT_STALE_AFTER_HOURS,
+    );
     Ok(BurnConfig {
         content: ContentConfig {
             store,
             retention_days: retention,
+        },
+        staleness: StalenessConfig {
+            threshold_hours: stale_after_hours,
         },
     })
 }
@@ -156,6 +183,14 @@ pub fn load_config_at(path: &Path) -> Result<BurnConfig> {
 struct RawConfig {
     #[serde(default)]
     content: Option<RawContent>,
+    #[serde(default)]
+    staleness: Option<RawStaleness>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct RawStaleness {
+    #[serde(default, rename = "thresholdHours")]
+    threshold_hours: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -286,24 +321,33 @@ fn normalize_retention_f64(f: f64) -> Option<Retention> {
     Some(Retention::Days(f))
 }
 
+fn pick_positive_number(env: Option<&str>, file: Option<&serde_json::Value>, default: f64) -> f64 {
+    env.and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .or_else(|| {
+            file.and_then(serde_json::Value::as_f64)
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        })
+        .unwrap_or(default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use tempfile::TempDir;
 
     // The picker functions read process-wide env vars. Serialize tests
     // that touch them so a parallel test run doesn't see a leaked value
     // from a peer.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     fn with_clean_env<F: FnOnce()>(f: F) {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("RELAYBURN_CONTENT_STORE");
         std::env::remove_var("RELAYBURN_CONTENT_TTL_DAYS");
+        std::env::remove_var("RELAYBURN_STALE_AFTER_HOURS");
         f();
         std::env::remove_var("RELAYBURN_CONTENT_STORE");
         std::env::remove_var("RELAYBURN_CONTENT_TTL_DAYS");
+        std::env::remove_var("RELAYBURN_STALE_AFTER_HOURS");
     }
 
     #[test]
@@ -313,6 +357,7 @@ mod tests {
             let cfg = load_config_at(&tmp.path().join("config.json")).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::Full);
             assert_eq!(cfg.content.retention_days, Retention::Days(90.0));
+            assert_eq!(cfg.staleness.threshold_hours, 24.0);
             assert_eq!(cfg, BurnConfig::default());
         });
     }
@@ -374,6 +419,24 @@ mod tests {
             let cfg = load_config_at(&path).unwrap();
             assert_eq!(cfg.content.store, ContentStoreMode::Off);
             assert_eq!(cfg.content.retention_days, Retention::Days(30.0));
+        });
+    }
+
+    #[test]
+    fn staleness_threshold_file_and_env_overrides() {
+        with_clean_env(|| {
+            let tmp = TempDir::new().unwrap();
+            let path = tmp.path().join("config.json");
+            std::fs::write(&path, r#"{"staleness":{"thresholdHours":6}}"#).unwrap();
+            assert_eq!(
+                load_config_at(&path).unwrap().staleness.threshold_hours,
+                6.0
+            );
+            std::env::set_var("RELAYBURN_STALE_AFTER_HOURS", "2.5");
+            assert_eq!(
+                load_config_at(&path).unwrap().staleness.threshold_hours,
+                2.5
+            );
         });
     }
 

@@ -65,7 +65,10 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   per-file deserialize. Blanked by `state rebuild` / `state reset` so the
 ///   next ingest does not trust source state captured before derived rows were
 ///   wiped. (#468)
-pub const SCHEMA_VERSION: u32 = 6;
+/// - `7`: adds `archive_state.last_write_at_ms INTEGER`, maintained by
+///   triggers on derived ledger tables, so read surfaces can distinguish a
+///   current ledger from one that has not received data recently. (#507)
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.
@@ -232,11 +235,12 @@ CREATE TABLE IF NOT EXISTS archive_state (
     last_rebuild_at       TEXT,
     -- Cheap source-side change gate: `count:totalBytes:hash` over the
     -- session files ingest scans. Empty until the first ingest records it.
-    source_fingerprint    TEXT NOT NULL DEFAULT ''
+    source_fingerprint    TEXT NOT NULL DEFAULT '',
+    last_write_at_ms      INTEGER
 );
 
 INSERT INTO archive_state (id, schema_version)
-    VALUES (1, 6)
+    VALUES (1, 7)
     ON CONFLICT(id) DO NOTHING;
 "#;
 

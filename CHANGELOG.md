@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- Read/report commands (`summary`, `hotspots`, `findings`, and `sessions list`) now warn when the ledger has not received data within the configurable staleness threshold (24 hours by default); the SDK exposes the same last-write timestamp and stale flag as data.
+
 ## [4.0.0] - 2026-06-23
 
 - **BREAKING (`relayburn-sdk`):** the published Rust SDK no longer re-exports its low-level `analyze`-layer internals (detector/aggregator functions and helper types such as `PricingTable`, `CompareTable`, `CompareCell`) — these were never the intended embedding surface. Embed through the verb layer instead: `LedgerHandle` methods / `summary_report` / `hotspots` / `compare`. CLI, MCP, and `@relayburn/sdk` behavior is unchanged.

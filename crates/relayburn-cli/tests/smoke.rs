@@ -53,6 +53,65 @@ fn burn() -> Command {
     Command::cargo_bin("burn").expect("`burn` binary must build for the smoke test")
 }
 
+fn seed_one_turn(home: &std::path::Path) {
+    let mut handle = relayburn_sdk::Ledger::open(relayburn_sdk::LedgerOpenOptions::with_home(home))
+        .expect("open test ledger");
+    let turn: relayburn_sdk::TurnRecord = serde_json::from_value(serde_json::json!({
+        "v": 1,
+        "source": "codex",
+        "sessionId": "stale-session",
+        "messageId": "stale-message",
+        "turnIndex": 0,
+        "ts": "2026-01-01T00:00:00.000Z",
+        "model": "gpt-5.2-codex",
+        "usage": {"input": 1, "output": 1, "reasoning": 0, "cacheRead": 0, "cacheCreate5m": 0, "cacheCreate1h": 0},
+        "toolCalls": []
+    }))
+    .expect("deserialize test turn");
+    handle.raw_mut().append_turns(&[turn]).expect("seed turn");
+}
+
+#[test]
+fn stale_warning_is_uniform_across_requested_read_surface() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    seed_one_turn(home.path());
+    std::fs::write(
+        home.path().join("config.json"),
+        r#"{"staleness":{"thresholdHours":0}}"#,
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+
+    for args in [
+        vec!["summary"],
+        vec!["hotspots"],
+        vec!["hotspots", "--findings"],
+        vec!["sessions", "list", "--since", "12m"],
+    ] {
+        burn()
+            .args(["--ledger-path", home.path().to_str().expect("utf-8 path")])
+            .args(&args)
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("ledger data is stale"));
+    }
+}
+
+#[test]
+fn fresh_ledger_does_not_warn() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    seed_one_turn(home.path());
+    burn()
+        .args([
+            "--ledger-path",
+            home.path().to_str().expect("utf-8 path"),
+            "summary",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ledger data is stale").not());
+}
+
 #[test]
 fn top_level_help_lists_every_subcommand() {
     let output = burn().arg("--help").assert().success().get_output().clone();

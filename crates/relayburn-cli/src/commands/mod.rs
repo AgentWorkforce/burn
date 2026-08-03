@@ -20,6 +20,7 @@
 
 pub mod compare;
 pub mod flow;
+mod freshness;
 pub mod hotspots;
 pub mod ingest;
 pub mod mcp_server;

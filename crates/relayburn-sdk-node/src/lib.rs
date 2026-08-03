@@ -374,6 +374,34 @@ fn open_options(home: Option<String>, content_home: Option<String>) -> sdk::Ledg
     }
 }
 
+#[napi(object)]
+pub struct LedgerFreshnessOptions {
+    pub ledger_home: Option<String>,
+}
+
+#[napi(object)]
+pub struct LedgerFreshness {
+    pub last_write_at_ms: Option<f64>,
+    pub stale_after_ms: f64,
+    pub stale: bool,
+}
+
+/// Return the shared SDK staleness flag without printing. MCP and other Node
+/// presenters can attach this data to their own response envelopes.
+#[napi]
+pub fn ledger_freshness(
+    opts: Option<LedgerFreshnessOptions>,
+) -> Result<LedgerFreshness, BurnError> {
+    let home = opts.and_then(|o| o.ledger_home);
+    let handle = sdk::Ledger::open(open_options(home, None)).map_err(sdk_err)?;
+    let freshness = handle.ledger_freshness().map_err(sdk_err)?;
+    Ok(LedgerFreshness {
+        last_write_at_ms: freshness.last_write_at_ms.map(|v| v as f64),
+        stale_after_ms: freshness.stale_after_ms as f64,
+        stale: freshness.stale,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // writePendingStamp
 // ---------------------------------------------------------------------------

@@ -73,7 +73,9 @@ fn run_list_inner(globals: &GlobalArgs, args: SessionsListArgs) -> anyhow::Resul
     let result = handle.sessions_list(sdk_opts).inspect_err(|_| {
         progress.finish_and_clear();
     })?;
+    let freshness = handle.ledger_freshness()?;
     progress.finish_and_clear();
+    crate::commands::freshness::warn_if_stale(&freshness);
 
     if globals.json {
         emit_json(
