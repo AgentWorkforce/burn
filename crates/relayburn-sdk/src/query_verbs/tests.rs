@@ -2914,7 +2914,21 @@ fn summary_timeseries_places_turns_in_buckets_and_sums_to_total() {
         "two turns 9m apart -> two distinct 5m buckets"
     );
     assert!(nonempty.iter().all(|b| b.turn_count == 1));
-    assert_eq!(nonempty.iter().map(|b| b.unpriced_turns).sum::<u64>(), 1);
+    let retired_bucket = nonempty
+        .iter()
+        .find(|bucket| bucket.rows.iter().any(|row| row.label == "gpt-5-codex"))
+        .expect("retired model bucket");
+    assert_eq!(retired_bucket.unpriced_turns, 1);
+    let priced_bucket = nonempty
+        .iter()
+        .find(|bucket| {
+            bucket
+                .rows
+                .iter()
+                .any(|row| row.label == "claude-sonnet-4-6")
+        })
+        .expect("priced model bucket");
+    assert_eq!(priced_bucket.unpriced_turns, 0);
 
     // Per-bucket totals reconcile with the un-bucketed total.
     let total_tokens: u64 = series.buckets.iter().map(|b| b.total_tokens).sum();
