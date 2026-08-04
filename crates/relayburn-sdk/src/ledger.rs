@@ -31,9 +31,12 @@ use std::path::PathBuf;
 
 use rusqlite::params;
 
+#[cfg(test)]
+pub(crate) use crate::ledger::config::CONFIG_ENV_LOCK;
 pub use crate::ledger::config::{
     config_path, config_path_at_home, load_config, load_config_at, load_config_with_home,
-    BurnConfig, ContentConfig, Retention, DEFAULT_RETENTION_DAYS,
+    load_staleness_config, load_staleness_config_at, load_staleness_config_with_home, BurnConfig,
+    ContentConfig, Retention, StalenessConfig, DEFAULT_RETENTION_DAYS, DEFAULT_STALE_AFTER_HOURS,
 };
 pub use crate::ledger::content::{PruneStats, SearchHit, SearchOptions};
 pub use crate::ledger::error::{LedgerError, Result};
@@ -79,6 +82,19 @@ impl Ledger {
 
     pub fn content_path(&self) -> &Path {
         &self.conns.content_path
+    }
+
+    /// Wall-clock time of the most recent event/derived-row mutation in
+    /// `burn.sqlite`, in Unix milliseconds. Content-sidecar-only writes are
+    /// excluded because report freshness tracks ingested activity rather than
+    /// blob persistence. `None` means the ledger has never received activity.
+    pub fn last_write_at_ms(&self) -> Result<Option<u64>> {
+        let value: Option<i64> = self.conns.burn.query_row(
+            "SELECT last_write_at_ms FROM archive_state WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(value.and_then(|v| u64::try_from(v).ok()))
     }
 
     // --- append paths -------------------------------------------------
@@ -350,8 +366,11 @@ impl Ledger {
     // --- state rebuild -----------------------------------------------
 
     /// Drop the derivable tables in `burn.sqlite` and the entire
-    /// `content.sqlite`, then re-create them empty. Stamps, archive
-    /// state, and ingest cursors are preserved.
+    /// `content.sqlite`, then re-create them empty. Stamps and ingest cursors
+    /// are preserved; archive timestamps remain except for
+    /// `last_write_at_ms`, which is cleared until re-ingest writes derived
+    /// rows again. The source fingerprint is also cleared so re-ingest cannot
+    /// incorrectly short-circuit.
     ///
     /// Returns the path to the (now-empty) content DB so the caller can
     /// move on to re-ingest from upstream files. Re-ingest is the
@@ -395,7 +414,8 @@ impl Ledger {
         // this only forces the next ingest to re-examine source state rather
         // than trusting a fingerprint recorded before the drop.
         self.conns.burn.execute(
-            "UPDATE archive_state SET last_rebuild_at = ?, source_fingerprint = '' WHERE id = 1",
+            "UPDATE archive_state SET last_rebuild_at = ?, source_fingerprint = '', \
+             last_write_at_ms = NULL WHERE id = 1",
             params![now],
         )?;
 
@@ -427,21 +447,22 @@ impl Ledger {
 
     /// Snapshot the single-row `archive_state` table as a JSON object —
     /// `{ schema_version, upstream_cursors_json, last_built_at,
-    /// last_rebuild_at }`. Powers `state_status`'s `archive` block; kept
+    /// last_rebuild_at, last_write_at_ms }`. Powers `state_status`'s `archive` block; kept
     /// here rather than at the SDK verb so callers don't have to bind
     /// to rusqlite directly to read first-party rows.
     pub fn read_archive_state_json(&self) -> Result<String> {
-        let row: (i64, String, Option<String>, Option<String>) = self.conns.burn.query_row(
-            "SELECT schema_version, upstream_cursors_json, last_built_at, last_rebuild_at \
+        let row: (i64, String, Option<String>, Option<String>, Option<i64>) = self.conns.burn.query_row(
+            "SELECT schema_version, upstream_cursors_json, last_built_at, last_rebuild_at, last_write_at_ms \
              FROM archive_state WHERE id = 1",
             [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
         let value = serde_json::json!({
             "schema_version": row.0,
             "upstream_cursors_json": row.1,
             "last_built_at": row.2,
             "last_rebuild_at": row.3,
+            "last_write_at_ms": row.4,
         });
         Ok(value.to_string())
     }
@@ -564,7 +585,8 @@ impl Ledger {
              SET upstream_cursors_json = '{}', \
                  last_built_at = NULL, \
                  last_rebuild_at = NULL, \
-                 source_fingerprint = '' \
+                 source_fingerprint = '', \
+                 last_write_at_ms = NULL \
              WHERE id = 1",
             [],
         )?;

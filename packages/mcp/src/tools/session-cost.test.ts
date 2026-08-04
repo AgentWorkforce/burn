@@ -3,9 +3,14 @@ import { describe, it } from 'node:test';
 
 import { createSessionCostTool, type SessionCostResult } from './session-cost.js';
 
+const FRESHNESS_DEP = {
+  ledgerFreshness: async () => ({ lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false }),
+};
+
 describe('createSessionCostTool', () => {
   it('returns the SDK no-session shape with the MCP-specific note when no id is registered', async () => {
     const tool = createSessionCostTool({
+      ...FRESHNESS_DEP,
       defaultSessionId: undefined,
       sessionCost: async () => ({
         sessionId: null,
@@ -20,12 +25,34 @@ describe('createSessionCostTool', () => {
     assert.equal(result.sessionId, null);
     assert.equal(result.totalUSD, 0);
     assert.equal(result.turnCount, 0);
+    assert.deepEqual(result.ledgerFreshness, {
+      lastWriteAtMs: 1,
+      staleAfterMs: 86_400_000,
+      stale: false,
+    });
     assert.match(result.note ?? '', /no session id provided and server was not registered/);
+  });
+
+  it('returns stale freshness metadata unchanged', async () => {
+    const tool = createSessionCostTool({
+      ledgerFreshness: async () => ({ lastWriteAtMs: 1, staleAfterMs: 2, stale: true }),
+      defaultSessionId: 's1',
+      sessionCost: async () => ({
+        sessionId: 's1',
+        totalUSD: 0,
+        totalTokens: 0,
+        turnCount: 0,
+        models: [],
+      }),
+    });
+    const result = (await tool.handler({})) as SessionCostResult;
+    assert.deepEqual(result.ledgerFreshness, { lastWriteAtMs: 1, staleAfterMs: 2, stale: true });
   });
 
   it('uses the override sessionId when provided', async () => {
     let queriedFor: string | undefined;
     const tool = createSessionCostTool({
+      ...FRESHNESS_DEP,
       defaultSessionId: 'default-id',
       sessionCost: async (opts) => {
         queriedFor = opts.session;
@@ -45,6 +72,7 @@ describe('createSessionCostTool', () => {
   it('falls back to defaultSessionId when no override given', async () => {
     let queriedFor: string | undefined;
     const tool = createSessionCostTool({
+      ...FRESHNESS_DEP,
       defaultSessionId: 'baked-id',
       sessionCost: async (opts) => {
         queriedFor = opts.session;
@@ -63,6 +91,7 @@ describe('createSessionCostTool', () => {
 
   it('returns the SDK result verbatim when a session id is present', async () => {
     const tool = createSessionCostTool({
+      ...FRESHNESS_DEP,
       defaultSessionId: 's1',
       sessionCost: async (opts) => ({
         sessionId: opts.session ?? null,

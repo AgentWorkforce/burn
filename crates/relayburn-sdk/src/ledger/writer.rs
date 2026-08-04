@@ -41,6 +41,18 @@ fn now_lex_token() -> String {
     format!("ts:{:020}.{:09}", secs, nanos_part)
 }
 
+fn touch_last_write(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    tx.execute(
+        "UPDATE archive_state SET last_write_at_ms = ? WHERE id = 1",
+        params![now_ms],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Result<usize> {
     if turns.is_empty() {
         return Ok(0);
@@ -93,6 +105,9 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -121,6 +136,9 @@ pub(crate) fn append_compactions(
                 appended += 1;
             }
         }
+    }
+    if appended > 0 {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -158,6 +176,9 @@ pub(crate) fn append_relationships(
                 appended += 1;
             }
         }
+    }
+    if appended > 0 {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -198,6 +219,9 @@ pub(crate) fn append_tool_result_events(
                 appended += 1;
             }
         }
+    }
+    if appended > 0 {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -242,6 +266,9 @@ pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) ->
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -277,6 +304,9 @@ pub(crate) fn append_user_turns(
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -292,6 +322,7 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
 
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let written_at = now_lex_token();
+    let mut derived_rows_written = false;
     {
         tx.prepare(
             "INSERT INTO stamps (source, session_id, ts, selector_json, enrichment_json, written_at)
@@ -308,22 +339,27 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
         if let Some(rel) = synthesized {
             let id = relationship_id_fingerprint(&rel);
             let json = serde_json::to_string(&rel)?;
-            tx.prepare(
-                "INSERT OR IGNORE INTO relationships
+            let changed = tx
+                .prepare(
+                    "INSERT OR IGNORE INTO relationships
                      (id_fingerprint, source, session_id, related_session_id,
                       relationship_type, ts, record_json)
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
-            )?
-            .execute(params![
-                id,
-                rel.source.wire_str(),
-                rel.session_id,
-                rel.related_session_id,
-                rel.relationship_type.wire_str(),
-                rel.ts,
-                json,
-            ])?;
+                )?
+                .execute(params![
+                    id,
+                    rel.source.wire_str(),
+                    rel.session_id,
+                    rel.related_session_id,
+                    rel.relationship_type.wire_str(),
+                    rel.ts,
+                    json,
+                ])?;
+            derived_rows_written = changed > 0;
         }
+    }
+    if derived_rows_written {
+        touch_last_write(&tx)?;
     }
     tx.commit()?;
     Ok(())

@@ -241,6 +241,43 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current_version < 7 {
+        match conn.execute(
+            "ALTER TABLE archive_state ADD COLUMN last_write_at_ms INTEGER",
+            [],
+        ) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.contains("duplicate column name") => {}
+            Err(e) => return Err(e.into()),
+        }
+        // Legacy ledgers have no write clock. Seed conservatively from the
+        // newest event timestamp so an old snapshot is warned about on its
+        // first post-upgrade read instead of being made artificially fresh by
+        // the schema migration itself.
+        conn.execute(
+            "UPDATE archive_state
+             SET last_write_at_ms = (
+                 SELECT MAX(ms) FROM (
+                     SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) AS ms FROM turns
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM compactions
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM relationships
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM tool_result_events
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM user_turns
+                     UNION ALL SELECT CAST(strftime('%s', MAX(end_ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(end_ts)), 4, 3) AS INTEGER) FROM inferences
+                 )
+             ), schema_version = 7
+             WHERE id = 1",
+            [],
+        )?;
+    }
+
     // The `idx_turns_stop_reason` index is created here rather than in
     // the static DDL so a legacy v1 table (no `stop_reason` column yet)
     // doesn't fail the DDL pre-pass. By this point the column either

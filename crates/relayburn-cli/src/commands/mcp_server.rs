@@ -268,8 +268,10 @@ impl Server {
                     "Cheap polling primitive over the burn ledger. Returns \
                      `{count}:{maxMtimeUnix}:{totalBytes}` — three integers \
                      joined by colons. Clients keep the last-seen value and \
-                     skip re-querying when it's unchanged. Optionally scoped \
-                     to a session id or a project path. Read-only.",
+                     skip re-querying when it's unchanged. The response also \
+                     includes ledgerFreshness; check ledgerFreshness.stale \
+                     before relying on ledger reads. Optionally scoped to a \
+                     session id or a project path. Read-only.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -352,23 +354,25 @@ impl Server {
 
         let handle_guard = self.handle.lock().await;
         let result = handle_guard.fingerprint(scope);
+        let freshness = handle_guard.ledger_freshness();
         drop(handle_guard);
 
         let fp = match result {
             Ok(fp) => fp,
             Err(err) => {
-                write_success(
-                    id,
-                    json!({
-                        "content": [{ "type": "text", "text": err.to_string() }],
-                        "isError": true,
-                    }),
-                );
+                write_tool_error(id, err.to_string());
+                return;
+            }
+        };
+        let freshness = match freshness {
+            Ok(value) => value,
+            Err(err) => {
+                write_tool_error(id, err.to_string());
                 return;
             }
         };
 
-        let payload = json!({ "fingerprint": fp.as_str() });
+        let payload = json!({ "fingerprint": fp.as_str(), "ledgerFreshness": freshness });
         let text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
         write_success(
             id,
@@ -404,22 +408,16 @@ impl Server {
         };
         let handle_guard = self.handle.lock().await;
         let result = handle_guard.session_cost(opts);
+        let freshness = handle_guard.ledger_freshness();
         drop(handle_guard);
 
         let mut payload: SessionCostResult = match result {
             Ok(r) => r,
             Err(err) => {
-                let msg = err.to_string();
                 // Per MCP convention: tool errors are non-throwing
                 // results with `isError: true`. Reserve JSON-RPC errors
                 // for protocol problems (parse / method-not-found).
-                write_success(
-                    id,
-                    json!({
-                        "content": [{ "type": "text", "text": msg }],
-                        "isError": true,
-                    }),
-                );
+                write_tool_error(id, err.to_string());
                 return;
             }
         };
@@ -434,7 +432,18 @@ impl Server {
                 Some("no session id provided and server was not registered with one".to_string());
         }
 
-        let value = serde_json::to_value(&payload).unwrap_or(Value::Null);
+        let mut value = serde_json::to_value(&payload).unwrap_or(Value::Null);
+        match freshness {
+            Ok(freshness) => {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("ledgerFreshness".to_string(), json!(freshness));
+                }
+            }
+            Err(err) => {
+                write_tool_error(id, err.to_string());
+                return;
+            }
+        }
         let text = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
         write_success(
             id,
@@ -457,6 +466,16 @@ fn write_success(id: &Value, result: Value) {
         result,
     };
     write_response(&serde_json::to_value(&env).unwrap_or(Value::Null));
+}
+
+fn write_tool_error(id: &Value, message: impl Into<String>) {
+    write_success(
+        id,
+        json!({
+            "content": [{ "type": "text", "text": message.into() }],
+            "isError": true,
+        }),
+    );
 }
 
 fn error_envelope(id: &Value, code: i32, message: &str, data: Option<Value>) -> Value {

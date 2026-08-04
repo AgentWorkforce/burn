@@ -21,7 +21,8 @@
     "rows": 0
   },
   "archive": {
-    "schemaVersion": 5
+    "schemaVersion": 7,
+    "lastWriteAtMs": "${TS}"
   },
   "config": {
     "store": "off",

@@ -34,8 +34,9 @@
 //!   rather than dragging `chrono::DateTime` or `Date` through the FFI.
 //!   Matches the public Node facade types.
 //! - **`async fn` SDK verbs → `Promise<T>` on the JS side.** napi-rs's
-//!   `tokio_rt` feature drives this; we mark `ingest` `async fn` and the
-//!   sync verbs (`summary`, `sessionCost`, …) as plain `fn` returning
+//!   `tokio_rt` feature drives this; blocking operations such as `ingest` and
+//!   `ledgerFreshness` run through Tokio's blocking pool. Lightweight sync
+//!   verbs (`summary`, `sessionCost`, …) remain plain `fn` returning
 //!   `Result<T, BurnError>`.
 //! - **Errors → typed `BurnError` JS class (sync verbs only).** Domain
 //!   failures from the SDK (`anyhow::Error`) and argument-shape errors
@@ -48,7 +49,7 @@
 //!   [`BurnErrorCode`] enum is exported as a `string_enum` so TS code
 //!   can reference the codes by name without stringly-typed literals.
 //!
-//!   **Async exception — [`ingest`].** napi-rs 2.x's `async fn` lowering
+//!   **Async exception — [`ingest`] and [`ledger_freshness`].** napi-rs 2.x's `async fn` lowering
 //!   in `napi-derive` runs through `napi::bindgen_prelude::execute_tokio_future`
 //!   ([`napi-derive-backend`]'s `codegen/fn.rs`), which is hard-typed to
 //!   `Result<T, napi::Error<Status>>` — and `Status` is a *closed* enum
@@ -62,12 +63,12 @@
 //!   `crates/relayburn-sdk-node/src/lib.rs` git history for the
 //!   evaluation. We deliberately don't pay that complexity in v1.
 //!
-//!   **Concrete contract for [`ingest`]:** the returned `Promise<IngestReport>`
-//!   rejects with a JS `Error` whose `.code === 'GenericFailure'` and
-//!   whose `.message` is the rendered `anyhow::Error` chain from the
-//!   SDK. JS callers branching on `e.code` should match `'GenericFailure'`
-//!   for ingest failures (or, more robustly, gate on `e.message`
-//!   substrings if discrimination is required). A future PR can tighten
+//!   **Concrete contract for async bindings:** the returned promise rejects
+//!   with a JS `Error` whose `.code === 'GenericFailure'` and whose `.message`
+//!   is the rendered `anyhow::Error` chain from the SDK. JS callers branching
+//!   on `e.code` should match `'GenericFailure'` for these failures (or, more
+//!   robustly, gate on `e.message` substrings if discrimination is required).
+//!   A future PR can tighten
 //!   this — likely by upgrading to napi-rs 3.x once the `string_enum`
 //!   and `BigInt` ergonomics there are validated against the rest of
 //!   the binding — at which point `e.code` becomes one of the
@@ -90,7 +91,9 @@ use std::path::PathBuf;
 use std::ptr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use napi::bindgen_prelude::{BigInt, Error as NapiError, Result as NapiResult, ToNapiValue};
+use napi::bindgen_prelude::{
+    BigInt, Either, Error as NapiError, Null, Result as NapiResult, ToNapiValue,
+};
 use napi::sys;
 use napi_derive::napi;
 use serde_json::Value as JsonValue;
@@ -372,6 +375,41 @@ fn open_options(home: Option<String>, content_home: Option<String>) -> sdk::Ledg
         home: maybe_path(home),
         content_home: maybe_path(content_home),
     }
+}
+
+#[napi(object)]
+pub struct LedgerFreshnessOptions {
+    pub ledger_home: Option<String>,
+}
+
+#[napi(object)]
+pub struct LedgerFreshness {
+    pub last_write_at_ms: Option<f64>,
+    pub stale_after_ms: Either<f64, Null>,
+    pub stale: bool,
+}
+
+/// Return the shared SDK staleness flag without printing. MCP and other Node
+/// presenters can attach this data to their own response envelopes.
+#[napi]
+pub async fn ledger_freshness(
+    opts: Option<LedgerFreshnessOptions>,
+) -> Result<LedgerFreshness, NapiError> {
+    let home = opts.and_then(|o| o.ledger_home);
+    let freshness = tokio::task::spawn_blocking(move || {
+        let handle = sdk::Ledger::open(open_options(home, None))?;
+        handle.ledger_freshness()
+    })
+    .await
+    .map_err(|e| NapiError::from_reason(format!("ledger freshness task panicked: {e}")))?
+    .map_err(|e| NapiError::from_reason(format!("{e:#}")))?;
+    Ok(LedgerFreshness {
+        last_write_at_ms: freshness.last_write_at_ms.map(|v| v as f64),
+        stale_after_ms: freshness
+            .stale_after_ms
+            .map_or(Either::B(Null), |v| Either::A(v as f64)),
+        stale: freshness.stale,
+    })
 }
 
 // ---------------------------------------------------------------------------

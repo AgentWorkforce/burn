@@ -52,6 +52,8 @@ pub struct ArchiveStateStatus {
     pub last_built_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_rebuild_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_write_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,12 +181,15 @@ fn read_archive_state(ledger: &crate::RawLedger) -> Result<ArchiveStateStatus> {
         last_built_at: Option<String>,
         #[serde(default)]
         last_rebuild_at: Option<String>,
+        #[serde(default)]
+        last_write_at_ms: Option<u64>,
     }
     let raw: Raw = serde_json::from_str(&json).map_err(|e| anyhow::anyhow!(e))?;
     Ok(ArchiveStateStatus {
         schema_version: raw.schema_version,
         last_built_at: raw.last_built_at,
         last_rebuild_at: raw.last_rebuild_at,
+        last_write_at_ms: raw.last_write_at_ms,
     })
 }
 

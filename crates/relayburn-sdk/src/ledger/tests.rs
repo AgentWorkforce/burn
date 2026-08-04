@@ -531,6 +531,31 @@ fn stamp_synthesizes_spawn_env_relationship() {
     assert_eq!(rels[0].relationship_type, RelationshipType::Subagent);
     assert_eq!(rels[0].related_session_id.as_deref(), Some("parent-1"));
     assert_eq!(rels[0].agent_id.as_deref(), Some("child-1"));
+    assert!(
+        l.last_write_at_ms().unwrap().is_some(),
+        "a newly synthesized derived relationship should refresh ledger freshness"
+    );
+}
+
+#[test]
+fn annotation_only_stamp_does_not_refresh_ledger_freshness() {
+    let tmp = TempDir::new().unwrap();
+    let mut l = open_in(&tmp);
+    let mut enrichment = BTreeMap::new();
+    enrichment.insert("role".into(), "fix-bug".into());
+    let stamp = Stamp::new(
+        "2025-01-01T00:00:00Z",
+        StampSelector {
+            session_id: Some("s1".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+
+    l.append_stamp(&stamp).unwrap();
+
+    assert_eq!(l.last_write_at_ms().unwrap(), None);
 }
 
 #[test]
@@ -739,7 +764,7 @@ fn invalid_session_id_in_content_rejected() {
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
 /// migration, and the stored version bumps forward to the current
-/// `SCHEMA_VERSION` (6 after #436 + #435 + #434 + #468 chained on top of
+/// `SCHEMA_VERSION` (7 after #436 + #435 + #434 + #468 + #507 chained on top of
 /// #437).
 /// Existing rows stay `NULL` for every back-added column until rewritten.
 #[test]
@@ -776,8 +801,8 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             INSERT INTO turns (source, session_id, message_id, ts,
                 project, project_key, record_json, content_fingerprint)
             VALUES ('claude-code', 'legacy-sess', 'legacy-msg',
-                '2025-01-01T00:00:00Z', NULL, NULL,
-                '{\"v\":1,\"source\":\"claude-code\",\"sessionId\":\"legacy-sess\",\"messageId\":\"legacy-msg\",\"turnIndex\":0,\"ts\":\"2025-01-01T00:00:00Z\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cacheRead\":0,\"cacheCreate5m\":0,\"cacheCreate1h\":0},\"toolCalls\":[]}',
+                '2025-01-01T00:00:00.123Z', NULL, NULL,
+                '{\"v\":1,\"source\":\"claude-code\",\"sessionId\":\"legacy-sess\",\"messageId\":\"legacy-msg\",\"turnIndex\":0,\"ts\":\"2025-01-01T00:00:00.123Z\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cacheRead\":0,\"cacheCreate5m\":0,\"cacheCreate1h\":0},\"toolCalls\":[]}',
                 'legacy-fp');
             ",
         )
@@ -787,7 +812,7 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     // Step 2: open through the SDK. The migration must:
     //   a) add `turns.stop_reason TEXT`,
     //   b) bump archive_state.schema_version forward to the current
-    //      `SCHEMA_VERSION` (chained v1 → v2 → v3 → v4 → v5 → v6),
+    //      `SCHEMA_VERSION` (chained v1 → v2 → v3 → v4 → v5 → v6 → v7),
     //   c) leave the legacy row's stop_reason as NULL.
     let l = Ledger::open(&layout.burn, &layout.content).unwrap();
     let version: i64 = l
@@ -799,11 +824,11 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    // Current `SCHEMA_VERSION` is 6 (chained #437 v2 + #436 v3 + #435
-    // v4 + #434 v5 + #468 v6); the migration must walk every step in one
+    // Current `SCHEMA_VERSION` is 7 (chained #437 v2 + #436 v3 + #435
+    // v4 + #434 v5 + #468 v6 + #507 v7); the migration must walk every step in one
     // open() call.
     assert_eq!(
-        version, 6,
+        version, 7,
         "open must bump v1 forward to the current schema version"
     );
 
@@ -821,6 +846,15 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     assert!(
         archive_cols.iter().any(|c| c == "source_fingerprint"),
         "v6 migration must add archive_state.source_fingerprint"
+    );
+    assert!(
+        archive_cols.iter().any(|c| c == "last_write_at_ms"),
+        "v7 migration must add archive_state.last_write_at_ms"
+    );
+    assert_eq!(
+        l.last_write_at_ms().unwrap(),
+        Some(1_735_689_600_123),
+        "v7 migration must preserve event timestamp milliseconds"
     );
 
     let column_names: Vec<String> = l
@@ -882,6 +916,36 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     // skips the ALTER, version stays at the current SCHEMA_VERSION.
     drop(l);
     let _ = Ledger::open(&layout.burn, &layout.content).unwrap();
+}
+
+#[test]
+fn v7_migration_seeds_inference_only_activity() {
+    let tmp = TempDir::new().unwrap();
+    let layout = LedgerLayout::under(tmp.path());
+    drop(Ledger::open(&layout.burn, &layout.content).unwrap());
+
+    {
+        let conn = rusqlite::Connection::open(&layout.burn).unwrap();
+        conn.execute(
+            "INSERT INTO inferences
+                 (source, session_id, request_id, request_id_source, turn_id,
+                  model, kind, start_ts, end_ts, record_json)
+             VALUES ('codex', 's1', 'r1', 'explicit', 't1', 'gpt-5', 'text',
+                     '2025-01-01T00:00:00.100Z', '2025-01-01T00:00:00.987Z', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE archive_state
+             SET schema_version = 6, last_write_at_ms = NULL
+             WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    }
+
+    let ledger = Ledger::open(&layout.burn, &layout.content).unwrap();
+    assert_eq!(ledger.last_write_at_ms().unwrap(), Some(1_735_689_600_987));
 }
 
 #[test]
