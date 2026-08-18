@@ -1139,6 +1139,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
         .append_turns(&[
             TurnRecord {
                 v: 1,
+                request_count: 1,
                 source: SourceKind::ClaudeCode,
                 session_id: "sess-unpriced".into(),
                 session_path: None,
@@ -1167,6 +1168,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
             },
             TurnRecord {
                 v: 1,
+                request_count: 1,
                 source: SourceKind::ClaudeCode,
                 session_id: "sess-unpriced-small".into(),
                 session_path: None,
