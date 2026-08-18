@@ -23,9 +23,17 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, and subagents. |
 | [`burn overhead`](#burn-overhead) | Attribute cached prompt cost to `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. |
 | [`burn compare`](#burn-compare) | Compare observed model performance by activity: cost per turn, one-shot rate, and sample size. |
+| [`burn state`](#burn-state) | Inspect, fingerprint, rebuild, prune, or reset local ledger state. |
+| [`burn sessions`](#burn-sessions) | Find recent session IDs for drill-down queries. |
+| [`burn flow`](#burn-flow) | Render a session's inference and subagent flow as Mermaid, SVG, or JSON. |
+| [`burn stamps`](#burn-stamps) | Export enrichment stamps as JSONL. |
 | [`burn ingest`](#burn-ingest) | Import existing or live session logs without wrapping the harness. |
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
-| [`burn state`](#burn-state) | Inspect, rebuild, and prune derived ledger artifacts. |
+| [`burn update`](#burn-update) | Check for releases, install an update, or configure automatic checks. |
+
+Every command accepts `--json` for machine-readable output,
+`--ledger-path <path>` to select a Burn home for that invocation, and
+`--no-color` to disable ANSI styling.
 
 ## `burn summary`
 
@@ -37,9 +45,20 @@ tokens they used, and what they cost.
 | `--since <range>` | Limit to a relative range like `24h`, `7d`, or `4w`, or an ISO timestamp. |
 | `--project <path>` | Limit to a project path or git-canonical project key. |
 | `--session <id>` | Limit to one session. |
+| `--workflow <id>` | Limit to turns folded under a `workflowId` enrichment stamp. |
 | `--tag k=v` | Filter by folded enrichment tag. Repeatable; all tags must match. |
 | `--group-by-tag <key>` | Group totals by a folded enrichment tag value. |
 | `--by-provider` | Group totals by provider instead of model. |
+| `--by-tool` | Attribute each turn's ingest cost to the preceding tool calls. |
+| `--by-subagent-type` | Group totals by subagent type. |
+| `--by-relationship [subagent]` | Group by session relationship, optionally drilling into subagent leaves. |
+| `--subagent-tree [session]` | Render the subagent spawn tree. Uses `--session` when passed without a value. |
+| `--agent <id>` | Limit subagent-tree or relationship views to one agent. |
+| `--provider <csv>` | Limit results to effective providers. |
+| `--quality` | Append one-shot and completion-outcome metrics. |
+| `--bucket <duration>` | Emit fixed-width time buckets across the `--since` window. |
+| `--ingest` | Run one ingest sweep before querying. |
+| `--no-archive` | Accepted for CLI parity; it is a no-op because the Rust SDK is SQLite-native. |
 | `--json` | Emit machine-readable output. |
 
 | Example | Result |
@@ -47,6 +66,9 @@ tokens they used, and what they cost.
 | `burn summary` | All-time cost by model. |
 | `burn summary --since 24h` | Cost from the last 24 hours. |
 | `burn summary --by-provider` | Cost grouped by effective provider. |
+| `burn summary --by-tool` | Cost grouped by the tool calls that preceded each turn. |
+| `burn summary --quality` | Usage totals with one-shot and completion outcomes. |
+| `burn summary --since 24h --bucket 1h` | Hourly usage and cost for the last day. |
 | `burn summary --tag persona=code-reviewer` | Cost for sessions stamped with that persona tag. |
 | `burn summary --group-by-tag persona` | Cost grouped by persona value. |
 
@@ -68,8 +90,11 @@ subagents.
 | `--provider <csv>` | Restrict to providers (case-insensitive CSV — e.g. `anthropic,openai`). |
 | `--all` | Show every row instead of the top 10. |
 | `--group-by <dim>` | Focus one rollup: `attribution`, `bash`, `bash-verb`, `file`, or `subagent`. |
-| `--patterns [csv]` | Run waste-pattern detectors instead of the attribution view. Pass without a value to enable every detector, or pass a CSV (e.g. `retry-loop,failure-run`). |
+| `--patterns [csv]` | Run hotspot-pattern detectors instead of the attribution view. Pass without a value to enable every detector, or pass a CSV (e.g. `retry-loop,failure-run`). |
 | `--findings` | Emit the unified findings table instead of the per-detector grouping. Implies `--patterns` if not already set. |
+| `--rank-by <cost\|bytes>` | Rank per-tool tables by USD or raw output bytes. Default: `cost`. |
+| `--ingest` | Run one ingest sweep before querying. |
+| `--explain-drift` | Reserved for relationship-drift analysis; currently exits with a directed unsupported message. |
 | `--json` | Emit machine-readable output. |
 
 | Example | Result |
@@ -77,13 +102,11 @@ subagents.
 | `burn hotspots --since 7d` | Top costly files, bash commands, and subagents for the week. |
 | `burn hotspots --all --project .` | Full project hotspot list. |
 | `burn hotspots --group-by bash-verb --since 7d` | Bash verbs ranked by cost. |
-| `burn hotspots --session <uuid>` | Restrict the standard attribution view to one session. |
-| `burn hotspots --patterns retry-loop,failure-run` | Surface retry/failure waste-pattern findings only. |
+| `burn hotspots --session demo-session` | Restrict the standard attribution view to one session. |
+| `burn hotspots --patterns retry-loop,failure-run` | Surface retry/failure hotspot findings only. |
 | `burn hotspots --findings --since 7d` | Unified severity-ranked findings list across every detector. |
 | `burn hotspots --provider anthropic` | Restrict attribution to Anthropic-served turns. |
-
-The per-session aggregate view (`--session` with no id) and `--explain-drift`
-are not yet ported — passing them exits 2 with a directed message.
+| `burn hotspots --rank-by bytes` | Surface large tool outputs even when truncation kept their token count small. |
 
 ## `burn overhead`
 
@@ -94,10 +117,16 @@ attributes cached prompt cost to files and headed sections.
 | Option | What it does |
 |---|---|
 | `trim` | Print projected-savings diffs for high-cost headed sections. Burn does not modify files. |
+| `deltas` | Attribute context growth between consecutive inferences to intervening prompts, tool results, reminders, and compactions. |
 | `--project <path>` | Project to inspect. Defaults to the current directory. |
 | `--since <range>` | Limit attribution to a time window. |
 | `--kind <k>` | Limit to `claude-md` or `agents-md`. |
-| `--top <n>` | In `trim` mode, recommendations per file. |
+| `trim --top <n>` | Recommendations per file. Default: `3`. |
+| `deltas --session <id>` | Limit context deltas to one session. |
+| `deltas --top <n>` | Context-delta row cap. Default: `20`. |
+| `deltas --min-delta <tokens>` | Hide smaller increases. Default: `1000`; compactions always remain visible. |
+| `deltas --owner <all\|main\|subagent>` | Select inference rails. Default: `all`. |
+| `deltas --explain` | Expand the intervening steps behind each delta. |
 | `--json` | Emit machine-readable attribution for report mode or structured trim recommendations in `trim` mode. |
 
 | Example | Result |
@@ -107,6 +136,7 @@ attributes cached prompt cost to files and headed sections.
 | `burn overhead --kind claude-md` | Claude instruction files only. |
 | `burn overhead trim --top 3` | Top three trim recommendations per file. |
 | `burn overhead trim --json` | Structured trim recommendations with projected savings and unified diffs. |
+| `burn overhead deltas --top 10 --owner main` | Largest context-window increases on the main conversation rail. |
 
 Harnesses pay for different files: Claude Code pays for `CLAUDE.md`; Codex and
 OpenCode pay for `AGENTS.md`.
@@ -131,10 +161,12 @@ testing, review, exploration, docs, and refactoring.
 | `--include-partial` | Include every turn. Shorthand for `--fidelity partial`. |
 | `--json` | Emit a stable JSON object. |
 | `--csv` | Emit one row per model/activity pair. |
+| `--bucket <duration>` | Emit a time series across `--since` instead of one comparison. |
+| `--no-archive` | Accepted for CLI parity; it is a no-op because the Rust SDK is SQLite-native. |
 
-`burn compare` reads the ledger as-is — it does NOT run an ingest sweep
-first. Chain `burn ingest && burn compare …` (or run `burn ingest --watch`
-in the background) when you need the freshest data.
+`burn compare` reads the ledger as-is — it does not run an ingest sweep first.
+Run `burn ingest && burn compare claude-sonnet-4-6,claude-haiku-4-5 --since
+30d` (or keep `burn ingest --watch` running) when you need the freshest data.
 
 | Example | Result |
 |---|---|
@@ -142,6 +174,7 @@ in the background) when you need the freshest data.
 | `burn compare claude-opus-4-7,claude-sonnet-4-6 --project . --json` | Project-scoped JSON comparison. |
 | `burn compare claude-sonnet-4-6,claude-haiku-4-5 --fidelity full` | Compare only full-fidelity turns. |
 | `burn compare claude-sonnet-4-6,claude-haiku-4-5 --include-partial` | Include lower-fidelity records too. |
+| `burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 7d --bucket 1d` | Daily comparison buckets for the last week. |
 
 Run `burn summary --by-provider` to discover model IDs present in your ledger.
 
@@ -156,11 +189,13 @@ harness spawn. Default mode scans Claude Code, Codex, and OpenCode stores once.
 | `--interval <ms>` | Poll interval in milliseconds. Default: `1000`. |
 | `--quiet` | Suppress stderr progress spinner / breadcrumbs. One-shot mode still writes the final summary on stdout. |
 | `--hook claude` | Read one Claude Code hook payload from stdin and ingest its single transcript via the SDK fast-path. |
+| `--no-fsevents` | In watch mode, use polling instead of filesystem events. |
 
 | Example | Result |
 |---|---|
 | `burn ingest` | Scan all known session stores once. |
 | `burn ingest --watch` | Keep the ingest loop running. |
+| `burn ingest --watch --no-fsevents` | Poll session stores when filesystem events are unreliable. |
 | `burn ingest --hook claude --quiet` | Claude Code hook path for orchestrators. |
 
 ## `burn mcp-server`
@@ -171,6 +206,7 @@ MCP. The server is stdio-only and read-only.
 | Option | What it does |
 |---|---|
 | `--session-id <uuid>` | Default session ID used by session cost, summary, and hotspots when the caller omits one. |
+| `--debug` | Emit protocol diagnostics to stderr. |
 
 | Tool | What it returns |
 |---|---|
@@ -196,37 +232,103 @@ content/search data in `content.sqlite`.
 | Subcommand or option | What it does |
 |---|---|
 | `burn state` or `burn state status` | Print status for indexes, content, classifier, and archive. |
-| `--json` | Emit machine-readable status or archive rebuild/vacuum output. |
-| `rebuild index` | Rebuild derivable SQLite read-model data. |
-| `rebuild content` | Re-parse source session files to backfill content and user turns. |
-| `rebuild archive` | Refresh archive metadata in `burn.sqlite`. |
-| `rebuild all [--force]` | Rebuild derivable state. |
-| `prune [--days <n>]` | Delete expired content sidecars. Use `forever` to disable. |
-| `prune --force` | Delete recoverable sidecars even if source session files still exist. |
-| `reset [--force] [--reingest] [--json]` | Wipe derived state. Dry-run without `--force`; preserves config, pricing overrides, and source harness logs. |
+| `--json` | Emit machine-readable output. |
+| `fingerprint [--session <id> \| --project <path>]` | Print a low-cost change token for polling the ledger. |
+| `rebuild index\|classify\|content\|archive\|all` | Drop derivable rows and stage the ledger for a fresh ingest. All targets use the same SQLite rebuild transaction. |
+| `prune [--days <n\|forever>]` | Delete content rows older than the retention window. |
+| `reset [--force] [--reingest] [--json]` | Preview or perform a wipe of derived events, stamps, content, and ingest cursors. Config, pricing overrides, and source harness logs remain. |
 
 | Example | Result |
 |---|---|
 | `burn state` | Derived artifact status. |
 | `burn state status --json` | Machine-readable status. |
-| `burn state rebuild classify --force` | Reclassify every turn with current rules. |
-| `burn state prune --days 30` | Prune content older than 30 days, keeping recoverable sidecars. |
+| `burn state fingerprint --project .` | Project-scoped ledger change token. |
+| `burn state rebuild classify` | Drop derivable rows so the next ingest applies current classifier rules. |
+| `burn state prune --days 30` | Prune content older than 30 days. |
+
+Follow any `state rebuild` command with `burn ingest` to repopulate derived
+tables from the harness session stores. Before a forced reset, back up
+enrichment with `burn stamps export`; ingest cannot reconstruct stamps from
+harness logs.
+
+## `burn sessions`
+
+`burn sessions list` prints recent sessions newest-first. The default window is
+seven days and the default limit is 20 rows. Use `--project`, `--grep`,
+`--since`, and `--limit` to narrow or widen the list; `--json` returns the same
+records for scripts.
+
+```bash
+burn sessions list --since 30d --limit 10
+burn sessions list --project . --json
+```
+
+The full session IDs copy directly into `summary --session`, `hotspots
+--session`, `overhead deltas --session`, and `flow --session`.
+
+## `burn flow`
+
+`burn flow --session <id>` emits a Mermaid inference-flow DAG to stdout. Use
+`--output <path>` for SVG, `--json` for the graph payload, and `--max-turns`
+to cap wide sessions (default: 50; `0` disables the cap). `--mermaid` forces
+Mermaid on stdout even when `--output` also writes an SVG.
+
+```bash
+burn flow --session demo-session --json
+```
+
+## `burn stamps`
+
+`burn stamps export` streams every enrichment stamp as JSONL. `--out <path>`
+writes the same export to a file.
+
+```bash
+burn stamps export
+```
+
+## `burn update`
+
+`burn update --check` reports whether a release is available without
+installing it. Bare `burn update` installs the latest release through the
+package manager that installed Burn; `--force` reinstalls the latest release
+when already current. Automatic launch checks are controlled by
+`burn update toggle-auto-update --on` and
+`burn update toggle-auto-update --off`.
+
+```bash
+burn update --check
+burn update toggle-auto-update --off
+```
 
 ## Local Data
+
+Burn keeps its 2.x ledger in two SQLite databases. Both use WAL mode, so
+reporting readers can run while ingest writes. `burn.sqlite` is the event and
+metadata database; `content.sqlite` separates larger prompt, response, and
+search content from the compact analytical rows.
 
 | Path or setting | Purpose |
 |---|---|
 | `~/.agentworkforce/burn/burn.sqlite` | Events, stamps, sessions, relationships, and archive metadata. |
-| `~/.agentworkforce/burn/content.sqlite` | Content blobs and the FTS5 search index. |
+| `~/.agentworkforce/burn/content.sqlite` | Prompt/response content and the FTS5 search index. |
 | `~/.agentworkforce/burn/config.json` | Content-storage and retention configuration. |
 | `~/.agentworkforce/burn/pending-stamps/` | Temporary manifests used by launchers that do not expose a session ID before spawn. |
 | `RELAYBURN_HOME` | Override the whole Burn data directory. |
 | `RELAYBURN_SQLITE_PATH` | Override the events database path. |
 | `RELAYBURN_CONTENT_PATH` | Override the content database path. |
-| `RELAYBURN_CONTENT_STORE=full|hash-only|off` | Control content sidecar storage. Default: `full`. |
-| `RELAYBURN_CONTENT_TTL_DAYS=<n>` | Sidecar retention. Default: `90`. |
+| `RELAYBURN_CONTENT_STORE=full\|hash-only\|off` | Control content payload storage. Default: `full`. |
+| `RELAYBURN_CONTENT_TTL_DAYS=<days\|forever>` | Content retention. Default: `90`. |
 
-Reports read local data from the ledger and derived sidecars.
+`RELAYBURN_HOME` relocates the complete layout. The two per-database overrides
+can place event and content data on different volumes. SQLite may create
+`-wal` and `-shm` files beside each open database; they are part of normal WAL
+operation.
+
+Harness transcripts remain the upstream input for ingest. `burn state status`
+shows database paths, row counts, schema metadata, and resolved retention.
+`burn state rebuild ...` clears derivable tables for re-ingest, `burn state
+prune` applies content retention, and `burn state reset` previews or performs a
+full derived-state wipe.
 
 ## Packages
 
@@ -367,7 +469,7 @@ For passive ingest, run:
 
 ```bash
 burn ingest
-burn ingest --watch [--interval <ms>]
+burn ingest --watch --interval 1000
 ```
 
 `burn ingest` scans Claude, Codex, and OpenCode stores once and uses the same
