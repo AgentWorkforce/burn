@@ -263,18 +263,17 @@ pub struct IngestArgs {
 
 /// Per-command flags for `burn mcp-server`. The stdio MCP server speaks
 /// JSON-RPC 2.0 line-delimited frames over stdin/stdout and exposes the
-/// `burn__sessionCost` read-only tool. Closes #210.
+/// read-only burn MCP tool catalog.
 ///
 /// Global `--ledger-path` (on [`Args`]) is consulted as the SDK ledger
-/// home. `--session-id` registers a default session id so MCP clients
-/// that omit `sessionId` in `tools/call` get a useful answer (the
-/// running agent's own session).
+/// home. `--session-id` registers a default session id so MCP clients that
+/// omit a session selector get a useful answer (the running agent's own
+/// session).
 #[derive(Debug, Clone, ClapArgs)]
 pub struct McpServerArgs {
-    /// Default sessionId to use when `tools/call burn__sessionCost`
-    /// omits the argument. Lets the host wrap the server with the
-    /// running agent's own session id so the agent can self-query
-    /// without knowing it.
+    /// Default sessionId used by sessionCost, summary, and hotspots when
+    /// their session argument is omitted. Lets the host register the running
+    /// agent's own session so it can self-query without knowing the id.
     #[arg(long = "session-id", value_name = "ID")]
     pub session_id: Option<String>,
 

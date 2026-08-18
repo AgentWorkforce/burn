@@ -13,14 +13,16 @@
 //!   4. Asserts the normalized Rust output matches the snapshot byte-for-byte
 //!      and prints a unified diff on mismatch.
 //!
-//! ## Why this is `#[ignore]`d on `main`
+//! ## Enforcement gate
 //!
-//! The fixture retains per-invocation `enabled` flags so partially ported
-//! command surfaces can be staged deliberately. Enabled entries enforce the
-//! Rust output against the committed snapshot.
+//! CI and the publish workflow set `BURN_GOLDEN=1` so enabled entries enforce
+//! the Rust output against the committed snapshots. Plain local test runs skip
+//! the suite unless the developer opts in. The fixture retains per-invocation
+//! `enabled` flags so partially ported command surfaces can be staged
+//! deliberately.
 //!
 //! Run the full enforced suite locally with:
-//!   BURN_GOLDEN=1 cargo test --test golden -- --include-ignored
+//!   BURN_GOLDEN=1 cargo test --test golden
 //!
 //! See `tests/fixtures/cli-golden/README.md` for fixture maintenance notes.
 
@@ -82,12 +84,9 @@ struct Invocation {
 #[test]
 fn golden_diff_against_cli_snapshots() {
     if std::env::var("BURN_GOLDEN").ok().as_deref() != Some("1") {
-        // CI runs `cargo test --workspace` without BURN_GOLDEN set, so the
-        // diff runner is silent there. Local devs run `BURN_GOLDEN=1
-        // cargo test --test golden -- --nocapture` to enforce the gate;
-        // once Wave 2 finishes, the gate flips on by default in CI.
-        // Return early so an unset BURN_GOLDEN truly skips — no fixture
-        // discovery, no snapshot reads, no env-prep work.
+        // CI and the publish workflow set BURN_GOLDEN=1. Return early for
+        // ordinary local runs so an unset variable truly skips — no fixture
+        // discovery, snapshot reads, or env-prep work.
         eprintln!(
             "[golden] BURN_GOLDEN!=1 — skipping (set BURN_GOLDEN=1 to enforce). \
              Even when enforced, individual invocations stay skipped until their \

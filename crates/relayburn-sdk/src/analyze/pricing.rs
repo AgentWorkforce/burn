@@ -5,7 +5,7 @@
 //! `load_pricing` accepts an optional override path that, when present,
 //! shallow-merges over the builtin (override entries win on collision).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -44,6 +44,22 @@ pub struct ModelCost {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<f64>,
     pub reasoning_mode: ReasoningMode,
+    /// Higher tariffs selected when the turn's input context exceeds the
+    /// tier threshold. Ordered by ascending threshold.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_tiers: Vec<ModelCostTier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCostTier {
+    pub context_tokens: u64,
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<f64>,
 }
 
 pub(crate) type PricingTable = HashMap<String, ModelCost>;
@@ -66,6 +82,32 @@ struct ModelsDevCost {
     cache_write: Option<f64>,
     #[serde(default)]
     reasoning: Option<f64>,
+    #[serde(default)]
+    tiers: Vec<ModelsDevCostTier>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ModelsDevCostTier {
+    #[serde(default)]
+    input: Option<f64>,
+    #[serde(default)]
+    output: Option<f64>,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
+    #[serde(default)]
+    reasoning: Option<f64>,
+    #[serde(default)]
+    tier: ModelsDevTierCondition,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ModelsDevTierCondition {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -77,10 +119,24 @@ struct ModelsDevProvider {
     models: Option<IndexMap<String, ModelsDevModel>>,
 }
 
-// Same reason as `ModelsDevProvider::models`: providers iterate in file
-// order so a duplicate model id encountered under a later provider block
-// overwrites the earlier one, matching the TS `Object.values(root)` walk.
+// Providers iterate in file order so duplicate non-primary model ids retain
+// deterministic last-wins behavior. Primary vendor entries are protected
+// from later reseller copies in `flatten`.
 type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
+
+/// Primary model vendors whose own tariff should win over reseller/router
+/// copies with the same bare model id. models.dev regularly adds new provider
+/// blocks and their order is not a pricing-precedence contract.
+const PRIMARY_PRICING_PROVIDERS: &[&str] =
+    &["anthropic", "openai", "google", "google-vertex", "xai"];
+
+/// Bare model IDs owned by a primary pricing provider, plus burn's aliases for
+/// those IDs. Unlike the models.dev snapshot, this set is append-only:
+/// `pnpm run pricing:update` retains the existing catalog and unions the
+/// outgoing and incoming primary-provider IDs before replacing the snapshot.
+/// That history prevents a retired first-party model or its logged alias from
+/// silently inheriting a reseller tariff after its primary entry disappears.
+const BUILTIN_PRIMARY_MODEL_IDS_JSON: &str = include_str!("../../data/primary-model-ids.json");
 
 /// Bundled `models.dev.json` snapshot. Refreshed via `pnpm run pricing:update`,
 /// which writes through to the SDK crate's `data/` copy. Vendoring inside the
@@ -92,7 +148,10 @@ const BUILTIN_PRICING_JSON: &str = include_str!("../../data/models.dev.json");
 /// `HashMap` of several hundred entries, and `load_builtin_pricing` is on the
 /// hot path of multiple SDK verbs that each used to re-parse it.
 static BUILTIN_PRICING: LazyLock<PricingTable> = LazyLock::new(|| {
-    parse_pricing(BUILTIN_PRICING_JSON).expect("bundled models.dev.json must parse")
+    let protected_models: HashSet<String> = serde_json::from_str(BUILTIN_PRIMARY_MODEL_IDS_JSON)
+        .expect("bundled primary-model-ids.json must parse");
+    parse_pricing_with_protected_models(BUILTIN_PRICING_JSON, &protected_models)
+        .expect("bundled models.dev.json must parse")
 });
 
 /// Load the bundled `models.dev` snapshot. No I/O — the JSON is embedded at
@@ -124,21 +183,33 @@ fn load_from_file(path: &Path) -> io::Result<PricingTable> {
 }
 
 fn parse_pricing(raw: &str) -> serde_json::Result<PricingTable> {
+    parse_pricing_with_protected_models(raw, &HashSet::new())
+}
+
+fn parse_pricing_with_protected_models(
+    raw: &str,
+    protected_models: &HashSet<String>,
+) -> serde_json::Result<PricingTable> {
     let parsed: ModelsDevRoot = serde_json::from_str(raw)?;
-    Ok(flatten(&parsed))
+    Ok(flatten(&parsed, protected_models))
 }
 
 /// Flatten a nested `provider → model → cost` map into the flat
 /// `model_id → ModelCost` table burn uses for lookup. Skips entries that lack
 /// either `input` or `output` — matches the TS guard so we don't surface
 /// half-priced models.
-fn flatten(root: &ModelsDevRoot) -> PricingTable {
+fn flatten(root: &ModelsDevRoot, protected_models: &HashSet<String>) -> PricingTable {
     let mut out = PricingTable::new();
-    for provider in root.values() {
+    let mut primary_models: HashSet<String> = HashSet::new();
+    for (provider_id, provider) in root {
         let Some(models) = provider.models.as_ref() else {
             continue;
         };
         for (id, model) in models {
+            let primary_provider = PRIMARY_PRICING_PROVIDERS.contains(&provider_id.as_str());
+            if !primary_provider && (primary_models.contains(id) || protected_models.contains(id)) {
+                continue;
+            }
             let Some(cost) = model.cost.as_ref() else {
                 continue;
             };
@@ -160,11 +231,40 @@ fn flatten(root: &ModelsDevRoot) -> PricingTable {
                 } else {
                     ReasoningMode::SameAsOutput
                 },
+                context_tiers: context_tiers(cost),
             };
             out.insert(id.clone(), entry);
+            if primary_provider {
+                primary_models.insert(id.clone());
+            }
         }
     }
     out
+}
+
+fn context_tiers(cost: &ModelsDevCost) -> Vec<ModelCostTier> {
+    let mut tiers: Vec<ModelCostTier> = cost
+        .tiers
+        .iter()
+        .filter_map(|tier| {
+            if tier.tier.kind != "context" {
+                return None;
+            }
+            let context_tokens = tier.tier.size?;
+            let input = tier.input?;
+            let output = tier.output?;
+            Some(ModelCostTier {
+                context_tokens,
+                input,
+                output,
+                cache_read: tier.cache_read.unwrap_or(0.0),
+                cache_write: tier.cache_write.unwrap_or(input),
+                reasoning: tier.reasoning,
+            })
+        })
+        .collect();
+    tiers.sort_by_key(|tier| tier.context_tokens);
+    tiers
 }
 
 #[cfg(test)]
@@ -199,6 +299,62 @@ mod tests {
         assert_eq!(cost.input, 5.0);
         assert_eq!(cost.cache_read, 0.5);
         assert_eq!(cost.output, 30.0);
+    }
+
+    #[test]
+    fn builtin_snapshot_has_current_generation_models() {
+        let table = load_builtin_pricing();
+        for model in [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "gpt-5.6-sol",
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+        ] {
+            assert!(table.contains_key(model), "{model} present");
+        }
+        let sol = table.get("gpt-5.6-sol").unwrap();
+        assert_eq!(sol.context_tiers.len(), 1);
+        assert_eq!(sol.context_tiers[0].context_tokens, 272_000);
+        assert_eq!(sol.context_tiers[0].input, 10.0);
+        assert_eq!(sol.context_tiers[0].output, 45.0);
+    }
+
+    #[test]
+    fn builtin_snapshot_does_not_price_retired_primary_models_from_resellers() {
+        let table = load_builtin_pricing();
+        for model in [
+            "claude-sonnet-4-20250514",
+            "gemini-2.5-flash-preview-05-20",
+            "gpt-5-codex",
+        ] {
+            assert!(
+                !table.contains_key(model),
+                "retired first-party model {model} must be unpriced"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_primary_models_are_all_recorded_in_ownership_history() {
+        let root: ModelsDevRoot = serde_json::from_str(BUILTIN_PRICING_JSON).unwrap();
+        let protected: HashSet<String> =
+            serde_json::from_str(BUILTIN_PRIMARY_MODEL_IDS_JSON).unwrap();
+
+        for provider_id in PRIMARY_PRICING_PROVIDERS {
+            let Some(models) = root
+                .get(*provider_id)
+                .and_then(|provider| provider.models.as_ref())
+            else {
+                continue;
+            };
+            for model_id in models.keys() {
+                assert!(
+                    protected.contains(model_id),
+                    "primary model {provider_id}/{model_id} is missing from primary-model-ids.json"
+                );
+            }
+        }
     }
 
     #[test]
@@ -273,6 +429,119 @@ mod tests {
     }
 
     #[test]
+    fn flatten_prefers_primary_vendor_over_later_reseller_copy() {
+        let raw = r#"{
+            "openai": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 5, "output": 30 } }
+                }
+            },
+            "reseller": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 1.5, "output": 12, "reasoning": 12 } }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("gpt-example").unwrap();
+        assert_eq!(cost.input, 5.0);
+        assert_eq!(cost.output, 30.0);
+        assert_eq!(cost.reasoning_mode, ReasoningMode::SameAsOutput);
+    }
+
+    #[test]
+    fn flatten_prefers_primary_vendor_when_reseller_is_listed_first() {
+        let raw = r#"{
+            "reseller": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 1.5, "output": 12, "reasoning": 12 } }
+                }
+            },
+            "openai": {
+                "models": {
+                    "gpt-example": { "cost": { "input": 5, "output": 30 } }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("gpt-example").unwrap();
+        assert_eq!(cost.input, 5.0);
+        assert_eq!(cost.output, 30.0);
+        assert_eq!(cost.reasoning_mode, ReasoningMode::SameAsOutput);
+    }
+
+    #[test]
+    fn flatten_prefers_google_over_later_reseller_copy() {
+        let raw = r#"{
+            "google": {
+                "models": {
+                    "gemini-example": { "cost": { "input": 0.5, "output": 60 } }
+                }
+            },
+            "reseller": {
+                "models": {
+                    "gemini-example": { "cost": { "input": 0.5, "output": 3 } }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("gemini-example").unwrap();
+        assert_eq!(cost.input, 0.5);
+        assert_eq!(cost.output, 60.0);
+    }
+
+    #[test]
+    fn protected_primary_model_never_defaults_cache_fields_from_reseller() {
+        let raw = r#"{
+            "reseller": {
+                "models": {
+                    "retired-primary": { "cost": { "input": 2.7, "output": 13.5 } }
+                }
+            }
+        }"#;
+        let protected = HashSet::from(["retired-primary".to_string()]);
+        let table = parse_pricing_with_protected_models(raw, &protected).unwrap();
+        assert!(
+            !table.contains_key("retired-primary"),
+            "a reseller entry without cache tariffs must not become a ModelCost"
+        );
+    }
+
+    #[test]
+    fn protected_internal_alias_never_takes_a_direct_reseller_price() {
+        let raw = r#"{
+            "reseller": {
+                "models": {
+                    "codex-auto-review": { "cost": { "input": 2.7, "output": 13.5 } }
+                }
+            }
+        }"#;
+        let protected: HashSet<String> =
+            serde_json::from_str(BUILTIN_PRIMARY_MODEL_IDS_JSON).unwrap();
+        assert!(protected.contains("codex-auto-review"));
+        let table = parse_pricing_with_protected_models(raw, &protected).unwrap();
+        assert!(!table.contains_key("codex-auto-review"));
+    }
+
+    #[test]
+    fn flatten_keeps_reseller_exclusive_model_that_was_never_primary() {
+        let raw = r#"{
+            "reseller": {
+                "models": {
+                    "reseller-exclusive": { "cost": { "input": 1.2, "output": 4.8 } }
+                }
+            }
+        }"#;
+        let protected = HashSet::from(["some-other-model".to_string()]);
+        let table = parse_pricing_with_protected_models(raw, &protected).unwrap();
+        let cost = table
+            .get("reseller-exclusive")
+            .expect("never-primary reseller model remains priced");
+        assert_eq!(cost.input, 1.2);
+        assert_eq!(cost.output, 4.8);
+    }
+
+    #[test]
     fn flatten_skips_models_without_input_or_output() {
         let raw = r#"{
             "acme": {
@@ -334,5 +603,38 @@ mod tests {
         assert!(table.contains_key("fresh-model"));
         // Other builtin entries are still present.
         assert!(table.contains_key("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn load_pricing_override_can_price_a_retired_primary_model() {
+        let override_path = std::env::temp_dir().join(format!(
+            "relayburn-retired-pricing-test-{}.json",
+            std::process::id()
+        ));
+        let raw = r#"{
+            "user": {
+                "models": {
+                    "gpt-5-codex": {
+                        "cost": {
+                            "input": 7,
+                            "output": 11,
+                            "cache_read": 0.7,
+                            "cache_write": 8
+                        }
+                    }
+                }
+            }
+        }"#;
+        fs::write(&override_path, raw).unwrap();
+        let table = load_pricing(Some(&override_path));
+        let _ = fs::remove_file(&override_path);
+
+        let cost = table
+            .get("gpt-5-codex")
+            .expect("user override restores retired model pricing");
+        assert_eq!(cost.input, 7.0);
+        assert_eq!(cost.output, 11.0);
+        assert_eq!(cost.cache_read, 0.7);
+        assert_eq!(cost.cache_write, 8.0);
     }
 }

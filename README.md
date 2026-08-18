@@ -196,16 +196,22 @@ MCP. The server is stdio-only and read-only.
 
 | Option | What it does |
 |---|---|
-| `--session-id <uuid>` | Default session ID used by MCP tools when the caller omits one. |
+| `--session-id <uuid>` | Default session ID used by session cost, summary, and hotspots when the caller omits one. |
 
 | Tool | What it returns |
 |---|---|
 | `burn__sessionCost` | Total USD, tokens, turns, and models for a session. |
+| `burn__fingerprint` | Cheap change-detection fingerprint for the ledger or a session/project scope. |
+| `burn__summary` | Token use and cost by tool and model, with optional session, project, time, and enrichment filters. |
+| `burn__hotspots` | Attribution, grouped hotspots, or findings for expensive and repeated activity. |
+| `burn__overhead` | Instruction-file token overhead and cost by file and section. |
+| `burn__overheadTrim` | Ranked instruction-file trimming recommendations and projected savings. |
+| `burn__compare` | Per-model, per-activity cost and outcome comparison. |
 
 | Example | Result |
 |---|---|
-| `burn mcp-server --session-id <uuid>` | Start a session-scoped stdio MCP server. |
-| `burn mcp-server` | Start a server where tools require explicit session IDs. |
+| `burn mcp-server --session-id <uuid>` | Start a stdio server whose session cost, summary, and hotspots tools default to that session. |
+| `burn mcp-server` | Start an unscoped stdio server; callers can pass filters explicitly, while overhead and compare remain cross-session by design. |
 
 ## `burn state`
 
@@ -282,6 +288,10 @@ Refresh it with:
 ```bash
 pnpm run pricing:update
 ```
+
+The weekly `Update models.dev pricing` workflow runs the same command and opens
+or updates a review PR when the snapshot changes. Before opening the PR, it
+checks the upstream payload for regressions and runs the Rust SDK test suite.
 
 User overrides live at `$RELAYBURN_HOME/models.dev.json` and take precedence at
 lookup time.
@@ -466,3 +476,7 @@ events is safe.
 
 If you don't want to deal with hook config at all, run `burn ingest --watch`
 instead — same data, slightly higher latency.
+
+## License
+
+Apache-2.0 - Copyright 2026 Agent Workforce Incorporated

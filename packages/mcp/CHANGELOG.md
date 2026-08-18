@@ -4,6 +4,8 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
+
 ## [4.0.0] - 2026-06-23
 
 - `compare` / `summary` tool output reflects the SDK's canonical compare-cost rounding (`toFixed` semantics; ties shift by one in the last digit) and a stable, deterministic fidelity-summary key order.

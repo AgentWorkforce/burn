@@ -2,6 +2,7 @@
   "name": "@relayburn/sdk-linux-arm64-gnu",
   "version": "4.0.0",
   "description": "Prebuilt napi-rs binding for @relayburn/sdk on linux-arm64-gnu (glibc).",
+  "license": "Apache-2.0",
   "main": "relayburn-sdk.linux-arm64-gnu.node",
   "files": [
     "relayburn-sdk.linux-arm64-gnu.node",
