@@ -22,7 +22,11 @@ use crate::ledger::paths::is_valid_session_id;
 use crate::ledger::query::Query;
 use crate::reader::ContentRecord;
 
+/// Default number of FTS5 hits returned when callers do not provide a cap.
+pub const DEFAULT_SEARCH_LIMIT: usize = 25;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub session_id: String,
     pub message_id: String,
@@ -43,14 +47,20 @@ impl<'a> SearchOptions<'a> {
     pub fn new(query: &'a str) -> Self {
         Self {
             query,
-            limit: 25,
+            limit: DEFAULT_SEARCH_LIMIT,
             session_id: None,
         }
     }
 }
 
 pub(crate) fn search(conn: &Connection, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {
-    let limit = opts.limit.max(1) as i64;
+    let requested_limit = opts.limit.max(1);
+    let limit = i64::try_from(requested_limit).map_err(|_| {
+        crate::ledger::error::LedgerError::Other(format!(
+            "search limit {requested_limit} exceeds SQLite maximum {}",
+            i64::MAX
+        ))
+    })?;
     let mut sql = String::from(
         "SELECT c.session_id, c.message_id, c.source, bm25(content_fts), \
                 snippet(content_fts, 0, '<b>', '</b>', '…', 16) \

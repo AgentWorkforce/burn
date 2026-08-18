@@ -20,6 +20,7 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | Command | Use it to |
 |---|---|
 | [`burn summary`](#burn-summary) | See total usage and cost by model or provider. |
+| [`burn search`](#burn-search) | Search ingested session content with SQLite FTS5. |
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, and subagents. |
 | [`burn overhead`](#burn-overhead) | Attribute cached prompt cost to `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. |
 | [`burn compare`](#burn-compare) | Compare observed model performance by activity: cost per turn, one-shot rate, and sample size. |
@@ -74,6 +75,31 @@ tokens they used, and what they cost.
 
 Synthetic-routed models are recognized from `hf:*`,
 `accounts/fireworks/models/*`, and `synthetic/*`.
+
+## `burn search`
+
+Use `burn search` to find text across ingested prompts, responses, and tool
+content. Queries use SQLite FTS5 syntax, including quoted phrases, `OR`, and
+prefix terms such as `mem*`.
+
+| Option | What it does |
+|---|---|
+| `--session <id>` | Restrict matches to one session. |
+| `--limit <n>` | Cap the number of ranked hits. Defaults to 25. |
+| `--snippet` | Include highlighted content excerpts in human output. |
+| `--json` | Emit the query, applied limit, truncation signal, session filter, and hits as JSON. |
+
+In JSON, `truncated: true` means the returned hit count reached `limit`, so
+more matches may exist; it does not guarantee that results were omitted.
+JSON snippets retain literal `<b>` match markers. Until
+[#516](https://github.com/AgentWorkforce/burn/issues/516) lands, stored content
+that already contains `<b>` tags can display ambiguously in human snippet mode.
+
+| Example | Result |
+|---|---|
+| `burn search 'out of memory' --limit 5 --snippet` | Show up to five matching content records with highlighted excerpts. |
+| `burn search 'permission AND denied' --session <uuid>` | Search within one session. |
+| `burn search 'mem*' --json` | Emit ranked matches as machine-readable JSON. |
 
 ## `burn hotspots`
 

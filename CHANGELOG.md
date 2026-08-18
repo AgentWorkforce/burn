@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn search <query>` searches ingested session content with FTS5, with session scoping, result limits, optional highlighted snippets, and JSON output.
+- **BREAKING (`relayburn-sdk`):** search-hit JSON fields are now `sessionId` and `messageId` instead of `session_id` and `message_id`, consistently with the SDK's camelCase JSON contract; `search` limits above SQLite's signed 64-bit maximum are rejected with an error instead of silently disabling the limit.
 - Documentation covers the complete `burn` command surface and the SQLite/WAL storage and maintenance workflow.
 - `burn mcp-server` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison through validated read-only tools.

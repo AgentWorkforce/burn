@@ -50,6 +50,10 @@ pub fn stderr_is_pretty(globals: &GlobalArgs) -> bool {
     !globals.json && io::stderr().is_terminal() && !term_is_dumb()
 }
 
+pub fn stdout_is_pretty(globals: &GlobalArgs) -> bool {
+    !globals.json && io::stdout().is_terminal() && !term_is_dumb()
+}
+
 pub fn term_is_dumb() -> bool {
     std::env::var("TERM")
         .map(|term| term.eq_ignore_ascii_case("dumb"))
