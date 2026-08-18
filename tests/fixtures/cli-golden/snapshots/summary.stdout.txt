@@ -6,9 +6,10 @@ turns analyzed: 7
 model              turns  input  output  reasoning  cacheRead  cacheCreate  cost
 claude-sonnet-4-6  4      5,100  830     0          19,500     200          $0.034
 claude-haiku-4-5   2      1,700  220     0          4,500      0            $0.0033
-gpt-5-codex        1      2,000  400     350        —          —            $0.00
+gpt-5-codex        1      2,000  400     350        —          —            unpriced
 
-total cost: $0.038
+total priced cost: $0.038
+1 turn unpriced: gpt-5-codex (total excludes their cost)
   input $0.017 / output $0.014 / reasoning $0.00 / cacheRead $0.0063 / cacheCreate $0.0008
 
 Turn outcomes: 0 end_turn, 0 max_tokens, 0 refusal, 0 pause, 7 none

@@ -495,6 +495,32 @@ mod tests {
     }
 
     #[test]
+    fn grouped_cost_cell_marks_unpriced_model() {
+        let unpriced_models = vec!["made-up-model-xyz".to_string()];
+        assert_eq!(
+            grouped_cost_cell(
+                SummaryGroupBy::Model,
+                &unpriced_models,
+                "made-up-model-xyz",
+                0.0,
+            ),
+            "unpriced"
+        );
+        assert_eq!(
+            grouped_cost_cell(SummaryGroupBy::Model, &[], "free-model", 0.0),
+            "$0.00"
+        );
+        assert_eq!(
+            grouped_cost_cell(SummaryGroupBy::Provider, &unpriced_models, "openai", 1.25,),
+            "$1.25"
+        );
+        assert_eq!(
+            unpriced_turns_line(2, &unpriced_models),
+            "2 turns unpriced: made-up-model-xyz (total excludes their cost)"
+        );
+    }
+
+    #[test]
     fn grouped_json_surfaces_unpriced_turns_and_models() {
         let mut report = empty_grouped_report();
         report.turn_count = 1;
