@@ -257,6 +257,10 @@ Refresh it with:
 pnpm run pricing:update
 ```
 
+The weekly `Update models.dev pricing` workflow runs the same command and opens
+or updates a review PR when the snapshot changes. Before opening the PR, it
+checks the upstream payload for regressions and runs the Rust SDK test suite.
+
 User overrides live at `$RELAYBURN_HOME/models.dev.json` and take precedence at
 lookup time.
 
@@ -440,3 +444,7 @@ events is safe.
 
 If you don't want to deal with hook config at all, run `burn ingest --watch`
 instead — same data, slightly higher latency.
+
+## License
+
+Apache-2.0 - Copyright 2026 Agent Workforce Incorporated

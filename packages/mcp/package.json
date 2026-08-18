@@ -2,6 +2,7 @@
   "name": "@relayburn/mcp",
   "version": "4.0.0",
   "description": "MCP (Model Context Protocol) server exposing read-only relayburn ledger queries for in-session self-query",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

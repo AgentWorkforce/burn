@@ -298,8 +298,40 @@ jobs:
       - name: Build workspace
         run: pnpm -r run build
 
+      # Reuse the napi matrix outputs for both conformance tests and package
+      # staging. The x64 Linux artifact is native to this publish runner.
+      - name: Download SDK napi artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/sdk-artifacts
+          pattern: relayburn-sdk-*
+          merge-multiple: false
+
+      - name: Stage native SDK binding for tests
+        run: |
+          set -euo pipefail
+          sdk_test_dir="/tmp/sdk-artifacts/relayburn-sdk-linux-x64-gnu"
+          if [ ! -d "$sdk_test_dir" ]; then
+            echo "::error title=Missing SDK test artifact dir::expected $sdk_test_dir" >&2
+            ls -la /tmp/sdk-artifacts/ 2>/dev/null || true
+            exit 1
+          fi
+          sdk_test_node=$(find "$sdk_test_dir" -maxdepth 2 -type f -name '*.node' -print -quit)
+          if [ -z "$sdk_test_node" ]; then
+            echo "::error title=Missing SDK test artifact::expected a .node file under $sdk_test_dir" >&2
+            find "$sdk_test_dir" -maxdepth 2 -type f -print >&2 || true
+            exit 1
+          fi
+          cp "$sdk_test_node" packages/sdk-node/src/index.linux-x64-gnu.node
+
       - name: Run tests
-        run: pnpm run test
+        env:
+          HOME: ${{ runner.temp }}/relayburn-node-tests/home
+          RELAYBURN_HOME: ${{ runner.temp }}/relayburn-node-tests/ledger
+          RELAYBURN_SDK_NAPI_BUILT: '1'
+        run: |
+          mkdir -p "$HOME" "$RELAYBURN_HOME"
+          pnpm run test
 
       # Rust port build + test gates the whole publish job. If the Rust
       # tree is red at this commit, abort before npm ships anything so the
@@ -916,13 +948,6 @@ jobs:
         with:
           path: /tmp/cli-artifacts
           pattern: relayburn-cli-*
-          merge-multiple: false
-
-      - name: Download SDK napi artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: /tmp/sdk-artifacts
-          pattern: relayburn-sdk-*
           merge-multiple: false
 
       - name: Stage prebuilt binaries into platform packages
