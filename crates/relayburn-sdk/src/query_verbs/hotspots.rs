@@ -28,6 +28,7 @@ const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
     "ghost-surface",
     "tool-output-bloat",
     "tool-call-pattern",
+    "unpriced-usage",
 ];
 
 fn default_hotspots_finding_kinds() -> Vec<String> {
@@ -207,7 +208,7 @@ impl LedgerHandle {
                 filter.contains(&provider.to_ascii_lowercase())
             });
         }
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
 
         if matches!(opts.group_by, Some(HotspotsGroupBy::Findings)) {
             let patterns = match opts.patterns {
@@ -560,10 +561,16 @@ fn run_hotspots_findings(
         }
     }
 
+    if wanted_set.contains("unpriced-usage") {
+        findings.extend(unpriced_usage_findings(turns, pricing));
+    }
+
+    mark_findings_with_unpriced_sessions(&mut findings, turns, pricing);
+
     // `findings_from_patterns` already sorts the slice it returns, but the
     // tool-output-bloat / ghost-surface / tool-call-pattern batches above
     // are appended afterwards. Re-sort once so the global slice is
-    // severity-descending → usdPerSession-descending end-to-end (TS parity).
+    // unpriced/token-descending first, then severity/USD descending.
     sort_findings(&mut findings);
 
     Ok(HotspotsResult::Findings {

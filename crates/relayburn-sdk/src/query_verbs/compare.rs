@@ -126,7 +126,7 @@ impl LedgerHandle {
             turns.retain(|t| has_minimum_fidelity(t.turn.fidelity.as_ref(), min_fidelity));
         }
 
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
         let table = build_compare_table(
             &turns,
             &AnalyzeCompareOptions {
@@ -183,7 +183,7 @@ impl LedgerHandle {
                 filter.contains(&provider.to_ascii_lowercase())
             });
         }
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
 
         let Some((buckets, per_bucket)) =
             super::partition_into_buckets(turns, q.since.as_deref(), bucket_secs, |t| &t.turn.ts)?

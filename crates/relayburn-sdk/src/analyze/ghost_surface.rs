@@ -519,6 +519,7 @@ pub fn ghost_surface_to_finding(
             usd_per_session: Some(per_session_usd),
             usd_per_month: None,
         },
+        pricing_status: Default::default(),
         actions: vec![action],
         event_source: None,
     }
