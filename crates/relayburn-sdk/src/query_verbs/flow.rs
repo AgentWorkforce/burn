@@ -451,7 +451,7 @@ impl LedgerHandle {
     /// delta's current inference. Its preceding baseline inference may be
     /// older. Deltas whose current inference has no timestamp remain eligible.
     pub fn context_delta(&self, opts: ContextDeltaOpts) -> Result<Vec<ContextDelta>> {
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
         let normalized_since = normalize_since(opts.since.as_deref())?;
         let since_ms = normalized_since
             .as_deref()

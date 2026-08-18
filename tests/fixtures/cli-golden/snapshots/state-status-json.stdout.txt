@@ -21,7 +21,7 @@
     "rows": 0
   },
   "archive": {
-    "schemaVersion": 5
+    "schemaVersion": 6
   },
   "config": {
     "store": "off",

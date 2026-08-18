@@ -185,7 +185,7 @@ jobs:
         with:
           name: relayburn-sdk-${{ matrix.short }}
           path: packages/sdk-node/src/*.node
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
 
       - name: Bundle smoke test (esbuild)
