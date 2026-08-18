@@ -885,6 +885,7 @@ mod tests {
     fn fixture_turn(index: u64, session: &str, model: &str, project: &str) -> TurnRecord {
         TurnRecord {
             v: 1,
+            request_count: 1,
             source: SourceKind::ClaudeCode,
             session_id: session.to_string(),
             session_path: None,
