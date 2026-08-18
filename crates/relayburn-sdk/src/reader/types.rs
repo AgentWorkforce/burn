@@ -398,6 +398,14 @@ pub struct TurnRecord {
     pub session_path: Option<String>,
     pub message_id: String,
     pub turn_index: u64,
+    /// Number of model API requests represented by this record.
+    ///
+    /// Most harnesses emit one `TurnRecord` per request. Codex instead emits
+    /// one record per logical task, which may contain many requests separated
+    /// by advancing `token_count` snapshots. Historical rows predate this
+    /// field and therefore default to one request.
+    #[serde(default = "default_request_count")]
+    pub request_count: u64,
     pub ts: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -431,6 +439,19 @@ pub struct TurnRecord {
     pub has_edits: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<Fidelity>,
+}
+
+const fn default_request_count() -> u64 {
+    1
+}
+
+impl TurnRecord {
+    /// Request denominator for aggregate metrics. Historical rows that omit
+    /// the field deserialize as one; an explicit zero remains zero for a
+    /// completed task that made no model request.
+    pub fn effective_request_count(&self) -> u64 {
+        self.request_count
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -717,6 +738,7 @@ mod tests {
             session_path: None,
             message_id: "m1".into(),
             turn_index: 0,
+            request_count: 1,
             ts: "2025-01-01T00:00:00Z".into(),
             model: "claude-sonnet-4-6".into(),
             project: None,
@@ -863,6 +885,38 @@ mod tests {
         });
         let rec: TurnRecord = serde_json::from_value(raw).unwrap();
         assert_eq!(rec.stop_reason, Some(StopReason::Silent));
+    }
+
+    #[test]
+    fn historical_turn_defaults_to_one_request() {
+        let mut value = serde_json::to_value(TurnRecord {
+            v: 1,
+            source: SourceKind::Codex,
+            session_id: "s".into(),
+            session_path: None,
+            message_id: "m".into(),
+            turn_index: 0,
+            request_count: 1,
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            model: "gpt-5.4".into(),
+            project: None,
+            project_key: None,
+            usage: Usage::default(),
+            tool_calls: Vec::new(),
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().remove("requestCount");
+
+        let historical: TurnRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(historical.request_count, 1);
+        assert_eq!(historical.effective_request_count(), 1);
     }
 
     #[test]

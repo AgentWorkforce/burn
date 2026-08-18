@@ -14,9 +14,9 @@
 //! `Inference` collapses to the same cardinality as its source
 //! `TurnRecord`. The reason we still introduce it:
 //!
-//! - It gives non-Claude harnesses (Codex, opencode) a stable fallback
-//!   key — `(message_id, role)`, then row-by-row — so a future surface
-//!   that wants "API calls" has one type to consume.
+//! - Codex emits one inference per advancing cumulative usage snapshot;
+//!   harnesses without observable request boundaries retain a stable
+//!   `(message_id, role)`, then row-by-row fallback key.
 //! - It carries the merged [`Usage`] explicitly: the row that carries
 //!   the `usage` block is the *only* row that should pay tokens, and the
 //!   `Inference` is the type that asserts that contract instead of
@@ -95,17 +95,16 @@ pub struct Inference {
     pub v: u32,
     pub source: SourceKind,
     pub session_id: String,
-    /// Stable key. For Claude this is the upstream `requestId`; for
-    /// Codex / opencode (no requestId) it falls back to `message_id`
-    /// (see [`build_inferences`] / [`InferenceFallback::MessageId`]).
+    /// Stable key. Claude uses the upstream `requestId`; Codex synthesizes
+    /// a stable per-task request index; generic inference construction falls
+    /// back to `message_id` (see [`build_inferences`]).
     pub request_id: String,
     /// Source of `request_id` — `request-id` (upstream `requestId`),
     /// `message-id` (fallback), or `row-uuid` (final fallback). Lets a
     /// debugger tell "is this a real request key" from "is this a
     /// synthesized key".
     pub request_id_source: InferenceKeySource,
-    /// Logical "turn" identity — for Claude this is `message_id`; for
-    /// Codex / opencode it's the same as `request_id`.
+    /// Logical turn identity. Multiple Codex request rows can share this id.
     pub turn_id: String,
     pub model: String,
     pub usage: Usage,
@@ -137,10 +136,11 @@ pub enum InferenceKeySource {
     /// Came from the upstream `requestId` field (Claude Code).
     RequestId,
     /// Fell back to the harness `message_id` because no `requestId` was
-    /// present (Codex, opencode, old Claude versions, sidechains).
+    /// present (opencode, old Claude versions, sidechains).
     MessageId,
-    /// Final fallback when neither key was usable — synthesized from the
-    /// row's session_id + index.
+    /// Synthesized locally. Codex uses a stable task-local request index;
+    /// generic inference construction also uses this as the final fallback
+    /// when neither an upstream request id nor a message id is usable.
     RowSynthetic,
 }
 
@@ -162,8 +162,8 @@ impl InferenceKeySource {
 /// [`InferenceKeySource::MessageId`] then [`InferenceKeySource::RowSynthetic`].
 ///
 /// The Claude reader populates this from the raw assistant rows in the
-/// same parse pass; Codex / opencode parsers leave it empty (they have
-/// no `requestId` equivalent today).
+/// same parse pass. Codex builds native request rows from usage snapshots;
+/// opencode leaves the lookup empty because it has no requestId equivalent.
 pub type RequestIdLookup = BTreeMap<TurnKey, String>;
 
 /// Composite key the lookup table uses. Equality matches the
@@ -219,7 +219,8 @@ impl Ord for TurnKey {
 ///    is the inference's `request_id` and rows with the same key collapse
 ///    together. Source = [`InferenceKeySource::RequestId`].
 /// 2. Otherwise the turn's own `message_id` becomes the key. Source =
-///    [`InferenceKeySource::MessageId`]. Codex / opencode land here.
+///    [`InferenceKeySource::MessageId`]. Harnesses without native request
+///    boundaries, such as opencode, land here.
 /// 3. Otherwise (empty `message_id`, which would be malformed) we
 ///    synthesize a key from `session_id + row index`. Source =
 ///    [`InferenceKeySource::RowSynthetic`].
@@ -409,6 +410,7 @@ mod tests {
             session_path: None,
             message_id: msg.to_string(),
             turn_index: 0,
+            request_count: 1,
             ts: ts.to_string(),
             model: "claude-sonnet-4-6".to_string(),
             project: None,

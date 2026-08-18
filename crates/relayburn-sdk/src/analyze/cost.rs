@@ -258,6 +258,7 @@ mod tests {
             session_path: None,
             message_id: "m".into(),
             turn_index: 0,
+            request_count: 1,
             ts: "2026-04-20T00:00:00.000Z".into(),
             model: model.into(),
             project: None,

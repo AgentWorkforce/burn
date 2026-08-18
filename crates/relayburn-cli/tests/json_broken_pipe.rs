@@ -33,6 +33,7 @@ fn turn(index: usize) -> TurnRecord {
             cache_create_1h: 0,
         },
         tool_calls: Vec::new(),
+        request_count: 1,
         files_touched: None,
         subagent: None,
         stop_reason: None,

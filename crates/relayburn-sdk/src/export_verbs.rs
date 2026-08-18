@@ -297,6 +297,7 @@ mod tests {
             session_path: None,
             message_id: "m1".into(),
             turn_index: 0,
+            request_count: 1,
             ts: "2025-01-01T00:00:00Z".into(),
             model: "claude-sonnet-4-6".into(),
             project: None,

@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- Codex turns and inference rows now reflect each model API request represented by an advancing usage snapshot, so summary, sessions, and compare per-turn metrics no longer collapse long agent loops into one turn. Run `burn state rebuild` to correct previously ingested Codex sessions.
 - `burn mcp-server` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison through validated read-only tools.
 - `burn --json` commands and stdout `burn stamps export` streams now exit quietly when a downstream pipe closes early instead of reporting the pipe closure as a generic error.

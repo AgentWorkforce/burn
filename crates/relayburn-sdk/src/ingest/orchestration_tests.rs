@@ -246,6 +246,39 @@ fn ingest_codex_sessions_round_trips_a_fixture_session() {
 }
 
 #[test]
+fn ingest_codex_request_count_matches_inference_rows() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let roots = pinned_roots(&tmp);
+    let codex_root = roots.codex_sessions_dir.clone().unwrap();
+    fs::create_dir_all(&codex_root).unwrap();
+    fs::copy(
+        shared_fixture_dir()
+            .join("codex")
+            .join("many-requests-one-turn.jsonl"),
+        codex_root.join("rollout-many.jsonl"),
+    )
+    .unwrap();
+
+    let mut ledger = open_ledger_in(&tmp);
+    ingest_codex_sessions(
+        &mut ledger,
+        &IngestOptions {
+            roots,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let query = Query::for_session("sess_many_requests");
+    let turns = ledger.query_turns(&query).unwrap();
+    let request_count: u64 = turns.iter().map(|turn| turn.turn.request_count).sum();
+    let inferences = ledger.query_inferences(&query).unwrap();
+    assert_eq!(request_count, 4);
+    assert_eq!(inferences.len() as u64, request_count);
+}
+
+#[test]
 fn ingest_opencode_sessions_round_trips_a_fixture_session() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);

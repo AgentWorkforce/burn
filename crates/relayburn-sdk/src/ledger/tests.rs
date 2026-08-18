@@ -29,6 +29,7 @@ fn make_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnRecord {
         session_path: None,
         message_id: message.into(),
         turn_index: 0,
+        request_count: 1,
         ts: ts.into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("burn".into()),
