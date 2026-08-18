@@ -389,16 +389,6 @@ fn is_schema_missing(err: &crate::ledger::LedgerError) -> bool {
     msg.contains("no such table") || msg.contains("no such column")
 }
 
-/// Convert a relative `Duration` window into a canonical
-/// `now - duration` ISO-8601 timestamp suitable for a [`Query::since`]
-/// filter. Centralized so the deltas seed-query mirrors the same
-/// `format_iso_z_ms` shape the rest of the SDK emits.
-pub(crate) fn duration_to_since_iso(d: std::time::Duration) -> String {
-    let now = system_now_secs();
-    let when = now.saturating_sub(d.as_secs()) as i64;
-    format_iso_z_ms(when, 0)
-}
-
 /// Lex key for sorting cross-session [`ContextDelta`] rows by owner_rail
 /// when other tie-breakers are equal. Mirrors the per-session helper in
 /// `analyze::context_delta`.
@@ -407,6 +397,40 @@ fn owner_rail_str(rail: &OwnerRail) -> (&str, &str) {
         OwnerRail::Main => ("main", ""),
         OwnerRail::Subagent { agent_id } => ("subagent", agent_id.as_str()),
     }
+}
+
+/// Project spellings that may already exist in the ledger. Ingest preserves
+/// the harness cwd verbatim, so historical rows can contain a symlinked path
+/// while callers may supply that raw path or its canonical target. Turns from
+/// another checkout can instead share the Git-derived project key. Query each
+/// available spelling without discarding the literal value the caller provided.
+fn project_filter_variants(project: Option<&str>) -> Vec<Option<String>> {
+    let Some(raw) = project else {
+        return vec![None];
+    };
+    let mut variants = vec![Some(raw.to_string())];
+    if let Some(project_key) = Path::new(raw)
+        .is_dir()
+        .then(|| resolve_project(raw).project_key)
+        .flatten()
+    {
+        if !variants
+            .iter()
+            .any(|variant| variant.as_deref() == Some(&project_key))
+        {
+            variants.push(Some(project_key));
+        }
+    }
+    if let Ok(canonical) = std::fs::canonicalize(raw) {
+        let canonical = canonical.to_string_lossy().into_owned();
+        if !variants
+            .iter()
+            .any(|variant| variant.as_deref() == Some(&canonical))
+        {
+            variants.push(Some(canonical));
+        }
+    }
+    variants
 }
 
 impl LedgerHandle {
@@ -421,41 +445,51 @@ impl LedgerHandle {
     /// isolation).
     ///
     /// When [`ContextDeltaOpts::session`] is `Some`, only that session is
-    /// scanned. When `None`, every session in the ledger that has activity
-    /// inside the [`ContextDeltaOpts::since`] window contributes — sessions
-    /// whose latest activity falls outside the window are skipped before any
-    /// span trees get loaded. The same window is then applied to the
-    /// returned [`Vec<ContextDelta>`] cap.
+    /// scanned. [`ContextDeltaOpts::project`] narrows sessions by their
+    /// ledger project/project-key. [`ContextDeltaOpts::since`] accepts the
+    /// shared relative-or-ISO grammar and is an inclusive lower bound on each
+    /// delta's current inference. Its preceding baseline inference may be
+    /// older. Deltas whose current inference has no timestamp remain eligible.
     pub fn context_delta(&self, opts: ContextDeltaOpts) -> Result<Vec<ContextDelta>> {
         let pricing = load_pricing_for_ledger(self);
+        let normalized_since = normalize_since(opts.since.as_deref())?;
+        let since_ms = normalized_since
+            .as_deref()
+            .and_then(crate::util::time::parse_iso_ms);
 
-        // Build the seed `since` filter from `opts.since`. We always have a
-        // sensible `effective_since()` default, but only apply it when the
-        // caller actually passed a value — when `None`, scan every session.
-        // (Honoring the default would change historic behavior for callers
-        // that relied on "no since = all time".)
-        let seed_since: Option<String> = opts.since.map(duration_to_since_iso);
-        let session_query = Query {
-            since: seed_since.clone(),
-            ..Default::default()
-        };
-
-        let session_ids: Vec<String> = match opts.session.clone() {
-            Some(id) => vec![id],
-            None => {
-                // Enumerate sessions that have activity inside the
-                // `since` window. Walking only the matching `turns`
-                // rows keeps this cheap on large ledgers — we never
-                // load span trees for sessions that already missed
-                // the filter.
-                let mut ids: BTreeSet<String> = BTreeSet::new();
-                let all = self.inner.query_turns(&session_query)?;
-                for enriched in all {
+        // First narrow by project/session, then select sessions with a turn or
+        // inference in the window. We intentionally inspect timestamps in
+        // memory instead of pushing `since` into SQL: the ledger query omits
+        // unknown timestamps, while deltas preserve those rows by contract.
+        let timestamp_passes = |ms: i64| since_ms.is_none_or(|cutoff| ms == 0 || ms >= cutoff);
+        let mut ids: BTreeSet<String> = BTreeSet::new();
+        for project in project_filter_variants(opts.project.as_deref()) {
+            let session_query = Query {
+                project,
+                session_id: opts.session.clone(),
+                ..Default::default()
+            };
+            for enriched in self.inner.query_turns(&session_query)? {
+                let ms = crate::util::time::parse_iso_ms(&enriched.turn.ts).unwrap_or(0);
+                if timestamp_passes(ms) {
                     ids.insert(enriched.turn.session_id);
                 }
-                ids.into_iter().collect()
             }
-        };
+            if since_ms.is_some() {
+                match self.inner.query_inferences(&session_query) {
+                    Ok(inferences) => {
+                        for inference in inferences {
+                            if timestamp_passes(inference.start_ms) {
+                                ids.insert(inference.session_id);
+                            }
+                        }
+                    }
+                    Err(err) if is_schema_missing(&err) => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+        let session_ids: Vec<String> = ids.into_iter().collect();
 
         let mut out: Vec<ContextDelta> = Vec::new();
         for session_id in session_ids {
@@ -467,7 +501,8 @@ impl LedgerHandle {
                 session_id: Some(session_id.clone()),
                 ..Default::default()
             })?;
-            let per_session = deltas_for_session(&trees, &compactions, &pricing, &opts);
+            let per_session =
+                deltas_for_session_since(&trees, &compactions, &pricing, &opts, since_ms);
             out.extend(per_session);
         }
 
