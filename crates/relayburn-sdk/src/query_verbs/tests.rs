@@ -6,13 +6,12 @@ use super::summary::{
     SummaryRelationshipMatch,
 };
 use super::*;
+use crate::analyze::FindingPricingStatus;
 use crate::reader::{
     ContentKind, ContentRecord, ContentRole, RelationshipSourceKind, ToolCall, Usage,
     UserTurnBlock, UserTurnBlockKind,
 };
 use std::path::PathBuf;
-use crate::analyze::FindingPricingStatus;
-use crate::reader::{RelationshipSourceKind, ToolCall, Usage, UserTurnBlock, UserTurnBlockKind};
 use tempfile::TempDir;
 
 fn fixture_handle() -> (TempDir, LedgerHandle) {
@@ -1349,6 +1348,9 @@ fn hotspots_ghost_surface_inputs_fall_back_when_content_missing() {
             .any(|g| g.source == SourceKind::Codex && g.path.ends_with("openspec-apply.md")),
         "missing content should preserve tool-call-only ghost behavior"
     );
+}
+
+#[test]
 fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
     let (_dir, mut handle) = fixture_handle();
     handle
