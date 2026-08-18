@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn flow` now connects the main rail across turn boundaries, so session DAGs render as one continuous inference flow in JSON, Mermaid, and SVG.
 - `burn mcp-server` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison through validated read-only tools.
 - `burn --json` commands and stdout `burn stamps export` streams now exit quietly when a downstream pipe closes early instead of reporting the pipe closure as a generic error.

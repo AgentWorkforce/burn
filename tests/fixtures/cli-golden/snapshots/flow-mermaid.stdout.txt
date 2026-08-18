@@ -12,6 +12,8 @@ graph LR
     msg_c1_3_tu_tu_c1_b1["T2: Bash"]:::toolUse
 
     msg_c1_1_inf_0 --> msg_c1_1_tu_tu_c1_r1
+    msg_c1_1_tu_tu_c1_r1 --> msg_c1_2_inf_0
     msg_c1_2_inf_0 --> msg_c1_2_tu_tu_c1_e1
+    msg_c1_2_tu_tu_c1_e1 --> msg_c1_3_inf_0
     msg_c1_3_inf_0 --> msg_c1_3_tu_tu_c1_b1
 ```
