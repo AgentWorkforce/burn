@@ -7,6 +7,7 @@ All notable changes to `@relayburn/mcp`.
 - Added `burn__summary`, `burn__hotspots`, `burn__overhead`,
   `burn__overheadTrim`, and `burn__compare` tool factories, exposing the
   current `@relayburn/sdk` read surface through validated MCP inputs.
+- Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
 
 ## [4.0.0] - 2026-06-23
 

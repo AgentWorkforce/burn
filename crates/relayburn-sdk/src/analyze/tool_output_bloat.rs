@@ -520,6 +520,7 @@ Source file: {source}.",
                 tokens_per_session: Some(configured_tokens),
                 ..Default::default()
             },
+            pricing_status: Default::default(),
             actions: vec![action],
             event_source: None,
         };
@@ -584,6 +585,7 @@ Estimated next-turn carry cost {usd}. {advice}",
             usd_per_session: Some(usd_estimate),
             ..Default::default()
         },
+        pricing_status: Default::default(),
         actions: vec![action],
         event_source: None,
     }
