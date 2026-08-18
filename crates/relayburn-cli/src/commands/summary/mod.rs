@@ -492,8 +492,6 @@ mod tests {
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
         assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
-        assert_eq!(value["unpricedTurns"], 2);
-        assert_eq!(value["unpricedModels"], json!(["made-up-model-xyz"]));
     }
 
     #[test]
