@@ -3,8 +3,8 @@
 // These tests run the napi-rs facade against the committed cli-golden ledger.
 // They are intentionally shape-level checks now that the old TypeScript SDK
 // package has been removed from the workspace. Set RELAYBURN_SDK_NAPI_BUILT=1
-// after `pnpm run build:napi` to execute them; without a native binding they
-// skip cleanly so package-level JS tests still work on a fresh checkout.
+// after `pnpm run build:napi` to execute them. A fresh local checkout skips
+// cleanly, while CI fails if the gate or native binding is missing.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,31 +12,11 @@ import { mkdtempSync, rmSync, cpSync, mkdirSync, readdirSync, readFileSync } fro
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadNapiSdk } from './helpers/napi.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../../..');
 const FIXTURE_LEDGER = join(REPO_ROOT, 'tests', 'fixtures', 'cli-golden', 'ledger');
-const NAPI_READY = process.env.RELAYBURN_SDK_NAPI_BUILT === '1';
-
-function bindingMissing(err) {
-  return /native binding not found/i.test(String(err && err.message));
-}
-
-async function loadNapiSdk(t) {
-  if (!NAPI_READY) {
-    t.skip('napi-rs binding not built; set RELAYBURN_SDK_NAPI_BUILT=1');
-    return null;
-  }
-  try {
-    return await import(join(__dirname, '..', 'src', 'index.js'));
-  } catch (err) {
-    if (bindingMissing(err)) {
-      t.skip('napi-rs binding load failed; build artifact missing');
-      return null;
-    }
-    throw err;
-  }
-}
 
 function makeLedgerHome() {
   const home = mkdtempSync(join(tmpdir(), 'relayburn-sdk-ledger-'));

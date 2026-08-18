@@ -411,7 +411,9 @@ export interface HotspotsFinding {
   severity: string;
   sessionId: string;
   title: string;
-  estimatedSavings: { usdPerSession?: number; [k: string]: unknown };
+  estimatedSavings: { tokensPerSession?: number | bigint; usdPerSession?: number; [k: string]: unknown };
+  /** Present when no model tariff exists and this finding is ranked by tokens. */
+  pricingStatus?: 'unpriced';
   [k: string]: unknown;
 }
 

@@ -4,6 +4,9 @@
 
 - `summary()` now returns context tokens per normalized generated-output token (including reasoning) plus p50/p95/max context sizes for the ten highest-ratio sessions. Context is input + cache-read + cache-creation tokens.
 - `hotspots()` accepts `contextOutputRatioThreshold` and `contextOutputMinTokens` for the new cost-independent finding (defaults: 382:1 inclusive and 1M context tokens).
+- Local napi builds load ahead of installed platform packages, so development and conformance tests use the current checkout's native binding.
+- Cost calculations recognize Claude 5 and GPT-5.6 models, prefer first-party tariffs, and apply long-context price tiers.
+- `hotspots()` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
 
 ## [4.0.0] - 2026-06-23
 
