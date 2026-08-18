@@ -4,6 +4,7 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+- `burn overhead` discovers active user, ancestor, and project instruction chains and labels each file with its scope.
 - Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
 - `burn hotspots --findings` identifies unknown pricing and ranks unpriced sessions by token volume instead of $0.00.
 

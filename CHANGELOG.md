@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn overhead` discovers the default Claude Code, Codex, and OpenCode user/ancestor/project instruction chains with harness-accurate precedence, boundaries, deduplication, and scope labels.
 - Pricing recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs over reseller duplicates, and applies long-context price tiers.
 - `burn hotspots --findings` surfaces unknown model pricing explicitly and ranks unpriced sessions by token volume instead of treating them as $0.00.
 - Licensed under Apache-2.0 (Copyright 2026 Agent Workforce Incorporated), matching Relay: added the repo `LICENSE`, set the Rust workspace `license` to `Apache-2.0`, declared `license` on the published npm packages, and shipped the license text inside every published npm package and crate.

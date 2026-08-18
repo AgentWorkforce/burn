@@ -905,11 +905,19 @@ fn overhead_returns_empty_when_no_files_present() {
     let r = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadOptions::default()
         })
         .unwrap();
-    assert!(r.files.is_empty());
-    assert!(r.per_file.is_empty());
+    let project_root = std::fs::canonicalize(project.path()).unwrap();
+    assert!(!r
+        .files
+        .iter()
+        .any(|file| Path::new(&file.path).starts_with(&project_root)));
+    assert!(!r
+        .per_file
+        .iter()
+        .any(|file| Path::new(&file.path).starts_with(&project_root)));
     assert_eq!(r.grand_total, 0.0);
 }
 
@@ -922,12 +930,21 @@ fn overhead_attributes_when_claude_md_present() {
     let r = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadOptions::default()
         })
         .unwrap();
-    assert_eq!(r.files.len(), 1);
-    assert_eq!(r.per_file.len(), 1);
-    assert_eq!(r.files[0].kind, OverheadFileKind::ClaudeMd);
+    let fixture_path = std::fs::canonicalize(project.path().join("CLAUDE.md"))
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let file = r
+        .files
+        .iter()
+        .find(|file| file.path == fixture_path)
+        .unwrap();
+    assert_eq!(file.kind, OverheadFileKind::ClaudeMd);
+    assert!(r.per_file.iter().any(|file| file.path == fixture_path));
 }
 
 #[test]
@@ -943,7 +960,8 @@ fn overhead_trim_emits_summary_when_claude_md_present() {
     let r = handle
         .overhead_trim(OverheadTrimOptions {
             project: Some(project.path().to_path_buf()),
-            top: Some(1),
+            top: Some(100),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadTrimOptions::default()
         })
         .unwrap();
@@ -951,12 +969,19 @@ fn overhead_trim_emits_summary_when_claude_md_present() {
     // CLAUDE.md's token count — so attribution sees no rides and total
     // cost is 0. `build_trim_recommendations` still emits a top-N row
     // per non-preamble section, with projected savings = 0; that's the
-    // contract. With `top=1` and two H2 sections in the file, we get
-    // a single recommendation.
-    assert_eq!(r.summary.files_analyzed, 1);
-    assert_eq!(r.recommendations.len(), 1);
-    assert_eq!(r.recommendations[0].projected_savings.per_session_usd, 0.0);
-    assert!(r.recommendations[0].diff.is_some());
+    // contract. Both fixture sections remain discoverable even if the host
+    // filesystem contributes unrelated ancestor instructions.
+    let fixture_recommendations: Vec<_> = r
+        .recommendations
+        .iter()
+        .filter(|recommendation| recommendation.file == "CLAUDE.md")
+        .collect();
+    assert_eq!(fixture_recommendations.len(), 2);
+    assert_eq!(
+        fixture_recommendations[0].projected_savings.per_session_usd,
+        0.0
+    );
+    assert!(fixture_recommendations[0].diff.is_some());
     assert_eq!(r.since, "all time");
 }
 

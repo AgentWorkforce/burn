@@ -11,6 +11,9 @@ pub struct OverheadOptions {
     pub since: Option<String>,
     pub kind: Option<OverheadFileKind>,
     pub ledger_home: Option<PathBuf>,
+    /// Override the harness configuration home (`~/.claude`, `~/.codex`,
+    /// `~/.config/opencode`). This does not bound Claude's ancestor walk.
+    pub harness_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +43,7 @@ pub struct OverheadAttributionDetail {
 pub struct OverheadFileSummary {
     pub kind: OverheadFileKind,
     pub path: String,
+    pub scope: OverheadFileScope,
     pub applies_to: Vec<SourceKind>,
     pub total_lines: u64,
     pub bytes: u64,
@@ -53,6 +57,7 @@ pub struct OverheadFileSummary {
 pub struct OverheadPerFileEntry {
     pub path: String,
     pub kind: OverheadFileKind,
+    pub scope: OverheadFileScope,
     pub applies_to: Vec<SourceKind>,
     pub attribution: OverheadAttributionDetail,
 }
@@ -75,6 +80,8 @@ pub struct OverheadTrimOptions {
     pub ledger_home: Option<PathBuf>,
     pub top: Option<u64>,
     pub include_diff: Option<bool>,
+    /// See [`OverheadOptions::harness_home`].
+    pub harness_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +107,7 @@ pub struct OverheadTrimProjectedSavings {
 pub struct OverheadTrimRecommendation {
     pub file: String,
     pub kind: OverheadFileKind,
+    pub scope: OverheadFileScope,
     pub applies_to: Vec<SourceKind>,
     pub section: OverheadTrimSection,
     pub projected_savings: OverheadTrimProjectedSavings,
@@ -137,13 +145,17 @@ fn gather_overhead(
     project: Option<&Path>,
     since: Option<&str>,
     kind: Option<OverheadFileKind>,
+    harness_home: Option<&Path>,
 ) -> Result<GatheredOverhead> {
     let project_path: PathBuf = match project {
         Some(p) => fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()),
         None => std::env::current_dir()?,
     };
 
-    let mut found: Vec<OverheadFile> = find_overhead_files(&project_path);
+    let mut found: Vec<OverheadFile> = match harness_home {
+        Some(home) => find_overhead_files_in_home(&project_path, home),
+        None => find_overhead_files(&project_path),
+    };
     if let Some(want) = kind {
         found.retain(|f| f.kind == want);
     }
@@ -157,7 +169,18 @@ fn gather_overhead(
 
     let mut parsed_files: Vec<ParsedOverheadFile> = Vec::with_capacity(found.len());
     for f in found {
-        parsed_files.push(load_overhead_file(f)?);
+        // Files can disappear or become unreadable between discovery and
+        // loading. One raced file must not suppress the rest of the report.
+        if let Ok(parsed) = load_overhead_file(f) {
+            parsed_files.push(parsed);
+        }
+    }
+    if parsed_files.is_empty() {
+        return Ok(GatheredOverhead {
+            project_path,
+            files: Vec::new(),
+            attribution: None,
+        });
     }
 
     let resolved = resolve_project(&project_path.to_string_lossy());
@@ -187,6 +210,7 @@ impl LedgerHandle {
             opts.project.as_deref(),
             opts.since.as_deref(),
             opts.kind,
+            opts.harness_home.as_deref(),
         )?;
         let project_str = data.project_path.to_string_lossy().into_owned();
         let Some(attribution) = data.attribution else {
@@ -203,6 +227,7 @@ impl LedgerHandle {
             .map(|pf| OverheadFileSummary {
                 kind: pf.file.kind,
                 path: pf.file.path.clone(),
+                scope: pf.file.scope,
                 applies_to: pf.file.applies_to.clone(),
                 total_lines: pf.parsed.total_lines,
                 bytes: pf.parsed.bytes,
@@ -217,6 +242,7 @@ impl LedgerHandle {
             .map(|p| OverheadPerFileEntry {
                 path: p.file.path.clone(),
                 kind: p.file.kind,
+                scope: p.file.scope,
                 applies_to: p.file.applies_to.clone(),
                 attribution: OverheadAttributionDetail {
                     total_tokens: p.attribution.total_tokens,
@@ -255,6 +281,7 @@ impl LedgerHandle {
             opts.project.as_deref(),
             opts.since.as_deref(),
             opts.kind,
+            opts.harness_home.as_deref(),
         )?;
         let project_str = data.project_path.to_string_lossy().into_owned();
         let top_n = parse_top_n(opts.top);
@@ -310,6 +337,7 @@ impl LedgerHandle {
                 recommendations.push(OverheadTrimRecommendation {
                     file: to_project_relative(&fa.file.path, &data.project_path),
                     kind: fa.file.kind,
+                    scope: fa.file.scope,
                     applies_to: fa.file.applies_to.clone(),
                     section: OverheadTrimSection {
                         heading: rec.section.heading.clone(),

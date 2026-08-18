@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- `overhead()` and `overheadTrim()` discover active instruction chains with configurable harness homes, label files by scope, and carry scope into trim recommendations.
 - Cost calculations recognize Claude 5 and GPT-5.6 models, prefer first-party tariffs, and apply long-context price tiers.
 - `hotspots()` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
 
