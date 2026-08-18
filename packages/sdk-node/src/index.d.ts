@@ -84,6 +84,8 @@ export interface SummaryOptions {
   project?: string;
   /** ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range (`24h`, `7d`, `4w`, `2m`). */
   since?: string;
+  /** Inclusive upper bound. Accepts the same ISO/relative grammar as `since`. */
+  until?: string;
   /** Folded enrichment tag filters; every key/value pair must match. */
   tags?: Record<string, string>;
   /** Group summary costs/tokens by this folded enrichment tag key. */
@@ -119,6 +121,146 @@ export declare function summary(opts?: SummaryOptions): Promise<{
   /** Distinct model names (first-seen order) that had no pricing entry. */
   unpricedModels?: string[];
 }>
+
+export interface ReportSchemaVersion {
+  name: 'relayburn.report.summary.v1' | 'relayburn.report.summaryTimeseries.v1' | string;
+  version: number;
+}
+
+export interface ReportCapabilities {
+  packageName: string;
+  packageVersion: string;
+  features: string[];
+}
+
+export interface ReportWindow {
+  since: string | null;
+  until: string | null;
+  bucket: { seconds: number | bigint } | null;
+}
+
+export type SummaryGroupBy = 'model' | 'provider' | 'tag';
+export type SummaryReportMode =
+  | { kind: 'grouped'; byProvider?: boolean }
+  | { kind: 'byTool' }
+  | { kind: 'bySubagentType' }
+  | { kind: 'byRelationship'; subagent?: boolean }
+  | { kind: 'subagentTree'; sessionId?: string };
+
+export interface SummaryReportOptions {
+  session?: string;
+  project?: string;
+  since?: string;
+  until?: string;
+  workflow?: string;
+  tags?: Record<string, string>;
+  groupByTag?: string;
+  agent?: string;
+  providers?: string[];
+  mode?: SummaryReportMode;
+  includeQuality?: boolean;
+  ledgerHome?: string;
+}
+
+export interface SummaryCostBreakdown {
+  model: string;
+  total: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheCreate: number;
+}
+
+export interface SummaryUsage {
+  input: number | bigint;
+  output: number | bigint;
+  reasoning: number | bigint;
+  cacheRead: number | bigint;
+  cacheCreate5m: number | bigint;
+  cacheCreate1h: number | bigint;
+}
+
+export interface SummaryAggregateRow {
+  label: string;
+  turns: number | bigint;
+  usage: SummaryUsage;
+  cost: SummaryCostBreakdown;
+  coverage: unknown;
+}
+
+export interface StopReasonCounts {
+  endTurn: number | bigint;
+  maxTokens: number | bigint;
+  pauseTurn: number | bigint;
+  stopSequence: number | bigint;
+  toolUse: number | bigint;
+  refusal: number | bigint;
+  silent: number | bigint;
+  none: number | bigint;
+}
+
+export interface SummaryGroupedReport {
+  groupBy: SummaryGroupBy;
+  tagKey?: string;
+  tagValues?: Array<string | null>;
+  turnCount: number | bigint;
+  rows: SummaryAggregateRow[];
+  totalCost: SummaryCostBreakdown;
+  fidelity: unknown;
+  perCellFidelity: unknown;
+  replacementSavings: unknown;
+  stopReasons: StopReasonCounts;
+  subagents?: unknown;
+  quality?: unknown;
+  unpricedTurns: number | bigint;
+  unpricedModels?: string[];
+}
+
+export type SummaryReportPayload =
+  | { grouped: SummaryGroupedReport }
+  | { byTool: unknown }
+  | { bySubagentType: unknown }
+  | { relationship: unknown }
+  | { subagentTree: unknown };
+
+export interface SummaryReportEnvelope {
+  schema: ReportSchemaVersion;
+  capabilities: ReportCapabilities;
+  window: ReportWindow;
+  report: SummaryReportPayload;
+}
+
+export interface SummaryTimeseriesOptions extends SummaryReportOptions {
+  /** Positive bucket size in seconds. */
+  bucketSeconds: number;
+}
+
+export interface SummaryBucket {
+  start: string;
+  end: string;
+  turnCount: number | bigint;
+  totalTokens: number | bigint;
+  totalCost: SummaryCostBreakdown;
+  groupBy: SummaryGroupBy;
+  rows: SummaryAggregateRow[];
+}
+
+export interface SummaryTimeseries {
+  bucketSeconds: number | bigint;
+  buckets: SummaryBucket[];
+}
+
+export interface SummaryTimeseriesEnvelope {
+  schema: ReportSchemaVersion;
+  capabilities: ReportCapabilities;
+  window: ReportWindow;
+  timeseries: SummaryTimeseries;
+}
+
+export declare function summaryReport(opts?: SummaryReportOptions): Promise<SummaryReportEnvelope>
+export declare function summaryTimeseries(opts: SummaryTimeseriesOptions): Promise<SummaryTimeseriesEnvelope>
+export declare function capabilities(): ReportCapabilities
 
 export interface SessionCostOptions {
   /** Session id to total. Omit for `{ note: 'no session id provided' }`. */

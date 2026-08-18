@@ -10,8 +10,8 @@
 //!
 //! The optional `userTurnTextBySession` map (used by Claude /
 //! Codex slash-command miners) is sourced from the ledger's content
-//! sidecar in the production CLI; loading it lives in the CLI layer
-//! rather than here so the analyze crate stays I/O-free.
+//! sidecar in the query layer; loading it lives outside this module so the
+//! analyze crate stays I/O-free.
 
 use std::collections::{HashMap, HashSet};
 

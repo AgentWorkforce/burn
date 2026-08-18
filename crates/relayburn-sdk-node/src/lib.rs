@@ -93,6 +93,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use napi::bindgen_prelude::{BigInt, Error as NapiError, Result as NapiResult, ToNapiValue};
 use napi::sys;
 use napi_derive::napi;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use relayburn_sdk as sdk;
@@ -221,6 +222,27 @@ const BIGINT_FIELDS: &[&str] = &[
     "filesWithRecommendations",
     "totalRecommendations",
     "tokensPerSession",
+    // SDK-owned summary report envelopes
+    "bucketSeconds",
+    "seconds",
+    "turnCount",
+    "totalTokens",
+    "unpricedTurns",
+    "turns",
+    "known",
+    "missing",
+    "count",
+    "calls",
+    "invocations",
+    "estimatedTokensSaved",
+    "endTurn",
+    "maxTokens",
+    "pauseTurn",
+    "stopSequence",
+    "toolUse",
+    "refusal",
+    "silent",
+    "none",
     // hotspots aggregations
     "callCount",
     "distinctCommands",
@@ -644,6 +666,8 @@ pub struct SummaryOptions {
     /// ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range
     /// (`24h`, `7d`, `4w`, `2m`).
     pub since: Option<String>,
+    /// Inclusive upper bound. Accepts the same ISO/relative grammar as `since`.
+    pub until: Option<String>,
     pub tags: Option<HashMap<String, String>>,
     pub group_by_tag: Option<String>,
     pub ledger_home: Option<String>,
@@ -767,6 +791,7 @@ pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
         session: None,
         project: None,
         since: None,
+        until: None,
         tags: None,
         group_by_tag: None,
         ledger_home: None,
@@ -775,6 +800,7 @@ pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
         session: opts.session,
         project: opts.project,
         since: opts.since,
+        until: opts.until,
         tags: opts
             .tags
             .map(|tags| tags.into_iter().collect::<BTreeMap<_, _>>()),
@@ -782,6 +808,111 @@ pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
         ledger_home: maybe_path(opts.ledger_home),
     };
     sdk::summary(raw).map(Summary::from).map_err(sdk_err)
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SummaryTimeseriesEnvelopeOptions {
+    #[serde(default)]
+    bucket_seconds: Option<u64>,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    since: Option<String>,
+    #[serde(default)]
+    until: Option<String>,
+    #[serde(default)]
+    workflow: Option<String>,
+    #[serde(default)]
+    tags: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    group_by_tag: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    providers: Option<Vec<String>>,
+    #[serde(default)]
+    mode: sdk::SummaryReportMode,
+    #[serde(default)]
+    include_quality: bool,
+    #[serde(default)]
+    ledger_home: Option<PathBuf>,
+}
+
+impl SummaryTimeseriesEnvelopeOptions {
+    fn into_parts(self) -> Result<(sdk::SummaryReportOptions, u64), BurnError> {
+        let bucket_seconds = self
+            .bucket_seconds
+            .filter(|n| *n > 0)
+            .ok_or_else(|| invalid_arg("summaryTimeseries requires a positive bucketSeconds"))?;
+        Ok((
+            sdk::SummaryReportOptions {
+                session: self.session,
+                project: self.project,
+                since: self.since,
+                until: self.until,
+                workflow: self.workflow,
+                tags: self.tags,
+                group_by_tag: self.group_by_tag,
+                agent: self.agent,
+                providers: self.providers,
+                mode: self.mode,
+                include_quality: self.include_quality,
+                ledger_home: self.ledger_home,
+            },
+            bucket_seconds,
+        ))
+    }
+}
+
+fn summary_report_options_from_value(
+    opts: Option<JsonValue>,
+) -> Result<sdk::SummaryReportOptions, BurnError> {
+    opts.map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| invalid_arg(format!("invalid summaryReport options: {e}")))?
+        .map(Ok)
+        .unwrap_or_else(|| Ok(sdk::SummaryReportOptions::default()))
+}
+
+/// Version/capability handshake for SDK-owned report contracts.
+#[napi(ts_return_type = "import('./index').ReportCapabilities")]
+pub fn capabilities() -> Result<BigIntPromoting, BurnError> {
+    let value = serde_json::to_value(sdk::report_capabilities())
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize capabilities: {e}")))?;
+    Ok(BigIntPromoting(value))
+}
+
+/// SDK-owned summary report envelope. The result shape is documented as
+/// `SummaryReportEnvelope` in the Node facade types.
+#[napi(
+    js_name = "summaryReport",
+    ts_return_type = "import('./index').SummaryReportEnvelope"
+)]
+pub fn summary_report(opts: Option<JsonValue>) -> Result<BigIntPromoting, BurnError> {
+    let raw = summary_report_options_from_value(opts)?;
+    let result = sdk::summary_report_envelope(raw).map_err(sdk_err)?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize summary_report: {e}")))?;
+    Ok(BigIntPromoting(value))
+}
+
+/// SDK-owned bucketed summary time-series envelope.
+#[napi(
+    js_name = "summaryTimeseries",
+    ts_return_type = "import('./index').SummaryTimeseriesEnvelope"
+)]
+pub fn summary_timeseries(opts: JsonValue) -> Result<BigIntPromoting, BurnError> {
+    let parsed: SummaryTimeseriesEnvelopeOptions = serde_json::from_value(opts)
+        .map_err(|e| invalid_arg(format!("invalid summaryTimeseries options: {e}")))?;
+    let (raw, bucket_seconds) = parsed.into_parts()?;
+    let result = sdk::summary_timeseries_envelope(raw, bucket_seconds).map_err(sdk_err)?;
+    let value = serde_json::to_value(&result).map_err(|e| {
+        NapiError::new(SDK_ERROR_CODE, format!("serialize summary_timeseries: {e}"))
+    })?;
+    Ok(BigIntPromoting(value))
 }
 
 // ---------------------------------------------------------------------------

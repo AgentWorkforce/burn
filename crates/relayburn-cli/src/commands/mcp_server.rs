@@ -362,6 +362,7 @@ impl Server {
                     .or_else(|| self.default_session_id.clone()),
                 project: optional_string(input, "project", "summary")?,
                 since: optional_string(input, "since", "summary")?,
+                until: None,
                 tags: optional_string_record(input, "tags", "summary")?,
                 group_by_tag: optional_string(input, "groupByTag", "summary")?,
                 // Ledger selection belongs to the server's pre-opened handle.

@@ -30,6 +30,7 @@ pub(crate) fn build_summary_report_query(opts: &SummaryReportOptions) -> Result<
         opts.session.as_deref(),
         opts.project.as_deref(),
         opts.since.as_deref(),
+        opts.until.as_deref(),
     )?;
     if let Some(tag) = opts.group_by_tag.as_deref() {
         validate_tag_key(tag, "groupByTag")?;
@@ -235,8 +236,8 @@ pub(crate) fn compute_summary_subagent_counts(
 /// into. Returns `None` when `opts` carries no scoping filters, which
 /// preserves the original "scan every reachable session" behavior for
 /// the bare `burn summary` invocation. Returns `Some(set)` when any
-/// filter (`session`, `project`, `since`, `workflow`, `tags`, `agent`,
-/// `providers`) is active — `set` is the session ids that survived
+/// filter (`session`, `project`, `since`, `until`, `workflow`, `tags`,
+/// `agent`, `providers`) is active — `set` is the session ids that survived
 /// every filter, derived from the already-filtered `turns` slice.
 ///
 /// Plumbing the filter via the filtered turn set (instead of e.g.
@@ -251,6 +252,7 @@ pub(crate) fn summary_subagent_session_filter(
     let has_filter = opts.session.is_some()
         || opts.project.is_some()
         || opts.since.is_some()
+        || opts.until.is_some()
         || opts.workflow.is_some()
         || opts.agent.is_some()
         || opts.tags.as_ref().map(|t| !t.is_empty()).unwrap_or(false)
