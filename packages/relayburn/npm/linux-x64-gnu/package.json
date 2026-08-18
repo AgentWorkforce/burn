@@ -2,6 +2,7 @@
   "name": "@relayburn/cli-linux-x64-gnu",
   "version": "4.0.0",
   "description": "Prebuilt `burn` binary for linux-x64-gnu (glibc).",
+  "license": "Apache-2.0",
   "bin": {
     "burn": "./bin/burn"
   },

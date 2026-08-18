@@ -1,7 +1,7 @@
 //! Human-readable table rendering for `burn hotspots`.
 
 use relayburn_sdk::{
-    AttributionMethod, BashAggregation, BashVerbAggregation, FileAggregation,
+    AttributionMethod, BashAggregation, BashVerbAggregation, FileAggregation, FindingPricingStatus,
     HotspotsAttributionResult, HotspotsExcludedBreakdown, HotspotsExcludedSourceRow,
     HotspotsResult, McpServerAggregation, SubagentAggregation, WasteFinding, WasteSeverity,
 };
@@ -149,11 +149,7 @@ fn emit_findings_unified(findings: &[WasteFinding]) {
         "title".into(),
     ]];
     for f in findings {
-        let usd = f
-            .estimated_savings
-            .usd_per_session
-            .map(format_usd)
-            .unwrap_or_else(|| "—".to_string());
+        let usd = finding_cost_label(f);
         rows.push(vec![
             severity_label(f.severity).to_string(),
             f.kind.clone(),
@@ -194,11 +190,7 @@ fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) {
             "title".into(),
         ]];
         for f in items.iter().take(limit) {
-            let usd = f
-                .estimated_savings
-                .usd_per_session
-                .map(format_usd)
-                .unwrap_or_else(|| "—".to_string());
+            let usd = finding_cost_label(f);
             rows.push(vec![
                 severity_label(f.severity).to_string(),
                 f.session_id.chars().take(8).collect(),
@@ -210,6 +202,17 @@ fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) {
         out.push(String::new());
     }
     print!("{}", out.join("\n"));
+}
+
+fn finding_cost_label(finding: &WasteFinding) -> String {
+    match finding.pricing_status {
+        FindingPricingStatus::Unpriced => "unpriced".to_string(),
+        FindingPricingStatus::Priced => finding
+            .estimated_savings
+            .usd_per_session
+            .map(format_usd)
+            .unwrap_or_else(|| "—".to_string()),
+    }
 }
 
 fn severity_label(s: WasteSeverity) -> &'static str {
