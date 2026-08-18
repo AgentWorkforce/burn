@@ -186,6 +186,7 @@ mod tests {
                 cache_write: 3.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::IncludedInOutput,
+                context_tiers: Vec::new(),
             },
         );
         p

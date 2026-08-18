@@ -158,7 +158,7 @@ impl LedgerHandle {
         }
         let enriched = self.inner.query_turns(&q)?;
         let turns: Vec<TurnRecord> = enriched.iter().map(|e| e.turn.clone()).collect();
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
         let mut summary = compute_summary(&turns, &pricing);
         if let Some(tag) = group_by_tag {
             summary.by_tag = Some(compute_summary_by_tag(&enriched, &tag, &pricing));
@@ -542,6 +542,7 @@ pub struct SummaryBucket {
     pub start: String,
     pub end: String,
     pub turn_count: u64,
+    pub unpriced_turns: u64,
     pub total_tokens: u64,
     pub total_cost: CostBreakdown,
     pub group_by: SummaryGroupBy,
@@ -587,7 +588,7 @@ impl LedgerHandle {
 
         let q = build_summary_report_query(&opts)?;
         let provider_filter = normalize_summary_provider_filter(opts.providers.as_deref());
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
         let agent_session_ids = match opts.agent.as_deref() {
             Some(agent_id) => Some(resolve_summary_agent_session_tree(&self.inner, agent_id)?),
             None => None,
@@ -620,6 +621,7 @@ impl LedgerHandle {
             .into_iter()
             .enumerate()
             .map(|(i, bturns)| {
+                let (unpriced_turns, _) = tally_unpriced(&bturns, &pricing);
                 let rows = if by_provider {
                     aggregate_by_provider(&bturns, AggregateByProviderOptions::new(&pricing))
                         .into_iter()
@@ -634,6 +636,7 @@ impl LedgerHandle {
                     start: buckets.start_iso(i),
                     end: buckets.end_iso(i),
                     turn_count: bturns.iter().map(TurnRecord::effective_request_count).sum(),
+                    unpriced_turns,
                     total_tokens,
                     total_cost,
                     group_by,
@@ -651,7 +654,7 @@ impl LedgerHandle {
     pub fn summary_report(&self, opts: SummaryReportOptions) -> Result<SummaryReport> {
         let q = build_summary_report_query(&opts)?;
         let provider_filter = normalize_summary_provider_filter(opts.providers.as_deref());
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
         let agent_session_ids = match opts.agent.as_deref() {
             Some(agent_id) => Some(resolve_summary_agent_session_tree(&self.inner, agent_id)?),
             None => None,

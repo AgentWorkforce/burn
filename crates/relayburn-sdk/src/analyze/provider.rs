@@ -359,6 +359,7 @@ mod tests {
                 cache_write: 1.25,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         p.insert(
@@ -370,6 +371,7 @@ mod tests {
                 cache_write: 3.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         p

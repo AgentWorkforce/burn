@@ -48,7 +48,7 @@ impl LedgerHandle {
                 note: Some("no turns recorded for this session yet".to_string()),
             });
         }
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
         let mut models = std::collections::BTreeSet::new();
         let mut total_tokens: u64 = 0;
         let mut costs = Vec::with_capacity(turns.len());
@@ -197,7 +197,7 @@ impl LedgerHandle {
         let q = build_query(None, opts.project.as_deref(), opts.since.as_deref())?;
         let turns = collect_turns(self, &q)?;
 
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
         // Aggregate per-session in a single pass over the turn stream.
         let mut acc: BTreeMap<String, SessionAccumulator> = BTreeMap::new();
         for turn in &turns {

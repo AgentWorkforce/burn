@@ -167,7 +167,7 @@ fn gather_overhead(
         ..Default::default()
     };
     let turns = collect_turns(handle, &q)?;
-    let pricing = load_pricing(None);
+    let pricing = load_pricing_for_ledger(handle);
     let attribution = attribute_overhead(AttributeOverheadInput {
         files: &parsed_files,
         turns: &turns,

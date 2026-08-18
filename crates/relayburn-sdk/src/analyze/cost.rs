@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::reader::{SourceKind, TurnRecord, Usage};
 
-use crate::analyze::pricing::{ModelCost, PricingTable, ReasoningMode};
+use crate::analyze::pricing::{ModelCost, ModelCostTier, PricingTable, ReasoningMode};
 use crate::analyze::provider_reattribution::{resolve_provider, strip_provider_prefix};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +45,15 @@ pub struct CostForUsageOptions {
 /// analyze module. Prices in the pricing table are quoted per million tokens.
 pub(crate) const PER_MILLION: f64 = 1_000_000.0;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EffectiveModelRate {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+    pub reasoning: Option<f64>,
+}
+
 pub(crate) fn cost_for_usage(
     usage: &Usage,
     model: &str,
@@ -52,14 +61,15 @@ pub(crate) fn cost_for_usage(
     options: CostForUsageOptions,
 ) -> Option<CostBreakdown> {
     let rate = lookup_model_rate(model, pricing)?;
+    let effective = effective_model_rate(usage, rate);
     let mode = options.reasoning_mode.unwrap_or(rate.reasoning_mode);
-    let input = (usage.input as f64 / PER_MILLION) * rate.input;
-    let output = (usage.output as f64 / PER_MILLION) * rate.output;
-    let reasoning = reasoning_cost(usage.reasoning, rate, mode);
-    let cache_read = (usage.cache_read as f64 / PER_MILLION) * rate.cache_read;
+    let input = (usage.input as f64 / PER_MILLION) * effective.input;
+    let output = (usage.output as f64 / PER_MILLION) * effective.output;
+    let reasoning = reasoning_cost(usage.reasoning, effective.output, effective.reasoning, mode);
+    let cache_read = (usage.cache_read as f64 / PER_MILLION) * effective.cache_read;
     let cache_create = ((usage.cache_create_5m as f64 + usage.cache_create_1h as f64)
         / PER_MILLION)
-        * rate.cache_write;
+        * effective.cache_write;
     Some(CostBreakdown {
         model: Cow::Owned(model.to_string()),
         total: input + output + reasoning + cache_read + cache_create,
@@ -99,7 +109,35 @@ where
     sum
 }
 
-fn reasoning_cost(reasoning_tokens: u64, rate: &ModelCost, mode: ReasoningMode) -> f64 {
+fn context_tier_for_usage<'a>(usage: &Usage, rate: &'a ModelCost) -> Option<&'a ModelCostTier> {
+    let context_tokens = usage
+        .input
+        .saturating_add(usage.cache_read)
+        .saturating_add(usage.cache_create_5m)
+        .saturating_add(usage.cache_create_1h);
+    rate.context_tiers
+        .iter()
+        .rev()
+        .find(|tier| context_tokens > tier.context_tokens)
+}
+
+pub(crate) fn effective_model_rate(usage: &Usage, rate: &ModelCost) -> EffectiveModelRate {
+    let tier = context_tier_for_usage(usage, rate);
+    EffectiveModelRate {
+        input: tier.map_or(rate.input, |tier| tier.input),
+        output: tier.map_or(rate.output, |tier| tier.output),
+        cache_read: tier.map_or(rate.cache_read, |tier| tier.cache_read),
+        cache_write: tier.map_or(rate.cache_write, |tier| tier.cache_write),
+        reasoning: tier.and_then(|tier| tier.reasoning).or(rate.reasoning),
+    }
+}
+
+fn reasoning_cost(
+    reasoning_tokens: u64,
+    output_rate: f64,
+    reasoning_rate: Option<f64>,
+    mode: ReasoningMode,
+) -> f64 {
     match mode {
         // Already billed inside `usage.output` — informational only.
         ReasoningMode::IncludedInOutput => 0.0,
@@ -107,9 +145,9 @@ fn reasoning_cost(reasoning_tokens: u64, rate: &ModelCost, mode: ReasoningMode) 
         // this mode but the model has no `rate.reasoning`, fall back to the
         // output rate so we never silently drop reasoning tokens.
         ReasoningMode::Separate => {
-            (reasoning_tokens as f64 / PER_MILLION) * rate.reasoning.unwrap_or(rate.output)
+            (reasoning_tokens as f64 / PER_MILLION) * reasoning_rate.unwrap_or(output_rate)
         }
-        ReasoningMode::SameAsOutput => (reasoning_tokens as f64 / PER_MILLION) * rate.output,
+        ReasoningMode::SameAsOutput => (reasoning_tokens as f64 / PER_MILLION) * output_rate,
     }
 }
 
@@ -318,6 +356,41 @@ mod tests {
     }
 
     #[test]
+    fn applies_context_tier_to_long_context_turns() {
+        let p = load_builtin_pricing();
+        let below = cost_for_turn(
+            &turn(
+                "gpt-5.6-sol",
+                Usage {
+                    input: 272_000,
+                    output: 1_000_000,
+                    ..Usage::default()
+                },
+                SourceKind::Codex,
+            ),
+            &p,
+        )
+        .unwrap();
+        let above = cost_for_turn(
+            &turn(
+                "gpt-5.6-sol",
+                Usage {
+                    input: 272_001,
+                    output: 1_000_000,
+                    ..Usage::default()
+                },
+                SourceKind::Codex,
+            ),
+            &p,
+        )
+        .unwrap();
+
+        assert_eq!(below.output, 30.0);
+        assert_eq!(above.output, 45.0);
+        assert!((above.input - 2.72001).abs() < 1e-9);
+    }
+
+    #[test]
     fn does_not_double_bill_reasoning_for_codex_turns() {
         // Acceptance criterion from issue #32: a Codex turn with
         //   input = 1_000_000, output = 500_000, reasoning = 200_000
@@ -332,6 +405,7 @@ mod tests {
                 cache_write: 2.5,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         let c = cost_for_turn(
@@ -369,6 +443,7 @@ mod tests {
                 cache_write: 1.25,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         let c = cost_for_turn(
@@ -413,6 +488,7 @@ mod tests {
                 cache_write: 1.0,
                 reasoning: Some(8.0),
                 reasoning_mode: ReasoningMode::Separate,
+                context_tiers: Vec::new(),
             },
         );
         let c = cost_for_usage(
@@ -440,6 +516,7 @@ mod tests {
                 cache_write: 1.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         let usage = usage_with(0, 0, 1_000_000);
@@ -495,6 +572,7 @@ mod tests {
                 cache_write: 1.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         let rate = lookup_model_rate("synthetic/qwen3-coder", &p).expect("synthetic prefix routes");
@@ -514,6 +592,7 @@ mod tests {
                 cache_write: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         let rate = lookup_model_rate("codex-auto-review", &p).expect("auto-review alias routes");
@@ -534,6 +613,7 @@ mod tests {
                 cache_write: 9.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         p.insert(
@@ -545,6 +625,7 @@ mod tests {
                 cache_write: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         let rate =
@@ -566,6 +647,7 @@ mod tests {
                 cache_write: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
         );
         let c = cost_for_turn(

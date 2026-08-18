@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Local napi builds load ahead of installed platform packages, so development and conformance tests use the current checkout's native binding.
+- Cost calculations recognize Claude 5 and GPT-5.6 models, prefer first-party tariffs, and apply long-context price tiers.
+- `hotspots()` findings identify unknown pricing and rank unpriced sessions by token volume instead of $0.00.
+
 ## [4.0.0] - 2026-06-23
 
 - `compare()` cost figures now use canonical decimal rounding (`toFixed` semantics) instead of float-multiply rounding, so cells/totals can shift by one in the last reported digit at exact ties.
