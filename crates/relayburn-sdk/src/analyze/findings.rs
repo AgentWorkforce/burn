@@ -334,6 +334,44 @@ pub(crate) fn hotspots_action(session_id: &str) -> WasteAction {
     }
 }
 
+/// Build the ratio-driven finding used by the public hotspots verb. Severity
+/// and inclusion are deliberately independent of dollar cost.
+pub(crate) struct ContextOutputRatioFindingInput<'a> {
+    pub session_id: &'a str,
+    pub high: bool,
+    pub ratio_label: &'a str,
+    pub context_tokens: u64,
+    pub output_tokens: u64,
+    pub threshold: f64,
+    pub min_context_tokens: u64,
+}
+
+pub(crate) fn context_output_ratio_finding(
+    input: ContextOutputRatioFindingInput<'_>,
+) -> WasteFinding {
+    WasteFinding {
+        kind: "context-output-ratio".to_string(),
+        severity: if input.high {
+            WasteSeverity::High
+        } else {
+            WasteSeverity::Warn
+        },
+        session_id: input.session_id.to_string(),
+        title: format!("{} context-to-output ratio", input.ratio_label),
+        detail: format!(
+            "{} context tokens (input + cache reads + cache creation) / {} generated output tokens (including reasoning); flat inspection threshold {}:1 with {} minimum context tokens (not length-normalized)",
+            input.context_tokens,
+            input.output_tokens,
+            input.threshold,
+            input.min_context_tokens,
+        ),
+        estimated_savings: EstimatedSavings::default(),
+        actions: vec![hotspots_action(input.session_id)],
+        event_source: None,
+        pricing_status: FindingPricingStatus::Priced,
+    }
+}
+
 impl WasteFinding {
     /// Build a cost-driven, session-scoped finding: severity derived from
     /// `cost` via [`severity_from_usd`], a `usd_per_session` saving of `cost`,

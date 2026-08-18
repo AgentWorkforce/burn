@@ -90,10 +90,51 @@ export interface SummaryOptions {
   groupByTag?: string;
   ledgerHome?: string;
 }
+
+export interface ContextSizeDistribution {
+  p50: number | bigint;
+  p95: number | bigint;
+  max: number | bigint;
+}
+
+export interface SessionContextEfficiency {
+  sessionId: string;
+  turnCount: number | bigint;
+  contextTokens: number | bigint;
+  /** All generated tokens, with separately reported reasoning included. */
+  outputTokens: number | bigint;
+  /** Null when outputTokens is zero; inspect `unbounded` to distinguish context-consuming 0-output sessions. */
+  contextTokensPerOutputToken: number | null;
+  unbounded: boolean;
+  zeroOutputTurnsWithContext: number | bigint;
+  contextSize: ContextSizeDistribution;
+}
+
+/**
+ * Context tokens are input + cache-read + both cache-creation buckets.
+ * All generated output is the denominator: Codex already includes reasoning
+ * in output, while separately reported reasoning is added for other harnesses.
+ */
+export interface ContextEfficiencySummary {
+  contextTokens: number | bigint;
+  /** All generated tokens, with separately reported reasoning included. */
+  outputTokens: number | bigint;
+  contextTokensPerOutputToken: number | null;
+  unbounded: boolean;
+  zeroOutputTurnsWithContext: number | bigint;
+  /** All distinct sessions in the filtered slice. */
+  totalSessions: number | bigint;
+  /** Sessions meeting the default 1M-context findings eligibility floor. */
+  eligibleSessions: number | bigint;
+  /** At most the ten highest-ratio sessions. */
+  sessions: SessionContextEfficiency[];
+}
+
 export declare function summary(opts?: SummaryOptions): Promise<{
   totalTokens: number | bigint;
   totalCost: number;
   turnCount: number;
+  contextEfficiency: ContextEfficiencySummary;
   byTool: Array<{ tool: string; tokens: number | bigint; cost: number; count: number }>;
   byModel: Array<{ model: string; tokens: number | bigint; cost: number }>;
   byTag?: Array<{
@@ -271,6 +312,10 @@ export interface HotspotsOptions {
   workflow?: string;
   /** Provider allow-list (case-insensitive). */
   provider?: string[];
+  /** Context:output ratio threshold for findings; defaults to 382. */
+  contextOutputRatioThreshold?: number;
+  /** Minimum session context-token volume for ratio findings; defaults to 1,000,000. */
+  contextOutputMinTokens?: number | bigint;
   ledgerHome?: string;
 }
 

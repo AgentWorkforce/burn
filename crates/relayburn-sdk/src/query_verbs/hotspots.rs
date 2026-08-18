@@ -16,6 +16,7 @@ pub enum HotspotsGroupBy {
 }
 
 const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
+    "context-output-ratio",
     "retry-loop",
     "failure-run",
     "cancellation-run",
@@ -51,6 +52,12 @@ pub struct HotspotsOptions {
     /// Restrict to turns whose derived provider is in the given set
     /// (case-insensitive). `None` / empty = no provider filter.
     pub provider: Option<Vec<String>>,
+    /// Session context-to-output ratio that triggers the independent
+    /// `context-output-ratio` finding. Defaults to 382:1 (inclusive).
+    pub context_output_ratio_threshold: Option<f64>,
+    /// Minimum context tokens a session must consume before ratio findings
+    /// apply. Defaults to 1,000,000; zero disables the volume floor.
+    pub context_output_min_tokens: Option<u64>,
     pub ledger_home: Option<PathBuf>,
 }
 
@@ -186,6 +193,13 @@ pub struct HotspotsAttributionResult {
 
 impl LedgerHandle {
     pub fn hotspots(&self, opts: HotspotsOptions) -> Result<HotspotsResult> {
+        let context_output_ratio_threshold = opts
+            .context_output_ratio_threshold
+            .unwrap_or(DEFAULT_CONTEXT_OUTPUT_RATIO_THRESHOLD);
+        validate_context_output_ratio_threshold(context_output_ratio_threshold)?;
+        let context_output_min_tokens = opts
+            .context_output_min_tokens
+            .unwrap_or(DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS);
         let using_patterns = opts
             .patterns
             .as_ref()
@@ -215,7 +229,15 @@ impl LedgerHandle {
                 Some(patterns) if !patterns.is_empty() => patterns,
                 _ => default_hotspots_finding_kinds(),
             };
-            return run_hotspots_findings(self, &turns, &pricing, patterns, &q);
+            return run_hotspots_findings(
+                self,
+                &turns,
+                &pricing,
+                patterns,
+                &q,
+                context_output_ratio_threshold,
+                context_output_min_tokens,
+            );
         }
         if using_patterns {
             return run_hotspots_findings(
@@ -224,6 +246,8 @@ impl LedgerHandle {
                 &pricing,
                 opts.patterns.unwrap_or_default(),
                 &q,
+                context_output_ratio_threshold,
+                context_output_min_tokens,
             );
         }
         run_hotspots_attribution(self, &turns, &pricing, opts.group_by, &q)
@@ -481,9 +505,19 @@ fn run_hotspots_findings(
     pricing: &PricingTable,
     wanted: Vec<String>,
     q: &Query,
+    context_output_ratio_threshold: f64,
+    context_output_min_tokens: u64,
 ) -> Result<HotspotsResult> {
     let wanted_set: HashSet<String> = wanted.into_iter().collect();
     let mut findings: Vec<WasteFinding> = Vec::new();
+
+    if wanted_set.contains("context-output-ratio") {
+        findings.extend(context_output_ratio_findings(
+            &compute_context_efficiency(turns),
+            context_output_ratio_threshold,
+            context_output_min_tokens,
+        ));
+    }
 
     // Propagate `enrichment` (e.g. workflowId folds) into side queries so a
     // partial-session workflow stamp doesn't pull unrelated user-turns /

@@ -234,6 +234,30 @@ fn summary_aggregates_two_turns() {
     assert_eq!(s.by_tool[0].tool, "Read");
     assert_eq!(s.by_tool[0].count, 2);
     assert!(s.total_cost > 0.0);
+    assert_eq!(s.context_efficiency.context_tokens, 2_000);
+    assert_eq!(s.context_efficiency.output_tokens, 900);
+    assert_eq!(
+        s.context_efficiency.context_tokens_per_output_token,
+        Some(2_000.0 / 900.0)
+    );
+    assert_eq!(s.context_efficiency.total_sessions, 1);
+    assert_eq!(s.context_efficiency.eligible_sessions, 0);
+    assert_eq!(s.context_efficiency.sessions.len(), 1);
+    assert_eq!(s.context_efficiency.sessions[0].context_tokens, 2_000);
+}
+
+#[test]
+fn summary_deserializes_payload_without_context_efficiency() {
+    let (_dir, handle) = fixture_handle();
+    let summary = handle.summary(SummaryOptions::default()).unwrap();
+    let mut value = serde_json::to_value(summary).unwrap();
+    value.as_object_mut().unwrap().remove("contextEfficiency");
+
+    let decoded: Summary = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        decoded.context_efficiency,
+        ContextEfficiencySummary::default()
+    );
 }
 
 #[test]
@@ -263,6 +287,10 @@ fn summary_report_grouped_owns_rows_and_stable_fidelity_shape() {
     assert_eq!(grouped.group_by, SummaryGroupBy::Model);
     assert_eq!(grouped.rows.len(), 1);
     assert_eq!(grouped.rows[0].label, "claude-sonnet-4-6");
+    assert_eq!(grouped.context_efficiency.context_tokens, 2_000);
+    assert_eq!(grouped.context_efficiency.total_sessions, 1);
+    assert_eq!(grouped.context_efficiency.sessions.len(), 1);
+    assert_eq!(grouped.context_efficiency.sessions[0].context_tokens, 2_000);
     assert_eq!(grouped.per_cell_fidelity["groupBy"], "model");
     assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
 }
@@ -1086,6 +1114,85 @@ fn hotspots_group_by_findings_honors_patterns_filter() {
         HotspotsResult::Findings { findings, summary } => {
             assert!(findings.is_empty());
             assert!(summary.is_object());
+        }
+        other => panic!("expected findings, got {other:?}"),
+    }
+}
+
+#[test]
+fn hotspots_context_output_ratio_threshold_override_reaches_finding_rule() {
+    let (_dir, handle) = fixture_handle();
+    // Fixture totals are 2,000 context / 900 output = 2.22:1.
+    let findings = handle
+        .hotspots(HotspotsOptions {
+            patterns: Some(vec!["context-output-ratio".into()]),
+            context_output_ratio_threshold: Some(2.125),
+            context_output_min_tokens: Some(0),
+            ..HotspotsOptions::default()
+        })
+        .unwrap();
+    match findings {
+        HotspotsResult::Findings { findings, .. } => {
+            assert_eq!(findings.len(), 1);
+            assert_eq!(findings[0].kind, "context-output-ratio");
+            assert_eq!(findings[0].session_id, "sess-a");
+            assert!(findings[0].detail.contains("threshold 2.125:1"));
+        }
+        other => panic!("expected findings, got {other:?}"),
+    }
+
+    let none = handle
+        .hotspots(HotspotsOptions {
+            patterns: Some(vec!["context-output-ratio".into()]),
+            context_output_ratio_threshold: Some(3.0),
+            context_output_min_tokens: Some(0),
+            ..HotspotsOptions::default()
+        })
+        .unwrap();
+    match none {
+        HotspotsResult::Findings { findings, .. } => assert!(findings.is_empty()),
+        other => panic!("expected findings, got {other:?}"),
+    }
+}
+
+#[test]
+fn hotspots_default_context_rule_flags_382_to_one_high_volume_session() {
+    let (_dir, mut handle) = fixture_handle();
+    let mut incident = handle
+        .raw()
+        .query_turns(&Query::default())
+        .unwrap()
+        .remove(0)
+        .turn;
+    incident.session_id = "incident-382".into();
+    incident.message_id = "incident-message".into();
+    incident.turn_index = 0;
+    incident.usage = Usage {
+        input: 1_146_000,
+        output: 3_000,
+        ..Usage::default()
+    };
+    incident.tool_calls.clear();
+    handle.raw_mut().append_turns(&[incident]).unwrap();
+
+    let result = handle
+        .hotspots(HotspotsOptions {
+            patterns: Some(vec!["context-output-ratio".into()]),
+            ..HotspotsOptions::default()
+        })
+        .unwrap();
+    match result {
+        HotspotsResult::Findings { findings, .. } => {
+            assert_eq!(findings.len(), 1);
+            assert_eq!(findings[0].session_id, "incident-382");
+            assert_eq!(findings[0].kind, "context-output-ratio");
+            assert!(findings[0].detail.contains("1146000 context tokens"));
+            assert!(findings[0]
+                .detail
+                .contains("3000 generated output tokens (including reasoning)"));
+            assert!(findings[0]
+                .detail
+                .contains("threshold 382:1 with 1000000 minimum context tokens"));
         }
         other => panic!("expected findings, got {other:?}"),
     }

@@ -97,6 +97,7 @@ pub(super) fn grouped_json_value(
         }),
     );
     payload.insert("turns".into(), json!(report.turn_count));
+    payload.insert("contextEfficiency".into(), json!(report.context_efficiency));
     payload.insert(
         "totalCost".into(),
         cost_breakdown_to_json(&report.total_cost),

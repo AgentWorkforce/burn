@@ -411,6 +411,8 @@ impl Server {
                 patterns: optional_string_array(input, "patterns", "hotspots")?,
                 workflow: optional_string(input, "workflow", "hotspots")?,
                 provider: optional_string_array(input, "provider", "hotspots")?,
+                context_output_ratio_threshold: None,
+                context_output_min_tokens: None,
                 ledger_home: None,
             })
         })() {

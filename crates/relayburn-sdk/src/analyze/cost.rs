@@ -156,7 +156,7 @@ fn reasoning_cost(
 ///
 /// - Codex: `output_tokens` already includes reasoning; never bill it on top.
 /// - Everyone else: defer to the model.
-fn reasoning_mode_for_source(source: SourceKind) -> Option<ReasoningMode> {
+pub(crate) fn reasoning_mode_for_source(source: SourceKind) -> Option<ReasoningMode> {
     match source {
         SourceKind::Codex => Some(ReasoningMode::IncludedInOutput),
         _ => None,

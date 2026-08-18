@@ -541,6 +541,9 @@ fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFi
 mod summary;
 pub use summary::*;
 
+mod context_efficiency;
+pub use context_efficiency::*;
+
 mod sessions;
 pub use sessions::*;
 
