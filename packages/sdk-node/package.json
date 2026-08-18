@@ -2,6 +2,7 @@
   "name": "@relayburn/sdk",
   "version": "4.0.0",
   "description": "Embeddable Relayburn SDK — napi-rs bindings over the Rust relayburn-sdk crate (2.x). Drop-in replacement for the TS @relayburn/sdk@1.x.",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",

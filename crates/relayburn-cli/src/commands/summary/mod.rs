@@ -457,9 +457,8 @@ mod tests {
         assert!(format!("{duplicate}").contains("duplicate --tag filter"));
     }
 
-    #[test]
-    fn grouped_json_includes_quality_and_unpriced_usage() {
-        let report = SummaryGroupedReport {
+    fn empty_grouped_report() -> SummaryGroupedReport {
+        SummaryGroupedReport {
             group_by: SummaryGroupBy::Model,
             tag_key: None,
             tag_values: Vec::new(),
@@ -479,10 +478,16 @@ mod tests {
             replacement_savings: relayburn_sdk::ReplacementSavingsSummary::default(),
             stop_reasons: relayburn_sdk::StopReasonCounts::default(),
             subagents: SubagentCounts::default(),
-            quality: Some(QualityResult::default()),
-            unpriced_turns: 2,
-            unpriced_models: vec!["made-up-model-xyz".into()],
-        };
+            quality: None,
+            unpriced_turns: 0,
+            unpriced_models: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn grouped_json_includes_quality_when_report_has_it() {
+        let mut report = empty_grouped_report();
+        report.quality = Some(QualityResult::default());
 
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
@@ -518,6 +523,19 @@ mod tests {
     }
 
     #[test]
+    fn grouped_json_surfaces_unpriced_turns_and_models() {
+        let mut report = empty_grouped_report();
+        report.turn_count = 1;
+        report.unpriced_turns = 1;
+        report.unpriced_models = vec!["gpt-5-codex".into()];
+
+        let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
+
+        assert_eq!(value["unpricedTurns"], 1);
+        assert_eq!(value["unpricedModels"], json!(["gpt-5-codex"]));
+    }
+
+    #[test]
     fn subagents_line_renders_only_when_counts_nonzero() {
         // Empty bucket → skipped, line absent (so old summaries keep
         // their byte-identical shape against the existing golden).
@@ -542,30 +560,7 @@ mod tests {
     fn subagents_json_payload_includes_total_and_omits_when_empty() {
         // Empty bucket → key absent in JSON so `summary.json | jq` for
         // pre-#435 callers still passes without a `?.` guard.
-        let mut report = SummaryGroupedReport {
-            group_by: SummaryGroupBy::Model,
-            tag_key: None,
-            tag_values: Vec::new(),
-            turn_count: 0,
-            rows: Vec::new(),
-            total_cost: CostBreakdown {
-                model: String::new().into(),
-                total: 0.0,
-                input: 0.0,
-                output: 0.0,
-                reasoning: 0.0,
-                cache_read: 0.0,
-                cache_create: 0.0,
-            },
-            fidelity: relayburn_sdk::summarize_fidelity(&[]),
-            per_cell_fidelity: json!({"groupBy": "model"}),
-            replacement_savings: relayburn_sdk::ReplacementSavingsSummary::default(),
-            stop_reasons: relayburn_sdk::StopReasonCounts::default(),
-            subagents: SubagentCounts::default(),
-            quality: None,
-            unpriced_turns: 0,
-            unpriced_models: Vec::new(),
-        };
+        let mut report = empty_grouped_report();
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
         assert!(
             value.get("subagents").is_none(),

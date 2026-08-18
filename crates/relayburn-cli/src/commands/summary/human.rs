@@ -637,7 +637,7 @@ pub(super) fn emit_human(
             report.unpriced_turns, models,
         );
         eprintln!(
-            "         Update the snapshot (pnpm run pricing:update) or add an override at $RELAYBURN_HOME/models.dev.json.",
+            "         Update the snapshot (pnpm run pricing:update) or add an override at <ledger-home>/models.dev.json.",
         );
     }
 }

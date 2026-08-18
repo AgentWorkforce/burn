@@ -101,8 +101,6 @@ pub(super) fn grouped_json_value(
         "totalCost".into(),
         cost_breakdown_to_json(&report.total_cost),
     );
-    payload.insert("unpricedTurns".into(), json!(report.unpriced_turns));
-    payload.insert("unpricedModels".into(), json!(&report.unpriced_models));
     payload.insert(key.into(), Value::Array(group_rows));
     payload.insert(
         "fidelity".into(),
@@ -121,6 +119,10 @@ pub(super) fn grouped_json_value(
         "stopReasons".into(),
         stop_reasons_to_json(&report.stop_reasons),
     );
+    payload.insert("unpricedTurns".into(), json!(report.unpriced_turns));
+    if !report.unpriced_models.is_empty() {
+        payload.insert("unpricedModels".into(), json!(report.unpriced_models));
+    }
     if !report.subagents.is_empty() {
         // `subagents: {paired, orphan, total}` (issue #435). Skipped
         // when both buckets are zero so the JSON shape stays compact

@@ -17,7 +17,7 @@ use indexmap::IndexMap;
 use phf::phf_set;
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::cost::{cost_for_turn, lookup_model_rate, PER_MILLION};
+use crate::analyze::cost::{cost_for_turn, effective_model_rate, lookup_model_rate, PER_MILLION};
 use crate::analyze::pricing::PricingTable;
 use crate::analyze::util::{
     group_turns_by_session_sorted, stringify_tool_result, tokens_from_utf16_len,
@@ -453,7 +453,8 @@ fn attribute_session(
     let mut grand_total = 0.0_f64;
 
     for &turn in turns {
-        let turn_rate = lookup_model_rate(&turn.model, pricing);
+        let turn_rate = lookup_model_rate(&turn.model, pricing)
+            .map(|rate| effective_model_rate(&turn.usage, rate));
 
         // Accumulate the per-turn grand total in this same pass. Routes
         // through the canonical `cost_for_turn` so hotspots stays in
