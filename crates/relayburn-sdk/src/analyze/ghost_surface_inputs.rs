@@ -238,6 +238,7 @@ mod tests {
                 cache_write: 0.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::IncludedInOutput,
+                context_tiers: Vec::new(),
             },
         );
         pricing.insert(
@@ -249,6 +250,7 @@ mod tests {
                 cache_write: 0.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::IncludedInOutput,
+                context_tiers: Vec::new(),
             },
         );
         let turns = vec![

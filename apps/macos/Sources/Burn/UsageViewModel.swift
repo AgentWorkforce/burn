@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 /// This-period and previous-period spend (USD) for one usage window, from the
 /// burn ledger.
@@ -28,24 +29,51 @@ final class UsageViewModel: ObservableObject {
 
     let refreshInterval: TimeInterval = 60
 
-    private var timer: Timer?
+    /// The repeating refresh timer, held in a box so `deinit` (nonisolated) can
+    /// invalidate it without touching `@MainActor` state. Previously the timer
+    /// was never invalidated, so a closed popover left it firing forever.
+    private let timerBox = TimerBox()
     /// While set, scheduled (non-forced) refreshes are skipped to let a 429 clear.
     private var backoffUntil: Date?
     private var consecutiveRateLimits = 0
-    private let providers: [ProviderName: UsageProvider] = [
-        .claude: ClaudeProvider(),
-        .codex: CodexProvider(),
-    ]
+    private let providers: [ProviderName: UsageProvider]
+    private let history: UsageHistoryStore
+    private let ledger: BurnLedger
 
-    init() {
+    /// - Parameters:
+    ///   - providers: usage providers to poll (default: the real Claude/Codex
+    ///     providers). Tests inject fakes.
+    ///   - history: the sample store to record into (default `.shared`).
+    ///   - ledger: the burn ledger for spend (default `.shared`).
+    ///   - autostart: when `false`, skips `start()` so tests can construct the
+    ///     model without kicking off timers/network.
+    init(providers: [ProviderName: UsageProvider]? = nil,
+         history: UsageHistoryStore = .shared,
+         ledger: BurnLedger = .shared,
+         autostart: Bool = true) {
+        let resolvedProviders = providers ?? [
+            .claude: ClaudeProvider(),
+            .codex: CodexProvider(),
+        ]
+        self.providers = resolvedProviders
+        self.history = history
+        self.ledger = ledger
+        var selected: ProviderName = .codex
         if let raw = UserDefaults.standard.string(forKey: "selectedProvider"),
            let provider = ProviderName(rawValue: raw) {
-            selectedProvider = provider
-        } else {
-            selectedProvider = .codex
+            selected = provider
         }
+        // The saved (or default) selection may not exist in an injected provider
+        // map; normalize to an available provider so refresh() isn't a no-op.
+        // (Computed on locals: `self` is off-limits until all stored properties
+        // are initialized.)
+        if resolvedProviders[selected] == nil,
+           let fallback = ProviderName.allCases.first(where: { resolvedProviders[$0] != nil }) {
+            selected = fallback
+        }
+        selectedProvider = selected
         menuBarIcon = MenuBarIcon.render(usage: nil, offTarget: false)
-        start()
+        if autostart { start() }
     }
 
     /// Recomputes the cached menu bar flame from the current headline state, but
@@ -61,12 +89,29 @@ final class UsageViewModel: ObservableObject {
         menuBarIcon = MenuBarIcon.render(usage: usage, offTarget: offTarget)
     }
 
-    private func start() {
+    /// Kicks off the first refresh and starts the repeating refresh timer.
+    /// Idempotent: a second call while the timer is live is a no-op. Internal
+    /// (not private) so lifecycle tests can drive it with `autostart: false`.
+    func start() {
+        guard timerBox.timer == nil else { return }
         Task { await refresh(force: true) }
-        timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        timerBox.timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
     }
+
+    /// Invalidates the refresh timer. Call when the model is no longer needed so
+    /// no orphaned timer keeps firing on the main run loop. `deinit` also does
+    /// this as a backstop when the view forgets (an NSPopover close may not fire
+    /// SwiftUI's `.onDisappear`).
+    func stop() {
+        timerBox.invalidate()
+    }
+
+    /// Test hook: whether the repeating refresh timer is currently scheduled.
+    var isRefreshTimerActive: Bool { timerBox.isActive }
+
+    deinit { timerBox.invalidate() }
 
     func select(_ provider: ProviderName) {
         guard provider != selectedProvider else { return }
@@ -88,6 +133,8 @@ final class UsageViewModel: ObservableObject {
     func refresh(force: Bool = false) async {
         guard let provider = providers[selectedProvider] else { return }
         if !force, let until = backoffUntil, Date() < until { return }
+        let refreshSignpost = Signposts.refresh.beginInterval("usageRefresh")
+        defer { Signposts.refresh.endInterval("usageRefresh", refreshSignpost) }
         isLoading = true
         let result = await provider.fetch()
         let now = Date()
@@ -121,7 +168,7 @@ final class UsageViewModel: ObservableObject {
         var built: [(metric: UsageMetric, data: BurndownData?)] = []
         if result.status == .ok || result.status == .warning {
             for metric in result.metrics {
-                let samples = UsageHistoryStore.shared.record(provider: result.provider, metric: metric, at: now)
+                let samples = history.record(provider: result.provider, metric: metric, at: now)
                 let data = BurndownBuilder.build(metric: metric, samples: samples, now: now)
                 built.append((metric, data))
             }
@@ -153,6 +200,8 @@ final class UsageViewModel: ObservableObject {
         if let last = lastSpendAt, Date().timeIntervalSince(last) < spendInterval {
             return
         }
+        let spendSignpost = Signposts.refresh.beginInterval("loadSpend")
+        defer { Signposts.refresh.endInterval("loadSpend", spendSignpost) }
         lastSpendAt = Date()
         let burnProvider = BurnLedger.burnProvider(for: provider)
         var result: [String: PeriodSpend] = [:]
@@ -160,12 +209,12 @@ final class UsageViewModel: ObservableObject {
             guard let resetsAt = metric.resetsAt, metric.periodSeconds > 0 else { continue }
             let thisStart = resetsAt.addingTimeInterval(-metric.periodSeconds)
             let lastStart = resetsAt.addingTimeInterval(-2 * metric.periodSeconds)
-            guard let thisCost = await BurnLedger.shared.cost(provider: burnProvider, since: thisStart) else {
+            guard let thisCost = await ledger.cost(provider: burnProvider, since: thisStart) else {
                 return // burn unavailable — keep whatever we had
             }
             // "Last period" = [lastStart, thisStart): spend since lastStart minus
             // spend since thisStart (burn has no --until).
-            let lastCost = await BurnLedger.shared.cost(provider: burnProvider, since: lastStart)
+            let lastCost = await ledger.cost(provider: burnProvider, since: lastStart)
                 .map { max(0, $0 - thisCost) }
             result[metric.name] = PeriodSpend(thisPeriod: thisCost, lastPeriod: lastCost)
         }

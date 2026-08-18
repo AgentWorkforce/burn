@@ -1,9 +1,15 @@
 import SwiftUI
+import os
 
 /// One bucket of the burn series for a provider: the per-bucket burn rate plus
 /// the running cumulative totals across the selected range.
 struct LiveBurnSample: Identifiable {
-    let id = UUID()
+    /// Identity is the bucket's date, not a fresh `UUID` per refresh. Series are
+    /// stored per-provider and each chart `ForEach` iterates a single provider's
+    /// array, where bucket dates are unique — so this is stable across the ~3s
+    /// refresh. A per-refresh `UUID` forced Swift Charts to rebuild every mark
+    /// instead of diffing, which showed up as churn/flicker on the live tab.
+    var id: Date { date }
     let date: Date
     /// Cumulative cost (USD) across the range up to and including this bucket.
     let cost: Double
@@ -95,25 +101,48 @@ final class LiveBurnViewModel: ObservableObject {
     @Published private(set) var unavailable = false
 
     private let providers = ProviderName.allCases
-    private var timer: Timer?
+    private let ledger: BurnLedger
+    /// The refresh timer, held in a box so `deinit` (nonisolated) can invalidate
+    /// it without touching `@MainActor` state — a backstop for when the view's
+    /// `.onDisappear` doesn't fire (e.g. an NSPopover closing) and `stop()` is
+    /// never called.
+    private let timerBox = TimerBox()
     private var refreshing = false
     /// Set when a refresh is requested while one is in flight, so the running
     /// one does another pass (for the latest range) instead of being dropped.
     private var refreshAgain = false
 
+    /// - Parameter ledger: the burn ledger to query (default `.shared`). Tests
+    ///   inject a ledger backed by a fake runner.
+    init(ledger: BurnLedger = .shared) {
+        self.ledger = ledger
+    }
+
     /// Begins the refresh loop and the background ingest watch. Idempotent.
     func start() {
-        guard timer == nil else { return }
-        Task { await BurnLedger.shared.startIngestWatch() }
+        guard timerBox.timer == nil else { return }
+        Task { await ledger.startIngestWatch() }
         Task { await refresh() }
         scheduleTimer()
     }
 
     /// Stops the loop and the watch.
     func stop() {
-        timer?.invalidate()
-        timer = nil
-        Task { await BurnLedger.shared.stopIngestWatch() }
+        timerBox.invalidate()
+        Task { await ledger.stopIngestWatch() }
+    }
+
+    /// Test hook: whether the refresh timer is currently scheduled.
+    var isRefreshTimerActive: Bool { timerBox.isActive }
+
+    deinit {
+        timerBox.invalidate()
+        // Also stop the long-lived `burn ingest --watch` child, which would
+        // otherwise outlive the model when `stop()` never ran (e.g. a missed
+        // `.onDisappear`). Capture the ledger into a local — deinit may read
+        // stored properties but must not touch actor-isolated state directly.
+        let ledger = self.ledger
+        Task { await ledger.stopIngestWatch() }
     }
 
     func isEnabled(_ provider: ProviderName) -> Bool { enabled.contains(provider) }
@@ -134,13 +163,13 @@ final class LiveBurnViewModel: ObservableObject {
         guard newRange != range else { return }
         range = newRange
         series = [:]
-        if timer != nil { scheduleTimer() } // only retime when running
+        if timerBox.timer != nil { scheduleTimer() } // only retime when running
         Task { await refresh() }
     }
 
     private func scheduleTimer() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: range.refreshInterval, repeats: true) { [weak self] _ in
+        timerBox.invalidate()
+        timerBox.timer = Timer.scheduledTimer(withTimeInterval: range.refreshInterval, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
     }
@@ -158,6 +187,9 @@ final class LiveBurnViewModel: ObservableObject {
         refreshing = true
         defer { refreshing = false }
 
+        let interval = Signposts.refresh.beginInterval("liveRefresh")
+        defer { Signposts.refresh.endInterval("liveRefresh", interval) }
+
         repeat {
             refreshAgain = false
             let range = self.range
@@ -167,7 +199,7 @@ final class LiveBurnViewModel: ObservableObject {
 
             for provider in providers {
                 let burnProvider = BurnLedger.burnProvider(for: provider)
-                guard let points = await BurnLedger.shared.timeseries(
+                guard let points = await ledger.timeseries(
                     provider: burnProvider, since: since, bucket: range.bucketArg
                 ) else { continue }
                 gotAny = true

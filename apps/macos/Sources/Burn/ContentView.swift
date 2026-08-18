@@ -23,13 +23,15 @@ private enum AppearanceMode: String, CaseIterable, Identifiable {
 /// The popover shown when the menu bar item is clicked.
 struct ContentView: View {
     @ObservedObject var viewModel: UsageViewModel
+    @ObservedObject var updater: AppUpdater
     @StateObject private var liveViewModel: LiveBurnViewModel
     @State private var tab: BurnTab = .usage
     @State private var showingSettings = false
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.system.rawValue
 
-    init(viewModel: UsageViewModel) {
+    init(viewModel: UsageViewModel, updater: AppUpdater) {
         self.viewModel = viewModel
+        self.updater = updater
         // The live view shows all providers at once (its own per-provider
         // toggles), independent of the Usage tab's single-select provider.
         _liveViewModel = StateObject(wrappedValue: LiveBurnViewModel())
@@ -71,7 +73,7 @@ struct ContentView: View {
         .fixedSize()
     }
 
-    /// Settings tab: appearance + quit.
+    /// Settings tab: appearance + updates + quit.
     private var settingsView: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
@@ -84,6 +86,15 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Updates")
+                    .font(.subheadline.weight(.medium))
+                updateControl
+                Text("Burn for Mac \(updater.currentVersion)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
             Divider()
@@ -99,6 +110,79 @@ struct ContentView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
+    }
+
+    /// The Updates row of Settings, keyed off the updater's phase: a check
+    /// button at rest, progress while checking/downloading, and Pear-style
+    /// "Update Now" / "Restart Now" actions when a new build is found.
+    @ViewBuilder
+    private var updateControl: some View {
+        switch updater.phase {
+        case .idle:
+            updateActionButton("Check for Updates", systemImage: "arrow.triangle.2.circlepath") {
+                updater.checkNow()
+            }
+        case .checking:
+            updateProgressRow("Checking for updates…")
+        case .upToDate:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("You're up to date.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                updateActionButton("Check Again", systemImage: "arrow.triangle.2.circlepath") {
+                    updater.checkNow()
+                }
+            }
+        case .available(let update):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Version \(update.version) is available.")
+                    .font(.caption)
+                updateActionButton("Update Now", systemImage: "arrow.down.circle") {
+                    updater.beginDownload()
+                }
+            }
+        case .downloading:
+            updateProgressRow("Downloading update…")
+        case .readyToRestart(let update):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Version \(update.version) is ready to install.")
+                    .font(.caption)
+                updateActionButton("Restart Now", systemImage: "arrow.clockwise.circle") {
+                    updater.restart()
+                }
+            }
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                updateActionButton("Try Again", systemImage: "arrow.triangle.2.circlepath") {
+                    updater.checkNow()
+                }
+            }
+        }
+    }
+
+    private func updateActionButton(
+        _ title: String, systemImage: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.callout)
+                .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func updateProgressRow(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     /// Header cog that toggles the Settings tab.

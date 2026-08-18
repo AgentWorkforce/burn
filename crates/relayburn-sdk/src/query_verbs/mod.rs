@@ -23,19 +23,20 @@ use crate::analyze::{
     build_subagent_tree, build_trim_recommendations, cost_for_turn, deltas_for_session,
     detect_ghost_surface, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
     find_overhead_files, findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity,
-    load_claude_settings, load_overhead_file, load_pricing, project_claude_settings_path,
-    render_unified_diff_for_recommendation, sort_findings, sum_costs, summarize_fidelity,
-    summarize_fidelity_from_iter, summarize_replacement_savings, tally_unpriced,
-    tool_call_pattern_to_finding, tool_output_bloat_to_finding, user_claude_settings_path,
-    AggregateByProviderOptions, AttributeOverheadInput, AttributionMethod, BashAggregation,
-    BashVerbAggregation, BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions,
-    CompareTable, ContextDelta, ContextDeltaOpts, CostBreakdown, DetectPatternsOptions,
-    DetectToolCallPatternsOptions, DetectToolOutputBloatOptions, FidelitySummary, FileAggregation,
-    GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings,
-    MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind, OwnerRail,
-    ParsedOverheadFile, PricingTable, ProviderFilter, QualityResult, ReplacementSavingsSummary,
-    SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
-    ToolSavingsAggregate, TurnSpanTree, UsageCostAggregateRow, WasteFinding,
+    load_claude_settings, load_overhead_file, load_pricing, mark_findings_with_unpriced_sessions,
+    project_claude_settings_path, render_unified_diff_for_recommendation, sort_findings, sum_costs,
+    summarize_fidelity, summarize_fidelity_from_iter, summarize_replacement_savings,
+    tally_unpriced, tool_call_pattern_to_finding, tool_output_bloat_to_finding,
+    unpriced_usage_findings, user_claude_settings_path, AggregateByProviderOptions,
+    AttributeOverheadInput, AttributionMethod, BashAggregation, BashVerbAggregation,
+    BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions, CompareTable, ContextDelta,
+    ContextDeltaOpts, CostBreakdown, DetectPatternsOptions, DetectToolCallPatternsOptions,
+    DetectToolOutputBloatOptions, FidelitySummary, FileAggregation, GhostSurfaceFindingOptions,
+    HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings, MarkdownSection,
+    McpServerAggregation, OverheadFile, OverheadFileKind, OwnerRail, ParsedOverheadFile,
+    PricingTable, ProviderFilter, QualityResult, ReplacementSavingsSummary, SessionClaudeMdCost,
+    SubagentAggregation, SubagentTreeNode, SubagentTypeStats, ToolSavingsAggregate, TurnSpanTree,
+    UsageCostAggregateRow, WasteFinding,
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
@@ -533,6 +534,20 @@ fn open_with(ledger_home: Option<&Path>) -> Result<LedgerHandle> {
         None => LedgerOpenOptions::default(),
     };
     Ledger::open(opts)
+}
+
+/// Load built-in pricing plus the override adjacent to this handle's ledger.
+///
+/// `LedgerOpenOptions::with_home(home)` stores `burn.sqlite` in `home`, so the
+/// ledger path remains the single source of truth even for embedders that do
+/// not configure `RELAYBURN_HOME` in the process environment.
+fn load_pricing_for_ledger(handle: &LedgerHandle) -> PricingTable {
+    let override_path = handle
+        .inner
+        .burn_path()
+        .parent()
+        .map(|home| home.join("models.dev.json"));
+    load_pricing(override_path.as_deref())
 }
 
 fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFilter> {

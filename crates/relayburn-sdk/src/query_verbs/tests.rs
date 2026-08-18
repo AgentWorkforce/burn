@@ -11,6 +11,8 @@ use crate::reader::{
     UserTurnBlock, UserTurnBlockKind,
 };
 use std::path::PathBuf;
+use crate::analyze::FindingPricingStatus;
+use crate::reader::{RelationshipSourceKind, ToolCall, Usage, UserTurnBlock, UserTurnBlockKind};
 use tempfile::TempDir;
 
 fn fixture_handle() -> (TempDir, LedgerHandle) {
@@ -601,6 +603,44 @@ fn summary_report_grouped_tracks_unpriced_turns_and_models() {
         grouped.total_cost.total > 0.0,
         "priced turn must contribute positive cost"
     );
+}
+
+#[test]
+fn ledger_home_pricing_override_restores_retired_model_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("models.dev.json"),
+        r#"{
+            "user": {
+                "models": {
+                    "gpt-5-codex": {
+                        "cost": { "input": 7, "output": 11, "cache_read": 0.7, "cache_write": 8 }
+                    }
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+    let mut turn = bucket_test_turn(
+        "override-session",
+        "override-message",
+        "2026-05-01T00:00:00.000Z",
+        1_000_000,
+    );
+    turn.model = "gpt-5-codex".into();
+    turn.usage.output = 1_000_000;
+    handle.raw_mut().append_turns(&[turn]).unwrap();
+
+    let SummaryReport::Grouped(report) = handle
+        .summary_report(SummaryReportOptions::default())
+        .unwrap()
+    else {
+        panic!("expected grouped report");
+    };
+    assert_eq!(report.unpriced_turns, 0);
+    assert!(report.unpriced_models.is_empty());
+    assert_eq!(report.total_cost.total, 18.0);
 }
 
 /// Acceptance test for issue #437: the legacy `LedgerHandle::summary`
@@ -1309,6 +1349,92 @@ fn hotspots_ghost_surface_inputs_fall_back_when_content_missing() {
             .any(|g| g.source == SourceKind::Codex && g.path.ends_with("openspec-apply.md")),
         "missing content should preserve tool-call-only ghost behavior"
     );
+fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
+    let (_dir, mut handle) = fixture_handle();
+    handle
+        .raw_mut()
+        .append_turns(&[
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: "sess-unpriced".into(),
+                session_path: None,
+                message_id: "m-unpriced".into(),
+                turn_index: 0,
+                ts: "2026-04-23T00:02:00.000Z".into(),
+                model: "future-model-without-a-price".into(),
+                project: Some("/tmp/proj".into()),
+                project_key: None,
+                usage: Usage {
+                    input: 400_000,
+                    output: 20_000,
+                    reasoning: 10_000,
+                    cache_read: 13_000,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: Vec::new(),
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            },
+            TurnRecord {
+                v: 1,
+                source: SourceKind::ClaudeCode,
+                session_id: "sess-unpriced-small".into(),
+                session_path: None,
+                message_id: "m-unpriced-small".into(),
+                turn_index: 0,
+                ts: "2026-04-23T00:03:00.000Z".into(),
+                model: "another-future-model".into(),
+                project: Some("/tmp/proj".into()),
+                project_key: None,
+                usage: Usage {
+                    input: 1_000,
+                    output: 100,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_create_5m: 0,
+                    cache_create_1h: 0,
+                },
+                tool_calls: Vec::new(),
+                files_touched: None,
+                subagent: None,
+                stop_reason: None,
+                activity: None,
+                retries: None,
+                has_edits: None,
+                fidelity: None,
+            },
+        ])
+        .expect("append unpriced turn");
+
+    let result = handle
+        .hotspots(HotspotsOptions {
+            patterns: Some(vec!["unpriced-usage".into()]),
+            ..HotspotsOptions::default()
+        })
+        .unwrap();
+
+    let HotspotsResult::Findings { findings, .. } = result else {
+        panic!("expected findings result");
+    };
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].session_id, "sess-unpriced");
+    assert_eq!(findings[1].session_id, "sess-unpriced-small");
+    let finding = &findings[0];
+    assert_eq!(finding.kind, "unpriced-usage");
+    assert_eq!(finding.pricing_status, FindingPricingStatus::Unpriced);
+    assert_eq!(finding.estimated_savings.usd_per_session, None);
+    assert_eq!(finding.estimated_savings.tokens_per_session, Some(443_000));
+    assert!(finding.detail.contains("future-model-without-a-price"));
+    let json = serde_json::to_value(finding).unwrap();
+    assert_eq!(json["pricingStatus"], "unpriced");
+    assert!(json["estimatedSavings"].get("usdPerSession").is_none());
 }
 
 #[test]
@@ -1441,6 +1567,36 @@ fn compare_returns_flat_cells_and_absent_models() {
     let json = serde_json::to_value(&r).unwrap();
     assert!(json["fidelity"]["summary"]["byClass"].is_object());
     assert!(json["fidelity"]["summary"]["missingCoverage"].is_object());
+}
+
+#[test]
+fn compare_existing_priced_turns_signal_exposes_unpriced_model() {
+    let (_dir, mut handle) = fixture_handle();
+    let mut turn = bucket_test_turn(
+        "retired-session",
+        "retired-message",
+        "2026-04-23T00:02:00.000Z",
+        1_000,
+    );
+    turn.model = "gpt-5-codex".into();
+    handle.raw_mut().append_turns(&[turn]).unwrap();
+
+    let result = handle
+        .compare(CompareOptions {
+            models: vec!["claude-sonnet-4-6".into(), "gpt-5-codex".into()],
+            min_fidelity: Some(FidelityClass::Partial),
+            ..CompareOptions::default()
+        })
+        .unwrap();
+
+    let cell = result
+        .cells
+        .iter()
+        .find(|cell| cell.model == "gpt-5-codex")
+        .unwrap();
+    assert_eq!(cell.turns, 1);
+    assert_eq!(cell.priced_turns, 0);
+    assert_eq!(cell.cost_per_turn, None);
 }
 
 #[test]
@@ -2989,12 +3145,11 @@ fn summary_timeseries_places_turns_in_buckets_and_sums_to_total() {
     let now = super::system_now_secs() as i64;
     let ts_recent = super::format_iso_z_ms(now - 180, 0); // 3m ago
     let ts_older = super::format_iso_z_ms(now - 720, 0); // 12m ago
+    let mut retired = bucket_test_turn("s1", "m1", &ts_recent, 1_000);
+    retired.model = "gpt-5-codex".into();
     handle
         .raw_mut()
-        .append_turns(&[
-            bucket_test_turn("s1", "m1", &ts_recent, 1_000),
-            bucket_test_turn("s1", "m2", &ts_older, 2_000),
-        ])
+        .append_turns(&[retired, bucket_test_turn("s1", "m2", &ts_older, 2_000)])
         .expect("append");
 
     let series = handle
@@ -3016,6 +3171,21 @@ fn summary_timeseries_places_turns_in_buckets_and_sums_to_total() {
         "two turns 9m apart -> two distinct 5m buckets"
     );
     assert!(nonempty.iter().all(|b| b.turn_count == 1));
+    let retired_bucket = nonempty
+        .iter()
+        .find(|bucket| bucket.rows.iter().any(|row| row.label == "gpt-5-codex"))
+        .expect("retired model bucket");
+    assert_eq!(retired_bucket.unpriced_turns, 1);
+    let priced_bucket = nonempty
+        .iter()
+        .find(|bucket| {
+            bucket
+                .rows
+                .iter()
+                .any(|row| row.label == "claude-sonnet-4-6")
+        })
+        .expect("priced model bucket");
+    assert_eq!(priced_bucket.unpriced_turns, 0);
 
     // Per-bucket totals reconcile with the un-bucketed total.
     let total_tokens: u64 = series.buckets.iter().map(|b| b.total_tokens).sum();
