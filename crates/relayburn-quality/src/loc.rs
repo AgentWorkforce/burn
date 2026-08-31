@@ -277,4 +277,37 @@ mod tests {
         let src = "/* x */ let a = 1;\nlet b = 2;\n";
         assert_eq!(code_lines(src), vec![1, 2]);
     }
+
+    #[test]
+    fn identifier_starting_with_r_is_not_a_raw_string() {
+        // If `r` + non-quote opened a raw string, line 2 would sit inside it
+        // and lose its code marking.
+        let src = "let rx = radius;\nlet y2 = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn zero_hash_raw_string_with_block_marker() {
+        // If the scanner re-entered at the opening quote, the raw string
+        // would close immediately and `/*` would swallow line 2.
+        let src = "let s = r\"/* x\";\nlet t = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn adjacent_char_literals_with_quote_char() {
+        // If the first literal's closing quote were re-scanned, `','` would
+        // parse as a char literal and the `"` inside the second literal
+        // would open a string swallowing line 2.
+        let src = "let p = ('a','\"');\nlet q = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn nested_block_comment_far_from_file_start() {
+        // Catches scanning-offset faults in the nested-comment opener: a
+        // wrong jump lands past both closers and line 3 disappears.
+        let src = "let x = 1;\n/* aaaaaaaaaaaaaaaaaaaaaa /* b */ */\nlet y = 2;\n";
+        assert_eq!(code_lines(src), vec![1, 3]);
+    }
 }
