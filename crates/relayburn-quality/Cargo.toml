@@ -1,0 +1,26 @@
+[package]
+name = "relayburn-quality"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Internal code-quality benchmark for the relayburn workspace. Not published to crates.io."
+publish = false
+
+[[bin]]
+name = "burn-quality"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Source-level metrics (cyclomatic / cognitive / Halstead) come from a
+# syn AST walk; span-locations turns on line/column info in proc-macro2
+# fallback spans so per-function line ranges can be joined with lcov data.
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+toml = "0.8"

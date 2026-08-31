@@ -1,0 +1,150 @@
+name: Quality
+
+# Code-quality benchmark: measures cyclomatic / cognitive complexity,
+# Halstead difficulty, file size, test coverage, CRAP, dead + redundant
+# code, and TS `any`/`unknown` usage via `cargo run -p relayburn-quality`,
+# gated against the targets + grandfathered baseline in quality.toml.
+# A second PR-only job runs mutation testing over the PR diff.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        # rust-toolchain.toml pins the channel; install unconditionally so a
+        # stale preinstalled stable is upgraded (same rationale as ci.yml).
+        run: |
+          rustup toolchain install
+          rustup component add clippy llvm-tools-preview
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Separate key namespace from ci.yml: the instrumented llvm-cov
+          # target artifacts must not be restored into the plain CI build.
+          key: quality-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            quality-cargo-${{ runner.os }}-
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Measure test coverage
+        # relayburn-quality is the benchmark tool itself and relayburn-sdk-node
+        # is exercised by the Node test suite (ci.yml), not `cargo test`, so
+        # both are excluded from the cargo coverage denominator.
+        env:
+          BURN_GOLDEN: '1'
+        run: >
+          cargo llvm-cov --workspace
+          --exclude relayburn-quality --exclude relayburn-sdk-node
+          --lcov --output-path lcov.info
+
+      - name: Collect clippy diagnostics
+        run: cargo clippy --workspace --all-targets --message-format=json > clippy-log.json
+
+      - name: Run quality gate
+        run: >
+          cargo run -p relayburn-quality --
+          --coverage lcov.info
+          --clippy-log clippy-log.json
+          --json quality-report.json
+          --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-report
+          path: |
+            quality-report.json
+            lcov.info
+          if-no-files-found: ignore
+
+  mutation-diff:
+    # Mutation testing over the whole workspace takes hours, so PRs are gated
+    # on "no surviving mutants in the lines this PR touches" instead. The
+    # full-suite number stays a target, not a per-PR gate.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        run: rustup toolchain install
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: quality-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            quality-cargo-${{ runner.os }}-
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Compute PR diff
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git diff "origin/${{ github.base_ref }}"... > pr.diff
+          wc -l pr.diff
+
+      - name: Run mutation testing on the diff
+        env:
+          BURN_GOLDEN: '1'
+        # Exit 2 = surviving mutants (gated by the step below, with a
+        # report); exit 4 = the diff produced no mutants (docs-only PRs).
+        run: |
+          set +e
+          cargo mutants --no-shuffle --in-diff pr.diff
+          ec=$?
+          if [ "$ec" -ne 0 ] && [ "$ec" -ne 2 ] && [ "$ec" -ne 4 ]; then
+            exit "$ec"
+          fi
+
+      - name: Run quality gate on mutants
+        run: |
+          if [ -f mutants.out/outcomes.json ]; then
+            cargo run -p relayburn-quality -- \
+              --mutants mutants.out/outcomes.json \
+              --github-summary "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No mutants generated for this diff."
+          fi
+
+      - name: Upload mutants output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out
+          if-no-files-found: ignore

@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- New code-quality benchmark: `cargo run -p relayburn-quality` reports cyclomatic/cognitive complexity, Halstead difficulty, lines per file, test coverage, CRAP, surviving mutants, dead/redundant code, and TS `any`/`unknown` counts against the targets in `quality.toml`; the `Quality` CI workflow enforces the gate (targets plus a shrinking grandfathered baseline) and runs `cargo-mutants` over each PR diff.
 - Documentation covers the complete `burn` command surface and the SQLite/WAL storage and maintenance workflow.
 - `burn mcp-server` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison through validated read-only tools.

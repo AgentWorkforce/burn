@@ -24,6 +24,9 @@ relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary.
                           Consumes the SDK as an external embedder would.
 relayburn-sdk-node    — napi-rs bindings; built in CI to produce
                           @relayburn/sdk .node artifacts. Not published to crates.io.
+relayburn-quality     — internal code-quality benchmark (`burn-quality` bin);
+                          drives the Quality CI gate against quality.toml.
+                          Not published to crates.io.
 ```
 
 Build order is `relayburn-sdk -> relayburn-cli`, with `relayburn-sdk-node` also
@@ -67,6 +70,26 @@ When debugging CLI behavior locally, prefer the Rust binary:
 ```bash
 cargo run -p relayburn-cli -- summary --since 24h
 ```
+
+## Quality benchmark
+
+`quality.toml` at the repo root defines code-quality targets (complexity,
+Halstead difficulty, lines per file, coverage, CRAP, mutants, dead/redundant
+code, TS `any`/`unknown`) plus a grandfathered `[baseline]` of existing
+violations. The Quality CI workflow fails on new violations or regressions
+beyond a grandfathered ceiling; PRs additionally get `cargo-mutants` run over
+their diff (target: zero surviving mutants in changed lines).
+
+```bash
+cargo run -p relayburn-quality                     # report + gate
+cargo run -p relayburn-quality -- --coverage lcov.info   # with coverage/CRAP
+cargo run -p relayburn-quality -- --write-baseline # regenerate [baseline]
+```
+
+When your PR trips the gate, prefer refactoring under the target over adding
+baseline entries. If you refactor a grandfathered offender, shrink or delete
+its baseline entry. Never raise a ceiling or add a new entry without calling
+it out in the PR description.
 
 ## Changelog
 
