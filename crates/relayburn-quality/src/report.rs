@@ -185,7 +185,7 @@ fn coverage_row(config: &Config, coverage_pct: Option<f64>, report: &mut Report)
         .baseline
         .coverage_min_pct
         .unwrap_or(t.coverage_min_pct);
-    if pct + 1e-9 < floor {
+    if pct < floor {
         report.violations.push(format!(
             "coverage: {pct:.2}% is below the enforced floor {floor:.2}%"
         ));
@@ -196,7 +196,7 @@ fn coverage_row(config: &Config, coverage_pct: Option<f64>, report: &mut Report)
             metric: "Test coverage (line)".into(),
             value: format!("{pct:.2}%"),
             target: format!("{}%", t.coverage_min_pct),
-            meets_target: pct + 1e-9 >= t.coverage_min_pct,
+            meets_target: pct >= t.coverage_min_pct,
             passes_gate: true,
             detail: format!("enforced floor: {floor:.2}%"),
         },
@@ -622,6 +622,99 @@ mod tests {
         let report = build(&config, &rust, &ts, Some(79.9), None, None, None);
         assert!(!report.gate_passed());
         assert!(report.violations[0].contains("below the enforced floor"));
+    }
+
+    #[test]
+    fn worst_keeps_first_of_equal_values() {
+        let mut violations = Vec::new();
+        let items = vec![
+            ("a".to_string(), 1u32),
+            ("b".to_string(), 5u32),
+            ("c".to_string(), 5u32),
+            ("d".to_string(), 3u32),
+        ];
+        let (worst, _) = check_items(
+            items.into_iter(),
+            22,
+            &BTreeMap::new(),
+            "m",
+            &mut violations,
+        );
+        assert_eq!(worst.unwrap(), ("b".to_string(), 5));
+    }
+
+    #[test]
+    fn coverage_exactly_at_floor_passes() {
+        let mut config = test_config();
+        config.baseline.coverage_min_pct = Some(80.0);
+        let rust = RustMetrics::default();
+        let ts = TsTypeCounts::default();
+        let report = build(&config, &rust, &ts, Some(80.0), None, None, None);
+        assert!(report.gate_passed());
+        // Exactly at the 100% target meets the target too.
+        let report = build(&config, &rust, &ts, Some(100.0), None, None, None);
+        let cov = report
+            .rows
+            .iter()
+            .find(|r| r.metric.contains("coverage"))
+            .unwrap();
+        assert!(cov.meets_target);
+    }
+
+    #[test]
+    fn each_scalar_metric_violates_above_its_max() {
+        let config = test_config();
+        let rust = RustMetrics::default();
+        let ts = TsTypeCounts {
+            any_count: 1,
+            unknown_count: 0,
+            per_file: vec![],
+        };
+        let lints = LintCounts {
+            dead_code: 1,
+            redundant: 0,
+            examples: vec![],
+        };
+        let mutants = MutantCounts {
+            total: 1,
+            caught: 0,
+            missed: 1,
+            timeout: 0,
+            unviable: 0,
+            missed_examples: vec!["m".into()],
+        };
+        let report = build(
+            &config,
+            &rust,
+            &ts,
+            None,
+            None,
+            Some(&lints),
+            Some(&mutants),
+        );
+        assert!(report.violations.iter().any(|v| v.starts_with("ts any:")));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.starts_with("dead code:")));
+        assert!(report.violations.iter().any(|v| v.starts_with("mutants:")));
+        assert!(!report.violations.iter().any(|v| v.starts_with("redundant")));
+        assert_eq!(report.violations.len(), 3);
+
+        // All-zero inputs produce no violations at zero maxima.
+        let clean_lints = LintCounts::default();
+        let clean_mutants = MutantCounts::default();
+        let clean_ts = TsTypeCounts::default();
+        let report = build(
+            &config,
+            &rust,
+            &clean_ts,
+            None,
+            None,
+            Some(&clean_lints),
+            Some(&clean_mutants),
+        );
+        assert!(report.gate_passed());
     }
 
     #[test]

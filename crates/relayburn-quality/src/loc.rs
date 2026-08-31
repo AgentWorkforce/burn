@@ -155,13 +155,14 @@ impl Scanner<'_> {
 
     fn step_raw_str(&mut self, hashes: usize) {
         if self.bytes[self.i] == b'"' {
+            // The close is the quote plus exactly `hashes` following `#`s;
+            // the resume index is derived from the run length so the two
+            // cannot drift apart.
             let mut j = self.i + 1;
-            let mut seen = 0;
-            while seen < hashes && self.bytes.get(j) == Some(&b'#') {
-                seen += 1;
+            while j - self.i - 1 < hashes && self.bytes.get(j) == Some(&b'#') {
                 j += 1;
             }
-            if seen == hashes {
+            if j - self.i - 1 == hashes {
                 self.state = State::Code;
                 self.i = j;
                 return;
@@ -314,6 +315,14 @@ mod tests {
     }
 
     #[test]
+    fn string_starting_with_escape() {
+        // A rewind at the escape would re-scan the opening quote, close the
+        // string early, and let `/*` swallow line 2.
+        let src = "let s = \"\\\\n/* b\";\nlet t = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
     fn escaped_quote_then_block_marker() {
         // If the escape were dropped, the string would close early and `/*`
         // would swallow line 2.
@@ -337,6 +346,8 @@ mod tests {
         assert_eq!(char_literal_end(b"'\\n'", 0), Some(3));
         assert_eq!(char_literal_end(b"'\\''", 0), Some(3));
         assert_eq!(char_literal_end(b"'\\u{41}'", 0), Some(7));
+        // The 12-byte escape window is relative to `start`, not absolute.
+        assert_eq!(char_literal_end(b"xxxx'\\u{41}'", 4), Some(11));
         // Two-byte scalar: continuation bytes then the closing quote.
         assert_eq!(char_literal_end("'é'".as_bytes(), 0), Some(3));
     }

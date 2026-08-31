@@ -143,7 +143,9 @@ impl<'ast> Visit<'ast> for CognitiveVisitor {
             syn::Expr::Continue(c) if c.label.is_some() => {
                 self.score += 1;
             }
-            syn::Expr::Binary(b) if matches!(b.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) => {
+            // logical_runs scores runs of `&&`/`||` and falls back to the
+            // default walk for any other operator, so no guard is needed.
+            syn::Expr::Binary(_) => {
                 self.logical_runs(node, None);
             }
             _ => syn::visit::visit_expr(self, node),

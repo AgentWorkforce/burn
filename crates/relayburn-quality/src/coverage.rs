@@ -204,6 +204,21 @@ mod tests {
     }
 
     #[test]
+    fn functions_without_instrumented_lines_are_skipped() {
+        let cov = lcov("SF:/repo/src/a.rs\nDA:1,1\nend_of_record\n");
+        let f = FunctionMetrics {
+            file: "src/a.rs".into(),
+            name: "f".into(),
+            start_line: 5,
+            end_line: 9,
+            cyclomatic: 2,
+            cognitive: 0,
+            halstead_difficulty: 0.0,
+        };
+        assert!(cov.crap_scores(&[f]).is_empty());
+    }
+
+    #[test]
     fn crap_formula_exact_at_half_coverage() {
         // cc = 3, coverage 2/4 = 0.5: crap = 9 * 0.125 + 3 = 4.125 exactly.
         let cov = lcov("SF:/repo/src/a.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nend_of_record\n");

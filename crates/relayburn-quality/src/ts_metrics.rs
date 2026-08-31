@@ -96,7 +96,9 @@ fn blank_block_comment(bytes: &[u8], out: &mut [u8], mut i: usize) -> usize {
         out[i] = b' ';
         i += 1;
     }
-    if i + 1 < bytes.len() {
+    // In bounds means the loop stopped on a `*/` terminator (never on the
+    // last byte, since the match needs two bytes).
+    if i < bytes.len() {
         out[i] = b' ';
         out[i + 1] = b' ';
         i += 2;
@@ -244,6 +246,7 @@ mod tests {
             std::fs::write(p, content).unwrap();
         };
         w("pkg/src/a.ts", "let x: any; let y: unknown;");
+        w("pkg/src/clean.ts", "let ok: number = 1;");
         w("pkg/src/sub/b.mts", "const z = q as unknown;");
         w("pkg/src/c.cts", "let v: any;");
         w("pkg/src/readme.txt", "any unknown any");

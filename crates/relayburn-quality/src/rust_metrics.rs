@@ -307,10 +307,13 @@ mod tests {
 
     #[test]
     fn count_loc_excludes_exactly_the_test_module_span() {
-        let src = "fn a() {}\n#[cfg(test)]\nmod t {\n    fn b() {}\n}\nfn c() {}\n";
+        // Asymmetric line counts on both sides of the module so an
+        // off-by-one at either boundary changes the total.
+        let src = "fn a() {}\nfn a2() {}\n#[cfg(test)]\nmod t {\n    fn b() {}\n}\nfn c() {}\nfn d() {}\n";
         let ast: syn::File = syn::parse_file(src).unwrap();
-        // Lines 2-5 (attr through closing brace) are the test module.
-        assert_eq!(count_loc(src, &ast), 2);
+        // Lines 3-6 (attr through closing brace) are the test module;
+        // lines 1, 2, 7, and 8 remain.
+        assert_eq!(count_loc(src, &ast), 4);
     }
 
     #[test]
