@@ -80,33 +80,36 @@ pub struct MutantCounts {
     pub missed_examples: Vec<String>,
 }
 
-/// Parse `mutants.out/outcomes.json` from cargo-mutants.
+/// Parse `mutants.out/outcomes.json` from cargo-mutants. The file carries
+/// authoritative top-level counts (`total_mutants`, `missed`, `caught`,
+/// `timeout`, `unviable`); the per-outcome list is only walked to name the
+/// missed mutants.
 pub fn parse_mutants_outcomes(path: &Path) -> Result<MutantCounts> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading mutants outcomes {}", path.display()))?;
     let v: Value = serde_json::from_str(&text).context("parsing mutants outcomes JSON")?;
-    let mut counts = MutantCounts::default();
+    let count = |key: &str| v.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
+    let mut counts = MutantCounts {
+        total: count("total_mutants"),
+        caught: count("caught"),
+        missed: count("missed"),
+        timeout: count("timeout"),
+        unviable: count("unviable"),
+        missed_examples: Vec::new(),
+    };
     let outcomes = v
         .get("outcomes")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     for o in &outcomes {
-        let summary = o.get("summary").and_then(Value::as_str).unwrap_or("");
-        counts.total += 1;
-        match summary {
-            "CaughtMutant" => counts.caught += 1,
-            "MissedMutant" => {
-                counts.missed += 1;
-                if counts.missed_examples.len() < 20 {
-                    if let Some(name) = o.pointer("/scenario/Mutant/name").and_then(Value::as_str) {
-                        counts.missed_examples.push(name.to_string());
-                    }
-                }
+        if o.get("summary").and_then(Value::as_str) != Some("MissedMutant") {
+            continue;
+        }
+        if counts.missed_examples.len() < 20 {
+            if let Some(name) = o.pointer("/scenario/Mutant/name").and_then(Value::as_str) {
+                counts.missed_examples.push(name.to_string());
             }
-            "Timeout" => counts.timeout += 1,
-            "Unviable" => counts.unviable += 1,
-            _ => {}
         }
     }
     Ok(counts)
@@ -142,7 +145,9 @@ mod tests {
 
     #[test]
     fn counts_missed_mutants() {
-        let json = r#"{"outcomes":[
+        let json = r#"{"total_mutants":2,"missed":1,"caught":1,"timeout":0,"unviable":0,
+        "outcomes":[
+            {"summary":"Success","scenario":"Baseline"},
             {"summary":"CaughtMutant","scenario":{"Mutant":{"name":"a"}}},
             {"summary":"MissedMutant","scenario":{"Mutant":{"name":"replace foo -> bar"}}}
         ]}"#;
