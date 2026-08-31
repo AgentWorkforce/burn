@@ -1,0 +1,7 @@
+# cargo-mutants configuration (used by the Quality CI workflow's
+# mutation-diff job and local runs).
+#
+# main.rs in the quality tool is CLI orchestration and report printing —
+# exercised by running the binary in CI, not by unit tests — so mutating it
+# only produces noise. Keep the analyzer/parser modules fully mutated.
+exclude_globs = ["crates/relayburn-quality/src/main.rs"]

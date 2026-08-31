@@ -236,4 +236,45 @@ mod tests {
         let src = "let s = \"a\\\"b // c\";\nlet t = 1;\n";
         assert_eq!(code_lines(src), vec![1, 2]);
     }
+
+    #[test]
+    fn block_comment_marker_inside_string_is_inert() {
+        // If the string opener were mis-scanned, `/*` would swallow line 2.
+        let src = "let s = \"/*\";\nlet t = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn division_is_not_a_comment() {
+        let src = "let x = a / b;\nlet y = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn raw_string_with_inner_quote_and_block_marker() {
+        // Without raw-string handling, the inner quote would close a plain
+        // string early and `/*` would swallow line 2.
+        let src = "let re = r#\"a\" /* b\"#;\nlet z = 3;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn quote_char_literal_does_not_open_string() {
+        // If '"' were not consumed as a char literal, the quote would open a
+        // string swallowing line 2.
+        let src = "let c = '\"';\nlet d = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn comment_at_file_start() {
+        let src = "//x\nlet a = 1;\n";
+        assert_eq!(code_lines(src), vec![2]);
+    }
+
+    #[test]
+    fn block_comment_at_file_start() {
+        let src = "/* x */ let a = 1;\nlet b = 2;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
 }
