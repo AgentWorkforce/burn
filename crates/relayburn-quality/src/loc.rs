@@ -304,6 +304,56 @@ mod tests {
     }
 
     #[test]
+    fn char_close_rescan_cannot_open_string() {
+        // 'x' followed by a string containing a quote: if the literal's
+        // closing quote were re-scanned, the string opener would be
+        // swallowed and the real terminator would open an unterminated
+        // string, losing line 2.
+        let src = "let a = 'x'\"'\";\nlet b = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn escaped_quote_then_block_marker() {
+        // If the escape were dropped, the string would close early and `/*`
+        // would swallow line 2.
+        let src = "let s = \"a\\\"/* b\";\nlet t = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn raw_string_close_consumes_exactly_its_hashes() {
+        // `r#"x"#` closes at one hash; the following `#` and string must be
+        // ordinary code. Over-consuming hashes would leave the raw string
+        // open and swallow line 2.
+        let src = "let s = r#\"x\"## ; \"/*\";\nlet t = 1;\n";
+        assert_eq!(code_lines(src), vec![1, 2]);
+    }
+
+    #[test]
+    fn char_literal_end_exact_indices() {
+        assert_eq!(char_literal_end(b"'a'", 0), Some(2));
+        assert_eq!(char_literal_end(b"x'b'", 1), Some(3));
+        assert_eq!(char_literal_end(b"'\\n'", 0), Some(3));
+        assert_eq!(char_literal_end(b"'\\''", 0), Some(3));
+        assert_eq!(char_literal_end(b"'\\u{41}'", 0), Some(7));
+        // Two-byte scalar: continuation bytes then the closing quote.
+        assert_eq!(char_literal_end("'é'".as_bytes(), 0), Some(3));
+    }
+
+    #[test]
+    fn char_literal_end_rejects_lifetimes_and_truncation() {
+        assert_eq!(char_literal_end(b"'a>", 0), None);
+        assert_eq!(char_literal_end(b"'static ", 0), None);
+        assert_eq!(char_literal_end(b"'a", 0), None);
+        assert_eq!(char_literal_end(b"'", 0), None);
+        // Escape whose closing quote sits past the 12-byte scan window.
+        assert_eq!(char_literal_end(b"'\\uAAAAAAAAAA'", 0), None);
+        // Truncated escape.
+        assert_eq!(char_literal_end(b"'\\u{4", 0), None);
+    }
+
+    #[test]
     fn nested_block_comment_far_from_file_start() {
         // Catches scanning-offset faults in the nested-comment opener: a
         // wrong jump lands past both closers and line 3 disappears.

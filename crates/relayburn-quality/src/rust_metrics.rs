@@ -276,4 +276,69 @@ mod tests {
         assert_eq!(fns[0].cyclomatic, 1);
         assert_eq!(fns[0].cognitive, 0);
     }
+
+    #[test]
+    fn is_test_path_variants() {
+        assert!(is_test_path("crates/x/tests/smoke.rs"));
+        assert!(is_test_path("crates/x/benches/b.rs"));
+        assert!(is_test_path("crates/x/src/ledger/tests.rs"));
+        assert!(is_test_path("crates/x/src/analyze/patterns_tests.rs"));
+        assert!(!is_test_path("crates/x/src/lib.rs"));
+        assert!(!is_test_path("crates/x/src/testsuite.rs"));
+    }
+
+    #[test]
+    fn nested_modules_and_trait_defaults_are_collected() {
+        let fns = metrics_for(
+            r#"
+            mod outer { mod inner { fn deep() {} } }
+            trait T { fn provided(&self) { let _x = 1; } fn required(&self); }
+            impl T for &Widget { fn required(&self) {} }
+            #[cfg_attr(test, allow(dead_code))]
+            fn kept() {}
+            "#,
+        );
+        let names: Vec<&str> = fns.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["outer::inner::deep", "provided", "Widget::required", "kept"]
+        );
+    }
+
+    #[test]
+    fn count_loc_excludes_exactly_the_test_module_span() {
+        let src = "fn a() {}\n#[cfg(test)]\nmod t {\n    fn b() {}\n}\nfn c() {}\n";
+        let ast: syn::File = syn::parse_file(src).unwrap();
+        // Lines 2-5 (attr through closing brace) are the test module.
+        assert_eq!(count_loc(src, &ast), 2);
+    }
+
+    #[test]
+    fn collect_walks_only_production_rust_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let w = |rel: &str, content: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, content).unwrap();
+        };
+        w("c/src/lib.rs", "fn shipped() { let x = 1; }\n");
+        w("c/src/nested/m.rs", "fn inner() {}\n");
+        w("c/src/tests.rs", "fn t() {}\n");
+        w("c/src/foo_tests.rs", "fn t() {}\n");
+        w("c/src/tests/fixture.rs", "fn t() {}\n");
+        w("c/src/target/gen.rs", "fn t() {}\n");
+        w("c/src/.hidden/h.rs", "fn t() {}\n");
+        w("c/src/notes.txt", "fn not_rust() {}\n");
+
+        let m = collect(root, &["c/src".to_string()]).unwrap();
+        let files: Vec<&str> = m.files.iter().map(|f| f.file.as_str()).collect();
+        assert_eq!(files, vec!["c/src/lib.rs", "c/src/nested/m.rs"]);
+        assert_eq!(m.files[0].loc, 1);
+        let names: Vec<&str> = m.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["shipped", "inner"]);
+
+        let empty = collect(root, &["c/absent".to_string()]).unwrap();
+        assert!(empty.files.is_empty());
+    }
 }

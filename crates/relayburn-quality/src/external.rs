@@ -143,6 +143,60 @@ mod tests {
         assert_eq!(counts.redundant, 1);
     }
 
+    fn msg(code: &str) -> String {
+        format!(
+            r#"{{"reason":"compiler-message","message":{{"code":{{"code":"{code}"}},"message":"m"}}}}"#
+        )
+    }
+
+    #[test]
+    fn each_lint_family_counts_and_gets_an_example() {
+        let dead = ["dead_code", "unused_variables", "unreachable_code"];
+        let redundant = [
+            "clippy::redundant_closure",
+            "clippy::needless_return",
+            "clippy::duplicate_underscore_argument",
+            "clippy::useless_conversion",
+            "clippy::let_and_return",
+        ];
+        let log: String = dead
+            .iter()
+            .chain(redundant.iter())
+            .chain(["clippy::unrelated_lint"].iter())
+            .map(|c| msg(c) + "\n")
+            .collect();
+        let path = write_temp("clippy-families.json", &log);
+        let counts = parse_clippy_log(&path).unwrap();
+        assert_eq!(counts.dead_code, dead.len());
+        assert_eq!(counts.redundant, redundant.len());
+        // One example per flagged finding; unrelated lints add none.
+        assert_eq!(counts.examples.len(), dead.len() + redundant.len());
+    }
+
+    #[test]
+    fn example_lists_cap_at_twenty() {
+        let log: String = (0..25).map(|_| msg("dead_code") + "\n").collect();
+        let path = write_temp("clippy-cap.json", &log);
+        let counts = parse_clippy_log(&path).unwrap();
+        assert_eq!(counts.dead_code, 25);
+        assert_eq!(counts.examples.len(), 20);
+
+        let outcomes: Vec<String> = (0..25)
+            .map(|i| {
+                format!(r#"{{"summary":"MissedMutant","scenario":{{"Mutant":{{"name":"m{i}"}}}}}}"#)
+            })
+            .collect();
+        let json = format!(
+            r#"{{"total_mutants":25,"missed":25,"caught":0,"timeout":0,"unviable":0,"outcomes":[{}]}}"#,
+            outcomes.join(",")
+        );
+        let path = write_temp("outcomes-cap.json", &json);
+        let counts = parse_mutants_outcomes(&path).unwrap();
+        assert_eq!(counts.missed, 25);
+        assert_eq!(counts.missed_examples.len(), 20);
+        assert_eq!(counts.missed_examples[0], "m0");
+    }
+
     #[test]
     fn counts_missed_mutants() {
         let json = r#"{"total_mutants":2,"missed":1,"caught":1,"timeout":0,"unviable":0,

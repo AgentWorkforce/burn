@@ -174,6 +174,52 @@ mod tests {
     }
 
     #[test]
+    fn unknown_lcov_lines_do_not_end_a_record() {
+        // FN:/FNDA:/LH: records must be ignored, not treated as terminators.
+        let cov = lcov("SF:/repo/src/a.rs\nFN:1,foo\nDA:1,1\nLH:1\nend_of_record\n");
+        assert_eq!(cov.instrumented_line_count(), 1);
+        assert_eq!(cov.total_line_coverage(), 100.0);
+    }
+
+    #[test]
+    fn span_coverage_is_inclusive_and_span_scoped() {
+        // Lines 1 (hit) and 10 (missed) instrumented; the function spans
+        // only line 1, so its coverage is 100% and CRAP equals cc.
+        let cov = lcov("SF:/repo/src/a.rs\nDA:1,1\nDA:10,0\nend_of_record\n");
+        let f = |start, end| FunctionMetrics {
+            file: "src/a.rs".into(),
+            name: "f".into(),
+            start_line: start,
+            end_line: end,
+            cyclomatic: 2,
+            cognitive: 0,
+            halstead_difficulty: 0.0,
+        };
+        let scores = cov.crap_scores(&[f(1, 1)]);
+        assert_eq!(scores[0].coverage_pct, 100.0);
+        assert!((scores[0].crap - 2.0).abs() < 1e-9);
+        // Inclusive end: span 2..=10 sees only the missed line.
+        let scores = cov.crap_scores(&[f(2, 10)]);
+        assert_eq!(scores[0].coverage_pct, 0.0);
+    }
+
+    #[test]
+    fn crap_formula_exact_at_half_coverage() {
+        // cc = 3, coverage 2/4 = 0.5: crap = 9 * 0.125 + 3 = 4.125 exactly.
+        let cov = lcov("SF:/repo/src/a.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nend_of_record\n");
+        let f = FunctionMetrics {
+            file: "src/a.rs".into(),
+            name: "f".into(),
+            start_line: 1,
+            end_line: 4,
+            cyclomatic: 3,
+            cognitive: 0,
+            halstead_difficulty: 0.0,
+        };
+        assert_eq!(cov.crap_scores(&[f])[0].crap, 4.125);
+    }
+
+    #[test]
     fn crap_penalizes_uncovered_complexity() {
         let cov = lcov("SF:/repo/src/a.rs\nDA:10,0\nend_of_record\n");
         let f = FunctionMetrics {

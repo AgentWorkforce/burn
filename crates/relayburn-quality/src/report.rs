@@ -450,6 +450,216 @@ mod tests {
         assert!(violations[0].contains("grandfathered ceiling"));
     }
 
+    use crate::config::{Baseline, Config, Sources, Targets};
+    use crate::coverage::CrapScore;
+    use crate::external::{LintCounts, MutantCounts};
+    use crate::rust_metrics::{FileMetrics, FunctionMetrics, RustMetrics};
+    use crate::ts_metrics::TsTypeCounts;
+
+    fn test_config() -> Config {
+        Config {
+            targets: Targets {
+                cyclomatic_max: 10,
+                cognitive_max: 10,
+                halstead_difficulty_max: 50.0,
+                file_loc_max: 100,
+                coverage_min_pct: 100.0,
+                crap_max: 25.0,
+                surviving_mutants_max: 0,
+                dead_code_max: 0,
+                redundant_code_max: 0,
+                ts_any_max: 0,
+                ts_unknown_max: 0,
+            },
+            baseline: Baseline {
+                coverage_min_pct: Some(80.0),
+                ts_unknown_max: Some(2),
+                file_loc: BTreeMap::from([("big.rs".to_string(), 150)]),
+                cyclomatic: BTreeMap::new(),
+                cognitive: BTreeMap::new(),
+                halstead: BTreeMap::new(),
+                crap: BTreeMap::new(),
+            },
+            sources: Sources {
+                rust_roots: vec![],
+                ts_roots: vec![],
+            },
+        }
+    }
+
+    fn fn_metric(name: &str, cyclomatic: u32) -> FunctionMetrics {
+        FunctionMetrics {
+            file: "a.rs".into(),
+            name: name.into(),
+            start_line: 1,
+            end_line: 10,
+            cyclomatic,
+            cognitive: 1,
+            halstead_difficulty: 1.0,
+        }
+    }
+
+    #[test]
+    fn build_reports_every_metric_and_gates_correctly() {
+        let config = test_config();
+        let rust = RustMetrics {
+            files: vec![
+                FileMetrics {
+                    file: "ok.rs".into(),
+                    loc: 100,
+                },
+                FileMetrics {
+                    file: "big.rs".into(),
+                    loc: 150,
+                },
+            ],
+            // Exactly at target: passes; one above: new violation.
+            functions: vec![fn_metric("at_limit", 10), fn_metric("over", 11)],
+        };
+        let ts = TsTypeCounts {
+            any_count: 0,
+            unknown_count: 2,
+            per_file: vec![],
+        };
+        let crap = vec![CrapScore {
+            file: "a.rs".into(),
+            name: "over".into(),
+            cyclomatic: 11,
+            coverage_pct: 0.0,
+            crap: 132.0,
+        }];
+        let lints = LintCounts {
+            dead_code: 0,
+            redundant: 1,
+            examples: vec![],
+        };
+        let mutants = MutantCounts {
+            total: 3,
+            caught: 3,
+            missed: 0,
+            timeout: 0,
+            unviable: 0,
+            missed_examples: vec![],
+        };
+        let report = build(
+            &config,
+            &rust,
+            &ts,
+            Some(80.0),
+            Some(&crap),
+            Some(&lints),
+            Some(&mutants),
+        );
+
+        assert_eq!(report.rows.len(), 11);
+        let row = |m: &str| report.rows.iter().find(|r| r.metric.contains(m)).unwrap();
+
+        // cyclomatic: "over" (11) is a new violation; "at_limit" (10) is not.
+        assert!(!row("Cyclomatic").meets_target);
+        assert!(!row("Cyclomatic").passes_gate);
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.contains("a.rs::over = 11")));
+        assert!(!report.violations.iter().any(|v| v.contains("at_limit")));
+
+        // file_loc: big.rs is grandfathered exactly at its ceiling.
+        assert!(!row("Lines of code").meets_target);
+        assert!(row("Lines of code").passes_gate);
+
+        // coverage: exactly at the enforced floor passes the gate.
+        assert_eq!(row("coverage").value, "80.00%");
+        assert!(!row("coverage").meets_target);
+        assert!(row("coverage").passes_gate);
+
+        // crap: 132.0 over target 25 without baseline fails the gate.
+        assert!(!row("CRAP").passes_gate);
+
+        // mutants: zero missed passes both.
+        assert!(row("mutants").meets_target);
+        assert!(row("mutants").passes_gate);
+
+        // lints: dead at max passes, redundant above max fails.
+        assert!(row("Dead code").meets_target);
+        assert!(row("Dead code").passes_gate);
+        assert!(!row("Redundant").meets_target);
+        assert!(!row("Redundant").passes_gate);
+
+        // ts: any 0 passes; unknown 2 misses the target but sits at the
+        // enforced ceiling.
+        assert!(row("`any`").meets_target);
+        assert!(!row("`unknown`").meets_target);
+        assert!(row("`unknown`").passes_gate);
+
+        assert!(!report.gate_passed());
+        let table = render_table(&report);
+        assert!(table.contains("Cyclomatic complexity (per fn)"));
+        assert!(table.contains("80.00%"));
+        assert!(table.contains("FAIL"));
+    }
+
+    #[test]
+    fn clean_inputs_pass_the_gate() {
+        let config = test_config();
+        let rust = RustMetrics {
+            files: vec![FileMetrics {
+                file: "ok.rs".into(),
+                loc: 10,
+            }],
+            functions: vec![fn_metric("small", 1)],
+        };
+        let ts = TsTypeCounts::default();
+        let report = build(&config, &rust, &ts, Some(100.0), None, None, None);
+        assert!(report.gate_passed());
+        assert!(report.violations.is_empty());
+        let cov = report
+            .rows
+            .iter()
+            .find(|r| r.metric.contains("coverage"))
+            .unwrap();
+        assert!(cov.meets_target);
+        // Coverage below the floor is a violation.
+        let report = build(&config, &rust, &ts, Some(79.9), None, None, None);
+        assert!(!report.gate_passed());
+        assert!(report.violations[0].contains("below the enforced floor"));
+    }
+
+    #[test]
+    fn rounded_displays_one_decimal() {
+        assert_eq!(Rounded(1.26).to_string(), "1.3");
+        assert_eq!(Rounded(80.0).to_string(), "80.0");
+    }
+
+    #[test]
+    fn baseline_at_exact_ceiling_is_allowed() {
+        let mut baseline = BTreeMap::new();
+        baseline.insert("a.rs::big".to_string(), 30u32);
+        let mut violations = Vec::new();
+        check_items(
+            vec![("a.rs::big".to_string(), 30u32)].into_iter(),
+            22,
+            &baseline,
+            "cyclomatic",
+            &mut violations,
+        );
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn value_at_target_is_not_a_violation() {
+        let mut violations = Vec::new();
+        let (worst, over) = check_items(
+            vec![("a.rs::f".to_string(), 22u32)].into_iter(),
+            22,
+            &BTreeMap::new(),
+            "cyclomatic",
+            &mut violations,
+        );
+        assert!(violations.is_empty());
+        assert_eq!(over, 0);
+        assert_eq!(worst.unwrap().1, 22);
+    }
+
     #[test]
     fn push_row_marks_gate_failures() {
         let mut report = Report::default();

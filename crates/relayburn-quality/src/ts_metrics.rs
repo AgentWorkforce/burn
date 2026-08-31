@@ -191,4 +191,82 @@ mod tests {
         assert_eq!(count_type_word(&s, "unknown"), 2);
         assert_eq!(count_type_word(&s, "any"), 1);
     }
+
+    #[test]
+    fn strip_exact_output() {
+        assert_eq!(strip_comments_and_strings("/*x*/y"), "     y");
+        assert_eq!(strip_comments_and_strings("//x"), "   ");
+        assert_eq!(strip_comments_and_strings("a/b//c"), "a/b   ");
+        assert_eq!(strip_comments_and_strings("`t`z"), "   z");
+        assert_eq!(strip_comments_and_strings("'q'r"), "   r");
+        assert_eq!(strip_comments_and_strings("\"a\\\"b\"c"), "      c");
+    }
+
+    #[test]
+    fn strip_survives_unterminated_input() {
+        assert_eq!(strip_comments_and_strings("/*x"), "   ");
+        assert_eq!(strip_comments_and_strings("//x"), "   ");
+        assert_eq!(strip_comments_and_strings("\"ab"), "   ");
+        assert_eq!(strip_comments_and_strings("\"a\\"), "   ");
+    }
+
+    #[test]
+    fn blank_block_comment_exact_bounds() {
+        let bytes = b"/*x*/y";
+        let mut out = bytes.to_vec();
+        assert_eq!(blank_block_comment(bytes, &mut out, 0), 5);
+        assert_eq!(&out, b"     y");
+
+        let bytes = b"/*x";
+        let mut out = bytes.to_vec();
+        assert_eq!(blank_block_comment(bytes, &mut out, 0), 3);
+        assert_eq!(&out, b"   ");
+    }
+
+    #[test]
+    fn word_boundaries_and_property_names_do_not_count() {
+        let cw = |src: &str, w| count_type_word(&strip_comments_and_strings(src), w);
+        assert_eq!(cw("{ any?: number }", "any"), 0);
+        assert_eq!(cw("{ any : 1 }", "any"), 0);
+        assert_eq!(cw("$any + any$ + anyx + xany + _any + any_", "any"), 0);
+        assert_eq!(cw("obj.any", "any"), 0);
+        // Word flush at end of input still counts.
+        assert_eq!(cw("x as any", "any"), 1);
+    }
+
+    #[test]
+    fn collect_walks_only_ts_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let w = |rel: &str, content: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, content).unwrap();
+        };
+        w("pkg/src/a.ts", "let x: any; let y: unknown;");
+        w("pkg/src/sub/b.mts", "const z = q as unknown;");
+        w("pkg/src/c.cts", "let v: any;");
+        w("pkg/src/readme.txt", "any unknown any");
+        w("pkg/src/node_modules/n.ts", "let n: any;");
+        w("pkg/src/dist/d.ts", "let d: any;");
+        w("pkg/src/.hidden/h.ts", "let h: any;");
+
+        let counts = collect(root, &["pkg/src".to_string()]).unwrap();
+        assert_eq!(counts.any_count, 2);
+        assert_eq!(counts.unknown_count, 2);
+        // Only files with hits are listed, sorted by path.
+        assert_eq!(
+            counts.per_file,
+            vec![
+                ("pkg/src/a.ts".to_string(), 1, 1),
+                ("pkg/src/c.cts".to_string(), 1, 0),
+                ("pkg/src/sub/b.mts".to_string(), 0, 1),
+            ]
+        );
+
+        // A missing root contributes nothing rather than erroring.
+        let empty = collect(root, &["pkg/absent".to_string()]).unwrap();
+        assert_eq!(empty.any_count, 0);
+        assert_eq!(empty.per_file, vec![]);
+    }
 }

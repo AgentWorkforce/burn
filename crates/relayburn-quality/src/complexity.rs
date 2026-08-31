@@ -163,14 +163,12 @@ pub fn halstead_difficulty(block: &syn::Block) -> f64 {
 struct HalsteadCounts {
     operators: HashSet<String>,
     operands: HashSet<String>,
-    total_operators: u64,
     total_operands: u64,
 }
 
 impl HalsteadCounts {
     fn operator(&mut self, tok: String) {
         self.operators.insert(tok);
-        self.total_operators += 1;
     }
 
     fn operand(&mut self, tok: String) {
@@ -265,5 +263,55 @@ mod tests {
     #[test]
     fn halstead_empty_block_is_zero() {
         assert_eq!(halstead_difficulty(&block("")), 0.0);
+    }
+
+    #[test]
+    fn halstead_exact_formula() {
+        // Tokens of `{ let x = a + a; }`: operators {brace, let, =, +, ;}
+        // => n1 = 5; operands {x, a} => n2 = 2, N2 = 3.
+        // D = (5/2) * (3/2) = 3.75 exactly.
+        assert_eq!(halstead_difficulty(&block("let x = a + a;")), 3.75);
+    }
+
+    #[test]
+    fn plain_arithmetic_is_not_a_branch() {
+        let b = block("let x = a + b;");
+        assert_eq!(cyclomatic(&b), 1);
+        assert_eq!(cognitive(&b), 0);
+    }
+
+    #[test]
+    fn standalone_logical_op_costs_one_cognitive() {
+        assert_eq!(cognitive(&block("let x = a && b;")), 1);
+    }
+
+    #[test]
+    fn sequential_ifs_do_not_accumulate_nesting() {
+        // Two sibling ifs cost 1 each; nesting must unwind between them.
+        assert_eq!(cognitive(&block("if a { } if b { }")), 2);
+    }
+
+    #[test]
+    fn bare_match_while_loop_cost_one_each() {
+        assert_eq!(cognitive(&block("match x { 1 => {}, _ => {} }")), 1);
+        assert_eq!(cognitive(&block("while a { }")), 1);
+        assert_eq!(cognitive(&block("loop { }")), 1);
+    }
+
+    #[test]
+    fn nested_structures_charge_one_plus_nesting() {
+        // Each inner structure sits at nesting 1: if(1) + inner(2) = 3.
+        assert_eq!(cognitive(&block("if a { match x { _ => {} } }")), 3);
+        assert_eq!(cognitive(&block("if a { while b { } }")), 3);
+        assert_eq!(cognitive(&block("if a { for x in y { } }")), 3);
+        assert_eq!(cognitive(&block("if a { loop { } }")), 3);
+    }
+
+    #[test]
+    fn labeled_jumps_cost_one_unlabeled_cost_zero() {
+        assert_eq!(cognitive(&block("loop { break; }")), 1);
+        assert_eq!(cognitive(&block("'a: loop { break 'a; }")), 2);
+        assert_eq!(cognitive(&block("loop { continue; }")), 1);
+        assert_eq!(cognitive(&block("'a: loop { continue 'a; }")), 2);
     }
 }

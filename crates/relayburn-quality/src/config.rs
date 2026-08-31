@@ -81,3 +81,25 @@ impl Config {
 pub fn function_key(file: &str, name: &str) -> String {
     format!("{file}::{name}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn function_key_is_path_and_name() {
+        assert_eq!(function_key("src/a.rs", "S::f"), "src/a.rs::S::f");
+    }
+
+    #[test]
+    fn loads_the_repo_config() {
+        // The checked-in quality.toml must always parse; baseline sections
+        // are optional but targets and sources are required.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("quality.toml");
+        let config = Config::load(&root).unwrap();
+        assert!(config.targets.cyclomatic_max > 0);
+        assert!(!config.sources.rust_roots.is_empty());
+    }
+}
