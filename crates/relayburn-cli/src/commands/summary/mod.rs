@@ -326,7 +326,13 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         include_quality: args.quality,
         ledger_home: None,
     };
-    let freshness = handle.ledger_freshness().ok();
+    // Freshness is advisory: metadata failures must not block report rendering.
+    let freshness = handle
+        .ledger_freshness()
+        .inspect_err(|err| {
+            tracing::debug!(error = %err, "summary freshness metadata unavailable");
+        })
+        .ok();
 
     // `--bucket` switches to a per-bucket time-series of the grouped summary.
     // Parsing/validation already happened above, before the ledger was opened.

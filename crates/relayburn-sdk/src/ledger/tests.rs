@@ -1558,7 +1558,28 @@ fn query_turns_in_sessions_chunking_handles_large_id_list() {
 fn migration_freshness_ignores_invalid_timestamps_and_orders_offsets() {
     for include_invalid in [false, true] {
         let tmp = TempDir::new().unwrap();
-        let mut ledger = open_in(&tmp);
+        let layout = LedgerLayout::under(tmp.path());
+        let conn = rusqlite::Connection::open(&layout.burn).unwrap();
+        // Build the v6 archive table before applying the unchanged event DDL.
+        // Do not open through the SDK until the actual migration is tested.
+        conn.execute_batch(
+            "CREATE TABLE archive_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                schema_version INTEGER NOT NULL,
+                upstream_cursors_json TEXT NOT NULL DEFAULT '{}',
+                last_built_at TEXT,
+                last_rebuild_at TEXT,
+                source_fingerprint TEXT NOT NULL DEFAULT ''
+             );
+             INSERT INTO archive_state (id, schema_version) VALUES (1, 6);",
+        )
+        .unwrap();
+        conn.execute_batch(schema::BURN_DDL).unwrap();
+        let freshness_columns: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('archive_state') WHERE name = 'last_write_at_ms'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(freshness_columns, 0, "fixture must lack the v7 column");
         let mut turns = vec![
             make_turn("s", "offset", "2025-01-02T01:00:00.123+09:00", 1),
             make_turn("s", "latest", "2025-01-01T20:00:00.987Z", 2),
@@ -1566,18 +1587,28 @@ fn migration_freshness_ignores_invalid_timestamps_and_orders_offsets() {
         if include_invalid {
             turns.push(make_turn("s", "invalid", "zz-invalid", 3));
         }
-        ledger.append_turns(&turns).unwrap();
-        ledger
-            .conns
-            .burn
-            .execute(
-                "UPDATE archive_state SET schema_version = 6, last_write_at_ms = NULL",
-                [],
-            )
-            .unwrap();
-        drop(ledger);
+        for turn in &turns {
+            conn.execute(
+                "INSERT INTO turns (source, session_id, message_id, ts, record_json, content_fingerprint)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![turn.source.wire_str(), turn.session_id, turn.message_id,
+                    turn.ts, serde_json::to_string(turn).unwrap(), turn.message_id],
+            ).unwrap();
+        }
+        drop(conn);
         let ledger = open_in(&tmp);
         assert_eq!(ledger.last_write_at_ms().unwrap(), Some(1_735_761_600_987));
+        let version: u32 = ledger
+            .conns
+            .burn
+            .query_row(
+                "SELECT schema_version FROM archive_state WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, schema::SCHEMA_VERSION);
+        assert_eq!(ledger.count_table("turns").unwrap(), turns.len() as i64);
     }
 }
 

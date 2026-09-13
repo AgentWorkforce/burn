@@ -4,11 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- JSONL bootstrap retains `archive_state`; freshness seeding uses event time for JSONL-only ledgers and preserves a newer live or migration-seeded `last_write_at_ms`.
-- `burn state rebuild` replays preserved relationships without advancing the freshness clock.
-- Summary and MCP reads retain successful results when freshness metadata is unavailable.
-- Freshness seeding ignores malformed timestamps and compares timezone offsets chronologically; unchanged inference reparses no longer refresh the ledger.
-- Read/report commands (`summary`, `hotspots`, `hotspots --findings`, and `sessions list`) now warn when the ledger has not received data within the configurable staleness threshold (24 hours by default); SDK and MCP consumers receive the same last-write timestamp and stale flag as data.
+- `summary`, `hotspots`, and `sessions list` warn on stale data (24-hour default, configurable), including older imported or rebuilt ledgers. SDK and MCP consumers receive freshness metadata; summary and MCP reads remain usable when that metadata is unavailable.
 - `burn flow` now connects the main rail across turn boundaries, so session DAGs render as one continuous inference flow in JSON, Mermaid, and SVG.
 - `burn summary` marks unpriced model rows and labels totals as priced-only; JSON adds `unpricedTurns` and `unpricedModels` so unknown-model spend is never mistaken for free usage.
 - Removed the macOS menu bar app and its build, test, and release tooling.

@@ -986,8 +986,12 @@ fn summary_renders_when_freshness_metadata_is_unavailable() {
     conn.execute("ALTER TABLE archive_state DROP COLUMN last_write_at_ms", [])
         .unwrap();
     drop(conn);
-    for bucket in [false, true] {
+    for (bucket, debug) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut command = burn_without_stale_threshold_env();
+        command.env_remove("RELAYBURN_LOG").env_remove("RUST_LOG");
+        if debug {
+            command.env("RELAYBURN_LOG", "debug");
+        }
         command.args([
             "--ledger-path",
             home.path().to_str().unwrap(),
@@ -1003,6 +1007,11 @@ fn summary_renders_when_freshness_metadata_is_unavailable() {
             .stderr(predicate::str::contains("ledger data may be stale").not())
             .get_output()
             .clone();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.contains("summary freshness metadata unavailable"),
+            debug
+        );
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         if bucket {
             assert_eq!(result["bucketSeconds"], 3_600);
