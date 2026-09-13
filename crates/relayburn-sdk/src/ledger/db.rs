@@ -255,25 +255,9 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         // newest event timestamp so an old snapshot is warned about on its
         // first post-upgrade read instead of being made artificially fresh by
         // the schema migration itself.
+        seed_last_write_from_events(conn)?;
         conn.execute(
-            "UPDATE archive_state
-             SET last_write_at_ms = (
-                 SELECT MAX(ms) FROM (
-                     SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
-                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) AS ms FROM turns
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
-                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM compactions
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
-                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM relationships
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
-                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM tool_result_events
-                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
-                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM user_turns
-                     UNION ALL SELECT CAST(strftime('%s', MAX(end_ts)) AS INTEGER) * 1000
-                         + CAST(substr(strftime('%f', MAX(end_ts)), 4, 3) AS INTEGER) FROM inferences
-                 )
-             ), schema_version = 7
-             WHERE id = 1",
+            "UPDATE archive_state SET schema_version = 7 WHERE id = 1",
             [],
         )?;
     }
@@ -320,5 +304,34 @@ fn verify_schema_version(conn: &Connection) -> Result<()> {
             supported: SCHEMA_VERSION,
         });
     }
+    Ok(())
+}
+
+/// Infer legacy freshness from event time, preserving any newer known clock.
+/// Used by both schema migration and JSONL replay; neither is live activity.
+pub(crate) fn seed_last_write_from_events(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE archive_state
+             SET last_write_at_ms = (
+                 SELECT MAX(ms) FROM (
+                     SELECT last_write_at_ms AS ms FROM archive_state WHERE id = 1
+                     UNION ALL
+                     SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) AS ms FROM turns
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM compactions
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM relationships
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM tool_result_events
+                     UNION ALL SELECT CAST(strftime('%s', MAX(ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(ts)), 4, 3) AS INTEGER) FROM user_turns
+                     UNION ALL SELECT CAST(strftime('%s', MAX(end_ts)) AS INTEGER) * 1000
+                         + CAST(substr(strftime('%f', MAX(end_ts)), 4, 3) AS INTEGER) FROM inferences
+                 )
+             )
+             WHERE id = 1",
+        [],
+    )?;
     Ok(())
 }

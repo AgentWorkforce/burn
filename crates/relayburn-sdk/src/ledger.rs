@@ -87,7 +87,9 @@ impl Ledger {
     /// Wall-clock time of the most recent event/derived-row mutation in
     /// `burn.sqlite`, in Unix milliseconds. Content-sidecar-only writes are
     /// excluded because report freshness tracks ingested activity rather than
-    /// blob persistence. `None` means the ledger has never received activity.
+    /// blob persistence. Legacy migration and JSONL bootstrap use historical
+    /// event timestamps when no write clock is available. `None` means there
+    /// is no known activity timestamp.
     pub fn last_write_at_ms(&self) -> Result<Option<u64>> {
         let value: Option<i64> = self.conns.burn.query_row(
             "SELECT last_write_at_ms FROM archive_state WHERE id = 1",
@@ -100,35 +102,35 @@ impl Ledger {
     // --- append paths -------------------------------------------------
 
     pub fn append_turns(&mut self, turns: &[crate::reader::TurnRecord]) -> Result<usize> {
-        writer::append_turns(&mut self.conns.burn, turns)
+        writer::append_turns(&mut self.conns.burn, turns, writer::WriteOrigin::Live)
     }
 
     pub fn append_compactions(
         &mut self,
         events: &[crate::reader::CompactionEvent],
     ) -> Result<usize> {
-        writer::append_compactions(&mut self.conns.burn, events)
+        writer::append_compactions(&mut self.conns.burn, events, writer::WriteOrigin::Live)
     }
 
     pub fn append_relationships(
         &mut self,
         records: &[crate::reader::SessionRelationshipRecord],
     ) -> Result<usize> {
-        writer::append_relationships(&mut self.conns.burn, records)
+        writer::append_relationships(&mut self.conns.burn, records, writer::WriteOrigin::Live)
     }
 
     pub fn append_tool_result_events(
         &mut self,
         records: &[crate::reader::ToolResultEventRecord],
     ) -> Result<usize> {
-        writer::append_tool_result_events(&mut self.conns.burn, records)
+        writer::append_tool_result_events(&mut self.conns.burn, records, writer::WriteOrigin::Live)
     }
 
     pub fn append_user_turns(
         &mut self,
         records: &[crate::reader::UserTurnRecord],
     ) -> Result<usize> {
-        writer::append_user_turns(&mut self.conns.burn, records)
+        writer::append_user_turns(&mut self.conns.burn, records, writer::WriteOrigin::Live)
     }
 
     /// Append per-API-call inferences (see issue #434). Re-ingest of the
@@ -137,11 +139,11 @@ impl Ledger {
     /// can legitimately produce updated `end_ts` / merged `usage`
     /// values.
     pub fn append_inferences(&mut self, records: &[crate::reader::Inference]) -> Result<usize> {
-        writer::append_inferences(&mut self.conns.burn, records)
+        writer::append_inferences(&mut self.conns.burn, records, writer::WriteOrigin::Live)
     }
 
     pub fn append_stamp(&mut self, stamp: &Stamp) -> Result<()> {
-        writer::append_stamp(&mut self.conns.burn, stamp)
+        writer::append_stamp(&mut self.conns.burn, stamp, writer::WriteOrigin::Live)
     }
 
     pub fn append_content(&mut self, records: &[crate::reader::ContentRecord]) -> Result<usize> {
@@ -404,7 +406,11 @@ impl Ledger {
             .filter_map(writer::synthesize_relationship)
             .collect();
         if !synthesized.is_empty() {
-            writer::append_relationships(&mut self.conns.burn, &synthesized)?;
+            writer::append_relationships(
+                &mut self.conns.burn,
+                &synthesized,
+                writer::WriteOrigin::Live,
+            )?;
         }
 
         let now = writer::debug_now();

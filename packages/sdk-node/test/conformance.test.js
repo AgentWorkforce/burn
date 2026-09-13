@@ -149,6 +149,30 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
   }
 });
 
+test('ledgerFreshness keeps JSONL-only historical imports stale', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-historical-ledger-'));
+  try {
+    writeFileSync(join(ledgerHome, 'ledger.jsonl'), JSON.stringify({
+      kind: 'turn',
+      record: {
+        v: 1, source: 'codex', sessionId: 'old-session', messageId: 'old-message',
+        turnIndex: 0, ts: '2025-01-01T00:00:00.123Z', model: 'gpt-5.2-codex',
+        usage: { input: 1, output: 1, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      },
+    }) + '\n');
+    const freshness = await sdk.ledgerFreshness({ ledgerHome });
+    assert.equal(freshness.lastWriteAtMs, Date.parse('2025-01-01T00:00:00.123Z'));
+    assert.equal(freshness.stale, true);
+    assert.equal((await sdk.summary({ ledgerHome })).turnCount, 1);
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
 test('ledgerFreshness returns null threshold when warnings are disabled', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;

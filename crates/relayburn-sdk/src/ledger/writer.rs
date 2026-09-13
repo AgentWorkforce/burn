@@ -41,7 +41,17 @@ fn now_lex_token() -> String {
     format!("ts:{:020}.{:09}", secs, nanos_part)
 }
 
-fn touch_last_write(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+/// Historical bootstrap must not turn a read into new activity.
+#[derive(Clone, Copy)]
+pub(crate) enum WriteOrigin {
+    Live,
+    Replay,
+}
+
+fn touch_last_write(tx: &rusqlite::Transaction<'_>, origin: WriteOrigin) -> Result<()> {
+    if matches!(origin, WriteOrigin::Replay) {
+        return Ok(());
+    }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -53,7 +63,11 @@ fn touch_last_write(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Result<usize> {
+pub(crate) fn append_turns(
+    conn: &mut Connection,
+    turns: &[TurnRecord],
+    origin: WriteOrigin,
+) -> Result<usize> {
     if turns.is_empty() {
         return Ok(0);
     }
@@ -106,7 +120,7 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
         }
     }
     if appended > 0 {
-        touch_last_write(&tx)?;
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -115,6 +129,7 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
 pub(crate) fn append_compactions(
     conn: &mut Connection,
     events: &[CompactionEvent],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if events.is_empty() {
         return Ok(0);
@@ -138,7 +153,7 @@ pub(crate) fn append_compactions(
         }
     }
     if appended > 0 {
-        touch_last_write(&tx)?;
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -147,6 +162,7 @@ pub(crate) fn append_compactions(
 pub(crate) fn append_relationships(
     conn: &mut Connection,
     records: &[SessionRelationshipRecord],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
@@ -178,7 +194,7 @@ pub(crate) fn append_relationships(
         }
     }
     if appended > 0 {
-        touch_last_write(&tx)?;
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -187,6 +203,7 @@ pub(crate) fn append_relationships(
 pub(crate) fn append_tool_result_events(
     conn: &mut Connection,
     records: &[ToolResultEventRecord],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
@@ -221,7 +238,7 @@ pub(crate) fn append_tool_result_events(
         }
     }
     if appended > 0 {
-        touch_last_write(&tx)?;
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -234,7 +251,11 @@ pub(crate) fn append_tool_result_events(
 /// if the JSONL grew between runs. The composite PK
 /// `(source, session_id, request_id)` is the natural identity. See issue
 /// #434.
-pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) -> Result<usize> {
+pub(crate) fn append_inferences(
+    conn: &mut Connection,
+    records: &[Inference],
+    origin: WriteOrigin,
+) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
     }
@@ -267,7 +288,7 @@ pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) ->
         }
     }
     if appended > 0 {
-        touch_last_write(&tx)?;
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(appended)
@@ -276,6 +297,7 @@ pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) ->
 pub(crate) fn append_user_turns(
     conn: &mut Connection,
     records: &[UserTurnRecord],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
@@ -305,13 +327,17 @@ pub(crate) fn append_user_turns(
         }
     }
     if appended > 0 {
-        touch_last_write(&tx)?;
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(appended)
 }
 
-pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
+pub(crate) fn append_stamp(
+    conn: &mut Connection,
+    stamp: &Stamp,
+    origin: WriteOrigin,
+) -> Result<()> {
     let selector_json = serde_json::to_string(&stamp.selector)?;
     let enrichment_json = serde_json::to_string(&stamp.enrichment)?;
     // Synthesize a spawn-env relationship row when the stamp carries a
@@ -359,7 +385,7 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
         }
     }
     if derived_rows_written {
-        touch_last_write(&tx)?;
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(())
