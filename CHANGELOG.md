@@ -5,6 +5,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn summary` marks unpriced model rows and labels totals as priced-only; JSON adds `unpricedTurns` and `unpricedModels` so unknown-model spend is never mistaken for free usage.
+- Removed the macOS menu bar app and its build, test, and release tooling.
+- Documentation covers the complete `burn` command surface and the SQLite/WAL storage and maintenance workflow.
 - `burn mcp-server` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison through validated read-only tools.
 - `burn --json` commands and stdout `burn stamps export` streams now exit quietly when a downstream pipe closes early instead of reporting the pipe closure as a generic error.
