@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- Historical `ledger.jsonl` bootstrap preserves event age and existing freshness metadata, so old imports still warn on CLI and MCP reads.
+- Historical `ledger.jsonl` bootstrap preserves event age and existing freshness metadata, so old imports still warn on CLI and MCP reads; `burn state rebuild` also replays preserved relationships without advancing the freshness clock.
 
 - Read/report commands (`summary`, `hotspots`, `hotspots --findings`, and `sessions list`) now warn when the ledger has not received data within the configurable staleness threshold (24 hours by default); SDK and MCP consumers receive the same last-write timestamp and stale flag as data.
 - `burn flow` now connects the main rail across turn boundaries, so session DAGs render as one continuous inference flow in JSON, Mermaid, and SVG.

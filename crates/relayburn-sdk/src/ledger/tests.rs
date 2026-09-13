@@ -600,7 +600,21 @@ fn rebuild_replays_stamp_synthesized_relationships() {
     l.append_stamp(&stamp).unwrap();
     assert_eq!(l.count_table("relationships").unwrap(), 1);
 
+    // Reject even a transient refresh: another connection could observe it
+    // before rebuild's final reset, or the process could exit before reset.
+    l.conns
+        .burn
+        .execute_batch(
+            "UPDATE archive_state SET last_write_at_ms = 1 WHERE id = 1;
+         CREATE TRIGGER reject_rebuild_freshness_refresh
+         BEFORE UPDATE OF last_write_at_ms ON archive_state
+         WHEN NEW.last_write_at_ms > OLD.last_write_at_ms
+         BEGIN SELECT RAISE(ABORT, 'rebuild refreshed freshness'); END;",
+        )
+        .unwrap();
+
     l.rebuild_derivable().unwrap();
+    assert_eq!(l.last_write_at_ms().unwrap(), None);
 
     let rels = l.query_relationships(&Query::default()).unwrap();
     assert_eq!(rels.len(), 1, "stamp-synthesized edge should survive");

@@ -135,7 +135,7 @@ fn historical_jsonl_bootstrap_warns_in_summary_and_mcp_reads() {
                 .join("\n")
                 + "\n";
             let output = command
-                .arg("mcp-server")
+                .args(["mcp-server", "--session-id", "old-session"])
                 .write_stdin(requests)
                 .timeout(std::time::Duration::from_secs(10))
                 .assert()
@@ -148,8 +148,34 @@ fn historical_jsonl_bootstrap_warns_in_summary_and_mcp_reads() {
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
             assert_eq!(responses.len(), tools.len());
+            let mut seen = [false; 3];
             for response in responses {
+                let id = response["id"].as_u64().expect("numeric request id") as usize;
+                let tool = tools.get(id).expect("known request id");
+                assert!(!seen[id], "duplicate response id {id}");
+                seen[id] = true;
+                assert!(response.get("error").is_none(), "{response}");
                 let payload = &response["result"]["structuredContent"];
+                match *tool {
+                    "burn__sessionCost" => {
+                        assert_eq!(payload["sessionId"], "old-session");
+                        assert_eq!(payload["turnCount"], 1);
+                        assert_eq!(payload["totalTokens"], 2);
+                        assert!(payload["totalUSD"].is_number());
+                    }
+                    "burn__fingerprint" => {
+                        let fingerprint = payload["fingerprint"].as_str().expect("fingerprint");
+                        let parts: Vec<_> = fingerprint.split(':').collect();
+                        assert_eq!(parts.len(), 3);
+                        assert!(parts.iter().all(|part| part.parse::<u64>().is_ok()));
+                    }
+                    "burn__summary" => {
+                        assert_eq!(payload["turnCount"], 1);
+                        assert!(payload["byModel"].is_array());
+                        assert!(payload["totalCost"].is_number());
+                    }
+                    _ => unreachable!(),
+                }
                 assert_eq!(
                     payload["ledgerFreshness"]["lastWriteAtMs"],
                     1_735_689_600_123_u64

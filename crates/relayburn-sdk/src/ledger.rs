@@ -409,7 +409,7 @@ impl Ledger {
             writer::append_relationships(
                 &mut self.conns.burn,
                 &synthesized,
-                writer::WriteOrigin::Live,
+                writer::WriteOrigin::Replay,
             )?;
         }
 

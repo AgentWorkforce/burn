@@ -42,6 +42,18 @@ function makeEmptyHome() {
   return home;
 }
 
+// Config-focused freshness tests must not inherit a caller's env override.
+// Top-level node:test cases in this file run sequentially; restore it even if
+// an assertion or native call fails.
+function clearStaleThresholdEnv(t) {
+  const previous = process.env.RELAYBURN_STALE_AFTER_HOURS;
+  delete process.env.RELAYBURN_STALE_AFTER_HOURS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.RELAYBURN_STALE_AFTER_HOURS;
+    else process.env.RELAYBURN_STALE_AFTER_HOURS = previous;
+  });
+}
+
 test('sdk facade exposes the expected verb set', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;
@@ -152,9 +164,12 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
 test('ledgerFreshness keeps JSONL-only historical imports stale', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;
+  clearStaleThresholdEnv(t);
 
   const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-historical-ledger-'));
   try {
+    writeFileSync(join(ledgerHome, 'config.json'),
+      JSON.stringify({ staleness: { thresholdHours: 24 } }));
     writeFileSync(join(ledgerHome, 'ledger.jsonl'), JSON.stringify({
       kind: 'turn',
       record: {
@@ -176,6 +191,7 @@ test('ledgerFreshness keeps JSONL-only historical imports stale', async (t) => {
 test('ledgerFreshness returns null threshold when warnings are disabled', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;
+  clearStaleThresholdEnv(t);
 
   const ledgerHome = makeLedgerHome();
   try {
