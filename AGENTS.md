@@ -8,10 +8,6 @@ how to work on it.
 
 The repo is Rust-first. `crates/` is the source of truth.
 
-Product development focuses on the Rust SDK and TypeScript/Node SDK, with the
-CLI and MCP server as thin consumers. The macOS menu bar app is discontinued;
-do not recreate the app or its build and release workflows.
-
 ### Rust crates (`crates/`)
 
 Only `relayburn-sdk` and `relayburn-cli` are published to crates.io. Crate
