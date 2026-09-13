@@ -136,6 +136,9 @@ fn format_status(s: &StateStatus) -> String {
         "  last rebuild: {}\n",
         s.archive.last_rebuild_at.as_deref().unwrap_or("never")
     ));
+    let last_write =
+        relayburn_cli::util::time::format_optional_epoch_ms(s.archive.last_write_at_ms);
+    out.push_str(&format!("  last write:   {last_write}\n"));
     out.push_str("config:\n");
     out.push_str(&format!("  store: {}\n", s.config.store));
     let retention = if s.config.retention_forever {

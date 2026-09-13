@@ -138,8 +138,18 @@
       "kind": "default"
     },
     {
+      "from": "msg-c1-1:tu-tu-c1-r1",
+      "to": "msg-c1-2:inf-0",
+      "kind": "default"
+    },
+    {
       "from": "msg-c1-2:inf-0",
       "to": "msg-c1-2:tu-tu-c1-e1",
+      "kind": "default"
+    },
+    {
+      "from": "msg-c1-2:tu-tu-c1-e1",
+      "to": "msg-c1-3:inf-0",
       "kind": "default"
     },
     {

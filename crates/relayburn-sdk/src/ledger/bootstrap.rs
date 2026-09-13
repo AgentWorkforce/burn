@@ -211,23 +211,26 @@ fn rebuild_from_jsonl(burn: &mut Connection, jsonl_path: &Path) -> Result<()> {
     }
 
     if !turns.is_empty() {
-        writer::append_turns(burn, &turns)?;
+        writer::append_turns(burn, &turns, writer::WriteOrigin::Replay)?;
     }
     if !user_turns.is_empty() {
-        writer::append_user_turns(burn, &user_turns)?;
+        writer::append_user_turns(burn, &user_turns, writer::WriteOrigin::Replay)?;
     }
     if !tool_results.is_empty() {
-        writer::append_tool_result_events(burn, &tool_results)?;
+        writer::append_tool_result_events(burn, &tool_results, writer::WriteOrigin::Replay)?;
     }
     if !relationships.is_empty() {
-        writer::append_relationships(burn, &relationships)?;
+        writer::append_relationships(burn, &relationships, writer::WriteOrigin::Replay)?;
     }
     if !compactions.is_empty() {
-        writer::append_compactions(burn, &compactions)?;
+        writer::append_compactions(burn, &compactions, writer::WriteOrigin::Replay)?;
     }
     for s in &stamps {
-        writer::append_stamp(burn, s)?;
+        writer::append_stamp(burn, s, writer::WriteOrigin::Replay)?;
     }
+    // Rebuilding a historical mirror is not live ingestion. Seed from event
+    // time without replacing a newer live write clock or v7 migration seed.
+    crate::ledger::db::seed_last_write_from_events(burn)?;
     Ok(())
 }
 
@@ -419,5 +422,114 @@ mod tests {
 
         let l = Ledger::open(&burn, &content).unwrap();
         assert_eq!(l.count_table("turns").unwrap(), 2);
+    }
+
+    #[test]
+    fn historical_bootstrap_uses_event_time_then_live_writes_refresh_it() {
+        let tmp = TempDir::new().unwrap();
+        let jsonl = tmp.path().join("ledger.jsonl");
+        let turn = turn_envelope_line("sess-a", "msg-1", 10);
+        // A replayed stamp also synthesizes a derived relationship. It must
+        // use historical time just like the replayed turn does.
+        let stamp = serde_json::json!({
+            "kind": "stamp",
+            "ts": "2025-01-02T00:00:00.123Z",
+            "selector": {"sessionId": "sess-a"},
+            "enrichment": {"agentId": "child", "parentAgentId": "parent"}
+        });
+        fs::write(&jsonl, format!("{turn}\n{stamp}\n")).unwrap();
+        let mut handle =
+            crate::Ledger::open(crate::LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        let historical_ms = 1_735_776_000_123;
+        assert_eq!(
+            handle.raw().last_write_at_ms().unwrap(),
+            Some(historical_ms)
+        );
+        assert_eq!(handle.raw().count_table("relationships").unwrap(), 1);
+        let envelope: serde_json::Value =
+            serde_json::from_str(&turn_envelope_line("sess-a", "msg-live", 30)).unwrap();
+        let live_turn: TurnRecord = serde_json::from_value(envelope["record"].clone()).unwrap();
+        let before = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        handle.raw_mut().append_turns(&[live_turn]).unwrap();
+        assert!(handle.raw().last_write_at_ms().unwrap().unwrap() >= before);
+    }
+
+    #[test]
+    fn bootstrap_preserves_v7_migration_seed() {
+        let tmp = TempDir::new().unwrap();
+        let burn = tmp.path().join("burn.sqlite");
+        let content = tmp.path().join("content.sqlite");
+        {
+            let mut ledger = Ledger::open(&burn, &content).unwrap();
+            let line = turn_envelope_line("sess-a", "existing", 10)
+                .replace("2025-01-01T00:00:00Z", "2025-01-02T00:00:00.987Z");
+            let envelope: serde_json::Value = serde_json::from_str(&line).unwrap();
+            ledger
+                .append_turns(&[serde_json::from_value(envelope["record"].clone()).unwrap()])
+                .unwrap();
+            ledger
+                .conns
+                .burn
+                .execute(
+                    "UPDATE archive_state SET schema_version = 6, last_write_at_ms = NULL",
+                    [],
+                )
+                .unwrap();
+        }
+        fs::write(
+            tmp.path().join("ledger.jsonl"),
+            turn_envelope_line("sess-a", "replay", 20),
+        )
+        .unwrap();
+        set_mtime(&burn, std::time::UNIX_EPOCH);
+        let ledger = Ledger::open(&burn, &content).unwrap();
+        assert_eq!(ledger.last_write_at_ms().unwrap(), Some(1_735_776_000_987));
+        assert_eq!(ledger.count_table("turns").unwrap(), 1);
+    }
+
+    #[test]
+    fn bootstrap_preserves_existing_live_write_clock() {
+        let tmp = TempDir::new().unwrap();
+        let burn = tmp.path().join("burn.sqlite");
+        let content = tmp.path().join("content.sqlite");
+        let previous;
+        {
+            let mut ledger = Ledger::open(&burn, &content).unwrap();
+            let envelope: serde_json::Value =
+                serde_json::from_str(&turn_envelope_line("sess-a", "existing", 10)).unwrap();
+            ledger
+                .append_turns(&[serde_json::from_value(envelope["record"].clone()).unwrap()])
+                .unwrap();
+            previous = ledger.last_write_at_ms().unwrap();
+        }
+        fs::write(
+            tmp.path().join("ledger.jsonl"),
+            turn_envelope_line("sess-a", "replay", 20),
+        )
+        .unwrap();
+        set_mtime(&burn, std::time::UNIX_EPOCH);
+        let ledger = Ledger::open(&burn, &content).unwrap();
+        assert_eq!(ledger.last_write_at_ms().unwrap(), previous);
+    }
+
+    #[test]
+    fn bootstrap_without_event_timestamps_keeps_freshness_unknown() {
+        for source in [
+            String::new(),
+            "bad JSON\n".to_string(),
+            turn_envelope_line("sess-a", "msg-1", 10).replace("2025-01-01T00:00:00Z", "invalid"),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            fs::write(tmp.path().join("ledger.jsonl"), source).unwrap();
+            let ledger = Ledger::open(
+                &tmp.path().join("burn.sqlite"),
+                &tmp.path().join("content.sqlite"),
+            )
+            .unwrap();
+            assert_eq!(ledger.last_write_at_ms().unwrap(), None);
+        }
     }
 }

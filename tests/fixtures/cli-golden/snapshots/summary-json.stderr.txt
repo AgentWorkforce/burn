@@ -1,3 +1,1 @@
 burn: warning: ledger data may be stale (last write: 2026-04-23T00:00:00.000Z; threshold: 24.0h). If expected activity is missing, run `burn ingest` before relying on this report.
-warning: 1 turn(s) had no pricing for model(s): gpt-5-codex.
-         Update the snapshot (pnpm run pricing:update) or add an override at <ledger-home>/models.dev.json.

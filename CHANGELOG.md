@@ -6,6 +6,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - `@relayburn/mcp` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison as read-only MCP tool factories.
+- `summary`, `hotspots`, and `sessions list` warn on stale data (24-hour default, configurable), including older imported or rebuilt ledgers. SDK and MCP consumers receive freshness metadata; summary and MCP reads remain usable when that metadata is unavailable.
+- `burn flow` now connects the main rail across turn boundaries, so session DAGs render as one continuous inference flow in JSON, Mermaid, and SVG.
+- `burn summary` marks unpriced model rows and labels totals as priced-only; JSON adds `unpricedTurns` and `unpricedModels` so unknown-model spend is never mistaken for free usage.
+- Removed the macOS menu bar app and its build, test, and release tooling.
+- Documentation covers the complete `burn` command surface and the SQLite/WAL storage and maintenance workflow.
 - `burn mcp-server` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison through validated read-only tools.
 - `burn --json` commands and stdout `burn stamps export` streams now exit quietly when a downstream pipe closes early instead of reporting the pipe closure as a generic error.

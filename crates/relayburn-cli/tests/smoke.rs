@@ -53,6 +53,178 @@ fn burn() -> Command {
     Command::cargo_bin("burn").expect("`burn` binary must build for the smoke test")
 }
 
+fn burn_without_stale_threshold_env() -> Command {
+    let mut command = burn();
+    command.env_remove("RELAYBURN_STALE_AFTER_HOURS");
+    command
+}
+
+fn seed_one_turn(home: &std::path::Path) {
+    let mut handle = relayburn_sdk::Ledger::open(relayburn_sdk::LedgerOpenOptions::with_home(home))
+        .expect("open test ledger");
+    let turn: relayburn_sdk::TurnRecord = serde_json::from_value(serde_json::json!({
+        "v": 1,
+        "source": "codex",
+        "sessionId": "stale-session",
+        "messageId": "stale-message",
+        "turnIndex": 0,
+        "ts": "2026-01-01T00:00:00.000Z",
+        "model": "gpt-5.2-codex",
+        "usage": {"input": 1, "output": 1, "reasoning": 0, "cacheRead": 0, "cacheCreate5m": 0, "cacheCreate1h": 0},
+        "toolCalls": []
+    }))
+    .expect("deserialize test turn");
+    handle.raw_mut().append_turns(&[turn]).expect("seed turn");
+}
+
+#[test]
+fn stale_warning_is_uniform_across_requested_read_surface() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    seed_one_turn(home.path());
+    std::fs::write(
+        home.path().join("config.json"),
+        r#"{"staleness":{"thresholdHours":0}}"#,
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+
+    for args in [
+        vec!["summary"],
+        vec!["hotspots"],
+        vec!["hotspots", "--findings"],
+        vec!["sessions", "list", "--since", "12m"],
+    ] {
+        burn_without_stale_threshold_env()
+            .args(["--ledger-path", home.path().to_str().expect("utf-8 path")])
+            .args(&args)
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("ledger data may be stale"));
+    }
+}
+
+#[test]
+fn historical_jsonl_bootstrap_warns_in_summary_and_mcp_reads() {
+    // Give each presenter a JSONL-only home so its own first open must replay.
+    for mcp in [false, true] {
+        let home = tempfile::TempDir::new().unwrap();
+        let record = serde_json::json!({
+            "v": 1, "source": "codex", "sessionId": "old-session",
+            "messageId": "old-message", "turnIndex": 0,
+            "ts": "2025-01-01T00:00:00.123Z", "model": "gpt-5.2-codex",
+            "usage": {"input": 1, "output": 1, "reasoning": 0, "cacheRead": 0, "cacheCreate5m": 0, "cacheCreate1h": 0}, "toolCalls": []
+        });
+        std::fs::write(
+            home.path().join("ledger.jsonl"),
+            serde_json::json!({"kind": "turn", "record": record}).to_string(),
+        )
+        .unwrap();
+        let mut command = burn_without_stale_threshold_env();
+        command.args(["--ledger-path", home.path().to_str().unwrap()]);
+        if mcp {
+            let tools = ["burn__sessionCost", "burn__fingerprint", "burn__summary"];
+            let requests = tools
+                .iter()
+                .enumerate()
+                .map(|(id, name)| {
+                    serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                    "params": {"name": name, "arguments": {}}})
+                    .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            let output = command
+                .args(["mcp-server", "--session-id", "old-session"])
+                .write_stdin(requests)
+                .timeout(std::time::Duration::from_secs(10))
+                .assert()
+                .success()
+                .get_output()
+                .clone();
+            let responses: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(responses.len(), tools.len());
+            let mut seen = [false; 3];
+            for response in responses {
+                let id = response["id"].as_u64().expect("numeric request id") as usize;
+                let tool = tools.get(id).expect("known request id");
+                assert!(!seen[id], "duplicate response id {id}");
+                seen[id] = true;
+                assert!(response.get("error").is_none(), "{response}");
+                let payload = &response["result"]["structuredContent"];
+                match *tool {
+                    "burn__sessionCost" => {
+                        assert_eq!(payload["sessionId"], "old-session");
+                        assert_eq!(payload["turnCount"], 1);
+                        assert_eq!(payload["totalTokens"], 2);
+                        assert!(payload["totalUSD"].is_number());
+                    }
+                    "burn__fingerprint" => {
+                        let fingerprint = payload["fingerprint"].as_str().expect("fingerprint");
+                        let parts: Vec<_> = fingerprint.split(':').collect();
+                        assert_eq!(parts.len(), 3);
+                        assert!(parts.iter().all(|part| part.parse::<u64>().is_ok()));
+                    }
+                    "burn__summary" => {
+                        assert_eq!(payload["turnCount"], 1);
+                        assert!(payload["byModel"].is_array());
+                        assert!(payload["totalCost"].is_number());
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    payload["ledgerFreshness"]["lastWriteAtMs"],
+                    1_735_689_600_123_u64
+                );
+                assert_eq!(payload["ledgerFreshness"]["stale"], true);
+                let text: serde_json::Value = serde_json::from_str(
+                    response["result"]["content"][0]["text"].as_str().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(&text, payload);
+            }
+        } else {
+            command.arg("summary").assert().success().stderr(
+                predicate::str::contains("ledger data may be stale")
+                    .and(predicate::str::contains("2025-01-01")),
+            );
+        }
+    }
+}
+
+#[test]
+fn fresh_ledger_does_not_warn() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    seed_one_turn(home.path());
+    burn_without_stale_threshold_env()
+        .args([
+            "--ledger-path",
+            home.path().to_str().expect("utf-8 path"),
+            "summary",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ledger data may be stale").not());
+}
+
+#[test]
+fn never_written_ledger_warns() {
+    let home = tempfile::TempDir::new().expect("tmp RELAYBURN_HOME");
+    burn_without_stale_threshold_env()
+        .args([
+            "--ledger-path",
+            home.path().to_str().expect("utf-8 path"),
+            "summary",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ledger data may be stale"));
+}
+
 #[test]
 fn top_level_help_lists_every_subcommand() {
     let output = burn().arg("--help").assert().success().get_output().clone();
@@ -804,4 +976,54 @@ fn hotspots_ingest_flag_runs_the_sweep() {
         .assert()
         .success()
         .stdout(predicate::str::contains("turns analyzed: 1"));
+}
+
+#[test]
+fn summary_renders_when_freshness_metadata_is_unavailable() {
+    let home = tempfile::TempDir::new().unwrap();
+    seed_one_turn(home.path());
+    let conn = rusqlite::Connection::open(home.path().join("burn.sqlite")).unwrap();
+    conn.execute("ALTER TABLE archive_state DROP COLUMN last_write_at_ms", [])
+        .unwrap();
+    drop(conn);
+    for (bucket, debug) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut command = burn_without_stale_threshold_env();
+        command.env_remove("RELAYBURN_LOG").env_remove("RUST_LOG");
+        if debug {
+            command.env("RELAYBURN_LOG", "debug");
+        }
+        command.args([
+            "--ledger-path",
+            home.path().to_str().unwrap(),
+            "summary",
+            "--json",
+        ]);
+        if bucket {
+            command.args(["--bucket", "1h"]);
+        }
+        let output = command
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("ledger data may be stale").not())
+            .get_output()
+            .clone();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.contains("summary freshness metadata unavailable"),
+            debug
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        if bucket {
+            assert_eq!(result["bucketSeconds"], 3_600);
+            let turns: u64 = result["buckets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|bucket| bucket["turnCount"].as_u64().unwrap())
+                .sum();
+            assert_eq!(turns, 1);
+        } else {
+            assert_eq!(result["turns"], 1);
+        }
+    }
 }

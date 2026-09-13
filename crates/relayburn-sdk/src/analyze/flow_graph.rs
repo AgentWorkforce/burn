@@ -30,7 +30,10 @@
 //!
 //! # Edge semantics
 //!
-//! - [`FlowEdgeKind::Default`] — sequential within a rail.
+//! - [`FlowEdgeKind::Default`] — sequential within a rail. Within one
+//!   turn this is model-driven continuation; across turns it spans an
+//!   intervening user prompt and does **not** imply autonomous model
+//!   continuation.
 //! - [`FlowEdgeKind::Dispatch`] — main rail's `Task` `ToolUse` →
 //!   first node on the spawned subagent rail.
 //! - [`FlowEdgeKind::Return`] — last node of a subagent rail → the
@@ -39,6 +42,13 @@
 //! - [`FlowEdgeKind::Unattached`] — connects the synthetic turn anchor
 //!   to a `Subagent` flagged `attributes["unattached"] = true`. Surfaces
 //!   the orphan case loudly so renderers can highlight it.
+//!
+//! When a turn's terminal main-rail tool dispatches a subagent, both
+//! the tool's cross-turn `Default` edge and the subagent's `Return`
+//! edge target the next main inference. This intentional diamond keeps
+//! main-rail continuity and cross-rail completion as independent causal
+//! paths rather than treating the dispatched branch as a replacement
+//! for the user-mediated main rail.
 
 use serde::{Deserialize, Serialize};
 
@@ -177,7 +187,8 @@ pub struct FlowNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlowEdgeKind {
-    /// Sequential within a rail.
+    /// Sequential within a rail. Across main-rail turns, spans the
+    /// intervening user prompt rather than autonomous continuation.
     Default,
     /// Main rail → subagent rail at the dispatching `Task` `ToolUse`.
     Dispatch,
@@ -232,7 +243,7 @@ pub struct FlowGraph {
     pub truncated: bool,
     /// All nodes, in causal (turn → rail → in-rail) order.
     pub nodes: Vec<FlowNode>,
-    /// All edges. Order is: per-turn sequential edges first, then
+    /// All edges. Order is: sequential rail edges first, then
     /// dispatch / return edges, then unattached edges.
     pub edges: Vec<FlowEdge>,
 }
@@ -267,6 +278,9 @@ impl FlowOpts {
 ///
 /// `session_id` is captured on the returned graph; when `trees` is
 /// non-empty the first tree's `session_id` will match.
+/// Trees are projected in ascending [`TurnSpanTree::turn_number`] order
+/// regardless of caller-provided slice order, and `max_turns` retains
+/// the earliest turns in that chronology.
 pub fn flow_graph_from_trees(
     session_id: &str,
     trees: &[TurnSpanTree],
@@ -292,17 +306,21 @@ struct Builder {
     /// session. Rails are session-scoped — every subagent dispatch
     /// gets a fresh rail rather than reusing.
     next_rail: u32,
-    /// Tracks the last node id emitted on the main rail across turns,
-    /// so a subagent rail's `Return` edge can target the first node
-    /// of the *next* main-rail inference.
-    last_main_node_per_turn: Vec<(u32, String)>,
+    /// Last node emitted on the session's main rail. Seeded into each
+    /// turn so the next main-rail entry gets a `Default` edge from the
+    /// previous turn's terminal node. Empty turns leave it unchanged.
+    last_main_id: Option<String>,
 }
 
 impl Builder {
     fn add_turn(&mut self, tree: &TurnSpanTree) {
         let turn_x = (tree.turn_number as i32) * INTER_TURN_GAP;
         let main_rail = 0;
-        let mut prev_main_id: Option<String> = None;
+        // The main rail is session-scoped. Carry its terminal node into
+        // this turn so the first emitted main node continues the chain.
+        // If the turn has no main nodes, the carried value survives for
+        // the next non-empty turn.
+        let mut prev_main_id = self.last_main_id.clone();
         let mut inference_index: u32 = 0;
         let mut main_node_y: i32 = 0;
 
@@ -431,11 +449,7 @@ impl Builder {
                     let first_id =
                         self.emit_subagent_rail(tree, child, rail, turn_x, unattached_y, None);
                     if let Some(first_id) = first_id {
-                        let anchor = prev_main_id.clone().or_else(|| {
-                            self.last_main_node_per_turn
-                                .last()
-                                .map(|(_, id)| id.clone())
-                        });
+                        let anchor = prev_main_id.clone();
                         if let Some(from) = anchor {
                             self.unattached_edges.push(FlowEdge {
                                 from,
@@ -452,9 +466,7 @@ impl Builder {
             }
         }
 
-        if let Some(id) = prev_main_id {
-            self.last_main_node_per_turn.push((tree.turn_number, id));
-        }
+        self.last_main_id = prev_main_id;
     }
 
     /// Walk a subagent's children and emit a sequential rail. Returns
@@ -704,12 +716,18 @@ fn span_duration(node: &SpanNode) -> i64 {
 /// public entrypoints so the projection contract has one home.
 fn build_with_finalize(session_id: &str, trees: &[TurnSpanTree], opts: FlowOpts) -> FlowGraph {
     let total_turn_count = u32::try_from(trees.len()).unwrap_or(u32::MAX);
+    // Public callers can construct trees directly and need not inherit
+    // the ledger query's chronological ordering. Normalize before both
+    // truncation and edge emission so main-rail Default edges and the
+    // turn-number-based Return timeline use the same direction.
+    let mut trees: Vec<&TurnSpanTree> = trees.iter().collect();
+    trees.sort_by_key(|tree| tree.turn_number);
     let max_turns = opts.effective_max_turns();
     let take = match max_turns {
         Some(cap) => (cap as usize).min(trees.len()),
         None => trees.len(),
     };
-    let trees = &trees[..take];
+    trees.truncate(take);
     let turn_count = u32::try_from(trees.len()).unwrap_or(u32::MAX);
     let truncated = turn_count < total_turn_count;
 
@@ -740,6 +758,8 @@ fn build_with_finalize(session_id: &str, trees: &[TurnSpanTree], opts: FlowOpts)
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, VecDeque};
+
     use super::*;
     use crate::analyze::span_tree::{SpanKind, SpanNode, SpanStatus};
 
@@ -786,6 +806,44 @@ mod tests {
         SpanNode::new(SpanKind::Turn, "turn")
     }
 
+    fn assert_acyclic(graph: &FlowGraph) {
+        let mut indegree: HashMap<&str, usize> = graph
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), 0))
+            .collect();
+        let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
+        for edge in &graph.edges {
+            *indegree
+                .get_mut(edge.to.as_str())
+                .expect("edge target should be a graph node") += 1;
+            outgoing
+                .entry(edge.from.as_str())
+                .or_default()
+                .push(edge.to.as_str());
+        }
+
+        let mut ready: VecDeque<&str> = indegree
+            .iter()
+            .filter_map(|(&id, &degree)| (degree == 0).then_some(id))
+            .collect();
+        let mut visited = 0;
+        while let Some(id) = ready.pop_front() {
+            visited += 1;
+            for &next in outgoing.get(id).into_iter().flatten() {
+                let degree = indegree
+                    .get_mut(next)
+                    .expect("edge target should be a graph node");
+                *degree -= 1;
+                if *degree == 0 {
+                    ready.push_back(next);
+                }
+            }
+        }
+
+        assert_eq!(visited, graph.nodes.len(), "flow graph contains a cycle");
+    }
+
     #[test]
     fn empty_trees_produce_empty_graph() {
         let graph = flow_graph_from_trees("sess-1", &[], FlowOpts::default());
@@ -826,6 +884,54 @@ mod tests {
         assert_eq!(graph.edges[0].kind, FlowEdgeKind::Default);
         assert_eq!(graph.edges[0].from, "msg-0:inf-0");
         assert_eq!(graph.edges[0].to, "msg-0:inf-1");
+    }
+
+    #[test]
+    fn two_plain_turns_are_connected_by_default_edge() {
+        let mut root0 = turn_root();
+        root0.children.push(inference("claude-sonnet", "req-1"));
+        let mut root1 = turn_root();
+        root1.children.push(inference("claude-sonnet", "req-2"));
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[make_tree(0, root0), make_tree(1, root1)],
+            FlowOpts::default(),
+        );
+
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(
+            graph.edges[0],
+            FlowEdge {
+                from: "msg-0:inf-0".into(),
+                to: "msg-1:inf-0".into(),
+                kind: FlowEdgeKind::Default,
+            }
+        );
+    }
+
+    #[test]
+    fn empty_turn_does_not_break_main_rail_continuity() {
+        let mut root0 = turn_root();
+        root0.children.push(inference("claude-sonnet", "req-1"));
+        let root1 = turn_root();
+        let mut root2 = turn_root();
+        root2.children.push(inference("claude-sonnet", "req-2"));
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[
+                make_tree(0, root0),
+                make_tree(1, root1),
+                make_tree(2, root2),
+            ],
+            FlowOpts::default(),
+        );
+
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].from, "msg-0:inf-0");
+        assert_eq!(graph.edges[0].to, "msg-2:inf-0");
+        assert_eq!(graph.edges[0].kind, FlowEdgeKind::Default);
     }
 
     #[test]
@@ -902,6 +1008,73 @@ mod tests {
             .find(|e| e.kind == FlowEdgeKind::Return)
             .unwrap();
         assert_eq!(return_edge.to, "msg-1:inf-0");
+    }
+
+    #[test]
+    fn terminal_dispatch_keeps_main_continuity_and_subagent_return_paths() {
+        let mut task = tool_use("Task", "tu-task");
+        task.children.push(subagent("agent-1", false));
+        let mut inf = inference("claude-sonnet", "req-1");
+        inf.children.push(task);
+        let mut root0 = turn_root();
+        root0.children.push(inf);
+
+        let mut root1 = turn_root();
+        root1.children.push(inference("claude-sonnet", "req-2"));
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            &[make_tree(0, root0), make_tree(1, root1)],
+            FlowOpts::default(),
+        );
+
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Default
+                && edge.from == "msg-0:tu-tu-task"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Return
+                && edge.from == "msg-0:sa-agent-1"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert_acyclic(&graph);
+    }
+
+    #[test]
+    fn unsorted_trees_are_normalized_before_cross_turn_edges() {
+        let mut root1 = turn_root();
+        root1.children.push(inference("claude-sonnet", "req-2"));
+
+        let mut task = tool_use("Task", "tu-task");
+        task.children.push(subagent("agent-1", false));
+        let mut inf = inference("claude-sonnet", "req-1");
+        inf.children.push(task);
+        let mut root0 = turn_root();
+        root0.children.push(inf);
+
+        let graph = flow_graph_from_trees(
+            "sess-1",
+            // Deliberately reverse chronological order. If Default
+            // edges followed this slice while Return edges followed
+            // turn_number, the dispatch diamond would contain a cycle.
+            &[make_tree(1, root1), make_tree(0, root0)],
+            FlowOpts::default(),
+        );
+
+        let emitted_turns: Vec<u32> = graph.nodes.iter().map(|node| node.turn_number).collect();
+        assert!(emitted_turns.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Default
+                && edge.from == "msg-0:tu-tu-task"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.kind == FlowEdgeKind::Return
+                && edge.from == "msg-0:sa-agent-1"
+                && edge.to == "msg-1:inf-0"
+        }));
+        assert_acyclic(&graph);
     }
 
     #[test]

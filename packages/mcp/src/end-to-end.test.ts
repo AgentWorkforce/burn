@@ -49,12 +49,17 @@ describe('end-to-end: read tool catalog over stdio', () => {
     const input = new PassThrough();
     const output = new PassThrough();
     const responses = collectResponses(output);
+    const ledgerFreshness = { lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false };
     const tools = [
       createSessionCostTool({
+        ledgerFreshness: async () => ledgerFreshness,
         defaultSessionId: 'S',
         sessionCost: async (opts) => ({ sessionId: opts.session ?? null, totalUSD: 3, totalTokens: 100, turnCount: 1, models: ['a'] }),
       }),
-      createFingerprintTool({ fingerprint: async () => ({ fingerprint: '1:2:3' }) }),
+      createFingerprintTool({
+        fingerprint: async () => ({ fingerprint: '1:2:3' }),
+        ledgerFreshness: async () => ledgerFreshness,
+      }),
       createSummaryTool({
         defaultSessionId: 'S',
         summary: async () => ({ totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [] }),
@@ -108,8 +113,8 @@ describe('end-to-end: read tool catalog over stdio', () => {
     const listed = all.find((r) => r.id === 2)?.result?.tools ?? [];
     assert.deepEqual(listed.map((tool) => tool.name), tools.map((tool) => tool.name));
     const expectedStructuredContent = new Map<number, unknown>([
-      [3, { sessionId: 'S', totalUSD: 3, totalTokens: 100, turnCount: 1, models: ['a'] }],
-      [4, { fingerprint: '1:2:3' }],
+      [3, { sessionId: 'S', totalUSD: 3, totalTokens: 100, turnCount: 1, models: ['a'], ledgerFreshness }],
+      [4, { fingerprint: '1:2:3', ledgerFreshness }],
       [5, { totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [] }],
       [6, { kind: 'findings', findings: [], summary: { fixture: true } }],
       [7, { project: '/fixture', files: [], perFile: [], grandTotal: 0 }],
