@@ -4,6 +4,10 @@ Understand how you're spending tokens in agent CLIs. Burn ingests Claude Code,
 Codex, and OpenCode session logs into a local ledger, then shows cost by model,
 provider, tool, file, workflow, agent, session, and overhead file.
 
+Burn focuses on the Rust SDK (`relayburn-sdk`) and the TypeScript/Node SDK
+(`@relayburn/sdk`). The CLI and MCP server expose those SDKs. The macOS menu
+bar app has been discontinued.
+
 ## Quick Start
 
 ```bash

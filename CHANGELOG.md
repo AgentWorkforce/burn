@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- Discontinued the macOS menu bar app and removed its build, test, and release
+  tooling to focus on the Rust and TypeScript/Node SDKs.
 - Documentation covers the complete `burn` command surface and the SQLite/WAL storage and maintenance workflow.
 - `burn mcp-server` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison through validated read-only tools.
