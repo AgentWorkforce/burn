@@ -1,2 +1,2 @@
-warning: 1 turn(s) had no pricing for model(s): gpt-5-codex — their cost is reported as $0.
+warning: 1 turn(s) had no pricing for model(s): gpt-5-codex.
          Update the snapshot (pnpm run pricing:update) or add an override at <ledger-home>/models.dev.json.
