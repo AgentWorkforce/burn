@@ -354,6 +354,14 @@ fn pick_staleness_threshold(
 ) -> f64 {
     env.and_then(|s| s.trim().parse::<f64>().ok())
         .filter(|v| v.is_finite())
+        // Preserve the disabling intent of `-0`: IEEE negative zero is not < 0.
+        .map(|v| {
+            if v == 0.0 && v.is_sign_negative() {
+                -1.0
+            } else {
+                v
+            }
+        })
         .or_else(|| {
             file.and_then(serde_json::Value::as_f64)
                 .filter(|v| v.is_finite())
@@ -497,6 +505,57 @@ mod tests {
                 -10.0
             );
         });
+    }
+
+    #[test]
+    fn staleness_negative_zero_env_disables_warning() {
+        with_clean_env(|| {
+            let tmp = TempDir::new().unwrap();
+            let handle =
+                crate::Ledger::open(crate::LedgerOpenOptions::with_home(tmp.path())).unwrap();
+            std::fs::write(
+                tmp.path().join("config.json"),
+                r#"{"staleness":{"thresholdHours":6}}"#,
+            )
+            .unwrap();
+            for value in ["-0", "-0.0", "-0e0", " -0.00 "] {
+                std::env::set_var("RELAYBURN_STALE_AFTER_HOURS", value);
+                let freshness = handle.ledger_freshness_at(1_000).unwrap();
+                assert_eq!(freshness.stale_after_ms, None, "{value}");
+                assert!(
+                    !freshness.stale,
+                    "{value} should disable even an empty ledger warning"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn staleness_threshold_preserves_other_inputs_and_fallbacks() {
+        let file = serde_json::json!(6);
+        for (env, expected) in [("0", 0.0), ("+0.0", 0.0), ("2.5", 2.5), ("-2.5", -2.5)] {
+            assert_eq!(
+                pick_staleness_threshold(Some(env), Some(&file), 24.0),
+                expected
+            );
+        }
+        for env in [
+            None,
+            Some(""),
+            Some("invalid"),
+            Some("NaN"),
+            Some("inf"),
+            Some("-inf"),
+        ] {
+            assert_eq!(pick_staleness_threshold(env, Some(&file), 24.0), 6.0);
+            assert_eq!(pick_staleness_threshold(env, None, 24.0), 24.0);
+        }
+        // Only environment negative zero is normalized; file values retain
+        // their existing behavior and finite-value validation.
+        let file = serde_json::json!(-0.0);
+        let value = pick_staleness_threshold(None, Some(&file), 24.0);
+        assert_eq!(value, 0.0);
+        assert!(value.is_sign_negative());
     }
 
     #[test]
