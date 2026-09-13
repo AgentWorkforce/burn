@@ -55,6 +55,33 @@ pub(super) fn coverage_cell(value: u64, c: &relayburn_sdk::FieldCoverage) -> Str
     format_uint(value)
 }
 
+/// Render a grouped cost without making an unpriced model look free. Provider
+/// and tag groups can mix priced and unpriced turns, so their priced subtotal
+/// remains numeric and the summary-level unpriced line carries that caveat.
+pub(super) fn grouped_cost_cell(
+    group_by: SummaryGroupBy,
+    unpriced_models: &[String],
+    label: &str,
+    cost: f64,
+) -> String {
+    if group_by == SummaryGroupBy::Model
+        && unpriced_models.iter().any(|model| model.as_str() == label)
+    {
+        "unpriced".to_string()
+    } else {
+        format_usd(cost)
+    }
+}
+
+pub(super) fn unpriced_turns_line(unpriced_turns: u64, unpriced_models: &[String]) -> String {
+    format!(
+        "{} {} unpriced: {} (total excludes their cost)",
+        format_uint(unpriced_turns),
+        if unpriced_turns == 1 { "turn" } else { "turns" },
+        unpriced_models.join(", "),
+    )
+}
+
 pub(super) fn emit_grouped(
     globals: &GlobalArgs,
     report: &SummaryGroupedReport,
@@ -530,15 +557,31 @@ pub(super) fn emit_human(
                 r.usage.cache_create_5m + r.usage.cache_create_1h,
                 &r.coverage.cache_create,
             ),
-            format_usd(r.cost.total),
+            grouped_cost_cell(
+                report.group_by,
+                &report.unpriced_models,
+                &r.label,
+                r.cost.total,
+            ),
         ]);
     }
     lines.push(render_table(&rendered));
     lines.push(String::new());
     lines.push(format!(
-        "total cost: {}",
+        "{}: {}",
+        if report.unpriced_turns > 0 {
+            "total priced cost"
+        } else {
+            "total cost"
+        },
         format_usd(report.total_cost.total)
     ));
+    if report.unpriced_turns > 0 {
+        lines.push(unpriced_turns_line(
+            report.unpriced_turns,
+            &report.unpriced_models,
+        ));
+    }
     lines.push(format!(
         "  input {} / output {} / reasoning {} / cacheRead {} / cacheCreate {}",
         format_usd(report.total_cost.input),
@@ -590,7 +633,7 @@ pub(super) fn emit_human(
     if report.unpriced_turns > 0 {
         let models = report.unpriced_models.join(", ");
         eprintln!(
-            "warning: {} turn(s) had no pricing for model(s): {} — their cost is reported as $0.",
+            "warning: {} turn(s) had no pricing for model(s): {}.",
             report.unpriced_turns, models,
         );
         eprintln!(
