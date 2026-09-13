@@ -38,6 +38,16 @@ pub fn iso_from_system_time(t: std::time::SystemTime) -> String {
     iso_from_ms(total_ms)
 }
 
+/// Format an optional Unix millisecond timestamp for human status/warning
+/// surfaces. Missing ledger history is rendered consistently as `never`.
+pub fn format_optional_epoch_ms(value: Option<u64>) -> String {
+    value
+        .map(|ms| {
+            iso_from_system_time(std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms))
+        })
+        .unwrap_or_else(|| "never".to_string())
+}
+
 fn iso_from_ms(total_ms: i64) -> String {
     let total_secs = total_ms.div_euclid(1000);
     let ms = total_ms.rem_euclid(1000) as u32;
@@ -101,5 +111,14 @@ mod tests {
         use std::time::{Duration, UNIX_EPOCH};
         let t = UNIX_EPOCH + Duration::from_millis(0);
         assert_eq!(iso_from_system_time(t), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn optional_epoch_ms_formats_value_and_missing() {
+        assert_eq!(format_optional_epoch_ms(None), "never");
+        assert_eq!(
+            format_optional_epoch_ms(Some(1_234)),
+            "1970-01-01T00:00:01.234Z"
+        );
     }
 }

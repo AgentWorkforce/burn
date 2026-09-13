@@ -34,6 +34,9 @@
 //! against multiple ledgers in the same process.
 
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 // Internal lower-stack modules. Order matches the dependency graph
 // (reader -> ledger -> analyze -> ingest); the verb modules below pull from
@@ -81,10 +84,12 @@ pub use crate::reader::{
 
 pub use crate::ledger::{
     burn_sqlite_path, config_path, config_path_at_home, content_sqlite_path, is_valid_session_id,
-    ledger_home, load_config, load_config_with_home, BurnConfig, ContentConfig, EnrichedTurn,
-    Enrichment, Ledger as RawLedger, LedgerError, LedgerFingerprintScope, MessageRange, PruneStats,
-    Query, RebuildSummary, ResetSummary, Retention, SearchHit, SearchOptions, Stamp, StampError,
-    StampSelector, DEFAULT_RETENTION_DAYS,
+    ledger_home, load_config, load_config_with_home, load_staleness_config,
+    load_staleness_config_at, load_staleness_config_with_home, BurnConfig, ContentConfig,
+    EnrichedTurn, Enrichment, Ledger as RawLedger, LedgerError, LedgerFingerprintScope,
+    MessageRange, PruneStats, Query, RebuildSummary, ResetSummary, Retention, SearchHit,
+    SearchOptions, StalenessConfig, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
+    DEFAULT_STALE_AFTER_HOURS,
 };
 
 pub use crate::analyze::{
@@ -192,6 +197,7 @@ impl LedgerOpenOptions {
 /// sharing one through a lock.
 pub struct LedgerHandle {
     pub(crate) inner: RawLedger,
+    config_home: PathBuf,
 }
 
 impl LedgerHandle {
@@ -205,6 +211,50 @@ impl LedgerHandle {
     pub fn raw_mut(&mut self) -> &mut RawLedger {
         &mut self.inner
     }
+
+    /// Return freshness metadata for read/report consumers. The SDK exposes
+    /// this as data; presenters decide whether and how to warn.
+    pub fn ledger_freshness(&self) -> anyhow::Result<LedgerFreshness> {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.ledger_freshness_at(now_ms)
+    }
+
+    /// Deterministic variant of [`Self::ledger_freshness`] for callers that
+    /// already own a clock and for threshold-boundary tests.
+    pub fn ledger_freshness_at(&self, now_ms: u64) -> anyhow::Result<LedgerFreshness> {
+        let config = load_staleness_config_with_home(Some(&self.config_home))?;
+        let disabled = config.threshold_hours < 0.0;
+        let stale_after_ms = if disabled {
+            None
+        } else {
+            Some((config.threshold_hours * 3_600_000.0) as u64)
+        };
+        let last_write_at_ms = self.inner.last_write_at_ms()?;
+        let stale = !disabled
+            && last_write_at_ms
+                .map(|last| now_ms.saturating_sub(last) > stale_after_ms.unwrap_or_default())
+                .unwrap_or(true);
+        Ok(LedgerFreshness {
+            last_write_at_ms,
+            stale_after_ms,
+            stale,
+        })
+    }
+}
+
+/// Shared staleness flag returned to SDK, Node, and MCP consumers. Its clock
+/// tracks event/derived-row writes in `burn.sqlite`, not content-sidecar-only
+/// persistence in `content.sqlite`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerFreshness {
+    pub last_write_at_ms: Option<u64>,
+    /// Configured threshold, or `None` when staleness warnings are disabled.
+    pub stale_after_ms: Option<u64>,
+    pub stale: bool,
 }
 
 /// Namespace type for the open verb. Matches the TS surface
@@ -216,9 +266,159 @@ impl Ledger {
     /// Open the ledger described by `opts`, applying schema DDL if needed,
     /// and return a [`LedgerHandle`] for the verbs in this crate.
     pub fn open(opts: LedgerOpenOptions) -> anyhow::Result<LedgerHandle> {
+        let config_home = opts.home.clone().unwrap_or_else(ledger_home);
         let burn = opts.resolve_burn_path();
         let content = opts.resolve_content_path();
         let inner = RawLedger::open(&burn, &content)?;
-        Ok(LedgerHandle { inner })
+        Ok(LedgerHandle { inner, config_home })
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::*;
+    use rusqlite::{params, Connection};
+    use tempfile::TempDir;
+
+    struct CleanStaleEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl CleanStaleEnv {
+        fn new() -> Self {
+            let lock = crate::ledger::CONFIG_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var_os("RELAYBURN_STALE_AFTER_HOURS");
+            std::env::remove_var("RELAYBURN_STALE_AFTER_HOURS");
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for CleanStaleEnv {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("RELAYBURN_STALE_AFTER_HOURS", value),
+                None => std::env::remove_var("RELAYBURN_STALE_AFTER_HOURS"),
+            }
+        }
+    }
+
+    fn set_last_write(home: &std::path::Path, value: u64) {
+        let conn = Connection::open(home.join("burn.sqlite")).unwrap();
+        conn.execute(
+            "UPDATE archive_state SET last_write_at_ms = ? WHERE id = 1",
+            params![value as i64],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn freshness_is_strictly_past_threshold() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        set_last_write(tmp.path(), 1_000);
+        let threshold = 24 * 60 * 60 * 1_000;
+
+        let boundary = handle.ledger_freshness_at(1_000 + threshold).unwrap();
+        assert!(!boundary.stale, "equal to the threshold is still fresh");
+        assert_eq!(boundary.last_write_at_ms, Some(1_000));
+        assert!(
+            handle
+                .ledger_freshness_at(1_000 + threshold + 1)
+                .unwrap()
+                .stale
+        );
+    }
+
+    #[test]
+    fn config_override_changes_stale_decision() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("config.json"),
+            r#"{"staleness":{"thresholdHours":2}}"#,
+        )
+        .unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        set_last_write(tmp.path(), 1_000);
+
+        let status = handle
+            .ledger_freshness_at(1_000 + 2 * 3_600_000 + 1)
+            .unwrap();
+        assert_eq!(status.stale_after_ms, Some(7_200_000));
+        assert!(status.stale);
+    }
+
+    #[test]
+    fn real_ledger_write_batch_updates_clock_and_is_fresh() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let mut handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        let turn: TurnRecord = serde_json::from_value(serde_json::json!({
+            "v": 1,
+            "source": "codex",
+            "sessionId": "s",
+            "messageId": "m",
+            "turnIndex": 0,
+            "ts": "2026-01-01T00:00:00.000Z",
+            "model": "gpt-5.2-codex",
+            "usage": {"input": 1, "output": 1, "reasoning": 0, "cacheRead": 0, "cacheCreate5m": 0, "cacheCreate1h": 0},
+            "toolCalls": []
+        }))
+        .unwrap();
+        handle.raw_mut().append_turns(&[turn]).unwrap();
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let status = handle.ledger_freshness_at(now_ms).unwrap();
+        assert!(status.last_write_at_ms.is_some());
+        assert!(!status.stale);
+    }
+
+    #[test]
+    fn never_written_is_stale_but_future_clock_is_fresh() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        assert!(handle.ledger_freshness_at(1_000).unwrap().stale);
+
+        set_last_write(tmp.path(), 2_000);
+        let future = handle.ledger_freshness_at(1_000).unwrap();
+        assert!(!future.stale);
+    }
+
+    #[test]
+    fn disabled_threshold_suppresses_even_never_written() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("config.json"),
+            r#"{"staleness":{"thresholdHours":-10}}"#,
+        )
+        .unwrap();
+        let handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        let status = handle.ledger_freshness_at(1_000).unwrap();
+        assert!(!status.stale);
+        assert_eq!(status.stale_after_ms, None);
+    }
+
+    #[test]
+    fn reset_clears_write_clock_and_reports_stale() {
+        let _env = CleanStaleEnv::new();
+        let tmp = TempDir::new().unwrap();
+        let mut handle = Ledger::open(LedgerOpenOptions::with_home(tmp.path())).unwrap();
+        set_last_write(tmp.path(), 1_000);
+        handle.raw_mut().reset().unwrap();
+        let status = handle.ledger_freshness_at(2_000).unwrap();
+        assert_eq!(status.last_write_at_ms, None);
+        assert!(status.stale);
     }
 }

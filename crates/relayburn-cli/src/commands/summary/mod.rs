@@ -326,6 +326,13 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         include_quality: args.quality,
         ledger_home: None,
     };
+    // Freshness is advisory: metadata failures must not block report rendering.
+    let freshness = handle
+        .ledger_freshness()
+        .inspect_err(|err| {
+            tracing::debug!(error = %err, "summary freshness metadata unavailable");
+        })
+        .ok();
 
     // `--bucket` switches to a per-bucket time-series of the grouped summary.
     // Parsing/validation already happened above, before the ledger was opened.
@@ -337,6 +344,9 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
                 progress.finish_and_clear();
             })?;
         progress.finish_and_clear();
+        if let Some(freshness) = freshness.as_ref() {
+            crate::commands::freshness::warn_if_stale(freshness, globals);
+        }
         return emit_summary_timeseries(globals, &series, &ingest_report);
     }
 
@@ -345,6 +355,9 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         progress.finish_and_clear();
     })?;
     progress.finish_and_clear();
+    if let Some(freshness) = freshness.as_ref() {
+        crate::commands::freshness::warn_if_stale(freshness, globals);
+    }
 
     match report {
         SummaryReport::Grouped(report) => {

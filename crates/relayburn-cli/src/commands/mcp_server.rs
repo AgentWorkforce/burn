@@ -270,7 +270,7 @@ impl Server {
     }
 
     async fn call_tool(&self, name: &str, args: &Value) -> Option<Value> {
-        Some(match name {
+        let result = match name {
             "burn__sessionCost" => self.tool_session_cost(args).await,
             "burn__fingerprint" => self.tool_fingerprint(args).await,
             "burn__summary" => self.tool_summary(args).await,
@@ -279,7 +279,20 @@ impl Server {
             "burn__overheadTrim" => self.tool_overhead_trim(args).await,
             "burn__compare" => self.tool_compare(args).await,
             _ => return None,
-        })
+        };
+        if result.get("isError") == Some(&Value::Bool(true)) {
+            return Some(result);
+        }
+        let freshness = match self.handle.lock().await.ledger_freshness() {
+            Ok(freshness) => freshness,
+            // Freshness is advisory; keep an already successful read intact.
+            Err(_) => return Some(result),
+        };
+        let mut payload = result["structuredContent"].clone();
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("ledgerFreshness".to_string(), json!(freshness));
+        }
+        Some(tool_output(&payload))
     }
 
     async fn tool_fingerprint(&self, args: &Value) -> Value {
@@ -564,8 +577,10 @@ fn tool_catalog() -> Value {
                 "Cheap polling primitive over the burn ledger. Returns \
                  `{count}:{maxMtimeUnix}:{totalBytes}` — three integers \
                  joined by colons. Clients keep the last-seen value and \
-                 skip re-querying when it's unchanged. Optionally scoped \
-                 to a session id or a project path. Read-only.",
+                 skip re-querying when it's unchanged. The response also \
+                 includes ledgerFreshness; check ledgerFreshness.stale \
+                 before relying on ledger reads. Optionally scoped to a \
+                 session id or a project path. Read-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -965,6 +980,9 @@ mod tests {
             &text_value, structured,
             "text and structured result diverged"
         );
+        assert!(structured["ledgerFreshness"]["stale"].is_boolean());
+        assert!(structured["ledgerFreshness"].get("lastWriteAtMs").is_some());
+        assert!(structured["ledgerFreshness"].get("staleAfterMs").is_some());
         structured
     }
 
@@ -1018,6 +1036,16 @@ mod tests {
     async fn new_tools_invoke_sdk_verbs_against_fixture_ledger() {
         let (server, _home, project) = fixture_server();
         let project = project.to_string_lossy();
+
+        for name in ["burn__sessionCost", "burn__fingerprint"] {
+            let result = server
+                .call_tool(name, &json!({}))
+                .await
+                .expect("known tool");
+            let payload = assert_tool_success(&result);
+            assert!(payload["ledgerFreshness"]["lastWriteAtMs"].is_number());
+            assert_eq!(payload["ledgerFreshness"]["stale"], json!(false));
+        }
 
         let summary = server
             .call_tool("burn__summary", &json!({}))
@@ -1171,6 +1199,8 @@ mod tests {
         std::fs::create_dir(&project).expect("create empty project");
         let project = project.to_string_lossy();
         let calls = [
+            ("burn__sessionCost", json!({})),
+            ("burn__fingerprint", json!({})),
             ("burn__summary", json!({})),
             ("burn__hotspots", json!({})),
             ("burn__overhead", json!({ "project": project })),
@@ -1182,7 +1212,30 @@ mod tests {
         ];
         for (name, args) in calls {
             let result = server.call_tool(name, &args).await.expect("known tool");
-            assert_tool_success(&result);
+            let payload = assert_tool_success(&result);
+            assert_eq!(payload["ledgerFreshness"]["lastWriteAtMs"], Value::Null);
+            assert_eq!(payload["ledgerFreshness"]["stale"], json!(true));
+        }
+    }
+
+    #[tokio::test]
+    async fn freshness_errors_preserve_successful_tool_results() {
+        let (server, home, _project) = fixture_server();
+        let tools = ["burn__sessionCost", "burn__fingerprint", "burn__summary"];
+        let mut expected = Vec::new();
+        for name in tools {
+            let result = server.call_tool(name, &json!({})).await.unwrap();
+            let mut payload = assert_tool_success(&result).clone();
+            payload.as_object_mut().unwrap().remove("ledgerFreshness");
+            expected.push(tool_output(&payload));
+        }
+        let conn = rusqlite::Connection::open(home.path().join("burn.sqlite")).unwrap();
+        conn.execute("ALTER TABLE archive_state DROP COLUMN last_write_at_ms", [])
+            .unwrap();
+        assert!(server.handle.lock().await.ledger_freshness().is_err());
+        for (name, expected) in tools.into_iter().zip(expected) {
+            let result = server.call_tool(name, &json!({})).await.unwrap();
+            assert_eq!(result, expected, "primary response changed for {name}");
         }
     }
 }

@@ -311,13 +311,14 @@ search content from the compact analytical rows.
 |---|---|
 | `~/.agentworkforce/burn/burn.sqlite` | Events, stamps, sessions, relationships, and archive metadata. |
 | `~/.agentworkforce/burn/content.sqlite` | Prompt/response content and the FTS5 search index. |
-| `~/.agentworkforce/burn/config.json` | Content-storage and retention configuration. |
+| `~/.agentworkforce/burn/config.json` | Content-storage, retention, and report-staleness configuration (`staleness.thresholdHours`; default `24`). |
 | `~/.agentworkforce/burn/pending-stamps/` | Temporary manifests used by launchers that do not expose a session ID before spawn. |
 | `RELAYBURN_HOME` | Override the whole Burn data directory. |
 | `RELAYBURN_SQLITE_PATH` | Override the events database path. |
 | `RELAYBURN_CONTENT_PATH` | Override the content database path. |
 | `RELAYBURN_CONTENT_STORE=full\|hash-only\|off` | Control content payload storage. Default: `full`. |
 | `RELAYBURN_CONTENT_TTL_DAYS=<days\|forever>` | Content retention. Default: `90`. |
+| `RELAYBURN_STALE_AFTER_HOURS=<n>` | Age after which reads warn that the ledger is stale. Default: `24`; set `-1` to disable. |
 
 `RELAYBURN_HOME` relocates the complete layout. The two per-database overrides
 can place event and content data on different volumes. SQLite may create

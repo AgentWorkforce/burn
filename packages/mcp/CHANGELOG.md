@@ -4,6 +4,7 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- Read-tool responses now include `ledgerFreshness` with the ledger's last-write timestamp, threshold, and stale flag.
 - Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
 
 ## [4.0.0] - 2026-06-23

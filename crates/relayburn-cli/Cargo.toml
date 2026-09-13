@@ -109,6 +109,9 @@ ureq = { version = "2", features = ["json"] }
 semver = "1"
 
 [dev-dependencies]
+# Exercise read behavior when advisory SQLite metadata is unavailable.
+rusqlite = { workspace = true }
+
 # `assert_cmd` drives the binary in the smoke test under `tests/`.
 # `predicates` provides the matchers `assert_cmd` wants.
 assert_cmd = "2"

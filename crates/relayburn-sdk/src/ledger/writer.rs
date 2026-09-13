@@ -41,7 +41,33 @@ fn now_lex_token() -> String {
     format!("ts:{:020}.{:09}", secs, nanos_part)
 }
 
-pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Result<usize> {
+/// Historical bootstrap must not turn a read into new activity.
+#[derive(Clone, Copy)]
+pub(crate) enum WriteOrigin {
+    Live,
+    Replay,
+}
+
+fn touch_last_write(tx: &rusqlite::Transaction<'_>, origin: WriteOrigin) -> Result<()> {
+    if matches!(origin, WriteOrigin::Replay) {
+        return Ok(());
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    tx.execute(
+        "UPDATE archive_state SET last_write_at_ms = ? WHERE id = 1",
+        params![now_ms],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn append_turns(
+    conn: &mut Connection,
+    turns: &[TurnRecord],
+    origin: WriteOrigin,
+) -> Result<usize> {
     if turns.is_empty() {
         return Ok(0);
     }
@@ -93,6 +119,9 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx, origin)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -100,6 +129,7 @@ pub(crate) fn append_turns(conn: &mut Connection, turns: &[TurnRecord]) -> Resul
 pub(crate) fn append_compactions(
     conn: &mut Connection,
     events: &[CompactionEvent],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if events.is_empty() {
         return Ok(0);
@@ -122,6 +152,9 @@ pub(crate) fn append_compactions(
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx, origin)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -129,6 +162,7 @@ pub(crate) fn append_compactions(
 pub(crate) fn append_relationships(
     conn: &mut Connection,
     records: &[SessionRelationshipRecord],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
@@ -159,6 +193,9 @@ pub(crate) fn append_relationships(
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx, origin)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -166,6 +203,7 @@ pub(crate) fn append_relationships(
 pub(crate) fn append_tool_result_events(
     conn: &mut Connection,
     records: &[ToolResultEventRecord],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
@@ -199,18 +237,24 @@ pub(crate) fn append_tool_result_events(
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx, origin)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
 
-/// `INSERT OR REPLACE` per-API-call inferences. Re-ingest of the same
-/// session intentionally replaces existing rows: the inference is pure
-/// derived state (no fingerprint dedup, no first-party fields), and a
-/// re-parse may legitimately produce different `end_ts` / `usage` values
+/// Upsert per-API-call inferences only when persisted values differ. An
+/// identical re-parse is a no-op; changed derived state must still update
+/// because a re-parse may produce different `end_ts` / `usage` values
 /// if the JSONL grew between runs. The composite PK
 /// `(source, session_id, request_id)` is the natural identity. See issue
 /// #434.
-pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) -> Result<usize> {
+pub(crate) fn append_inferences(
+    conn: &mut Connection,
+    records: &[Inference],
+    origin: WriteOrigin,
+) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
     }
@@ -218,10 +262,25 @@ pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) ->
     let mut appended = 0usize;
     {
         let mut insert = tx.prepare(
-            "INSERT OR REPLACE INTO inferences
+            "INSERT INTO inferences
                  (source, session_id, request_id, request_id_source, turn_id,
                   model, kind, start_ts, end_ts, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (source, session_id, request_id) DO UPDATE SET
+                 request_id_source = excluded.request_id_source,
+                 turn_id = excluded.turn_id,
+                 model = excluded.model,
+                 kind = excluded.kind,
+                 start_ts = excluded.start_ts,
+                 end_ts = excluded.end_ts,
+                 record_json = excluded.record_json
+             WHERE inferences.request_id_source IS NOT excluded.request_id_source
+                OR inferences.turn_id IS NOT excluded.turn_id
+                OR inferences.model IS NOT excluded.model
+                OR inferences.kind IS NOT excluded.kind
+                OR inferences.start_ts IS NOT excluded.start_ts
+                OR inferences.end_ts IS NOT excluded.end_ts
+                OR inferences.record_json IS NOT excluded.record_json",
         )?;
         for r in records {
             let json = serde_json::to_string(r)?;
@@ -242,6 +301,9 @@ pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) ->
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx, origin)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
@@ -249,6 +311,7 @@ pub(crate) fn append_inferences(conn: &mut Connection, records: &[Inference]) ->
 pub(crate) fn append_user_turns(
     conn: &mut Connection,
     records: &[UserTurnRecord],
+    origin: WriteOrigin,
 ) -> Result<usize> {
     if records.is_empty() {
         return Ok(0);
@@ -277,11 +340,18 @@ pub(crate) fn append_user_turns(
             }
         }
     }
+    if appended > 0 {
+        touch_last_write(&tx, origin)?;
+    }
     tx.commit()?;
     Ok(appended)
 }
 
-pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
+pub(crate) fn append_stamp(
+    conn: &mut Connection,
+    stamp: &Stamp,
+    origin: WriteOrigin,
+) -> Result<()> {
     let selector_json = serde_json::to_string(&stamp.selector)?;
     let enrichment_json = serde_json::to_string(&stamp.enrichment)?;
     // Synthesize a spawn-env relationship row when the stamp carries a
@@ -292,6 +362,7 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
 
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let written_at = now_lex_token();
+    let mut derived_rows_written = false;
     {
         tx.prepare(
             "INSERT INTO stamps (source, session_id, ts, selector_json, enrichment_json, written_at)
@@ -308,22 +379,27 @@ pub(crate) fn append_stamp(conn: &mut Connection, stamp: &Stamp) -> Result<()> {
         if let Some(rel) = synthesized {
             let id = relationship_id_fingerprint(&rel);
             let json = serde_json::to_string(&rel)?;
-            tx.prepare(
-                "INSERT OR IGNORE INTO relationships
+            let changed = tx
+                .prepare(
+                    "INSERT OR IGNORE INTO relationships
                      (id_fingerprint, source, session_id, related_session_id,
                       relationship_type, ts, record_json)
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
-            )?
-            .execute(params![
-                id,
-                rel.source.wire_str(),
-                rel.session_id,
-                rel.related_session_id,
-                rel.relationship_type.wire_str(),
-                rel.ts,
-                json,
-            ])?;
+                )?
+                .execute(params![
+                    id,
+                    rel.source.wire_str(),
+                    rel.session_id,
+                    rel.related_session_id,
+                    rel.relationship_type.wire_str(),
+                    rel.ts,
+                    json,
+                ])?;
+            derived_rows_written = changed > 0;
         }
+    }
+    if derived_rows_written {
+        touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
     Ok(())

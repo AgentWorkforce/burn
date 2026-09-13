@@ -100,6 +100,10 @@ export async function summary(opts) {
   return coerceBigInts(await binding.summary(opts));
 }
 
+export async function ledgerFreshness(opts) {
+  return binding.ledgerFreshness(opts);
+}
+
 export async function sessionCost(opts) {
   return coerceBigInts(await binding.sessionCost(opts));
 }
