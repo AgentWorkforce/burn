@@ -977,3 +977,44 @@ fn hotspots_ingest_flag_runs_the_sweep() {
         .success()
         .stdout(predicate::str::contains("turns analyzed: 1"));
 }
+
+#[test]
+fn summary_renders_when_freshness_metadata_is_unavailable() {
+    let home = tempfile::TempDir::new().unwrap();
+    seed_one_turn(home.path());
+    let conn = rusqlite::Connection::open(home.path().join("burn.sqlite")).unwrap();
+    conn.execute("ALTER TABLE archive_state DROP COLUMN last_write_at_ms", [])
+        .unwrap();
+    drop(conn);
+    for bucket in [false, true] {
+        let mut command = burn_without_stale_threshold_env();
+        command.args([
+            "--ledger-path",
+            home.path().to_str().unwrap(),
+            "summary",
+            "--json",
+        ]);
+        if bucket {
+            command.args(["--bucket", "1h"]);
+        }
+        let output = command
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("ledger data may be stale").not())
+            .get_output()
+            .clone();
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        if bucket {
+            assert_eq!(result["bucketSeconds"], 3_600);
+            let turns: u64 = result["buckets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|bucket| bucket["turnCount"].as_u64().unwrap())
+                .sum();
+            assert_eq!(turns, 1);
+        } else {
+            assert_eq!(result["turns"], 1);
+        }
+    }
+}

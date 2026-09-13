@@ -134,10 +134,10 @@ impl Ledger {
     }
 
     /// Append per-API-call inferences (see issue #434). Re-ingest of the
-    /// same `(source, session_id, request_id)` triple replaces the
-    /// existing row — inferences are pure derived state and a re-parse
-    /// can legitimately produce updated `end_ts` / merged `usage`
-    /// values.
+    /// same `(source, session_id, request_id)` triple updates the row only
+    /// when persisted values change, such as `end_ts` or merged `usage`.
+    /// Returns the number of inserted or materially updated rows; identical
+    /// re-parses do not advance the freshness clock.
     pub fn append_inferences(&mut self, records: &[crate::reader::Inference]) -> Result<usize> {
         writer::append_inferences(&mut self.conns.burn, records, writer::WriteOrigin::Live)
     }

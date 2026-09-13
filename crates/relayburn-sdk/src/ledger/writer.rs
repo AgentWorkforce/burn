@@ -244,10 +244,9 @@ pub(crate) fn append_tool_result_events(
     Ok(appended)
 }
 
-/// `INSERT OR REPLACE` per-API-call inferences. Re-ingest of the same
-/// session intentionally replaces existing rows: the inference is pure
-/// derived state (no fingerprint dedup, no first-party fields), and a
-/// re-parse may legitimately produce different `end_ts` / `usage` values
+/// Upsert per-API-call inferences only when persisted values differ. An
+/// identical re-parse is a no-op; changed derived state must still update
+/// because a re-parse may produce different `end_ts` / `usage` values
 /// if the JSONL grew between runs. The composite PK
 /// `(source, session_id, request_id)` is the natural identity. See issue
 /// #434.
@@ -263,10 +262,25 @@ pub(crate) fn append_inferences(
     let mut appended = 0usize;
     {
         let mut insert = tx.prepare(
-            "INSERT OR REPLACE INTO inferences
+            "INSERT INTO inferences
                  (source, session_id, request_id, request_id_source, turn_id,
                   model, kind, start_ts, end_ts, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (source, session_id, request_id) DO UPDATE SET
+                 request_id_source = excluded.request_id_source,
+                 turn_id = excluded.turn_id,
+                 model = excluded.model,
+                 kind = excluded.kind,
+                 start_ts = excluded.start_ts,
+                 end_ts = excluded.end_ts,
+                 record_json = excluded.record_json
+             WHERE inferences.request_id_source IS NOT excluded.request_id_source
+                OR inferences.turn_id IS NOT excluded.turn_id
+                OR inferences.model IS NOT excluded.model
+                OR inferences.kind IS NOT excluded.kind
+                OR inferences.start_ts IS NOT excluded.start_ts
+                OR inferences.end_ts IS NOT excluded.end_ts
+                OR inferences.record_json IS NOT excluded.record_json",
         )?;
         for r in records {
             let json = serde_json::to_string(r)?;

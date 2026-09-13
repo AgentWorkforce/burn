@@ -285,7 +285,8 @@ impl Server {
         }
         let freshness = match self.handle.lock().await.ledger_freshness() {
             Ok(freshness) => freshness,
-            Err(err) => return Some(tool_error(err)),
+            // Freshness is advisory; keep an already successful read intact.
+            Err(_) => return Some(result),
         };
         let mut payload = result["structuredContent"].clone();
         if let Some(object) = payload.as_object_mut() {
@@ -1214,6 +1215,27 @@ mod tests {
             let payload = assert_tool_success(&result);
             assert_eq!(payload["ledgerFreshness"]["lastWriteAtMs"], Value::Null);
             assert_eq!(payload["ledgerFreshness"]["stale"], json!(true));
+        }
+    }
+
+    #[tokio::test]
+    async fn freshness_errors_preserve_successful_tool_results() {
+        let (server, home, _project) = fixture_server();
+        let tools = ["burn__sessionCost", "burn__fingerprint", "burn__summary"];
+        let mut expected = Vec::new();
+        for name in tools {
+            let result = server.call_tool(name, &json!({})).await.unwrap();
+            let mut payload = assert_tool_success(&result).clone();
+            payload.as_object_mut().unwrap().remove("ledgerFreshness");
+            expected.push(tool_output(&payload));
+        }
+        let conn = rusqlite::Connection::open(home.path().join("burn.sqlite")).unwrap();
+        conn.execute("ALTER TABLE archive_state DROP COLUMN last_write_at_ms", [])
+            .unwrap();
+        assert!(server.handle.lock().await.ledger_freshness().is_err());
+        for (name, expected) in tools.into_iter().zip(expected) {
+            let result = server.call_tool(name, &json!({})).await.unwrap();
+            assert_eq!(result, expected, "primary response changed for {name}");
         }
     }
 }

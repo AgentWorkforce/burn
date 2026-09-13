@@ -1553,3 +1553,63 @@ fn query_turns_in_sessions_chunking_handles_large_id_list() {
     msg_ids.sort();
     assert_eq!(msg_ids, vec!["m1", "m2"]);
 }
+
+#[test]
+fn migration_freshness_ignores_invalid_timestamps_and_orders_offsets() {
+    for include_invalid in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let mut ledger = open_in(&tmp);
+        let mut turns = vec![
+            make_turn("s", "offset", "2025-01-02T01:00:00.123+09:00", 1),
+            make_turn("s", "latest", "2025-01-01T20:00:00.987Z", 2),
+        ];
+        if include_invalid {
+            turns.push(make_turn("s", "invalid", "zz-invalid", 3));
+        }
+        ledger.append_turns(&turns).unwrap();
+        ledger
+            .conns
+            .burn
+            .execute(
+                "UPDATE archive_state SET schema_version = 6, last_write_at_ms = NULL",
+                [],
+            )
+            .unwrap();
+        drop(ledger);
+        let ledger = open_in(&tmp);
+        assert_eq!(ledger.last_write_at_ms().unwrap(), Some(1_735_761_600_987));
+    }
+}
+
+#[test]
+fn inference_freshness_changes_only_on_insert_or_material_update() {
+    use crate::reader::build_inferences;
+    let tmp = TempDir::new().unwrap();
+    let mut ledger = open_in(&tmp);
+    let turns = [make_turn("s", "m", "2025-01-01T00:00:00Z", 10)];
+    let mut inferences = build_inferences(&turns, &Default::default());
+    assert_eq!(inferences.len(), 1);
+    assert_eq!(ledger.append_inferences(&inferences).unwrap(), 1);
+    assert!(ledger.last_write_at_ms().unwrap().is_some());
+    ledger
+        .conns
+        .burn
+        .execute("UPDATE archive_state SET last_write_at_ms = 1", [])
+        .unwrap();
+    assert_eq!(ledger.append_inferences(&inferences).unwrap(), 0);
+    assert_eq!(ledger.last_write_at_ms().unwrap(), Some(1));
+
+    // Usage lives only inside record_json; end_ts is also denormalized.
+    inferences[0].usage.output += 10;
+    inferences[0].end_ts = "2025-01-01T00:00:01.234Z".into();
+    inferences[0].end_ms += 1_234;
+    assert_eq!(ledger.append_inferences(&inferences).unwrap(), 1);
+    assert!(ledger.last_write_at_ms().unwrap().unwrap() > 1);
+    let stored = ledger.query_inferences(&Query::default()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&stored).unwrap(),
+        serde_json::to_value(&inferences).unwrap()
+    );
+    assert_eq!(ledger.count_table("inferences").unwrap(), 1);
+    assert_eq!(ledger.append_inferences(&inferences).unwrap(), 0);
+}
