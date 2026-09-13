@@ -6,9 +6,9 @@
   "turns": 7,
   "totalCost": {
     "model": "aggregate",
-    "total": 0.0441,
-    "input": 0.0195,
-    "output": 0.01755,
+    "total": 0.0376,
+    "input": 0.017,
+    "output": 0.01355,
     "reasoning": 0,
     "cacheRead": 0.0063,
     "cacheCreate": 0.00075
@@ -36,27 +36,6 @@
       }
     },
     {
-      "model": "gpt-5-codex",
-      "turns": 1,
-      "usage": {
-        "input": 2000,
-        "output": 400,
-        "reasoning": 350,
-        "cacheRead": 0,
-        "cacheCreate5m": 0,
-        "cacheCreate1h": 0
-      },
-      "cost": {
-        "model": "gpt-5-codex",
-        "total": 0.006500000000000001,
-        "input": 0.0025,
-        "output": 0.004,
-        "reasoning": 0,
-        "cacheRead": 0,
-        "cacheCreate": 0
-      }
-    },
-    {
       "model": "claude-haiku-4-5",
       "turns": 2,
       "usage": {
@@ -74,6 +53,27 @@
         "output": 0.0011,
         "reasoning": 0,
         "cacheRead": 0.00045,
+        "cacheCreate": 0
+      }
+    },
+    {
+      "model": "gpt-5-codex",
+      "turns": 1,
+      "usage": {
+        "input": 2000,
+        "output": 400,
+        "reasoning": 350,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "cost": {
+        "model": "gpt-5-codex",
+        "total": 0,
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cacheRead": 0,
         "cacheCreate": 0
       }
     }
@@ -137,32 +137,6 @@
           }
         },
         {
-          "label": "gpt-5-codex",
-          "partial": true,
-          "fields": {
-            "input": {
-              "known": 1,
-              "missing": 0
-            },
-            "output": {
-              "known": 1,
-              "missing": 0
-            },
-            "reasoning": {
-              "known": 1,
-              "missing": 0
-            },
-            "cacheRead": {
-              "known": 0,
-              "missing": 1
-            },
-            "cacheCreate": {
-              "known": 0,
-              "missing": 1
-            }
-          }
-        },
-        {
           "label": "claude-haiku-4-5",
           "partial": false,
           "fields": {
@@ -187,6 +161,32 @@
               "missing": 0
             }
           }
+        },
+        {
+          "label": "gpt-5-codex",
+          "partial": true,
+          "fields": {
+            "input": {
+              "known": 1,
+              "missing": 0
+            },
+            "output": {
+              "known": 1,
+              "missing": 0
+            },
+            "reasoning": {
+              "known": 1,
+              "missing": 0
+            },
+            "cacheRead": {
+              "known": 0,
+              "missing": 1
+            },
+            "cacheCreate": {
+              "known": 0,
+              "missing": 1
+            }
+          }
         }
       ]
     }
@@ -200,5 +200,9 @@
     "refusal": 0,
     "silent": 0,
     "none": 7
-  }
+  },
+  "unpricedTurns": 1,
+  "unpricedModels": [
+    "gpt-5-codex"
+  ]
 }

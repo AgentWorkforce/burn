@@ -514,6 +514,20 @@ fn open_with(ledger_home: Option<&Path>) -> Result<LedgerHandle> {
     Ledger::open(opts)
 }
 
+/// Load built-in pricing plus the override adjacent to this handle's ledger.
+///
+/// `LedgerOpenOptions::with_home(home)` stores `burn.sqlite` in `home`, so the
+/// ledger path remains the single source of truth even for embedders that do
+/// not configure `RELAYBURN_HOME` in the process environment.
+fn load_pricing_for_ledger(handle: &LedgerHandle) -> PricingTable {
+    let override_path = handle
+        .inner
+        .burn_path()
+        .parent()
+        .map(|home| home.join("models.dev.json"));
+    load_pricing(override_path.as_deref())
+}
+
 fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFilter> {
     let filter: ProviderFilter = provider
         .unwrap_or_default()

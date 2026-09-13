@@ -2,8 +2,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 .npm-cache/
+.agentworkforce/
+.worktrees/
 .DS_Store
 *.log
+INCIDENT-*.md
 
 # Rust / Cargo
 target/

@@ -11,6 +11,7 @@
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
+use anyhow::Context;
 use relayburn_sdk::{ExportStampsOptions, Ledger, LedgerOpenOptions};
 
 use crate::cli::{GlobalArgs, StampsArgs};
@@ -19,6 +20,12 @@ use crate::render::progress::TaskProgress;
 
 /// Default output is stdout ("-")
 const DEFAULT_OUT: &str = "-";
+
+#[derive(Clone, Copy)]
+enum OutputTarget {
+    Stdout,
+    File,
+}
 
 pub fn run(globals: &GlobalArgs, args: StampsArgs) -> i32 {
     match args.command {
@@ -54,10 +61,14 @@ fn run_export(globals: &GlobalArgs, args: crate::cli::StampsExportArgs) -> i32 {
     let out_path = args.out.as_deref().unwrap_or(DEFAULT_OUT);
     let result = if out_path == "-" {
         let stdout = io::stdout();
-        write_jsonl(&mut BufWriter::new(stdout.lock()), iter)
+        write_jsonl(
+            &mut BufWriter::new(stdout.lock()),
+            iter,
+            OutputTarget::Stdout,
+        )
     } else {
         match File::create(out_path) {
-            Ok(file) => write_jsonl(&mut BufWriter::new(file), iter),
+            Ok(file) => write_jsonl(&mut BufWriter::new(file), iter, OutputTarget::File),
             Err(err) => Err(anyhow::anyhow!("failed to open output file: {}", err)),
         }
     };
@@ -81,18 +92,30 @@ fn run_export(globals: &GlobalArgs, args: crate::cli::StampsExportArgs) -> i32 {
 fn write_jsonl<W: Write, I: IntoIterator<Item = serde_json::Value>>(
     writer: &mut W,
     iter: I,
+    target: OutputTarget,
 ) -> anyhow::Result<usize> {
     let mut count: usize = 0;
     for val in iter {
         serde_json::to_writer(&mut *writer, &val)
-            .map_err(|err| anyhow::anyhow!("failed to serialize stamp: {}", err))?;
+            .map_err(crate::render::json::serde_error_to_io)
+            .map_err(|err| mark_stdout(err, target))
+            .context("failed to serialize stamp")?;
         writer
             .write_all(b"\n")
-            .map_err(|err| anyhow::anyhow!("failed to write stamp: {}", err))?;
+            .map_err(|err| mark_stdout(err, target))
+            .context("failed to write stamp")?;
         count += 1;
     }
     writer
         .flush()
-        .map_err(|err| anyhow::anyhow!("failed to flush output: {}", err))?;
+        .map_err(|err| mark_stdout(err, target))
+        .context("failed to flush output")?;
     Ok(count)
+}
+
+fn mark_stdout(err: io::Error, target: OutputTarget) -> io::Error {
+    match target {
+        OutputTarget::Stdout => crate::render::json::stdout_error(err),
+        OutputTarget::File => err,
+    }
 }
