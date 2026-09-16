@@ -307,6 +307,9 @@ reporting readers can run while ingest writes. `burn.sqlite` is the event and
 metadata database; `content.sqlite` separates larger prompt, response, and
 search content from the compact analytical rows.
 
+- Set `RELAYBURN_HOME` to override the ledger's home directory, which defaults
+  to `~/.agentworkforce/burn/`.
+
 | Path or setting | Purpose |
 |---|---|
 | `~/.agentworkforce/burn/burn.sqlite` | Events, stamps, sessions, relationships, and archive metadata. |
