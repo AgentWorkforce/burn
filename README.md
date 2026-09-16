@@ -11,6 +11,9 @@ npm i -g relayburn
 burn summary
 ```
 
+Run `burn ingest` to import existing session logs before `burn summary`,
+which queries the ledger without importing logs by default.
+
 Burn stores data under `~/.agentworkforce/burn/` by default. Set
 `RELAYBURN_HOME` to use a different location.
 

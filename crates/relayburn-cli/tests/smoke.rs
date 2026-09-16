@@ -878,6 +878,11 @@ fn fixture_path(rel: &str) -> std::path::PathBuf {
 /// `$HOME/.claude/projects` must therefore be invisible to a default
 /// `summary` against an empty ledger: the banner reports
 /// `ingested 0 new sessions` and no turns are analyzed.
+///
+/// The tail of the test covers the documented Quick Start workflow: a
+/// standalone `burn ingest` imports the transcript, and a later default
+/// `summary` against the same ledger still runs no sweep of its own
+/// (`ingested 0 new sessions`) yet now reports the persisted turn.
 #[test]
 fn summary_does_not_ingest_by_default() {
     let home = tempfile::TempDir::new().expect("tmp HOME");
@@ -899,6 +904,25 @@ fn summary_does_not_ingest_by_default() {
         .success()
         .stdout(predicate::str::contains("ingested 0 new sessions"))
         .stdout(predicate::str::contains("turns analyzed: 0"));
+
+    // Documented workflow: `burn ingest` first, then query the ledger.
+    burn()
+        .arg("ingest")
+        .env("RELAYBURN_HOME", &ledger)
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success();
+
+    burn()
+        .arg("summary")
+        .env("RELAYBURN_HOME", &ledger)
+        .env("HOME", home.path())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ingested 0 new sessions"))
+        .stdout(predicate::str::contains("turns analyzed: 1"));
 }
 
 /// `burn summary --ingest` opts back into the one-off sweep: the same
