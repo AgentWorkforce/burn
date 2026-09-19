@@ -1,5 +1,7 @@
 //! Human-readable table rendering and ingest-prelude text for `burn summary`.
 
+use std::path::Path;
+
 use relayburn_sdk::{
     summary_fidelity_summary_to_value, summary_replacement_savings_to_value, CoverageField,
     FidelityClass, FidelitySummary, OutcomeLabel, QualityResult, RelationshipType,
@@ -12,6 +14,7 @@ use serde_json::{json, Map, Value};
 use crate::cli::GlobalArgs;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
 use crate::render::json::render_json;
+use crate::render::pricing::warn_unpriced_usage;
 
 use super::*;
 
@@ -86,11 +89,12 @@ pub(super) fn emit_grouped(
     globals: &GlobalArgs,
     report: &SummaryGroupedReport,
     ingest_report: &relayburn_sdk::IngestReport,
+    pricing_override: &Path,
 ) -> std::io::Result<()> {
     if globals.json {
         return emit_json(report, ingest_report);
     }
-    emit_human(report, ingest_report);
+    emit_human(report, ingest_report, pricing_override);
     Ok(())
 }
 
@@ -501,6 +505,7 @@ pub(super) fn render_node_line(node: &SubagentTreeNode, indent: &str) -> String 
 pub(super) fn emit_human(
     report: &SummaryGroupedReport,
     ingest_report: &relayburn_sdk::IngestReport,
+    pricing_override: &Path,
 ) {
     let mut lines: Vec<String> = Vec::new();
     emit_human_ingest_prelude(ingest_report);
@@ -630,16 +635,11 @@ pub(super) fn emit_human(
     // TS uses `process.stdout.write(lines.join('\n'))` — no trailing newline.
     print!("{}", out);
 
-    if report.unpriced_turns > 0 {
-        let models = report.unpriced_models.join(", ");
-        eprintln!(
-            "warning: {} turn(s) had no pricing for model(s): {}.",
-            report.unpriced_turns, models,
-        );
-        eprintln!(
-            "         Update the snapshot (pnpm run pricing:update) or add an override at <ledger-home>/models.dev.json.",
-        );
-    }
+    warn_unpriced_usage(
+        report.unpriced_turns,
+        &report.unpriced_models,
+        pricing_override,
+    );
 }
 
 pub(super) fn render_quality(q: &QualityResult) -> String {

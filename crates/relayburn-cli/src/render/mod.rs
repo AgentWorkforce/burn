@@ -17,6 +17,7 @@ pub mod error;
 pub mod format;
 pub mod json;
 pub mod logging;
+pub mod pricing;
 pub mod progress;
 pub mod prompt;
 pub mod table;

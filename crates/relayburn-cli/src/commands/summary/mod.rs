@@ -347,7 +347,12 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         if let Some(freshness) = freshness.as_ref() {
             crate::commands::freshness::warn_if_stale(freshness, globals);
         }
-        return emit_summary_timeseries(globals, &series, &ingest_report);
+        return emit_summary_timeseries(
+            globals,
+            &series,
+            &ingest_report,
+            &crate::render::pricing::pricing_override_path(&handle),
+        );
     }
 
     progress.set_task("building summary");
@@ -361,7 +366,12 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
 
     match report {
         SummaryReport::Grouped(report) => {
-            emit_grouped(globals, &report, &ingest_report)?;
+            emit_grouped(
+                globals,
+                &report,
+                &ingest_report,
+                &crate::render::pricing::pricing_override_path(&handle),
+            )?;
         }
         SummaryReport::ByTool(report) => {
             emit_ingest_prelude(globals, &ingest_report);
@@ -530,6 +540,47 @@ mod tests {
         assert_eq!(
             unpriced_turns_line(2, &unpriced_models),
             "2 turns unpriced: made-up-model-xyz (total excludes their cost)"
+        );
+    }
+
+    fn sample_bucket(
+        turns: u64,
+        unpriced_turns: u64,
+        total_cost: f64,
+    ) -> relayburn_sdk::SummaryBucket {
+        relayburn_sdk::SummaryBucket {
+            start: "2026-04-23T00:00:00.000Z".into(),
+            end: "2026-04-23T01:00:00.000Z".into(),
+            turn_count: turns,
+            unpriced_turns,
+            total_tokens: 1_000,
+            total_cost: CostBreakdown {
+                model: String::new().into(),
+                total: total_cost,
+                input: total_cost,
+                output: 0.0,
+                reasoning: 0.0,
+                cache_read: 0.0,
+                cache_create: 0.0,
+            },
+            group_by: SummaryGroupBy::Model,
+            rows: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn bucket_cost_marks_unpriced_turns() {
+        assert_eq!(format_bucket_cost(&sample_bucket(4, 0, 1.25)), "$1.25");
+        assert_eq!(format_bucket_cost(&sample_bucket(3, 3, 0.0)), "unpriced");
+        assert_eq!(
+            format_bucket_cost(&sample_bucket(5, 2, 1.25)),
+            "$1.25 (2 unpriced)"
+        );
+        let line = format_timeseries_bucket_line(&sample_bucket(3, 3, 0.0));
+        assert!(line.contains("unpriced"), "{line}");
+        assert!(
+            !line.contains("$0.00"),
+            "fully unpriced bucket must not look free: {line}"
         );
     }
 
