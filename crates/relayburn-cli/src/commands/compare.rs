@@ -44,6 +44,7 @@ use crate::cli::{CompareArgs, GlobalArgs};
 use crate::render::error::report_error;
 use crate::render::format::{format_uint, format_usd};
 use crate::render::json::render_json;
+use crate::render::pricing::{pricing_override_path, warn_unpriced_usage};
 use crate::render::progress::TaskProgress;
 
 const FIDELITY_CHOICES: &[&str] = &[
@@ -248,6 +249,12 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     }
     let tty = render_tty(&result);
     print!("{tty}");
+    let (unpriced_turns, unpriced_models) = unpriced_compare_totals(&result);
+    warn_unpriced_usage(
+        unpriced_turns,
+        &unpriced_models,
+        &pricing_override_path(&handle),
+    );
     Ok(0)
 }
 
@@ -772,7 +779,8 @@ fn render_tty(result: &CompareResult) -> String {
         }
     }
 
-    // Per-model totals.
+    // Per-model totals. Use each model's cell `turns` vs `pricedTurns` so a
+    // fully unpriced column cannot render as `$0.00 total`.
     lines.push(String::new());
     for m in &result.models {
         let (turns, total_cost_raw) = result
@@ -780,20 +788,56 @@ fn render_tty(result: &CompareResult) -> String {
             .get(m)
             .map(|t| (t.turns, t.total_cost))
             .unwrap_or((0, 0.0));
-        let total_cost = if turns > 0 {
-            format_usd(total_cost_raw)
-        } else {
-            DASH.to_string()
-        };
+        let unpriced = unpriced_turns_for_model(result, m);
         lines.push(format!(
-            "{}: {} turns, {} total",
+            "{}: {} turns, {}",
             display_model_name(m),
             format_uint(turns),
-            total_cost
+            format_model_total_cost(turns, total_cost_raw, unpriced),
         ));
     }
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// Turns in `model`'s cells that the pricing table could not price.
+fn unpriced_turns_for_model(result: &CompareResult, model: &str) -> u64 {
+    result
+        .cells
+        .iter()
+        .filter(|c| c.model == model)
+        .map(|c| c.turns.saturating_sub(c.priced_turns))
+        .sum()
+}
+
+/// Unpriced turn count and model names in `result.models` order.
+fn unpriced_compare_totals(result: &CompareResult) -> (u64, Vec<String>) {
+    let mut turns = 0;
+    let mut models = Vec::new();
+    for m in &result.models {
+        let n = unpriced_turns_for_model(result, m);
+        if n > 0 {
+            turns += n;
+            models.push(m.clone());
+        }
+    }
+    (turns, models)
+}
+
+fn format_model_total_cost(turns: u64, total_cost: f64, unpriced_turns: u64) -> String {
+    if turns == 0 {
+        format!("{DASH} total")
+    } else if unpriced_turns >= turns {
+        "unpriced".to_string()
+    } else if unpriced_turns > 0 {
+        format!(
+            "{} total ({} unpriced)",
+            format_usd(total_cost),
+            format_uint(unpriced_turns)
+        )
+    } else {
+        format!("{} total", format_usd(total_cost))
+    }
 }
 
 fn build_sub_header(models: &[String]) -> Vec<String> {
@@ -937,5 +981,146 @@ mod tests {
             "claude-sonnet-4-6"
         );
         assert_eq!(display_model_name("claude-haiku-4-5"), "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn format_model_total_cost_marks_unpriced_instead_of_zero() {
+        assert_eq!(format_model_total_cost(0, 0.0, 0), "— total");
+        assert_eq!(format_model_total_cost(4, 1.25, 0), "$1.25 total");
+        assert_eq!(format_model_total_cost(3, 0.0, 3), "unpriced");
+        assert_eq!(
+            format_model_total_cost(5, 1.25, 2),
+            "$1.25 total (2 unpriced)"
+        );
+    }
+
+    fn sample_compare_result() -> CompareResult {
+        use relayburn_sdk::CompareFidelityBlock;
+        use relayburn_sdk::CompareModelTotal;
+        use std::collections::BTreeMap;
+
+        let mut totals = BTreeMap::new();
+        totals.insert(
+            "claude-sonnet-4-6".into(),
+            CompareModelTotal {
+                turns: 2,
+                total_cost: 1.25,
+            },
+        );
+        totals.insert(
+            "future-model".into(),
+            CompareModelTotal {
+                turns: 3,
+                total_cost: 0.0,
+            },
+        );
+        totals.insert(
+            "mixed-model".into(),
+            CompareModelTotal {
+                turns: 4,
+                total_cost: 0.50,
+            },
+        );
+
+        CompareResult {
+            analyzed_turns: 9,
+            min_sample: 5,
+            models: vec![
+                "claude-sonnet-4-6".into(),
+                "future-model".into(),
+                "mixed-model".into(),
+            ],
+            categories: vec!["coding".into()],
+            totals,
+            cells: vec![
+                CompareCellResult {
+                    model: "claude-sonnet-4-6".into(),
+                    category: "coding".into(),
+                    turns: 2,
+                    edit_turns: 0,
+                    one_shot_turns: 0,
+                    priced_turns: 2,
+                    total_cost: 1.25,
+                    cost_per_turn: Some(0.625),
+                    one_shot_rate: None,
+                    cache_hit_rate: None,
+                    median_retries: None,
+                    no_data: false,
+                    insufficient_sample: true,
+                },
+                CompareCellResult {
+                    model: "future-model".into(),
+                    category: "coding".into(),
+                    turns: 3,
+                    edit_turns: 0,
+                    one_shot_turns: 0,
+                    priced_turns: 0,
+                    total_cost: 0.0,
+                    cost_per_turn: None,
+                    one_shot_rate: None,
+                    cache_hit_rate: None,
+                    median_retries: None,
+                    no_data: false,
+                    insufficient_sample: true,
+                },
+                CompareCellResult {
+                    model: "mixed-model".into(),
+                    category: "coding".into(),
+                    turns: 4,
+                    edit_turns: 0,
+                    one_shot_turns: 0,
+                    priced_turns: 3,
+                    total_cost: 0.50,
+                    cost_per_turn: Some(0.50 / 3.0),
+                    one_shot_rate: None,
+                    cache_hit_rate: None,
+                    median_retries: None,
+                    no_data: false,
+                    insufficient_sample: true,
+                },
+            ],
+            fidelity: CompareFidelityBlock {
+                minimum: FidelityClass::UsageOnly,
+                excluded: CompareExcludedBreakdown {
+                    total: 0,
+                    aggregate_only: 0,
+                    cost_only: 0,
+                    partial: 0,
+                    usage_only: 0,
+                },
+                summary: FidelitySummary {
+                    total: 0,
+                    by_class: BTreeMap::new(),
+                    by_granularity: BTreeMap::new(),
+                    missing_coverage: BTreeMap::new(),
+                    unknown: 0,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn render_tty_uses_cell_priced_turns_for_model_totals() {
+        let tty = render_tty(&sample_compare_result());
+        assert!(
+            tty.contains("claude-sonnet-4-6: 2 turns, $1.25 total"),
+            "{tty}"
+        );
+        assert!(tty.contains("future-model: 3 turns, unpriced"), "{tty}");
+        assert!(
+            tty.contains("mixed-model: 4 turns, $0.500 total (1 unpriced)"),
+            "{tty}"
+        );
+        assert!(
+            !tty.contains("future-model: 3 turns, $0.00 total"),
+            "unpriced model must not look free:\n{tty}"
+        );
+    }
+
+    #[test]
+    fn unpriced_compare_totals_follow_model_order() {
+        let (turns, models) = unpriced_compare_totals(&sample_compare_result());
+        assert_eq!(turns, 4);
+        assert_eq!(models, vec!["future-model", "mixed-model"]);
     }
 }
