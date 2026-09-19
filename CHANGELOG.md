@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `@relayburn/sdk` exposes `turnSpanTree`, `sessionSpanTrees`, `flowGraph`, and `contextDelta`, matching the Rust SDK verbs for span trees, inference-flow DAGs, and context-window deltas.
+- `@relayburn/mcp` tests compile TypeScript before running, so the package suite executes on a clean checkout.
 - `summary`, `hotspots`, and `sessions list` warn on stale data (24-hour default, configurable), including older imported or rebuilt ledgers. SDK and MCP consumers receive freshness metadata; summary and MCP reads remain usable when that metadata is unavailable.
 - `burn flow` now connects the main rail across turn boundaries, so session DAGs render as one continuous inference flow in JSON, Mermaid, and SVG.
 - `burn summary` marks unpriced model rows and labels totals as priced-only; JSON adds `unpricedTurns` and `unpricedModels` so unknown-model spend is never mistaken for free usage.

@@ -4,7 +4,8 @@
 // the 1.x SDK contract:
 //
 //   1. The sync `#[napi]` verbs (`summary`, `sessionCost`, `overhead`,
-//      `overheadTrim`, `hotspots`, `compare`) are re-exported as `async`
+//      `overheadTrim`, `hotspots`, `compare`, `turnSpanTree`,
+//      `sessionSpanTrees`, `flowGraph`, `contextDelta`) are re-exported as `async`
 //      functions so callers receive `Promise<T>` (matching the 1.x
 //      `Promise<...>` return shape). Awaiting an `async` wrapper around a
 //      sync return is free and preserves the typed `e.code` thrown by the
@@ -110,6 +111,22 @@ export async function sessionCost(opts) {
 
 export async function fingerprint(opts) {
   return coerceBigInts(await binding.fingerprint(opts));
+}
+
+export async function turnSpanTree(opts) {
+  return coerceBigInts(await binding.turnSpanTree(opts));
+}
+
+export async function sessionSpanTrees(opts) {
+  return coerceBigInts(await binding.sessionSpanTrees(opts));
+}
+
+export async function flowGraph(opts) {
+  return coerceBigInts(await binding.flowGraph(opts));
+}
+
+export async function contextDelta(opts) {
+  return coerceBigInts(await binding.contextDelta(opts));
 }
 
 export async function overhead(opts) {
