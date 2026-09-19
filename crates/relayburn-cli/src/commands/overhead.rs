@@ -21,7 +21,7 @@ use crate::render::error::report_error;
 use crate::render::format::{
     coerce_whole_f64_to_int, format_tokens, format_uint, format_usd, render_table,
 };
-use crate::render::json::render_json;
+use crate::render::json::{render_json, stdout_error};
 use crate::render::progress::TaskProgress;
 
 pub fn run(globals: &GlobalArgs, args: OverheadArgs) -> i32 {
@@ -211,8 +211,8 @@ fn render_human_report(result: &OverheadResult, since: Option<&str>) -> io::Resu
     lines.push(String::new());
 
     let joined = lines.join("\n");
-    handle.write_all(joined.as_bytes())?;
-    handle.flush()?;
+    handle.write_all(joined.as_bytes()).map_err(stdout_error)?;
+    handle.flush().map_err(stdout_error)?;
     Ok(())
 }
 
@@ -309,9 +309,9 @@ fn render_human_trim(result: &OverheadTrimResult) -> io::Result<()> {
     let mut handle = stdout.lock();
 
     if result.recommendations.is_empty() {
-        return handle.write_all(
-            "# no trim candidates — overhead files have no headed sections\n".as_bytes(),
-        );
+        return handle
+            .write_all("# no trim candidates — overhead files have no headed sections\n".as_bytes())
+            .map_err(stdout_error);
     }
 
     // Group by `file` while preserving insertion order.
@@ -353,8 +353,8 @@ fn render_human_trim(result: &OverheadTrimResult) -> io::Result<()> {
     }
 
     let joined = lines.join("\n");
-    handle.write_all(joined.as_bytes())?;
-    handle.flush()?;
+    handle.write_all(joined.as_bytes()).map_err(stdout_error)?;
+    handle.flush().map_err(stdout_error)?;
     Ok(())
 }
 
@@ -410,7 +410,9 @@ fn render_human_deltas(deltas: &[ContextDelta], explain: bool) -> io::Result<()>
     let mut handle = stdout.lock();
 
     if deltas.is_empty() {
-        return handle.write_all(b"# no context deltas above threshold\n");
+        return handle
+            .write_all(b"# no context deltas above threshold\n")
+            .map_err(stdout_error);
     }
 
     let mut table: Vec<Vec<String>> = Vec::with_capacity(deltas.len() + 1);
@@ -438,11 +440,13 @@ fn render_human_deltas(deltas: &[ContextDelta], explain: bool) -> io::Result<()>
             driver_label,
         ]);
     }
-    handle.write_all(render_table(&table).as_bytes())?;
-    handle.write_all(b"\n")?;
+    handle
+        .write_all(render_table(&table).as_bytes())
+        .map_err(stdout_error)?;
+    handle.write_all(b"\n").map_err(stdout_error)?;
 
     if explain {
-        handle.write_all(b"\n")?;
+        handle.write_all(b"\n").map_err(stdout_error)?;
         for d in deltas {
             let inf_label = format!("{}/inf{}", short_turn_label(&d.turn_id), d.inference_idx);
             let header = format!(
@@ -451,20 +455,22 @@ fn render_human_deltas(deltas: &[ContextDelta], explain: bool) -> io::Result<()>
                 format_tokens(d.prior_context_tokens),
                 format_tokens(d.current_context_tokens),
             );
-            handle.write_all(header.as_bytes())?;
+            handle.write_all(header.as_bytes()).map_err(stdout_error)?;
             for step in &d.intervening {
                 let line = format!("    - {}\n", explain_step(step));
-                handle.write_all(line.as_bytes())?;
+                handle.write_all(line.as_bytes()).map_err(stdout_error)?;
             }
         }
     }
 
-    handle.write_all(
-        b"\n# token / cost figures are approximate (bytes/4 for tool results,\n\
-          # cache-read rate for cost). Compaction rows surface separately and\n\
-          # never appear as negative deltas.\n",
-    )?;
-    handle.flush()?;
+    handle
+        .write_all(
+            b"\n# token / cost figures are approximate (bytes/4 for tool results,\n\
+              # cache-read rate for cost). Compaction rows surface separately and\n\
+              # never appear as negative deltas.\n",
+        )
+        .map_err(stdout_error)?;
+    handle.flush().map_err(stdout_error)?;
     Ok(())
 }
 

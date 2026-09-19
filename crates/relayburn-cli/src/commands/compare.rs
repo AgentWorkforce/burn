@@ -46,6 +46,7 @@ use crate::render::format::{format_uint, format_usd};
 use crate::render::json::render_json;
 use crate::render::pricing::{pricing_override_path, warn_unpriced_usage};
 use crate::render::progress::TaskProgress;
+use crate::render::stdout::{write_stdout, writeln_stdout};
 
 const FIDELITY_CHOICES: &[&str] = &[
     "full",
@@ -200,16 +201,16 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
             return Ok(0);
         }
         if series.buckets.is_empty() {
-            println!("(no data in range)");
+            writeln_stdout("(no data in range)")?;
             return Ok(0);
         }
         for bucket in &series.buckets {
-            println!(
+            writeln_stdout(&format!(
                 "{}  {:>5} turns  {} models",
                 bucket.start,
                 bucket.result.analyzed_turns,
                 bucket.result.models.len(),
-            );
+            ))?;
         }
         return Ok(0);
     }
@@ -244,11 +245,11 @@ fn run_inner(globals: &GlobalArgs, args: CompareArgs) -> Result<i32> {
     }
     if args.csv {
         let csv = render_csv(&result);
-        print!("{csv}");
+        write_stdout(&csv)?;
         return Ok(0);
     }
     let tty = render_tty(&result);
-    print!("{tty}");
+    write_stdout(&tty)?;
     let (unpriced_turns, unpriced_models) = unpriced_compare_totals(&result);
     warn_unpriced_usage(
         unpriced_turns,

@@ -28,6 +28,7 @@ use crate::render::error::report_error;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
 use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
+use crate::render::stdout::write_stdout;
 
 const DEFAULT_SINCE: &str = "7d";
 const PROJECT_DISPLAY_WIDTH: usize = 56;
@@ -85,7 +86,7 @@ fn run_list_inner(globals: &GlobalArgs, args: SessionsListArgs) -> anyhow::Resul
             args.grep.as_deref(),
         )?;
     } else {
-        emit_human(&result, &since, args.grep.as_deref());
+        emit_human(&result, &since, args.grep.as_deref())?;
     }
     Ok(0)
 }
@@ -120,7 +121,7 @@ fn emit_json(
     render_json(&payload)
 }
 
-fn emit_human(result: &SessionsListResult, since: &str, grep: Option<&str>) {
+fn emit_human(result: &SessionsListResult, since: &str, grep: Option<&str>) -> std::io::Result<()> {
     let mut lines: Vec<String> = Vec::new();
     lines.push(String::new());
 
@@ -131,8 +132,8 @@ fn emit_human(result: &SessionsListResult, since: &str, grep: Option<&str>) {
         ));
         let mut out = lines.join("\n");
         out.push('\n');
-        print!("{}", out);
-        return;
+        write_stdout(&out)?;
+        return Ok(());
     }
 
     let rows = session_table_rows(&result.sessions);
@@ -151,7 +152,7 @@ fn emit_human(result: &SessionsListResult, since: &str, grep: Option<&str>) {
     ));
     lines.push("(pass the full session id to `burn summary --session <id>` for details)".into());
     lines.push(String::new());
-    print!("{}", lines.join("\n"));
+    write_stdout(&lines.join("\n"))
 }
 
 fn session_table_rows(sessions: &[SessionListEntry]) -> Vec<Vec<String>> {
