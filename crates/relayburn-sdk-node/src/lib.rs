@@ -289,6 +289,7 @@ const BIGINT_FIELDS: &[&str] = &[
     "cacheWrite",
     "priorContextTokens",
     "currentContextTokens",
+    "deltaTokens",
     "approxBytes",
     "tokensFreed",
 ];
@@ -1788,6 +1789,7 @@ mod tests {
             "cacheWrite",
             "priorContextTokens",
             "currentContextTokens",
+            "deltaTokens",
             "approxBytes",
             "tokensFreed",
         ] {

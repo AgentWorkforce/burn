@@ -205,6 +205,9 @@ test('span tree, flow graph, and context delta verbs return stable shapes', asyn
     assert.equal(typeof graph.turnCount, 'number');
     assert.ok(Array.isArray(graph.nodes));
     assert.ok(Array.isArray(graph.edges));
+    for (const node of graph.nodes) {
+      assert.ok(node.model === null || typeof node.model === 'string');
+    }
 
     const deltas = await sdk.contextDelta({ session, ledgerHome });
     assert.ok(Array.isArray(deltas));
@@ -218,6 +221,7 @@ test('span tree, flow graph, and context delta verbs return stable shapes', asyn
       assert.ok(
         typeof d.currentContextTokens === 'number' || typeof d.currentContextTokens === 'bigint',
       );
+      assert.ok(typeof d.deltaTokens === 'number' || typeof d.deltaTokens === 'bigint');
       assert.ok(Array.isArray(d.intervening));
     }
 

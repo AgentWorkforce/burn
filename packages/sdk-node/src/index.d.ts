@@ -227,7 +227,7 @@ export interface FlowNode {
   turnNumber: number;
   rail: number;
   label: string;
-  model?: string;
+  model: string | null;
   tokens: FlowTurnTokens;
   durationMs: number;
   status: SpanStatus;
@@ -287,7 +287,7 @@ export interface ContextDelta {
   ownerRail: ContextDeltaOwnerRail;
   priorContextTokens: number | bigint;
   currentContextTokens: number | bigint;
-  deltaTokens: number;
+  deltaTokens: number | bigint;
   intervening: InterveningStep[];
   attributedCostUSD: number;
 }
