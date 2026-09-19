@@ -35,15 +35,15 @@ pub(super) fn emit_summary_timeseries(
         render_json(series)?;
         return Ok(0);
     }
-    emit_human_ingest_prelude(ingest_report);
+    emit_human_ingest_prelude(ingest_report)?;
     if series.buckets.is_empty() {
-        println!("(no data in range)");
+        crate::render::stdout::writeln_stdout("(no data in range)")?;
         return Ok(0);
     }
     let mut unpriced_turns = 0u64;
     for bucket in &series.buckets {
         unpriced_turns += bucket.unpriced_turns;
-        println!("{}", format_timeseries_bucket_line(bucket));
+        crate::render::stdout::writeln_stdout(&format_timeseries_bucket_line(bucket))?;
     }
     warn_unpriced_usage(unpriced_turns, &[], pricing_override);
     Ok(0)

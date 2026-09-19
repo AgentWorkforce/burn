@@ -374,19 +374,19 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
             )?;
         }
         SummaryReport::ByTool(report) => {
-            emit_ingest_prelude(globals, &ingest_report);
+            emit_ingest_prelude(globals, &ingest_report)?;
             return render_by_tool_report(globals, &report, &ingest_report);
         }
         SummaryReport::BySubagentType(report) => {
-            emit_ingest_prelude(globals, &ingest_report);
+            emit_ingest_prelude(globals, &ingest_report)?;
             return render_subagent_type_report(globals, &report.stats);
         }
         SummaryReport::Relationship(report) => {
-            emit_ingest_prelude(globals, &ingest_report);
+            emit_ingest_prelude(globals, &ingest_report)?;
             return render_relationship_report(globals, &report);
         }
         SummaryReport::SubagentTree(report) => {
-            emit_ingest_prelude(globals, &ingest_report);
+            emit_ingest_prelude(globals, &ingest_report)?;
             return render_subagent_tree_report(globals, &report);
         }
     }

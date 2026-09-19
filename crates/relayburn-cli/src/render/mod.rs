@@ -7,6 +7,7 @@
 //! - [`logging`] — opt-in structured diagnostics on stderr.
 //! - [`progress`] — TTY-only spinners and prettier warning rendering.
 //! - [`prompt`] — shared interactive prompt/select helpers.
+//! - [`stdout`] — fallible stdout writes for human output (EPIPE-safe).
 //! - [`ux`] — status messages, headings, and color policy.
 //!
 //! Wave 2 PRs add per-command rendering helpers next to their command
@@ -20,5 +21,6 @@ pub mod logging;
 pub mod pricing;
 pub mod progress;
 pub mod prompt;
+pub mod stdout;
 pub mod table;
 pub mod ux;

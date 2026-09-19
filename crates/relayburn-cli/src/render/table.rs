@@ -73,8 +73,13 @@ pub fn print_table(globals: &GlobalArgs, headers: &[&str], rows: &[Vec<String>])
     let rendered = render_table(globals, headers, rows);
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    handle.write_all(rendered.as_bytes())?;
-    handle.write_all(b"\n")
+    handle
+        .write_all(rendered.as_bytes())
+        .map_err(crate::render::json::stdout_error)?;
+    handle
+        .write_all(b"\n")
+        .map_err(crate::render::json::stdout_error)?;
+    handle.flush().map_err(crate::render::json::stdout_error)
 }
 
 #[cfg(test)]
