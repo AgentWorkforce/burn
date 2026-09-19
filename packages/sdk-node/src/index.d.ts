@@ -157,6 +157,154 @@ export interface FingerprintResult {
  */
 export declare function fingerprint(opts?: FingerprintOptions): Promise<FingerprintResult>
 
+export type SpanKind =
+  | 'turn'
+  | 'inference'
+  | 'tool-use'
+  | 'subagent'
+  | 'skill'
+  | 'user-prompt'
+  | 'tool-result';
+
+export type SpanStatus = { code: 'ok' } | { code: 'error'; msg: string };
+export type SpanAttrValue = string | number | bigint | boolean;
+
+export interface SpanEvent {
+  ts: number;
+  name: string;
+  attributes: Record<string, SpanAttrValue>;
+}
+
+export interface SpanNode {
+  kind: SpanKind;
+  name: string;
+  startMs: number;
+  endMs: number;
+  status: SpanStatus;
+  attributes: Record<string, SpanAttrValue>;
+  events: SpanEvent[];
+  children: SpanNode[];
+}
+
+export interface TurnSpanTree {
+  sessionId: string;
+  turnId: string;
+  turnNumber: number;
+  root: SpanNode;
+}
+
+export interface TurnSpanTreeOptions {
+  sessionId: string;
+  turnId: string;
+  ledgerHome?: string;
+}
+
+/** Per-turn span tree for one `(sessionId, turnId)` pair. */
+export declare function turnSpanTree(opts: TurnSpanTreeOptions): Promise<TurnSpanTree>
+
+export interface SessionSpanTreesOptions {
+  sessionId: string;
+  ledgerHome?: string;
+}
+
+/** Span tree for every turn in a session, in stored order. */
+export declare function sessionSpanTrees(opts: SessionSpanTreesOptions): Promise<TurnSpanTree[]>
+
+export type FlowNodeKind = 'inference' | 'tool-use' | 'subagent' | 'skill';
+export type FlowEdgeKind = 'default' | 'dispatch' | 'return' | 'subagent' | 'unattached';
+
+export interface FlowTurnTokens {
+  input: number | bigint;
+  output: number | bigint;
+  cacheRead: number | bigint;
+  cacheWrite: number | bigint;
+  reasoning: number | bigint;
+}
+
+export interface FlowNode {
+  id: string;
+  kind: FlowNodeKind;
+  turnNumber: number;
+  rail: number;
+  label: string;
+  model: string | null;
+  tokens: FlowTurnTokens;
+  durationMs: number;
+  status: SpanStatus;
+  x: number;
+  y: number;
+}
+
+export interface FlowEdge {
+  from: string;
+  to: string;
+  kind: FlowEdgeKind;
+}
+
+export interface FlowGraph {
+  sessionId: string;
+  turnCount: number;
+  totalTurnCount: number;
+  truncated: boolean;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+}
+
+export interface FlowGraphOptions {
+  sessionId: string;
+  /** Cap rendered turns. Omit for the SDK default (50); pass `0` to disable. */
+  maxTurns?: number;
+  ledgerHome?: string;
+}
+
+/** Per-session inference-flow DAG projected from the session's span trees. */
+export declare function flowGraph(opts: FlowGraphOptions): Promise<FlowGraph>
+
+export type ContextDeltaOwnerRail =
+  | { kind: 'main' }
+  | { kind: 'subagent'; agentId: string };
+export type ContextDeltaOwnerFilter = 'all' | 'main' | 'subagent';
+export type ReminderSource = 'relaycast' | 'harness' | 'other';
+
+export type InterveningStep =
+  | {
+      kind: 'tool-result';
+      toolUseId: string;
+      toolName: string;
+      approxTokens: number | bigint;
+      approxBytes: number | bigint;
+      truncated: boolean;
+    }
+  | { kind: 'user-prompt'; approxTokens: number | bigint; hasSystemReminder: boolean }
+  | { kind: 'system-reminder'; source: ReminderSource; approxTokens: number | bigint }
+  | { kind: 'compaction'; tokensFreed: number | bigint }
+  | { kind: 'other' };
+
+export interface ContextDelta {
+  sessionId: string;
+  turnId: string;
+  inferenceIdx: number;
+  ownerRail: ContextDeltaOwnerRail;
+  priorContextTokens: number | bigint;
+  currentContextTokens: number | bigint;
+  deltaTokens: number | bigint;
+  intervening: InterveningStep[];
+  attributedCostUSD: number;
+}
+
+export interface ContextDeltaOptions {
+  session?: string;
+  /** Relative range (`24h`, `7d`, `4w`, `2m`). ISO timestamps are not accepted. */
+  since?: string;
+  top?: number;
+  minDelta?: number;
+  owner?: ContextDeltaOwnerFilter;
+  ledgerHome?: string;
+}
+
+/** Per-inference context-window deltas. Powers `burn overhead deltas`. */
+export declare function contextDelta(opts?: ContextDeltaOptions): Promise<ContextDelta[]>
+
 export type OverheadFileKind = 'claude-md' | 'agents-md';
 export type OverheadHarness = 'claude-code' | 'codex' | 'opencode';
 
