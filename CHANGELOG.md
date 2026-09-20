@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn ingest` collects GitHub Copilot CLI usage from the OpenTelemetry file exporter while `COPILOT_OTEL_FILE_EXPORTER_PATH` is set (the exporter file plus `~/.copilot/otel/*.jsonl`), recording per-API-call token usage as `copilot-cli` turns with usage-only fidelity; the opt-in setup is printed by the new `burn init copilot` helper.
+
 ## [4.1.0] - 2026-09-20
 
 - `burn measure` and `@relayburn/sdk.measureSession()` turn one explicit Claude Code, Codex, or OpenCode session source into a versioned per-model token/cost document without discovery or a ledger; incomplete and zero-turn inputs fail closed.

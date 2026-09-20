@@ -60,6 +60,7 @@ fn dispatch(args: Args) -> i32 {
         Command::Ingest(args) => commands::ingest::run(&globals, args),
         Command::McpServer(args) => commands::mcp_server::run(&globals, args),
         Command::Update(args) => commands::update::run(&globals, args),
+        Command::Init(args) => commands::init::run(args),
     }
 }
 
@@ -87,5 +88,6 @@ fn command_name(command: &Command) -> &'static str {
         Command::Ingest(_) => "ingest",
         Command::McpServer(_) => "mcp-server",
         Command::Update(_) => "update",
+        Command::Init(_) => "init",
     }
 }

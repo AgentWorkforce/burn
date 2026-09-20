@@ -16,6 +16,7 @@ pub mod user_turn;
 
 pub mod claude;
 pub mod codex;
+pub mod copilot;
 pub mod opencode;
 
 pub use codex::span_tree::{build_codex_span_tree, CodexSpanTreeInputs};
@@ -23,6 +24,10 @@ pub use codex::{
     parse_codex_session_incremental, read_codex_session_id_hint, CodexLastCompletedTurn,
     CodexResumeState, CodexTurnContext, CumulativeUsage, ParseCodexIncrementalOptions,
     ParseCodexIncrementalResult, PersistedUserTurnSlot,
+};
+pub use copilot::{
+    parse_copilot_otel_incremental, CopilotResumeState, ParseCopilotIncrementalOptions,
+    ParseCopilotIncrementalResult,
 };
 pub use opencode::{
     parse_opencode_session_incremental, ParseOpencodeIncrementalOptions,

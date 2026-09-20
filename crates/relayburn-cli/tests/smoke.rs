@@ -36,6 +36,7 @@ const SUBCOMMANDS: &[&str] = &[
     "ingest",
     "mcp-server",
     "update",
+    "init",
 ];
 
 #[test]
@@ -434,6 +435,21 @@ fn json_mode_emits_error_envelope_on_argument_failure() {
     assert!(
         stdout.contains("needs at least 2 models"),
         "expected JSON-mode envelope to carry the compare error message; got:\n{stdout}",
+    );
+}
+
+#[test]
+fn init_copilot_prints_otel_exporter_setup() {
+    let output = burn()
+        .args(["init", "copilot"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+    assert!(
+        stdout.contains("COPILOT_OTEL_FILE_EXPORTER_PATH"),
+        "expected `init copilot` to print the exporter env var; got:\n{stdout}",
     );
 }
 

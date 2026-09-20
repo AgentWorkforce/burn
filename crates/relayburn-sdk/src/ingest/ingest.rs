@@ -27,18 +27,20 @@ use serde_json::Value;
 use crate::ledger::{load_config, Ledger};
 use crate::reader::{
     parse_claude_session, parse_claude_session_incremental, parse_codex_session_incremental,
-    parse_opencode_session_incremental, reconcile_claude_session_relationships,
-    ClaudeParseIncrementalOptions, ClaudeParseIncrementalResult, ClaudeParseOptions,
-    ClaudeParseResult, CodexLastCompletedTurn, CodexResumeState, CodexTurnContext, CompactionEvent,
-    ContentRecord, ContentStoreMode, CumulativeUsage as ReaderCumulativeUsage,
-    ParseCodexIncrementalOptions, ParseCodexIncrementalResult, ParseOpencodeIncrementalOptions,
-    ParseOpencodeIncrementalResult, PersistedUserTurnSlot, ReconcileClaudeRelationshipsInput,
-    SessionRelationshipRecord, ToolResultEventRecord, TurnRecord, UserTurnRecord,
+    parse_copilot_otel_incremental, parse_opencode_session_incremental,
+    reconcile_claude_session_relationships, ClaudeParseIncrementalOptions,
+    ClaudeParseIncrementalResult, ClaudeParseOptions, ClaudeParseResult, CodexLastCompletedTurn,
+    CodexResumeState, CodexTurnContext, CompactionEvent, ContentRecord, ContentStoreMode,
+    CopilotResumeState, CumulativeUsage as ReaderCumulativeUsage, ParseCodexIncrementalOptions,
+    ParseCodexIncrementalResult, ParseCopilotIncrementalOptions, ParseCopilotIncrementalResult,
+    ParseOpencodeIncrementalOptions, ParseOpencodeIncrementalResult, PersistedUserTurnSlot,
+    ReconcileClaudeRelationshipsInput, SessionRelationshipRecord, ToolResultEventRecord,
+    TurnRecord, UserTurnRecord,
 };
 
 use crate::ingest::cursors::{
-    load_cursors, save_cursors_if_changed, ClaudeCursor, CodexCumulative, CodexCursor, Cursors,
-    FileCursor, OpencodeCursor,
+    load_cursors, save_cursors_if_changed, ClaudeCursor, CodexCumulative, CodexCursor,
+    CopilotCursor, Cursors, FileCursor, OpencodeCursor,
 };
 use crate::ingest::gap::{
     count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap, AdapterName,
@@ -116,6 +118,11 @@ pub struct IngestRoots {
     pub claude_projects_dir: Option<PathBuf>,
     pub codex_sessions_dir: Option<PathBuf>,
     pub opencode_storage_dir: Option<PathBuf>,
+    /// Copilot CLI OTEL export files. `None` resolves the defaults: the
+    /// `COPILOT_OTEL_FILE_EXPORTER_PATH` env var (when set to an existing
+    /// file) plus `$COPILOT_HOME/otel/*.jsonl` (default `~/.copilot/otel`).
+    /// Tests inject explicit paths so they don't depend on process env.
+    pub copilot_otel_files: Option<Vec<PathBuf>>,
 }
 
 pub(crate) fn claude_projects_dir(roots: &IngestRoots) -> PathBuf {
@@ -146,6 +153,42 @@ pub(crate) fn opencode_session_root(roots: &IngestRoots) -> PathBuf {
     opencode_storage_dir(roots).join("session")
 }
 
+/// Default OTEL export directory Copilot CLI writes when the exporter is
+/// pointed at a directory: `$COPILOT_HOME/otel`, falling back to
+/// `~/.copilot/otel`.
+pub(crate) fn copilot_otel_dir() -> PathBuf {
+    std::env::var("COPILOT_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home_dir().join(".copilot"))
+        .join("otel")
+}
+
+/// Resolve the Copilot CLI OTEL JSONL files ingest scans. Unlike the other
+/// harnesses this source is env-gated: nothing exists on disk until the
+/// user sets `COPILOT_OTEL_FILE_EXPORTER_PATH` (see #14), so an empty list
+/// is the normal steady state and never an error.
+pub(crate) fn copilot_otel_files(roots: &IngestRoots) -> Vec<PathBuf> {
+    if let Some(files) = &roots.copilot_otel_files {
+        return files.clone();
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Ok(var) = std::env::var("COPILOT_OTEL_FILE_EXPORTER_PATH") {
+        let trimmed = var.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            if p.is_file() {
+                files.push(p);
+            }
+        }
+    }
+    for file in list_jsonl_files(&copilot_otel_dir()) {
+        if !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    files
+}
+
 /// Resolve the default session-store roots ingest scans, in the same
 /// order `ingest_all` walks them. Used by the watch loop to drive its
 /// `notify`-backed FS-event driver against the harness home dirs the
@@ -153,15 +196,30 @@ pub(crate) fn opencode_session_root(roots: &IngestRoots) -> PathBuf {
 /// [`IngestRoots`] to override individual paths; defaults still come
 /// from `$HOME` for fields left `None`.
 ///
-/// Returns the Claude / Codex / OpenCode roots in that order — the
-/// caller doesn't have to filter for existence; the FS-event driver
-/// silently skips any path that doesn't yet exist.
+/// Returns the Claude / Codex / OpenCode roots, then the Copilot OTEL
+/// export directory, in that order — the caller doesn't have to filter
+/// for existence; the FS-event driver silently skips any path that
+/// doesn't yet exist.
 pub fn default_session_roots(roots: &IngestRoots) -> Vec<PathBuf> {
-    vec![
+    let mut dirs = vec![
         claude_projects_dir(roots),
         codex_sessions_dir(roots),
         opencode_storage_dir(roots),
-    ]
+    ];
+    // Copilot: watch the injected files' parents in tests / overrides, the
+    // default otel dir otherwise (the env-var file's appends are also caught
+    // by the polling fingerprint even without an FS event).
+    match &roots.copilot_otel_files {
+        Some(files) => {
+            for parent in files.iter().filter_map(|f| f.parent()) {
+                if !dirs.iter().any(|d| d == parent) {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+        }
+        None => dirs.push(copilot_otel_dir()),
+    }
+    dirs
 }
 
 pub(crate) fn opencode_message_root(roots: &IngestRoots) -> PathBuf {
@@ -261,6 +319,17 @@ fn source_fingerprint(roots: &IngestRoots) -> String {
                 ));
                 count = count.wrapping_add(dir_entry_count(&message_dir));
             }
+        }
+    }
+
+    // Copilot CLI: the OTEL export files (env-var path plus otel dir glob).
+    // Env-gated, so normally empty — but when set, appends must move the
+    // fingerprint like any other source.
+    for file in copilot_otel_files(roots) {
+        if let Ok(meta) = fs::metadata(&file) {
+            count = count.wrapping_add(1);
+            total_bytes = total_bytes.wrapping_add(meta.len());
+            hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("copilot", &file, &meta));
         }
     }
 
@@ -381,6 +450,19 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
     report.merge(&r);
     emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
 
+    progress(opts, "scanning Copilot CLI OTEL exports");
+    let r = ingest_copilot_into(
+        ledger,
+        &mut after,
+        &opts.roots,
+        content_mode,
+        opts.ledger_home.as_deref(),
+        &mut had_skips,
+    )?;
+    report.merge(&r);
+    // No content-mode gap warning for Copilot: OTEL spans carry metrics
+    // only, never content records, so there is nothing to heal.
+
     progress(opts, "saving ingest cursors");
     save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
     // Record the source fingerprint captured at the start of this sweep so
@@ -430,6 +512,13 @@ pub fn ingest_opencode_sessions(
     opts: &IngestOptions,
 ) -> anyhow::Result<IngestReport> {
     run_single_harness(ledger, opts, AdapterName::Opencode, ingest_opencode_into)
+}
+
+pub fn ingest_copilot_sessions(
+    ledger: &mut Ledger,
+    opts: &IngestOptions,
+) -> anyhow::Result<IngestReport> {
+    run_single_harness(ledger, opts, AdapterName::Copilot, ingest_copilot_into)
 }
 
 /// Shared boilerplate for the per-harness verbs: clean stale stamps, snapshot
@@ -978,6 +1067,107 @@ fn ingest_opencode_into(
 
 // --- Codex cursor <-> reader resume-state conversions -------------------
 
+/// Iterate the Copilot CLI OTEL export files (`COPILOT_OTEL_FILE_EXPORTER_PATH`
+/// plus `$COPILOT_HOME/otel/*.jsonl`), driving
+/// [`parse_copilot_otel_incremental`] with the carried per-session turn
+/// counters and chat-trace set. Env-gated: when neither source exists the
+/// file list is empty and this is a silent no-op (#14).
+///
+/// Rotation handling matches the Claude/Codex adapters: an inode change or
+/// a shrunken file restarts the byte offset at 0, but the per-session
+/// `turn_index` counters and `chat_trace_ids` survive — the exporter's new
+/// file continues the same Copilot sessions, and the ledger's
+/// `(source, session_id, message_id)` key dedups any span re-read at the
+/// rotation boundary.
+fn ingest_copilot_into(
+    ledger: &mut Ledger,
+    cursors: &mut Cursors,
+    roots: &IngestRoots,
+    _content_mode: ContentStoreMode,
+    _ledger_home: Option<&Path>,
+    had_skips: &mut bool,
+) -> anyhow::Result<IngestReport> {
+    let mut report = IngestReport::empty();
+    for file in copilot_otel_files(roots) {
+        report.scanned_sessions += 1;
+        let key = file.to_string_lossy().into_owned();
+        let meta = match fs::metadata(&file) {
+            Ok(m) => m,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // The env var can point at a file the exporter has not
+                // created yet; that's the pre-first-session steady state,
+                // not a failure.
+                continue;
+            }
+            Err(err) => {
+                eprintln!("[burn] skipping {}: {}", file.display(), err);
+                *had_skips = true;
+                continue;
+            }
+        };
+        let prior = match cursors.get_typed(&key) {
+            Some(FileCursor::Copilot(c)) => Some(c),
+            _ => None,
+        };
+        let inode = file_inode(&meta);
+        let mtime = mtime_ms(&meta);
+        let size = meta.len();
+        let rotated = match &prior {
+            None => true,
+            Some(c) => c.inode != inode || mtime < c.mtime_ms || size < c.offset_bytes,
+        };
+        let start_offset = if rotated {
+            0
+        } else {
+            prior.as_ref().map(|c| c.offset_bytes).unwrap_or(0)
+        };
+
+        if !rotated && start_offset >= size {
+            if let Some(mut c) = prior.clone() {
+                c.mtime_ms = mtime;
+                cursors.insert(key, FileCursor::Copilot(c));
+            }
+            continue;
+        }
+
+        let resume = prior.map(|c| CopilotResumeState {
+            session_turn_counts: c.session_turn_counts,
+            chat_trace_ids: c.chat_trace_ids,
+        });
+        let parse_opts = ParseCopilotIncrementalOptions {
+            session_path: Some(file.to_string_lossy().into_owned()),
+            start_offset: Some(start_offset),
+            resume,
+            fallback_ts_ms: Some(mtime),
+        };
+        let parsed: ParseCopilotIncrementalResult =
+            match parse_copilot_otel_incremental(&file, &parse_opts) {
+                Ok(r) => r,
+                Err(err) => {
+                    eprintln!("[burn] skipping {}: {}", file.display(), err);
+                    *had_skips = true;
+                    continue;
+                }
+            };
+
+        if !parsed.turns.is_empty() {
+            report.appended_turns += parsed.turns.len();
+            report.ingested_sessions += 1;
+            ledger.append_turns(&parsed.turns)?;
+        }
+
+        let next = CopilotCursor {
+            inode,
+            offset_bytes: parsed.end_offset,
+            mtime_ms: mtime,
+            session_turn_counts: parsed.resume.session_turn_counts,
+            chat_trace_ids: parsed.resume.chat_trace_ids,
+        };
+        cursors.insert(key, FileCursor::Copilot(next));
+    }
+    Ok(report)
+}
+
 fn codex_cursor_to_resume_state(c: &CodexCursor) -> CodexResumeState {
     let mut turn_contexts: HashMap<String, CodexTurnContext> = HashMap::new();
     for (k, v) in &c.turn_contexts {
@@ -1386,6 +1576,7 @@ mod tests {
             claude_projects_dir: Some(PathBuf::from("/x/claude")),
             codex_sessions_dir: Some(PathBuf::from("/x/codex")),
             opencode_storage_dir: Some(PathBuf::from("/x/oc")),
+            copilot_otel_files: Some(vec![]),
         };
         assert_eq!(claude_projects_dir(&roots), PathBuf::from("/x/claude"));
         assert_eq!(codex_sessions_dir(&roots), PathBuf::from("/x/codex"));
@@ -1399,6 +1590,7 @@ mod tests {
             claude_projects_dir: Some(tmp.path().join("claude")),
             codex_sessions_dir: Some(tmp.path().join("codex")),
             opencode_storage_dir: Some(tmp.path().join("opencode")),
+            copilot_otel_files: Some(vec![]),
         };
         // Empty roots: well-formed, stable, and identical across calls.
         let empty = source_fingerprint(&roots);
@@ -1442,6 +1634,7 @@ mod tests {
             claude_projects_dir: Some(tmp.path().join("claude")),
             codex_sessions_dir: Some(tmp.path().join("codex")),
             opencode_storage_dir: Some(storage.clone()),
+            copilot_otel_files: Some(vec![]),
         };
 
         let session_dir = storage.join("session");

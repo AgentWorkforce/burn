@@ -48,6 +48,7 @@ pub enum AdapterName {
     Claude,
     Codex,
     Opencode,
+    Copilot,
 }
 
 impl AdapterName {
@@ -56,6 +57,7 @@ impl AdapterName {
             AdapterName::Claude => "claude",
             AdapterName::Codex => "codex",
             AdapterName::Opencode => "opencode",
+            AdapterName::Copilot => "copilot",
         }
     }
 }

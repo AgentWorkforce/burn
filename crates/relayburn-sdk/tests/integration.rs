@@ -335,6 +335,7 @@ fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
                 claude_projects_dir: Some(claude.path().to_path_buf()),
                 codex_sessions_dir: Some(codex.path().to_path_buf()),
                 opencode_storage_dir: Some(opencode.path().to_path_buf()),
+                copilot_otel_files: Some(vec![]),
             },
             ..Default::default()
         })
@@ -348,6 +349,7 @@ fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
             claude_projects_dir: Some(claude.path().to_path_buf()),
             codex_sessions_dir: Some(codex.path().to_path_buf()),
             opencode_storage_dir: Some(opencode.path().to_path_buf()),
+            copilot_otel_files: Some(vec![]),
         },
         ..Default::default()
     })
