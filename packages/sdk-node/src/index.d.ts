@@ -136,6 +136,50 @@ export interface SessionCostResult {
 /** Compact session-scoped cost shape; powers the MCP `burn__sessionCost` tool. */
 export declare function sessionCost(opts?: SessionCostOptions): Promise<SessionCostResult>
 
+export type MeasureSessionHarness = 'claude-code' | 'claude' | 'codex' | 'opencode';
+export interface MeasureSessionOptions {
+  /**
+   * Exact session source. Claude Code and Codex use transcript files.
+   * OpenCode uses the selected session metadata file inside a complete storage tree.
+   */
+  inputPath: string;
+  harness: MeasureSessionHarness;
+  /** Optional models.dev-compatible pricing overlay. */
+  pricingPath?: string;
+}
+export interface SessionTokenMetrics {
+  inputTokens: number | bigint;
+  outputTokens: number | bigint;
+  cacheReadTokens: number | bigint;
+  cacheWriteTokens: number | bigint;
+  reasoningTokens: number | bigint;
+  totalTokens: number | bigint;
+}
+export interface SessionModelMetrics {
+  provider: string;
+  model: string;
+  turnCount: number | bigint;
+  usage: SessionTokenMetrics;
+  /** Null means at least one contributing turn had no known price. */
+  costUsdMicros: number | bigint | null;
+  pricedTurns: number | bigint;
+  unpricedTurns: number | bigint;
+}
+export interface SessionMetrics {
+  schema: 'burn.session-metrics.v1';
+  sessionId: string | null;
+  harness: 'claude-code' | 'codex' | 'opencode';
+  turnCount: number | bigint;
+  usage: SessionTokenMetrics;
+  /** Null means at least one turn had no known price. */
+  costUsdMicros: number | bigint | null;
+  pricedTurns: number | bigint;
+  unpricedTurns: number | bigint;
+  models: SessionModelMetrics[];
+}
+/** One explicit session in, one versioned metrics document out. No discovery or ledger. */
+export declare function measureSession(opts: MeasureSessionOptions): Promise<SessionMetrics>
+
 export interface FingerprintOptions {
   /** Restrict to a single `session_id`. Mutually exclusive with `project`. */
   session?: string;

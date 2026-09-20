@@ -254,6 +254,15 @@ const BIGINT_FIELDS: &[&str] = &[
     "partial",
     "usageOnly",
     "unknown",
+    // measureSession
+    "turnCount",
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "reasoningTokens",
+    "totalTokens",
+    "costUsdMicros",
     // export_ledger / export_stamps record bodies — every camelCased
     // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /
     // CompactionEvent / nested Usage and ToolCall payloads. These values
@@ -899,6 +908,43 @@ pub fn session_cost(opts: Option<SessionCostOptions>) -> Result<SessionCostResul
     sdk::session_cost(raw)
         .map(SessionCostResult::from)
         .map_err(sdk_err)
+}
+
+// ---------------------------------------------------------------------------
+// measure_session — one explicit transcript in, one metrics document out.
+// No ledger or harness-store discovery is involved.
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct MeasureSessionOptions {
+    pub input_path: String,
+    pub harness: String,
+    pub pricing_path: Option<String>,
+}
+
+fn parse_measure_harness(value: &str) -> Result<sdk::Harness, BurnError> {
+    match value {
+        "claude-code" | "claude" => Ok(sdk::Harness::ClaudeCode),
+        "codex" => Ok(sdk::Harness::Codex),
+        "opencode" => Ok(sdk::Harness::Opencode),
+        other => Err(invalid_arg(format!(
+            "measureSession: invalid harness {other:?} (expected claude-code, codex, or opencode)"
+        ))),
+    }
+}
+
+/// Parse one exact session artifact and return Cloud-ready token/cost metrics.
+#[napi(js_name = "measureSession")]
+pub fn measure_session(opts: MeasureSessionOptions) -> Result<BigIntPromoting, BurnError> {
+    let result = sdk::measure_session(sdk::MeasureSessionOptions {
+        input_path: PathBuf::from(opts.input_path),
+        harness: parse_measure_harness(&opts.harness)?,
+        pricing_path: opts.pricing_path.map(PathBuf::from),
+    })
+    .map_err(sdk_err)?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize measureSession: {e}")))?;
+    Ok(BigIntPromoting(value))
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+- `burn measure --harness <name> --input <path> --json` emits Cloud-ready per-model token and cost metrics for one explicit session without discovery or ledger state.
 - Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
 - `burn hotspots --findings` identifies unknown pricing and ranks unpriced sessions by token volume instead of $0.00.
 - `burn compare` and `burn summary --bucket` human output mark unpriced usage instead of showing it as `$0.00`.

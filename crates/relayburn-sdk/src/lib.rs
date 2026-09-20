@@ -54,12 +54,14 @@ mod reader;
 mod export_verbs;
 mod ingest_verb;
 mod query_verbs;
+mod session_metrics;
 mod stamp_verb;
 mod util;
 
 pub use export_verbs::*;
 pub use ingest_verb::*;
 pub use query_verbs::*;
+pub use session_metrics::*;
 pub use stamp_verb::*;
 
 // --- Re-exports ------------------------------------------------------------
