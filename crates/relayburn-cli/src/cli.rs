@@ -89,6 +89,9 @@ impl Args {
 /// "not yet implemented" message and exits 1.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Measure one explicit session artifact without discovery or a ledger.
+    Measure(MeasureArgs),
+
     /// Aggregate session usage and cost.
     Summary(crate::commands::summary::SummaryArgs),
 
@@ -123,6 +126,39 @@ pub enum Command {
 
     /// Check for, install, or configure `burn` self-updates.
     Update(UpdateArgs),
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+pub struct MeasureArgs {
+    /// Exact transcript/session artifact to parse.
+    #[arg(long, value_name = "PATH")]
+    pub input: PathBuf,
+
+    /// Harness format of the input artifact.
+    #[arg(long, value_enum, value_name = "HARNESS")]
+    pub harness: MeasureHarness,
+
+    /// Optional models.dev-compatible pricing overlay.
+    #[arg(long, value_name = "PATH")]
+    pub pricing: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MeasureHarness {
+    #[value(name = "claude-code", alias = "claude")]
+    ClaudeCode,
+    Codex,
+    Opencode,
+}
+
+impl From<MeasureHarness> for relayburn_sdk::Harness {
+    fn from(value: MeasureHarness) -> Self {
+        match value {
+            MeasureHarness::ClaudeCode => relayburn_sdk::Harness::ClaudeCode,
+            MeasureHarness::Codex => relayburn_sdk::Harness::Codex,
+            MeasureHarness::Opencode => relayburn_sdk::Harness::Opencode,
+        }
+    }
 }
 
 /// Per-command flags for `burn update`.

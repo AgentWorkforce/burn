@@ -109,6 +109,10 @@ export async function sessionCost(opts) {
   return coerceBigInts(await binding.sessionCost(opts));
 }
 
+export async function measureSession(opts) {
+  return coerceBigInts(await binding.measureSession(opts));
+}
+
 export async function fingerprint(opts) {
   return coerceBigInts(await binding.fingerprint(opts));
 }

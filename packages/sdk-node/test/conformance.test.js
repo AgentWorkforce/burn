@@ -64,6 +64,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'summary',
     'ledgerFreshness',
     'sessionCost',
+    'measureSession',
     'fingerprint',
     'overhead',
     'overheadTrim',
@@ -82,6 +83,24 @@ test('sdk facade exposes the expected verb set', async (t) => {
   ]) {
     assert.equal(typeof sdk[name], 'function', `${name} should be exported`);
   }
+});
+
+test('measureSession reports one explicit transcript without a ledger', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const result = await sdk.measureSession({
+    harness: 'codex',
+    inputPath: join(REPO_ROOT, 'tests', 'fixtures', 'codex', 'simple-turn.jsonl'),
+  });
+  assert.equal(result.schema, 'burn.session-metrics.v1');
+  assert.equal(result.sessionId, 'sess_simple_1');
+  assert.equal(result.turnCount, 1);
+  assert.equal(result.usage.inputTokens, 600);
+  assert.equal(result.usage.cacheReadTokens, 400);
+  assert.equal(result.usage.outputTokens, 120);
+  assert.equal(result.usage.reasoningTokens, 30);
+  assert.equal(result.models[0].provider, 'openai');
 });
 
 test('read verbs return stable shapes against the fixture ledger', async (t) => {

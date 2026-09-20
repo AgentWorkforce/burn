@@ -16,6 +16,7 @@ export declare function ingest(opts?: unknown): Promise<unknown>;
 export declare function summary(opts?: unknown): Promise<unknown>;
 export declare function ledgerFreshness(opts?: unknown): Promise<unknown>;
 export declare function sessionCost(opts?: unknown): Promise<unknown>;
+export declare function measureSession(opts: unknown): Promise<unknown>;
 export declare function fingerprint(opts?: unknown): Promise<unknown>;
 export declare function turnSpanTree(opts: unknown): Promise<unknown>;
 export declare function sessionSpanTrees(opts: unknown): Promise<unknown>;

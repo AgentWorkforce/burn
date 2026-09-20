@@ -19,6 +19,7 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 
 | Command | Use it to |
 |---|---|
+| [`burn measure`](#burn-measure) | Turn one explicit session artifact into Cloud-ready token and cost metrics. |
 | [`burn summary`](#burn-summary) | See total usage and cost by model or provider. |
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, and subagents. |
 | [`burn overhead`](#burn-overhead) | Attribute cached prompt cost to `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. |
@@ -31,9 +32,9 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
 | [`burn update`](#burn-update) | Check for releases, install an update, or configure automatic checks. |
 
-Every command accepts `--json` for machine-readable output,
-`--ledger-path <path>` to select a Burn home for that invocation, and
-`--no-color` to disable ANSI styling.
+Every command accepts `--json` for machine-readable output and `--no-color`
+to disable ANSI styling. Ledger-backed commands also accept `--ledger-path
+<path>`; `burn measure` intentionally ignores ledger configuration.
 
 ## `burn summary`
 
@@ -74,6 +75,25 @@ tokens they used, and what they cost.
 
 Synthetic-routed models are recognized from `hf:*`,
 `accounts/fireworks/models/*`, and `synthetic/*`.
+
+## `burn measure`
+
+Use `burn measure` in a sandbox or runner when the caller already knows the
+one session artifact it wants to report. It parses only that input: it does not
+scan harness stores, create a ledger, or run discovery.
+
+```bash
+burn --json measure --harness codex --input /run/session.jsonl
+```
+
+The versioned `burn.session-metrics.v1` document includes the session and
+harness, raw input/output/cache/reasoning token buckets, totals, and a
+per-provider/model breakdown. Costs are integer USD micros. A cost is `null`
+when any contributing turn is unpriced, so consumers such as Cloud never
+mistake unknown spend for free usage.
+
+Supported harness values are `claude-code` (or `claude`), `codex`, and
+`opencode`. Use `--pricing <models.dev.json>` to overlay custom rates.
 
 ## `burn hotspots`
 

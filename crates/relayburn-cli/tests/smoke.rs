@@ -24,6 +24,7 @@ use predicates::prelude::*;
 /// this list, and Wave 2 PRs that delete a stub should drop the entry
 /// here as part of the same PR.
 const SUBCOMMANDS: &[&str] = &[
+    "measure",
     "summary",
     "hotspots",
     "overhead",
@@ -36,6 +37,32 @@ const SUBCOMMANDS: &[&str] = &[
     "mcp-server",
     "update",
 ];
+
+#[test]
+fn measure_emits_one_cloud_ready_session_document() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/codex/simple-turn.jsonl");
+    let output = burn()
+        .args([
+            "--json",
+            "measure",
+            "--harness",
+            "codex",
+            "--input",
+            fixture.to_str().expect("fixture path"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).expect("measure JSON");
+    assert_eq!(report["schema"], "burn.session-metrics.v1");
+    assert_eq!(report["sessionId"], "sess_simple_1");
+    assert_eq!(report["turnCount"], 1);
+    assert_eq!(report["usage"]["inputTokens"], 600);
+    assert_eq!(report["models"][0]["provider"], "openai");
+}
 
 /// Subcommands that still print "not yet implemented" when invoked
 /// without args. Wave 2 D1 wired up `summary` and `hotspots`, D2 wired
