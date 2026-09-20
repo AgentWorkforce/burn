@@ -339,6 +339,7 @@ fn provider_from_source(source: SourceKind) -> String {
         SourceKind::Codex | SourceKind::OpenaiApi => "openai".into(),
         SourceKind::GeminiApi => "google".into(),
         SourceKind::Opencode => "opencode".into(),
+        SourceKind::CopilotCli => "github-copilot".into(),
     }
 }
 

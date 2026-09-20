@@ -126,6 +126,26 @@ pub enum Command {
 
     /// Check for, install, or configure `burn` self-updates.
     Update(UpdateArgs),
+
+    /// Print setup instructions for collectors that need opt-in
+    /// configuration (e.g. GitHub Copilot CLI's OTEL exporter).
+    Init(InitArgs),
+}
+
+/// Per-command flags for `burn init`.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct InitArgs {
+    #[command(subcommand)]
+    pub action: InitAction,
+}
+
+/// Nested subcommand for `burn init`. Required — `burn init` on its own
+/// would have nothing to print.
+#[derive(Debug, Clone, Subcommand)]
+pub enum InitAction {
+    /// Print the COPILOT_OTEL_FILE_EXPORTER_PATH setup for the GitHub
+    /// Copilot CLI collector.
+    Copilot,
 }
 
 #[derive(Debug, Clone, ClapArgs)]

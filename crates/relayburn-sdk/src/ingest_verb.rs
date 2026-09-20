@@ -101,6 +101,7 @@ mod tests {
                 claude_projects_dir: Some(claude.path().to_path_buf()),
                 codex_sessions_dir: Some(codex.path().to_path_buf()),
                 opencode_storage_dir: Some(opencode.path().to_path_buf()),
+                copilot_otel_files: Some(vec![]),
             },
             on_progress: None,
             on_warn: None,

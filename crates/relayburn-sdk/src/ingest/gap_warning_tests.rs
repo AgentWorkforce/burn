@@ -59,6 +59,7 @@ fn pinned_roots(tmp: &TempDir) -> IngestRoots {
         claude_projects_dir: Some(tmp.path().join("claude").join("projects")),
         codex_sessions_dir: Some(tmp.path().join("codex").join("sessions")),
         opencode_storage_dir: Some(tmp.path().join("opencode").join("storage")),
+        copilot_otel_files: Some(vec![]),
     }
 }
 

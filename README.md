@@ -1,8 +1,9 @@
 ![relayburn](./burn-readme-banner.png)
 
 Understand how you're spending tokens in agent CLIs. Burn ingests Claude Code,
-Codex, and OpenCode session logs into a local ledger, then shows cost by model,
-provider, tool, file, workflow, agent, session, and overhead file.
+Codex, and OpenCode session logs — plus GitHub Copilot CLI's opt-in OTEL span
+export — into a local ledger, then shows cost by model, provider, tool, file,
+workflow, agent, session, and overhead file.
 
 ## Quick Start
 
@@ -29,6 +30,7 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn flow`](#burn-flow) | Render a session's inference and subagent flow as Mermaid, SVG, or JSON. |
 | [`burn stamps`](#burn-stamps) | Export enrichment stamps as JSONL. |
 | [`burn ingest`](#burn-ingest) | Import existing or live session logs without wrapping the harness. |
+| [`burn init`](#collector-setup) | Print setup instructions for opt-in collectors (Copilot CLI). |
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
 | [`burn update`](#burn-update) | Check for releases, install an update, or configure automatic checks. |
 
@@ -205,7 +207,8 @@ Run `burn summary --by-provider` to discover model IDs present in your ledger.
 ## `burn ingest`
 
 Use `burn ingest` when sessions already exist, or when another process owns the
-harness spawn. Default mode scans Claude Code, Codex, and OpenCode stores once.
+harness spawn. Default mode scans Claude Code, Codex, and OpenCode stores once,
+plus the GitHub Copilot CLI OTEL export when it is enabled (see below).
 
 | Option | What it does |
 |---|---|
@@ -214,6 +217,24 @@ harness spawn. Default mode scans Claude Code, Codex, and OpenCode stores once.
 | `--quiet` | Suppress stderr progress spinner / breadcrumbs. One-shot mode still writes the final summary on stdout. |
 | `--hook claude` | Read one Claude Code hook payload from stdin and ingest its single transcript via the SDK fast-path. |
 | `--no-fsevents` | In watch mode, use polling instead of filesystem events. |
+
+### Collector setup
+
+**GitHub Copilot CLI** does not write a session log; it emits usage through its
+OpenTelemetry file exporter, and only when you opt in:
+
+```bash
+export COPILOT_OTEL_FILE_EXPORTER_PATH="$HOME/.copilot/otel/copilot.jsonl"
+```
+
+Add that to your shell rc file, restart the shell, and subsequent `copilot`
+sessions emit one JSONL span per API call, which `burn ingest` picks up
+automatically while the variable is set (the exporter file plus
+`~/.copilot/otel/*.jsonl`; without it Copilot ingest is a silent no-op).
+Nothing is recoverable retroactively — the exporter
+must be on before sessions are captured. Run `burn init copilot` to print these
+instructions. Coverage is usage-only: spans carry per-call token counts (input,
+output, cache read/write, reasoning) and the model, but no tool-call content.
 
 | Example | Result |
 |---|---|
@@ -497,7 +518,8 @@ burn ingest
 burn ingest --watch --interval 1000
 ```
 
-`burn ingest` scans Claude, Codex, and OpenCode stores once and uses the same
+`burn ingest` scans Claude, Codex, and OpenCode stores (plus the Copilot CLI
+OTEL export when enabled) once and uses the same
 cursor and dedup path as the reporting commands. `burn ingest --watch` keeps
 that scan loop running in the foreground.
 
@@ -521,7 +543,8 @@ the same session.
 ### What does `burn ingest` do?
 
 Each harness (Claude Code, Codex, OpenCode) writes its own session transcripts
-to disk in its own format. `burn ingest` reads those transcripts, normalizes
+to disk in its own format; GitHub Copilot CLI instead appends OTEL spans to the
+file named by `COPILOT_OTEL_FILE_EXPORTER_PATH` when that export is enabled. `burn ingest` reads those transcripts, normalizes
 them, and writes them into burn's local SQLite ledger so the query commands
 (`summary`, `hotspots`, `overhead`, `compare`) have something to read against.
 Three modes:
