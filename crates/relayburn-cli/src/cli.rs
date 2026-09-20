@@ -130,7 +130,8 @@ pub enum Command {
 
 #[derive(Debug, Clone, ClapArgs)]
 pub struct MeasureArgs {
-    /// Exact transcript/session artifact to parse.
+    /// Exact session source to parse. OpenCode expects its session metadata
+    /// file inside a complete storage tree.
     #[arg(long, value_name = "PATH")]
     pub input: PathBuf,
 

@@ -2,7 +2,7 @@
 //!
 //! Unlike [`crate::ingest`], this module never discovers session stores and
 //! never opens or mutates a Burn ledger. The caller supplies one exact
-//! transcript path plus its harness; Burn parses that input and returns a
+//! session source plus its harness; Burn parses that input and returns a
 //! versioned metrics document suitable for a control plane such as Cloud.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,8 +23,9 @@ pub const SESSION_METRICS_SCHEMA: &str = "burn.session-metrics.v1";
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasureSessionOptions {
-    /// The one transcript/session artifact to parse. No parent directories are
-    /// scanned and no default harness roots are consulted.
+    /// The one session source to parse. Claude Code and Codex use a transcript
+    /// file. OpenCode uses the selected session metadata file inside its
+    /// storage tree and reads only that session's message/part records.
     pub input_path: PathBuf,
     pub harness: Harness,
     /// Optional pricing override in models.dev format. Built-in pricing is
@@ -56,6 +57,13 @@ impl SessionTokenMetrics {
             .total_tokens
             .saturating_add(usage.input)
             .saturating_add(usage.output)
+            // Codex includes reasoning in output; the other supported sources
+            // expose a separate, billable reasoning bucket.
+            .saturating_add(if matches!(turn.source, crate::reader::SourceKind::Codex) {
+                0
+            } else {
+                usage.reasoning
+            })
             .saturating_add(usage.cache_read)
             .saturating_add(cache_write);
     }
@@ -168,9 +176,17 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
     let mut session_ids = BTreeSet::new();
     let mut usage = SessionTokenMetrics::default();
     let mut by_model: BTreeMap<(String, String), ModelAccumulator> = BTreeMap::new();
-    let mut total_cost_usd = 0.0;
     let mut priced_turns = 0_u64;
     let mut unpriced_turns = 0_u64;
+
+    if turns.is_empty() {
+        if matches!(options.harness, Harness::Opencode) {
+            bail!(
+                "OpenCode session produced no measurable turns; provide the selected session metadata file inside a complete storage tree containing message/<sessionId> and part/<messageId> records"
+            );
+        }
+        bail!("session input produced no measurable turns");
+    }
 
     for turn in &turns {
         session_ids.insert(turn.session_id.clone());
@@ -182,7 +198,6 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
         if let Some(cost) = cost_for_turn(turn, &pricing) {
             row.cost_usd += cost.total;
             row.priced_turns = row.priced_turns.saturating_add(1);
-            total_cost_usd += cost.total;
             priced_turns = priced_turns.saturating_add(1);
         } else {
             row.unpriced_turns = row.unpriced_turns.saturating_add(1);
@@ -195,7 +210,7 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
         1 => session_ids.into_iter().next(),
         _ => bail!("input contains turns from more than one session"),
     };
-    let models = by_model
+    let models: Vec<SessionModelMetrics> = by_model
         .into_iter()
         .map(|((provider, model), row)| SessionModelMetrics {
             provider,
@@ -209,6 +224,17 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
             unpriced_turns: row.unpriced_turns,
         })
         .collect();
+    // The document-level integer total is derived from the already-rounded
+    // model rows. This makes Cloud's reconciliation invariant exact:
+    // session cost == sum(models[].cost), never a second independent f64
+    // rounding of the same turns.
+    let cost_usd_micros = if unpriced_turns == 0 {
+        models.iter().try_fold(0_u64, |total, row| {
+            row.cost_usd_micros.and_then(|cost| total.checked_add(cost))
+        })
+    } else {
+        None
+    };
 
     Ok(SessionMetrics {
         schema: SESSION_METRICS_SCHEMA.to_string(),
@@ -216,9 +242,7 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
         harness: options.harness,
         turn_count: turns.len() as u64,
         usage,
-        cost_usd_micros: (unpriced_turns == 0)
-            .then(|| usd_to_micros(total_cost_usd))
-            .flatten(),
+        cost_usd_micros,
         priced_turns,
         unpriced_turns,
         models,
@@ -279,6 +303,48 @@ mod tests {
         // bucket, so totalTokens counts the primary billing buckets once.
         assert_eq!(report.usage.total_tokens, 1_120);
         assert_eq!(report.models[0].provider, "openai");
+    }
+
+    #[test]
+    fn opencode_counts_separate_reasoning_and_reconciles_model_costs() {
+        let report = measure_session(MeasureSessionOptions {
+            input_path: fixture("opencode/multi-turn/storage/session/global/ses_multi.json"),
+            harness: Harness::Opencode,
+            pricing_path: None,
+        })
+        .expect("measure fixture");
+
+        assert_eq!(report.turn_count, 2);
+        assert_eq!(report.usage.reasoning_tokens, 50);
+        assert_eq!(report.usage.total_tokens, 33_360);
+        assert_eq!(report.models.len(), 2);
+        assert_eq!(
+            report.cost_usd_micros,
+            Some(
+                report
+                    .models
+                    .iter()
+                    .map(|model| model.cost_usd_micros.expect("priced fixture"))
+                    .sum()
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_opencode_session_instead_of_reporting_zero_usage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("ses_incomplete.json");
+        std::fs::write(&input, r#"{"id":"ses_incomplete","directory":"/tmp"}"#)
+            .expect("write fixture");
+
+        let error = measure_session(MeasureSessionOptions {
+            input_path: input,
+            harness: Harness::Opencode,
+            pricing_path: None,
+        })
+        .expect_err("incomplete OpenCode session must fail closed");
+
+        assert!(error.to_string().contains("no measurable turns"));
     }
 
     #[test]

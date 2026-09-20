@@ -103,6 +103,48 @@ test('measureSession reports one explicit transcript without a ledger', async (t
   assert.equal(result.models[0].provider, 'openai');
 });
 
+test('measureSession counts OpenCode reasoning and reconciles model costs', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const result = await sdk.measureSession({
+    harness: 'opencode',
+    inputPath: join(
+      REPO_ROOT,
+      'tests',
+      'fixtures',
+      'opencode',
+      'multi-turn',
+      'storage',
+      'session',
+      'global',
+      'ses_multi.json',
+    ),
+  });
+  assert.equal(result.turnCount, 2);
+  assert.equal(result.usage.reasoningTokens, 50);
+  assert.equal(result.usage.totalTokens, 33_360);
+  assert.equal(
+    result.costUsdMicros,
+    result.models.reduce((total, model) => total + model.costUsdMicros, 0),
+  );
+});
+
+test('measureSession rejects an incomplete OpenCode session tree', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const root = mkdtempSync(join(tmpdir(), 'relayburn-sdk-opencode-incomplete-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const inputPath = join(root, 'ses_incomplete.json');
+  writeFileSync(inputPath, JSON.stringify({ id: 'ses_incomplete', directory: '/tmp' }));
+
+  await assert.rejects(
+    sdk.measureSession({ harness: 'opencode', inputPath }),
+    /no measurable turns/,
+  );
+});
+
 test('read verbs return stable shapes against the fixture ledger', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;

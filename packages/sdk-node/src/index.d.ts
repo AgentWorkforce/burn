@@ -138,7 +138,10 @@ export declare function sessionCost(opts?: SessionCostOptions): Promise<SessionC
 
 export type MeasureSessionHarness = 'claude-code' | 'claude' | 'codex' | 'opencode';
 export interface MeasureSessionOptions {
-  /** Exact transcript/session artifact. Burn does not scan its parent directory. */
+  /**
+   * Exact session source. Claude Code and Codex use transcript files.
+   * OpenCode uses the selected session metadata file inside a complete storage tree.
+   */
   inputPath: string;
   harness: MeasureSessionHarness;
   /** Optional models.dev-compatible pricing overlay. */
@@ -174,7 +177,7 @@ export interface SessionMetrics {
   unpricedTurns: number | bigint;
   models: SessionModelMetrics[];
 }
-/** One explicit transcript in, one versioned metrics document out. No discovery or ledger. */
+/** One explicit session in, one versioned metrics document out. No discovery or ledger. */
 export declare function measureSession(opts: MeasureSessionOptions): Promise<SessionMetrics>
 
 export interface FingerprintOptions {

@@ -19,7 +19,7 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 
 | Command | Use it to |
 |---|---|
-| [`burn measure`](#burn-measure) | Turn one explicit session artifact into Cloud-ready token and cost metrics. |
+| [`burn measure`](#burn-measure) | Turn one explicit session source into Cloud-ready token and cost metrics. |
 | [`burn summary`](#burn-summary) | See total usage and cost by model or provider. |
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, and subagents. |
 | [`burn overhead`](#burn-overhead) | Attribute cached prompt cost to `CLAUDE.md`, `.claude/CLAUDE.md`, and `AGENTS.md`. |
@@ -79,8 +79,12 @@ Synthetic-routed models are recognized from `hf:*`,
 ## `burn measure`
 
 Use `burn measure` in a sandbox or runner when the caller already knows the
-one session artifact it wants to report. It parses only that input: it does not
-scan harness stores, create a ledger, or run discovery.
+one session it wants to report. It does not scan for sessions, create a ledger,
+or run discovery. Claude Code and Codex inputs are transcript files. OpenCode
+inputs are the selected `storage/session/<scope>/<sessionId>.json` file inside
+a complete OpenCode storage tree; Burn reads only that session's
+`message/<sessionId>` and referenced `part/<messageId>` records. Missing or
+zero-turn inputs fail closed instead of reporting valid-looking zero usage.
 
 ```bash
 burn --json measure --harness codex --input /run/session.jsonl

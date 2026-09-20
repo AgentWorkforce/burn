@@ -22,8 +22,10 @@ Windows (`win32-x64-msvc`) is not yet shipped — see #247 follow-up.
   and leaves larger values as `bigint`. The declarations widen these fields
   to `number | bigint`.
 - `measureSession({ harness, inputPath })` parses exactly one caller-selected
-  session artifact and returns `burn.session-metrics.v1`; it does not scan
-  harness stores or open a ledger.
+  session and returns `burn.session-metrics.v1`; it does not discover sessions
+  or open a ledger. Claude Code and Codex use transcript files. OpenCode uses
+  its selected session metadata file inside a complete storage tree and reads
+  only that session's message/part records.
 - The SDK exposes read verbs such as `summary()`, `sessionCost()`,
   `hotspots()`, `compare()`, `search()`, `exportLedger()`, and
   `exportStamps()`.
