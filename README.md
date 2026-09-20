@@ -216,6 +216,7 @@ plus the GitHub Copilot CLI OTEL export when it is enabled (see below).
 | `--interval <ms>` | Poll interval in milliseconds. Default: `1000`. |
 | `--quiet` | Suppress stderr progress spinner / breadcrumbs. One-shot mode still writes the final summary on stdout. |
 | `--hook claude` | Read one Claude Code hook payload from stdin and ingest its single transcript via the SDK fast-path. |
+| `--no-fsevents` | In watch mode, use polling instead of filesystem events. |
 
 ### Collector setup
 
@@ -228,12 +229,12 @@ export COPILOT_OTEL_FILE_EXPORTER_PATH="$HOME/.copilot/otel/copilot.jsonl"
 
 Add that to your shell rc file, restart the shell, and subsequent `copilot`
 sessions emit one JSONL span per API call, which `burn ingest` picks up
-automatically (files under `~/.copilot/otel/` are scanned even without the env
-var on the ingest side). Nothing is recoverable retroactively — the exporter
+automatically while the variable is set (the exporter file plus
+`~/.copilot/otel/*.jsonl`; without it Copilot ingest is a silent no-op).
+Nothing is recoverable retroactively — the exporter
 must be on before sessions are captured. Run `burn init copilot` to print these
 instructions. Coverage is usage-only: spans carry per-call token counts (input,
 output, cache read/write, reasoning) and the model, but no tool-call content.
-| `--no-fsevents` | In watch mode, use polling instead of filesystem events. |
 
 | Example | Result |
 |---|---|

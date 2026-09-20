@@ -164,22 +164,25 @@ pub(crate) fn copilot_otel_dir() -> PathBuf {
 }
 
 /// Resolve the Copilot CLI OTEL JSONL files ingest scans. Unlike the other
-/// harnesses this source is env-gated: nothing exists on disk until the
-/// user sets `COPILOT_OTEL_FILE_EXPORTER_PATH` (see #14), so an empty list
-/// is the normal steady state and never an error.
+/// harnesses this source is env-gated: nothing is scanned until the user
+/// sets `COPILOT_OTEL_FILE_EXPORTER_PATH` (see #14), so an empty list is
+/// the normal steady state and never an error. An explicit
+/// [`IngestRoots::copilot_otel_files`] override bypasses the gate so tests
+/// can inject files directly.
 pub(crate) fn copilot_otel_files(roots: &IngestRoots) -> Vec<PathBuf> {
     if let Some(files) = &roots.copilot_otel_files {
         return files.clone();
     }
+    let configured = std::env::var("COPILOT_OTEL_FILE_EXPORTER_PATH")
+        .map(|var| var.trim().to_owned())
+        .unwrap_or_default();
+    if configured.is_empty() {
+        return Vec::new();
+    }
     let mut files: Vec<PathBuf> = Vec::new();
-    if let Ok(var) = std::env::var("COPILOT_OTEL_FILE_EXPORTER_PATH") {
-        let trimmed = var.trim();
-        if !trimmed.is_empty() {
-            let p = PathBuf::from(trimmed);
-            if p.is_file() {
-                files.push(p);
-            }
-        }
+    let p = PathBuf::from(&configured);
+    if p.is_file() {
+        files.push(p);
     }
     for file in list_jsonl_files(&copilot_otel_dir()) {
         if !files.contains(&file) {
@@ -1070,8 +1073,9 @@ fn ingest_opencode_into(
 /// Iterate the Copilot CLI OTEL export files (`COPILOT_OTEL_FILE_EXPORTER_PATH`
 /// plus `$COPILOT_HOME/otel/*.jsonl`), driving
 /// [`parse_copilot_otel_incremental`] with the carried per-session turn
-/// counters and chat-trace set. Env-gated: when neither source exists the
-/// file list is empty and this is a silent no-op (#14).
+/// counters and chat-trace set. Env-gated: without
+/// `COPILOT_OTEL_FILE_EXPORTER_PATH` (and without an explicit roots
+/// override) the file list is empty and this is a silent no-op (#14).
 ///
 /// Rotation handling matches the Claude/Codex adapters: an inode change or
 /// a shrunken file restarts the byte offset at 0, but the per-session
@@ -1155,6 +1159,10 @@ fn ingest_copilot_into(
             report.ingested_sessions += 1;
             ledger.append_turns(&parsed.turns)?;
         }
+        // Keep the inference table in lockstep with the persisted turns,
+        // like every other harness path (issue #434) — otherwise
+        // `burn flow` and span-tree reads see no Copilot API calls.
+        apply_parsed_extras(ledger, &parsed)?;
 
         let next = CopilotCursor {
             inode,
@@ -1404,6 +1412,33 @@ impl_derived_records_common!(ClaudeParseResult);
 impl_derived_records_common!(ClaudeParseIncrementalResult);
 impl_derived_records_common!(ParseCodexIncrementalResult);
 impl_derived_records_common!(ParseOpencodeIncrementalResult);
+
+/// The Copilot OTEL parser emits usage-only turns with no trailing content,
+/// compaction, relationship, tool-result, or user-turn buckets, so every
+/// bucket but `turns` is empty. The `turns` slice feeds the
+/// `apply_parsed_extras` inference materializer; the request-id lookup
+/// stays the trait default (empty) since Copilot spans carry no `requestId`
+/// equivalent, and the inference builder falls back to `message_id`.
+impl DerivedRecords for ParseCopilotIncrementalResult {
+    fn content(&self) -> &[ContentRecord] {
+        &[]
+    }
+    fn events(&self) -> &[CompactionEvent] {
+        &[]
+    }
+    fn relationships(&self) -> &[SessionRelationshipRecord] {
+        &[]
+    }
+    fn tool_result_events(&self) -> &[ToolResultEventRecord] {
+        &[]
+    }
+    fn user_turns(&self) -> &[UserTurnRecord] {
+        &[]
+    }
+    fn turns(&self) -> &[TurnRecord] {
+        &self.turns
+    }
+}
 
 /// Per-type adapter for the `request_id_lookup` override (issue #434).
 /// Specialized for Claude's two result types so they borrow the parser's

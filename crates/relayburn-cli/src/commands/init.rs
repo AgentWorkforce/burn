@@ -8,6 +8,8 @@
 
 use crate::cli::InitArgs;
 
+/// Print the opt-in setup for one collector (`burn init copilot`).
+/// Read-only: never edits shell rc files, only prints copy-pasteable lines.
 pub fn run(args: InitArgs) -> i32 {
     match args.action {
         crate::cli::InitAction::Copilot => {
@@ -23,8 +25,8 @@ pub fn run(args: InitArgs) -> i32 {
                  \x20   export COPILOT_OTEL_FILE_EXPORTER_PATH=\"$HOME/.copilot/otel/copilot.jsonl\"\n\
                  \n\
                  \x20   Add that line to your shell rc file (~/.zshrc, ~/.bashrc, …) so\n\
-                 \x20   new shells pick it up. Any path works; under ~/.copilot/otel/ it is\n\
-                 \x20   picked up even on shells where the export isn't set.\n\
+                 \x20   new shells pick it up — burn ingest only scans Copilot\n\
+                 \x20   files while this variable is set. Any path works.\n\
                  \n\
                  2. Restart your shell (or `source` the rc file), then run Copilot CLI.\n\
                  \n\

@@ -178,6 +178,89 @@ fn invoke_agent_suppressed_across_incremental_passes() {
 }
 
 #[test]
+fn invoke_agent_before_chat_in_same_chunk_is_suppressed() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("copilot.jsonl");
+
+    // Exporter flush order isn't contractual: the aggregate summary can
+    // precede its trace's chat spans in the same chunk. Suppression must
+    // not depend on record order, or the trace is double counted.
+    let summary = br#"{"type":"span","traceId":"t-ord","spanId":"i-ord","name":"invoke_agent","startTime":[1775934259,0],"attributes":{"gen_ai.operation.name":"invoke_agent","gen_ai.conversation.id":"conv-ord","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":2}}"#;
+    let chat = br#"{"type":"span","traceId":"t-ord","spanId":"s-ord","name":"chat m","startTime":[1775934260,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.conversation.id":"conv-ord","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":2}}"#;
+
+    std::fs::write(
+        &path,
+        [summary.as_slice(), b"\n", chat.as_slice(), b"\n"].concat(),
+    )
+    .unwrap();
+    let parsed =
+        parse_copilot_otel_incremental(&path, &ParseCopilotIncrementalOptions::default()).unwrap();
+    assert_eq!(parsed.turns.len(), 1);
+    assert_eq!(parsed.turns[0].message_id, "s-ord");
+}
+
+#[test]
+fn chat_span_name_provides_model_fallback() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("copilot.jsonl");
+
+    // No gen_ai.{request,response}.model attributes: the `chat <model>`
+    // span name is the only model signal and must beat "unknown".
+    let span = br#"{"type":"span","traceId":"t-nm","spanId":"s-nm","name":"chat claude-sonnet-4.6","startTime":[1775934260,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.conversation.id":"conv-nm","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":2}}"#;
+    std::fs::write(&path, [span.as_slice(), b"\n"].concat()).unwrap();
+    let parsed =
+        parse_copilot_otel_incremental(&path, &ParseCopilotIncrementalOptions::default()).unwrap();
+    assert_eq!(parsed.turns.len(), 1);
+    assert_eq!(parsed.turns[0].model, "claude-sonnet-4.6");
+}
+
+#[test]
+fn id_less_spans_get_offset_stable_message_ids() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("copilot.jsonl");
+
+    // Spans with neither spanId nor gen_ai.response.id fall back to a
+    // file-offset identity. A chunk-local index would restart at zero on
+    // the second pass and collide in the ledger key; the absolute offset
+    // keeps the two turns distinct.
+    let line = |trace: &str| {
+        format!(
+            "{{\"type\":\"span\",\"traceId\":\"{trace}\",\"name\":\"chat m\",\"startTime\":[1775934260,0],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-off\",\"gen_ai.usage.input_tokens\":10,\"gen_ai.usage.output_tokens\":2}}}}"
+        )
+    };
+    let line_a = line("t-off-a");
+    let line_b = line("t-off-b");
+    std::fs::write(&path, format!("{line_a}\n")).unwrap();
+    let first =
+        parse_copilot_otel_incremental(&path, &ParseCopilotIncrementalOptions::default()).unwrap();
+    assert_eq!(first.turns.len(), 1);
+    assert_eq!(first.turns[0].message_id, "line-0");
+
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(f, "{line_b}").unwrap();
+    drop(f);
+
+    let second = parse_copilot_otel_incremental(
+        &path,
+        &ParseCopilotIncrementalOptions {
+            start_offset: Some(first.end_offset),
+            resume: Some(first.resume),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(second.turns.len(), 1);
+    assert_eq!(
+        second.turns[0].message_id,
+        format!("line-{}", first.end_offset)
+    );
+    assert_ne!(first.turns[0].message_id, second.turns[0].message_id);
+}
+
+#[test]
 fn empty_and_missing_files() {
     let tmp = tempdir().unwrap();
     let path = tmp.path().join("empty.jsonl");

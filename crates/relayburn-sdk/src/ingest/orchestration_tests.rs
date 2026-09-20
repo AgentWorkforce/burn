@@ -329,6 +329,15 @@ fn ingest_copilot_sessions_round_trips_otel_spans() {
     assert_eq!(turns[0].turn.usage.input, 100);
     assert_eq!(turns[1].turn.usage.output, 20);
 
+    // Inferences stay in lockstep with the persisted turns (issue #434):
+    // one per API call, carrying its usage.
+    let inferences = ledger
+        .query_inferences(&Query::for_session("conv-1"))
+        .unwrap();
+    assert_eq!(inferences.len(), 2);
+    assert_eq!(inferences[0].usage.input, 100);
+    assert_eq!(inferences[1].usage.output, 20);
+
     let cursors = load_cursors(&ledger).unwrap();
     let key = export_file.to_string_lossy().into_owned();
     match cursors.get_typed(&key) {
@@ -352,6 +361,71 @@ fn ingest_copilot_sessions_round_trips_otel_spans() {
     let turns = ledger.query_turns(&Query::for_session("conv-1")).unwrap();
     assert_eq!(turns.len(), 3);
     assert_eq!(turns[2].turn.turn_index, 2);
+}
+
+/// Restores one env var to its prior value on drop so env-mutating tests
+/// can't leak into other tests sharing the process.
+struct RestoreEnv {
+    key: &'static str,
+    prior: Option<String>,
+}
+
+impl Drop for RestoreEnv {
+    fn drop(&mut self) {
+        match &self.prior {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+#[test]
+fn ingest_copilot_sessions_requires_exporter_env_var() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let _restore_exporter = RestoreEnv {
+        key: "COPILOT_OTEL_FILE_EXPORTER_PATH",
+        prior: std::env::var("COPILOT_OTEL_FILE_EXPORTER_PATH").ok(),
+    };
+    let _restore_home = RestoreEnv {
+        key: "COPILOT_HOME",
+        prior: std::env::var("COPILOT_HOME").ok(),
+    };
+
+    // A valid export file sits in the default OTEL dir, but the exporter
+    // variable is unset: the collector must stay a silent no-op (#14
+    // opt-in gate). No explicit roots override, so discovery reads env.
+    let otel_dir = tmp.path().join("copilot-home").join("otel");
+    fs::create_dir_all(&otel_dir).unwrap();
+    let export_file = otel_dir.join("copilot.jsonl");
+    fs::write(
+        &export_file,
+        "{\"type\":\"span\",\"traceId\":\"t-g\",\"spanId\":\"s-g\",\"name\":\"chat m\",\"startTime\":[1775934260,0],\"attributes\":{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-g\",\"gen_ai.usage.input_tokens\":10,\"gen_ai.usage.output_tokens\":2}}\n",
+    )
+    .unwrap();
+    std::env::remove_var("COPILOT_OTEL_FILE_EXPORTER_PATH");
+    std::env::set_var("COPILOT_HOME", tmp.path().join("copilot-home"));
+
+    let roots = IngestRoots {
+        copilot_otel_files: None,
+        ..pinned_roots(&tmp)
+    };
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.scanned_sessions, 0);
+    assert_eq!(report.appended_turns, 0);
+
+    // Opting in picks the same file up.
+    std::env::set_var("COPILOT_OTEL_FILE_EXPORTER_PATH", &export_file);
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.appended_turns, 1);
+    let turns = ledger.query_turns(&Query::for_session("conv-g")).unwrap();
+    assert_eq!(turns.len(), 1);
 }
 
 #[test]

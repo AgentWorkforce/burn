@@ -7,7 +7,9 @@
 //! per line — a `chat` span per API call, an `invoke_agent` summary span per
 //! turn, plus metrics and log records we ignore. Burn additionally globs
 //! `$COPILOT_HOME/otel/*.jsonl` (default `~/.copilot/otel`) so a directory
-//! pointed at by the exporter is covered too.
+//! pointed at by the exporter is covered too. Both are scanned only while
+//! `COPILOT_OTEL_FILE_EXPORTER_PATH` is set — without it ingest is a
+//! silent no-op (test roots can still inject files directly).
 //!
 //! Format reference: tokscale's `sessions/copilot.rs` and the GitHub Docs
 //! Copilot CLI command reference. Notable shapes handled here:
@@ -34,7 +36,7 @@
 //! content, so the emitted [`TurnRecord`]s are usage-only
 //! ([`UsageGranularity::PerMessage`] — one record per API call).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -72,6 +74,10 @@ pub struct CopilotResumeState {
     pub chat_trace_ids: Vec<String>,
 }
 
+/// Turns parsed from one incremental pass over a Copilot OTEL export,
+/// plus the cursor state (`end_offset` + `resume`) the next pass continues
+/// from. `end_offset` stops at the last complete line so a partial tail
+/// still being flushed is re-read next pass.
 #[derive(Debug, Clone, Default)]
 pub struct ParseCopilotIncrementalResult {
     pub turns: Vec<TurnRecord>,
@@ -135,7 +141,13 @@ pub fn parse_copilot_otel_incremental(
     let mut trace_contexts: BTreeMap<String, TraceContext> = BTreeMap::new();
     let mut candidates: Vec<PendingCandidate> = Vec::new();
 
-    for (index, line) in buf[..consumed].split(|b| *b == b'\n').enumerate() {
+    // `consumed` ends on a newline, so every piece (including blanks)
+    // occupies `len + 1` bytes of the file; track the absolute offset so
+    // the `message_id` fallback below stays stable across passes.
+    let mut line_offset = start_offset;
+    for line in buf[..consumed].split(|b| *b == b'\n') {
+        let this_offset = line_offset;
+        line_offset += line.len() as u64 + 1;
         let trimmed = trim_ascii(line);
         if trimmed.is_empty() {
             continue;
@@ -145,15 +157,29 @@ pub fn parse_copilot_otel_incremental(
             Err(_) => continue, // lossy per line: one bad record never truncates the file
         };
         accumulate_trace_context(&mut trace_contexts, &record);
-        if let Some(candidate) = candidate_from_record(&record, index, opts.fallback_ts_ms) {
+        if let Some(candidate) = candidate_from_record(&record, this_offset, opts.fallback_ts_ms) {
             candidates.push(candidate);
         }
     }
 
+    // Suppression must not depend on record order: an `invoke_agent`
+    // summary can precede its trace's `chat` spans in the same chunk
+    // (exporter flush order isn't contractual), so collect this chunk's
+    // chat traces before resolving anything.
+    let chunk_chat_traces: BTreeSet<String> = candidates
+        .iter()
+        .filter(|c| c.kind == SpanKind::Chat)
+        .filter_map(|c| c.trace_id.clone())
+        .collect();
+
     let mut turns = Vec::new();
     for candidate in candidates {
-        let Some(turn) = candidate.resolve(&trace_contexts, &mut resume, session_path.as_deref())
-        else {
+        let Some(turn) = candidate.resolve(
+            &trace_contexts,
+            &chunk_chat_traces,
+            &mut resume,
+            session_path.as_deref(),
+        ) else {
             continue;
         };
         turns.push(turn);
@@ -242,6 +268,15 @@ fn attr_i64_first(attributes: &Map<String, Value>, keys: &[&str]) -> i64 {
 }
 
 const MODEL_ATTRS: &[&str] = &["gen_ai.response.model", "gen_ai.request.model"];
+
+/// Model suffix of a `chat <model>` span name. The exporter always names
+/// chat spans this way, so a usage-bearing span without model attributes
+/// still identifies its model instead of falling back to `"unknown"`.
+fn model_from_span_name(name: &str) -> Option<&str> {
+    name.strip_prefix("chat ")
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+}
 
 /// Session id attribute priority, mirroring tokscale's `SESSION_ATTRS`.
 const SESSION_ATTRS: &[&str] = &[
@@ -361,7 +396,15 @@ fn accumulate_trace_context(contexts: &mut BTreeMap<String, TraceContext>, recor
         .unwrap_or_default();
     let ctx = contexts.entry(trace).or_default();
     if ctx.model.is_none() {
-        ctx.model = first_non_empty_attr(&attributes, MODEL_ATTRS).map(str::to_string);
+        ctx.model = first_non_empty_attr(&attributes, MODEL_ATTRS)
+            .map(str::to_string)
+            .or_else(|| {
+                record
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(model_from_span_name)
+                    .map(str::to_string)
+            });
     }
     if ctx.session_id.is_none() {
         ctx.session_id = best_session_attr(&attributes).map(str::to_string);
@@ -378,18 +421,23 @@ struct PendingCandidate {
     stop_reason: Option<StopReason>,
     ts_ms: i64,
     usage: Usage,
-    /// Position among successfully parsed records in this chunk; fallback
-    /// identity for spans with no `spanId`.
-    index: usize,
+    /// Absolute byte offset of this span's line in the export file;
+    /// fallback identity for spans with no `spanId`. Chunk-local indexes
+    /// would restart at zero on every incremental pass and collide in the
+    /// ledger's `(source, session_id, message_id)` key; the absolute
+    /// offset is stable for a given file generation, so a re-read span
+    /// dedups instead of dropping a later, distinct turn.
+    line_offset: u64,
 }
 
 fn candidate_from_record(
     record: &Value,
-    index: usize,
+    line_offset: u64,
     fallback_ts_ms: Option<i64>,
 ) -> Option<PendingCandidate> {
     let attributes = record.get("attributes").and_then(Value::as_object)?;
     let kind = classify_span(record, attributes)?;
+    let span_name = record.get("name").and_then(Value::as_str).unwrap_or("");
 
     let input = attr_i64(attributes, "gen_ai.usage.input_tokens");
     let output = attr_i64(attributes, "gen_ai.usage.output_tokens");
@@ -457,12 +505,14 @@ fn candidate_from_record(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-        model: first_non_empty_attr(attributes, MODEL_ATTRS).map(str::to_string),
+        model: first_non_empty_attr(attributes, MODEL_ATTRS)
+            .map(str::to_string)
+            .or_else(|| model_from_span_name(span_name).map(str::to_string)),
         session_id: best_session_attr(attributes).map(str::to_string),
         stop_reason,
         ts_ms,
         usage,
-        index,
+        line_offset,
     })
 }
 
@@ -470,6 +520,7 @@ impl PendingCandidate {
     fn resolve(
         self,
         trace_contexts: &BTreeMap<String, TraceContext>,
+        chunk_chat_traces: &BTreeSet<String>,
         resume: &mut CopilotResumeState,
         session_path: Option<&str>,
     ) -> Option<TurnRecord> {
@@ -491,11 +542,9 @@ impl PendingCandidate {
                 }
             }
             SpanKind::AgentSummary => {
-                if self
-                    .trace_id
-                    .as_ref()
-                    .is_some_and(|t| resume.chat_trace_ids.contains(t))
-                {
+                if self.trace_id.as_ref().is_some_and(|t| {
+                    chunk_chat_traces.contains(t) || resume.chat_trace_ids.contains(t)
+                }) {
                     return None;
                 }
             }
@@ -516,7 +565,7 @@ impl PendingCandidate {
         let message_id = self
             .span_id
             .or(self.response_id)
-            .unwrap_or_else(|| format!("line-{}", self.index));
+            .unwrap_or_else(|| format!("line-{}", self.line_offset));
 
         let turn_index = resume
             .session_turn_counts
