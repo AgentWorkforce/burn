@@ -39,8 +39,20 @@ on:
         required: true
         default: false
         type: boolean
+      resume_publish:
+        description: 'Resume an interrupted release by reusing exact package versions already published to npm'
+        required: true
+        default: false
+        type: boolean
+      resume_source_sha:
+        description: 'Original failed release commit SHA (required with resume_publish)'
+        required: false
+      resume_run_id:
+        description: 'Original failed GitHub Actions run ID (required with resume_publish)'
+        required: false
 
 permissions:
+  actions: read
   contents: write
   id-token: write
 
@@ -94,9 +106,73 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_version: ${{ steps.compute.outputs.release_version }}
+      recovery_source: ${{ steps.recovery.outputs.source_commit }}
+      recovery_run_id: ${{ steps.recovery.outputs.run_id }}
+      recovery_release_date: ${{ steps.recovery.outputs.release_date }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate recovery inputs and source
+        id: recovery
+        if: ${{ github.event.inputs.resume_publish == 'true' }}
+        env:
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          RESUME_SOURCE_SHA: ${{ github.event.inputs.resume_source_sha }}
+          RESUME_RUN_ID: ${{ github.event.inputs.resume_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CUSTOM_VERSION" ]; then
+            echo "::error title=Exact recovery version required::Set custom_version to the interrupted release version when resume_publish is enabled."
+            exit 1
+          fi
+          if [ -z "$RESUME_SOURCE_SHA" ]; then
+            echo "::error title=Recovery source required::Set resume_source_sha to the original failed release commit when resume_publish is enabled."
+            exit 1
+          fi
+          if ! [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error title=Recovery run required::Set resume_run_id to the numeric ID of the original failed release run."
+            exit 1
+          fi
+
+          SOURCE_COMMIT=$(git rev-parse "$RESUME_SOURCE_SHA^{commit}" 2>/dev/null || true)
+          if [ -z "$SOURCE_COMMIT" ]; then
+            echo "::error title=Invalid recovery source::$RESUME_SOURCE_SHA does not resolve to a commit."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD; then
+            echo "::error title=Recovery source is not an ancestor::$SOURCE_COMMIT is not an ancestor of the dispatched ref."
+            exit 1
+          fi
+
+          RUN_HEAD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN_ID" --jq .head_sha)
+          RUN_CREATED_AT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN_ID" --jq .created_at)
+          if [ "$RUN_HEAD_SHA" != "$SOURCE_COMMIT" ]; then
+            echo "::error title=Recovery run/source mismatch::Run $RESUME_RUN_ID used $RUN_HEAD_SHA, not $SOURCE_COMMIT."
+            exit 1
+          fi
+          RELEASE_DATE="${RUN_CREATED_AT%%T*}"
+          if ! [[ "$RELEASE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "::error title=Invalid recovery date::Could not derive the release date from run $RESUME_RUN_ID."
+            exit 1
+          fi
+
+          # Recovery may contain the workflow repair that makes resumption
+          # possible, but no release inputs or artifact sources may have moved.
+          if ! git diff --quiet "${SOURCE_COMMIT}..HEAD" -- . ':(exclude).github/workflows/publish.yml'; then
+            echo "::error title=Recovery source drift::Files outside the publish workflow changed after $SOURCE_COMMIT. Resume from a ref with identical release sources."
+            git diff --name-only "${SOURCE_COMMIT}..HEAD" -- . ':(exclude).github/workflows/publish.yml'
+            exit 1
+          fi
+          {
+            echo "source_commit=$SOURCE_COMMIT"
+            echo "run_id=$RESUME_RUN_ID"
+            echo "release_date=$RELEASE_DATE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Recovery source verified: $SOURCE_COMMIT (run $RESUME_RUN_ID, date $RELEASE_DATE)"
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -306,6 +382,8 @@ jobs:
           path: /tmp/sdk-artifacts
           pattern: relayburn-sdk-*
           merge-multiple: false
+          run-id: ${{ needs.resolve-release-version.outputs.recovery_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Stage native SDK binding for tests
         run: |
@@ -484,9 +562,10 @@ jobs:
       # manually published a one-off from another branch between when
       # the precursor ran and now). Catch it before we waste a build +
       # before npm rejects with a less specific error.
-      - name: Verify new versions are not yet published
+      - name: Verify npm package versions
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          RESUME_PUBLISH: ${{ github.event.inputs.resume_publish }}
         run: |
           set -euo pipefail
           declare -A DIRS
@@ -502,10 +581,14 @@ jobs:
             NPM_NAME=$(node -p "require('./$dir/package.json').name")
             EXISTS=$(npm view "$NPM_NAME@$ver" version 2>/dev/null || true)
             if [ -n "$EXISTS" ]; then
-              echo "::error title=Version already published::$NPM_NAME@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
-              exit 1
+              if [ "$RESUME_PUBLISH" != "true" ]; then
+                echo "::error title=Version already published::$NPM_NAME@$ver is already on npm. Pick a different bump type, set custom_version to a higher version, or explicitly resume the interrupted release."
+                exit 1
+              fi
+              echo "$NPM_NAME@$ver: already published — recovery will reuse it"
+            else
+              echo "$NPM_NAME@$ver: unpublished — OK"
             fi
-            echo "$NPM_NAME@$ver: unpublished — OK"
           done
 
       # Per-package CHANGELOG.md generation. For each TS-only package being
@@ -528,13 +611,16 @@ jobs:
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          CHANGELOG_END_REF: ${{ needs.resolve-release-version.outputs.recovery_source }}
+          RECOVERY_RELEASE_DATE: ${{ needs.resolve-release-version.outputs.recovery_release_date }}
         run: |
-          TODAY=$(date -u +%Y-%m-%d)
+          TODAY="${RECOVERY_RELEASE_DATE:-$(date -u +%Y-%m-%d)}"
           cat > /tmp/gen-changelog.mjs << 'GENEOF'
           import { execSync } from 'node:child_process';
           import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
           const [,, key, dir, newVersion, today] = process.argv;
+          const endRef = process.env.CHANGELOG_END_REF || 'HEAD';
           const path = `${dir}/CHANGELOG.md`;
 
           if (newVersion.includes('-')) {
@@ -597,7 +683,7 @@ jobs:
             process.exit(0);
           } else {
             const log = execSync(
-              `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- ${dir}`,
+              `git log ${lastTag}..${endRef} --pretty=format:"%H|%s|%b%x00" --no-merges -- ${dir}`,
               { encoding: 'utf-8' }
             ).trim();
             if (!log) {
@@ -743,8 +829,9 @@ jobs:
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
         env:
           RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
+          RECOVERY_RELEASE_DATE: ${{ needs.resolve-release-version.outputs.recovery_release_date }}
         run: |
-          TODAY=$(date -u +%Y-%m-%d)
+          TODAY="${RECOVERY_RELEASE_DATE:-$(date -u +%Y-%m-%d)}"
           cat > /tmp/gen-root-changelog.mjs << 'GENEOF'
           import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
@@ -949,6 +1036,8 @@ jobs:
           path: /tmp/cli-artifacts
           pattern: relayburn-cli-*
           merge-multiple: false
+          run-id: ${{ needs.resolve-release-version.outputs.recovery_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Stage prebuilt binaries into platform packages
         run: |
@@ -1089,6 +1178,7 @@ jobs:
       - name: Pack + publish
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          RESUME_PUBLISH: ${{ github.event.inputs.resume_publish }}
         run: |
           set -euo pipefail
           PACK_DIR="$RUNNER_TEMP/packs"
@@ -1141,8 +1231,78 @@ jobs:
               exit 1
             fi
 
+            # npm package versions are immutable. A recovery may reuse a
+            # published version only when its unpacked files and executable
+            # modes match the artifact built from the verified source. Compare
+            # canonical contents rather than tarball bytes because gzip/tar
+            # metadata can differ across otherwise identical pack operations.
+            EXISTS=$(npm view "$NPM_NAME@$version" version 2>/dev/null || true)
+            if [ -n "$EXISTS" ]; then
+              if [ "$RESUME_PUBLISH" != "true" ]; then
+                echo "::error title=Version already published::$NPM_NAME@$version appeared after preflight; aborting normal release."
+                exit 1
+              fi
+              COMPARE_DIR="$RUNNER_TEMP/recovery-compare/$key"
+              mkdir -p "$COMPARE_DIR/local" "$COMPARE_DIR/remote" "$COMPARE_DIR/registry"
+              tar -xzf "$TARBALL" -C "$COMPARE_DIR/local"
+              REMOTE_TARBALL_BASENAME=$(npm pack "$NPM_NAME@$version" --silent --pack-destination "$COMPARE_DIR/registry")
+              REMOTE_TARBALL="$COMPARE_DIR/registry/$REMOTE_TARBALL_BASENAME"
+              tar -xzf "$REMOTE_TARBALL" -C "$COMPARE_DIR/remote"
+              if ! diff -qr "$COMPARE_DIR/local/package" "$COMPARE_DIR/remote/package"; then
+                echo "::error title=Published artifact mismatch::$NPM_NAME@$version contents do not match the artifact packed from the verified recovery source."
+                exit 1
+              fi
+              if ! diff \
+                <(cd "$COMPARE_DIR/local/package" && find . -type f -printf '%m %p\n' | sort) \
+                <(cd "$COMPARE_DIR/remote/package" && find . -type f -printf '%m %p\n' | sort); then
+                echo "::error title=Published artifact mode mismatch::$NPM_NAME@$version executable modes do not match the artifact packed from the verified recovery source."
+                exit 1
+              fi
+              echo "==> Reusing $NPM_NAME@$version (artifact contents verified)"
+              continue
+            fi
+
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
             npm publish "$TARBALL" $COMMON_FLAGS
+          done
+
+      # npm's OIDC publisher can return success while the registry still says
+      # a package is being processed. Do not regenerate the lockfile until all
+      # eleven exact versions are readable; pnpm otherwise silently drops an
+      # unavailable optional dependency from the importer and only reports the
+      # mismatch in the later frozen-lockfile check.
+      - name: Wait for npm registry propagation
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
+        run: |
+          set -euo pipefail
+          declare -A DIRS
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            DIRS[$key]="$dir"
+          done <<< "$TARGETS"
+
+          attempts=30
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            key="${entry%%:*}"
+            version="${entry##*:}"
+            dir="${DIRS[$key]}"
+            NPM_NAME=$(node -p "require('./$dir/package.json').name")
+
+            for i in $(seq 1 "$attempts"); do
+              visible=$(npm view "$NPM_NAME@$version" version 2>/dev/null || true)
+              if [ "$visible" = "$version" ]; then
+                echo "$NPM_NAME@$version: visible (attempt $i/$attempts)"
+                break
+              fi
+              if [ "$i" -eq "$attempts" ]; then
+                echo "::error title=npm propagation timeout::$NPM_NAME@$version was not readable after $attempts attempts. Rerun with resume_publish enabled once npm finishes processing it."
+                exit 1
+              fi
+              echo "$NPM_NAME@$version: not visible yet (attempt $i/$attempts); retrying in 10s..."
+              sleep 10
+            done
           done
 
       # Refresh pnpm-lock.yaml AFTER the publish loop so the umbrella
