@@ -94,6 +94,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # Full history: the PR diff below needs the merge base with the
+          # base branch, which a depth-1 checkout doesn't contain.
+          fetch-depth: 0
 
       - name: Setup Rust toolchain
         run: rustup toolchain install
@@ -128,12 +132,15 @@ jobs:
         env:
           BURN_GOLDEN: '1'
         # Exit 2 = surviving mutants (gated by the step below, with a
-        # report); exit 4 = the diff produced no mutants (docs-only PRs).
+        # report). Exit 3 = timeouts only, which rust-oleum reports but
+        # does not gate. Anything else fails the job — notably 4, which
+        # means the unmutated tree's tests are already failing. A
+        # docs-only diff exits 0.
         run: |
           set +e
           cargo mutants --no-shuffle --in-diff pr.diff
           ec=$?
-          if [ "$ec" -ne 0 ] && [ "$ec" -ne 2 ] && [ "$ec" -ne 4 ]; then
+          if [ "$ec" -ne 0 ] && [ "$ec" -ne 2 ] && [ "$ec" -ne 3 ]; then
             exit "$ec"
           fi
 
