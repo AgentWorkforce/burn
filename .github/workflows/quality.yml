@@ -59,9 +59,14 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Install rust-oleum
-        # cargo install no-ops quickly when the pinned version is already
-        # in the cached ~/.cargo/bin.
-        run: cargo install --locked rust-oleum --version "$RUST_OLEUM_VERSION"
+        # The cache keeps ~/.cargo/bin but not cargo's install metadata
+        # (~/.cargo/.crates2.json), so a plain `cargo install` refuses with
+        # "binary already exists". Skip when the cached binary is already
+        # the pinned version; force-reinstall over it otherwise.
+        run: |
+          if [ "$(rust-oleum --version 2>/dev/null)" != "rust-oleum $RUST_OLEUM_VERSION" ]; then
+            cargo install --locked --force rust-oleum --version "$RUST_OLEUM_VERSION"
+          fi
 
       - name: Measure test coverage
         # relayburn-sdk-node is exercised by the Node test suite (ci.yml),
@@ -129,9 +134,14 @@ jobs:
           tool: cargo-mutants
 
       - name: Install rust-oleum
-        # cargo install no-ops quickly when the pinned version is already
-        # in the cached ~/.cargo/bin.
-        run: cargo install --locked rust-oleum --version "$RUST_OLEUM_VERSION"
+        # The cache keeps ~/.cargo/bin but not cargo's install metadata
+        # (~/.cargo/.crates2.json), so a plain `cargo install` refuses with
+        # "binary already exists". Skip when the cached binary is already
+        # the pinned version; force-reinstall over it otherwise.
+        run: |
+          if [ "$(rust-oleum --version 2>/dev/null)" != "rust-oleum $RUST_OLEUM_VERSION" ]; then
+            cargo install --locked --force rust-oleum --version "$RUST_OLEUM_VERSION"
+          fi
 
       - name: Compute PR diff
         run: |
