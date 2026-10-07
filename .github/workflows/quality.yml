@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Pinned so the cached ~/.cargo/bin copy is used only while it is this
+  # version; bumping the pin forces a reinstall through the cache.
+  RUST_OLEUM_VERSION: 0.1.1
+
 concurrency:
   group: quality-${{ github.ref }}
   cancel-in-progress: true
@@ -52,7 +57,9 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Install rust-oleum
-        run: command -v rust-oleum || cargo install --locked rust-oleum
+        # cargo install no-ops quickly when the pinned version is already
+        # in the cached ~/.cargo/bin.
+        run: cargo install --locked rust-oleum --version "$RUST_OLEUM_VERSION"
 
       - name: Measure test coverage
         # relayburn-sdk-node is exercised by the Node test suite (ci.yml),
@@ -120,7 +127,9 @@ jobs:
           tool: cargo-mutants
 
       - name: Install rust-oleum
-        run: command -v rust-oleum || cargo install --locked rust-oleum
+        # cargo install no-ops quickly when the pinned version is already
+        # in the cached ~/.cargo/bin.
+        run: cargo install --locked rust-oleum --version "$RUST_OLEUM_VERSION"
 
       - name: Compute PR diff
         run: |

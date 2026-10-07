@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- New code-quality gate in CI: [rust-oleum](https://github.com/AgentWorkforce/rust-oleum) (our OSS quality ratchet, extracted from this repo) measures cyclomatic/cognitive complexity, Halstead difficulty, lines per file, test coverage, CRAP, surviving mutants, and dead/redundant code against `rust-oleum.toml` (targets plus a shrinking grandfathered baseline); the `Quality` workflow enforces the gate and runs `cargo-mutants` over each PR diff.
+- CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 
 ## [4.1.0] - 2026-09-20
 
