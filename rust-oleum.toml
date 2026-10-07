@@ -1,11 +1,12 @@
-# Code-quality benchmark configuration for `cargo run -p relayburn-quality`.
+# Code-quality gate configuration for rust-oleum
+# (https://github.com/AgentWorkforce/rust-oleum).
 #
 # `[targets]` are the aspirational limits every metric is reported against.
 # The `[baseline]` section grandfathers existing violations at their current
 # ceiling so the CI gate can be enforced today: new violations, and
 # regressions beyond a grandfathered ceiling, fail CI. Shrink the baseline
-# as code improves (`cargo run -p relayburn-quality -- --write-baseline`
-# regenerates it); never grow it.
+# as code improves (`rust-oleum --write-baseline` regenerates it); never
+# grow it.
 
 [targets]
 cyclomatic_max = 22
@@ -17,21 +18,16 @@ crap_max = 25.0
 surviving_mutants_max = 0
 dead_code_max = 0
 redundant_code_max = 0
-ts_any_max = 0
-ts_unknown_max = 0
 
 [sources]
 rust_roots = [
     "crates/relayburn-sdk/src",
     "crates/relayburn-cli/src",
     "crates/relayburn-sdk-node/src",
-    "crates/relayburn-quality/src",
 ]
-ts_roots = ["packages/sdk-node/src", "packages/mcp/src"]
 
 [baseline]
 coverage_min_pct = 80.7
-ts_unknown_max = 45
 
 [baseline.file_loc]
 "crates/relayburn-cli/src/commands/compare.rs" = 657

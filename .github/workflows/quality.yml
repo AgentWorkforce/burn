@@ -1,10 +1,10 @@
 name: Quality
 
-# Code-quality benchmark: measures cyclomatic / cognitive complexity,
-# Halstead difficulty, file size, test coverage, CRAP, dead + redundant
-# code, and TS `any`/`unknown` usage via `cargo run -p relayburn-quality`,
-# gated against the targets + grandfathered baseline in quality.toml.
-# A second PR-only job runs mutation testing over the PR diff.
+# Code-quality gate: rust-oleum (https://github.com/AgentWorkforce/rust-oleum)
+# measures cyclomatic / cognitive complexity, Halstead difficulty, file
+# size, test coverage, CRAP, and dead + redundant code against the targets
+# and grandfathered baseline in rust-oleum.toml. A second PR-only job runs
+# mutation testing over the PR diff.
 
 on:
   pull_request:
@@ -36,6 +36,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             target
@@ -50,15 +51,16 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
+      - name: Install rust-oleum
+        run: command -v rust-oleum || cargo install --locked rust-oleum
+
       - name: Measure test coverage
-        # relayburn-quality is the benchmark tool itself and relayburn-sdk-node
-        # is exercised by the Node test suite (ci.yml), not `cargo test`, so
-        # both are excluded from the cargo coverage denominator.
+        # relayburn-sdk-node is exercised by the Node test suite (ci.yml),
+        # not `cargo test`, so it is excluded from the coverage denominator.
         env:
           BURN_GOLDEN: '1'
         run: >
-          cargo llvm-cov --workspace
-          --exclude relayburn-quality --exclude relayburn-sdk-node
+          cargo llvm-cov --workspace --exclude relayburn-sdk-node
           --lcov --output-path lcov.info
 
       - name: Collect clippy diagnostics
@@ -66,7 +68,7 @@ jobs:
 
       - name: Run quality gate
         run: >
-          cargo run -p relayburn-quality --
+          rust-oleum
           --coverage lcov.info
           --clippy-log clippy-log.json
           --json quality-report.json
@@ -100,6 +102,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             target
@@ -111,6 +114,9 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
+
+      - name: Install rust-oleum
+        run: command -v rust-oleum || cargo install --locked rust-oleum
 
       - name: Compute PR diff
         run: |
@@ -134,7 +140,7 @@ jobs:
       - name: Run quality gate on mutants
         run: |
           if [ -f mutants.out/outcomes.json ]; then
-            cargo run -p relayburn-quality -- \
+            rust-oleum \
               --mutants mutants.out/outcomes.json \
               --github-summary "$GITHUB_STEP_SUMMARY"
           else
