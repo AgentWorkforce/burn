@@ -33,3 +33,4 @@ mutants.out/
 lcov.info
 clippy-log.json
 quality-report.json
+*.profraw
