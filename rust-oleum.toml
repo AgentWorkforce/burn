@@ -4,9 +4,10 @@
 # `[targets]` are the aspirational limits every metric is reported against.
 # The `[baseline]` section grandfathers existing violations at their current
 # ceiling so the CI gate can be enforced today: new violations, and
-# regressions beyond a grandfathered ceiling, fail CI. Shrink the baseline
-# as code improves (`rust-oleum --write-baseline` regenerates it); never
-# grow it.
+# regressions beyond a grandfathered ceiling, fail CI. Ratchet the baseline
+# as code improves (`rust-oleum --write-baseline` regenerates it): per-item
+# ceilings only shrink, and the `coverage_min_pct` floor only rises —
+# regenerate after coverage improves so the new floor locks the gain in.
 
 [targets]
 cyclomatic_max = 22

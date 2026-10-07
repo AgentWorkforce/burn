@@ -45,11 +45,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          # Separate key namespace from ci.yml: the instrumented llvm-cov
-          # target artifacts must not be restored into the plain CI build.
-          key: quality-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          # Separate key namespace from ci.yml and from mutation-diff: the
+          # instrumented llvm-cov target artifacts must not be restored
+          # into the plain CI build, and two jobs saving one key race so
+          # only one save lands.
+          key: quality-benchmark-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
-            quality-cargo-${{ runner.os }}-
+            quality-benchmark-cargo-${{ runner.os }}-
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
@@ -117,9 +119,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: quality-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          key: quality-mutants-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
-            quality-cargo-${{ runner.os }}-
+            quality-mutants-cargo-${{ runner.os }}-
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@v2
