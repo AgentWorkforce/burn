@@ -8,7 +8,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, cpSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  cpSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +42,18 @@ function makeEmptyHome() {
   return home;
 }
 
+// Config-focused freshness tests must not inherit a caller's env override.
+// Top-level node:test cases in this file run sequentially; restore it even if
+// an assertion or native call fails.
+function clearStaleThresholdEnv(t) {
+  const previous = process.env.RELAYBURN_STALE_AFTER_HOURS;
+  delete process.env.RELAYBURN_STALE_AFTER_HOURS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.RELAYBURN_STALE_AFTER_HOURS;
+    else process.env.RELAYBURN_STALE_AFTER_HOURS = previous;
+  });
+}
+
 test('sdk facade exposes the expected verb set', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;
@@ -42,7 +62,9 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'Ledger',
     'ingest',
     'summary',
+    'ledgerFreshness',
     'sessionCost',
+    'measureSession',
     'fingerprint',
     'overhead',
     'overheadTrim',
@@ -54,9 +76,73 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'search',
     'exportLedger',
     'exportStamps',
+    'turnSpanTree',
+    'sessionSpanTrees',
+    'flowGraph',
+    'contextDelta',
   ]) {
     assert.equal(typeof sdk[name], 'function', `${name} should be exported`);
   }
+});
+
+test('measureSession reports one explicit transcript without a ledger', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const result = await sdk.measureSession({
+    harness: 'codex',
+    inputPath: join(REPO_ROOT, 'tests', 'fixtures', 'codex', 'simple-turn.jsonl'),
+  });
+  assert.equal(result.schema, 'burn.session-metrics.v1');
+  assert.equal(result.sessionId, 'sess_simple_1');
+  assert.equal(result.turnCount, 1);
+  assert.equal(result.usage.inputTokens, 600);
+  assert.equal(result.usage.cacheReadTokens, 400);
+  assert.equal(result.usage.outputTokens, 120);
+  assert.equal(result.usage.reasoningTokens, 30);
+  assert.equal(result.models[0].provider, 'openai');
+});
+
+test('measureSession counts OpenCode reasoning and reconciles model costs', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const result = await sdk.measureSession({
+    harness: 'opencode',
+    inputPath: join(
+      REPO_ROOT,
+      'tests',
+      'fixtures',
+      'opencode',
+      'multi-turn',
+      'storage',
+      'session',
+      'global',
+      'ses_multi.json',
+    ),
+  });
+  assert.equal(result.turnCount, 2);
+  assert.equal(result.usage.reasoningTokens, 50);
+  assert.equal(result.usage.totalTokens, 33_360);
+  assert.equal(
+    result.costUsdMicros,
+    result.models.reduce((total, model) => total + model.costUsdMicros, 0),
+  );
+});
+
+test('measureSession rejects an incomplete OpenCode session tree', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const root = mkdtempSync(join(tmpdir(), 'relayburn-sdk-opencode-incomplete-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const inputPath = join(root, 'ses_incomplete.json');
+  writeFileSync(inputPath, JSON.stringify({ id: 'ses_incomplete', directory: '/tmp' }));
+
+  await assert.rejects(
+    sdk.measureSession({ harness: 'opencode', inputPath }),
+    /no measurable turns/,
+  );
 });
 
 test('read verbs return stable shapes against the fixture ledger', async (t) => {
@@ -65,6 +151,12 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
 
   const ledgerHome = makeLedgerHome();
   try {
+    const freshness = await sdk.ledgerFreshness({ ledgerHome });
+    assert.equal(typeof freshness.stale, 'boolean');
+    assert.ok(freshness.staleAfterMs === null || typeof freshness.staleAfterMs === 'number');
+    assert.ok(
+      freshness.lastWriteAtMs === undefined || typeof freshness.lastWriteAtMs === 'number',
+    );
     const summary = await sdk.summary({ ledgerHome });
     assert.equal(typeof summary.totalCost, 'number');
     assert.ok(Array.isArray(summary.byModel));
@@ -129,6 +221,121 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
       session: '11111111-1111-1111-1111-111111111111',
     });
     assert.notEqual(fp.fingerprint, fpSession.fingerprint);
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
+test('span tree, flow graph, and context delta verbs return stable shapes', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const ledgerHome = makeLedgerHome();
+  const session = '11111111-1111-1111-1111-111111111111';
+  try {
+    const trees = await sdk.sessionSpanTrees({ sessionId: session, ledgerHome });
+    assert.ok(Array.isArray(trees));
+    if (trees.length > 0) {
+      assert.equal(trees[0].sessionId, session);
+      assert.equal(typeof trees[0].turnId, 'string');
+      assert.equal(typeof trees[0].root.kind, 'string');
+      assert.ok(Array.isArray(trees[0].root.children));
+
+      const single = await sdk.turnSpanTree({
+        sessionId: session,
+        turnId: trees[0].turnId,
+        ledgerHome,
+      });
+      assert.equal(single.turnId, trees[0].turnId);
+      assert.equal(single.root.kind, trees[0].root.kind);
+    }
+
+    const empty = await sdk.sessionSpanTrees({
+      sessionId: 'not-a-session',
+      ledgerHome,
+    });
+    assert.deepEqual(empty, []);
+
+    await assert.rejects(
+      () => sdk.turnSpanTree({ sessionId: session, turnId: 'missing-turn', ledgerHome }),
+      /turn not found/,
+    );
+
+    const graph = await sdk.flowGraph({ sessionId: session, ledgerHome });
+    assert.equal(graph.sessionId, session);
+    assert.equal(typeof graph.turnCount, 'number');
+    assert.ok(Array.isArray(graph.nodes));
+    assert.ok(Array.isArray(graph.edges));
+    for (const node of graph.nodes) {
+      assert.ok(node.model === null || typeof node.model === 'string');
+    }
+
+    const deltas = await sdk.contextDelta({ session, ledgerHome });
+    assert.ok(Array.isArray(deltas));
+    for (const d of deltas) {
+      assert.equal(typeof d.sessionId, 'string');
+      assert.equal(typeof d.turnId, 'string');
+      assert.equal(typeof d.ownerRail.kind, 'string');
+      assert.ok(
+        typeof d.priorContextTokens === 'number' || typeof d.priorContextTokens === 'bigint',
+      );
+      assert.ok(
+        typeof d.currentContextTokens === 'number' || typeof d.currentContextTokens === 'bigint',
+      );
+      assert.ok(typeof d.deltaTokens === 'number' || typeof d.deltaTokens === 'bigint');
+      assert.ok(Array.isArray(d.intervening));
+    }
+
+    await assert.rejects(
+      () => sdk.contextDelta({ ledgerHome, owner: 'both' }),
+      /invalid owner/,
+    );
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
+test('ledgerFreshness keeps JSONL-only historical imports stale', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+  clearStaleThresholdEnv(t);
+
+  const ledgerHome = mkdtempSync(join(tmpdir(), 'relayburn-historical-ledger-'));
+  try {
+    writeFileSync(join(ledgerHome, 'config.json'),
+      JSON.stringify({ staleness: { thresholdHours: 24 } }));
+    writeFileSync(join(ledgerHome, 'ledger.jsonl'), JSON.stringify({
+      kind: 'turn',
+      record: {
+        v: 1, source: 'codex', sessionId: 'old-session', messageId: 'old-message',
+        turnIndex: 0, ts: '2025-01-01T00:00:00.123Z', model: 'gpt-5.2-codex',
+        usage: { input: 1, output: 1, reasoning: 0, cacheRead: 0, cacheCreate5m: 0, cacheCreate1h: 0 },
+        toolCalls: [],
+      },
+    }) + '\n');
+    const freshness = await sdk.ledgerFreshness({ ledgerHome });
+    assert.equal(freshness.lastWriteAtMs, Date.parse('2025-01-01T00:00:00.123Z'));
+    assert.equal(freshness.stale, true);
+    assert.equal((await sdk.summary({ ledgerHome })).turnCount, 1);
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
+test('ledgerFreshness returns null threshold when warnings are disabled', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+  clearStaleThresholdEnv(t);
+
+  const ledgerHome = makeLedgerHome();
+  try {
+    writeFileSync(
+      join(ledgerHome, 'config.json'),
+      JSON.stringify({ staleness: { thresholdHours: -1 } }),
+    );
+    const freshness = await sdk.ledgerFreshness({ ledgerHome });
+    assert.equal(freshness.staleAfterMs, null);
+    assert.equal(freshness.stale, false);
   } finally {
     rmSync(ledgerHome, { recursive: true, force: true });
   }

@@ -7,6 +7,7 @@ use relayburn_sdk::{
 };
 
 use crate::render::format::{format_uint, format_usd, render_table};
+use crate::render::stdout::write_stdout;
 
 use super::*;
 
@@ -15,9 +16,9 @@ pub(super) fn emit_human(
     limit: usize,
     findings_view: bool,
     rank_by: RankBy,
-) {
+) -> std::io::Result<()> {
     match result {
-        HotspotsResult::Attribution(a) => emit_human_attribution(a, limit, rank_by),
+        HotspotsResult::Attribution(a) => emit_human_attribution(a, limit, rank_by)?,
         // The single-axis group_by surfaces aren't yet tied to a golden
         // snapshot (the snapshot covers the default attribution view),
         // so we render their tables on a best-effort basis with the same
@@ -28,7 +29,7 @@ pub(super) fn emit_human(
             refusal_reason,
             ..
         } => {
-            print_refusal(refusal_reason.as_deref());
+            print_refusal(refusal_reason.as_deref())?;
         }
         HotspotsResult::Bash { rows, .. } => {
             let (heading, sorted) = sort_bash(rows, rank_by);
@@ -44,14 +45,14 @@ pub(super) fn emit_human(
                     "bytes",
                     "cost",
                 ],
-            );
+            )?;
         }
         HotspotsResult::BashVerb {
             refused: Some(true),
             refusal_reason,
             ..
         } => {
-            print_refusal(refusal_reason.as_deref());
+            print_refusal(refusal_reason.as_deref())?;
         }
         HotspotsResult::BashVerb { rows, .. } => {
             let (heading, sorted) = sort_bash_verb(rows, rank_by);
@@ -70,14 +71,14 @@ pub(super) fn emit_human(
                     "cost",
                     "examples",
                 ],
-            );
+            )?;
         }
         HotspotsResult::File {
             refused: Some(true),
             refusal_reason,
             ..
         } => {
-            print_refusal(refusal_reason.as_deref());
+            print_refusal(refusal_reason.as_deref())?;
         }
         HotspotsResult::File { rows, .. } => {
             let (heading, sorted) = sort_file(rows, rank_by);
@@ -95,14 +96,14 @@ pub(super) fn emit_human(
                     "cost",
                     "%attr",
                 ],
-            );
+            )?;
         }
         HotspotsResult::Subagent {
             refused: Some(true),
             refusal_reason,
             ..
         } => {
-            print_refusal(refusal_reason.as_deref());
+            print_refusal(refusal_reason.as_deref())?;
         }
         HotspotsResult::Subagent { rows, .. } => {
             let (heading, sorted) = sort_subagent(rows, rank_by);
@@ -118,19 +119,20 @@ pub(super) fn emit_human(
                     "bytes",
                     "cost",
                 ],
-            );
+            )?;
         }
         HotspotsResult::Findings { findings, .. } => {
             if findings_view {
-                emit_findings_unified(findings);
+                emit_findings_unified(findings)?;
             } else {
-                emit_findings_grouped(findings, limit);
+                emit_findings_grouped(findings, limit)?;
             }
         }
     }
+    Ok(())
 }
 
-fn emit_findings_unified(findings: &[WasteFinding]) {
+fn emit_findings_unified(findings: &[WasteFinding]) -> std::io::Result<()> {
     let mut out: Vec<String> = Vec::new();
     out.push(String::new());
     out.push(format!("findings: {}", format_uint(findings.len() as u64)));
@@ -138,8 +140,8 @@ fn emit_findings_unified(findings: &[WasteFinding]) {
     if findings.is_empty() {
         out.push("  (no hotspot findings)".to_string());
         out.push(String::new());
-        print!("{}", out.join("\n"));
-        return;
+        write_stdout(&out.join("\n"))?;
+        return Ok(());
     }
     let mut rows: Vec<Vec<String>> = vec![vec![
         "severity".into(),
@@ -160,10 +162,10 @@ fn emit_findings_unified(findings: &[WasteFinding]) {
     }
     out.push(render_table(&rows));
     out.push(String::new());
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))
 }
 
-fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) {
+fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) -> std::io::Result<()> {
     let mut out: Vec<String> = Vec::new();
     out.push(String::new());
     out.push(format!("findings: {}", format_uint(findings.len() as u64)));
@@ -171,8 +173,8 @@ fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) {
     if findings.is_empty() {
         out.push("  (no hotspot findings)".to_string());
         out.push(String::new());
-        print!("{}", out.join("\n"));
-        return;
+        write_stdout(&out.join("\n"))?;
+        return Ok(());
     }
     // Group by detector kind, preserving severity-sorted order of the
     // sdk-emitted slice. Within each group we cap at `limit`.
@@ -201,7 +203,7 @@ fn emit_findings_grouped(findings: &[WasteFinding], limit: usize) {
         out.push(render_table(&rows));
         out.push(String::new());
     }
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))
 }
 
 fn finding_cost_label(finding: &WasteFinding) -> String {
@@ -223,7 +225,7 @@ fn severity_label(s: WasteSeverity) -> &'static str {
     }
 }
 
-fn print_refusal(reason: Option<&str>) {
+fn print_refusal(reason: Option<&str>) -> std::io::Result<()> {
     let mut out = String::new();
     out.push('\n');
     if let Some(r) = reason {
@@ -232,10 +234,15 @@ fn print_refusal(reason: Option<&str>) {
     } else {
         out.push_str("hotspots refused for the matched slice.\n");
     }
-    print!("{}", out);
+    write_stdout(&out)
 }
 
-fn print_section_table<I, F>(heading: &str, empty_msg: &str, rows: I, header: &[&str])
+fn print_section_table<I, F>(
+    heading: &str,
+    empty_msg: &str,
+    rows: I,
+    header: &[&str],
+) -> std::io::Result<()>
 where
     I: Iterator<Item = F>,
     F: IntoIterator<Item = String>,
@@ -253,10 +260,14 @@ where
         lines.push(render_table(&all_rows));
     }
     lines.push(String::new());
-    print!("{}", lines.join("\n"));
+    write_stdout(&lines.join("\n"))
 }
 
-fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize, rank_by: RankBy) {
+fn emit_human_attribution(
+    a: &HotspotsAttributionResult,
+    limit: usize,
+    rank_by: RankBy,
+) -> std::io::Result<()> {
     let degraded = a.attribution_degraded;
     let approx_suffix = if degraded { " (approximate)" } else { "" };
     let rank_suffix = match rank_by {
@@ -445,7 +456,7 @@ fn emit_human_attribution(a: &HotspotsAttributionResult, limit: usize, rank_by: 
         out.push(String::new());
     }
 
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))
 }
 
 fn coverage_notice(a: &HotspotsAttributionResult) -> Option<String> {

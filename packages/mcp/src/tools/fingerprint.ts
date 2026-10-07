@@ -1,5 +1,5 @@
-import { fingerprint as sdkFingerprint } from '@relayburn/sdk';
-import type { FingerprintResult as SdkFingerprintResult } from '@relayburn/sdk';
+import { fingerprint as sdkFingerprint, ledgerFreshness as sdkLedgerFreshness } from '@relayburn/sdk';
+import type { FingerprintResult as SdkFingerprintResult, LedgerFreshness } from '@relayburn/sdk';
 
 import type { ToolDefinition } from '../types.js';
 
@@ -8,7 +8,7 @@ export interface FingerprintInput {
   project?: string;
 }
 
-export type FingerprintResult = SdkFingerprintResult;
+export type FingerprintResult = SdkFingerprintResult & { ledgerFreshness: LedgerFreshness };
 
 export interface FingerprintDeps {
   /**
@@ -19,6 +19,7 @@ export interface FingerprintDeps {
     session?: string;
     project?: string;
   }) => Promise<SdkFingerprintResult>;
+  ledgerFreshness?: () => Promise<LedgerFreshness>;
 }
 
 /**
@@ -29,13 +30,16 @@ export interface FingerprintDeps {
  */
 export function createFingerprintTool(deps: FingerprintDeps = {}): ToolDefinition {
   const callFingerprint = deps.fingerprint ?? sdkFingerprint;
+  const callLedgerFreshness = deps.ledgerFreshness ?? sdkLedgerFreshness;
   return {
     name: 'burn__fingerprint',
     description:
       'Cheap polling primitive over the burn ledger. Returns ' +
       '`{count}:{maxMtimeUnix}:{totalBytes}` joined by colons. ' +
       "Clients keep the last-seen value and skip re-querying when it's " +
-      'unchanged. Optionally scoped to a session id or project path. Read-only.',
+      'unchanged. The response also includes ledgerFreshness; check ' +
+      'ledgerFreshness.stale before relying on ledger reads. Optionally scoped ' +
+      'to a session id or project path. Read-only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -61,8 +65,11 @@ export function createFingerprintTool(deps: FingerprintDeps = {}): ToolDefinitio
       const opts: { session?: string; project?: string } = {};
       if (input.sessionId !== undefined) opts.session = input.sessionId;
       if (input.project !== undefined) opts.project = input.project;
-      const result = await callFingerprint(opts);
-      return result;
+      const [result, ledgerFreshness] = await Promise.all([
+        callFingerprint(opts),
+        callLedgerFreshness(),
+      ]);
+      return { ...result, ledgerFreshness };
     },
   };
 }
