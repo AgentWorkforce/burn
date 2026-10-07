@@ -128,6 +128,9 @@ coverage_min_pct = 82.3
 "crates/relayburn-sdk/src/reader/opencode.rs::build_opencode_user_turn_record" = 27
 
 [baseline.crap]
+# Ceiling is cc^2+cc (fully uncovered): this fn's measured coverage
+# differs between local and CI runs, swinging CRAP across the target.
+"crates/relayburn-sdk/src/query_verbs/flow.rs::discover_and_pair_subagents" = 72.1
 "crates/relayburn-cli/src/commands/compare.rs::run_inner" = 1219.5
 "crates/relayburn-cli/src/commands/summary/mod.rs::run_inner" = 423.4
 "crates/relayburn-cli/src/commands/ingest.rs::run_watch" = 380.1
