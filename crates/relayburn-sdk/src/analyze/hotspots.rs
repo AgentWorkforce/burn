@@ -17,11 +17,14 @@ use indexmap::IndexMap;
 use phf::phf_set;
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::cost::{cost_for_turn, effective_model_rate, lookup_model_rate, PER_MILLION};
+use crate::analyze::cost::{cost_for_turn, effective_model_rate, lookup_model_rate};
+
+mod charge;
 use crate::analyze::pricing::PricingTable;
 use crate::analyze::util::{
     group_turns_by_session_sorted, stringify_tool_result, tokens_from_utf16_len,
 };
+use charge::{pay_initial, pay_persistence};
 
 /// How a session's attribution loop allocated cost across tool calls.
 ///
@@ -469,88 +472,19 @@ fn attribute_session(
         //    previous turn. Use THIS turn's rate and (input/cacheCreate) mix
         //    — not the emit turn's.
         if !pending_initial.is_empty() {
-            if let Some(rate) = turn_rate {
-                let new_content = (turn.usage.input
-                    + turn.usage.cache_create_5m
-                    + turn.usage.cache_create_1h) as f64;
-                if new_content > 0.0 {
-                    let input_share = turn.usage.input as f64 / new_content;
-                    let create_share = 1.0 - input_share;
-                    let per_token_price =
-                        input_share * rate.input + create_share * rate.cache_write;
-                    if have_any_sizes {
-                        let sibling_total: f64 = pending_initial
-                            .iter()
-                            .map(|&i| attributions[i].result_tokens as f64)
-                            .sum();
-                        if sibling_total > 0.0 {
-                            // Cap at what turn N+1 actually paid for new
-                            // content — otherwise multiple tool_results
-                            // entering on the same turn could over-attribute
-                            // past the actual paid total.
-                            let cap = sibling_total.min(new_content);
-                            for &i in &pending_initial {
-                                let result_tokens_f = attributions[i].result_tokens as f64;
-                                let tokens = (result_tokens_f / sibling_total) * cap;
-                                let cost = (tokens / PER_MILLION) * per_token_price;
-                                attributions[i].initial_cost = cost;
-                                attributions[i].initial_tokens = tokens;
-                                attributions[i].total_cost += cost;
-                            }
-                        }
-                    } else {
-                        // Even-split: with no per-result sizes, divide this
-                        // turn's (input + cacheCreate) cost evenly across the
-                        // prior emit's tool calls.
-                        let k = pending_initial.len() as f64;
-                        let tokens_per_call = new_content / k;
-                        let cost_per_call = ((turn.usage.input as f64 / PER_MILLION) * rate.input
-                            + ((turn.usage.cache_create_5m + turn.usage.cache_create_1h) as f64
-                                / PER_MILLION)
-                                * rate.cache_write)
-                            / k;
-                        for &i in &pending_initial {
-                            attributions[i].initial_tokens = tokens_per_call;
-                            attributions[i].initial_cost = cost_per_call;
-                            attributions[i].total_cost += cost_per_call;
-                        }
-                    }
-                }
-            }
+            pay_initial(
+                &mut attributions,
+                &pending_initial,
+                turn,
+                turn_rate.as_ref(),
+                have_any_sizes,
+            );
         }
 
         // 2) Persistence cost: each still-cached prior tool_result rides
-        //    along in this turn's cacheRead. Allocate proportionally by size
-        //    so the sum across active results never exceeds the actual
-        //    cacheRead tokens. Eviction signal: a result drops out once the
-        //    turn's cacheRead falls below that single result's size.
+        //    along in this turn's cacheRead.
         if have_any_sizes && !riding_active.is_empty() && turn.usage.cache_read > 0 {
-            if let Some(rate) = turn_rate {
-                let still_cached: Vec<usize> = riding_active
-                    .iter()
-                    .copied()
-                    .filter(|&i| {
-                        let rt = attributions[i].result_tokens;
-                        rt > 0 && turn.usage.cache_read >= rt
-                    })
-                    .collect();
-                if !still_cached.is_empty() {
-                    let active_total: f64 = still_cached
-                        .iter()
-                        .map(|&i| attributions[i].result_tokens as f64)
-                        .sum();
-                    let allocatable = (turn.usage.cache_read as f64).min(active_total);
-                    for &i in &still_cached {
-                        let rt = attributions[i].result_tokens as f64;
-                        let tokens = (rt / active_total) * allocatable;
-                        let cost = (tokens / PER_MILLION) * rate.cache_read;
-                        attributions[i].persistence_tokens += tokens;
-                        attributions[i].persistence_cost += cost;
-                        attributions[i].total_cost += cost;
-                        attributions[i].riding_turns += 1;
-                    }
-                }
-            }
+            pay_persistence(&mut attributions, &riding_active, turn, turn_rate.as_ref());
         }
 
         // 3) Promote yesterday's pendingInitial into the riding-active set,

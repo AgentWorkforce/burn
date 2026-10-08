@@ -260,7 +260,8 @@ pub enum WasteAction {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Ordered least to most severe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WasteSeverity {
     Info,
@@ -494,6 +495,7 @@ pub(crate) fn mark_findings_with_unpriced_sessions(
             .estimated_savings
             .tokens_per_session
             .get_or_insert(usage.tokens);
+        finding.detail = without_dollar_figures(&finding.detail);
         finding.detail.push_str(&format!(
             " Pricing is unavailable for model(s) {}; the dollar estimate is unknown. The session contains {} unpriced tokens.",
             usage.models.join(", "),
@@ -502,7 +504,7 @@ pub(crate) fn mark_findings_with_unpriced_sessions(
     }
 }
 
-use super::util::{fmt_usd, format_with_commas};
+use super::util::{fmt_usd, format_with_commas, without_dollar_figures};
 
 pub fn retry_loop_to_finding(loop_: &RetryLoop) -> WasteFinding {
     let target = match &loop_.target {
@@ -805,14 +807,6 @@ pub(crate) fn findings_from_patterns(result: &PatternsResult) -> Vec<WasteFindin
     findings
 }
 
-fn severity_order(s: WasteSeverity) -> u8 {
-    match s {
-        WasteSeverity::High => 0,
-        WasteSeverity::Warn => 1,
-        WasteSeverity::Info => 2,
-    }
-}
-
 /// Sort in place. Unpriced findings come first and rank by token volume so an
 /// unknown price can never masquerade as a cheap `$0.00` finding. Priced
 /// findings retain the historical severity-descending, then USD-descending
@@ -838,7 +832,7 @@ pub fn sort_findings(findings: &mut [WasteFinding]) {
         if pricing != std::cmp::Ordering::Equal {
             return pricing;
         }
-        let sev = severity_order(a.severity).cmp(&severity_order(b.severity));
+        let sev = b.severity.cmp(&a.severity);
         if sev != std::cmp::Ordering::Equal {
             return sev;
         }
@@ -1144,6 +1138,7 @@ mod tests {
         finding_with_token_savings
             .estimated_savings
             .tokens_per_session = Some(5_000);
+        finding_with_token_savings.detail = "Cumulative turn cost $0.0000 over $1,234.5.".into();
         let mut findings = vec![finding_without_token_savings, finding_with_token_savings];
 
         mark_findings_with_unpriced_sessions(&mut findings, &[turn], &PricingTable::new());
@@ -1160,6 +1155,9 @@ mod tests {
             findings[1].estimated_savings.tokens_per_session,
             Some(5_000)
         );
+        assert!(findings[1]
+            .detail
+            .starts_with("Cumulative turn cost unknown over unknown."));
         assert!(findings[1].detail.contains("future-unpriced-model"));
         assert!(findings[1].detail.contains("443,000 unpriced tokens"));
     }

@@ -1,15 +1,20 @@
-//! Shell-command file-read tokenizer for the edit-heavy / codex-read
-//! detectors. A small, self-contained POSIX-ish shell parser: it splits a
-//! command into segments, tokenizes each segment (honoring quotes), and
-//! decides whether a `cat`/`head`/`tail` invocation has a file operand (vs.
-//! reading stdin via a pipe or heredoc). Ported alongside the rest of
-//! `patterns.ts`; mirrors its regexes line-for-line (noted per function).
+//! Shell-command file-read tokenizer for the edit-heavy detector. A small,
+//! self-contained POSIX-ish shell parser: it splits a command into segments,
+//! tokenizes each segment (honoring quotes), and decides whether a
+//! file-printing command (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`,
+//! `less`, `more`) has a file operand (vs. reading stdin via a pipe or
+//! heredoc).
 //!
 //! Only `shell_command_has_file_read` is used by the parent module.
 
-// Codex shell-read commands (patterns.ts:271): `CODEX_SHELL_READ_COMMANDS`.
-fn is_codex_shell_read_command(name: &str) -> bool {
-    matches!(name, "cat" | "head" | "tail")
+/// Commands that print a file's contents. Search commands (`grep`, `rg`)
+/// are excluded for the same reason the `Grep` tool is: they show matched
+/// lines, not the surrounding code an edit needs.
+fn is_shell_read_command(name: &str) -> bool {
+    matches!(
+        name,
+        "cat" | "head" | "tail" | "sed" | "nl" | "bat" | "less" | "more"
+    )
 }
 
 pub(super) fn shell_command_has_file_read(command: &str) -> bool {
@@ -59,11 +64,36 @@ fn shell_segment_starts_with_file_read(segment: &str) -> bool {
         return false;
     }
     let cmd = command_basename(&tokens[i]);
-    if !is_codex_shell_read_command(&cmd) {
+    if !is_shell_read_command(&cmd) {
         return false;
     }
     let rest: Vec<String> = tokens[i + 1..].to_vec();
+    if cmd == "sed" {
+        return is_sed_print(&rest);
+    }
     has_shell_file_operand(&cmd, &rest)
+}
+
+/// `sed -n <script> <file>…`: a print-only sed over a file. In-place edits
+/// (`-i`) and stream filters without `-n` are not reads.
+fn is_sed_print(tokens: &[String]) -> bool {
+    let flags: Vec<String> = tokens
+        .iter()
+        .map(|t| strip_shell_quotes(t))
+        .take_while(|t| !matches!(t.as_str(), "|" | "&&" | "||" | ";"))
+        .collect();
+    let quiet = flags
+        .iter()
+        .any(|t| t == "--quiet" || (t.starts_with('-') && !t.starts_with("--") && t.contains('n')));
+    let in_place = flags.iter().any(|t| {
+        t.starts_with("--in-place")
+            || (t.starts_with('-') && !t.starts_with("--") && t.contains('i'))
+    });
+    let operands = flags
+        .iter()
+        .filter(|t| !t.starts_with('-') && !t.starts_with('>') && !t.starts_with('<'))
+        .count();
+    quiet && !in_place && operands >= 2
 }
 
 // Mirrors the JS regex `/"[^"]*"|'[^']*'|\S+/g` from patterns.ts:1336.
@@ -233,4 +263,38 @@ fn is_signed_integer(token: &str) -> bool {
         None => token,
     };
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_command_has_file_read as reads;
+
+    #[test]
+    fn file_printing_commands_with_a_file_operand_are_reads() {
+        for command in [
+            "cat src/lib.rs",
+            "head -n 20 src/main.rs",
+            "sed -n '1,80p' src/main.rs",
+            "sed -ne 5p Cargo.toml",
+            "git status && nl -ba src/lib.rs | head",
+            "bat README.md",
+        ] {
+            assert!(reads(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn edits_filters_and_searches_are_not_reads() {
+        for command in [
+            "sed -i 's/a/b/' src/main.rs",
+            "sed -n -i 1p src/main.rs",
+            "sed 's/a/b/' src/main.rs",
+            "sed -n 1p",
+            "git log | sed -n 1,5p",
+            "grep -n foo src/main.rs",
+            "cat <<EOF",
+        ] {
+            assert!(!reads(command), "{command}");
+        }
+    }
 }

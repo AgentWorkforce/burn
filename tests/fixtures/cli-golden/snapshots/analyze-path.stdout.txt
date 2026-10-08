@@ -21,7 +21,7 @@ Bash  4      4       790     $0.0016
 
 hotspots      $0.0001 of $0.0016 attributed (sized)
   command     npm run build · 4 calls · $0.0001
-overhead      1 instruction file(s) cost $0.00 · 3 trim recommendation(s)
+overhead      1 instruction file(s) · 0 tokens re-read · $0.00 · 3 trim recommendation(s)
 context       peak 275 tokens at msg_retry_4 · 0 compactions
 flow          4 inferences · 4 tool uses · 0 subagents · 1 rail(s)
 subagents     none

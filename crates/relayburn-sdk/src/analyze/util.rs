@@ -83,6 +83,15 @@ where
 
 /// Format a USD amount to 4 decimal places (`$0.1234`), matching the TS
 /// finding adapters' money formatting.
+/// `detail` with every dollar figure replaced by `unknown`: in a session
+/// with unpriced turns each figure is a partial (often zero) sum.
+pub(crate) fn without_dollar_figures(detail: &str) -> String {
+    static DOLLARS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\$\d[\d,]*(?:\.\d+)?").expect("dollar regex")
+    });
+    DOLLARS.replace_all(detail, "unknown").into_owned()
+}
+
 pub(crate) fn fmt_usd(n: f64) -> String {
     format!("${n:.4}")
 }

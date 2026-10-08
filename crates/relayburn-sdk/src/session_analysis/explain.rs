@@ -43,16 +43,16 @@ pub(super) fn guidance(code: &str) -> (&'static str, &'static str) {
             "Large tool output is appended to context and re-read from cache on every later turn.",
             "Cap the output (head/tail, quiet flags, an output-length limit) or write verbose output to a file and search it.",
         ),
-        "ghost-surface" => (
-            "Installed skills, agents and commands are described in the system prompt on every turn even though this session never used them.",
-            "Archive or disable the surface this project does not use.",
+        code if code.starts_with("ghost-") => (
+            "Installed agents, commands and skills are described in the system prompt of every session, used or not.",
+            "Archive or delete the unused file (the archive action moves it out of the always-loaded surface) and reinstall it only in the projects that use it.",
         ),
         "tool-call-pattern" => (
             "A run of single-purpose tool calls re-sends the context once per step.",
             "Batch the steps into one call (one broader search, one multi-file edit, one combined git status/diff) or a project script.",
         ),
         "unpriced-usage" => (
-            "burn has no price for this model, so its spend is reported as unknown rather than $0.",
+            "burn has no price for this model, so its spend is reported as unknown, never as free.",
             "Add the model to a models.dev-format pricing file and pass it with --pricing.",
         ),
         "instruction-overhead" => (
@@ -79,6 +79,9 @@ pub(super) fn guidance(code: &str) -> (&'static str, &'static str) {
             "Without per-tool evidence burn cannot say which files, commands or subagents drove the spend.",
             "Analyze a transcript that records tool calls and tool results.",
         ),
-        _ => ("", ""),
+        _ => (
+            "",
+            "Inspect the turns in the evidence and remove the repeated work the title names.",
+        ),
     }
 }

@@ -2,7 +2,7 @@ use super::*;
 
 use std::collections::HashMap;
 
-use crate::reader::{count_retries, normalize_tool_name, SourceKind, ToolCall, TurnRecord};
+use crate::reader::{count_retries, normalize_tool_name, ToolCall, TurnRecord};
 
 use crate::analyze::findings::{EditHeavySession, EditRevertCycle, EditRevertSamplePreview};
 use crate::analyze::pricing::PricingTable;
@@ -104,7 +104,7 @@ pub(crate) fn detect_edit_heavy_for_session(
         let mut turn_has_edit = false;
         for call in &t.tool_calls {
             let name = normalize_tool_name(&call.name);
-            if is_read_for_edit_heavy(call, t.source) {
+            if is_read_for_edit_heavy(call) {
                 read_count += 1;
             } else if is_edit_tool(name) {
                 edit_count += 1;
@@ -139,19 +139,14 @@ pub(crate) fn detect_edit_heavy_for_session(
     }]
 }
 
-fn is_read_for_edit_heavy(call: &ToolCall, source: SourceKind) -> bool {
-    if is_read_tool(normalize_tool_name(&call.name)) {
-        return true;
+/// A call that read file contents: a read tool, or a shell command that
+/// prints a file (`cat`, `head`, `sed -n`, …) from any harness's shell tool.
+fn is_read_for_edit_heavy(call: &ToolCall) -> bool {
+    match normalize_tool_name(&call.name) {
+        "Bash" => call
+            .target
+            .as_deref()
+            .is_some_and(shell_command_has_file_read),
+        name => is_read_tool(name),
     }
-    source == SourceKind::Codex && is_codex_shell_file_read(call)
-}
-
-fn is_codex_shell_file_read(call: &ToolCall) -> bool {
-    if !is_codex_shell_name(&call.name) {
-        return false;
-    }
-    let Some(target) = call.target.as_deref() else {
-        return false;
-    };
-    shell_command_has_file_read(target)
 }

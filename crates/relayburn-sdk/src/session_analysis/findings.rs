@@ -19,6 +19,8 @@ use crate::reader::{StopReason, TurnRecord};
 
 mod detectors;
 
+use detectors::Detail;
+
 /// Context growth at or above this many tokens in one step is a finding.
 const CONTEXT_GROWTH_FINDING_TOKENS: i64 = 20_000;
 /// Context-growth findings kept, largest first.
@@ -72,22 +74,34 @@ pub(super) fn findings(
 ) -> Vec<Finding> {
     let turns = &inputs.records.turns;
     let cx = FindingContext::new(turns);
-    let (mut wastes, mut evidence) = detectors::detections(detections, &cx);
+    let (mut wastes, mut details) = detectors::detections(detections, &cx);
     for unpriced in unpriced_usage_findings(turns, inputs.pricing) {
         wastes.push(unpriced);
-        evidence.push(FindingEvidence {
+        details.push(Detail::from(FindingEvidence {
             models: tally_unpriced(turns, inputs.pricing).1,
             ..Default::default()
-        });
+        }));
     }
+    // Every detection belongs to this session, including installed-surface
+    // rows keyed by their file, so unpriced marking reaches all of them.
+    // Marking also stands the session's whole unpriced volume in for a
+    // missing token estimate; each finding keeps its own estimate instead.
+    let own_tokens: Vec<Option<u64>> = wastes
+        .iter_mut()
+        .map(|w| {
+            w.session_id = inputs.evidence.session.session_id.clone();
+            w.estimated_savings.tokens_per_session
+        })
+        .collect();
     mark_findings_with_unpriced_sessions(&mut wastes, turns, inputs.pricing);
     let priced = wastes
         .iter()
         .all(|w| w.pricing_status == FindingPricingStatus::Priced);
     let mut out: Vec<Finding> = wastes
         .into_iter()
-        .zip(evidence)
-        .map(|(waste, evidence)| from_waste(waste, evidence, &cx))
+        .zip(details)
+        .zip(own_tokens)
+        .map(|((waste, detail), tokens)| from_waste(waste, detail, tokens, &cx))
         .collect();
     if let Some(report) = overhead.data() {
         out.extend(overhead_findings(report, priced));
@@ -101,12 +115,16 @@ pub(super) fn findings(
     out
 }
 
-fn from_waste(waste: WasteFinding, evidence: FindingEvidence, cx: &FindingContext<'_>) -> Finding {
+fn from_waste(
+    waste: WasteFinding,
+    detail: Detail,
+    own_tokens: Option<u64>,
+    cx: &FindingContext<'_>,
+) -> Finding {
     let (why, suggestion) = guidance(&waste.kind);
-    let tokens = waste
-        .estimated_savings
-        .tokens_per_session
-        .or_else(|| cx.evidence_tokens(&evidence));
+    let suggestion = detail.suggestion.unwrap_or(suggestion);
+    let evidence = detail.evidence;
+    let tokens = own_tokens.or_else(|| cx.evidence_tokens(&evidence));
     let cost_usd = match waste.pricing_status {
         FindingPricingStatus::Priced => waste.estimated_savings.usd_per_session,
         FindingPricingStatus::Unpriced => None,
@@ -174,30 +192,46 @@ fn overhead_findings(report: &OverheadReport, priced: bool) -> Vec<Finding> {
         .trim
         .recommendations
         .iter()
-        .filter(|rec| rec.projected_savings.across_window_usd > 0.0)
-        .map(|rec| {
-            let usd = rec.projected_savings.per_session_usd;
-            finding(
-                "instruction-overhead",
-                severity_from_usd(usd),
-                format!("Trim \"{}\" in {}", rec.section.heading, rec.file),
-                format!(
-                    "Lines {}-{} of {} ({} tokens, {:.0}% of the file) stayed in the cached context for this session.",
-                    rec.section.start_line,
-                    rec.section.end_line,
-                    rec.file,
-                    rec.section.tokens,
-                    rec.projected_savings.token_share * 100.0,
-                ),
-                FindingEvidence {
-                    files: vec![rec.file.clone()],
-                    targets: vec![rec.section.heading.clone()],
-                    ..Default::default()
-                },
-                impact(rec.section.tokens, Some(usd), priced),
-            )
+        .filter_map(|rec| {
+            let rides = riding_turns(report, &rec.file);
+            (rides > 0).then(|| {
+                let usd = rec.projected_savings.per_session_usd;
+                finding(
+                    "instruction-overhead",
+                    severity_from_usd(usd),
+                    format!("Trim \"{}\" in {}", rec.section.heading, rec.file),
+                    format!(
+                        "Lines {}-{} of {} ({} tokens, {:.0}% of the file) were re-read from cache on {rides} turn(s) of this session.",
+                        rec.section.start_line,
+                        rec.section.end_line,
+                        rec.file,
+                        rec.section.tokens,
+                        rec.projected_savings.token_share * 100.0,
+                    ),
+                    FindingEvidence {
+                        files: vec![rec.file.clone()],
+                        targets: vec![rec.section.heading.clone()],
+                        ..Default::default()
+                    },
+                    impact(rec.section.tokens * rides, Some(usd), priced),
+                )
+            })
         })
         .collect()
+}
+
+/// Turns of the session that carried the instruction file `file` (a
+/// project-relative path) in their cached context.
+fn riding_turns(report: &OverheadReport, file: &str) -> u64 {
+    report
+        .attribution
+        .per_file
+        .iter()
+        .filter(|entry| entry.path.replace('\\', "/").ends_with(file))
+        .flat_map(|entry| &entry.attribution.session_costs)
+        .map(|session| session.riding_turns)
+        .max()
+        .unwrap_or(0)
 }
 
 fn context_findings(report: &ContextReport, priced: bool) -> Vec<Finding> {
@@ -342,24 +376,25 @@ fn fidelity_findings(
     out
 }
 
-fn rank(a: &Finding, b: &Finding) -> std::cmp::Ordering {
-    let severity = |f: &Finding| match f.severity {
-        WasteSeverity::High => 0,
-        WasteSeverity::Warn => 1,
-        WasteSeverity::Info => 2,
-    };
-    severity(a)
-        .cmp(&severity(b))
-        .then_with(|| {
-            let usd = |f: &Finding| f.impact.cost_usd.unwrap_or(-1.0);
-            usd(b)
-                .partial_cmp(&usd(a))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .then_with(|| {
-            b.impact
-                .tokens
-                .unwrap_or(0)
-                .cmp(&a.impact.tokens.unwrap_or(0))
-        })
+/// Severity first, then estimated impact: priced cost, else tokens. A
+/// finding without a known impact sorts after every finding with one.
+pub(super) fn rank(a: &Finding, b: &Finding) -> std::cmp::Ordering {
+    let ((tier_a, size_a), (tier_b, size_b)) = (impact_rank(&a.impact), impact_rank(&b.impact));
+    b.severity
+        .cmp(&a.severity)
+        .then(tier_b.cmp(&tier_a))
+        .then(size_b.total_cmp(&size_a))
+}
+
+/// `(tier, magnitude)`: tier 2 for a nonzero priced cost, 1 for a nonzero
+/// token count, 0 for no known impact.
+fn impact_rank(impact: &FindingImpact) -> (u8, f64) {
+    let cost = impact
+        .cost_usd
+        .filter(|c| *c > 0.0 && impact.pricing == FindingPricingStatus::Priced);
+    match (cost, impact.tokens.filter(|t| *t > 0)) {
+        (Some(cost), _) => (2, cost),
+        (None, Some(tokens)) => (1, tokens as f64),
+        (None, None) => (0, 0.0),
+    }
 }

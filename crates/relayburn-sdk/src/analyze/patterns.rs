@@ -94,12 +94,6 @@ fn is_edit_tool(name: &str) -> bool {
     EDIT_TOOL_NAMES.contains(&name)
 }
 
-// Codex shell-name recognition (patterns.ts:270): `CODEX_SHELL_NAMES`. The
-// companion `CODEX_SHELL_READ_COMMANDS` check lives in the `shell` submodule.
-fn is_codex_shell_name(name: &str) -> bool {
-    name == "exec_command" || name == "shell"
-}
-
 // ---------------------------------------------------------------------------
 // Public surface
 // ---------------------------------------------------------------------------

@@ -334,15 +334,17 @@ pub(crate) fn attribute_claude_md_refs(
         let mut riding_turns: u64 = 0;
         let mut model_counts: IndexMap<String, u64> = IndexMap::new();
         for t in &turns {
+            // A turn whose cache read covers the files carried them, priced
+            // or not; only priced turns add cost.
+            let rides = t.usage.cache_read >= total_tokens;
+            riding_turns += u64::from(rides);
             let Some(rate) = lookup_model_rate(&t.model, pricing) else {
                 continue;
             };
             *model_counts.entry(t.model.clone()).or_insert(0) += 1;
-            if t.usage.cache_read < total_tokens {
-                continue;
+            if rides {
+                cost += (total_tokens as f64 / PER_MILLION) * rate.cache_read;
             }
-            cost += (total_tokens as f64 / PER_MILLION) * rate.cache_read;
-            riding_turns += 1;
         }
         let dominant = pick_dominant_model(&model_counts);
         session_costs.push(SessionClaudeMdCost {

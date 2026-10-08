@@ -2,13 +2,17 @@
 //! then one line or table per section.
 
 use relayburn_sdk::{
-    ActivityBreakdown, Finding, FindingImpact, SessionAnalysis, StopReasonCounts, WasteSeverity,
+    ActivityBreakdown, BashAggregation, FileAggregation, Finding, FindingImpact,
+    HotspotsAttributionResult, OverheadReport as SessionOverheadReport, SessionAnalysis,
+    StopReasonCounts, WasteSeverity,
 };
 
 use crate::render::format::{format_uint, format_usd, render_table};
 
 /// Rows shown per table and per hotspot list.
 const TOP: usize = 5;
+/// Widest hotspot command shown; JSON keeps the full command.
+const COMMAND_WIDTH: usize = 80;
 
 pub(super) fn render(a: &SessionAnalysis) -> String {
     let mut out = Vec::new();
@@ -187,46 +191,12 @@ fn activity_tables(activity: &ActivityBreakdown, out: &mut Vec<String>) {
 
 fn sections(a: &SessionAnalysis, out: &mut Vec<String>) {
     out.push(String::new());
+    let priced = a.metrics.data().is_some_and(|m| m.unpriced_turns == 0);
     if let Some(h) = a.hotspots.data() {
-        let method = h
-            .sessions
-            .first()
-            .map(|s| wire(&s.attribution_method))
-            .unwrap_or_default();
-        out.push(field(
-            "hotspots",
-            format!(
-                "{} of {} attributed ({method})",
-                format_usd(h.attributed_total),
-                format_usd(h.grand_total)
-            ),
-        ));
-        for row in h.bash.iter().take(TOP) {
-            out.push(format!(
-                "  command     {} · {} calls · {}",
-                row.command.as_deref().unwrap_or(&row.args_hash),
-                row.call_count,
-                format_usd(row.total_cost)
-            ));
-        }
-        for row in h.files.iter().take(TOP) {
-            out.push(format!(
-                "  file        {} · {}",
-                row.path,
-                format_usd(row.total_cost)
-            ));
-        }
+        hotspots(h, priced, out);
     }
     if let Some(o) = a.overhead.data() {
-        out.push(field(
-            "overhead",
-            format!(
-                "{} instruction file(s) cost {} · {} trim recommendation(s)",
-                o.attribution.files.len(),
-                format_usd(o.attribution.grand_total),
-                o.trim.recommendations.len()
-            ),
-        ));
+        out.push(field("overhead", overhead_line(o, priced)));
     }
     if let Some(c) = a.context.data() {
         out.push(field(
@@ -253,7 +223,8 @@ fn sections(a: &SessionAnalysis, out: &mut Vec<String>) {
             "subagents",
             match root.children.len() {
                 0 => "none".to_string(),
-                n => format!("{n} · cumulative {}", format_usd(root.cumulative_cost)),
+                n if priced => format!("{n} · cumulative {}", format_usd(root.cumulative_cost)),
+                n => format!("{n} · cumulative cost unknown (unpriced model)"),
             },
         ));
     }
@@ -266,6 +237,109 @@ fn sections(a: &SessionAnalysis, out: &mut Vec<String>) {
     if let Some(stops) = a.stop_reasons.data() {
         out.push(field("stop reasons", stop_line(stops)));
     }
+}
+
+/// Cost when every turn is priced, else the tokens behind it.
+fn spend(usd: f64, tokens: f64, priced: bool) -> String {
+    if priced {
+        format_usd(usd)
+    } else {
+        format!("{} tokens", format_uint(tokens.round() as u64))
+    }
+}
+
+/// `text` on one line of at most [`COMMAND_WIDTH`] characters.
+fn one_line(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= COMMAND_WIDTH {
+        return flat;
+    }
+    let cut: String = flat.chars().take(COMMAND_WIDTH - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
+fn hotspots(h: &HotspotsAttributionResult, priced: bool, out: &mut Vec<String>) {
+    let method = h
+        .sessions
+        .first()
+        .map(|s| wire(&s.attribution_method))
+        .unwrap_or_default();
+    out.push(field(
+        "hotspots",
+        if priced {
+            format!(
+                "{} of {} attributed ({method})",
+                format_usd(h.attributed_total),
+                format_usd(h.grand_total)
+            )
+        } else {
+            format!("cost unknown (unpriced model) · ranked by tokens ({method})")
+        },
+    ));
+    let mut bash: Vec<&BashAggregation> = h.bash.iter().collect();
+    let mut files: Vec<&FileAggregation> = h.files.iter().collect();
+    if !priced {
+        bash.sort_by(|x, y| {
+            (y.initial_tokens + y.persistence_tokens)
+                .total_cmp(&(x.initial_tokens + x.persistence_tokens))
+        });
+        files.sort_by(|x, y| {
+            (y.initial_tokens + y.persistence_tokens)
+                .total_cmp(&(x.initial_tokens + x.persistence_tokens))
+        });
+    }
+    for row in bash.into_iter().take(TOP) {
+        out.push(format!(
+            "  command     {} · {} calls · {}",
+            one_line(row.command.as_deref().unwrap_or(&row.args_hash)),
+            row.call_count,
+            spend(
+                row.total_cost,
+                row.initial_tokens + row.persistence_tokens,
+                priced
+            )
+        ));
+    }
+    for row in files.into_iter().take(TOP) {
+        out.push(format!(
+            "  file        {} · {}",
+            row.path,
+            spend(
+                row.total_cost,
+                row.initial_tokens + row.persistence_tokens,
+                priced
+            )
+        ));
+    }
+}
+
+fn overhead_line(o: &SessionOverheadReport, priced: bool) -> String {
+    let tokens: u64 = o
+        .attribution
+        .per_file
+        .iter()
+        .map(|f| {
+            let rides = f
+                .attribution
+                .session_costs
+                .iter()
+                .map(|s| s.riding_turns)
+                .max()
+                .unwrap_or(0);
+            f.attribution.total_tokens * rides
+        })
+        .sum();
+    let cost = if priced {
+        format_usd(o.attribution.grand_total)
+    } else {
+        "cost unknown (unpriced model)".to_string()
+    };
+    format!(
+        "{} instruction file(s) · {} tokens re-read · {cost} · {} trim recommendation(s)",
+        o.attribution.files.len(),
+        format_uint(tokens),
+        o.trim.recommendations.len()
+    )
 }
 
 /// The serde wire name of an enum value.
@@ -326,5 +400,43 @@ fn unavailable(a: &SessionAnalysis, out: &mut Vec<String>) {
                 .iter()
                 .map(|c| format!("  {:<15}{}", c.check, c.reason)),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use relayburn_sdk::{analyze_session, AnalyzeSessionOptions, Harness, SessionLocator};
+
+    #[test]
+    fn long_commands_render_on_one_bounded_line() {
+        assert_eq!(one_line("git status\n  && ls"), "git status && ls");
+        let long = format!("cargo test {}", "x".repeat(200));
+        let shown = one_line(&long);
+        assert_eq!(shown.chars().count(), COMMAND_WIDTH);
+        assert!(shown.ends_with('…'));
+    }
+
+    #[test]
+    fn unpriced_sessions_render_tokens_and_never_dollars() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unpriced.jsonl");
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/claude/retry-loop.jsonl"),
+        )
+        .unwrap()
+        .replace("claude-sonnet-4-6", "unpriced-house-model");
+        std::fs::write(&path, text).unwrap();
+        let analysis = analyze_session(AnalyzeSessionOptions::new(SessionLocator::Path {
+            harness: Harness::ClaudeCode,
+            path,
+        }))
+        .unwrap();
+        let report = render(&analysis);
+        assert!(!report.contains('$'), "{report}");
+        assert!(report.contains("hotspots      cost unknown (unpriced model)"));
+        assert!(report.contains("npm run build · 4 calls ·"));
+        assert!(report.contains(" tokens\n"));
     }
 }

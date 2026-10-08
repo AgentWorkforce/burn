@@ -1421,14 +1421,16 @@ mod edit_heavy_sessions {
     }
 
     #[test]
-    fn grep_glob_ls_bash_do_not_count_as_reads() {
+    fn search_and_listing_calls_do_not_count_as_reads() {
         let pricing = load_builtin_pricing();
         let mut turns = edit_heavy_turns(SourceKind::ClaudeCode, "Edit", "s");
         for (i, (id, name, target)) in [
             ("g1", "Grep", None),
             ("g2", "Glob", None),
             ("g3", "LS", None),
-            ("g4", "Bash", Some("cat /etc/hosts")),
+            ("g4", "Bash", Some("grep -n foo src/main.rs")),
+            ("g5", "Bash", Some("sed -i 's/a/b/' src/main.rs")),
+            ("g6", "Bash", Some("ls src && git status")),
         ]
         .iter()
         .enumerate()
@@ -1454,6 +1456,33 @@ mod edit_heavy_sessions {
         );
         assert_eq!(result.edit_heavy_sessions.len(), 1);
         assert_eq!(result.edit_heavy_sessions[0].read_count, 0);
+    }
+
+    #[test]
+    fn claude_bash_file_reads_count_as_reads() {
+        let pricing = load_builtin_pricing();
+        let mut turns = edit_heavy_turns(SourceKind::ClaudeCode, "Edit", "s");
+        for (i, command) in ["cat src/lib.rs", "sed -n '40,120p' src/main.rs"]
+            .iter()
+            .enumerate()
+        {
+            let mut t = turn("s", &format!("r{i}"), 6 + i as u64);
+            t.source = SourceKind::ClaudeCode;
+            t.tool_calls
+                .push(tc_target(&format!("r{i}"), "Bash", "h", command));
+            turns.push(t);
+        }
+        let result = detect_patterns(
+            &turns,
+            &DetectPatternsOptions {
+                pricing: &pricing,
+                compactions: None,
+                user_turns_by_session: None,
+                content_by_session: None,
+                tool_result_events: None,
+            },
+        );
+        assert_eq!(result.edit_heavy_sessions.len(), 0);
     }
 
     #[test]

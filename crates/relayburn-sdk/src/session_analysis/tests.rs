@@ -269,3 +269,130 @@ fn locators_deserialize_from_camel_case() {
     );
     assert_eq!(options.store.db_path, Some(PathBuf::from("/tmp/db")));
 }
+
+/// A Claude install under a temp home whose only session is `retry-loop`
+/// on a model burn has no price for, plus one never-used agent.
+fn unpriced_install() -> (tempfile::TempDir, PathBuf) {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join(".claude/projects/-tmp-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = project.join("retry-loop.jsonl");
+    let text = std::fs::read_to_string(fixture("claude/retry-loop.jsonl"))
+        .unwrap()
+        .replace("claude-sonnet-4-6", "unpriced-house-model");
+    std::fs::write(&transcript, text).unwrap();
+    let agents = home.path().join(".claude/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("forgotten-helper.md"),
+        "---\nname: forgotten-helper\n---\nHelps with things nobody asks for.\n",
+    )
+    .unwrap();
+    (home, transcript)
+}
+
+#[test]
+fn unpriced_sessions_explain_costs_as_unknown_and_rank_by_tokens() {
+    let (_home, transcript) = unpriced_install();
+    let analysis = by_path(Harness::ClaudeCode, transcript);
+
+    let ghost = finding(&analysis, "ghost-agent");
+    assert!(!ghost.suggestion.is_empty());
+    assert_eq!(ghost.impact.cost_usd, None);
+    for f in &analysis.findings {
+        assert!(!f.suggestion.is_empty(), "{} has no suggestion", f.code);
+        assert!(
+            !f.explanation.contains("$0"),
+            "{} explains an unpriced cost as $0: {}",
+            f.code,
+            f.explanation
+        );
+        assert_eq!(f.impact.cost_usd, None, "{}", f.code);
+    }
+    let tokens: Vec<u64> = analysis
+        .findings
+        .iter()
+        .filter(|f| f.severity == WasteSeverity::Info)
+        .map(|f| f.impact.tokens.unwrap_or(0))
+        .collect();
+    let mut sorted = tokens.clone();
+    sorted.sort_by(|a, b| b.cmp(a));
+    assert_eq!(tokens, sorted, "info findings rank by tokens when unpriced");
+
+    // Unpriced turns still attribute tokens to the commands that caused them.
+    let hotspots = analysis.hotspots.data().expect("hotspots");
+    assert!(hotspots.bash[0].initial_tokens > 0.0);
+}
+
+#[test]
+fn findings_with_known_impact_rank_before_unknown_impact() {
+    let impact = |tokens: Option<u64>, cost_usd: Option<f64>| FindingImpact {
+        tokens,
+        cost_usd,
+        pricing: crate::FindingPricingStatus::Priced,
+    };
+    let finding = |code: &str, impact: FindingImpact| Finding {
+        code: code.into(),
+        severity: WasteSeverity::Info,
+        title: String::new(),
+        explanation: String::new(),
+        evidence: FindingEvidence::default(),
+        impact,
+        suggestion: String::new(),
+        actions: Vec::new(),
+    };
+    let mut findings = [
+        finding("none", impact(None, None)),
+        finding("zero", impact(Some(0), Some(0.0))),
+        finding("tokens", impact(Some(6_000), None)),
+        finding("cheap", impact(Some(10), Some(0.01))),
+        finding("dear", impact(Some(1), Some(0.5))),
+    ];
+    findings.sort_by(findings::rank);
+    let order: Vec<&str> = findings.iter().map(|f| f.code.as_str()).collect();
+    assert_eq!(order, ["dear", "cheap", "tokens", "none", "zero"]);
+}
+
+#[test]
+fn every_finding_code_carries_a_suggestion() {
+    let codes = crate::query_verbs::default_hotspots_finding_kinds()
+        .into_iter()
+        .chain(
+            [
+                "ghost-agent",
+                "ghost-skill",
+                "ghost-command",
+                "instruction-overhead",
+                "context-growth",
+                "max-tokens-stop",
+                "refusal",
+                "usage-unrecorded",
+                "attribution-unavailable",
+            ]
+            .map(String::from),
+        );
+    for code in codes {
+        let (_, suggestion) = explain::guidance(&code);
+        assert!(!suggestion.is_empty(), "{code}");
+    }
+}
+
+#[test]
+fn unpriced_instruction_files_still_report_their_tokens() {
+    let (_home, transcript) = unpriced_install();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("CLAUDE.md"),
+        format!("# Build\n\n{}\n", "Run the full build. ".repeat(6)),
+    )
+    .unwrap();
+    let mut options = AnalyzeSessionOptions::new(SessionLocator::Path {
+        harness: Harness::ClaudeCode,
+        path: transcript,
+    });
+    options.project_dir = Some(project.path().to_path_buf());
+    let analysis = analyze_session(options).unwrap();
+    let trim = finding(&analysis, "instruction-overhead");
+    assert!(trim.impact.tokens.unwrap() > 0);
+    assert_eq!(trim.impact.cost_usd, None);
+}
