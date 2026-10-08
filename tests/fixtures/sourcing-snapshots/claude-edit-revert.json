@@ -1,0 +1,347 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "msg_er_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 100,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_edit_1",
+          "name": "Edit",
+          "target": "/src/foo.ts",
+          "argsHash": "5b3057ccafb792a5",
+          "editPreHash": "4aad210793b5d830",
+          "editPostHash": "72b6ea86479465bd"
+        }
+      ],
+      "filesTouched": [
+        "/src/foo.ts"
+      ],
+      "stopReason": "tool-use",
+      "activity": "coding",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "msg_er_2",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:03.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 5,
+        "output": 3,
+        "reasoning": 0,
+        "cacheRead": 100,
+        "cacheCreate5m": 50,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "msg_er_3",
+      "turnIndex": 2,
+      "ts": "2026-04-20T00:00:05.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 5,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 150,
+        "cacheCreate5m": 50,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_edit_2",
+          "name": "Edit",
+          "target": "/src/foo.ts",
+          "argsHash": "0f15f10a00faafc3",
+          "editPreHash": "72b6ea86479465bd",
+          "editPostHash": "4aad210793b5d830"
+        }
+      ],
+      "filesTouched": [
+        "/src/foo.ts"
+      ],
+      "stopReason": "tool-use",
+      "activity": "coding",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "tweak the file"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "msg_er_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_edit_1",
+        "name": "Edit",
+        "input": {
+          "file_path": "/src/foo.ts",
+          "new_string": "const FOO = 2;",
+          "old_string": "const FOO = 1;"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_edit_1",
+        "content": "ok"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "msg_er_2",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "looking at other file"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "hmm that broke tests, revert it"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "msg_er_3",
+      "ts": "2026-04-20T00:00:05.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_edit_2",
+        "name": "Edit",
+        "input": {
+          "file_path": "/src/foo.ts",
+          "new_string": "const FOO = 1;",
+          "old_string": "const FOO = 2;"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "u-user-4",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_edit_2",
+        "content": "ok"
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "u-user-2",
+      "toolUseId": "tu_edit_1",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-20T00:00:02.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 2,
+      "outputBytes": 2,
+      "outputTruncated": false,
+      "contentHash": "2689367b205c16ce"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "messageId": "u-user-4",
+      "toolUseId": "tu_edit_2",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-20T00:00:06.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 2,
+      "outputBytes": 2,
+      "outputTruncated": false,
+      "contentHash": "2689367b205c16ce"
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_er_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 14,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "userUuid": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "precedingMessageId": "msg_er_1",
+      "followingMessageId": "msg_er_2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_edit_1",
+          "byteLen": 2,
+          "approxTokens": 1
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "userUuid": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "precedingMessageId": "msg_er_2",
+      "followingMessageId": "msg_er_3",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 31,
+          "approxTokens": 8
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "revert-session",
+      "userUuid": "u-user-4",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "precedingMessageId": "msg_er_3",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_edit_2",
+          "byteLen": 2,
+          "approxTokens": 1
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

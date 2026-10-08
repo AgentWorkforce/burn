@@ -1,0 +1,372 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "msg_utb_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_bash_1",
+          "name": "Bash",
+          "target": "ls",
+          "argsHash": "4cf29611a6693486"
+        },
+        {
+          "id": "tu_read_1",
+          "name": "Read",
+          "target": "/src/app.ts",
+          "argsHash": "3e921289309f921f"
+        }
+      ],
+      "filesTouched": [
+        "/src/app.ts"
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "msg_utb_2",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:03.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 22,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_bash_2",
+          "name": "Bash",
+          "target": "npm run build",
+          "argsHash": "5c263ac899cef39b",
+          "isError": true
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "msg_utb_3",
+      "turnIndex": 2,
+      "ts": "2026-04-20T00:00:05.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 11,
+        "output": 2,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "please fix the build"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "msg_utb_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_bash_1",
+        "name": "Bash",
+        "input": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "msg_utb_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_read_1",
+        "name": "Read",
+        "input": {
+          "file_path": "/src/app.ts"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_bash_1",
+        "content": "a\nb\n"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_read_1",
+        "content": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "msg_utb_2",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_bash_2",
+        "name": "Bash",
+        "input": {
+          "command": "npm run build"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_bash_2",
+        "content": "npm ERR! ENOENT",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "msg_utb_3",
+      "ts": "2026-04-20T00:00:05.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "done"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "u-user-2",
+      "toolUseId": "tu_bash_1",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-20T00:00:02.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 4,
+      "outputBytes": 4,
+      "outputTruncated": false,
+      "contentHash": "911169ddaaf146af"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "u-user-2",
+      "toolUseId": "tu_read_1",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-20T00:00:02.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 100,
+      "outputBytes": 100,
+      "outputTruncated": false,
+      "contentHash": "d82c6aa133a0fc25"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "messageId": "u-user-3",
+      "toolUseId": "tu_bash_2",
+      "callIndex": 0,
+      "eventIndex": 2,
+      "ts": "2026-04-20T00:00:04.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 15,
+      "outputBytes": 15,
+      "outputTruncated": false,
+      "contentHash": "991124789eb58e8d",
+      "isError": true
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_utb_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 20,
+          "approxTokens": 5
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "userUuid": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "precedingMessageId": "msg_utb_1",
+      "followingMessageId": "msg_utb_2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_bash_1",
+          "byteLen": 4,
+          "approxTokens": 1
+        },
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_read_1",
+          "byteLen": 100,
+          "approxTokens": 25
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "utb-session",
+      "userUuid": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "precedingMessageId": "msg_utb_2",
+      "followingMessageId": "msg_utb_3",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_bash_2",
+          "byteLen": 15,
+          "approxTokens": 4,
+          "isError": true
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

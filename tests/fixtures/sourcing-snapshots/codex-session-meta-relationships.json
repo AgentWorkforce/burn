@@ -1,0 +1,77 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_meta_child",
+      "messageId": "turn_meta_1",
+      "turnIndex": 0,
+      "ts": "2026-04-24T00:00:00.100Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 80,
+        "output": 10,
+        "reasoning": 2,
+        "cacheRead": 20,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "reasoning",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_meta_child",
+      "relationshipType": "root",
+      "ts": "2026-04-24T00:00:00.000Z",
+      "sourceSessionId": "sess_original",
+      "sourceVersion": "0.130.0"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_meta_child",
+      "relatedSessionId": "sess_fork_base",
+      "relationshipType": "fork",
+      "ts": "2026-04-24T00:00:00.000Z",
+      "sourceSessionId": "sess_original",
+      "sourceVersion": "0.130.0"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_meta_child",
+      "relatedSessionId": "sess_previous",
+      "relationshipType": "continuation",
+      "ts": "2026-04-24T00:00:00.000Z",
+      "sourceSessionId": "sess_original",
+      "sourceVersion": "0.130.0"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [],
+  "requestIdLookup": []
+}

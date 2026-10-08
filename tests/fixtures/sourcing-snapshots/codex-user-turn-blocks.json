@@ -1,0 +1,420 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_1",
+      "turnIndex": 0,
+      "ts": "2026-04-21T00:00:00.200Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 100,
+        "output": 50,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_b1",
+          "name": "exec_command",
+          "target": "ls",
+          "argsHash": "a908494c958996ec"
+        }
+      ],
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "turnIndex": 1,
+      "ts": "2026-04-21T00:00:01.200Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 55,
+        "output": 35,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_b2",
+          "name": "exec_command",
+          "target": "npm test",
+          "argsHash": "a49163c1cbde3bb8"
+        },
+        {
+          "id": "call_p1",
+          "name": "apply_patch",
+          "target": "/tmp/project/x.ts",
+          "argsHash": "2d90b6ac275369d8"
+        }
+      ],
+      "filesTouched": [
+        "/tmp/project/x.ts"
+      ],
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_3",
+      "turnIndex": 2,
+      "ts": "2026-04-21T00:00:02.200Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 43,
+        "output": 25,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_b3",
+          "name": "exec_command",
+          "target": "echo done",
+          "argsHash": "2f7d29b1850faf28"
+        }
+      ],
+      "activity": "exploration",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_1",
+      "ts": "2026-04-21T00:00:00.100Z",
+      "role": "user",
+      "kind": "text",
+      "text": "fix the build"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_1",
+      "ts": "2026-04-21T00:00:00.400Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_b1",
+        "name": "exec_command",
+        "input": {
+          "cmd": "ls"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_1",
+      "ts": "2026-04-21T00:00:00.600Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_b1",
+        "content": "a\n"
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "ts": "2026-04-21T00:00:01.100Z",
+      "role": "user",
+      "kind": "text",
+      "text": "now run tests"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "ts": "2026-04-21T00:00:01.400Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_b2",
+        "name": "exec_command",
+        "input": {
+          "cmd": "npm test"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "ts": "2026-04-21T00:00:01.600Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_b2",
+        "content": "FAIL: 1 test broke"
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "ts": "2026-04-21T00:00:01.700Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_p1",
+        "name": "apply_patch",
+        "input": {
+          "input": "*** Begin Patch\n*** Update File: /tmp/project/x.ts\n@@\n+ok\n*** End Patch\n"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "ts": "2026-04-21T00:00:01.800Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_p1",
+        "content": "patched"
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_3",
+      "ts": "2026-04-21T00:00:02.400Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_b3",
+        "name": "exec_command",
+        "input": {
+          "cmd": "echo done"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_3",
+      "ts": "2026-04-21T00:00:02.600Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_b3",
+        "content": "done\n"
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "relationshipType": "root",
+      "ts": "2026-04-21T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_1",
+      "toolUseId": "call_b1",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-21T00:00:00.600Z",
+      "status": "completed",
+      "eventSource": "function_call_output",
+      "contentLength": 2,
+      "outputBytes": 2,
+      "contentHash": "87428fc522803d31"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "toolUseId": "call_b2",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-21T00:00:01.600Z",
+      "status": "errored",
+      "eventSource": "function_call_output",
+      "contentLength": 18,
+      "outputBytes": 18,
+      "contentHash": "df77cc9bc703e088",
+      "isError": true
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_2",
+      "toolUseId": "call_p1",
+      "callIndex": 0,
+      "eventIndex": 2,
+      "ts": "2026-04-21T00:00:01.800Z",
+      "status": "completed",
+      "eventSource": "function_call_output",
+      "contentLength": 7,
+      "outputBytes": 7,
+      "contentHash": "d7017ebcd65455e7"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "messageId": "turn_utb_3",
+      "toolUseId": "call_b3",
+      "callIndex": 0,
+      "eventIndex": 3,
+      "ts": "2026-04-21T00:00:02.600Z",
+      "status": "completed",
+      "eventSource": "function_call_output",
+      "contentLength": 5,
+      "outputBytes": 5,
+      "contentHash": "d117fa006ba92085"
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "userUuid": "sess_codex_utb:start->turn_utb_1",
+      "ts": "2026-04-21T00:00:00.100Z",
+      "followingMessageId": "turn_utb_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 13,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "userUuid": "sess_codex_utb:turn_utb_1->turn_utb_2",
+      "ts": "2026-04-21T00:00:00.600Z",
+      "precedingMessageId": "turn_utb_1",
+      "followingMessageId": "turn_utb_2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "call_b1",
+          "byteLen": 2,
+          "approxTokens": 1
+        },
+        {
+          "kind": "text",
+          "byteLen": 13,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "userUuid": "sess_codex_utb:turn_utb_2->turn_utb_3",
+      "ts": "2026-04-21T00:00:01.600Z",
+      "precedingMessageId": "turn_utb_2",
+      "followingMessageId": "turn_utb_3",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "call_b2",
+          "byteLen": 18,
+          "approxTokens": 5,
+          "isError": true
+        },
+        {
+          "kind": "tool_result",
+          "toolUseId": "call_p1",
+          "byteLen": 7,
+          "approxTokens": 2
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

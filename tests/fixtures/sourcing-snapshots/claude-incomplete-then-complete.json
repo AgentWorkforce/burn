@@ -1,0 +1,152 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_done_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 5,
+        "output": 2,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_inprog_1",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:02.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 7,
+        "output": 3,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "hi"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_done_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "done"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_inprog_1",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "working..."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "sourceVersion": "2.1.96"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_done_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 2,
+          "approxTokens": 1
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "33333333-3333-3333-3333-333333333333",
+      "msg_done_1",
+      "req_1"
+    ],
+    [
+      "33333333-3333-3333-3333-333333333333",
+      "msg_inprog_1",
+      "req_2"
+    ]
+  ]
+}

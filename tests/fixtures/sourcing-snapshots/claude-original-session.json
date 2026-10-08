@@ -1,0 +1,100 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "msg_original_1",
+      "turnIndex": 0,
+      "ts": "2026-04-21T23:59:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 4,
+        "output": 2,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "u-original-user",
+      "ts": "2026-04-21T23:59:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "start the work"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "msg_original_1",
+      "ts": "2026-04-21T23:59:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "On it."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "relationshipType": "root",
+      "ts": "2026-04-21T23:59:00.000Z",
+      "sourceVersion": "2.1.97"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "userUuid": "u-original-user",
+      "ts": "2026-04-21T23:59:00.000Z",
+      "followingMessageId": "msg_original_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 14,
+          "approxTokens": 4
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "msg_original_1",
+      "req_o"
+    ]
+  ]
+}

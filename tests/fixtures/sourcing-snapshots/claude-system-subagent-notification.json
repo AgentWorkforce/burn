@@ -1,0 +1,106 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_system_1",
+      "turnIndex": 0,
+      "ts": "2026-04-24T01:00:00.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 8,
+        "output": 4,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_system",
+          "name": "Agent",
+          "target": "Explore",
+          "argsHash": "48cf6691bfc34263"
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "delegation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_system_1",
+      "ts": "2026-04-24T01:00:00.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_system",
+        "name": "Agent",
+        "input": {
+          "description": "inspect the tree",
+          "subagent_type": "Explore"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "relationshipType": "root",
+      "ts": "2026-04-24T01:00:00.000Z",
+      "sourceVersion": "2.1.98"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "toolUseId": "toolu_system",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-24T01:00:01.000Z",
+      "status": "completed",
+      "eventSource": "subagent_notification",
+      "contentLength": 18,
+      "outputBytes": 18,
+      "outputTruncated": false,
+      "contentHash": "27c3b3affa9807cf",
+      "subagentSessionId": "session-system-child",
+      "agentId": "agent-system-1"
+    }
+  ],
+  "userTurns": [],
+  "requestIdLookup": [
+    [
+      "22222222-2222-2222-2222-222222222222",
+      "msg_system_1",
+      "req_system"
+    ]
+  ]
+}

@@ -1,0 +1,217 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "msg_bug_assistant",
+      "turnIndex": 0,
+      "ts": "2026-05-01T00:00:02.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1,
+        "output": 1,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_edit_bug",
+          "name": "Edit",
+          "target": "/tmp/project/src/auth.ts",
+          "argsHash": "7bc0a0bdf1453524",
+          "editPreHash": "a0d94ca2b396bad0",
+          "editPostHash": "45bcc67d340a204b"
+        }
+      ],
+      "filesTouched": [
+        "/tmp/project/src/auth.ts"
+      ],
+      "stopReason": "end-turn",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "msg_feature_assistant",
+      "turnIndex": 1,
+      "ts": "2026-05-01T00:00:03.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1,
+        "output": 1,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_edit_feature",
+          "name": "Edit",
+          "target": "/tmp/project/src/billing.ts",
+          "argsHash": "dfd9e03ac822376f",
+          "editPreHash": "ea7a98981cbe75cf",
+          "editPostHash": "e3cc64a358c19640"
+        }
+      ],
+      "filesTouched": [
+        "/tmp/project/src/billing.ts"
+      ],
+      "stopReason": "end-turn",
+      "activity": "feature",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "u-user-bug",
+      "ts": "2026-05-01T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "fix the bug in auth.ts"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "u-user-feature",
+      "ts": "2026-05-01T00:00:00.500Z",
+      "role": "user",
+      "kind": "text",
+      "text": "add a new feature to billing.ts"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "msg_bug_assistant",
+      "ts": "2026-05-01T00:00:02.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_edit_bug",
+        "name": "Edit",
+        "input": {
+          "file_path": "/tmp/project/src/auth.ts",
+          "new_string": "const x = 2",
+          "old_string": "const x = 1"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "messageId": "msg_feature_assistant",
+      "ts": "2026-05-01T00:00:03.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_edit_feature",
+        "name": "Edit",
+        "input": {
+          "file_path": "/tmp/project/src/billing.ts",
+          "new_string": "const y = 2",
+          "old_string": "const y = 1"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "relationshipType": "root",
+      "ts": "2026-05-01T00:00:00.000Z",
+      "sourceVersion": "2.1.96"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "userUuid": "u-user-bug",
+      "ts": "2026-05-01T00:00:00.000Z",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 22,
+          "approxTokens": 6
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "userUuid": "u-user-feature",
+      "ts": "2026-05-01T00:00:00.500Z",
+      "followingMessageId": "msg_bug_assistant",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 31,
+          "approxTokens": 8
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "msg_bug_assistant",
+      "req_bug"
+    ],
+    [
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "msg_feature_assistant",
+      "req_feature"
+    ]
+  ]
+}

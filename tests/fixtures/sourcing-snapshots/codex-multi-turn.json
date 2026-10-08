@@ -1,0 +1,116 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_multi_1",
+      "messageId": "turn_multi_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T02:00:00.200Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "reasoning": 50,
+        "cacheRead": 1000,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "reasoning",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_multi_1",
+      "messageId": "turn_multi_2",
+      "turnIndex": 1,
+      "ts": "2026-04-20T02:00:10.100Z",
+      "model": "gpt-5.3-codex",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 2500,
+        "output": 500,
+        "reasoning": 50,
+        "cacheRead": 2500,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_m2_1",
+          "name": "exec_command",
+          "target": "ls",
+          "argsHash": "a908494c958996ec"
+        }
+      ],
+      "activity": "exploration",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_multi_1",
+      "messageId": "turn_multi_2",
+      "ts": "2026-04-20T02:00:11.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_m2_1",
+        "name": "exec_command",
+        "input": {
+          "cmd": "ls"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_multi_1",
+      "relationshipType": "root",
+      "ts": "2026-04-20T02:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [],
+  "requestIdLookup": []
+}
