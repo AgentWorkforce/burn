@@ -113,6 +113,10 @@ export async function measureSession(opts) {
   return coerceBigInts(await binding.measureSession(opts));
 }
 
+export async function analyzeSession(opts) {
+  return coerceBigInts(await binding.analyzeSession(opts));
+}
+
 export async function fingerprint(opts) {
   return coerceBigInts(await binding.fingerprint(opts));
 }

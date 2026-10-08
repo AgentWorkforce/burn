@@ -86,6 +86,22 @@ pub fn session_cost(opts: SessionCostOptions) -> Result<SessionCostResult> {
     })
 }
 
+/// The subagent tree rooted at `session_id`, built from `turns` and their
+/// session relationship rows. `None` when no tree contains the session.
+pub(crate) fn subagent_tree_for_session(
+    turns: &[TurnRecord],
+    relationships: &[crate::reader::SessionRelationshipRecord],
+    pricing: &PricingTable,
+    session_id: &str,
+) -> Option<SubagentTreeNode> {
+    let tree_opts = BuildSubagentTreeOptions::new(pricing).with_relationships(relationships);
+    let trees = build_subagent_tree(turns, &tree_opts);
+    trees
+        .get(session_id)
+        .cloned()
+        .or_else(|| super::summary::find_summary_tree_node(trees.values(), session_id))
+}
+
 // ---------------------------------------------------------------------------
 // inferences — per-API-call rollup (#434)
 // ---------------------------------------------------------------------------

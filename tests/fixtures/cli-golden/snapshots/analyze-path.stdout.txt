@@ -1,0 +1,32 @@
+session       retry-session (claude-code)
+transcript    tests/fixtures/claude/retry-loop.jsonl
+project       /tmp/project
+models        claude-sonnet-4-6
+turns         4 assistant · 5 user · 4 tool calls · 0 compactions
+tokens        790 (input 70 · output 20 · cache read 450 · cache write 250 · reasoning 0)
+cost          $0.0016
+fidelity      4 of 4 turns full · 4 attributable
+
+findings (1)
+  [info] Retry loop: Bash npm run build failed 4× in a row: 'npm ERR! code ENOENT'
+         turns 0-3 · tools Bash · 790 tokens · $0.0016
+         why  Turns 0-3 are 4 consecutive errored Bash calls with the same arguments. Cumulative turn cost $0.0016 — the agent kept retrying without changing inputs. Every retry resends the whole conversation as input, so repeating a failing call multiplies context spend without new information.
+         fix  Stop after the first identical failure: read the error and change the arguments or approach. If the agent keeps retrying this command, document its failure mode in the project instructions.
+
+category   turns  tokens  cost
+debugging  4      790     $0.0016
+
+tool  calls  errors  tokens  cost
+Bash  4      4       790     $0.0016
+
+hotspots      $0.0001 of $0.0016 attributed (sized)
+  command     npm run build · 4 calls · $0.0001
+overhead      1 instruction file(s) cost $0.00 · 3 trim recommendation(s)
+context       peak 275 tokens at msg_retry_4 · 0 compactions
+flow          4 inferences · 4 tool uses · 0 subagents · 1 rail(s)
+subagents     none
+outcome       abandoned (user-ended)
+stop reasons  tool_use 4
+
+skipped checks
+  ghost-surface  the session was read outside a harness install, so its installed skills, agents and commands are unknown

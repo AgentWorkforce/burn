@@ -174,6 +174,7 @@ fn overhead_findings(report: &OverheadReport, priced: bool) -> Vec<Finding> {
         .trim
         .recommendations
         .iter()
+        .filter(|rec| rec.projected_savings.across_window_usd > 0.0)
         .map(|rec| {
             let usd = rec.projected_savings.per_session_usd;
             finding(
@@ -181,7 +182,7 @@ fn overhead_findings(report: &OverheadReport, priced: bool) -> Vec<Finding> {
                 severity_from_usd(usd),
                 format!("Trim \"{}\" in {}", rec.section.heading, rec.file),
                 format!(
-                    "Lines {}-{} of {} ({} tokens, {:.0}% of the file) rode in context on every turn of this session.",
+                    "Lines {}-{} of {} ({} tokens, {:.0}% of the file) stayed in the cached context for this session.",
                     rec.section.start_line,
                     rec.section.end_line,
                     rec.file,

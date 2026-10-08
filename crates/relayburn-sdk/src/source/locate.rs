@@ -153,7 +153,7 @@ fn load_by_path(harness: Harness, path: &std::path::Path) -> Result<LoadedSessio
     let store = staged.open_store()?;
     let reference = staged
         .hydrate(&store)
-        .with_context(|| format!("read {harness} session from {}", path.display()))?;
+        .map_err(|error| anyhow!("read {harness} session from {}: {error:#}", path.display()))?;
     Ok(LoadedSession {
         evidence: read_evidence(&store, &reference)?,
         roots: staged.install_roots(),

@@ -90,6 +90,7 @@ module.exports = {
   ledgerFreshness: async (opts) => binding.ledgerFreshness(opts),
   sessionCost: async (opts) => coerceBigInts(await binding.sessionCost(opts)),
   measureSession: async (opts) => coerceBigInts(await binding.measureSession(opts)),
+  analyzeSession: async (opts) => coerceBigInts(await binding.analyzeSession(opts)),
   fingerprint: async (opts) => coerceBigInts(await binding.fingerprint(opts)),
   turnSpanTree: async (opts) => coerceBigInts(await binding.turnSpanTree(opts)),
   sessionSpanTrees: async (opts) => coerceBigInts(await binding.sessionSpanTrees(opts)),

@@ -92,6 +92,9 @@ pub enum Command {
     /// Measure one explicit session artifact without discovery or a ledger.
     Measure(MeasureArgs),
 
+    /// Diagnose one session's token spend without a ledger.
+    Analyze(crate::commands::analyze::AnalyzeArgs),
+
     /// Aggregate session usage and cost.
     Summary(crate::commands::summary::SummaryArgs),
 
@@ -137,27 +140,28 @@ pub struct MeasureArgs {
 
     /// Harness format of the input artifact.
     #[arg(long, value_enum, value_name = "HARNESS")]
-    pub harness: MeasureHarness,
+    pub harness: HarnessArg,
 
     /// Optional models.dev-compatible pricing overlay.
     #[arg(long, value_name = "PATH")]
     pub pricing: Option<PathBuf>,
 }
 
+/// A harness burn reads sessions from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum MeasureHarness {
+pub enum HarnessArg {
     #[value(name = "claude-code", alias = "claude")]
     ClaudeCode,
     Codex,
     Opencode,
 }
 
-impl From<MeasureHarness> for relayburn_sdk::Harness {
-    fn from(value: MeasureHarness) -> Self {
+impl From<HarnessArg> for relayburn_sdk::Harness {
+    fn from(value: HarnessArg) -> Self {
         match value {
-            MeasureHarness::ClaudeCode => relayburn_sdk::Harness::ClaudeCode,
-            MeasureHarness::Codex => relayburn_sdk::Harness::Codex,
-            MeasureHarness::Opencode => relayburn_sdk::Harness::Opencode,
+            HarnessArg::ClaudeCode => relayburn_sdk::Harness::ClaudeCode,
+            HarnessArg::Codex => relayburn_sdk::Harness::Codex,
+            HarnessArg::Opencode => relayburn_sdk::Harness::Opencode,
         }
     }
 }

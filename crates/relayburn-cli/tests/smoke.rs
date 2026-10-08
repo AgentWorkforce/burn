@@ -25,6 +25,7 @@ use predicates::prelude::*;
 /// here as part of the same PR.
 const SUBCOMMANDS: &[&str] = &[
     "measure",
+    "analyze",
     "summary",
     "hotspots",
     "overhead",
@@ -62,6 +63,44 @@ fn measure_emits_one_cloud_ready_session_document() {
     assert_eq!(report["turnCount"], 1);
     assert_eq!(report["usage"]["inputTokens"], 600);
     assert_eq!(report["models"][0]["provider"], "openai");
+}
+
+#[test]
+fn analyze_resolves_a_session_id_through_a_sealed_store() {
+    let home = tempfile::tempdir().expect("home");
+    let project = home.path().join(".claude/projects/-tmp-project");
+    std::fs::create_dir_all(&project).expect("claude project dir");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/claude/retry-loop.jsonl"),
+        project.join("retry-loop.jsonl"),
+    )
+    .expect("stage fixture");
+    let output = burn()
+        .args(["--json", "analyze", "claude", "retry-session", "--home"])
+        .arg(home.path())
+        .arg("--store-db")
+        .arg(home.path().join("ai-history.db"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let analysis: serde_json::Value = serde_json::from_slice(&output).expect("analysis JSON");
+    assert_eq!(analysis["schema"], "burn.session-analysis.v1");
+    assert_eq!(analysis["session"]["sessionId"], "retry-session");
+    assert_eq!(analysis["findings"][0]["code"], "retry-loop");
+    assert_eq!(analysis["skippedChecks"], serde_json::json!([]));
+}
+
+#[test]
+fn analyze_without_a_session_is_a_usage_error() {
+    burn().arg("analyze").assert().failure();
+    burn()
+        .args(["analyze", "codex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("SESSION_ID"));
 }
 
 /// Subcommands that still print "not yet implemented" when invoked

@@ -180,6 +180,167 @@ export interface SessionMetrics {
 /** One explicit session in, one versioned metrics document out. No discovery or ledger. */
 export declare function measureSession(opts: MeasureSessionOptions): Promise<SessionMetrics>
 
+/**
+ * Which session `analyzeSession` reads. Pass `sessionId` to look the session
+ * up in a relayhistory store (discovered on demand from `home`), or `path` to
+ * analyze a session artifact directly: a Claude Code or Codex transcript, or an
+ * OpenCode `storage/session/<scope>/<id>.json`.
+ */
+export interface AnalyzeSessionOptions {
+  harness: MeasureSessionHarness;
+  sessionId?: string;
+  path?: string;
+  /** ai-hist database that resolves `sessionId`. */
+  storeDbPath?: string;
+  /** Provider home searched for `sessionId`, instead of `$HOME`. */
+  home?: string;
+  /** Optional models.dev-compatible pricing overlay. */
+  pricingPath?: string;
+  /** Project whose instruction files to price; defaults to the session cwd. */
+  projectDir?: string;
+}
+/** A typed action a finding suggests. */
+export type WasteAction =
+  | { type: 'paste'; label: string; text: string }
+  | { type: 'command'; label: string; text: string }
+  | { type: 'file-content'; label: string; path: string; content: string };
+export interface SubagentTreeNode {
+  nodeId: string;
+  label: string;
+  relationshipType: string;
+  subagentType?: string;
+  description?: string;
+  models: string[];
+  selfTurns: number | bigint;
+  selfCost: number;
+  cumulativeTurns: number | bigint;
+  cumulativeCost: number;
+  depth: number;
+  children: SubagentTreeNode[];
+}
+/** A section's data, or why burn could not produce it. */
+export type AnalysisSection<T> =
+  | { status: 'available'; data: T }
+  | { status: 'unavailable'; reason: string };
+export interface SessionIdentity {
+  harness: 'claude-code' | 'codex' | 'opencode';
+  sessionId: string;
+  /** The artifact analyzed: the caller's path, else where relayhistory found it. */
+  transcriptPath: string | null;
+  cwd: string | null;
+  project: string | null;
+  gitBranch: string | null;
+  agentVersion: string | null;
+  models: string[];
+  firstActivity: string | null;
+  lastActivity: string | null;
+  turnCount: number | bigint;
+  userTurnCount: number | bigint;
+  toolCallCount: number | bigint;
+  compactionCount: number | bigint;
+}
+export interface SessionFidelityReport {
+  /** `{ total, byClass, byGranularity, missingCoverage, unknown }`. */
+  summary: Record<string, unknown>;
+  attributableTurns: number | bigint;
+  evidenceKinds: string[];
+}
+export interface ActivityRow {
+  /** Null for turns the classifier left unlabeled. */
+  category: string | null;
+  turns: number | bigint;
+  tokens: number | bigint;
+  /** Null when any contributing turn's model is unpriced. */
+  costUsd: number | null;
+}
+export interface ToolActivityRow {
+  tool: string;
+  calls: number | bigint;
+  errors: number | bigint;
+  turns: number | bigint;
+  tokens: number | bigint;
+  /** Null when any contributing turn's model is unpriced. */
+  costUsd: number | null;
+}
+export interface ActivityBreakdown {
+  categories: ActivityRow[];
+  /** Tokens / cost of the turns that called each tool. */
+  tools: ToolActivityRow[];
+  replacementSavings: Record<string, unknown> | null;
+}
+export interface SessionOverheadReport {
+  projectDir: string;
+  attribution: OverheadResult;
+  trim: OverheadTrimResult;
+}
+export interface FlowSummary {
+  turns: number | bigint;
+  inferences: number | bigint;
+  toolUses: number | bigint;
+  subagents: number | bigint;
+  skills: number | bigint;
+  rails: number | bigint;
+  edges: number | bigint;
+}
+export interface SessionContextReport {
+  peakContextTokens: number | bigint;
+  peakTurnId: string | null;
+  compactions: Array<Record<string, unknown>>;
+  /** Largest per-inference context growths, with what caused them. */
+  largestGrowth: ContextDelta[];
+}
+export interface SessionQualityReport {
+  outcome: Record<string, unknown> | null;
+  oneShot: Record<string, unknown> | null;
+}
+export interface FindingEvidence {
+  turnIds: string[];
+  turnIndexes: number[];
+  tools: string[];
+  files: string[];
+  /** Commands, skills, sections or other targets the finding concerns. */
+  targets: string[];
+  models: string[];
+}
+export interface Finding {
+  /** Stable identifier (`retry-loop`, `tool-output-bloat`, …). */
+  code: string;
+  severity: 'info' | 'warn' | 'high';
+  title: string;
+  /** What happened in this session and why it costs tokens. */
+  explanation: string;
+  evidence: FindingEvidence;
+  impact: {
+    tokens: number | bigint | null;
+    /** Null when unpriced or not expressible in USD. */
+    costUsd: number | null;
+    pricing: 'priced' | 'unpriced';
+  };
+  /** The concrete change that avoids the cost. */
+  suggestion: string;
+  actions: WasteAction[];
+}
+export interface SessionAnalysis {
+  schema: 'burn.session-analysis.v1';
+  session: SessionIdentity;
+  fidelity: SessionFidelityReport;
+  metrics: AnalysisSection<SessionMetrics>;
+  activity: AnalysisSection<ActivityBreakdown>;
+  hotspots: AnalysisSection<HotspotsAttributionResult>;
+  overhead: AnalysisSection<SessionOverheadReport>;
+  subagents: AnalysisSection<SubagentTreeNode>;
+  flow: AnalysisSection<FlowSummary>;
+  context: AnalysisSection<SessionContextReport>;
+  quality: AnalysisSection<SessionQualityReport>;
+  stopReasons: AnalysisSection<Record<string, number | bigint>>;
+  /** Diagnoses, most severe and most expensive first. */
+  findings: Finding[];
+  /** Finding checks that did not run, and why. */
+  skippedChecks: Array<{ check: string; reason: string }>;
+}
+/** Every burn analyzer over one session, read through relayhistory. No ledger or ingest. */
+export declare function analyzeSession(opts: AnalyzeSessionOptions): Promise<SessionAnalysis>
+
 export interface FingerprintOptions {
   /** Restrict to a single `session_id`. Mutually exclusive with `project`. */
   session?: string;

@@ -112,5 +112,17 @@
     "args": ["--help"],
     "expectStatus": 0,
     "enabled": false
+  },
+  {
+    "name": "analyze-path",
+    "args": ["analyze", "--path", "tests/fixtures/claude/retry-loop.jsonl", "--project", "tests/fixtures/cli-golden/project"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
+    "name": "analyze-path-json",
+    "args": ["analyze", "--path", "tests/fixtures/claude/retry-loop.jsonl", "--project", "tests/fixtures/cli-golden/project", "--json"],
+    "expectStatus": 0,
+    "enabled": true
   }
 ]

@@ -49,6 +49,7 @@ fn dispatch(args: Args) -> i32 {
     }
     match args.command {
         Command::Measure(args) => commands::measure::run(&globals, args),
+        Command::Analyze(args) => commands::analyze::run(&globals, args),
         Command::Summary(sub) => commands::summary::run(&globals, sub),
         Command::Hotspots(sub) => commands::hotspots::run(&globals, sub),
         Command::Overhead(args) => commands::overhead::run(&globals, args),
@@ -69,13 +70,14 @@ fn dispatch(args: Args) -> i32 {
 fn offer_update_for(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Update(_) | Command::McpServer(_) | Command::Measure(_)
+        Command::Update(_) | Command::McpServer(_) | Command::Measure(_) | Command::Analyze(_)
     )
 }
 
 fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Measure(_) => "measure",
+        Command::Analyze(_) => "analyze",
         Command::Summary(_) => "summary",
         Command::Hotspots(_) => "hotspots",
         Command::Overhead(_) => "overhead",

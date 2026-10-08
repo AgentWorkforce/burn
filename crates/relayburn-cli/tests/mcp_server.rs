@@ -65,6 +65,7 @@ fn stdio_catalog_rejects_bad_input_and_keeps_serving() {
             "burn__overhead",
             "burn__overheadTrim",
             "burn__compare",
+            "burn__analyzeSession",
         ]
     );
     let property_names = |tool: &Value| {

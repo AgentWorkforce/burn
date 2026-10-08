@@ -1,0 +1,535 @@
+{
+  "schema": "burn.session-analysis.v1",
+  "session": {
+    "harness": "claude-code",
+    "sessionId": "retry-session",
+    "transcriptPath": "tests/fixtures/claude/retry-loop.jsonl",
+    "cwd": "/tmp/project",
+    "project": "/tmp/project",
+    "gitBranch": null,
+    "agentVersion": null,
+    "models": [
+      "claude-sonnet-4-6"
+    ],
+    "firstActivity": "2026-04-20T00:00:00.000Z",
+    "lastActivity": "2026-04-20T00:00:08.000Z",
+    "turnCount": 4,
+    "userTurnCount": 5,
+    "toolCallCount": 4,
+    "compactionCount": 0
+  },
+  "fidelity": {
+    "summary": {
+      "total": 4,
+      "byClass": {
+        "full": 4,
+        "usage-only": 0,
+        "aggregate-only": 0,
+        "cost-only": 0,
+        "partial": 0
+      },
+      "byGranularity": {
+        "per-turn": 4,
+        "per-message": 0,
+        "per-session-aggregate": 0,
+        "cost-only": 0
+      },
+      "missingCoverage": {
+        "hasCacheCreateTokens": 0,
+        "hasCacheReadTokens": 0,
+        "hasInputTokens": 0,
+        "hasOutputTokens": 0,
+        "hasRawContent": 0,
+        "hasReasoningTokens": 4,
+        "hasSessionRelationships": 0,
+        "hasToolCalls": 0,
+        "hasToolResultEvents": 0
+      },
+      "unknown": 0
+    },
+    "attributableTurns": 4,
+    "evidenceKinds": [
+      "history",
+      "session_event",
+      "tool_call",
+      "file_edit",
+      "relationship",
+      "session_marker"
+    ]
+  },
+  "metrics": {
+    "status": "available",
+    "data": {
+      "schema": "burn.session-metrics.v1",
+      "sessionId": "retry-session",
+      "harness": "claude-code",
+      "turnCount": 4,
+      "usage": {
+        "inputTokens": 70,
+        "outputTokens": 20,
+        "cacheReadTokens": 450,
+        "cacheWriteTokens": 250,
+        "reasoningTokens": 0,
+        "totalTokens": 790
+      },
+      "costUsdMicros": 1583,
+      "pricedTurns": 4,
+      "unpricedTurns": 0,
+      "models": [
+        {
+          "provider": "anthropic",
+          "model": "claude-sonnet-4-6",
+          "turnCount": 4,
+          "usage": {
+            "inputTokens": 70,
+            "outputTokens": 20,
+            "cacheReadTokens": 450,
+            "cacheWriteTokens": 250,
+            "reasoningTokens": 0,
+            "totalTokens": 790
+          },
+          "costUsdMicros": 1583,
+          "pricedTurns": 4,
+          "unpricedTurns": 0
+        }
+      ]
+    }
+  },
+  "activity": {
+    "status": "available",
+    "data": {
+      "categories": [
+        {
+          "category": "debugging",
+          "turns": 4,
+          "tokens": 790,
+          "costUsd": 0.0015825000000000001
+        }
+      ],
+      "tools": [
+        {
+          "tool": "Bash",
+          "calls": 4,
+          "errors": 4,
+          "turns": 4,
+          "tokens": 790,
+          "costUsd": 0.0015825000000000001
+        }
+      ],
+      "replacementSavings": null
+    }
+  },
+  "hotspots": {
+    "status": "available",
+    "data": {
+      "turnsAnalyzed": 4,
+      "grandTotal": 0.0015825000000000001,
+      "attributedTotal": 0.00005756318681318682,
+      "unattributedTotal": 0.0015249368131868134,
+      "attributionDegraded": false,
+      "sessions": [
+        {
+          "sessionId": "retry-session",
+          "grandCost": 0.0015825000000000001,
+          "attributedCost": 0.00005756318681318682,
+          "unattributedCost": 0.0015249368131868134,
+          "attributionMethod": "sized"
+        }
+      ],
+      "files": [],
+      "bashVerbs": [
+        {
+          "verb": "npm build",
+          "callCount": 4,
+          "distinctCommands": 1,
+          "totalCost": 0.00005756318681318682,
+          "initialTokens": 15.0,
+          "persistenceTokens": 15.0,
+          "avgPersistenceTurns": 0.75,
+          "topExamples": [
+            "npm run build"
+          ],
+          "totalOutputBytes": 80,
+          "maxOutputBytes": 20,
+          "truncatedCount": 0
+        }
+      ],
+      "bash": [
+        {
+          "argsHash": "5c263ac899cef39b",
+          "command": "npm run build",
+          "callCount": 4,
+          "totalCost": 0.00005756318681318682,
+          "initialTokens": 15.0,
+          "persistenceTokens": 15.0,
+          "totalOutputBytes": 80,
+          "maxOutputBytes": 20,
+          "truncatedCount": 0
+        }
+      ],
+      "subagents": [],
+      "mcpServers": [],
+      "fidelity": {
+        "analyzed": 4,
+        "excluded": 0,
+        "summary": {
+          "total": 4,
+          "byClass": {
+            "full": 4,
+            "usage-only": 0,
+            "aggregate-only": 0,
+            "cost-only": 0,
+            "partial": 0
+          },
+          "byGranularity": {
+            "per-turn": 4,
+            "per-message": 0,
+            "per-session-aggregate": 0,
+            "cost-only": 0
+          },
+          "missingCoverage": {
+            "hasCacheCreateTokens": 0,
+            "hasCacheReadTokens": 0,
+            "hasInputTokens": 0,
+            "hasOutputTokens": 0,
+            "hasRawContent": 0,
+            "hasReasoningTokens": 4,
+            "hasSessionRelationships": 0,
+            "hasToolCalls": 0,
+            "hasToolResultEvents": 0
+          },
+          "unknown": 0
+        },
+        "refused": false
+      }
+    }
+  },
+  "overhead": {
+    "status": "available",
+    "data": {
+      "projectDir": "tests/fixtures/cli-golden/project",
+      "attribution": {
+        "project": "tests/fixtures/cli-golden/project",
+        "files": [
+          {
+            "kind": "claude-md",
+            "path": "tests/fixtures/cli-golden/project/CLAUDE.md",
+            "appliesTo": [
+              "claude-code"
+            ],
+            "totalLines": 23,
+            "bytes": 908,
+            "tokens": 227,
+            "sections": [
+              {
+                "heading": "(preamble)",
+                "level": 0,
+                "startLine": 1,
+                "endLine": 6,
+                "bytes": 246,
+                "tokens": 62
+              },
+              {
+                "heading": "## Conventions",
+                "level": 2,
+                "startLine": 7,
+                "endLine": 11,
+                "bytes": 97,
+                "tokens": 25
+              },
+              {
+                "heading": "## Frequently asked",
+                "level": 2,
+                "startLine": 12,
+                "endLine": 16,
+                "bytes": 185,
+                "tokens": 47
+              },
+              {
+                "heading": "## Long-tail trivia",
+                "level": 2,
+                "startLine": 17,
+                "endLine": 23,
+                "bytes": 380,
+                "tokens": 95
+              }
+            ],
+            "groupingLevel": 2
+          }
+        ],
+        "perFile": [
+          {
+            "path": "tests/fixtures/cli-golden/project/CLAUDE.md",
+            "kind": "claude-md",
+            "appliesTo": [
+              "claude-code"
+            ],
+            "attribution": {
+              "totalTokens": 227,
+              "totalCost": 0.0,
+              "sessionCosts": [
+                {
+                  "sessionId": "retry-session",
+                  "cost": 0.0,
+                  "ridingTurns": 0,
+                  "totalTurns": 4,
+                  "model": "claude-sonnet-4-6"
+                }
+              ],
+              "sectionCosts": [
+                {
+                  "filePath": "tests/fixtures/cli-golden/project/CLAUDE.md",
+                  "section": {
+                    "heading": "(preamble)",
+                    "level": 0,
+                    "startLine": 1,
+                    "endLine": 6,
+                    "bytes": 246,
+                    "tokens": 62
+                  },
+                  "tokenShare": 0.2709251101321586,
+                  "costPerSession": 0.0,
+                  "totalCost": 0.0
+                },
+                {
+                  "filePath": "tests/fixtures/cli-golden/project/CLAUDE.md",
+                  "section": {
+                    "heading": "## Conventions",
+                    "level": 2,
+                    "startLine": 7,
+                    "endLine": 11,
+                    "bytes": 97,
+                    "tokens": 25
+                  },
+                  "tokenShare": 0.10682819383259912,
+                  "costPerSession": 0.0,
+                  "totalCost": 0.0
+                },
+                {
+                  "filePath": "tests/fixtures/cli-golden/project/CLAUDE.md",
+                  "section": {
+                    "heading": "## Frequently asked",
+                    "level": 2,
+                    "startLine": 12,
+                    "endLine": 16,
+                    "bytes": 185,
+                    "tokens": 47
+                  },
+                  "tokenShare": 0.20374449339207049,
+                  "costPerSession": 0.0,
+                  "totalCost": 0.0
+                },
+                {
+                  "filePath": "tests/fixtures/cli-golden/project/CLAUDE.md",
+                  "section": {
+                    "heading": "## Long-tail trivia",
+                    "level": 2,
+                    "startLine": 17,
+                    "endLine": 23,
+                    "bytes": 380,
+                    "tokens": 95
+                  },
+                  "tokenShare": 0.4185022026431718,
+                  "costPerSession": 0.0,
+                  "totalCost": 0.0
+                }
+              ],
+              "perSessionAvg": 0.0,
+              "perSessionP95": 0.0,
+              "sessionCount": 1
+            }
+          }
+        ],
+        "grandTotal": 0.0
+      },
+      "trim": {
+        "project": "tests/fixtures/cli-golden/project",
+        "since": "this session",
+        "recommendations": [
+          {
+            "file": "CLAUDE.md",
+            "kind": "claude-md",
+            "appliesTo": [
+              "claude-code"
+            ],
+            "section": {
+              "heading": "## Conventions",
+              "startLine": 7,
+              "endLine": 11,
+              "tokens": 25
+            },
+            "projectedSavings": {
+              "perSessionUsd": 0.0,
+              "acrossWindowUsd": 0.0,
+              "tokens": 25,
+              "tokenShare": 0.10682819383259912
+            }
+          },
+          {
+            "file": "CLAUDE.md",
+            "kind": "claude-md",
+            "appliesTo": [
+              "claude-code"
+            ],
+            "section": {
+              "heading": "## Frequently asked",
+              "startLine": 12,
+              "endLine": 16,
+              "tokens": 47
+            },
+            "projectedSavings": {
+              "perSessionUsd": 0.0,
+              "acrossWindowUsd": 0.0,
+              "tokens": 47,
+              "tokenShare": 0.20374449339207049
+            }
+          },
+          {
+            "file": "CLAUDE.md",
+            "kind": "claude-md",
+            "appliesTo": [
+              "claude-code"
+            ],
+            "section": {
+              "heading": "## Long-tail trivia",
+              "startLine": 17,
+              "endLine": 23,
+              "tokens": 95
+            },
+            "projectedSavings": {
+              "perSessionUsd": 0.0,
+              "acrossWindowUsd": 0.0,
+              "tokens": 95,
+              "tokenShare": 0.4185022026431718
+            }
+          }
+        ],
+        "summary": {
+          "filesAnalyzed": 1,
+          "filesWithRecommendations": 1,
+          "totalRecommendations": 3,
+          "totalProjectedSavingsPerSession": 0.0,
+          "totalProjectedSavingsAcrossWindow": 0.0
+        }
+      }
+    }
+  },
+  "subagents": {
+    "status": "available",
+    "data": {
+      "nodeId": "retry-session",
+      "label": "main",
+      "relationshipType": "root",
+      "models": [
+        "claude-sonnet-4-6"
+      ],
+      "selfTurns": 4,
+      "selfCost": 0.0015825000000000001,
+      "cumulativeTurns": 4,
+      "cumulativeCost": 0.0015825000000000001,
+      "depth": 0,
+      "children": []
+    }
+  },
+  "flow": {
+    "status": "available",
+    "data": {
+      "turns": 4,
+      "inferences": 4,
+      "toolUses": 4,
+      "subagents": 0,
+      "skills": 0,
+      "rails": 1,
+      "edges": 7
+    }
+  },
+  "context": {
+    "status": "available",
+    "data": {
+      "peakContextTokens": 275,
+      "peakTurnId": "msg_retry_4",
+      "compactions": [],
+      "largestGrowth": []
+    }
+  },
+  "quality": {
+    "status": "available",
+    "data": {
+      "outcome": {
+        "sessionId": "retry-session",
+        "outcome": "abandoned",
+        "confidence": "medium",
+        "isRecent": false,
+        "reason": "user-ended"
+      },
+      "oneShot": {
+        "sessionId": "retry-session",
+        "editTurns": 0,
+        "oneShotTurns": 0,
+        "totalRetries": 0
+      }
+    }
+  },
+  "stopReasons": {
+    "status": "available",
+    "data": {
+      "endTurn": 0,
+      "maxTokens": 0,
+      "pauseTurn": 0,
+      "stopSequence": 0,
+      "toolUse": 4,
+      "refusal": 0,
+      "silent": 0,
+      "none": 0
+    }
+  },
+  "findings": [
+    {
+      "code": "retry-loop",
+      "severity": "info",
+      "title": "Retry loop: Bash npm run build failed 4× in a row: 'npm ERR! code ENOENT'",
+      "explanation": "Turns 0-3 are 4 consecutive errored Bash calls with the same arguments. Cumulative turn cost $0.0016 — the agent kept retrying without changing inputs. Every retry resends the whole conversation as input, so repeating a failing call multiplies context spend without new information.",
+      "evidence": {
+        "turnIds": [
+          "msg_retry_1",
+          "msg_retry_2",
+          "msg_retry_3",
+          "msg_retry_4"
+        ],
+        "turnIndexes": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "tools": [
+          "Bash"
+        ],
+        "files": [],
+        "targets": [
+          "npm run build"
+        ],
+        "models": []
+      },
+      "impact": {
+        "tokens": 790,
+        "costUsd": 0.0015825000000000001,
+        "pricing": "priced"
+      },
+      "suggestion": "Stop after the first identical failure: read the error and change the arguments or approach. If the agent keeps retrying this command, document its failure mode in the project instructions.",
+      "actions": [
+        {
+          "type": "command",
+          "label": "Inspect this session",
+          "text": "burn hotspots --session retry-session"
+        }
+      ]
+    }
+  ],
+  "skippedChecks": [
+    {
+      "check": "ghost-surface",
+      "reason": "the session was read outside a harness install, so its installed skills, agents and commands are unknown"
+    }
+  ]
+}

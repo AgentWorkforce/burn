@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   mkdtempSync,
   rmSync,
+  copyFileSync,
   cpSync,
   mkdirSync,
   readdirSync,
@@ -65,6 +66,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'ledgerFreshness',
     'sessionCost',
     'measureSession',
+    'analyzeSession',
     'fingerprint',
     'overhead',
     'overheadTrim',
@@ -136,13 +138,66 @@ test('measureSession rejects an incomplete OpenCode session tree', async (t) => 
 
   const root = mkdtempSync(join(tmpdir(), 'relayburn-sdk-opencode-incomplete-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const inputPath = join(root, 'ses_incomplete.json');
+  const scope = join(root, 'storage', 'session', 'global');
+  mkdirSync(scope, { recursive: true });
+  const inputPath = join(scope, 'ses_incomplete.json');
   writeFileSync(inputPath, JSON.stringify({ id: 'ses_incomplete', directory: '/tmp' }));
 
   await assert.rejects(
     sdk.measureSession({ harness: 'opencode', inputPath }),
     /no measurable turns/,
   );
+});
+
+test('analyzeSession diagnoses one transcript without a ledger', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const analysis = await sdk.analyzeSession({
+    harness: 'claude',
+    path: join(REPO_ROOT, 'tests', 'fixtures', 'claude', 'retry-loop.jsonl'),
+  });
+  assert.equal(analysis.schema, 'burn.session-analysis.v1');
+  assert.equal(analysis.session.sessionId, 'retry-session');
+  assert.equal(analysis.session.turnCount, 4);
+  assert.equal(analysis.metrics.status, 'available');
+  assert.equal(analysis.metrics.data.usage.totalTokens, 790);
+  const retry = analysis.findings.find((f) => f.code === 'retry-loop');
+  assert.ok(retry, 'retry-loop finding');
+  assert.deepEqual(retry.evidence.tools, ['Bash']);
+  assert.equal(retry.evidence.turnIds.length, 4);
+  assert.match(retry.explanation, /resends the whole conversation/);
+  assert.equal(analysis.overhead.status, 'unavailable');
+  assert.equal(typeof analysis.overhead.reason, 'string');
+});
+
+test('analyzeSession resolves a session id through a sealed store', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const home = mkdtempSync(join(tmpdir(), 'relayburn-sdk-analyze-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const project = join(home, '.claude', 'projects', '-tmp-project');
+  mkdirSync(project, { recursive: true });
+  copyFileSync(
+    join(REPO_ROOT, 'tests', 'fixtures', 'claude', 'retry-loop.jsonl'),
+    join(project, 'retry-loop.jsonl'),
+  );
+  const analysis = await sdk.analyzeSession({
+    harness: 'claude-code',
+    sessionId: 'retry-session',
+    home,
+    storeDbPath: join(home, 'ai-history.db'),
+  });
+  assert.equal(analysis.session.sessionId, 'retry-session');
+  assert.deepEqual(analysis.skippedChecks, []);
+});
+
+test('analyzeSession requires exactly one of sessionId or path', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  await assert.rejects(sdk.analyzeSession({ harness: 'codex' }), /exactly one of sessionId or path/);
 });
 
 test('read verbs return stable shapes against the fixture ledger', async (t) => {

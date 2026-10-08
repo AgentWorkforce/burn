@@ -18,6 +18,7 @@
 //! `mod.rs` only re-exports submodules; do not add cross-command logic
 //! here. Shared rendering helpers live in `crate::render`.
 
+pub mod analyze;
 pub mod compare;
 pub mod flow;
 mod freshness;
