@@ -78,7 +78,11 @@ fn user_messages<'a>(ctx: &Context<'a>) -> Vec<UserMessage<'a>> {
             continue;
         };
         if marker.kind == "compaction_boundary" && !users.iter().any(|u| u.id == id) {
-            users.push(UserMessage { id, ts_ms, message: None });
+            users.push(UserMessage {
+                id,
+                ts_ms,
+                message: None,
+            });
         }
     }
     users.sort_by_key(|u| u.ts_ms);
@@ -96,7 +100,11 @@ fn tool_output_blocks(ctx: &Context<'_>, assistant: &Message) -> Vec<UserTurnBlo
             let failed = ctx.errored.contains(tool_use_id.as_str());
             UserTurnBlock {
                 is_error: failed.then_some(true),
-                ..block(UserTurnBlockKind::ToolResult, Some(tool_use_id), b.text_bytes)
+                ..block(
+                    UserTurnBlockKind::ToolResult,
+                    Some(tool_use_id),
+                    b.text_bytes,
+                )
             }
         })
         .collect()
@@ -110,7 +118,11 @@ fn text_blocks(message: &Message) -> impl Iterator<Item = UserTurnBlock> + '_ {
         .map(|b| block(UserTurnBlockKind::Text, None, b.text_bytes))
 }
 
-fn block(kind: UserTurnBlockKind, tool_use_id: Option<String>, bytes: Option<i64>) -> UserTurnBlock {
+fn block(
+    kind: UserTurnBlockKind,
+    tool_use_id: Option<String>,
+    bytes: Option<i64>,
+) -> UserTurnBlock {
     let byte_len = bytes.unwrap_or_default().max(0) as u64;
     UserTurnBlock {
         kind,

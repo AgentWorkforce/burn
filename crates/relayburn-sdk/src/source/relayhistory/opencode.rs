@@ -78,7 +78,11 @@ fn refine_turn(ctx: &Context<'_>, turn: &mut TurnRecord, is_sidechain: bool) {
             .unwrap_or_else(|| Value::Object(Default::default()));
         call.target = tools::pick_target(&call.name, &input);
         call.skill_name = tools::skill_name(&call.name, &input);
-        if let Some(target) = call.target.as_ref().filter(|_| tools::is_file_tool(&call.name)) {
+        if let Some(target) = call
+            .target
+            .as_ref()
+            .filter(|_| tools::is_file_tool(&call.name))
+        {
             files.insert(target.clone());
         }
     }
@@ -171,7 +175,11 @@ fn compactions(ctx: &Context<'_>, assistants: &[&Message]) -> Vec<CompactionEven
         if marker.kind != "compaction_boundary" {
             continue;
         }
-        if marker.message_id.as_ref().is_some_and(|id| !seen.insert(id.as_str())) {
+        if marker
+            .message_id
+            .as_ref()
+            .is_some_and(|id| !seen.insert(id.as_str()))
+        {
             continue;
         }
         let ts_ms = marker.ts_ms.unwrap_or_default();
@@ -182,8 +190,11 @@ fn compactions(ctx: &Context<'_>, assistants: &[&Message]) -> Vec<CompactionEven
             session_id: ctx.session_id().to_string(),
             ts: format_iso_ms(ts_ms),
             preceding_message_id: preceding.and_then(|a| a.message_id.clone()),
-            tokens_before_compact: preceding
-                .map(|a| usage_from_raw(SourceKind::Opencode, a.raw_usage()).0.cache_read),
+            tokens_before_compact: preceding.map(|a| {
+                usage_from_raw(SourceKind::Opencode, a.raw_usage())
+                    .0
+                    .cache_read
+            }),
         });
     }
     out
@@ -202,8 +213,14 @@ mod tests {
             ..Usage::default()
         };
         let shares: Vec<Usage> = (0..3).map(|i| usage_share(&total, 3, i)).collect();
-        assert_eq!(shares.iter().map(|u| u.input).collect::<Vec<_>>(), [3, 2, 2]);
-        assert_eq!(shares.iter().map(|u| u.output).collect::<Vec<_>>(), [34, 33, 33]);
+        assert_eq!(
+            shares.iter().map(|u| u.input).collect::<Vec<_>>(),
+            [3, 2, 2]
+        );
+        assert_eq!(
+            shares.iter().map(|u| u.output).collect::<Vec<_>>(),
+            [34, 33, 33]
+        );
         assert_eq!(
             shares.iter().map(|u| u.cache_create_5m).collect::<Vec<_>>(),
             [6667, 6667, 6666]

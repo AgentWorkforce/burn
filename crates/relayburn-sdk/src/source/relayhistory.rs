@@ -9,17 +9,16 @@ use std::collections::{HashMap, HashSet};
 use ai_hist::{BlockKind, Message, Role, SessionEvidence, SessionRequest, Source};
 use serde_json::Value;
 
-use super::usage::{add as add_usage, usage_from_raw};
+use super::usage::usage_from_raw;
 use super::SessionRecords;
-use crate::reader::claude::{apply_edit_hashes, extract_files_touched, pick_target};
 use crate::reader::classifier::{classify_activity, ClassificationInput};
+use crate::reader::claude::{apply_edit_hashes, extract_files_touched, pick_target};
 use crate::reader::hash::args_hash;
 use crate::reader::types::{
-    CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentToolResult, ContentToolUse,
-    Coverage, Fidelity, RelationshipSourceKind, RelationshipType, SessionRelationshipRecord,
-    SourceKind, StopReason, ToolCall, Usage, ToolResultEventRecord, ToolResultEventSource,
-    ToolResultStatus, TurnRecord, UsageGranularity, UserTurnBlock, UserTurnBlockKind,
-    UserTurnRecord,
+    CompactionEvent, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
+    SessionRelationshipRecord, SourceKind, StopReason, ToolCall, ToolResultEventRecord,
+    ToolResultEventSource, ToolResultStatus, TurnRecord, UsageGranularity, UserTurnBlock,
+    UserTurnBlockKind, UserTurnRecord,
 };
 use crate::reader::user_turn::bytes_to_approx_tokens;
 use crate::reader::{resolve_project, RequestIdLookup, TurnKey};
@@ -27,6 +26,7 @@ use crate::util::time::format_iso_ms;
 
 mod claude;
 mod codex;
+mod content;
 mod opencode;
 
 pub(crate) fn source_kind(source: Source) -> Option<SourceKind> {
@@ -44,6 +44,9 @@ pub(crate) fn records_from_evidence(ev: &SessionEvidence) -> SessionRecords {
     let Some(source) = source_kind(ev.session.source) else {
         return SessionRecords::default();
     };
+    if source == SourceKind::Codex {
+        return codex::records(ev);
+    }
     let session_id = ev.session.session_id.clone();
     let ctx = Context::new(ev, source);
 
@@ -75,7 +78,6 @@ pub(crate) fn records_from_evidence(ev: &SessionEvidence) -> SessionRecords {
     }];
     records.request_id_lookup = ctx.request_ids(&records.turns);
     match source {
-        SourceKind::Codex => codex::refine(&ctx, &mut records),
         SourceKind::Opencode => opencode::refine(&ctx, &mut records),
         _ => claude::refine(&ctx, &mut records),
     }
@@ -84,7 +86,6 @@ pub(crate) fn records_from_evidence(ev: &SessionEvidence) -> SessionRecords {
 
 fn relationship_source(source: SourceKind) -> RelationshipSourceKind {
     match source {
-        SourceKind::Codex => RelationshipSourceKind::Codex,
         SourceKind::Opencode => RelationshipSourceKind::Opencode,
         _ => RelationshipSourceKind::ClaudeCode,
     }
@@ -95,8 +96,7 @@ pub(super) struct Context<'a> {
     ev: &'a SessionEvidence,
     source: SourceKind,
     by_id: HashMap<&'a str, &'a Message>,
-    /// Burn turns in order: one per request, except Codex, whose turn is
-    /// the task (`turn_id`) spanning one or more requests.
+    /// Burn turns in order, one per request.
     units: Vec<Unit<'a>>,
     /// relayhistory message id → burn turn message id.
     turn_id_of: HashMap<&'a str, String>,
@@ -105,18 +105,16 @@ pub(super) struct Context<'a> {
 
 impl<'a> Context<'a> {
     fn new(ev: &'a SessionEvidence, source: SourceKind) -> Self {
-        let by_id: HashMap<&str, &Message> =
-            ev.messages
-                .iter()
-                .filter_map(|m| Some((m.message_id.as_deref()?, m)))
-                .collect();
-        let units = units(ev, source, &by_id);
+        let by_id: HashMap<&str, &Message> = ev
+            .messages
+            .iter()
+            .filter_map(|m| Some((m.message_id.as_deref()?, m)))
+            .collect();
+        let units = units(ev, &by_id);
         let mut turn_id_of = HashMap::new();
         for unit in &units {
-            for request in &unit.requests {
-                for id in &request.message_ids {
-                    turn_id_of.insert(id.as_str(), unit.id.clone());
-                }
+            for id in &unit.request.message_ids {
+                turn_id_of.insert(id.as_str(), unit.id.clone());
             }
         }
         let errored = ev
@@ -125,7 +123,14 @@ impl<'a> Context<'a> {
             .filter(|r| r.result_status.as_deref() == Some("errored"))
             .filter_map(|r| r.tool_use_id.as_deref())
             .collect();
-        Self { ev, source, by_id, units, turn_id_of, errored }
+        Self {
+            ev,
+            source,
+            by_id,
+            units,
+            turn_id_of,
+            errored,
+        }
     }
 
     fn session_id(&self) -> &str {
@@ -135,30 +140,17 @@ impl<'a> Context<'a> {
     fn turns(&self) -> Vec<TurnRecord> {
         let mut turns = Vec::new();
         for (index, unit) in self.units.iter().enumerate() {
-            let message_ids: Vec<String> = unit
-                .requests
-                .iter()
-                .flat_map(|r| r.message_ids.iter().cloned())
-                .collect();
+            let message_ids = &unit.request.message_ids;
             let messages: Vec<&Message> = message_ids
                 .iter()
                 .filter_map(|id| self.by_id.get(id.as_str()).copied())
                 .collect();
-            let Some(first) = messages.first() else { continue };
-            let mut usage = Usage::default();
-            let mut coverage = Coverage::default();
-            for request in &unit.requests {
-                let raw = request
-                    .message_ids
-                    .iter()
-                    .rev()
-                    .filter_map(|id| self.by_id.get(id.as_str()))
-                    .find_map(|m| m.raw_usage());
-                let (u, c) = usage_from_raw(self.source, raw);
-                usage = add_usage(&usage, &u);
-                coverage = merge_coverage(&coverage, &c);
-            }
-            let tool_calls = self.tool_calls(&message_ids);
+            let Some(first) = messages.first() else {
+                continue;
+            };
+            let raw = messages.iter().rev().find_map(|m| m.raw_usage());
+            let (usage, coverage) = usage_from_raw(self.source, raw);
+            let tool_calls = self.tool_calls(message_ids);
             let files_touched = extract_files_touched(&tool_calls);
             let mut turn = TurnRecord {
                 v: 1,
@@ -173,11 +165,7 @@ impl<'a> Context<'a> {
                 message_id: unit.id.clone(),
                 turn_index: index as u64,
                 ts: format_iso_ms(first.ts_ms),
-                model: unit
-                    .requests
-                    .iter()
-                    .find_map(|r| r.model.clone())
-                    .unwrap_or_default(),
+                model: unit.request.model.clone().unwrap_or_default(),
                 project: None,
                 project_key: None,
                 usage,
@@ -225,7 +213,10 @@ impl<'a> Context<'a> {
             if !seen.insert(call.tool_use_id.as_str()) {
                 continue;
             }
-            let input = call.args.clone().unwrap_or(Value::Object(Default::default()));
+            let input = call
+                .args
+                .clone()
+                .unwrap_or(Value::Object(Default::default()));
             let mut tool_call = ToolCall {
                 id: call.tool_use_id.clone(),
                 name: call.name.clone(),
@@ -292,110 +283,6 @@ impl<'a> Context<'a> {
             cursor = message.parent_id.as_deref();
         }
         None
-    }
-
-    fn content(&self, turns: &[TurnRecord]) -> Vec<ContentRecord> {
-        let _ = turns;
-        let mut out = Vec::new();
-        // `tool_use` blocks name no call id; a message's calls are its
-        // tool_use blocks in order.
-        let mut calls: HashMap<&str, Vec<&ai_hist::ToolCall>> = HashMap::new();
-        for call in &self.ev.tool_calls {
-            if let Some(id) = call.message_id.as_deref() {
-                calls.entry(id).or_default().push(call);
-            }
-        }
-        let results: HashMap<&str, &ai_hist::ToolResult> = self
-            .ev
-            .tool_results
-            .iter()
-            .map(|r| (r.event_uid.as_str(), r))
-            .collect();
-        for message in &self.ev.messages {
-            let message_id = self.record_message_id(message);
-            let mut message_calls = message
-                .message_id
-                .as_deref()
-                .and_then(|id| calls.get(id))
-                .map(|c| c.iter())
-                .into_iter()
-                .flatten();
-            for block in &message.blocks {
-                let base = ContentRecord {
-                    v: 1,
-                    source: self.source,
-                    session_id: self.session_id().to_string(),
-                    message_id: message_id.clone(),
-                    ts: format_iso_ms(block.ts_ms),
-                    role: ContentRole::Assistant,
-                    kind: ContentKind::Text,
-                    text: None,
-                    tool_use: None,
-                    tool_result: None,
-                };
-                let record = match (message.role, block.kind) {
-                    (role, BlockKind::Text) => ContentRecord {
-                        role: content_role(role),
-                        text: block.text.clone(),
-                        ..base
-                    },
-                    (role, BlockKind::Thinking) => ContentRecord {
-                        role: content_role(role),
-                        kind: ContentKind::Thinking,
-                        text: block.text.clone(),
-                        ..base
-                    },
-                    (_, BlockKind::ToolUse) => {
-                        let Some(call) = message_calls.next() else {
-                            continue;
-                        };
-                        let input = match call.args.clone() {
-                            Some(Value::Object(map)) => map.into_iter().collect(),
-                            _ => Default::default(),
-                        };
-                        ContentRecord {
-                            kind: ContentKind::ToolUse,
-                            tool_use: Some(ContentToolUse {
-                                id: call.tool_use_id.clone(),
-                                name: call.name.clone(),
-                                input,
-                            }),
-                            ..base
-                        }
-                    }
-                    (_, BlockKind::ToolResult) => {
-                        let result = results.get(block.event_uid.as_str());
-                        ContentRecord {
-                            role: ContentRole::ToolResult,
-                            kind: ContentKind::ToolResult,
-                            tool_result: Some(ContentToolResult {
-                                tool_use_id: block.tool_use_id.clone().unwrap_or_default(),
-                                content: Value::String(
-                                    result.and_then(|r| r.text.clone()).unwrap_or_default(),
-                                ),
-                                is_error: result
-                                    .filter(|r| r.result_status.as_deref() == Some("errored"))
-                                    .map(|_| true),
-                            }),
-                            ..base
-                        }
-                    }
-                    _ => continue,
-                };
-                out.push(record);
-            }
-        }
-        out
-    }
-
-    /// The id burn keys a message's derived records by: the turn id for
-    /// assistant rows, the relayhistory message id otherwise.
-    fn record_message_id(&self, message: &Message) -> String {
-        let id = message.message_id.as_deref().unwrap_or_default();
-        self.turn_id_of
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| id.to_string())
     }
 
     fn tool_result_events(&self) -> Vec<ToolResultEventRecord> {
@@ -507,7 +394,9 @@ impl<'a> Context<'a> {
                 .messages
                 .iter()
                 .filter(|m| {
-                    m.message_id.as_deref().and_then(|id| self.turn_id_of.get(id))
+                    m.message_id
+                        .as_deref()
+                        .and_then(|id| self.turn_id_of.get(id))
                         == Some(&turn.message_id)
                 })
                 .find_map(|m| m.request_id.clone());
@@ -521,45 +410,17 @@ impl<'a> Context<'a> {
 
 struct Unit<'a> {
     id: String,
-    requests: Vec<&'a SessionRequest>,
+    request: &'a SessionRequest,
 }
 
-fn units<'a>(
-    ev: &'a SessionEvidence,
-    source: SourceKind,
-    by_id: &HashMap<&str, &'a Message>,
-) -> Vec<Unit<'a>> {
-    let mut out: Vec<Unit<'a>> = Vec::new();
-    for request in &ev.requests {
-        let codex_turn = (source == SourceKind::Codex)
-            .then(|| {
-                request
-                    .message_ids
-                    .iter()
-                    .filter_map(|id| by_id.get(id.as_str()))
-                    .find_map(|m| m.turn_id.clone())
-            })
-            .flatten();
-        match (&codex_turn, out.last_mut()) {
-            (Some(turn), Some(last)) if &last.id == turn => last.requests.push(request),
-            _ => out.push(Unit {
-                id: codex_turn.unwrap_or_else(|| turn_message_id(&request.message_ids, by_id)),
-                requests: vec![request],
-            }),
-        }
-    }
-    out
-}
-
-fn merge_coverage(a: &Coverage, b: &Coverage) -> Coverage {
-    Coverage {
-        has_input_tokens: a.has_input_tokens || b.has_input_tokens,
-        has_output_tokens: a.has_output_tokens || b.has_output_tokens,
-        has_reasoning_tokens: a.has_reasoning_tokens || b.has_reasoning_tokens,
-        has_cache_read_tokens: a.has_cache_read_tokens || b.has_cache_read_tokens,
-        has_cache_create_tokens: a.has_cache_create_tokens || b.has_cache_create_tokens,
-        ..a.clone()
-    }
+fn units<'a>(ev: &'a SessionEvidence, by_id: &HashMap<&str, &'a Message>) -> Vec<Unit<'a>> {
+    ev.requests
+        .iter()
+        .map(|request| Unit {
+            id: turn_message_id(&request.message_ids, by_id),
+            request,
+        })
+        .collect()
 }
 
 /// Burn's turn id for a request: the provider message id when the harness
@@ -570,14 +431,6 @@ fn turn_message_id(message_ids: &[String], by_id: &HashMap<&str, &Message>) -> S
         .and_then(|m| m.provider_message_id.clone())
         .or_else(|| first.and_then(|m| m.message_id.clone()))
         .unwrap_or_default()
-}
-
-fn content_role(role: Role) -> ContentRole {
-    match role {
-        Role::User => ContentRole::User,
-        Role::Assistant => ContentRole::Assistant,
-        _ => ContentRole::ToolResult,
-    }
 }
 
 fn text_of<'m>(messages: impl Iterator<Item = &'m Message>, kind: BlockKind) -> String {

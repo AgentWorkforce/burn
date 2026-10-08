@@ -67,17 +67,15 @@ impl<'a> Transcript<'a> {
         let mut turn_of = HashMap::new();
         let mut turn_messages: HashMap<String, Vec<&Message>> = HashMap::new();
         for unit in &ctx.units {
-            for request in &unit.requests {
-                for id in &request.message_ids {
-                    let Some(message) = by_id.get(id.as_str()) else {
-                        continue;
-                    };
-                    turn_of.insert(id.as_str(), unit.id.clone());
-                    turn_messages
-                        .entry(unit.id.clone())
-                        .or_default()
-                        .push(message);
-                }
+            for id in &unit.request.message_ids {
+                let Some(message) = by_id.get(id.as_str()) else {
+                    continue;
+                };
+                turn_of.insert(id.as_str(), unit.id.clone());
+                turn_messages
+                    .entry(unit.id.clone())
+                    .or_default()
+                    .push(message);
             }
         }
         let skill_messages = skill_messages(ev);

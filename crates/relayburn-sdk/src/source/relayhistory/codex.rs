@@ -4,7 +4,8 @@
 //! cumulative `token_count` snapshots across it, and everything a task
 //! derives is emitted only once it commits.
 
-use super::Context;
+use ai_hist::SessionEvidence;
+
 use crate::source::SessionRecords;
 
 mod events;
@@ -14,16 +15,16 @@ mod snapshots;
 mod targets;
 mod tasks;
 
-/// Replace the shared per-request derivation with the task derivation.
-pub(super) fn refine(ctx: &Context<'_>, records: &mut SessionRecords) {
-    let stream = events::stream(ctx.ev);
-    let derived = tasks::Tasks::new(ctx.ev).run(&stream);
+/// Burn's records for one Codex session.
+pub(super) fn records(ev: &SessionEvidence) -> SessionRecords {
+    let stream = events::stream(ev);
+    let derived = tasks::Tasks::new(ev).run(&stream);
     let mut relationships = Vec::new();
     if derived.committed {
-        relationships = relationships::session_meta(ctx.ev);
+        relationships = relationships::session_meta(ev);
         relationships.extend(derived.subagents);
     }
-    *records = SessionRecords {
+    SessionRecords {
         turns: derived.turns,
         content: derived.content,
         compactions: derived.compactions,
@@ -31,5 +32,5 @@ pub(super) fn refine(ctx: &Context<'_>, records: &mut SessionRecords) {
         tool_result_events: derived.tool_result_events,
         user_turns: derived.user_turns,
         request_id_lookup: Default::default(),
-    };
+    }
 }

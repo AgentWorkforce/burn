@@ -57,7 +57,10 @@ fn stage_corpus() -> Vec<Staged> {
         let dir = home.path().join(".claude/projects/-tmp-project");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::copy(&path, dir.join(path.file_name().unwrap())).unwrap();
-        staged.push(Staged { prefix: format!("claude-{}", name_of(&path)), home });
+        staged.push(Staged {
+            prefix: format!("claude-{}", name_of(&path)),
+            home,
+        });
     }
     for path in sorted(&root.join("codex")) {
         let home = tempfile::tempdir().unwrap();
@@ -65,7 +68,10 @@ fn stage_corpus() -> Vec<Staged> {
         std::fs::create_dir_all(&dir).unwrap();
         let file = format!("rollout-2026-04-20T00-00-00-{}.jsonl", name_of(&path));
         std::fs::copy(&path, dir.join(file)).unwrap();
-        staged.push(Staged { prefix: format!("codex-{}", name_of(&path)), home });
+        staged.push(Staged {
+            prefix: format!("codex-{}", name_of(&path)),
+            home,
+        });
     }
     for dir in sorted(&root.join("opencode")) {
         let home = tempfile::tempdir().unwrap();
@@ -73,7 +79,10 @@ fn stage_corpus() -> Vec<Staged> {
             &dir.join("storage"),
             &home.path().join(".local/share/opencode/storage"),
         );
-        staged.push(Staged { prefix: format!("opencode-{}", name_of(&dir)), home });
+        staged.push(Staged {
+            prefix: format!("opencode-{}", name_of(&dir)),
+            home,
+        });
     }
     staged
 }
@@ -159,7 +168,10 @@ fn relayhistory_parity() {
     }
     for name in expected.keys() {
         if !seen.contains(name) {
-            failures.entry(name.clone()).or_default().push("no session mapped".into());
+            failures
+                .entry(name.clone())
+                .or_default()
+                .push("no session mapped".into());
         }
     }
     if std::env::var_os("PARITY_REPORT").is_some() {
@@ -177,7 +189,6 @@ fn relayhistory_parity() {
         failures.keys().collect::<Vec<_>>()
     );
 }
-
 
 /// `storage`'s OpenCode JSON tree loaded into an `opencode.db` at `db`,
 /// the layout current OpenCode releases write: one row per session,
@@ -254,7 +265,10 @@ fn opencode_db_sessions_map_like_the_json_tree() {
         if !tree.prefix.starts_with("opencode-") {
             continue;
         }
-        let db = Staged { prefix: tree.prefix.clone(), home: tempfile::tempdir().unwrap() };
+        let db = Staged {
+            prefix: tree.prefix.clone(),
+            home: tempfile::tempdir().unwrap(),
+        };
         write_opencode_db(
             &tree.home.path().join(".local/share/opencode/storage"),
             &db.home.path().join(".local/share/opencode/opencode.db"),

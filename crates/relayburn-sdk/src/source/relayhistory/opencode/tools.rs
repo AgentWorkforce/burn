@@ -48,18 +48,39 @@ mod tests {
 
     #[test]
     fn targets_follow_the_opencode_field_names() {
-        assert_eq!(pick_target("read", &json!({"filePath": "/a"})).as_deref(), Some("/a"));
-        assert_eq!(pick_target("bash", &json!({"command": "ls"})).as_deref(), Some("ls"));
-        assert_eq!(pick_target("glob", &json!({"pattern": "*.rs"})).as_deref(), Some("*.rs"));
-        assert_eq!(pick_target("webfetch", &json!({"url": "u"})).as_deref(), Some("u"));
-        assert_eq!(pick_target("task", &json!({"prompt": "p"})).as_deref(), Some("p"));
-        assert_eq!(pick_target("mcp_x", &json!({"url": "u"})).as_deref(), Some("u"));
+        assert_eq!(
+            pick_target("read", &json!({"filePath": "/a"})).as_deref(),
+            Some("/a")
+        );
+        assert_eq!(
+            pick_target("bash", &json!({"command": "ls"})).as_deref(),
+            Some("ls")
+        );
+        assert_eq!(
+            pick_target("glob", &json!({"pattern": "*.rs"})).as_deref(),
+            Some("*.rs")
+        );
+        assert_eq!(
+            pick_target("webfetch", &json!({"url": "u"})).as_deref(),
+            Some("u")
+        );
+        assert_eq!(
+            pick_target("task", &json!({"prompt": "p"})).as_deref(),
+            Some("p")
+        );
+        assert_eq!(
+            pick_target("mcp_x", &json!({"url": "u"})).as_deref(),
+            Some("u")
+        );
         assert_eq!(pick_target("read", &json!("not an object")), None);
     }
 
     #[test]
     fn a_skill_call_names_its_skill() {
-        assert_eq!(skill_name("skill", &json!({"name": "ship-pr"})).as_deref(), Some("ship-pr"));
+        assert_eq!(
+            skill_name("skill", &json!({"name": "ship-pr"})).as_deref(),
+            Some("ship-pr")
+        );
         assert_eq!(skill_name("bash", &json!({"name": "ship-pr"})), None);
         assert!(is_file_tool("edit") && !is_file_tool("bash"));
     }

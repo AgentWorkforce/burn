@@ -14,7 +14,6 @@ pub(crate) fn usage_from_raw(source: SourceKind, raw: Option<&str>) -> (Usage, C
         return (Usage::default(), Coverage::default());
     };
     match source {
-        SourceKind::Codex => codex(obj),
         SourceKind::Opencode => opencode(obj),
         _ => anthropic(obj),
     }
@@ -30,7 +29,12 @@ fn n(obj: &Map<String, Value>, key: &str) -> u64 {
 /// is reported.
 fn anthropic(obj: &Map<String, Value>) -> (Usage, Coverage) {
     let split = obj.get("cache_creation").and_then(Value::as_object);
-    let tier = |k: &str| split.and_then(|s| s.get(k)).and_then(Value::as_u64).unwrap_or(0);
+    let tier = |k: &str| {
+        split
+            .and_then(|s| s.get(k))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
     let (mut create_5m, create_1h) = (
         tier("ephemeral_5m_input_tokens"),
         tier("ephemeral_1h_input_tokens"),
@@ -60,33 +64,16 @@ fn anthropic(obj: &Map<String, Value>) -> (Usage, Coverage) {
     (usage, coverage)
 }
 
-/// OpenAI Responses usage as Codex reports it: `input_tokens` includes
-/// `cached_input_tokens`, and `output_tokens` includes reasoning.
-fn codex(obj: &Map<String, Value>) -> (Usage, Coverage) {
-    let cached = n(obj, "cached_input_tokens");
-    let usage = Usage {
-        input: n(obj, "input_tokens").saturating_sub(cached),
-        output: n(obj, "output_tokens"),
-        reasoning: n(obj, "reasoning_output_tokens"),
-        cache_read: cached,
-        cache_create_5m: 0,
-        cache_create_1h: 0,
-    };
-    let coverage = Coverage {
-        has_input_tokens: true,
-        has_output_tokens: true,
-        has_reasoning_tokens: true,
-        has_cache_read_tokens: true,
-        ..Coverage::default()
-    };
-    (usage, coverage)
-}
-
 /// OpenCode's per-message `tokens` object: `cache.write` is billed at the
 /// 5-minute rate. A counter is covered when the object names it.
 fn opencode(obj: &Map<String, Value>) -> (Usage, Coverage) {
     let cache = obj.get("cache").and_then(Value::as_object);
-    let c = |k: &str| cache.and_then(|c| c.get(k)).and_then(Value::as_u64).unwrap_or(0);
+    let c = |k: &str| {
+        cache
+            .and_then(|c| c.get(k))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
     let has = |k: &str| obj.get(k).is_some_and(Value::is_u64);
     let has_cache = |k: &str| cache.and_then(|c| c.get(k)).is_some_and(Value::is_u64);
     let usage = Usage {
@@ -106,16 +93,4 @@ fn opencode(obj: &Map<String, Value>) -> (Usage, Coverage) {
         ..Coverage::default()
     };
     (usage, coverage)
-}
-
-/// Field-wise sum, for harnesses whose turn spans several requests.
-pub(crate) fn add(a: &Usage, b: &Usage) -> Usage {
-    Usage {
-        input: a.input + b.input,
-        output: a.output + b.output,
-        reasoning: a.reasoning + b.reasoning,
-        cache_read: a.cache_read + b.cache_read,
-        cache_create_5m: a.cache_create_5m + b.cache_create_5m,
-        cache_create_1h: a.cache_create_1h + b.cache_create_1h,
-    }
 }
