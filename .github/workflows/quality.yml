@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   quality-benchmark:
+    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -102,7 +103,9 @@ jobs:
     # Mutation testing over the whole workspace takes hours, so PRs are gated
     # on "no surviving mutants in the lines this PR touches" instead. The
     # full-suite number stays a target, not a per-PR gate.
-    if: github.event_name == 'pull_request'
+    if: >-
+      ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk') &&
+      (github.event_name == 'pull_request')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
