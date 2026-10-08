@@ -83,10 +83,12 @@ fn codex(obj: &Map<String, Value>) -> (Usage, Coverage) {
 }
 
 /// OpenCode's per-message `tokens` object: `cache.write` is billed at the
-/// 5-minute rate.
+/// 5-minute rate. A counter is covered when the object names it.
 fn opencode(obj: &Map<String, Value>) -> (Usage, Coverage) {
     let cache = obj.get("cache").and_then(Value::as_object);
     let c = |k: &str| cache.and_then(|c| c.get(k)).and_then(Value::as_u64).unwrap_or(0);
+    let has = |k: &str| obj.get(k).is_some_and(Value::is_u64);
+    let has_cache = |k: &str| cache.and_then(|c| c.get(k)).is_some_and(Value::is_u64);
     let usage = Usage {
         input: n(obj, "input"),
         output: n(obj, "output"),
@@ -96,11 +98,11 @@ fn opencode(obj: &Map<String, Value>) -> (Usage, Coverage) {
         cache_create_1h: 0,
     };
     let coverage = Coverage {
-        has_input_tokens: true,
-        has_output_tokens: true,
-        has_reasoning_tokens: true,
-        has_cache_read_tokens: true,
-        has_cache_create_tokens: true,
+        has_input_tokens: has("input"),
+        has_output_tokens: has("output"),
+        has_reasoning_tokens: has("reasoning"),
+        has_cache_read_tokens: has_cache("read"),
+        has_cache_create_tokens: has_cache("write"),
         ..Coverage::default()
     };
     (usage, coverage)
