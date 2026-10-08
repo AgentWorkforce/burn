@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn analyze <source> <session-id>` / `burn analyze --path <transcript>` diagnose one session without a ledger or ingest: metrics, activity, hotspots, instruction overhead, subagents, flow, context growth, quality, and stop reasons, plus findings that explain each cost, cite turns/tools/files, and suggest a fix. `--json` emits `burn.session-analysis.v1`; the same document comes from Rust `analyze_session`, Node `analyzeSession()`, and the MCP `burn__analyzeSession` tool.
+- `burn measure` / `measureSession()` read sessions through relayhistory, the same source path as `burn analyze`.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 
 ## [4.1.0] - 2026-09-20

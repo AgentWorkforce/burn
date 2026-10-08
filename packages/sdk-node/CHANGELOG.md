@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `analyzeSession({ harness, sessionId | path })` returns the ledger-less `burn.session-analysis.v1` diagnosis of one session, typed as `SessionAnalysis`.
+- `measureSession()` reads sessions through relayhistory; an OpenCode input outside its `storage/session/<scope>/` tree is rejected with the expected layout.
 ## [4.1.0] - 2026-09-20
 
 - `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.

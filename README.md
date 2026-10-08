@@ -19,6 +19,7 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 
 | Command | Use it to |
 |---|---|
+| [`burn analyze`](#burn-analyze) | Diagnose one session's token spend, with explained findings, without a ledger. |
 | [`burn measure`](#burn-measure) | Turn one explicit session source into Cloud-ready token and cost metrics. |
 | [`burn summary`](#burn-summary) | See total usage and cost by model or provider. |
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, and subagents. |
@@ -34,7 +35,8 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 
 Every command accepts `--json` for machine-readable output and `--no-color`
 to disable ANSI styling. Ledger-backed commands also accept `--ledger-path
-<path>`; `burn measure` intentionally ignores ledger configuration.
+<path>`; `burn analyze` and `burn measure` intentionally ignore ledger
+configuration.
 
 ## `burn summary`
 
@@ -75,6 +77,79 @@ tokens they used, and what they cost.
 
 Synthetic-routed models are recognized from `hf:*`,
 `accounts/fireworks/models/*`, and `synthetic/*`.
+
+## `burn analyze`
+
+Use `burn analyze` to run every burn analyzer over one session and get back a
+diagnosis: where the tokens went and why. It needs no ledger and no ingest —
+the session is read through relayhistory, either looked up by id or read
+straight from a transcript file.
+
+| Option | What it does |
+|---|---|
+| `<source> <session-id>` | Look the session up by id (`claude`, `codex`, or `opencode`), discovering that harness's sessions on demand. |
+| `--path <file>` | Analyze a session artifact instead: a Claude Code or Codex transcript, or an OpenCode `storage/session/<scope>/<id>.json`. Nothing is persisted. |
+| `--harness <harness>` | Format of `--path`; inferred from the file name when omitted (`rollout-*` is Codex, `.json` is OpenCode, else Claude Code). |
+| `--store-db <path>` | relayhistory (ai-hist) database that resolves ids. |
+| `--home <dir>` | Provider home searched for the session, instead of `$HOME`. |
+| `--project <dir>` | Project whose instruction files to price; defaults to the session's working directory. |
+| `--pricing <models.dev.json>` | Overlay custom rates. |
+
+| Example | Result |
+|---|---|
+| `burn analyze claude <session-id>` | Report for one Claude Code session from the local relayhistory store. |
+| `burn analyze --path ./transcript.jsonl` | Report for a transcript file, e.g. one copied out of a sandbox. |
+| `burn --json analyze --path rollout-….jsonl` | The `burn.session-analysis.v1` document. |
+
+The `burn.session-analysis.v1` document has one section per analysis —
+`metrics` (the `burn.session-metrics.v1` totals), `activity`, `hotspots`,
+`overhead`, `subagents`, `flow`, `context`, `quality`, `stopReasons` — each
+either `{"status":"available","data":…}` or
+`{"status":"unavailable","reason":…}`, plus `session` identity, `fidelity`,
+and `findings`. Every finding carries a stable `code`, `severity`, an
+`explanation` of what happened and why it costs tokens, `evidence` (turn ids,
+tools, files), `impact` (tokens and USD), and a concrete `suggestion`.
+Unpriced models report `costUsd: null`, never `$0`.
+
+```text
+findings (1)
+  [info] Retry loop: Bash npm run build failed 4× in a row: 'npm ERR! code ENOENT'
+         turns 0-3 · tools Bash · 790 tokens · $0.0016
+         why  Turns 0-3 are 4 consecutive errored Bash calls with the same arguments. …
+         fix  Stop after the first identical failure: read the error and change the arguments or approach. …
+```
+
+### Analyzing sessions from another project
+
+The same analysis is a function call from Rust, Node, an MCP client, or a
+shell:
+
+```rust
+use relayburn_sdk::{analyze_session, AnalyzeSessionOptions, Harness, SessionLocator};
+
+let analysis = analyze_session(AnalyzeSessionOptions::new(SessionLocator::Path {
+    harness: Harness::ClaudeCode,
+    path: "/runs/42/session.jsonl".into(),
+}))?;
+for finding in &analysis.findings {
+    println!("{} {:?}: {}", finding.code, finding.impact.cost_usd, finding.suggestion);
+}
+```
+
+```js
+import { analyzeSession } from '@relayburn/sdk';
+
+const analysis = await analyzeSession({ harness: 'codex', sessionId: 'sess_123' });
+const worst = analysis.findings[0];
+```
+
+```bash
+burn --json analyze --path /runs/42/session.jsonl | jq '.findings[] | {code, suggestion}'
+```
+
+Rust embedders that already hold relayhistory evidence (`relayburn_sdk::ai_hist`,
+the exact version burn pins) call `analyze_evidence` instead. MCP clients use
+the `burn__analyzeSession` tool of `burn mcp-server`.
 
 ## `burn measure`
 
@@ -241,6 +316,7 @@ MCP. The server is stdio-only and read-only.
 | `burn__overhead` | Instruction-file token overhead and cost by file and section. |
 | `burn__overheadTrim` | Ranked instruction-file trimming recommendations and projected savings. |
 | `burn__compare` | Per-model, per-activity cost and outcome comparison. |
+| `burn__analyzeSession` | The ledger-less `burn.session-analysis.v1` diagnosis of one session (defaults to the registered session). |
 
 | Example | Result |
 |---|---|
