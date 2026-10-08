@@ -62,8 +62,8 @@ pub(super) struct Tasks<'a> {
     /// Calls Codex reported failed (`exec_command_end` exit code,
     /// `patch_apply_end` success).
     errored: HashSet<&'a str>,
-    /// turn id → (model, cwd) from the turn's `turn_context`, as stamped on
-    /// its messages.
+    /// turn id → (model, cwd) from the turn's `turn_context` record, else
+    /// as stamped on its messages.
     contexts: HashMap<&'a str, (Option<&'a str>, Option<&'a str>)>,
     cumulative: Counters,
     open: Option<Open>,
@@ -87,6 +87,16 @@ pub(super) struct Tasks<'a> {
 impl<'a> Tasks<'a> {
     pub(super) fn new(ev: &'a SessionEvidence) -> Self {
         let mut contexts: HashMap<&str, (Option<&str>, Option<&str>)> = HashMap::new();
+        for marker in ev.markers.iter().filter(|m| m.kind == "turn_context") {
+            let (Some(turn), Some(payload)) = (marker.turn_id.as_deref(), marker.payload.as_ref())
+            else {
+                continue;
+            };
+            let field = |key: &str| payload.get(key).and_then(|v| v.as_str());
+            let slot = contexts.entry(turn).or_default();
+            slot.0 = slot.0.or(field("model"));
+            slot.1 = slot.1.or(field("cwd"));
+        }
         for m in &ev.messages {
             if let Some(turn) = m.turn_id.as_deref() {
                 let slot = contexts.entry(turn).or_default();
