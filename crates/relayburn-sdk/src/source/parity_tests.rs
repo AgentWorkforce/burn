@@ -177,3 +177,97 @@ fn relayhistory_parity() {
         failures.keys().collect::<Vec<_>>()
     );
 }
+
+
+/// `storage`'s OpenCode JSON tree loaded into an `opencode.db` at `db`,
+/// the layout current OpenCode releases write: one row per session,
+/// message and part, each carrying the provider's JSON as `data`.
+fn write_opencode_db(storage: &Path, db: &Path) {
+    let read = |path: &Path| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(db).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+                               time_created INTEGER, time_updated INTEGER);
+         CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT,
+                               time_created INTEGER, data TEXT);
+         CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+                            time_created INTEGER, data TEXT);",
+    )
+    .unwrap();
+    for scope in sorted(&storage.join("session")) {
+        for path in sorted(&scope) {
+            let s = read(&path);
+            conn.execute(
+                "INSERT INTO session VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    s["id"].as_str(),
+                    s["parentID"].as_str(),
+                    s["directory"].as_str(),
+                    s["time"]["created"].as_i64(),
+                    s["time"]["updated"].as_i64(),
+                ],
+            )
+            .unwrap();
+        }
+    }
+    for session in sorted(&storage.join("message")) {
+        for path in sorted(&session) {
+            let m = read(&path);
+            conn.execute(
+                "INSERT INTO message VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    m["id"].as_str(),
+                    m["sessionID"].as_str(),
+                    m["time"]["created"].as_i64(),
+                    m.to_string(),
+                ],
+            )
+            .unwrap();
+        }
+    }
+    for message in sorted(&storage.join("part")) {
+        for path in sorted(&message) {
+            let p = read(&path);
+            conn.execute(
+                "INSERT INTO part VALUES (?1, ?2, ?3, NULL, ?4)",
+                rusqlite::params![
+                    p["id"].as_str(),
+                    p["messageID"].as_str(),
+                    p["sessionID"].as_str(),
+                    p.to_string(),
+                ],
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// An OpenCode session maps to the same records whether relayhistory read
+/// it from the legacy JSON tree or from `opencode.db`.
+#[test]
+fn opencode_db_sessions_map_like_the_json_tree() {
+    let mut compared = 0;
+    for tree in stage_corpus() {
+        if !tree.prefix.starts_with("opencode-") {
+            continue;
+        }
+        let db = Staged { prefix: tree.prefix.clone(), home: tempfile::tempdir().unwrap() };
+        write_opencode_db(
+            &tree.home.path().join(".local/share/opencode/storage"),
+            &db.home.path().join(".local/share/opencode/opencode.db"),
+        );
+        let (from_tree, from_db) = (mapped(&tree), mapped(&db));
+        assert_eq!(
+            from_tree.keys().collect::<Vec<_>>(),
+            from_db.keys().collect::<Vec<_>>()
+        );
+        for (name, records) in &from_tree {
+            assert_eq!(records, &from_db[name], "{name}");
+            compared += 1;
+        }
+    }
+    assert_eq!(compared, 6);
+}
