@@ -35,4 +35,7 @@ fn serialize_request_ids<S: serde::Serializer>(
     seq.end()
 }
 
+mod parity_tests;
+mod relayhistory;
 mod snapshot_tests;
+mod usage;

@@ -733,7 +733,7 @@ pub(in crate::reader::claude) fn extract_tool_calls(
     out
 }
 
-fn apply_edit_hashes(call: &mut ToolCall, input: &Value) {
+pub(crate) fn apply_edit_hashes(call: &mut ToolCall, input: &Value) {
     let obj = match input.as_object() {
         Some(o) => o,
         None => return,
@@ -752,7 +752,7 @@ fn apply_edit_hashes(call: &mut ToolCall, input: &Value) {
     }
 }
 
-fn pick_target(name: &str, input: &Value) -> Option<String> {
+pub(crate) fn pick_target(name: &str, input: &Value) -> Option<String> {
     let obj = input.as_object()?;
     let s = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
     match name {
@@ -768,7 +768,7 @@ fn pick_target(name: &str, input: &Value) -> Option<String> {
     }
 }
 
-pub(in crate::reader::claude) fn extract_files_touched(tool_calls: &[ToolCall]) -> Vec<String> {
+pub(crate) fn extract_files_touched(tool_calls: &[ToolCall]) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for tc in tool_calls {

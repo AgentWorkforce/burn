@@ -42,6 +42,10 @@ memchr = { workspace = true }
 # ledger: SQLite events + content store
 rusqlite = { workspace = true }
 
+# Session sourcing: relayhistory captures harness evidence; burn owns what
+# the counters mean. The exact pin is the contract.
+ai-hist = "=0.36.0"
+
 # ingest + query_verbs: civil-date arithmetic / ISO-8601 formatting.
 # Replaces three hand-rolled Howard Hinnant implementations.
 time = { version = "0.3", default-features = false, features = ["formatting", "parsing", "macros"] }

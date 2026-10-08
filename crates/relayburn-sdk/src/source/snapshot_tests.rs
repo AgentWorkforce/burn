@@ -15,11 +15,11 @@ use crate::reader::{
     ParseOpencodeIncrementalOptions,
 };
 
-fn fixtures_root() -> PathBuf {
+pub(super) fn fixtures_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
 }
 
-fn snapshot_dir() -> PathBuf {
+pub(super) fn snapshot_dir() -> PathBuf {
     fixtures_root().join("sourcing-snapshots")
 }
 
@@ -127,10 +127,27 @@ fn stem(path: &Path) -> String {
 
 /// Serialize with machine-specific absolute paths replaced by `<fixtures>`.
 fn render(records: &SessionRecords) -> String {
-    let json = serde_json::to_string_pretty(records).unwrap() + "\n";
-    let root = fixtures_root().canonicalize().unwrap();
-    json.replace(&root.to_string_lossy().into_owned(), "<fixtures>")
-        .replace(&fixtures_root().to_string_lossy().into_owned(), "<fixtures>")
+    serde_json::to_string_pretty(&render_value(records, &fixtures_root())).unwrap() + "\n"
+}
+
+/// `records` as JSON with every occurrence of `root` (and its canonical
+/// form) replaced by `<fixtures>`, and `sessionPath` dropped: where a
+/// session file lives is not something the readers derive.
+pub(super) fn render_value(records: &SessionRecords, root: &Path) -> serde_json::Value {
+    let mut json = serde_json::to_string(records).unwrap();
+    let canonical = root.canonicalize().unwrap();
+    for prefix in [canonical.as_path(), root] {
+        json = json.replace(&*prefix.to_string_lossy(), "<fixtures>");
+    }
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    if let Some(turns) = value.get_mut("turns").and_then(|t| t.as_array_mut()) {
+        for turn in turns {
+            if let Some(obj) = turn.as_object_mut() {
+                obj.remove("sessionPath");
+            }
+        }
+    }
+    value
 }
 
 #[test]
