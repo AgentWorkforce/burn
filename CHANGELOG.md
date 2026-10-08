@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+
 ## [4.1.0] - 2026-09-20
 
 - `burn measure` and `@relayburn/sdk.measureSession()` turn one explicit Claude Code, Codex, or OpenCode session source into a versioned per-model token/cost document without discovery or a ledger; incomplete and zero-turn inputs fail closed.
