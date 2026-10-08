@@ -54,8 +54,8 @@ mod reader;
 mod export_verbs;
 mod ingest_verb;
 mod query_verbs;
+mod session_analysis;
 mod session_metrics;
-#[cfg(test)]
 mod source;
 mod stamp_verb;
 mod util;
@@ -63,7 +63,14 @@ mod util;
 pub use export_verbs::*;
 pub use ingest_verb::*;
 pub use query_verbs::*;
+pub use session_analysis::*;
 pub use session_metrics::*;
+pub use source::locate::{HistoryStoreOptions, SessionLocator};
+
+/// relayhistory, the session-sourcing crate burn reads harness sessions
+/// through, at the exact version burn pins. Embedders that hold their own
+/// [`ai_hist::SessionStore`] pass its evidence to [`analyze_evidence`].
+pub use ai_hist;
 pub use stamp_verb::*;
 
 // --- Re-exports ------------------------------------------------------------

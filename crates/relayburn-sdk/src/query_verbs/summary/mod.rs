@@ -175,6 +175,22 @@ pub fn summary(opts: SummaryOptions) -> Result<Summary> {
     })
 }
 
+/// The subagent tree rooted at `session_id`, built from `turns` and their
+/// session relationship rows. `None` when no tree contains the session.
+pub(crate) fn subagent_tree_for_session(
+    turns: &[TurnRecord],
+    relationships: &[crate::reader::SessionRelationshipRecord],
+    pricing: &PricingTable,
+    session_id: &str,
+) -> Option<SubagentTreeNode> {
+    let tree_opts = BuildSubagentTreeOptions::new(pricing).with_relationships(relationships);
+    let trees = build_subagent_tree(turns, &tree_opts);
+    trees
+        .get(session_id)
+        .cloned()
+        .or_else(|| find_summary_tree_node(trees.values(), session_id))
+}
+
 pub(crate) fn validate_tags(tags: &Enrichment) -> Result<()> {
     for key in tags.keys() {
         validate_tag_key(key, "tag")?;
@@ -678,13 +694,7 @@ impl LedgerHandle {
                 provider_filter.as_ref(),
             );
             let turns = summary_turns_from_enriched(&enriched);
-            let tree_opts =
-                BuildSubagentTreeOptions::new(&pricing).with_relationships(&relationships);
-            let trees = build_subagent_tree(&turns, &tree_opts);
-            let root = trees
-                .get(&session_id)
-                .cloned()
-                .or_else(|| find_summary_tree_node(trees.values(), &session_id));
+            let root = subagent_tree_for_session(&turns, &relationships, &pricing, &session_id);
             return Ok(SummaryReport::SubagentTree(SummarySubagentTreeReport {
                 session_id,
                 root,

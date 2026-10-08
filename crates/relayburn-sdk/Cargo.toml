@@ -45,6 +45,9 @@ rusqlite = { workspace = true }
 # Session sourcing: relayhistory captures harness evidence; burn owns what
 # the counters mean. The exact pin is the contract.
 ai-hist = "=0.36.0"
+# Path-mode session analysis stages one transcript into a throwaway
+# provider root and relayhistory store.
+tempfile = "3"
 
 # ingest + query_verbs: civil-date arithmetic / ISO-8601 formatting.
 # Replaces three hand-rolled Howard Hinnant implementations.
@@ -69,5 +72,4 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }

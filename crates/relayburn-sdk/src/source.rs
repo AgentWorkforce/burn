@@ -35,7 +35,13 @@ fn serialize_request_ids<S: serde::Serializer>(
     seq.end()
 }
 
+pub(crate) mod locate;
+#[cfg(test)]
 mod parity_tests;
 mod relayhistory;
+#[cfg(test)]
 mod snapshot_tests;
+mod stage;
 mod usage;
+
+pub(crate) use relayhistory::records_from_evidence;

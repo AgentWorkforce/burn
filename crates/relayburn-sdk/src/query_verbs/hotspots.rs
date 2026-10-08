@@ -1,5 +1,11 @@
 use super::*;
 
+mod compute;
+pub(crate) use compute::{
+    detect_hotspots, hotspots_attribution, HotspotDetections, HotspotEnvironment,
+    HotspotSideRecords, SessionDetail,
+};
+
 // ---------------------------------------------------------------------------
 // hotspots — discriminated union
 // ---------------------------------------------------------------------------
@@ -31,7 +37,7 @@ const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
     "unpriced-usage",
 ];
 
-fn default_hotspots_finding_kinds() -> Vec<String> {
+pub(crate) fn default_hotspots_finding_kinds() -> Vec<String> {
     DEFAULT_HOTSPOTS_FINDING_KINDS
         .iter()
         .map(|s| (*s).to_string())
@@ -186,11 +192,6 @@ pub struct HotspotsAttributionResult {
 
 impl LedgerHandle {
     pub fn hotspots(&self, opts: HotspotsOptions) -> Result<HotspotsResult> {
-        let using_patterns = opts
-            .patterns
-            .as_ref()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
         let mut q = build_query(
             opts.session.as_deref(),
             opts.project.as_deref(),
@@ -209,24 +210,47 @@ impl LedgerHandle {
             });
         }
         let pricing = load_pricing_for_ledger(self);
+        // Propagate `enrichment` (e.g. workflowId folds) into side queries so a
+        // partial-session workflow stamp doesn't pull unrelated user-turns /
+        // tool-result events into the per-session buckets and skew attribution
+        // outside the requested slice.
+        let side_q = Query {
+            session_id: q.session_id.clone(),
+            since: q.since.clone(),
+            enrichment: q.enrichment.clone(),
+            ..Default::default()
+        };
+        let user_turns = self.inner.query_user_turns(&side_q)?;
+        let tool_result_events = self.inner.query_tool_result_events(&side_q)?;
+        let side = HotspotSideRecords {
+            user_turns: &user_turns,
+            tool_result_events: &tool_result_events,
+            session_detail: None,
+        };
 
-        if matches!(opts.group_by, Some(HotspotsGroupBy::Findings)) {
-            let patterns = match opts.patterns {
-                Some(patterns) if !patterns.is_empty() => patterns,
-                _ => default_hotspots_finding_kinds(),
-            };
-            return run_hotspots_findings(self, &turns, &pricing, patterns, &q);
-        }
-        if using_patterns {
-            return run_hotspots_findings(
-                self,
-                &turns,
-                &pricing,
-                opts.patterns.unwrap_or_default(),
-                &q,
-            );
-        }
-        run_hotspots_attribution(self, &turns, &pricing, opts.group_by, &q)
+        let wanted = match (opts.group_by, opts.patterns) {
+            (Some(HotspotsGroupBy::Findings), Some(p)) if !p.is_empty() => p,
+            (Some(HotspotsGroupBy::Findings), _) => default_hotspots_finding_kinds(),
+            (_, Some(p)) if !p.is_empty() => p,
+            _ => return Ok(hotspots_attribution(&turns, &side, &pricing, opts.group_by)),
+        };
+        let wanted: HashSet<String> = wanted.into_iter().collect();
+        let detections = detect_hotspots(
+            &turns,
+            &side,
+            &pricing,
+            &HotspotEnvironment {
+                settings: &ledger_claude_settings(),
+                ghost_surface: wanted
+                    .contains("ghost-surface")
+                    .then(|| build_ghost_surface_inputs(&turns, &pricing, None)),
+                wanted: &wanted,
+            },
+        );
+        Ok(HotspotsResult::Findings {
+            findings: detections.waste_findings(&turns, &pricing, &wanted),
+            summary: fidelity_summary_to_value(&summarize_fidelity(&turns)),
+        })
     }
 }
 
@@ -238,154 +262,17 @@ pub fn hotspots(opts: HotspotsOptions) -> Result<HotspotsResult> {
     })
 }
 
-fn run_hotspots_attribution(
-    handle: &LedgerHandle,
-    turns: &[TurnRecord],
-    pricing: &PricingTable,
-    group_by: Option<HotspotsGroupBy>,
-    q: &Query,
-) -> Result<HotspotsResult> {
-    let mut eligible: Vec<TurnRecord> = Vec::new();
-    let mut excluded: Vec<TurnRecord> = Vec::new();
-    let mut excluded_by_source = HotspotsExcludedBreakdown::default();
-    for t in turns {
-        if turn_passes_hotspots_coverage(t) {
-            eligible.push(t.clone());
-        } else {
-            record_excluded_source(&mut excluded_by_source, t);
-            excluded.push(t.clone());
-        }
-    }
-    let fidelity_summary = summarize_fidelity(turns);
-    let summary_value = fidelity_summary_to_value(&fidelity_summary);
-
-    if !turns.is_empty() && eligible.is_empty() {
-        let refusal = format!(
-            "{}/{} turns lack tool-call/tool-result coverage required for hotspots attribution",
-            turns.len(),
-            turns.len()
-        );
-        let group = group_by.unwrap_or(HotspotsGroupBy::Attribution);
-        return Ok(refused_for_group(
-            group,
-            refusal,
-            turns.len() as u64,
-            summary_value,
-            excluded_by_source,
-        ));
-    }
-
-    let session_ids: HashSet<String> = eligible.iter().map(|t| t.session_id.clone()).collect();
-    // Propagate `enrichment` (e.g. workflowId folds) into side queries so a
-    // partial-session workflow stamp doesn't pull unrelated user-turns /
-    // tool-result events into the per-session buckets and skew attribution
-    // outside the requested slice.
-    let side_q = Query {
-        session_id: q.session_id.clone(),
-        since: q.since.clone(),
-        enrichment: q.enrichment.clone(),
-        ..Default::default()
-    };
-    let user_turns_by_session = bucket_user_turns_by_session(handle, &side_q, Some(&session_ids))?;
-    // Bytes plumbing (#436): hand attribute_hotspots a per-session lookup
-    // so it can stamp `output_bytes` / `output_truncated` onto each
-    // attribution row from the matching `ToolResultEventRecord`.
-    let tool_result_events_by_session =
-        bucket_tool_result_events_by_session(handle, &side_q, Some(&session_ids))?;
-
-    let result = attribute_hotspots(
-        &eligible,
-        &AnalyzeHotspotsOptions {
-            pricing,
-            content_by_session: None,
-            user_turns_by_session: Some(&user_turns_by_session),
-            tool_result_events_by_session: Some(&tool_result_events_by_session),
-        },
-    );
-
-    let group = group_by.unwrap_or(HotspotsGroupBy::Attribution);
-    match group {
-        HotspotsGroupBy::Bash => {
-            return Ok(HotspotsResult::Bash {
-                rows: aggregate_by_bash(&result.attributions),
-                refused: None,
-                refusal_reason: None,
-            });
-        }
-        HotspotsGroupBy::BashVerb => {
-            return Ok(HotspotsResult::BashVerb {
-                rows: aggregate_by_bash_verb(&result.attributions, parse_bash_verb),
-                refused: None,
-                refusal_reason: None,
-            });
-        }
-        HotspotsGroupBy::File => {
-            return Ok(HotspotsResult::File {
-                rows: aggregate_by_file(&result.attributions),
-                refused: None,
-                refusal_reason: None,
-            });
-        }
-        HotspotsGroupBy::Subagent => {
-            return Ok(HotspotsResult::Subagent {
-                rows: aggregate_by_subagent(&result.attributions),
-                refused: None,
-                refusal_reason: None,
-            });
-        }
-        HotspotsGroupBy::Findings => unreachable!("findings is handled before attribution"),
-        HotspotsGroupBy::Attribution => {}
-    }
-
-    let files = aggregate_by_file(&result.attributions);
-    let bash_verbs = aggregate_by_bash_verb(&result.attributions, parse_bash_verb);
-    let bash = aggregate_by_bash(&result.attributions);
-    let subagents = aggregate_by_subagent(&result.attributions);
-    let mcp_servers = aggregate_by_mcp_server(&result.attributions);
-    let even_split: usize = result
-        .session_totals
-        .iter()
-        .filter(|s| matches!(s.attribution_method, AttributionMethod::EvenSplit))
-        .count();
-    let degraded = !result.session_totals.is_empty()
-        && (even_split as f64 / result.session_totals.len() as f64) >= 0.5;
-
-    let sessions = result
-        .session_totals
-        .into_iter()
-        .map(|s| HotspotsSessionTotal {
-            session_id: s.session_id,
-            grand_cost: s.grand_cost,
-            attributed_cost: s.attributed_cost,
-            unattributed_cost: s.unattributed_cost,
-            attribution_method: s.attribution_method,
-        })
-        .collect();
-
-    Ok(HotspotsResult::Attribution(Box::new(
-        HotspotsAttributionResult {
-            turns_analyzed: eligible.len() as u64,
-            grand_total: result.grand_total,
-            attributed_total: result.attributed_total,
-            unattributed_total: result.unattributed_total,
-            attribution_degraded: degraded,
-            sessions,
-            files,
-            bash_verbs,
-            bash,
-            subagents,
-            mcp_servers,
-            fidelity: HotspotsFidelityBlock {
-                analyzed: eligible.len() as u64,
-                excluded: excluded.len() as u64,
-                summary: summary_value,
-                refused: false,
-                excluded_by_source,
-            },
-            refused: None,
-            refusal_reason: None,
-        },
-    )))
+/// The user-level and working-directory Claude settings the cross-session
+/// tool-output-bloat check reads.
+fn ledger_claude_settings() -> Vec<LoadedClaudeSettings> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    [
+        load_claude_settings(user_claude_settings_path()),
+        load_claude_settings(project_claude_settings_path(&cwd)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Folds the coverage gap on `t` into the per-source breakdown. Mirrors
@@ -393,7 +280,7 @@ fn run_hotspots_attribution(
 /// so callers can render the inline source clause without a second ledger
 /// walk. Turns without `fidelity` are treated as best-effort full upstream
 /// (`turn_passes_hotspots_coverage`) and never reach this function.
-fn record_excluded_source(out: &mut HotspotsExcludedBreakdown, t: &TurnRecord) {
+pub(crate) fn record_excluded_source(out: &mut HotspotsExcludedBreakdown, t: &TurnRecord) {
     let entry = out
         .sources
         .entry(t.source.wire_str().to_string())
@@ -412,7 +299,7 @@ fn record_excluded_source(out: &mut HotspotsExcludedBreakdown, t: &TurnRecord) {
     }
 }
 
-fn refused_for_group(
+pub(crate) fn refused_for_group(
     group: HotspotsGroupBy,
     refusal: String,
     excluded_total: u64,
@@ -471,115 +358,11 @@ fn refused_for_group(
     }
 }
 
-fn parse_bash_verb(command: &str) -> Option<BashParse> {
+pub(crate) fn parse_bash_verb(command: &str) -> Option<BashParse> {
     parse_bash_command(command)
 }
 
-fn run_hotspots_findings(
-    handle: &LedgerHandle,
-    turns: &[TurnRecord],
-    pricing: &PricingTable,
-    wanted: Vec<String>,
-    q: &Query,
-) -> Result<HotspotsResult> {
-    let wanted_set: HashSet<String> = wanted.into_iter().collect();
-    let mut findings: Vec<WasteFinding> = Vec::new();
-
-    // Propagate `enrichment` (e.g. workflowId folds) into side queries so a
-    // partial-session workflow stamp doesn't pull unrelated user-turns /
-    // tool-result events into the per-session buckets and skew attribution
-    // outside the requested slice.
-    let side_q = Query {
-        session_id: q.session_id.clone(),
-        since: q.since.clone(),
-        enrichment: q.enrichment.clone(),
-        ..Default::default()
-    };
-
-    let user_turns_all: Vec<UserTurnRecord> = handle.inner.query_user_turns(&side_q)?;
-    let mut user_turns_by_session: HashMap<String, Vec<UserTurnRecord>> = HashMap::new();
-    for ut in &user_turns_all {
-        user_turns_by_session
-            .entry(ut.session_id.clone())
-            .or_default()
-            .push(ut.clone());
-    }
-
-    let detected = detect_patterns(
-        turns,
-        &DetectPatternsOptions {
-            pricing,
-            compactions: None,
-            user_turns_by_session: Some(&user_turns_by_session),
-            content_by_session: None,
-            tool_result_events: None,
-        },
-    );
-    for f in findings_from_patterns(&detected) {
-        if wanted_set.contains(&f.kind) {
-            findings.push(f);
-        }
-    }
-
-    if wanted_set.contains("tool-output-bloat") {
-        let mut settings: Vec<LoadedClaudeSettings> = Vec::new();
-        if let Some(s) = load_claude_settings(user_claude_settings_path()) {
-            settings.push(s);
-        }
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        if let Some(s) = load_claude_settings(project_claude_settings_path(&cwd)) {
-            settings.push(s);
-        }
-        let tool_result_events = handle.inner.query_tool_result_events(&side_q)?;
-        let bloats = detect_tool_output_bloat(&DetectToolOutputBloatOptions {
-            settings: &settings,
-            tool_result_events: &tool_result_events,
-            user_turns: &user_turns_all,
-            turns,
-            pricing,
-            threshold: None,
-            min_occurrences: None,
-        });
-        for b in bloats {
-            findings.push(tool_output_bloat_to_finding(&b));
-        }
-    }
-
-    if wanted_set.contains("ghost-surface") {
-        let inputs = build_ghost_surface_inputs(turns, pricing, None);
-        let ghosts = detect_ghost_surface(&inputs);
-        let options = GhostSurfaceFindingOptions::default();
-        for g in ghosts {
-            findings.push(ghost_surface_to_finding(&g, &options));
-        }
-    }
-
-    if wanted_set.contains("tool-call-pattern") {
-        let patterns = detect_tool_call_patterns(turns, &DetectToolCallPatternsOptions { pricing });
-        for p in patterns {
-            findings.push(tool_call_pattern_to_finding(&p));
-        }
-    }
-
-    if wanted_set.contains("unpriced-usage") {
-        findings.extend(unpriced_usage_findings(turns, pricing));
-    }
-
-    mark_findings_with_unpriced_sessions(&mut findings, turns, pricing);
-
-    // `findings_from_patterns` already sorts the slice it returns, but the
-    // tool-output-bloat / ghost-surface / tool-call-pattern batches above
-    // are appended afterwards. Re-sort once so the global slice is
-    // unpriced/token-descending first, then severity/USD descending.
-    sort_findings(&mut findings);
-
-    Ok(HotspotsResult::Findings {
-        findings,
-        summary: fidelity_summary_to_value(&summarize_fidelity(turns)),
-    })
-}
-
-fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Value {
+pub(crate) fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Value {
     // Mirror the TS shape: { total, byClass, byGranularity, missingCoverage,
     // unknown }. The analyze type doesn't derive Serialize so build it here.
     let by_class: serde_json::Map<String, serde_json::Value> = s

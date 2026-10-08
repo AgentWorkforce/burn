@@ -1,21 +1,22 @@
 //! One-session, input/output metrics surface.
 //!
-//! Unlike [`crate::ingest`], this module never discovers session stores and
-//! never opens or mutates a Burn ledger. The caller supplies one exact
-//! session source plus its harness; Burn parses that input and returns a
-//! versioned metrics document suitable for a control plane such as Cloud.
+//! This module never discovers the user's session stores and never opens or
+//! mutates a Burn ledger. The caller supplies one exact session artifact
+//! plus its harness; relayhistory reads it through a throwaway store and
+//! Burn returns a versioned metrics document suitable for a control plane
+//! such as Cloud. The same metrics are the `metrics` section of
+//! [`crate::analyze_session`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::{cost_for_turn, load_pricing, provider_for};
-use crate::reader::{
-    parse_claude_session, parse_codex_session_incremental, parse_opencode_session_incremental,
-    ClaudeParseOptions, ParseCodexIncrementalOptions, ParseOpencodeIncrementalOptions, TurnRecord,
-};
+use crate::analyze::{cost_for_turn, load_pricing, provider_for, PricingTable};
+use crate::reader::TurnRecord;
+use crate::source::locate::{load_session, HistoryStoreOptions, SessionLocator};
+use crate::source::records_from_evidence;
 use crate::Harness;
 
 pub const SESSION_METRICS_SCHEMA: &str = "burn.session-metrics.v1";
@@ -45,7 +46,7 @@ pub struct SessionTokenMetrics {
 }
 
 impl SessionTokenMetrics {
-    fn add_turn(&mut self, turn: &TurnRecord) {
+    pub(crate) fn add_turn(&mut self, turn: &TurnRecord) {
         let usage = &turn.usage;
         let cache_write = usage.cache_create_5m.saturating_add(usage.cache_create_1h);
         self.input_tokens = self.input_tokens.saturating_add(usage.input);
@@ -113,89 +114,48 @@ fn usd_to_micros(value: f64) -> Option<u64> {
         .then(|| micros.round() as u64)
 }
 
-fn parse_one(options: &MeasureSessionOptions) -> Result<Vec<TurnRecord>> {
-    if !options.input_path.is_file() {
-        bail!(
-            "session input is not a file: {}",
-            options.input_path.display()
-        );
-    }
-
-    let session_path = Some(options.input_path.to_string_lossy().into_owned());
-    let turns = match options.harness {
-        Harness::ClaudeCode => {
-            parse_claude_session(
-                &options.input_path,
-                &ClaudeParseOptions {
-                    session_path,
-                    content_mode: None,
-                    file_session_id: None,
-                },
-            )
-            .context("parse Claude Code session")?
-            .turns
-        }
-        Harness::Codex => {
-            parse_codex_session_incremental(
-                &options.input_path,
-                &ParseCodexIncrementalOptions {
-                    session_path,
-                    content_mode: None,
-                    tokenizer: None,
-                    start_offset: Some(0),
-                    resume: None,
-                },
-            )
-            .context("parse Codex session")?
-            .turns
-        }
-        Harness::Opencode => {
-            parse_opencode_session_incremental(
-                &options.input_path,
-                &ParseOpencodeIncrementalOptions {
-                    session_path,
-                    content_mode: None,
-                    tokenizer: None,
-                    seen_message_ids: None,
-                },
-            )
-            .context("parse OpenCode session")?
-            .turns
-        }
-    };
-    Ok(turns)
-}
-
 /// Measure one caller-selected session without discovery, ingestion, or a
 /// ledger. This is the preferred runtime boundary for sandbox → Cloud usage
 /// reporting; discovery-oriented Burn commands remain available for local
 /// historical analysis.
 pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics> {
-    let turns = parse_one(&options)?;
+    let loaded = load_session(
+        &SessionLocator::Path {
+            harness: options.harness,
+            path: options.input_path.clone(),
+        },
+        &HistoryStoreOptions::default(),
+    )?;
+    let records = records_from_evidence(&loaded.evidence);
     let pricing = load_pricing(options.pricing_path.as_deref());
-    let mut session_ids = BTreeSet::new();
-    let mut usage = SessionTokenMetrics::default();
-    let mut by_model: BTreeMap<(String, String), ModelAccumulator> = BTreeMap::new();
-    let mut priced_turns = 0_u64;
-    let mut unpriced_turns = 0_u64;
+    session_metrics(options.harness, &records.turns, &pricing)
+}
 
-    if turns.is_empty() {
-        if matches!(options.harness, Harness::Opencode) {
+/// Token and cost metrics for one session's turns.
+pub(crate) fn session_metrics(
+    harness: Harness,
+    turns: &[TurnRecord],
+    pricing: &PricingTable,
+) -> Result<SessionMetrics> {
+    let Some(first) = turns.first() else {
+        if matches!(harness, Harness::Opencode) {
             bail!(
                 "OpenCode session produced no measurable turns; provide the selected session metadata file inside a complete storage tree containing message/<sessionId> and part/<messageId> records"
             );
         }
         bail!("session input produced no measurable turns");
-    }
-
-    for turn in &turns {
-        session_ids.insert(turn.session_id.clone());
+    };
+    let mut usage = SessionTokenMetrics::default();
+    let mut by_model: BTreeMap<(String, String), ModelAccumulator> = BTreeMap::new();
+    let mut priced_turns = 0_u64;
+    let mut unpriced_turns = 0_u64;
+    for turn in turns {
         usage.add_turn(turn);
         let provider = provider_for(turn).provider;
         let row = by_model.entry((provider, turn.model.clone())).or_default();
         row.turn_count = row.turn_count.saturating_add(1);
         row.usage.add_turn(turn);
-        if let Some(cost) = cost_for_turn(turn, &pricing) {
+        if let Some(cost) = cost_for_turn(turn, pricing) {
             row.cost_usd += cost.total;
             row.priced_turns = row.priced_turns.saturating_add(1);
             priced_turns = priced_turns.saturating_add(1);
@@ -204,12 +164,6 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
             unpriced_turns = unpriced_turns.saturating_add(1);
         }
     }
-
-    let session_id = match session_ids.len() {
-        0 => None,
-        1 => session_ids.into_iter().next(),
-        _ => bail!("input contains turns from more than one session"),
-    };
     let models: Vec<SessionModelMetrics> = by_model
         .into_iter()
         .map(|((provider, model), row)| SessionModelMetrics {
@@ -235,11 +189,10 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
     } else {
         None
     };
-
     Ok(SessionMetrics {
         schema: SESSION_METRICS_SCHEMA.to_string(),
-        session_id,
-        harness: options.harness,
+        session_id: Some(first.session_id.clone()),
+        harness,
         turn_count: turns.len() as u64,
         usage,
         cost_usd_micros,
@@ -333,7 +286,9 @@ mod tests {
     #[test]
     fn rejects_incomplete_opencode_session_instead_of_reporting_zero_usage() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let input = dir.path().join("ses_incomplete.json");
+        let scope = dir.path().join("storage/session/global");
+        std::fs::create_dir_all(&scope).expect("storage tree");
+        let input = scope.join("ses_incomplete.json");
         std::fs::write(&input, r#"{"id":"ses_incomplete","directory":"/tmp"}"#)
             .expect("write fixture");
 
@@ -344,7 +299,10 @@ mod tests {
         })
         .expect_err("incomplete OpenCode session must fail closed");
 
-        assert!(error.to_string().contains("no measurable turns"));
+        assert!(
+            format!("{error:#}").contains("no measurable turns"),
+            "{error:#}"
+        );
     }
 
     #[test]

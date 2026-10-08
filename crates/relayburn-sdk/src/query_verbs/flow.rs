@@ -62,12 +62,6 @@ impl LedgerHandle {
             return Ok(Vec::new());
         }
 
-        // Source dispatch: every turn in the session shares the same
-        // `source` (the ledger never mixes harness rows under one
-        // session id), so the first turn's source decides which
-        // builder we route to.
-        let source = turns[0].source;
-
         // Bulk-load the per-session sidecar tables.
         //
         // These tables landed in later schema versions (see #434 / #444);
@@ -87,80 +81,22 @@ impl LedgerHandle {
             Err(err) => return Err(err.into()),
         };
 
-        // Group sidecars by message_id for fast per-turn slicing.
-        let mut infs_by_msg: HashMap<String, Vec<crate::reader::Inference>> = HashMap::new();
-        for inf in inferences {
-            infs_by_msg
-                .entry(inf.turn_id.clone())
-                .or_default()
-                .push(inf);
-        }
-        let mut events_by_msg: HashMap<String, Vec<crate::reader::ToolResultEventRecord>> =
-            HashMap::new();
-        for ev in tool_result_events {
-            if let Some(m) = ev.message_id.clone() {
-                events_by_msg.entry(m).or_default().push(ev);
-            }
-        }
-
         // Subagent transcripts: Claude-only. Even for Claude, the
         // discovery walks a session-scoped directory that's missing
         // for the vast majority of sessions; the lazy stat-check in
-        // `discover_subagents` keeps this near-free on miss.
-        let subagents = if matches!(source, crate::reader::SourceKind::ClaudeCode) {
+        // `discover_subagents` keeps this near-free on miss. Every turn
+        // in a session shares one `source`.
+        let subagents = if matches!(turns[0].source, crate::reader::SourceKind::ClaudeCode) {
             discover_and_pair_subagents(session_id).unwrap_or_default()
         } else {
             Vec::new()
         };
-
-        // Bucket the session-wide subagent slice into per-turn lists so
-        // each sidecar lands in exactly one turn. The Claude builder
-        // treats `paired_tool_use_id == None` as an unattached child of
-        // the turn root, so passing the unfiltered slice into every
-        // turn build would duplicate each orphan into every tree.
-        //
-        // Assignment rule:
-        // - **Paired**: assign to the turn whose `tool_calls` carry the
-        //   matching `tool_use_id`. (Falls through to the orphan rule
-        //   when the pairing references a tool_use we don't have on
-        //   ledger — keeps a sidecar reachable rather than dropping it.)
-        // - **Orphan**: assign to the latest turn whose `ts <=
-        //   subagent_start_ms`; if no turn precedes it (or the sidecar
-        //   has no parseable timestamp), assign to the first turn.
-        let subagent_buckets = bucket_subagents_per_turn(&turns, &subagents);
-
-        let mut out = Vec::with_capacity(turns.len());
-        for (turn_idx, turn) in turns.iter().enumerate() {
-            let infs_for_turn = infs_by_msg
-                .get(&turn.message_id)
-                .cloned()
-                .unwrap_or_default();
-            let events_for_turn = events_by_msg
-                .get(&turn.message_id)
-                .cloned()
-                .unwrap_or_default();
-            let subagents_for_turn: Vec<crate::reader::SubagentTranscript> = subagent_buckets
-                .get(&turn_idx)
-                .map(|idxs| idxs.iter().map(|i| subagents[*i].clone()).collect())
-                .unwrap_or_default();
-            let tree = match source {
-                crate::reader::SourceKind::ClaudeCode => {
-                    crate::reader::build_claude_span_tree(crate::reader::ClaudeSpanTreeInputs {
-                        turn,
-                        tool_result_events: &events_for_turn,
-                        inferences: &infs_for_turn,
-                        subagents: &subagents_for_turn,
-                    })
-                }
-                _ => crate::reader::build_codex_span_tree(crate::reader::CodexSpanTreeInputs {
-                    turn,
-                    tool_result_events: &events_for_turn,
-                    inferences: &infs_for_turn,
-                }),
-            };
-            out.push(tree);
-        }
-        Ok(out)
+        Ok(build_session_span_trees(
+            &turns,
+            inferences,
+            tool_result_events,
+            &subagents,
+        ))
     }
 
     /// Build the per-session inference-flow DAG (issue #431).
@@ -179,6 +115,74 @@ impl LedgerHandle {
             session_id, &trees, opts,
         ))
     }
+}
+
+/// One [`TurnSpanTree`] per turn of a single session, in `turns` order.
+///
+/// Pure derivation over the session's records: `inferences` and
+/// `tool_result_events` are sliced per turn by `message_id`, and each
+/// subagent transcript lands in exactly one turn (see
+/// [`bucket_subagents_per_turn`]). Every turn shares one `source`, which
+/// picks the per-harness builder.
+pub(crate) fn build_session_span_trees(
+    turns: &[crate::reader::TurnRecord],
+    inferences: Vec<crate::reader::Inference>,
+    tool_result_events: Vec<crate::reader::ToolResultEventRecord>,
+    subagents: &[crate::reader::SubagentTranscript],
+) -> Vec<TurnSpanTree> {
+    let Some(first) = turns.first() else {
+        return Vec::new();
+    };
+    let mut infs_by_msg: HashMap<String, Vec<crate::reader::Inference>> = HashMap::new();
+    for inf in inferences {
+        infs_by_msg
+            .entry(inf.turn_id.clone())
+            .or_default()
+            .push(inf);
+    }
+    let mut events_by_msg: HashMap<String, Vec<crate::reader::ToolResultEventRecord>> =
+        HashMap::new();
+    for ev in tool_result_events {
+        if let Some(m) = ev.message_id.clone() {
+            events_by_msg.entry(m).or_default().push(ev);
+        }
+    }
+    // Passing the unfiltered subagent slice into every turn build would
+    // duplicate each orphan into every tree, so bucket first.
+    let subagent_buckets = bucket_subagents_per_turn(turns, subagents);
+    turns
+        .iter()
+        .enumerate()
+        .map(|(turn_idx, turn)| {
+            let infs_for_turn = infs_by_msg
+                .get(&turn.message_id)
+                .cloned()
+                .unwrap_or_default();
+            let events_for_turn = events_by_msg
+                .get(&turn.message_id)
+                .cloned()
+                .unwrap_or_default();
+            let subagents_for_turn: Vec<crate::reader::SubagentTranscript> = subagent_buckets
+                .get(&turn_idx)
+                .map(|idxs| idxs.iter().map(|i| subagents[*i].clone()).collect())
+                .unwrap_or_default();
+            match first.source {
+                crate::reader::SourceKind::ClaudeCode => {
+                    crate::reader::build_claude_span_tree(crate::reader::ClaudeSpanTreeInputs {
+                        turn,
+                        tool_result_events: &events_for_turn,
+                        inferences: &infs_for_turn,
+                        subagents: &subagents_for_turn,
+                    })
+                }
+                _ => crate::reader::build_codex_span_tree(crate::reader::CodexSpanTreeInputs {
+                    turn,
+                    tool_result_events: &events_for_turn,
+                    inferences: &infs_for_turn,
+                }),
+            }
+        })
+        .collect()
 }
 
 /// Bucket subagent transcripts into per-turn lists for the span-tree
@@ -298,22 +302,30 @@ fn discover_and_pair_subagents(session_id: &str) -> Result<Vec<crate::reader::Su
     };
     for entry in entries.flatten() {
         let project_dir = entry.path();
-        if !project_dir.is_dir() {
+        if !project_dir.is_dir() || !project_dir.join(session_id).join("subagents").exists() {
             continue;
         }
-        let candidate = project_dir.join(session_id).join("subagents");
-        if !candidate.exists() {
-            continue;
+        let paired = pair_claude_subagents(&project_dir, session_id);
+        if !paired.is_empty() {
+            return Ok(paired);
         }
-        let subs = crate::reader::discover_subagents(&project_dir, session_id);
-        if subs.is_empty() {
-            continue;
-        }
-        let parent_jsonl = project_dir.join(format!("{session_id}.jsonl"));
-        let parent_records = read_jsonl_values(&parent_jsonl);
-        return Ok(crate::reader::pair_to_main(&parent_records, subs));
     }
     Ok(Vec::new())
+}
+
+/// Subagent sidecars under `<project_dir>/<session_id>/subagents/`, paired
+/// against the session's main transcript `<project_dir>/<session_id>.jsonl`.
+/// Empty when the session spawned no sidecars.
+pub(crate) fn pair_claude_subagents(
+    project_dir: &Path,
+    session_id: &str,
+) -> Vec<crate::reader::SubagentTranscript> {
+    let subs = crate::reader::discover_subagents(project_dir, session_id);
+    if subs.is_empty() {
+        return Vec::new();
+    }
+    let parent_records = read_jsonl_values(&project_dir.join(format!("{session_id}.jsonl")));
+    crate::reader::pair_to_main(&parent_records, subs)
 }
 
 /// Load a JSONL file into a `Vec<serde_json::Value>`. Returns empty on

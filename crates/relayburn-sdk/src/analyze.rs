@@ -61,7 +61,7 @@ pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySum
 pub(crate) use findings::{
     findings_from_patterns, mark_findings_with_unpriced_sessions, unpriced_usage_findings,
 };
-pub use findings::{sort_findings, FindingPricingStatus, WasteFinding, WasteSeverity};
+pub use findings::{sort_findings, FindingPricingStatus, WasteAction, WasteFinding, WasteSeverity};
 pub use flow_graph::{
     flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
     TurnTokens, INTER_TURN_GAP, RAIL_GAP,
@@ -80,7 +80,7 @@ pub use hotspots::{
 };
 pub(crate) use overhead::{
     attribute_overhead, find_overhead_files, load_overhead_file, AttributeOverheadInput,
-    OverheadAttribution, OverheadFile, ParsedOverheadFile,
+    OverheadFileAttribution, ParsedOverheadFile,
 };
 pub use overhead::{describe_applies_to, OverheadFileKind};
 pub(crate) use patterns::detect_patterns;
