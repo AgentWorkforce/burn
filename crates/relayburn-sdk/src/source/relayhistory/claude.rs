@@ -196,3 +196,6 @@ fn skill_messages(ev: &SessionEvidence) -> HashSet<&str> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sidecar_tests;

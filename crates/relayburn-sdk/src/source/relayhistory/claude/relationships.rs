@@ -1,6 +1,7 @@
 //! Claude session relationships beyond the root: the explicit
-//! `continuedFromSessionId` / `forkSessionId` edges a record names, and one
-//! subagent edge per resolved sidechain agent.
+//! `continuedFromSessionId` / `forkSessionId` edges a record names, one
+//! subagent edge per resolved inline sidechain agent, and one per subagent
+//! sidecar transcript (`<sessionId>/subagents/agent-<agentId>.jsonl`).
 
 use std::collections::HashSet;
 
@@ -19,6 +20,7 @@ pub(super) fn refine(
     let version = relationships.first().and_then(|r| r.source_version.clone());
     relationships.extend(explicit(ev));
     relationships.extend(subagents(turns));
+    relationships.extend(sidecars(ev));
     for row in relationships.iter_mut() {
         if row.source_version.is_none() {
             row.source_version = version.clone();
@@ -95,4 +97,35 @@ fn subagents(turns: &[TurnRecord]) -> Vec<SessionRelationshipRecord> {
         });
     }
     out
+}
+
+/// Subagent sidecars relayhistory recorded as delegations to a child named
+/// by its `agentId`. A delegation it could not name a child for has no
+/// agent to hang a subagent node on.
+fn sidecars(ev: &SessionEvidence) -> Vec<SessionRelationshipRecord> {
+    let session_id = ev.session.session_id.as_str();
+    let mut edges: Vec<(&Relationship, &str)> = ev
+        .relationships
+        .iter()
+        .filter(|r| r.side == RelationshipSide::Parent && r.relationship == "delegated")
+        .filter_map(|r| Some((r, r.child_session_id.as_deref()?)))
+        .collect();
+    edges.sort_by_key(|(r, child)| (r.spawned_at_ms, *child));
+    edges
+        .into_iter()
+        .map(|(r, child)| SessionRelationshipRecord {
+            v: 1,
+            source: RelationshipSourceKind::NativeClaude,
+            session_id: session_id.to_string(),
+            related_session_id: Some(r.parent_session_id.clone()),
+            relationship_type: RelationshipType::Subagent,
+            ts: r.spawned_at_ms.map(format_iso_ms),
+            source_session_id: None,
+            source_version: None,
+            parent_tool_use_id: r.evidence_ref.clone(),
+            agent_id: Some(child.to_string()),
+            subagent_type: r.child_agent_type.clone(),
+            description: r.child_agent_name.clone(),
+        })
+        .collect()
 }

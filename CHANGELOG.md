@@ -5,6 +5,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn analyze <source> <session-id>` / `burn analyze --path <transcript>` diagnose one session without a ledger or ingest: metrics, activity, hotspots, instruction overhead, subagents, flow, context growth, quality, and stop reasons, plus findings that explain each cost, cite turns/tools/files, and suggest a fix. `--json` emits `burn.session-analysis.v1`; the same document comes from Rust `analyze_session`, Node `analyzeSession()`, and the MCP `burn__analyzeSession` tool.
+- `burn analyze` lists Claude Code subagents written as sidecar transcripts (`<session>/subagents/agent-<id>.jsonl`) in `subagents`, with their type and description; their token spend is not yet included.
 - `burn measure` / `measureSession()` read sessions through relayhistory, the same source path as `burn analyze`.
 - Edit-heavy findings count file reads made through any harness's shell (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`, `less`, `more`), so sessions that read via Bash are no longer flagged as editing blind.
 - Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.
