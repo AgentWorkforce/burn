@@ -17,7 +17,6 @@ concurrency:
 
 jobs:
   build-and-test:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -71,7 +70,6 @@ jobs:
           pnpm run test
 
   cargo-build-and-test:
-    if: (github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || github.head_ref == 'trunk'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
