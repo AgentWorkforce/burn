@@ -148,6 +148,9 @@ fn relayhistory_parity() {
     let mut failures: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut expected: BTreeMap<String, Value> = BTreeMap::new();
     for path in sorted(&snapshot_dir()) {
+        if path.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
         let text = std::fs::read_to_string(&path).unwrap();
         expected.insert(name_of(&path), serde_json::from_str(&text).unwrap());
     }

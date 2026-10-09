@@ -10,6 +10,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `burn analyze` adds a `reasoning` section (turns, tokens, reasoning tokens and cost per effort level, effort changes) and findings for high reasoning effort on routine work and for mid-session effort changes; unpriced spend reads unknown.
 - `burn summary` adds a reasoning-effort table (JSON `reasoningEfforts`) when any turn in scope recorded an effort.
 - `burn measure` / `measureSession()` read sessions through relayhistory, the same source path as `burn analyze`.
+- Session sourcing pins `ai-hist` 0.37.0: a Codex turn's model, cwd and reasoning come from the `turn_context` naming it, else the latest earlier one; a forked Codex child's first turn is charged only its own spend, not the parent's inherited total; a Claude turn opened by a signature-only `thinking` record starts when that record was written.
 - Edit-heavy findings count file reads made through any harness's shell (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`, `less`, `more`), so sessions that read via Bash are no longer flagged as editing blind.
 - Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.

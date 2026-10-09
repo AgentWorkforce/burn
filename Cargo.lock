@@ -31,9 +31,9 @@ dependencies = [
 
 [[package]]
 name = "ai-hist"
-version = "0.36.0"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c52f19c6f09b62b05cc19adcedd64a71e960c96e21d1c0c7695e112156999309"
+checksum = "5897ea69bd434b9802d72d9a326fb13841c49bc7277911d4c04a63fa4e5e2926"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2144,7 +2144,7 @@ checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2155,7 +2155,7 @@ checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.117",
 ]
 
 [[package]]

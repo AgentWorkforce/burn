@@ -44,7 +44,7 @@ rusqlite = { workspace = true }
 
 # Session sourcing: relayhistory captures harness evidence; burn owns what
 # the counters mean. The exact pin is the contract.
-ai-hist = "=0.36.0"
+ai-hist = "=0.37.0"
 # Path-mode session analysis stages one transcript into a throwaway
 # provider root and relayhistory store.
 tempfile = "3"

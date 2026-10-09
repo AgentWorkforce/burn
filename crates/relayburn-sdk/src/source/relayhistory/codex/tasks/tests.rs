@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use super::super::events::stream;
 use super::{Derived, Tasks};
 
-fn evidence(markers: Vec<Value>) -> SessionEvidence {
+fn evidence(markers: Vec<Value>, messages: Vec<Value>) -> SessionEvidence {
     serde_json::from_value(json!({
         "session": {
             "source": "codex", "session_id": "sess", "cwd": "/tmp/project",
@@ -17,7 +17,7 @@ fn evidence(markers: Vec<Value>) -> SessionEvidence {
             "project_key_method": null, "raw_path": null, "source_stamp": null,
             "discovery_state": "full", "locations": ["local"]
         },
-        "prompts": [], "messages": [], "tool_calls": [], "tool_results": [],
+        "prompts": [], "messages": messages, "tool_calls": [], "tool_results": [],
         "file_edits": [], "markers": markers, "relationships": [], "requests": [],
         "usage": null, "user_turns": [], "coverage": [], "loaded": [],
         "include_text": true, "diagnostics": []
@@ -29,7 +29,9 @@ fn marker(line: u64, kind: &str, turn: Option<&str>, payload: Value) -> Value {
     json!({
         "marker_uid": format!("{line}:marker"), "ts_ms": line * 1000,
         "message_id": null, "parent_id": null, "turn_id": turn,
-        "kind": kind, "subkind": kind, "text": null, "payload": payload
+        "kind": kind, "subkind": kind, "text": null,
+        "payload": if kind == "usage_snapshot" { Value::Null } else { payload.clone() },
+        "usage_snapshot": if kind == "usage_snapshot" { payload } else { Value::Null }
     })
 }
 
@@ -52,7 +54,11 @@ fn snapshot(line: u64, input: u64, cached: u64, output: u64) -> Value {
 }
 
 fn derive(markers: Vec<Value>) -> Derived {
-    let ev = evidence(markers);
+    derive_with(markers, Vec::new())
+}
+
+fn derive_with(markers: Vec<Value>, messages: Vec<Value>) -> Derived {
+    let ev = evidence(markers, messages);
     Tasks::new(&ev).run(&stream(&ev))
 }
 
@@ -203,4 +209,148 @@ fn turns_without_turn_context_record_no_reasoning() {
     assert_eq!(derived.turns[0].reasoning, None);
     let json = serde_json::to_string(&derived.turns[0]).unwrap();
     assert!(!json.contains("\"reasoning\":{"), "{json}");
+}
+
+fn id_less_context(line: u64, model: &str, effort: &str) -> Value {
+    marker(
+        line,
+        "turn_context",
+        None,
+        json!({"model": model, "effort": effort}),
+    )
+}
+
+fn pair(model: &str, effort: &str) -> (String, Option<String>) {
+    (model.to_string(), Some(effort.to_string()))
+}
+
+#[test]
+fn markers_apply_in_rollout_line_order_not_evidence_order() {
+    let [s1, c1] = task(10, "t1");
+    let [s2, c2] = task(30, "t2");
+    // Evidence lists the later context first; the line index decides.
+    let derived = derive(vec![
+        id_less_context(25, "gpt-5.5", "high"),
+        c2,
+        s2,
+        id_less_context(5, "gpt-5.4", "low"),
+        c1,
+        s1,
+    ]);
+    assert_eq!(
+        configuration(&derived),
+        vec![pair("gpt-5.4", "low"), pair("gpt-5.5", "high")]
+    );
+}
+
+#[test]
+fn the_context_naming_the_turn_wins_over_a_later_one_without_a_turn_id() {
+    let [s1, c1] = task(10, "t1");
+    let [s2, c2] = task(30, "t2");
+    let derived = derive(vec![
+        s1,
+        turn_context(11, "t1", "gpt-5.4", "low"),
+        // Inside t1 but naming no turn: not t1's, yet the latest for t2.
+        id_less_context(15, "gpt-5.5", "high"),
+        c1,
+        s2,
+        c2,
+    ]);
+    assert_eq!(
+        configuration(&derived),
+        vec![pair("gpt-5.4", "low"), pair("gpt-5.5", "high")]
+    );
+}
+
+#[test]
+fn a_context_naming_another_turn_is_not_this_turns_but_carries_forward() {
+    let [s1, c1] = task(10, "t1");
+    let [s2, c2] = task(30, "t2");
+    let derived = derive(vec![
+        turn_context(5, "t0", "gpt-5.3", "minimal"),
+        s1,
+        c1,
+        s2,
+        turn_context(31, "t2", "gpt-5.5", "high"),
+        c2,
+    ]);
+    assert_eq!(
+        configuration(&derived),
+        vec![pair("gpt-5.3", "minimal"), pair("gpt-5.5", "high")]
+    );
+}
+
+fn stamped(line: u64, turn: &str, model: &str, cwd: &str) -> Value {
+    json!({
+        "message_id": format!("{line}:message"), "role": "assistant", "ts_ms": line * 1000,
+        "turn_id": turn, "model": model, "cwd": cwd, "blocks": []
+    })
+}
+
+/// `(model, project)` per turn.
+fn placement(derived: &Derived) -> Vec<(String, Option<String>)> {
+    derived
+        .turns
+        .iter()
+        .map(|t| (t.model.clone(), t.project.clone()))
+        .collect()
+}
+
+#[test]
+fn messages_place_a_turn_only_when_no_context_precedes_it() {
+    let [s1, c1] = task(10, "t1");
+    let [s2, c2] = task(30, "t2");
+    let derived = derive_with(
+        vec![
+            s1,
+            c1,
+            s2,
+            // Names no cwd: t2 is placed by the session, not its messages.
+            marker(
+                31,
+                "turn_context",
+                Some("t2"),
+                json!({"turn_id": "t2", "model": "gpt-5.5"}),
+            ),
+            c2,
+        ],
+        vec![
+            stamped(12, "t1", "gpt-5.4", "/tmp/stamped"),
+            stamped(32, "t2", "gpt-5.4", "/tmp/stamped"),
+        ],
+    );
+    assert_eq!(
+        placement(&derived),
+        vec![
+            ("gpt-5.4".to_string(), Some("/tmp/stamped".to_string())),
+            ("gpt-5.5".to_string(), Some("/tmp/project".to_string())),
+        ]
+    );
+    assert_eq!(derived.turns[0].reasoning, None);
+}
+
+#[test]
+fn a_fork_child_starts_its_chain_and_its_spend_at_its_own_history() {
+    let [s1, c1] = task(10, "t1");
+    let boundary = marker(
+        1,
+        "fork_replay_boundary",
+        None,
+        json!({
+            "inherited_baseline": "applied",
+            "inherited_snapshot": {"total_token_usage": {
+                "input_tokens": 5000, "cached_input_tokens": 1000, "output_tokens": 400
+            }},
+        }),
+    );
+    // The replay wrote no turn_context, so t1 reads only its own.
+    let derived = derive(vec![
+        boundary,
+        s1,
+        turn_context(11, "t1", "gpt-5.5", "high"),
+        snapshot(12, 5600, 1300, 450),
+        c1,
+    ]);
+    assert_eq!(configuration(&derived), vec![pair("gpt-5.5", "high")]);
+    assert_eq!(usage(&derived), vec![(300, 300, 50, true)]);
 }

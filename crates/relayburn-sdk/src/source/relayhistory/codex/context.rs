@@ -1,14 +1,58 @@
 //! The configuration a Codex task runs under.
 //!
 //! Codex writes a `turn_context` record just after each `task_started`, and
-//! relayhistory keeps one only when the configuration changes. A task
-//! therefore runs under the latest `turn_context` in rollout order: one
-//! written inside the open task, else the one carried forward from an
-//! earlier task.
+//! relayhistory keeps one only where the configuration changes. A task runs
+//! under the `turn_context` naming its turn, else the latest one before the
+//! task started in rollout order. A fork child's replayed parent history
+//! carries none, so its chain starts at its own first `turn_context`.
 
+use std::collections::HashMap;
+
+use ai_hist::SessionEvidence;
 use serde_json::Value;
 
 use crate::reader::ReasoningConfig;
+
+/// Each task's `turn_context`, resolved as the stream is read.
+pub(super) struct Chain<'a> {
+    /// `turn_context` payloads by the turn they took effect at.
+    by_turn: HashMap<&'a str, TurnContext<'a>>,
+    /// The latest `turn_context` read so far, with or without a turn id.
+    current: Option<TurnContext<'a>>,
+}
+
+impl<'a> Chain<'a> {
+    pub(super) fn new(ev: &'a SessionEvidence) -> Self {
+        let mut by_turn = HashMap::new();
+        for marker in ev.markers.iter().filter(|m| m.kind == "turn_context") {
+            let Some(payload) = marker.payload.as_ref() else {
+                continue;
+            };
+            let turn = marker
+                .turn_id
+                .as_deref()
+                .or_else(|| payload.get("turn_id").and_then(Value::as_str));
+            if let Some(turn) = turn {
+                by_turn.insert(turn, TurnContext::read(payload));
+            }
+        }
+        Self {
+            by_turn,
+            current: None,
+        }
+    }
+
+    /// A `turn_context` read in rollout order.
+    pub(super) fn observe(&mut self, payload: &'a Value) {
+        self.current = Some(TurnContext::read(payload));
+    }
+
+    /// The configuration of the task `turn_id` starting now; `None` when no
+    /// `turn_context` names it or precedes it.
+    pub(super) fn for_turn(&self, turn_id: &str) -> Option<TurnContext<'a>> {
+        self.by_turn.get(turn_id).copied().or(self.current)
+    }
+}
 
 /// One `turn_context` record's settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

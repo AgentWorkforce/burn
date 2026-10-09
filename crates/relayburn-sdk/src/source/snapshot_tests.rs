@@ -150,6 +150,14 @@ pub(super) fn render_value(records: &SessionRecords, root: &Path) -> serde_json:
     value
 }
 
+/// Snapshots that record burn's intended records where they deliberately
+/// differ from the builtin readers (see the snapshot directory's README).
+/// The builtin readers are not held to them, and an update leaves them be.
+const DELIBERATE_DEVIATIONS: &[&str] = &[
+    "claude-incomplete-then-complete",
+    "opencode-user-turn-blocks-ses_utb",
+];
+
 #[test]
 fn sourcing_snapshots() {
     let update = std::env::var_os("UPDATE_SOURCING_SNAPSHOTS").is_some();
@@ -159,6 +167,9 @@ fn sourcing_snapshots() {
     }
     let mut mismatched = Vec::new();
     for (name, records) in builtin_corpus() {
+        if DELIBERATE_DEVIATIONS.contains(&name.as_str()) {
+            continue;
+        }
         let path = dir.join(format!("{name}.json"));
         let rendered = render(&records);
         if update {

@@ -404,7 +404,9 @@ fn codex_effort_evidence() -> ai_hist::SessionEvidence {
         serde_json::json!({
             "marker_uid": format!("{line}:marker"), "ts_ms": 1_790_000_000_000u64 + line * 1000,
             "message_id": null, "parent_id": null, "turn_id": turn,
-            "kind": kind, "subkind": kind, "text": null, "payload": payload
+            "kind": kind, "subkind": kind, "text": null,
+            "payload": if kind == "usage_snapshot" { serde_json::Value::Null } else { payload.clone() },
+            "usage_snapshot": if kind == "usage_snapshot" { payload } else { serde_json::Value::Null }
         })
     };
     let context = |line: u64, turn: &str, effort: &str| {

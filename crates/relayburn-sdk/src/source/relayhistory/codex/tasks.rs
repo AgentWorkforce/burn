@@ -12,7 +12,7 @@ use ai_hist::SessionEvidence;
 mod tests;
 mod tools;
 
-use super::context::TurnContext;
+use super::context::{Chain, TurnContext};
 use super::events::{Event, Located};
 use super::records::{text_content, Slot, Spawn};
 use super::snapshots::{read_snapshot, spend, CounterError, Counters};
@@ -43,7 +43,8 @@ pub(super) struct Derived {
 struct Open<'a> {
     turn_id: String,
     ts_ms: i64,
-    context: TurnContext<'a>,
+    /// The task's `turn_context`; `None` when none names or precedes it.
+    context: Option<TurnContext<'a>>,
     start: Counters,
     usage_observed: bool,
     counter_error: Option<CounterError>,
@@ -64,8 +65,7 @@ pub(super) struct Tasks<'a> {
     /// Calls Codex reported failed (`exec_command_end` exit code,
     /// `patch_apply_end` success).
     errored: HashSet<&'a str>,
-    /// The latest `turn_context` in rollout order.
-    context: TurnContext<'a>,
+    chain: Chain<'a>,
     /// turn id → (model, cwd) as stamped on its messages.
     stamps: HashMap<&'a str, (Option<&'a str>, Option<&'a str>)>,
     cumulative: Counters,
@@ -106,7 +106,7 @@ impl<'a> Tasks<'a> {
                 .filter(|c| c.is_error == Some(true))
                 .map(|c| c.tool_use_id.as_str())
                 .collect(),
-            context: TurnContext::default(),
+            chain: Chain::new(ev),
             stamps,
             cumulative: Counters::default(),
             open: None,
@@ -139,13 +139,9 @@ impl<'a> Tasks<'a> {
             Event::TaskStarted { turn_id, ts_ms } => self.task_started(turn_id, *ts_ms),
             Event::TaskComplete { turn_id } => self.task_complete(line, turn_id),
             Event::Compacted { ts_ms } => self.compacted(line, *ts_ms),
-            Event::TurnContext { payload } => {
-                self.context = TurnContext::read(payload);
-                if let Some(open) = self.open.as_mut() {
-                    open.context = self.context;
-                }
-            }
-            Event::UsageSnapshot { info } => self.usage_snapshot(info),
+            Event::TurnContext { payload } => self.chain.observe(payload),
+            Event::UsageSnapshot { snapshot } => self.usage_snapshot(snapshot),
+            Event::InheritedTotal { counters } => self.cumulative = *counters,
             Event::UserText { text, ts_ms } => self.user_text(text, *ts_ms),
             Event::AssistantText { text, ts_ms } => self.assistant_output(text, *ts_ms, false),
             Event::Reasoning { text, ts_ms } => self.assistant_output(text, *ts_ms, true),
@@ -177,7 +173,7 @@ impl<'a> Tasks<'a> {
         self.open = Some(Open {
             turn_id: turn_id.to_string(),
             ts_ms,
-            context: self.context,
+            context: self.chain.for_turn(turn_id),
             start: self.cumulative,
             usage_observed: false,
             counter_error: None,
@@ -248,8 +244,8 @@ impl<'a> Tasks<'a> {
     /// Advance the running total. A snapshot that cannot be read, or that
     /// runs backwards, leaves the open task's usage unknown; a regressed
     /// total is still the baseline the next task spends from.
-    fn usage_snapshot(&mut self, info: &serde_json::Value) {
-        let Some(read) = read_snapshot(info) else {
+    fn usage_snapshot(&mut self, snapshot: &ai_hist::UsageSnapshot) {
+        let Some(read) = read_snapshot(snapshot) else {
             return;
         };
         let problem = match read {
@@ -320,18 +316,8 @@ impl<'a> Tasks<'a> {
             },
             _ => (Usage::default(), false),
         };
-        let (stamped_model, stamped_cwd) = self
-            .stamps
-            .get(open.turn_id.as_str())
-            .copied()
-            .unwrap_or_default();
-        let model = open.context.model.or(stamped_model);
-        let cwd = open
-            .context
-            .cwd
-            .or(stamped_cwd)
-            .or(self.ev.session.cwd.as_deref());
-        let resolved = cwd.map(resolve_project);
+        let (model, cwd) = self.configuration(&open);
+        let resolved = cwd.or(self.ev.session.cwd.as_deref()).map(resolve_project);
         let text = join_nonempty(&[&open.user_text, &open.assistant_text], "\n");
         let classified = classify_activity(ClassificationInput {
             tool_calls: &open.tool_calls,
@@ -381,9 +367,22 @@ impl<'a> Tasks<'a> {
                     has_raw_content: true,
                 },
             )),
-            reasoning: open.context.reasoning(),
+            reasoning: open.context.and_then(|c| c.reasoning()),
         };
         (turn, open.content)
+    }
+
+    /// The task's model and cwd: its `turn_context`'s, else — only when no
+    /// `turn_context` names or precedes it — what its messages carry.
+    fn configuration(&self, open: &Open<'a>) -> (Option<&'a str>, Option<&'a str>) {
+        match open.context {
+            Some(context) => (context.model, context.cwd),
+            None => self
+                .stamps
+                .get(open.turn_id.as_str())
+                .copied()
+                .unwrap_or_default(),
+        }
     }
 
     fn into_derived(mut self) -> Derived {

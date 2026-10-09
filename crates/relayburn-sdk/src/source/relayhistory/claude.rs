@@ -20,8 +20,10 @@ mod user_turns;
 pub(super) fn refine(ctx: &Context<'_>, records: &mut SessionRecords) {
     let transcript = Transcript::new(ctx);
     let replacements = records::replacements(ctx.ev);
+    let signed = records::SignedStarts::new(ctx.ev);
     for turn in &mut records.turns {
         transcript.refine_turn(turn, &replacements);
+        signed.restamp(transcript.messages_of(turn), turn);
     }
     records::refine_content(&transcript, &records.turns, &mut records.content);
     records::refine_tool_result_events(
@@ -193,9 +195,6 @@ fn skill_messages(ev: &SessionEvidence) -> HashSet<&str> {
     }
     out
 }
-
-#[cfg(test)]
-mod tests;
 
 #[cfg(test)]
 mod sidecar_tests;

@@ -37,43 +37,6 @@
         },
         "class": "full"
       }
-    },
-    {
-      "v": 1,
-      "source": "claude-code",
-      "sessionId": "33333333-3333-3333-3333-333333333333",
-      "messageId": "msg_inprog_1",
-      "turnIndex": 1,
-      "ts": "2026-04-20T00:00:02.000Z",
-      "model": "claude-sonnet-4-6",
-      "project": "/tmp/project",
-      "usage": {
-        "input": 7,
-        "output": 3,
-        "reasoning": 0,
-        "cacheRead": 0,
-        "cacheCreate5m": 0,
-        "cacheCreate1h": 0
-      },
-      "toolCalls": [],
-      "activity": "conversation",
-      "retries": 0,
-      "hasEdits": false,
-      "fidelity": {
-        "granularity": "per-turn",
-        "coverage": {
-          "hasInputTokens": true,
-          "hasOutputTokens": true,
-          "hasReasoningTokens": false,
-          "hasCacheReadTokens": true,
-          "hasCacheCreateTokens": true,
-          "hasToolCalls": true,
-          "hasToolResultEvents": true,
-          "hasSessionRelationships": true,
-          "hasRawContent": true
-        },
-        "class": "full"
-      }
     }
   ],
   "content": [
@@ -96,16 +59,6 @@
       "role": "assistant",
       "kind": "text",
       "text": "done"
-    },
-    {
-      "v": 1,
-      "source": "claude-code",
-      "sessionId": "33333333-3333-3333-3333-333333333333",
-      "messageId": "msg_inprog_1",
-      "ts": "2026-04-20T00:00:02.000Z",
-      "role": "assistant",
-      "kind": "text",
-      "text": "working..."
     }
   ],
   "compactions": [],
@@ -142,11 +95,6 @@
       "33333333-3333-3333-3333-333333333333",
       "msg_done_1",
       "req_1"
-    ],
-    [
-      "33333333-3333-3333-3333-333333333333",
-      "msg_inprog_1",
-      "req_2"
     ]
   ]
 }

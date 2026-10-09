@@ -11,6 +11,7 @@
 //! negative spend: both are reported as [`CounterError`] so the turn can
 //! say its usage is unknown.
 
+use ai_hist::{TokenUsage, UsageSnapshot};
 use serde_json::Value;
 
 use crate::reader::types::Usage;
@@ -58,26 +59,43 @@ impl Counters {
     }
 }
 
-/// The cumulative counters in one `token_count` `info` object. `None` when
-/// the snapshot carries no running total (Codex writes `info: null` before
-/// a turn has spent anything). A counter Codex leaves out is zero.
-pub(super) fn read_snapshot(info: &Value) -> Option<Result<Counters, CounterError>> {
-    info.get("total_token_usage").map(counters)
+/// The cumulative counters in one `token_count` snapshot. `None` when the
+/// snapshot carries no running total. A counter Codex leaves out is zero.
+pub(super) fn read_snapshot(snapshot: &UsageSnapshot) -> Option<Result<Counters, CounterError>> {
+    match &snapshot.total_token_usage {
+        Some(total) => Some(counters(total)),
+        // A total written as something other than an object counts nothing.
+        None => snapshot
+            .other
+            .contains_key("total_token_usage")
+            .then(|| Ok(Counters::default())),
+    }
 }
 
-fn counters(total: &Value) -> Result<Counters, CounterError> {
-    let field = |name: &'static str| match total.get(name) {
+fn counters(total: &TokenUsage) -> Result<Counters, CounterError> {
+    let field = |name: &'static str, value: &Option<Value>| match value {
         None | Some(Value::Null) => Ok(0),
         Some(value) => value
             .as_u64()
             .ok_or(CounterError::Malformed { field: name }),
     };
     Ok(Counters {
-        input: field("input_tokens")?,
-        cached_input: field("cached_input_tokens")?,
-        output: field("output_tokens")?,
-        reasoning: field("reasoning_output_tokens")?,
+        input: field("input_tokens", &total.input_tokens)?,
+        cached_input: field("cached_input_tokens", &total.cached_input_tokens)?,
+        output: field("output_tokens", &total.output_tokens)?,
+        reasoning: field("reasoning_output_tokens", &total.reasoning_output_tokens)?,
     })
+}
+
+/// The running total a fork child continues from: the replayed parent
+/// snapshot on its `fork_replay_boundary`, when relayhistory found the
+/// child's own counter `applied` it as the baseline.
+pub(super) fn inherited_total(boundary: &Value) -> Option<Counters> {
+    if boundary.get("inherited_baseline")?.as_str()? != "applied" {
+        return None;
+    }
+    let info = boundary.get("inherited_snapshot")?.clone();
+    read_snapshot(&serde_json::from_value(info).ok()?)?.ok()
 }
 
 /// What was spent between two running totals.
@@ -106,6 +124,11 @@ mod tests {
 
     use super::*;
 
+    /// `read_snapshot` over a provider `info` object.
+    fn read(info: Value) -> Option<Result<Counters, CounterError>> {
+        read_snapshot(&serde_json::from_value::<UsageSnapshot>(info).unwrap())
+    }
+
     fn snapshot(input: u64, cached: u64, output: u64, reasoning: u64) -> Counters {
         Counters {
             input,
@@ -121,19 +144,26 @@ mod tests {
             "input_tokens": 1000, "cached_input_tokens": 400,
             "output_tokens": 120, "reasoning_output_tokens": 30, "total_tokens": 1120
         }});
-        assert_eq!(read_snapshot(&info), Some(Ok(snapshot(1000, 400, 120, 30))));
+        assert_eq!(read(info), Some(Ok(snapshot(1000, 400, 120, 30))));
     }
 
     #[test]
     fn absent_counters_are_zero() {
         let info = json!({"total_token_usage": {"input_tokens": 100, "output_tokens": 50}});
-        assert_eq!(read_snapshot(&info), Some(Ok(snapshot(100, 0, 50, 0))));
+        assert_eq!(read(info), Some(Ok(snapshot(100, 0, 50, 0))));
     }
 
     #[test]
     fn null_info_is_no_snapshot() {
-        assert_eq!(read_snapshot(&Value::Null), None);
-        assert_eq!(read_snapshot(&json!({"last_token_usage": {}})), None);
+        assert_eq!(read(json!({"last_token_usage": {}})), None);
+    }
+
+    #[test]
+    fn a_non_object_total_counts_nothing() {
+        assert_eq!(
+            read(json!({"total_token_usage": "n/a"})),
+            Some(Ok(Counters::default()))
+        );
     }
 
     #[test]
@@ -146,12 +176,30 @@ mod tests {
         ] {
             let info = json!({"total_token_usage": {"input_tokens": 10, "output_tokens": bad}});
             assert_eq!(
-                read_snapshot(&info),
+                read(info),
                 Some(Err(CounterError::Malformed {
                     field: "output_tokens"
                 }))
             );
         }
+    }
+
+    #[test]
+    fn an_applied_fork_baseline_is_the_inherited_total() {
+        let info = json!({"total_token_usage": {"input_tokens": 1000, "output_tokens": 50}});
+        let boundary =
+            |verdict: Value| json!({"inherited_snapshot": info, "inherited_baseline": verdict});
+        assert_eq!(
+            inherited_total(&boundary(json!("applied"))),
+            Some(snapshot(1000, 0, 50, 0))
+        );
+        for verdict in [json!("dropped"), json!("pending"), Value::Null] {
+            assert_eq!(inherited_total(&boundary(verdict)), None);
+        }
+        assert_eq!(
+            inherited_total(&json!({"inherited_baseline": "applied"})),
+            None
+        );
     }
 
     #[test]

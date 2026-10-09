@@ -10,6 +10,8 @@ use std::collections::{HashMap, HashSet};
 use ai_hist::{BlockKind, FileEdit, Marker, Role, SessionEvidence, ToolCall, ToolResult};
 use serde_json::Value;
 
+use super::snapshots::{inherited_total, Counters};
+
 /// One rollout record burn derives from.
 pub(super) enum Event<'a> {
     TaskStarted {
@@ -27,9 +29,14 @@ pub(super) enum Event<'a> {
     TurnContext {
         payload: &'a Value,
     },
-    /// A `token_count`'s `info`, verbatim.
+    /// A `token_count`'s `info`, typed.
     UsageSnapshot {
-        info: &'a Value,
+        snapshot: &'a ai_hist::UsageSnapshot,
+    },
+    /// A fork child's running total as inherited from its replayed parent
+    /// history, when its own counter continues from it.
+    InheritedTotal {
+        counters: Counters,
     },
     /// A `subagent_*_complete`-style lifecycle notification.
     SubagentDone {
@@ -114,7 +121,10 @@ fn marker_event(marker: &Marker) -> Option<Located<'_>> {
             payload: marker.payload.as_ref()?,
         },
         ("usage_snapshot", _) => Event::UsageSnapshot {
-            info: marker.payload.as_ref()?,
+            snapshot: marker.usage_snapshot.as_deref()?,
+        },
+        ("fork_replay_boundary", _) => Event::InheritedTotal {
+            counters: inherited_total(marker.payload.as_ref()?)?,
         },
         ("subagent_notification", Some(kind)) if is_terminal_notification(kind) => {
             Event::SubagentDone { marker }

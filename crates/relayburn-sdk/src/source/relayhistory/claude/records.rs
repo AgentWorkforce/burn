@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ai_hist::{Role, SessionEvidence};
+use ai_hist::{Message, Role, SessionEvidence};
 use serde_json::Value;
 
 use super::{is_system_notification, Transcript};
@@ -12,6 +12,64 @@ use crate::reader::types::{
     ToolResultEventSource, TurnRecord,
 };
 use crate::util::time::format_iso_ms;
+
+/// When each request opened according to the signature-only `thinking`
+/// records relayhistory keeps as `thinking_signature` markers rather than
+/// messages, keyed by request id and by provider message id.
+pub(super) struct SignedStarts<'a> {
+    by_request: HashMap<&'a str, i64>,
+    by_provider_message: HashMap<&'a str, i64>,
+}
+
+impl<'a> SignedStarts<'a> {
+    pub(super) fn new(ev: &'a SessionEvidence) -> Self {
+        let mut out = Self {
+            by_request: HashMap::new(),
+            by_provider_message: HashMap::new(),
+        };
+        let signatures = ev
+            .markers
+            .iter()
+            .filter(|m| m.subkind.as_deref() == Some("thinking_signature"));
+        for marker in signatures {
+            let (Some(ts), Some(payload)) = (marker.ts_ms, marker.payload.as_ref()) else {
+                continue;
+            };
+            let id = |key| payload.get(key).and_then(Value::as_str);
+            if let Some(request) = id("request_id") {
+                keep_earliest(&mut out.by_request, request, ts);
+            }
+            if let Some(message) = id("provider_message_id") {
+                keep_earliest(&mut out.by_provider_message, message, ts);
+            }
+        }
+        out
+    }
+
+    /// A turn starts at its earliest record, signature-only ones included.
+    /// A record matches signatures by its request id, else by its provider
+    /// message id.
+    pub(super) fn restamp(&self, messages: &[&Message], turn: &mut TurnRecord) {
+        let signed = messages
+            .iter()
+            .filter_map(|m| match m.request_id.as_deref() {
+                Some(request) => self.by_request.get(request).copied(),
+                None => self
+                    .by_provider_message
+                    .get(m.provider_message_id.as_deref()?)
+                    .copied(),
+            });
+        let start = messages.iter().map(|m| m.ts_ms).chain(signed).min();
+        if let Some(start) = start {
+            turn.ts = format_iso_ms(start);
+        }
+    }
+}
+
+fn keep_earliest<'a>(map: &mut HashMap<&'a str, i64>, key: &'a str, ts: i64) {
+    let slot = map.entry(key).or_insert(ts);
+    *slot = (*slot).min(ts);
+}
 
 /// Tool-replacement metadata a tool result carried (`_meta.replaces`,
 /// `_meta.collapsedCalls`).
