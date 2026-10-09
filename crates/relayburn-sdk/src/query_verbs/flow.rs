@@ -26,10 +26,10 @@ impl LedgerHandle {
     ///    builder falls back to a synthetic single-inference shape.
     /// 3. Pulling the per-session `tool_result_events` and filtering
     ///    to events for the requested turn's `message_id`.
-    /// 4. Walking the Claude `subagents/` sidecar tree (lazy — short-
-    ///    circuits when the directory is missing) and pairing
-    ///    transcripts against the same session's main JSONL. Codex
-    ///    turns skip this step entirely (no sidecar concept).
+    /// 4. For Claude, reading the session's delegated subagents from the
+    ///    relayhistory store, setting their billed turns aside, and
+    ///    pairing each to the tool use that spawned it. Codex turns skip
+    ///    this step.
     /// 5. Dispatching to the per-harness builder.
     ///
     /// Returns an error when the requested turn isn't on the ledger.
@@ -81,15 +81,16 @@ impl LedgerHandle {
             Err(err) => return Err(err.into()),
         };
 
-        // Subagent transcripts: Claude-only. Even for Claude, the
-        // discovery walks a session-scoped directory that's missing
-        // for the vast majority of sessions; the lazy stat-check in
-        // `discover_subagents` keeps this near-free on miss. Every turn
-        // in a session shares one `source`.
-        let subagents = if matches!(turns[0].source, crate::reader::SourceKind::ClaudeCode) {
-            discover_and_pair_subagents(session_id).unwrap_or_default()
+        // Delegated subagents: Claude-only. Their turns are billed to this
+        // session; the span trees are the session's own conversation, with
+        // each subagent hung off the tool use that spawned it.
+        let (turns, subagents) = if turns[0].source == crate::reader::SourceKind::ClaudeCode {
+            match claude_subagents(session_id) {
+                Ok(children) => crate::source::split_delegated(&turns, &children),
+                Err(_) => (turns, Vec::new()),
+            }
         } else {
-            Vec::new()
+            (turns, Vec::new())
         };
         Ok(build_session_span_trees(
             &turns,
@@ -247,86 +248,11 @@ pub(crate) fn bucket_subagents_per_turn(
     out
 }
 
-/// Resolve the Claude projects root and discover + pair subagent
-/// sidecars for `session_id`. Returns an empty `Vec` when:
-///
-/// - The projects root doesn't exist (no Claude on this machine).
-/// - The session's sidecar directory doesn't exist (most sessions).
-/// - The parent JSONL is missing (every sidecar surfaces as orphan).
-///
-/// We resolve `BURN_CLAUDE_PROJECTS_DIR` first to mirror what the
-/// summary path does (so the test suite can pin a sandbox); otherwise
-/// fall back to `$HOME/.claude/projects`.
-fn discover_and_pair_subagents(session_id: &str) -> Result<Vec<crate::reader::SubagentTranscript>> {
-    let root = if let Some(p) = std::env::var_os("BURN_CLAUDE_PROJECTS_DIR") {
-        std::path::PathBuf::from(p)
-    } else {
-        // Defaults to `~/.claude/projects` (HOME, then USERPROFILE on
-        // Windows — see crate::util::home_dir) when
-        // `BURN_CLAUDE_PROJECTS_DIR` is unset.
-        crate::util::home_dir().join(".claude").join("projects")
-    };
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    // We don't know which project subdir the session lives under
-    // without the ledger storing it explicitly. Walk one level deep
-    // looking for a project that has a matching session dir.
-    let entries = match std::fs::read_dir(&root) {
-        Ok(e) => e,
-        Err(_) => return Ok(Vec::new()),
-    };
-    for entry in entries.flatten() {
-        let project_dir = entry.path();
-        if !project_dir.is_dir() || !project_dir.join(session_id).join("subagents").exists() {
-            continue;
-        }
-        let paired = pair_claude_subagents(&project_dir, session_id);
-        if !paired.is_empty() {
-            return Ok(paired);
-        }
-    }
-    Ok(Vec::new())
-}
-
-/// Subagent sidecars under `<project_dir>/<session_id>/subagents/`, paired
-/// against the session's main transcript `<project_dir>/<session_id>.jsonl`.
-/// Empty when the session spawned no sidecars.
-pub(crate) fn pair_claude_subagents(
-    project_dir: &Path,
-    session_id: &str,
-) -> Vec<crate::reader::SubagentTranscript> {
-    let subs = crate::reader::discover_subagents(project_dir, session_id);
-    if subs.is_empty() {
-        return Vec::new();
-    }
-    let parent_records = read_jsonl_values(&project_dir.join(format!("{session_id}.jsonl")));
-    crate::reader::pair_to_main(&parent_records, subs)
-}
-
-/// Load a JSONL file into a `Vec<serde_json::Value>`. Returns empty on
-/// any I/O / parse failure — `pair_subagents_to_main` treats every
-/// sidecar as orphan in that case, which is the right fallback when
-/// the parent transcript is missing or corrupt.
-fn read_jsonl_values(path: &Path) -> Vec<serde_json::Value> {
-    use std::io::BufRead;
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return Vec::new(),
-    };
-    let reader = std::io::BufReader::new(file);
-    reader
-        .lines()
-        .filter_map(|line| {
-            let l = line.ok()?;
-            let t = l.trim();
-            if t.is_empty() {
-                None
-            } else {
-                serde_json::from_str::<serde_json::Value>(t).ok()
-            }
-        })
-        .collect()
+/// The delegated subagents of the Claude session `session_id`, read from
+/// the default relayhistory store. An error when there is no store.
+fn claude_subagents(session_id: &str) -> Result<Vec<ai_hist::SessionEvidence>> {
+    let store = crate::source::locate::open_existing_store(&Default::default())?;
+    crate::source::claude_children(&store, session_id, Default::default())
 }
 
 /// Free-function form of [`LedgerHandle::turn_span_tree`].

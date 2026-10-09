@@ -8,15 +8,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::reader::{
-    parse_claude_session, ClaudeParseOptions, CompactionEvent, ContentKind, ContentRecord,
-    ContentRole, ContentToolResult, ContentToolUse, SourceKind, ToolCall, ToolResultEventRecord,
-    ToolResultEventSource, ToolResultStatus, TurnRecord, Usage, UserTurnBlock, UserTurnBlockKind,
-    UserTurnRecord,
+    CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentToolResult, ContentToolUse,
+    SourceKind, ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus,
+    TurnRecord, Usage, UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
 };
 use serde_json::{json, Value};
 
 use crate::analyze::patterns::{detect_patterns, DetectPatternsOptions};
 use crate::analyze::pricing::load_builtin_pricing;
+use crate::reader::Harness;
+use crate::source::fixtures::fixture_records;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -251,8 +252,7 @@ mod retry_loops {
     #[test]
     fn reports_one_retry_loop_of_length_4_for_4_consecutive_identical_failing_bash_calls() {
         let pricing = load_builtin_pricing();
-        let res = parse_claude_session(fixture("retry-loop.jsonl"), &ClaudeParseOptions::default())
-            .expect("parse retry-loop fixture");
+        let res = fixture_records(Harness::ClaudeCode, &fixture("retry-loop.jsonl"));
         let result = detect_patterns(
             &res.turns,
             &DetectPatternsOptions {
@@ -275,8 +275,7 @@ mod retry_loops {
     #[test]
     fn reports_same_retry_loop_from_event_chronology_and_annotates_event_source() {
         let pricing = load_builtin_pricing();
-        let res = parse_claude_session(fixture("retry-loop.jsonl"), &ClaudeParseOptions::default())
-            .expect("parse retry-loop fixture");
+        let res = fixture_records(Harness::ClaudeCode, &fixture("retry-loop.jsonl"));
         let legacy = detect_patterns(
             &res.turns,
             &DetectPatternsOptions {
@@ -413,11 +412,7 @@ mod consecutive_failure_runs {
     #[test]
     fn reports_3_distinct_failing_tools_in_sequence_as_one_failure_run() {
         let pricing = load_builtin_pricing();
-        let res = parse_claude_session(
-            fixture("consecutive-failures.jsonl"),
-            &ClaudeParseOptions::default(),
-        )
-        .expect("parse consecutive-failures fixture");
+        let res = fixture_records(Harness::ClaudeCode, &fixture("consecutive-failures.jsonl"));
         let result = detect_patterns(
             &res.turns,
             &DetectPatternsOptions {
@@ -464,8 +459,7 @@ mod consecutive_failure_runs {
     #[test]
     fn does_not_double_report_a_retry_loop_as_a_failure_run() {
         let pricing = load_builtin_pricing();
-        let res = parse_claude_session(fixture("retry-loop.jsonl"), &ClaudeParseOptions::default())
-            .expect("parse retry-loop fixture");
+        let res = fixture_records(Harness::ClaudeCode, &fixture("retry-loop.jsonl"));
         let result = detect_patterns(
             &res.turns,
             &DetectPatternsOptions {
@@ -572,16 +566,12 @@ mod compaction_losses {
     #[test]
     fn prices_compaction_against_preceding_turn_cache_read() {
         let pricing = load_builtin_pricing();
-        let res = parse_claude_session(
-            fixture("compact-boundary.jsonl"),
-            &ClaudeParseOptions::default(),
-        )
-        .expect("parse compact-boundary fixture");
+        let res = fixture_records(Harness::ClaudeCode, &fixture("compact-boundary.jsonl"));
         let result = detect_patterns(
             &res.turns,
             &DetectPatternsOptions {
                 pricing: &pricing,
-                compactions: Some(&res.events),
+                compactions: Some(&res.compactions),
                 user_turns_by_session: None,
                 content_by_session: None,
                 tool_result_events: None,
@@ -605,9 +595,7 @@ mod edit_reverts {
     #[test]
     fn detects_two_edit_cycle_where_b_reverts_a() {
         let pricing = load_builtin_pricing();
-        let res =
-            parse_claude_session(fixture("edit-revert.jsonl"), &ClaudeParseOptions::default())
-                .expect("parse edit-revert fixture");
+        let res = fixture_records(Harness::ClaudeCode, &fixture("edit-revert.jsonl"));
         let result = detect_patterns(
             &res.turns,
             &DetectPatternsOptions {
@@ -687,17 +675,9 @@ mod session_summary_rollup {
     #[test]
     fn aggregates_counts_per_session() {
         let pricing = load_builtin_pricing();
-        let retry =
-            parse_claude_session(fixture("retry-loop.jsonl"), &ClaudeParseOptions::default())
-                .expect("retry-loop");
-        let revert =
-            parse_claude_session(fixture("edit-revert.jsonl"), &ClaudeParseOptions::default())
-                .expect("edit-revert");
-        let compact = parse_claude_session(
-            fixture("compact-boundary.jsonl"),
-            &ClaudeParseOptions::default(),
-        )
-        .expect("compact-boundary");
+        let retry = fixture_records(Harness::ClaudeCode, &fixture("retry-loop.jsonl"));
+        let revert = fixture_records(Harness::ClaudeCode, &fixture("edit-revert.jsonl"));
+        let compact = fixture_records(Harness::ClaudeCode, &fixture("compact-boundary.jsonl"));
 
         let mut all_turns = retry.turns.clone();
         all_turns.extend(revert.turns.clone());
@@ -705,7 +685,7 @@ mod session_summary_rollup {
             &all_turns,
             &DetectPatternsOptions {
                 pricing: &pricing,
-                compactions: Some(&compact.events),
+                compactions: Some(&compact.compactions),
                 user_turns_by_session: None,
                 content_by_session: None,
                 tool_result_events: None,

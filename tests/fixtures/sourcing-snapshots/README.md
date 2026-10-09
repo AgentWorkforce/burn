@@ -2,15 +2,14 @@
 
 The `SessionRecords` burn derives from each session fixture under
 `tests/fixtures/{claude,codex,opencode}`, one JSON file per session. They are
-the spec for mapping relayhistory evidence onto burn records:
+the frozen spec for mapping relayhistory evidence onto burn records:
 `source::parity_tests` stages each fixture, syncs it through `ai-hist`, maps
-it, and diffs the result against these files.
+it, and diffs the result against these files. Adopting a new `ai-hist`
+version re-runs that suite.
 
-The snapshots were generated from burn's builtin (pre-relayhistory) session
-readers with `UPDATE_SOURCING_SNAPSHOTS=1 cargo test -p relayburn-sdk
-sourcing_snapshots`, and `source::snapshot_tests` still holds those readers to
-them — except for two snapshots edited by hand, where burn's records
-deliberately differ from what the builtin readers produced:
+The snapshots record what burn's original session readers derived from each
+fixture, except for two edited by hand where burn's records deliberately
+differ:
 
 - `opencode-user-turn-blocks-ses_utb.json` — a failed OpenCode tool call sets
   `toolCalls[].isError = true`, as Claude and Codex turns already do.
@@ -18,5 +17,4 @@ deliberately differ from what the builtin readers produced:
   progress (no `stop_reason` yet) is not emitted; it becomes a turn once its
   response settles.
 
-Both are listed in `DELIBERATE_DEVIATIONS` in `snapshot_tests.rs`, so an
-update run leaves them as written.
+The files change only by hand, alongside the mapping change they describe.

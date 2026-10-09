@@ -368,16 +368,10 @@ impl Ledger {
     // --- state rebuild -----------------------------------------------
 
     /// Drop the derivable tables in `burn.sqlite` and the entire
-    /// `content.sqlite`, then re-create them empty. Stamps and ingest cursors
-    /// are preserved; archive timestamps remain except for
-    /// `last_write_at_ms`, which is cleared until re-ingest writes derived
-    /// rows again. The source fingerprint is also cleared so re-ingest cannot
-    /// incorrectly short-circuit.
-    ///
-    /// Returns the path to the (now-empty) content DB so the caller can
-    /// move on to re-ingest from upstream files. Re-ingest is the
-    /// caller's responsibility — `relayburn-ingest` (#245) drives it
-    /// against the discovery layer.
+    /// `content.sqlite`, then re-create them empty. Stamps are preserved;
+    /// the ingest cursors and `last_write_at_ms` are cleared, so the next
+    /// ingest rebuilds every session from the relayhistory store. Re-ingest
+    /// is the caller's responsibility.
     pub fn rebuild_derivable(&mut self) -> Result<RebuildSummary> {
         let mut rows_dropped = 0i64;
         for table in DERIVABLE_TABLES {
@@ -392,7 +386,7 @@ impl Ledger {
                 .execute(&format!("DELETE FROM {table}"), [])?;
         }
         // Replay stamp-synthesized relationships. `relationships` is a
-        // derivable table (the upstream session log is the source of
+        // derivable table (the relayhistory store is the source of
         // truth) and was dropped above, but stamp-synthesized rows
         // live and die with the stamp itself — `append_stamp` produced
         // them by reading the stamp's `parentAgentId` enrichment, and
@@ -414,13 +408,10 @@ impl Ledger {
         }
 
         let now = writer::debug_now();
-        // Blank the source fingerprint so the ingest gate can't short-circuit
-        // a sweep against derived tables we just wiped. Cursors survive (the
-        // partial-progress contract for rebuild), so re-ingest stays cheap;
-        // this only forces the next ingest to re-examine source state rather
-        // than trusting a fingerprint recorded before the drop.
+        // Blank the ingest cursors: the derived rows they described are
+        // gone, so the next ingest resyncs every session from the store.
         self.conns.burn.execute(
-            "UPDATE archive_state SET last_rebuild_at = ?, source_fingerprint = '', \
+            "UPDATE archive_state SET last_rebuild_at = ?, upstream_cursors_json = '{}', \
              last_write_at_ms = NULL WHERE id = 1",
             params![now],
         )?;
@@ -496,30 +487,6 @@ impl Ledger {
         Ok(())
     }
 
-    /// Read the cheap source-change fingerprint recorded by the last
-    /// `ingest_all` sweep. Empty string means "never recorded" (fresh DB,
-    /// pre-v6 ledger, or post-reset) — which never matches a live
-    /// fingerprint, so ingest falls through to a full walk.
-    pub fn read_source_fingerprint(&self) -> Result<String> {
-        let fp: String = self.conns.burn.query_row(
-            "SELECT source_fingerprint FROM archive_state WHERE id = 1",
-            [],
-            |r| r.get(0),
-        )?;
-        Ok(fp)
-    }
-
-    /// Persist the source-change fingerprint. `ingest_all` calls this at the
-    /// end of a full sweep so the next call can short-circuit when nothing
-    /// upstream has moved.
-    pub fn write_source_fingerprint(&mut self, fingerprint: &str) -> Result<()> {
-        self.conns.burn.execute(
-            "UPDATE archive_state SET source_fingerprint = ? WHERE id = 1",
-            params![fingerprint],
-        )?;
-        Ok(())
-    }
-
     /// Vacuum both databases. Useful after a large prune.
     pub fn vacuum(&mut self) -> Result<()> {
         self.conns.burn.execute_batch("VACUUM")?;
@@ -558,7 +525,7 @@ impl Ledger {
 
     /// Wipe **all** derived ledger state, including first-party stamps
     /// and ingest cursors. Stronger than [`Self::rebuild_derivable`],
-    /// which preserves stamps and cursors so re-ingest is incremental.
+    /// which preserves stamps.
     ///
     /// After `reset()` runs, both DBs are byte-equivalent to a fresh
     /// `Ledger::open` against an empty `$RELAYBURN_HOME`: every
@@ -584,14 +551,13 @@ impl Ledger {
         tx.execute("DELETE FROM stamps", [])?;
         // Reset archive_state to the bootstrap shape: keep the row
         // (the CHECK constraint pins id=1) and the schema_version, but
-        // blank the cursors + build timestamps so the next ingest walks
-        // every upstream file from offset 0.
+        // blank the cursors + build timestamps so the next ingest resyncs
+        // every session from the relayhistory store.
         tx.execute(
             "UPDATE archive_state \
              SET upstream_cursors_json = '{}', \
                  last_built_at = NULL, \
                  last_rebuild_at = NULL, \
-                 source_fingerprint = '', \
                  last_write_at_ms = NULL \
              WHERE id = 1",
             [],

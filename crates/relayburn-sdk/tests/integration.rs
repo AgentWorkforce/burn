@@ -13,8 +13,8 @@ use tempfile::TempDir;
 use relayburn_sdk::{
     compare, export_ledger, export_stamps, hotspots, ingest, overhead, overhead_trim, search,
     session_cost, summary, summary_report, CompareOptions, ContentKind, ContentRecord, ContentRole,
-    Enrichment, ExportLedgerOptions, ExportStampsOptions, HotspotsOptions, HotspotsResult,
-    IngestOptions, IngestRoots, Ledger, LedgerOpenOptions, OverheadOptions, OverheadTrimOptions,
+    Enrichment, ExportLedgerOptions, ExportStampsOptions, HistoryStoreOptions, HotspotsOptions,
+    HotspotsResult, IngestOptions, Ledger, LedgerOpenOptions, OverheadOptions, OverheadTrimOptions,
     SearchQueryOptions, SessionCostOptions, SourceKind, Stamp, StampSelector, SummaryOptions,
     SummaryReport, SummaryReportOptions, ToolCall, TurnRecord, Usage,
 };
@@ -320,36 +320,32 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
 }
 
 #[test]
-fn ingest_with_empty_roots_returns_zero_report_via_handle_and_free_fn() {
-    // 10. ingest — handle + free. Both forms must accept empty roots and
-    // return an all-zero report without scanning the developer's HOME.
+fn ingest_with_empty_history_returns_zero_report_via_handle_and_free_fn() {
+    // 10. ingest — handle + free. Both forms bootstrap a relayhistory store
+    // under an empty provider home and return an all-zero report without
+    // scanning the developer's HOME.
     let home = TempDir::new().expect("home tmp");
-    let claude = TempDir::new().expect("claude tmp");
-    let codex = TempDir::new().expect("codex tmp");
-    let opencode = TempDir::new().expect("opencode tmp");
+    let providers = TempDir::new().expect("provider home tmp");
+    let store = || HistoryStoreOptions {
+        db_path: Some(providers.path().join("ai-history.db")),
+        home: Some(providers.path().to_path_buf()),
+    };
 
     let mut handle = Ledger::open(LedgerOpenOptions::with_home(home.path())).expect("open");
     let report = handle
         .ingest(IngestOptions {
             ledger_home: Some(home.path().to_path_buf()),
-            roots: IngestRoots {
-                claude_projects_dir: Some(claude.path().to_path_buf()),
-                codex_sessions_dir: Some(codex.path().to_path_buf()),
-                opencode_storage_dir: Some(opencode.path().to_path_buf()),
-            },
+            store: store(),
             ..Default::default()
         })
         .expect("handle ingest");
     assert_eq!(report.scanned_sessions, 0);
     assert_eq!(report.appended_turns, 0);
+    assert!(providers.path().join("ai-history.db").exists());
 
     let report2 = ingest(IngestOptions {
         ledger_home: Some(home.path().to_path_buf()),
-        roots: IngestRoots {
-            claude_projects_dir: Some(claude.path().to_path_buf()),
-            codex_sessions_dir: Some(codex.path().to_path_buf()),
-            opencode_storage_dir: Some(opencode.path().to_path_buf()),
-        },
+        store: store(),
         ..Default::default()
     })
     .expect("free ingest");

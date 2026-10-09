@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use ai_hist::{CatalogQuery, ProviderRoots, SessionQuery, SessionStore, StoreOptions};
 use serde_json::Value;
 
+use super::fixtures::{fixtures_root, render_value, snapshot_dir};
 use super::relayhistory::records_from_evidence;
-use super::snapshot_tests::{fixtures_root, render_value, snapshot_dir};
 
 /// One staged fixture: the snapshot name prefix and a populated HOME.
 struct Staged {

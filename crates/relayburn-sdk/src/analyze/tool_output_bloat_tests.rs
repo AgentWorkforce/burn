@@ -967,10 +967,10 @@ fn fixture_settings_json_oversized_bash_output_length() {
 
 #[test]
 fn fixture_claude_oversized_bash_output_enriched_path() {
-    use crate::reader::{parse_claude_session, ClaudeParseOptions};
     let pricing = load_builtin_pricing();
     let path = workspace_fixture("claude/oversized-bash-output.jsonl");
-    let parsed = parse_claude_session(&path, &ClaudeParseOptions::default()).expect("parses");
+    let parsed =
+        crate::source::fixtures::fixture_records(crate::reader::Harness::ClaudeCode, &path);
     // cl100k tokenizes repeated single-char content far below the
     // bytes/4 heuristic; we don't have cl100k wired here so the
     // detector falls back to bytes/4 either way. Use a low threshold
@@ -991,10 +991,10 @@ fn fixture_claude_oversized_bash_output_enriched_path() {
 
 #[test]
 fn fixture_claude_oversized_bash_output_content_length_fallback() {
-    use crate::reader::{parse_claude_session, ClaudeParseOptions};
     let pricing = load_builtin_pricing();
     let path = workspace_fixture("claude/oversized-bash-output.jsonl");
-    let parsed = parse_claude_session(&path, &ClaudeParseOptions::default()).expect("parses");
+    let parsed =
+        crate::source::fixtures::fixture_records(crate::reader::Harness::ClaudeCode, &path);
     let out = detect_observed_bloat(&DetectObservedBloatOptions {
         tool_result_events: &parsed.tool_result_events,
         user_turns: &[],
@@ -1011,10 +1011,9 @@ fn fixture_claude_oversized_bash_output_content_length_fallback() {
 
 #[test]
 fn fixture_codex_oversized_shell_output() {
-    use crate::reader::codex::{parse_codex_session, ParseCodexOptions};
     let pricing = load_builtin_pricing();
     let path = workspace_fixture("codex/oversized-shell-output.jsonl");
-    let parsed = parse_codex_session(&path, &ParseCodexOptions::default()).expect("parses");
+    let parsed = crate::source::fixtures::fixture_records(crate::reader::Harness::Codex, &path);
     let out = detect_observed_bloat(&DetectObservedBloatOptions {
         tool_result_events: &parsed.tool_result_events,
         user_turns: &parsed.user_turns,

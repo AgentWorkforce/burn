@@ -13,7 +13,7 @@
 //! Verbs are callable two ways: as a free function or as a method on
 //! [`LedgerHandle`].
 //!
-//! Every verb is synchronous: ingest is filesystem walks plus rusqlite
+//! Every verb is synchronous: ingest is a relayhistory sync plus rusqlite
 //! writes, and the query/compute verbs are CPU-bound. Callers running
 //! these from an async context — the typical pattern in the MCP server,
 //! the napi binding, or the watch loop — should wrap them in
@@ -80,8 +80,7 @@ pub use stamp_verb::*;
 // their own `Cargo.toml`. The grouping mirrors the four wave-1 crates.
 
 pub use crate::reader::{
-    build_claude_span_tree, build_codex_span_tree, build_inferences, count_subagents_under,
-    discover_subagents, pair_to_main as pair_subagents_to_main, parse_bash_command,
+    build_claude_span_tree, build_codex_span_tree, build_inferences, parse_bash_command,
     resolve_project, ActivityCategory, BashParse, ClassificationInput, ClassificationResult,
     ClaudeSpanTreeInputs, CodexSpanTreeInputs, CompactionEvent, ContentKind, ContentRecord,
     ContentRole, ContentStoreMode, ContentToolResult, ContentToolUse, Coverage, Fidelity,
@@ -141,12 +140,10 @@ pub use crate::analyze::{
 };
 
 pub use crate::ingest::{
-    cleanup_stale_pending_stamps, default_session_roots, ingest_all, ingest_claude_session,
-    ingest_claude_transcript_path, ingest_codex_sessions, ingest_opencode_sessions,
-    start_watch_loop, write_pending_stamp, ErrorSink, IngestFn, IngestOptions as RawIngestOptions,
-    IngestReport, IngestRoots, PendingStamp, PendingStampHarness, PendingStampWriteResult,
-    ReportSink, StartWatchLoopOptions, WatchController, WriteOptions as PendingStampWriteOptions,
-    DEFAULT_FS_DEBOUNCE, DEFAULT_SLOW_FALLBACK,
+    cleanup_stale_pending_stamps, ingest_all, ingest_claude_transcript_path, watch_ingest,
+    write_pending_stamp, IngestOptions, IngestReport, PendingStamp, PendingStampHarness,
+    PendingStampWriteResult, ProgressSink, WatchIngestOptions,
+    WriteOptions as PendingStampWriteOptions,
 };
 
 // --- LedgerOpenOptions -----------------------------------------------------

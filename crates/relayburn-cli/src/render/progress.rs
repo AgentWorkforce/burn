@@ -1,15 +1,14 @@
-//! TTY-only progress and warning helpers.
+//! TTY-only progress helpers.
 //!
 //! Human runs get a stderr spinner while long-running work is in flight.
-//! JSON mode and redirected stderr keep the old quiet/scriptable behavior.
+//! JSON mode and redirected stderr stay quiet and scriptable.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use console::style;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use relayburn_sdk::RawIngestOptions;
+use relayburn_sdk::IngestOptions;
 
 use crate::cli::GlobalArgs;
 use crate::render::ux;
@@ -21,8 +20,6 @@ pub struct TaskProgress {
 
 struct Inner {
     bar: Option<ProgressBar>,
-    color: bool,
-    pretty_warnings: bool,
 }
 
 impl TaskProgress {
@@ -31,11 +28,7 @@ impl TaskProgress {
         let pretty = ux::stderr_is_pretty(globals);
         let bar = pretty.then(|| spinner(label.into(), color));
         Self {
-            inner: Arc::new(Inner {
-                bar,
-                color,
-                pretty_warnings: pretty,
-            }),
+            inner: Arc::new(Inner { bar }),
         }
     }
 
@@ -66,43 +59,17 @@ impl TaskProgress {
         }
     }
 
-    pub fn warn(&self, body: &str) {
-        self.suspend(|| {
-            if self.inner.pretty_warnings {
-                eprintln!("{}", format_warning(body, self.inner.color));
-            } else {
-                eprintln!("burn: warning: {body}");
-            }
-        });
-    }
-
-    pub fn ingest_options(&self, ledger_home: Option<PathBuf>) -> RawIngestOptions {
+    pub fn ingest_options(&self, ledger_home: Option<PathBuf>) -> IngestOptions {
         let on_progress = self.is_visible().then(|| {
             let progress = self.clone();
             Box::new(move |message: &str| {
                 progress.set_task(message.to_string());
             }) as Box<dyn Fn(&str) + Send + Sync>
         });
-        let on_warn = {
-            let progress = self.clone();
-            Some(Box::new(move |body: &str| {
-                progress.warn(body);
-            }) as Box<dyn Fn(&str) + Send + Sync>)
-        };
-
-        RawIngestOptions {
+        IngestOptions {
             on_progress,
-            on_warn,
             ledger_home,
-            ..RawIngestOptions::default()
-        }
-    }
-
-    pub fn quiet_ingest_options(ledger_home: Option<PathBuf>) -> RawIngestOptions {
-        RawIngestOptions {
-            on_warn: Some(Box::new(ignore_warning) as Box<dyn Fn(&str) + Send + Sync>),
-            ledger_home,
-            ..RawIngestOptions::default()
+            ..IngestOptions::default()
         }
     }
 }
@@ -130,63 +97,4 @@ fn spinner(label: String, color: bool) -> ProgressBar {
     bar.set_prefix(label);
     bar.enable_steady_tick(Duration::from_millis(80));
     bar
-}
-
-fn ignore_warning(_: &str) {}
-
-fn format_warning(body: &str, color: bool) -> String {
-    let mut lines = body.lines();
-    let first = lines.next().unwrap_or(body).trim();
-    let (scope, detail) = first.split_once(':').unwrap_or(("burn", first));
-    let scope = scope.trim();
-    let detail = detail.trim();
-
-    let icon = paint("⚠", color, |s| style(s).yellow().bold().to_string());
-    let title = paint(format!("{scope} ingest warning"), color, |s| {
-        style(s).yellow().bold().to_string()
-    });
-    let rail = paint("│", color, |s| style(s).yellow().dim().to_string());
-
-    let mut out = format!("{icon} {title}");
-    if !detail.is_empty() {
-        out.push('\n');
-        out.push_str(&format!("  {rail} {detail}"));
-    }
-    for line in lines {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        out.push('\n');
-        out.push_str(&format!("  {rail} {line}"));
-    }
-    out
-}
-
-fn paint<S, F>(value: S, color: bool, apply: F) -> String
-where
-    S: ToString,
-    F: FnOnce(String) -> String,
-{
-    let value = value.to_string();
-    if color {
-        apply(value)
-    } else {
-        value
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::format_warning;
-
-    #[test]
-    fn warning_formatter_reframes_gap_warning() {
-        let body = "claude: 7 sessions logged tool calls without any observed tool_result content (381 tool calls).\n  Likely cause: still running.\n  Counts decay later.";
-        let rendered = format_warning(body, false);
-        assert_eq!(
-            rendered,
-            "⚠ claude ingest warning\n  │ 7 sessions logged tool calls without any observed tool_result content (381 tool calls).\n  │ Likely cause: still running.\n  │ Counts decay later."
-        );
-    }
 }

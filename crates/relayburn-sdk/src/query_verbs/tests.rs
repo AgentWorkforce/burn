@@ -2,8 +2,7 @@ use super::flow::bucket_subagents_per_turn;
 use super::summary::{
     aggregate_summary_relationship_stats, attribute_summary_cost_to_tools,
     collect_summary_agent_session_tree, collect_summary_connected_relationships, compute_summary,
-    summary_subagent_session_filter, summary_tool_attribution_method, summary_turn_identity_key,
-    SummaryRelationshipMatch,
+    summary_tool_attribution_method, summary_turn_identity_key, SummaryRelationshipMatch,
 };
 use super::*;
 use crate::analyze::FindingPricingStatus;
@@ -650,120 +649,6 @@ fn summary_legacy_surface_includes_stop_reason_counts_with_none_for_missing_fiel
     assert_eq!(s.stop_reasons.none, 1);
     assert_eq!(s.stop_reasons.pause_turn, 1);
     assert_eq!(s.stop_reasons.end_turn, 0);
-}
-
-/// Issue #449 review follow-up: when no filters are set, the
-/// subagent count helper must return `None` so the underlying
-/// walker preserves its original "count every reachable session"
-/// behavior (the global-summary path).
-#[test]
-fn summary_subagent_session_filter_returns_none_for_unfiltered_summary() {
-    let opts = SummaryReportOptions::default();
-    let turns: Vec<TurnRecord> = Vec::new();
-    assert!(summary_subagent_session_filter(&opts, &turns).is_none());
-}
-
-/// Issue #449 review follow-up: when `--session` (or any other
-/// scoping filter) is active, the subagent count helper must
-/// return `Some(set)` containing exactly the session ids that
-/// survived filtering. This is the linkage that stops the
-/// `subagents: X paired, Y orphan` line from including sidecars
-/// from sessions the user excluded.
-#[test]
-fn summary_subagent_session_filter_collects_session_ids_when_filtered() {
-    let opts = SummaryReportOptions {
-        session: Some("sess-a".into()),
-        ..SummaryReportOptions::default()
-    };
-    let mk = |session_id: &str| TurnRecord {
-        v: 1,
-        source: SourceKind::ClaudeCode,
-        session_id: session_id.into(),
-        session_path: None,
-        message_id: format!("m-{session_id}"),
-        turn_index: 0,
-        ts: "2026-04-23T00:00:00.000Z".into(),
-        model: "claude-sonnet-4-6".into(),
-        project: None,
-        project_key: None,
-        usage: Usage::default(),
-        tool_calls: vec![],
-        files_touched: None,
-        subagent: None,
-        stop_reason: None,
-        activity: None,
-        retries: None,
-        has_edits: None,
-        fidelity: None,
-        reasoning: None,
-    };
-    let turns = vec![mk("sess-a"), mk("sess-a")];
-    let filter = summary_subagent_session_filter(&opts, &turns)
-        .expect("expected Some(set) when --session is active");
-    assert!(filter.contains("sess-a"));
-    assert_eq!(filter.len(), 1, "duplicates collapse into the set");
-}
-
-/// Each non-default filter on `SummaryReportOptions` must flip the
-/// helper into "filtered" mode. Iterating over the surface keeps
-/// us from quietly losing scoping when a new filter is added.
-#[test]
-fn summary_subagent_session_filter_treats_every_filter_as_scoping() {
-    let turns: Vec<TurnRecord> = Vec::new();
-    let cases: Vec<(&str, SummaryReportOptions)> = vec![
-        (
-            "project",
-            SummaryReportOptions {
-                project: Some("/tmp/proj".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "since",
-            SummaryReportOptions {
-                since: Some("24h".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "workflow",
-            SummaryReportOptions {
-                workflow: Some("wf-1".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "agent",
-            SummaryReportOptions {
-                agent: Some("agent-x".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "providers",
-            SummaryReportOptions {
-                providers: Some(vec!["anthropic".into()]),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "tags",
-            SummaryReportOptions {
-                tags: Some({
-                    let mut m = BTreeMap::new();
-                    m.insert("k".into(), "v".into());
-                    m
-                }),
-                ..SummaryReportOptions::default()
-            },
-        ),
-    ];
-    for (label, opts) in cases {
-        assert!(
-            summary_subagent_session_filter(&opts, &turns).is_some(),
-            "expected filter to engage for {label}"
-        );
-    }
 }
 
 #[test]
@@ -2564,7 +2449,6 @@ fn bucket_subagent(
         agent_type: None,
         description: None,
         meta_tool_use_id: None,
-        records: Vec::new(),
         started_at_ms: first_record_ts.and_then(crate::util::time::parse_iso_ms),
         paired_tool_use_id: paired_tool_use_id.map(str::to_string),
         source_path: std::path::PathBuf::from(format!("/tmp/agent-{agent_id}.jsonl")),

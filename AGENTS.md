@@ -17,7 +17,11 @@ binary keeps the `burn` invocation via `[[bin]] name = "burn"` in
 
 ```
 relayburn-sdk         — PUBLISHED to crates.io; embedding API.
-                          src/{reader,ledger,analyze,ingest}/ are internal modules.
+                          src/{reader,source,ledger,analyze,ingest}/ are internal
+                          modules: reader/ is burn's record model (types,
+                          classifier, inference, span trees), source/ maps
+                          relayhistory evidence onto it, ingest/ keeps the
+                          ledger up to date from the relayhistory store.
                           The public verb surface lives in
                           src/{query_verbs,export_verbs,ingest_verb}.rs.
 relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary.
@@ -121,17 +125,30 @@ the npm platform packages, publishes the umbrellas (`relayburn`,
 `@relayburn/sdk`, `@relayburn/mcp`) and their optional dependencies, then tags
 each published target.
 
-## Adding ingest support
+## Session sourcing lives in relayhistory
 
-`burn ingest` owns session import: no flags scans all known session stores
-once, `--watch` follows them, and `--hook claude --quiet` handles Claude hook
-payloads from stdin. Harness readers and ingest orchestration live under
-`crates/relayburn-sdk/src/{reader,ingest}/`; the CLI presenter lives at
-`crates/relayburn-cli/src/commands/ingest.rs`.
+burn never parses harness logs. Every session comes from the
+[`ai-hist`](https://github.com/AgentWorkforce/relayhistory) crate's
+`SessionStore`, pinned exactly in `crates/relayburn-sdk/Cargo.toml` (the crate
+version is the contract; adopting a new one is a deliberate PR that bumps the
+pin and re-runs the parity suite).
 
-Add a harness reader to the SDK and include its source root in `IngestRoots`.
-Launchers that cannot provide a session ID before spawn use the pending-stamp
-API in `crates/relayburn-sdk/src/ingest/pending_stamps.rs`.
+- `crates/relayburn-sdk/src/source/relayhistory/` maps `SessionEvidence` onto
+  burn's records per harness; `source/usage.rs` owns what the raw provider
+  counters mean; `source/delegated.rs` bills Claude subagents to the session
+  that spawned them.
+- `source::parity_tests` holds the mapping to the frozen snapshots in
+  `tests/fixtures/sourcing-snapshots/` (see its README for the deliberate
+  deviations).
+- `crates/relayburn-sdk/src/ingest/` syncs the store, reads its change feed
+  from the ledger's watermark, and appends each changed session. The CLI
+  presenter lives at `crates/relayburn-cli/src/commands/ingest.rs`.
+
+A harness quirk is fixed in relayhistory, not here. A new harness lands in
+relayhistory first; burn then adds its `SourceKind`, mapping, pricing, and
+`TOOL_ALIASES` entries. Launchers that cannot provide a session ID before
+spawn use the pending-stamp API in
+`crates/relayburn-sdk/src/ingest/pending_stamps.rs`.
 
 ## When in doubt
 

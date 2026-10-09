@@ -247,8 +247,9 @@ fn stamps_survive_state_rebuild() {
 }
 
 #[test]
-fn cursors_survive_state_rebuild() {
-    // Acceptance: ingest cursors in archive_state likewise survive.
+fn state_rebuild_clears_the_ingest_cursors() {
+    // The derived rows the cursors described are gone, so the next ingest
+    // must resync every session.
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
 
@@ -258,8 +259,7 @@ fn cursors_survive_state_rebuild() {
         .unwrap();
     l.rebuild_derivable().unwrap();
 
-    let cursors = l.read_cursors().unwrap();
-    assert_eq!(cursors, r#"{"claude-code": "2025-01-01T00:00:00Z"}"#);
+    assert_eq!(l.read_cursors().unwrap(), "{}");
 }
 
 #[test]

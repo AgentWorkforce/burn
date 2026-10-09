@@ -9,10 +9,10 @@ use std::collections::{HashMap, HashSet};
 use ai_hist::{BlockKind, Message, Role, SessionEvidence, SessionRequest, Source};
 use serde_json::Value;
 
+use self::tools::{apply_edit_hashes, extract_files_touched, pick_target};
 use super::usage::usage_from_raw;
 use super::SessionRecords;
 use crate::reader::classifier::{classify_activity, ClassificationInput};
-use crate::reader::claude::{apply_edit_hashes, extract_files_touched, pick_target};
 use crate::reader::hash::args_hash;
 use crate::reader::types::{
     CompactionEvent, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
@@ -28,6 +28,7 @@ mod claude;
 mod codex;
 mod content;
 mod opencode;
+mod tools;
 
 pub(crate) fn source_kind(source: Source) -> Option<SourceKind> {
     match source {

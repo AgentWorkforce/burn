@@ -23,16 +23,15 @@ name = "relayburn_cli"
 path = "src/lib.rs"
 
 [dependencies]
-# The CLI is the canonical external embedder of the SDK — every read
-# verb the binary surfaces will wrap a `relayburn-sdk` call once #248
-# fills in the CLI source.
+# The CLI is the canonical external embedder of the SDK: every verb the
+# binary surfaces wraps a `relayburn-sdk` call.
 #
 # Version requirement is the current MAJOR.MINOR (caret semantics:
 # `>=1.10.0, <2.0.0`). The publish workflow rewrites this to match
 # the workspace MAJOR.MINOR on every release so the local workspace
 # path (currently 1.10.0) and the published `relayburn-sdk` on
 # crates.io always satisfy the dep at publish time.
-relayburn-sdk = { path = "../relayburn-sdk", version = "4.1" }
+relayburn-sdk = { path = "../relayburn-sdk", version = "5.0" }
 
 # clap v4 derive — argument parsing root and subcommand dispatch. The
 # scaffold defines globals + subcommand stubs only; per-command flag
@@ -77,16 +76,8 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 
-# Harness substrate unit tests still use `async-trait` and `phf`. `tokio::sync`
-# is needed by MCP / ingest presenters, and `rt` is required by read-path
-# commands so they can drive `relayburn_sdk::ingest_all` from otherwise-sync
-# presenter bodies via a current-thread runtime.
-async-trait = "0.1"
-phf = { version = "0.11", features = ["macros"] }
-# `signal` is needed for the `burn ingest --watch` SIGINT/SIGTERM trap
-# (#248 D8); the watch loop blocks the foreground until a stop signal
-# comes in. `rt` drives the current-thread runtime that wraps the SDK's
-# async ingest verb from otherwise-sync presenter bodies.
+# `sync` + `rt` drive the MCP server's current-thread runtime; `signal` is
+# the `burn ingest --watch` SIGINT/SIGTERM trap.
 tokio = { workspace = true, features = ["sync", "rt", "signal"] }
 
 # `IndexMap` preserves first-seen iteration order, which matters for the
@@ -122,9 +113,7 @@ predicates = "3"
 # verbs end-to-end.
 tempfile = "3"
 
-# Async test harness for the `harnesses` module unit tests (lookup, factory
-# round-trips). `rt-multi-thread` + `macros` lets `#[tokio::test]` resolve
-# and gives spawned watch-loop ticks a runtime to land on.
+# `#[tokio::test]` for the MCP server tests.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 
 # `tests/golden.rs` loads `invocations.json` to drive both the TS-CLI snapshot

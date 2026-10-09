@@ -9,8 +9,8 @@ use crate::analyze::pricing::load_builtin_pricing;
 use crate::query_verbs::subagent_tree_for_session;
 use crate::reader::Harness;
 use crate::session_metrics::turn_total_tokens;
+use crate::source::fixtures::fixtures_root;
 use crate::source::locate::{discover, read_evidence};
-use crate::source::snapshot_tests::fixtures_root;
 use crate::source::stage::stage_path;
 use crate::{analyze_session, AnalyzeSessionOptions, SessionLocator};
 

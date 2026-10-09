@@ -1,8 +1,11 @@
 ![relayburn](./burn-readme-banner.png)
 
-Understand how you're spending tokens in agent CLIs. Burn ingests Claude Code,
-Codex, and OpenCode session logs into a local ledger, then shows cost by model,
-provider, tool, file, workflow, agent, session, and overhead file.
+Understand how you're spending tokens in agent CLIs. Burn reads Claude Code,
+Codex, and OpenCode sessions through
+[relayhistory](https://github.com/AgentWorkforce/relayhistory) into a local
+ledger, then shows cost by model, provider, tool, file, workflow, agent,
+session, and overhead file. Subagent spend is billed to the session that
+spawned it.
 
 ## Quick Start
 
@@ -11,8 +14,12 @@ npm i -g relayburn
 burn summary
 ```
 
-Burn stores data under `~/.agentworkforce/burn/` by default. Set
-`RELAYBURN_HOME` to use a different location.
+The first run creates the relayhistory session store
+(`~/.local/share/ai-hist/ai-history.db`, or `$AI_HIST_DB`) and syncs every
+session on the machine into it; later runs pick up only what changed. The
+`ai-hist` CLI is not required. Burn's own ledger lives under
+`~/.agentworkforce/burn/`; set `RELAYBURN_HOME` to use a different location.
+Upgrading from 4.x: see [docs/migrating-to-5.md](docs/migrating-to-5.md).
 
 
 ## Commands
@@ -29,7 +36,7 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn sessions`](#burn-sessions) | Find recent session IDs for drill-down queries. |
 | [`burn flow`](#burn-flow) | Render a session's inference and subagent flow as Mermaid, SVG, or JSON. |
 | [`burn stamps`](#burn-stamps) | Export enrichment stamps as JSONL. |
-| [`burn ingest`](#burn-ingest) | Import existing or live session logs without wrapping the harness. |
+| [`burn ingest`](#burn-ingest) | Sync session history and append new turns, once, live, or from a hook. |
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
 | [`burn update`](#burn-update) | Check for releases, install an update, or configure automatic checks. |
 
@@ -303,22 +310,23 @@ Run `burn summary --by-provider` to discover model IDs present in your ledger.
 
 ## `burn ingest`
 
-Use `burn ingest` when sessions already exist, or when another process owns the
-harness spawn. Default mode scans Claude Code, Codex, and OpenCode stores once.
+`burn ingest` syncs the relayhistory store (Claude Code, Codex, and OpenCode
+sessions) and appends every session it changed since the ledger's last ingest.
+Reporting commands that refresh the ledger run the same step.
 
 | Option | What it does |
 |---|---|
-| `--watch` | Keep polling session stores in the foreground. |
-| `--interval <ms>` | Poll interval in milliseconds. Default: `1000`. |
+| `--watch` | Keep ingesting in the foreground as sessions change. |
+| `--interval <ms>` | Poll interval when filesystem events are off or unavailable. Default: `1000`. |
 | `--quiet` | Suppress stderr progress spinner / breadcrumbs. One-shot mode still writes the final summary on stdout. |
 | `--hook claude` | Read one Claude Code hook payload from stdin and ingest its single transcript via the SDK fast-path. |
 | `--no-fsevents` | In watch mode, use polling instead of filesystem events. |
 
 | Example | Result |
 |---|---|
-| `burn ingest` | Scan all known session stores once. |
+| `burn ingest` | Sync session history once and append what changed. |
 | `burn ingest --watch` | Keep the ingest loop running. |
-| `burn ingest --watch --no-fsevents` | Poll session stores when filesystem events are unreliable. |
+| `burn ingest --watch --no-fsevents` | Poll when filesystem events are unreliable. |
 | `burn ingest --hook claude --quiet` | Claude Code hook path for orchestrators. |
 
 ## `burn mcp-server`
@@ -449,11 +457,17 @@ can place event and content data on different volumes. SQLite may create
 `-wal` and `-shm` files beside each open database; they are part of normal WAL
 operation.
 
-Harness transcripts remain the upstream input for ingest. `burn state status`
-shows database paths, row counts, schema metadata, and resolved retention.
-`burn state rebuild ...` clears derivable tables for re-ingest, `burn state
-prune` applies content retention, and `burn state reset` previews or performs a
-full derived-state wipe.
+The relayhistory store is the upstream input for ingest; the ledger records
+how far it has read the store's change feed. `burn state status` shows
+database paths, row counts, schema metadata, and resolved retention. `burn
+state rebuild ...` clears derivable tables so the next ingest rebuilds every
+session from the store, `burn state prune` applies content retention, and
+`burn state reset` previews or performs a full derived-state wipe.
+
+| Session history setting | Purpose |
+|---|---|
+| `AI_HIST_DB` | relayhistory database burn reads sessions from. Default: `~/.local/share/ai-hist/ai-history.db`. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` | Harness store locations, as relayhistory resolves them. |
 
 ## Packages
 
@@ -463,7 +477,7 @@ full derived-state wipe.
 | `@relayburn/sdk` | Node facade over the Rust SDK, resolved through `@relayburn/sdk-<platform>` optional dependencies. |
 | `@relayburn/cli-<platform>` | Prebuilt `burn` binary packages for supported OS/CPU targets. |
 | `@relayburn/sdk-<platform>` | Prebuilt napi-rs packages for supported OS/CPU targets. |
-| `relayburn-sdk` | Rust crate with the embedding API and internal reader/ledger/analyze/ingest modules. |
+| `relayburn-sdk` | Rust crate with the embedding API and internal reader/ledger/analyze/ingest modules; sessions come from the `ai-hist` crate. |
 | `relayburn-cli` | Rust crate that produces the `burn` binary. |
 
 ## Development
@@ -597,9 +611,9 @@ burn ingest
 burn ingest --watch --interval 1000
 ```
 
-`burn ingest` scans Claude, Codex, and OpenCode stores once and uses the same
-cursor and dedup path as the reporting commands. `burn ingest --watch` keeps
-that scan loop running in the foreground.
+`burn ingest` syncs session history once and uses the same watermark and dedup
+path as the reporting commands. `burn ingest --watch` keeps that loop running
+in the foreground.
 
 ### Hook-based ingest for orchestrators
 
@@ -611,22 +625,23 @@ hooks per invocation via Claude's `--settings` flag without mutating global
 burn ingest --hook claude --quiet
 ```
 
-Hook payloads land on stdin and get forwarded to `burn ingest`. The command is
-safe to re-fire on every hook; the ledger cursor and dedup path keep ingestion
-idempotent, so the hook path and normal session-store path reconcile against
-the same session.
+Hook payloads land on stdin and get forwarded to `burn ingest`, which indexes
+just that transcript. The command is safe to re-fire on every hook; appends are
+idempotent, so the hook path and a full ingest reconcile against the same
+session.
 
 ## FAQ
 
 ### What does `burn ingest` do?
 
 Each harness (Claude Code, Codex, OpenCode) writes its own session transcripts
-to disk in its own format. `burn ingest` reads those transcripts, normalizes
-them, and writes them into burn's local SQLite ledger so the query commands
-(`summary`, `hotspots`, `overhead`, `compare`) have something to read against.
-Three modes:
+to disk in its own format. relayhistory reads those into one session store;
+`burn ingest` syncs that store, derives burn's turns, costs, and activity from
+what changed, and writes them into burn's local SQLite ledger so the query
+commands (`summary`, `hotspots`, `overhead`, `compare`) have something to read
+against. Three modes:
 
-- **One-shot** — `burn ingest` scans every known session store once and exits.
+- **One-shot** — `burn ingest` syncs session history once and exits.
   Good for backfilling or catching up before a query.
 - **Watch** — `burn ingest --watch` keeps a loop running in the foreground and
   picks up new turns as harnesses write them.
@@ -650,7 +665,7 @@ FS-watching contortions.
 - **Hook** is the preferred path when the harness supports it: push-based,
   exact, no polling.
 - **Watch** is the fallback for harnesses without hooks, or when the user
-  hasn't wired one up. It polls the session store directories on an interval.
+  hasn't wired one up. It follows filesystem events, polling as a backstop.
 - **One-shot** is for backfill, cron, or "just give me numbers now."
 
 For most solo users, `burn ingest --watch` in a background terminal is

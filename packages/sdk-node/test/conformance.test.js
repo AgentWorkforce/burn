@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   rmSync,
   copyFileSync,
+  existsSync,
   cpSync,
   mkdirSync,
   readdirSync,
@@ -521,27 +522,21 @@ test('writeStamp rejects empty enrichment', async (t) => {
   }
 });
 
-test('ingest scans an isolated empty home', async (t) => {
+test('ingest bootstraps session history under an isolated empty home', async (t) => {
   const sdk = await loadNapiSdk(t);
   if (!sdk) return;
 
   const fakeHome = makeEmptyHome();
   const ledgerHome = makeLedgerHome();
-  const prevHome = process.env.HOME;
-  const prevUserprofile = process.env.USERPROFILE;
+  const storeDbPath = join(fakeHome, 'ai-history.db');
   try {
-    process.env.HOME = fakeHome;
-    process.env.USERPROFILE = fakeHome;
-    const report = await sdk.ingest({ ledgerHome });
-    assert.equal(typeof report.scannedSessions, 'number');
-    assert.equal(typeof report.ingestedSessions, 'number');
-    assert.equal(typeof report.appendedTurns, 'number');
-    assert.equal(typeof report.appliedPendingStamps, 'number');
+    const report = await sdk.ingest({ ledgerHome, home: fakeHome, storeDbPath });
+    assert.equal(report.scannedSessions, 0);
+    assert.equal(report.ingestedSessions, 0);
+    assert.equal(report.appendedTurns, 0);
+    assert.equal(report.appliedPendingStamps, 0);
+    assert.ok(existsSync(storeDbPath), 'the relayhistory store is created');
   } finally {
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
     rmSync(fakeHome, { recursive: true, force: true });
     rmSync(ledgerHome, { recursive: true, force: true });
   }

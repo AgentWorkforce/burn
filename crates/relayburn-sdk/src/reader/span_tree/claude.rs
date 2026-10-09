@@ -16,7 +16,7 @@
 //! │   │   └── ToolResult           <- paired by tool_use_id
 //! │   └── ToolUse (name=Task)      <- subagent dispatch
 //! │       ├── ToolResult
-//! │       └── Subagent             <- nested span tree from agent-<id>.jsonl
+//! │       └── Subagent             <- delegated subagent
 //! │           └── ...
 //! └── ...
 //! ```
@@ -31,9 +31,8 @@
 //!
 //! # Subagent stitching
 //!
-//! [`SubagentTranscript::paired_tool_use_id`] (filled by
-//! [`crate::reader::pair_to_main`]) tells us which `ToolUse` a sidecar
-//! belongs under. Unpaired transcripts are surfaced as **sibling**
+//! [`SubagentTranscript::paired_tool_use_id`] tells us which `ToolUse` a
+//! subagent belongs under. Unpaired transcripts are surfaced as **sibling**
 //! `Subagent` nodes under the [`SpanKind::Turn`] root, carrying
 //! `attributes["unattached"] = true`. The alternative — a separate
 //! top-level `UnattachedGroup` — would force every consumer to special-
@@ -47,8 +46,8 @@
 use std::collections::HashMap;
 
 use crate::analyze::{AttrValue, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
-use crate::reader::claude::subagents::SubagentTranscript;
 use crate::reader::inference::Inference;
+use crate::reader::subagent::SubagentTranscript;
 use crate::reader::types::{
     StopReason, ToolCall, ToolResultEventRecord, ToolResultStatus, TurnRecord,
 };
@@ -489,12 +488,8 @@ fn build_subagent_node(sa: &SubagentTranscript, unattached: bool) -> SpanNode {
     if unattached {
         node.set_attr("unattached", AttrValue::Bool(true));
     }
-    // We do NOT recursively build a span tree from `sa.records` here:
-    // the parser hands us raw `Value` rows, and re-running the parse
-    // pipeline against an in-memory sidecar is the ingest path's job,
-    // not the span-tree builder's. Downstream consumers can call
-    // `build_claude_span_tree` against the materialized child turn(s)
-    // once they're in the ledger and stitch the subtree client-side.
+    // The subagent's own turns are ledger turns of this session carrying
+    // its `agent_id`; consumers that want its subtree build it from those.
     node
 }
 
@@ -867,7 +862,6 @@ mod tests {
             agent_type: Some("slash-skill".into()),
             description: Some("ad-hoc".into()),
             meta_tool_use_id: None,
-            records: vec![],
             started_at_ms: None,
             paired_tool_use_id: None,
             source_path: std::path::PathBuf::from("/tmp/agent-orphan-1.jsonl"),
@@ -921,7 +915,6 @@ mod tests {
             agent_type: Some("general-purpose".into()),
             description: None,
             meta_tool_use_id: None,
-            records: vec![],
             started_at_ms: None,
             paired_tool_use_id: Some("toolu_task".into()),
             source_path: std::path::PathBuf::from("/tmp/agent-x.jsonl"),

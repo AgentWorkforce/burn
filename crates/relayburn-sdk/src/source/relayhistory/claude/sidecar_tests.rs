@@ -6,9 +6,9 @@
 use serde_json::{json, Value};
 
 use crate::reader::Harness;
+use crate::source::fixtures::fixtures_root;
 use crate::source::locate::{load_session, SessionLocator};
 use crate::source::relayhistory::records_from_evidence;
-use crate::source::snapshot_tests::fixtures_root;
 
 #[test]
 fn sidecars_the_main_session_spawned_are_its_subagent_relationships() {

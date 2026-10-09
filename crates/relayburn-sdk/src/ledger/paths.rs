@@ -96,13 +96,11 @@ fn is_id_char(b: u8) -> bool {
 mod tests {
     use super::*;
 
-    /// Serialises tests that mutate `RELAYBURN_HOME` / `HOME` so they
-    /// don't trample one another (cargo runs tests in parallel by
-    /// default; env vars are process-global). This must be the same
-    /// mutex the ingest test modules hold while pinning
-    /// `RELAYBURN_HOME`: two groups guarding one variable with
-    /// different locks still race.
-    use crate::ingest::TEST_ENV_LOCK as ENV_LOCK;
+    /// Serialises tests that mutate `RELAYBURN_HOME` / `HOME` with the
+    /// config tests that read them (cargo runs tests in parallel; env vars
+    /// are process-global, and two groups guarding one variable with
+    /// different locks still race).
+    use crate::ledger::CONFIG_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn ledger_home_defaults_to_agentworkforce_burn_under_home() {

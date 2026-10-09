@@ -7,38 +7,19 @@ license.workspace = true
 repository.workspace = true
 description = "Embedding API for relayburn — published to crates.io as the supported Rust surface."
 
-[features]
-# Opt-in feature for downstream integration tests that need the
-# test-only API (`set_ingest_gap_writer` / `restore_ingest_gap_writer`).
-# In-crate unit tests reach the same items via `cfg(test)`; external
-# crates wanting the same hooks enable this feature explicitly so the
-# items are NOT part of the SDK's default public surface.
-test-utils = []
-
 [dependencies]
-# Deps absorbed from the four former lower crates
-# (`relayburn-{reader,ledger,analyze,ingest}`) when the monolith
-# restructure collapsed them into modules under
-# `src/{reader,ledger,analyze,ingest}/`.
-
 # Common
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
 
 # reader: hashing + classifier rule tables
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
 phf = { version = "0.11", features = ["macros"] }
-# reader: SIMD-accelerated newline split for the JSONL hot loops in
-# `reader/{claude,codex}.rs`. `regex` already pulls memchr in
-# transitively; we depend on it directly so we own the version.
-memchr = { workspace = true }
-
 # ledger: SQLite events + content store
 rusqlite = { workspace = true }
 
@@ -60,16 +41,7 @@ time = { version = "0.3", default-features = false, features = ["formatting", "p
 # matching the TS `Object.values` / `Object.entries` iteration semantics.
 indexmap = { version = "2", features = ["serde"] }
 
-# ingest: filesystem event watcher for the watch loop. Drives the
-# `notify`-backed driver in `ingest/watch_loop.rs` (FSEvents on macOS,
-# inotify on Linux, ReadDirectoryChangesW on Windows) with a slow
-# polling fallback when FS events are unavailable (network filesystems,
-# unsupported targets, or `--no-fsevents`). Closes #250.
-notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
-
 [target.'cfg(unix)'.dependencies]
 # ingest: pid-liveness probe in the pending-stamp resolver
 libc = "0.2"
 
-[dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "test-util"] }

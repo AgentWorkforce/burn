@@ -1,10 +1,8 @@
-//! Rust port of `@relayburn/reader`. See AgentWorkforce/burn#242.
-//!
-//! This crate is a work-in-progress port of the TS reader package. Foundational
-//! modules (`types`, `hash`, `fidelity`, `git`, `classifier`, `user_turn`) are
-//! ported with native conformance tests; the `codex` (#256) and `opencode`
-//! (#257) parsers are ported; the Claude Code parser (`claude`) covers the
-//! synchronous, incremental, and cross-file reconciliation surface (#255).
+//! Burn's record model and the derivations that run over it: the
+//! [`types`] every ledger row is, the activity [`classifier`], inference
+//! grouping, project resolution, fidelity, hashing, and the span tree
+//! builders. Harness sessions are sourced through relayhistory (see
+//! `crate::source`), never parsed here.
 
 pub mod classifier;
 pub mod fidelity;
@@ -12,37 +10,18 @@ pub mod git;
 pub mod hash;
 pub mod inference;
 pub mod reasoning;
+pub mod span_tree;
+pub mod subagent;
 pub mod types;
 pub mod user_turn;
 
-pub mod claude;
-pub mod codex;
-pub mod opencode;
-
-pub use codex::span_tree::{build_codex_span_tree, CodexSpanTreeInputs};
-pub use codex::{
-    parse_codex_session_incremental, read_codex_session_id_hint, CodexLastCompletedTurn,
-    CodexResumeState, CodexTurnContext, CumulativeUsage, ParseCodexIncrementalOptions,
-    ParseCodexIncrementalResult, PersistedUserTurnSlot,
-};
-pub use opencode::{
-    parse_opencode_session_incremental, ParseOpencodeIncrementalOptions,
-    ParseOpencodeIncrementalResult,
-};
+pub use span_tree::claude::{build_claude_span_tree, ClaudeSpanTreeInputs};
+pub use span_tree::codex::{build_codex_span_tree, CodexSpanTreeInputs};
+pub use subagent::{SubagentCounts, SubagentTranscript};
 
 pub use classifier::{
     count_retries, normalize_tool_name, parse_bash_command, BashParse, ClassificationInput,
     ClassificationResult,
-};
-pub use claude::span_tree::{build_claude_span_tree, ClaudeSpanTreeInputs};
-pub use claude::subagents::{
-    count_subagents_under, discover_subagents, pair_to_main, SubagentCounts, SubagentTranscript,
-};
-pub use claude::{
-    parse_claude_session, parse_claude_session_incremental, reconcile_claude_session_relationships,
-    ParseIncrementalOptions as ClaudeParseIncrementalOptions,
-    ParseIncrementalResult as ClaudeParseIncrementalResult, ParseOptions as ClaudeParseOptions,
-    ParseResult as ClaudeParseResult, ReconcileClaudeRelationshipsInput,
 };
 pub use fidelity::classify_fidelity;
 pub use git::{resolve_project, ProjectResolver, ResolvedProject};

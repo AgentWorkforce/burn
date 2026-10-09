@@ -23,7 +23,7 @@ use crate::reader::types::{
     SessionRelationshipRecord, SourceKind, ToolCall, ToolResultEventRecord, ToolResultStatus,
     TurnRecord, Usage, UsageGranularity, UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
 };
-use crate::reader::user_turn::{join_nonempty, HeuristicCounter};
+use crate::reader::user_turn::join_nonempty;
 use crate::util::time::format_iso_ms;
 
 /// What the committed tasks of one session derive.
@@ -270,8 +270,7 @@ impl<'a> Tasks<'a> {
             None => &mut self.pending_user_text,
         };
         append(target, text);
-        self.slot
-            .push(UserTurnBlock::text(text, &HeuristicCounter), ts_ms);
+        self.slot.push(UserTurnBlock::text(text), ts_ms);
         let record = |message_id: &str| {
             text_content(
                 self.session_id,

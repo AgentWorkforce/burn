@@ -729,24 +729,7 @@ impl LedgerHandle {
                     None
                 };
                 let stop_reasons = StopReasonCounts::from_turns(&turns);
-                // Lazy walk over `~/.claude/projects/` (or the configured
-                // override) for the `subagents: X paired, Y orphan`
-                // summary line (issue #435). The walk short-circuits when
-                // the projects root is missing or every session lacks a
-                // `subagents/` subdir — i.e. zero cost on the vast
-                // majority of summaries that don't hit a session with
-                // sidecar transcripts.
-                //
-                // When the summary itself is scoped (any of `--session`,
-                // `--project`, `--since`, `--workflow`, `--tags`,
-                // `--agent`, `--providers`) we restrict the sidecar
-                // walk to the same session-id set the rest of the
-                // summary covers; otherwise the line could report
-                // paired/orphan counts from sessions the user excluded.
-                // Un-filtered runs keep the original global walk
-                // behavior.
-                let session_filter = summary_subagent_session_filter(&opts, &turns);
-                let subagents = compute_summary_subagent_counts(session_filter.as_ref());
+                let subagents = crate::source::summary_subagent_counts(&turns);
                 let (unpriced_turns, unpriced_models) = tally_unpriced(&turns, &pricing);
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
                     group_by,

@@ -21,7 +21,13 @@ export declare class Ledger {
   static open(opts?: LedgerOpenOptions): Promise<Ledger>;
 }
 
-export interface IngestOptions { sessionId?: string; harness?: 'claude-code'|'codex'|'opencode'; ledgerHome?: string }
+export interface IngestOptions {
+  ledgerHome?: string;
+  /** ai-hist database sessions are read from; defaults to `$AI_HIST_DB`, then the XDG data path. */
+  storeDbPath?: string;
+  /** Provider home whose harness stores are read, instead of `$HOME`. */
+  home?: string;
+}
 export interface IngestReport {
   scannedSessions: number | bigint;
   ingestedSessions: number | bigint;

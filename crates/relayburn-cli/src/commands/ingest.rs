@@ -1,55 +1,33 @@
-//! `burn ingest` — passive-ingest entrypoint. No flags scans every
-//! known session store once; `--watch` keeps polling; `--hook claude
-//! --quiet` is the stdin-driven Claude hook path.
+//! `burn ingest` — keep the ledger up to date from session history. No
+//! flags syncs the relayhistory store once and appends what changed;
+//! `--watch` keeps doing that as sessions change; `--hook claude --quiet`
+//! is the stdin-driven Claude hook path.
 //!
-//! Thin presenter over the SDK ingest verb plus the SDK's watch-loop
-//! controller. TS source of truth: `packages/cli/src/commands/ingest.ts`
-//! plus `packages/ingest/src/watch-loop.ts`.
+//! Thin presenter over the SDK ingest verbs:
 //!
-//! The Rust port keeps the three modes as a single subcommand so
-//! `burn ingest` retains its TS muscle memory:
-//!
-//! - No flags = `runIngestOnce` — one full sweep, then exit.
-//! - `--watch` = `runIngestWatch` — foreground poll loop until SIGINT
-//!   / SIGTERM.
-//! - `--hook claude` = `runIngestHook` — stdin-driven hook payload.
-//!   Today only `--hook claude` is wired here (Codex / OpenCode hooks
-//!   were never part of the TS surface either). The hook path uses
-//!   the SDK's single-transcript fast-path
-//!   (`ingest_claude_transcript_path`) on the `transcript_path` from
-//!   the Claude Code hook payload so the per-call cost is bounded by
-//!   the one JSONL file, not by the number of sessions on disk.
+//! - No flags: [`ingest_all`] — one sync, then exit.
+//! - `--watch`: [`watch_ingest`] — relayhistory's live-capture loop in the
+//!   foreground until SIGINT / SIGTERM.
+//! - `--hook claude`: [`ingest_claude_transcript_path`] on the payload's
+//!   `transcript_path`, so the per-call cost is bounded by that one
+//!   transcript, not by the number of sessions on disk.
 //!
 //! Output shape: every successful run writes a single
-//! `[burn] ingest: ingested N session(s) (+M turn(s))` line. The
-//! one-shot path emits it on **stdout** so pipelines can capture the
-//! summary (matching the TS `runIngestOnce` source-of-truth at
-//! `packages/cli/src/commands/ingest.ts:121-126`); `--watch` and
-//! `--hook` modes log on **stderr** so the foreground banner / hook
-//! breadcrumbs don't pollute downstream stdout consumers. `--quiet`
-//! is accepted in every mode: in `--watch` and `--hook` it silences
-//! every breadcrumb; in one-shot mode it suppresses the progress
-//! spinner / gap warnings but the final stdout summary still prints.
-//!
-//! Not ported from 1.x: `--opencode-stream`, `--opencode-url`, and
-//! `--opencode-global`. The 1.x stream subscribed to the OpenCode dev
-//! server's SSE feed directly. 2.x consumes OpenCode through the
-//! file-based session store (`~/.local/share/opencode/storage`) on
-//! every sweep, and `--watch` reacts to FS events the moment OpenCode
-//! writes a new event file. The `OpencodeStreamIngestor` parser still
-//! lives in `relayburn-sdk::reader::opencode_stream` for embedders
-//! that want to consume the SSE feed themselves, but the CLI no
-//! longer ships HTTP client wiring for it.
+//! `[burn] ingest: ingested N session(s) (+M turn(s))` line. The one-shot
+//! path emits it on **stdout** so pipelines can capture the summary;
+//! `--watch` and `--hook` modes log on **stderr** so the foreground banner
+//! and hook breadcrumbs don't pollute downstream stdout consumers.
+//! `--quiet` is accepted in every mode: in `--watch` and `--hook` it
+//! silences every breadcrumb; in one-shot mode it suppresses the progress
+//! spinner but the final stdout summary still prints.
 
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use relayburn_sdk::{
-    default_session_roots, ingest_all, ingest_claude_transcript_path, start_watch_loop,
-    IngestReport, IngestRoots, Ledger, LedgerHandle, LedgerOpenOptions, RawIngestOptions,
-    StartWatchLoopOptions,
+    ai_hist::StopToken, ingest_all, ingest_claude_transcript_path, watch_ingest, IngestOptions,
+    IngestReport, Ledger, LedgerHandle, LedgerOpenOptions, WatchIngestOptions,
 };
 
 use crate::cli::{GlobalArgs, IngestArgs};
@@ -85,15 +63,9 @@ pub fn run(globals: &GlobalArgs, args: IngestArgs) -> i32 {
     run_once(globals, args.quiet)
 }
 
-/// One-shot scan: open the ledger, run a single `ingest_all`, log the
-/// summary, exit.
-///
-/// Summary line is emitted on **stdout** (matching TS `runIngestOnce`
-/// at `packages/cli/src/commands/ingest.ts:121-126`) so callers can
-/// capture pipeline output without redirecting stderr. `--quiet`
-/// suppresses the progress spinner and gap-warning side channel but
-/// leaves the final stdout summary alone so pipeline consumers always
-/// see the report.
+/// One-shot: open the ledger, run a single `ingest_all`, log the summary,
+/// exit. The summary line goes to **stdout** so callers can capture it
+/// without redirecting stderr; `--quiet` suppresses only the spinner.
 fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
     let progress = (!quiet).then(|| {
         let p = TaskProgress::new(globals, "ingest");
@@ -109,13 +81,7 @@ fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
             return report_error(&err, globals);
         }
     };
-    if let Some(p) = &progress {
-        p.set_task("scanning sessions");
-    }
-    let opts = match &progress {
-        Some(p) => p.ingest_options(globals.ledger_path.clone()),
-        None => TaskProgress::quiet_ingest_options(globals.ledger_path.clone()),
-    };
+    let opts = ingest_options(globals, progress.as_ref());
     let result = ingest_all(handle.raw_mut(), &opts);
     if let Some(p) = &progress {
         p.finish_and_clear();
@@ -131,15 +97,10 @@ fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
     }
 }
 
-/// `--watch` mode: spin up [`start_watch_loop`] over a persistent ledger
-/// handle and a tokio runtime, then park on SIGINT / SIGTERM.
-///
-/// We share the ledger handle across ticks via an `Arc<Mutex>` so the
-/// poll loop reuses one open SQLite connection per process — same shape
-/// as the TS adapter, which keeps a single `withLock('ledger', …)`
-/// guarded handle alive for the duration of the watch. `RawIngestOptions`
-/// is `Default` per tick because none of the per-tick state (progress
-/// callbacks, etc.) needs to survive across ticks.
+/// `--watch` mode: run [`watch_ingest`] on this thread, with a signal
+/// thread stopping it on SIGINT / SIGTERM. relayhistory's loop owns the
+/// filesystem-event driver and its polling fallback; each tick appends
+/// whatever the store gained.
 fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
     let interval_ms = match args.interval {
         Some(0) => {
@@ -150,13 +111,12 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         None => 1000,
     };
 
-    let quiet = args.quiet;
-    let progress = (!quiet).then(|| {
+    let progress = (!args.quiet).then(|| {
         let p = TaskProgress::new(globals, "ingest");
         p.set_task("opening ledger");
         p
     });
-    let handle = match open_handle(globals) {
+    let mut handle = match open_handle(globals) {
         Ok(h) => h,
         Err(err) => {
             if let Some(p) = &progress {
@@ -166,28 +126,7 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         }
     };
 
-    if let Some(p) = &progress {
-        p.set_task("starting watcher");
-    }
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(err) => {
-            if let Some(p) = &progress {
-                p.finish_and_clear();
-            }
-            return report_error(&err, globals);
-        }
-    };
-
-    let no_fsevents = args.no_fsevents;
-    // The FS-event driver may silently demote to polling at startup
-    // (no watchable path yet) or mid-run (notify channel closes), so
-    // the banner doesn't assert which driver is live — only that the
-    // user opted out of the FS-event attempt.
-    let watch_message = if no_fsevents {
+    let watch_message = if args.no_fsevents {
         format!("watching (polling every {interval_ms}ms); Ctrl-C to stop")
     } else {
         "watching (FS events with polling fallback); Ctrl-C to stop".to_string()
@@ -195,101 +134,59 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
     if let Some(p) = &progress {
         if p.is_visible() {
             p.set_task(watch_message.clone());
-        } else if no_fsevents {
-            eprintln!(
-                "[burn] ingest: foreground ingest polling every {interval_ms}ms; Ctrl-C to stop",
-            );
         } else {
-            eprintln!(
-                "[burn] ingest: foreground ingest on FS events (polling fallback); Ctrl-C to stop",
-            );
+            eprintln!("[burn] ingest: foreground ingest {watch_message}");
         }
     }
 
-    let ledger_home = globals.ledger_path.clone();
-    let progress_for_loop = progress.clone();
-    rt.block_on(async move {
-        let handle_arc: Arc<tokio::sync::Mutex<LedgerHandle>> =
-            Arc::new(tokio::sync::Mutex::new(handle));
-        let handle_for_ingest = handle_arc.clone();
-        let progress_for_ingest = progress_for_loop.clone();
-        let watch_message_for_ingest = watch_message.clone();
-        let ingest_fn: relayburn_sdk::IngestFn = Arc::new(move |force: bool| {
-            let h = handle_for_ingest.clone();
-            let progress = progress_for_ingest.clone();
-            let ledger_home = ledger_home.clone();
-            let watch_message = watch_message_for_ingest.clone();
-            Box::pin(async move {
-                if let Some(p) = &progress {
-                    p.set_task("scanning sessions");
-                }
-                let mut guard = h.lock().await;
-                // `force` is set by the FS-event driver: a `notify` event can
-                // beat the write's flush, so force a full sweep rather than
-                // trust the stat-only source fingerprint for that tick.
-                let opts = match &progress {
-                    Some(p) => p.ingest_options(ledger_home),
-                    None => TaskProgress::quiet_ingest_options(ledger_home),
-                };
-                let opts = RawIngestOptions {
-                    force_scan: force,
-                    ..opts
-                };
-                let result = ingest_all(guard.raw_mut(), &opts);
-                if let Some(p) = &progress {
-                    p.set_task(watch_message);
-                }
-                result
-            })
-        });
-
-        let progress_for_report = progress_for_loop.clone();
-        let on_report: relayburn_sdk::ReportSink = Arc::new(move |report: &IngestReport| {
-            // Match TS: only log a summary when the tick actually
-            // appended turns. Empty ticks would otherwise drown the
-            // user with zero-progress lines.
-            if let Some(p) = &progress_for_report {
-                if report.appended_turns > 0 {
-                    p.suspend(|| {
-                        eprint!("{}", render_ingest_line(report));
-                    });
-                }
-            }
-        });
-
-        let progress_for_error = progress_for_loop.clone();
-        let on_error: relayburn_sdk::ErrorSink =
-            Arc::new(move |err: &anyhow::Error| match &progress_for_error {
-                Some(p) => p.suspend(|| {
-                    eprintln!("[burn] ingest: {err}");
-                }),
-                None => eprintln!("[burn] ingest: {err}"),
-            });
-
-        // Default to the `notify`-backed FS-event driver against the
-        // three session-store roots ingest scans. Falls back to polling
-        // automatically when no path exists yet (fresh install) or
-        // when the user passes `--no-fsevents`. The slow polling
-        // backstop in the SDK keeps progress on filesystems where FS
-        // events are unreliable.
-        let watch_paths = default_session_roots(&IngestRoots::default());
-        let opts = StartWatchLoopOptions::new(ingest_fn)
-            .with_interval(Duration::from_millis(interval_ms))
-            .with_immediate(true)
-            .with_watch_paths(watch_paths)
-            .with_disable_fsevents(no_fsevents)
-            .with_on_report(on_report)
-            .with_on_error(on_error);
-        let controller = start_watch_loop(opts);
-
-        wait_for_stop_signal().await;
-        controller.stop().await;
+    let watch = WatchIngestOptions {
+        poll_interval: Duration::from_millis(interval_ms),
+        use_fs_events: !args.no_fsevents,
+        stop: StopToken::new(),
+    };
+    stop_on_signal(watch.stop.clone());
+    // Progress updates would overwrite the watch banner on every tick, so
+    // the loop runs without them.
+    let opts = IngestOptions {
+        ledger_home: globals.ledger_path.clone(),
+        ..IngestOptions::default()
+    };
+    let result = watch_ingest(handle.raw_mut(), &opts, watch, |tick| {
+        report_tick(progress.as_ref(), tick);
     });
     if let Some(p) = &progress {
         p.finish_and_clear();
     }
+    match result {
+        Ok(()) => 0,
+        Err(err) => report_error(&err, globals),
+    }
+}
 
-    0
+/// Log a tick that appended turns (unless quiet), or the error that stopped
+/// it. Empty ticks stay silent so a quiet machine is a quiet terminal.
+fn report_tick(progress: Option<&TaskProgress>, tick: anyhow::Result<IngestReport>) {
+    match (tick, progress) {
+        (Ok(report), Some(p)) if report.appended_turns > 0 => {
+            p.suspend(|| eprint!("{}", render_ingest_line(&report)));
+        }
+        (Ok(_), _) => {}
+        (Err(err), Some(p)) => p.suspend(|| eprintln!("[burn] ingest: {err:#}")),
+        (Err(err), None) => eprintln!("[burn] ingest: {err:#}"),
+    }
+}
+
+/// Stop `stop` from a background thread once SIGINT or SIGTERM arrives.
+fn stop_on_signal(stop: StopToken) {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        if let Ok(runtime) = runtime {
+            runtime.block_on(wait_for_stop_signal());
+        }
+        stop.stop();
+    });
 }
 
 /// `--hook <harness>`: read a JSON payload from stdin and ingest the
@@ -300,11 +197,11 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
 /// keeps that policy — every error is logged to stderr but the exit
 /// code is `0` so the calling Claude Code session continues.
 ///
-/// Fast-path: when the payload carries a `transcript_path` we drive
-/// the SDK's single-transcript verb against just that JSONL file
-/// instead of a full sweep. Falls back to `ingest_all` when the
-/// payload is missing `transcript_path` (older Claude Code releases
-/// occasionally elide it) so we still make forward progress.
+/// Fast-path: when the payload carries a `transcript_path` we index just
+/// that transcript instead of syncing every provider. Falls back to
+/// `ingest_all` when the payload is missing `transcript_path` (older
+/// Claude Code releases occasionally elide it) so we still make forward
+/// progress.
 fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
     if hook != "claude" {
         eprintln!("burn: unsupported hook harness: {hook}");
@@ -367,10 +264,7 @@ fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
     if let Some(progress) = &progress {
         progress.set_task("ingesting transcript");
     }
-    let opts = match &progress {
-        Some(progress) => progress.ingest_options(globals.ledger_path.clone()),
-        None => TaskProgress::quiet_ingest_options(globals.ledger_path.clone()),
-    };
+    let opts = ingest_options(globals, progress.as_ref());
     let result = match transcript_path.as_deref() {
         Some(path) => ingest_claude_transcript_path(handle.raw_mut(), path, &opts),
         None => ingest_all(handle.raw_mut(), &opts),
@@ -394,6 +288,18 @@ fn run_hook(globals: &GlobalArgs, hook: &str, quiet: bool) -> i32 {
     0
 }
 
+/// Ingest options honoring the global `--ledger-path` override, driving
+/// `progress` when there is one.
+fn ingest_options(globals: &GlobalArgs, progress: Option<&TaskProgress>) -> IngestOptions {
+    match progress {
+        Some(p) => p.ingest_options(globals.ledger_path.clone()),
+        None => IngestOptions {
+            ledger_home: globals.ledger_path.clone(),
+            ..IngestOptions::default()
+        },
+    }
+}
+
 /// Open a ledger honoring the global `--ledger-path` override.
 fn open_handle(globals: &GlobalArgs) -> anyhow::Result<LedgerHandle> {
     let opts = match globals.ledger_path.as_deref() {
@@ -403,8 +309,8 @@ fn open_handle(globals: &GlobalArgs) -> anyhow::Result<LedgerHandle> {
     Ledger::open(opts)
 }
 
-/// Format an `IngestReport` as the canonical TS log line. Kept as a
-/// pure helper so the watch loop and one-shot mode share output shape.
+/// Format an `IngestReport` as the canonical log line, shared by the watch
+/// loop and one-shot mode.
 fn render_ingest_line(report: &IngestReport) -> String {
     let session_word = if report.ingested_sessions == 1 {
         "session"
@@ -423,11 +329,7 @@ fn render_ingest_line(report: &IngestReport) -> String {
 }
 
 /// Log the canonical `[burn] ingest: ...` line on **stdout** for the
-/// one-shot path. TS source of truth: `runIngestOnce` at
-/// `packages/cli/src/commands/ingest.ts:121-126` writes the rendered
-/// report via `process.stdout.write`, so pipelines that capture stdout
-/// see the summary. `--watch` and `--hook` keep their own stderr
-/// emitters (`render_ingest_line` is the shared formatter).
+/// one-shot path, so pipelines that capture stdout see the summary.
 fn log_report_oneshot(report: &IngestReport) -> std::io::Result<()> {
     write_stdout(&render_ingest_line(report))
 }
@@ -447,8 +349,7 @@ fn read_stdin() -> io::Result<String> {
 
 /// Park until SIGINT or SIGTERM. Cross-platform via tokio's `ctrl_c` for
 /// SIGINT; SIGTERM is wired only on Unix because Windows lacks the
-/// signal. The watch loop's controller will drain in-flight ticks before
-/// returning so callers see all observable side effects.
+/// signal.
 async fn wait_for_stop_signal() {
     #[cfg(unix)]
     {

@@ -36,13 +36,22 @@ fn serialize_request_ids<S: serde::Serializer>(
 }
 
 mod delegated;
+#[cfg(test)]
+pub(crate) mod fixtures;
 pub(crate) mod locate;
 #[cfg(test)]
 mod parity_tests;
 mod relayhistory;
-#[cfg(test)]
-mod snapshot_tests;
 mod stage;
 mod usage;
 
-pub(crate) use delegated::{child_ids, records_with_children, subagent_transcripts};
+pub(crate) use delegated::{
+    claude_children, delegated_children, records_with_children, split_delegated,
+    summary_subagent_counts,
+};
+pub(crate) use relayhistory::records_from_evidence;
+
+/// Whether burn accounts for sessions of `source`.
+pub(crate) fn is_accounted(source: ai_hist::Source) -> bool {
+    relayhistory::source_kind(source).is_some()
+}

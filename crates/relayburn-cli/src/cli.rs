@@ -119,7 +119,7 @@ pub enum Command {
     /// Inspect or export stamps in the ledger.
     Stamps(StampsArgs),
 
-    /// Scan harness session stores and append new turns to the ledger.
+    /// Sync session history and append new turns to the ledger.
     Ingest(IngestArgs),
 
     /// Stdio MCP server exposing read-only ledger queries for
@@ -207,15 +207,13 @@ pub struct ToggleAutoUpdateArgs {
     pub off: bool,
 }
 
-/// Per-command flags for `burn ingest`. Mirrors the TS surface in
-/// `packages/cli/src/commands/ingest.ts` so flag muscle memory carries
-/// across.
+/// Per-command flags for `burn ingest`.
 ///
 /// Three modes, exactly one applies per invocation:
 ///
-/// - No flags: scan all known session stores once and exit.
-/// - `--watch` (optionally with `--interval <MS>`): foreground poll loop
-///   driven by [`relayburn_sdk::start_watch_loop`].
+/// - No flags: sync the relayhistory store once, append what changed, exit.
+/// - `--watch` (optionally with `--interval <MS>`): foreground loop driven
+///   by [`relayburn_sdk::watch_ingest`].
 /// - `--hook <HARNESS>`: stdin-driven hook entrypoint. Today only
 ///   `--hook claude` is supported.
 ///
@@ -227,13 +225,14 @@ pub struct ToggleAutoUpdateArgs {
 /// the combination at runtime with exit 2 (matching TS).
 #[derive(Debug, Clone, ClapArgs)]
 pub struct IngestArgs {
-    /// Stay running and poll session stores at `--interval` ms.
+    /// Stay running and ingest as sessions change.
     /// Mutually exclusive with `--hook`.
     #[arg(long)]
     pub watch: bool,
 
-    /// Poll interval for `--watch`, in milliseconds. Defaults to 1000.
-    /// Ignored without `--watch`.
+    /// Poll interval for `--watch` when filesystem events are off or
+    /// unavailable, in milliseconds. Defaults to 1000. Ignored without
+    /// `--watch`.
     #[arg(long, value_name = "MS")]
     pub interval: Option<u64>,
 
@@ -253,9 +252,9 @@ pub struct IngestArgs {
     pub quiet: bool,
 
     /// Force the polling driver in `--watch` mode instead of the
-    /// default `notify`-backed FS-event driver. Use this on
-    /// filesystems where FS events are unreliable (network mounts,
-    /// some Docker setups). Ignored without `--watch`.
+    /// default filesystem-event driver. Use this on filesystems where
+    /// FS events are unreliable (network mounts, some Docker setups).
+    /// Ignored without `--watch`.
     #[arg(long, requires = "watch")]
     pub no_fsevents: bool,
 }

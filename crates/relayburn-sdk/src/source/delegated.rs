@@ -14,19 +14,20 @@
 //! its own session, with a subagent edge naming its parent thread), so they
 //! are never folded here.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use ai_hist::{
-    DiscoveryState, Relationship, RelationshipSide, SessionEvidence, SessionIdentity, SessionQuery,
-    SessionRef, SessionStore, Source,
+    DiscoveryState, EvidenceKind, Relationship, RelationshipSide, SessionEvidence, SessionIdentity,
+    SessionQuery, SessionRef, SessionStore, Source,
 };
 use anyhow::{Context, Result};
 
 use super::relayhistory::records_from_evidence;
 use super::SessionRecords;
 use crate::reader::{
-    RelationshipType, Subagent, SubagentTranscript, ToolCall, TurnKey, TurnRecord,
+    RelationshipType, SourceKind, Subagent, SubagentCounts, SubagentTranscript, ToolCall, TurnKey,
+    TurnRecord,
 };
 
 /// Evidence of every Claude subagent `root` delegated work to, nested ones
@@ -39,10 +40,17 @@ pub(crate) fn delegated_children(
     if root.session.source != Source::Claude {
         return Ok(Vec::new());
     }
-    let identity = SessionIdentity::new(
-        root.session.source.as_str(),
-        root.session.session_id.clone(),
-    );
+    claude_children(store, &root.session.session_id, SessionQuery::default())
+}
+
+/// [`delegated_children`] of the Claude session `session_id`, each read
+/// with `query`.
+pub(crate) fn claude_children(
+    store: &SessionStore,
+    session_id: &str,
+    query: SessionQuery,
+) -> Result<Vec<SessionEvidence>> {
+    let identity = SessionIdentity::new(Source::Claude.as_str(), session_id);
     let ids = store
         .delegated_descendants(&[identity])
         .context("list delegated subagents")?;
@@ -50,7 +58,7 @@ pub(crate) fn delegated_children(
     for id in ids {
         let reference = SessionRef::id(Source::Claude, id.session_id.clone());
         let evidence = store
-            .session(&reference, SessionQuery::default())
+            .session(&reference, query.clone())
             .with_context(|| format!("read subagent {}", id.session_id))?;
         children
             .extend(evidence.filter(|ev| ev.session.discovery_state == DiscoveryState::Delegated));
@@ -184,7 +192,7 @@ fn fold_child(out: &mut SessionRecords, root_id: &str, sub: Subagent, child: Ses
 /// One [`SubagentTranscript`] per delegated child, paired to the tool use
 /// in `turns` that spawned it. A child spawned from outside `turns` (by
 /// another subagent) is unpaired and placed by its start time.
-pub(crate) fn subagent_transcripts(
+fn subagent_transcripts(
     turns: &[TurnRecord],
     children: &[SessionEvidence],
 ) -> Vec<SubagentTranscript> {
@@ -202,7 +210,6 @@ pub(crate) fn subagent_transcripts(
                 agent_type: edge.child_agent_type.clone(),
                 description: edge.child_agent_name.clone(),
                 meta_tool_use_id: tool_use.clone(),
-                records: Vec::new(),
                 started_at_ms: child.session.first_activity_ms,
                 paired_tool_use_id: tool_use.filter(|id| calls.contains(id.as_str())),
                 source_path: child.session.raw_path.clone().unwrap_or_else(PathBuf::new),
@@ -213,13 +220,68 @@ pub(crate) fn subagent_transcripts(
     out
 }
 
+/// The turns of the root's own conversation (`turns` without the delegated
+/// children's), and one [`SubagentTranscript`] per child paired to them.
+pub(crate) fn split_delegated(
+    turns: &[TurnRecord],
+    children: &[SessionEvidence],
+) -> (Vec<TurnRecord>, Vec<SubagentTranscript>) {
+    let delegated = child_ids(children);
+    let own: Vec<TurnRecord> = turns
+        .iter()
+        .filter(|t| {
+            !t.subagent
+                .as_ref()
+                .and_then(|s| s.agent_id.as_deref())
+                .is_some_and(|id| delegated.contains(id))
+        })
+        .cloned()
+        .collect();
+    let transcripts = subagent_transcripts(&own, children);
+    (own, transcripts)
+}
+
 /// Ids of the delegated children, whose turns are subagent work rather than
 /// turns of the root's own conversation.
-pub(crate) fn child_ids(children: &[SessionEvidence]) -> HashSet<&str> {
+fn child_ids(children: &[SessionEvidence]) -> HashSet<&str> {
     children
         .iter()
         .map(|c| c.session.session_id.as_str())
         .collect()
+}
+
+/// Paired / orphan counts of the subagents the Claude sessions in `turns`
+/// delegated work to, from the default relayhistory store's delegation
+/// edges. A subagent pairs when the tool use that spawned it is among its
+/// session's own turns. Zero when there is no store.
+pub(crate) fn summary_subagent_counts(turns: &[TurnRecord]) -> SubagentCounts {
+    let mut counts = SubagentCounts::default();
+    let Ok(store) = super::locate::open_existing_store(&Default::default()) else {
+        return counts;
+    };
+    let mut sessions: BTreeMap<&str, Vec<TurnRecord>> = BTreeMap::new();
+    for turn in turns.iter().filter(|t| t.source == SourceKind::ClaudeCode) {
+        sessions
+            .entry(turn.session_id.as_str())
+            .or_default()
+            .push(turn.clone());
+    }
+    let mut edges_only = SessionQuery::default();
+    edges_only.include_text = false;
+    edges_only.kinds = Some(vec![EvidenceKind::Relationship]);
+    for (session_id, session_turns) in sessions {
+        let Ok(children) = claude_children(&store, session_id, edges_only.clone()) else {
+            continue;
+        };
+        for transcript in split_delegated(&session_turns, &children).1 {
+            if transcript.paired_tool_use_id.is_some() {
+                counts.paired += 1;
+            } else {
+                counts.orphan += 1;
+            }
+        }
+    }
+    counts
 }
 
 #[cfg(test)]

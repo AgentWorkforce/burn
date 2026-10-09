@@ -4,6 +4,29 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+5.0.0: burn reads every session through relayhistory (`ai-hist` 0.37.0) and no longer parses harness logs. See `docs/migrating-to-5.md`.
+
+### Breaking
+
+- `burn ingest` syncs the relayhistory store (`$AI_HIST_DB`, else `~/.local/share/ai-hist/ai-history.db`, created on first use; the `ai-hist` CLI is not required) and appends the sessions its change feed reports since the ledger's watermark. The first run on a 4.x ledger rebuilds every session once; matching turn identities keep it from duplicating any.
+- `BURN_CLAUDE_PROJECTS_DIR` is removed; harness locations follow relayhistory (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`).
+- `relayburn-sdk`: `IngestRoots` / `IngestOptions.roots` are replaced by `IngestOptions.store: HistoryStoreOptions`; `start_watch_loop` and its option/sink types by `watch_ingest` + `WatchIngestOptions`; `RawIngestOptions` is `IngestOptions`; `ingest_claude_session`, `ingest_codex_sessions`, `ingest_opencode_sessions`, `default_session_roots`, `count_subagents_under`, `discover_subagents` and `pair_subagents_to_main` are removed. `SubagentTranscript` drops `records`.
+- `@relayburn/sdk` `ingest()` takes `{ ledgerHome, storeDbPath, home }`; the ignored `sessionId` / `harness` fields are removed.
+- `burn state rebuild` clears the ingest watermark with the derived rows, so the next ingest rebuilds every session from the store.
+
+### Added
+
+- Claude Code subagent spend is billed: every turn of a subagent transcript, nested subagents included, is a turn of the session that spawned it. Ledger totals for sessions that delegated work go up by exactly that spend.
+- OpenCode sessions in the SQLite store (`opencode.db`, current OpenCode releases) are ingested, as well as the `storage/` JSON tree.
+- A Codex subagent thread is ingested as a session of its own.
+- `burn summary`'s `subagents: X paired, Y orphan` line counts the delegated subagents of the sessions in scope from the store's delegation edges.
+
+### Fixed
+
+- Codex turn usage comes from each response's raw token snapshot.
+- A failed OpenCode tool call sets `isError`, as Claude and Codex turns do.
+- A Claude assistant turn still being written (no `stop_reason` yet) is billed once it settles, not early.
+
 - `burn analyze <source> <session-id>` / `burn analyze --path <transcript>` diagnose one session without a ledger or ingest: metrics, activity, hotspots, instruction overhead, subagents, flow, context growth, quality, and stop reasons, plus findings that explain each cost, cite turns/tools/files, and suggest a fix. `--json` emits `burn.session-analysis.v1`; the same document comes from Rust `analyze_session`, Node `analyzeSession()`, and the MCP `burn__analyzeSession` tool.
 - `burn analyze` and `burn measure` now include Claude Code subagent spend: every turn of a subagent sidecar transcript (`<session>/subagents/agent-<id>.jsonl`), nested subagents included, is billed once as subagent work of the session that spawned it.
 - `burn analyze` shows the subagent tree with each subagent's own and cumulative turns, tokens and cost, nested under the subagent that spawned it, and adds a `subagent-spend` finding when one subagent type carries at least a quarter of the session's tokens. Subagent tree nodes (`SubagentTreeNode`) add `selfTokens` / `cumulativeTokens`; `selfCost` / `cumulativeCost` are `null` when a turn they cover is unpriced, never `0`.

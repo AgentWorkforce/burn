@@ -1,200 +1,53 @@
-//! User-turn block helpers — Rust port of `packages/reader/src/userTurn.ts`.
-//!
-//! Construction lives on the type itself: [`UserTurnBlock::text`] and
-//! [`UserTurnBlock::tool_result`] take any [`TokenCounter`]. The default
-//! [`HeuristicCounter`] reproduces the bytes/4 estimate the TS port falls
-//! back to; the cl100k tokenizer hookup is deferred until a parser actually
-//! needs it (no `tiktoken` crate in the dep tree yet — when it lands, plug
-//! in a counter that satisfies the trait).
-
-use serde_json::Value;
+//! User-turn block sizing.
 
 use crate::reader::types::{UserTurnBlock, UserTurnBlockKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UserTurnTokenizer {
-    Heuristic,
-    Cl100k,
-}
-
-pub trait TokenCounter {
-    fn tokenizer(&self) -> UserTurnTokenizer;
-    fn count(&self, content: &Value, byte_len: u64) -> u64;
-}
-
-/// Bytes/4 ceiling estimate. Cheap, no dependencies, good enough for
-/// proportional allocation across tool calls within one user turn.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct HeuristicCounter;
-
-impl TokenCounter for HeuristicCounter {
-    fn tokenizer(&self) -> UserTurnTokenizer {
-        UserTurnTokenizer::Heuristic
-    }
-    fn count(&self, _content: &Value, byte_len: u64) -> u64 {
-        bytes_to_approx_tokens(byte_len)
-    }
-}
-
 impl UserTurnBlock {
-    /// Build a `text` block — plain user input or a harness-injected text
-    /// block. `byteLen` is the UTF-8 byte length of `text`; `approxTokens`
-    /// comes from the supplied counter.
-    pub fn text<C: TokenCounter + ?Sized>(text: &str, counter: &C) -> Self {
+    /// A `text` block: plain user input or a harness-injected text block,
+    /// sized by its UTF-8 byte length.
+    pub fn text(text: &str) -> Self {
         let byte_len = text.len() as u64;
-        let approx = counter.count(&Value::String(text.to_string()), byte_len);
         Self {
             kind: UserTurnBlockKind::Text,
             tool_use_id: None,
             byte_len,
-            approx_tokens: approx,
+            approx_tokens: bytes_to_approx_tokens(byte_len),
             is_error: None,
         }
     }
-
-    /// Build a `tool_result` block. `byte_len` matches how the content would
-    /// be serialized into the request body (UTF-8 for plain strings,
-    /// `JSON.stringify`'d for structured content). Following the TS shape,
-    /// `is_error` is only emitted on the wire when it's `Some(true)`.
-    pub fn tool_result<C: TokenCounter + ?Sized>(
-        tool_use_id: impl Into<String>,
-        content: &Value,
-        is_error: Option<bool>,
-        counter: &C,
-    ) -> Self {
-        let byte_len = measure_content_bytes(content);
-        let approx = counter.count(content, byte_len);
-        Self {
-            kind: UserTurnBlockKind::ToolResult,
-            tool_use_id: Some(tool_use_id.into()),
-            byte_len,
-            approx_tokens: approx,
-            is_error: if is_error == Some(true) {
-                Some(true)
-            } else {
-                None
-            },
-        }
-    }
 }
 
-pub fn measure_content_bytes(content: &Value) -> u64 {
-    match content {
-        Value::Null => 0,
-        Value::String(s) => s.len() as u64,
-        other => {
-            // Counting writer: tallies bytes serde_json would emit without
-            // materializing the JSON string. For tool results this avoids
-            // allocating an entire payload-sized String just to read `.len()`.
-            let mut counter = ByteCountWriter::default();
-            if serde_json::to_writer(&mut counter, other).is_err() {
-                return 0;
-            }
-            counter.count
-        }
-    }
-}
-
-#[derive(Default)]
-struct ByteCountWriter {
-    count: u64,
-}
-
-impl std::io::Write for ByteCountWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.count += buf.len() as u64;
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
+/// Approximate token count for `byte_len` bytes of user-turn content: the
+/// bytes/4 estimate, rounded up, with zero bytes as zero tokens.
 pub fn bytes_to_approx_tokens(byte_len: u64) -> u64 {
-    if byte_len == 0 {
-        0
-    } else {
-        byte_len.div_ceil(4)
-    }
+    byte_len.div_ceil(4)
 }
 
-/// Resolves the requested tokenizer to a concrete counter. `None` and
-/// `Some(Heuristic)` map to [`HeuristicCounter`]; `Some(Cl100k)` is rejected
-/// with an explicit error until the cl100k counter is wired up (see #246) so
-/// callers don't silently get bytes/4 sizing when they asked for cl100k.
-///
-/// Shared by the codex and opencode readers, which validate the requested
-/// tokenizer at their public entry points.
-pub(crate) fn resolve_token_counter(
-    tokenizer: Option<UserTurnTokenizer>,
-) -> std::io::Result<HeuristicCounter> {
-    match tokenizer {
-        None | Some(UserTurnTokenizer::Heuristic) => Ok(HeuristicCounter),
-        Some(UserTurnTokenizer::Cl100k) => Err(std::io::Error::other(
-            "cl100k tokenizer is not yet available in the Rust port; \
-             omit `tokenizer` or pass `Some(Heuristic)` (see AgentWorkforce/burn#246)",
-        )),
-    }
-}
-
-/// Join the non-empty entries of `parts` with `sep`, skipping empties so an
-/// absent half (e.g. a user turn with no assistant text) doesn't leave a
-/// dangling separator. Used by the readers to assemble combined user-turn text.
+/// The non-empty entries of `parts` joined with `sep`, so an absent half
+/// (a user turn with no assistant text) leaves no dangling separator.
 pub(crate) fn join_nonempty(parts: &[&str], sep: &str) -> String {
-    let mut out: Vec<&str> = Vec::with_capacity(parts.len());
-    for p in parts {
-        if !p.is_empty() {
-            out.push(p);
-        }
-    }
-    out.join(sep)
+    parts
+        .iter()
+        .copied()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(sep)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
-    fn heuristic_text_block_counts_bytes_div_4_ceil() {
-        let block = UserTurnBlock::text("hello", &HeuristicCounter);
+    fn text_block_counts_bytes_div_4_ceil() {
+        let block = UserTurnBlock::text("hello");
         assert_eq!(block.byte_len, 5);
-        assert_eq!(block.approx_tokens, 2); // ceil(5/4) = 2
+        assert_eq!(block.approx_tokens, 2);
         assert_eq!(block.kind, UserTurnBlockKind::Text);
     }
 
     #[test]
-    fn tool_result_block_with_string_content() {
-        let block =
-            UserTurnBlock::tool_result("tool_1", &json!("hello world"), None, &HeuristicCounter);
-        assert_eq!(block.kind, UserTurnBlockKind::ToolResult);
-        assert_eq!(block.tool_use_id.as_deref(), Some("tool_1"));
-        assert_eq!(block.byte_len, "hello world".len() as u64);
-        assert!(block.is_error.is_none());
-    }
-
-    #[test]
-    fn tool_result_block_with_structured_content_uses_json_stringify() {
-        let content = json!({"a": 1, "b": "two"});
-        let block = UserTurnBlock::tool_result("t", &content, Some(false), &HeuristicCounter);
-        let expected = serde_json::to_string(&content).unwrap();
-        assert_eq!(block.byte_len, expected.len() as u64);
-        assert!(block.is_error.is_none());
-    }
-
-    #[test]
-    fn tool_result_block_preserves_is_error_true() {
-        let block = UserTurnBlock::tool_result("t", &json!("err"), Some(true), &HeuristicCounter);
-        assert_eq!(block.is_error, Some(true));
-    }
-
-    #[test]
-    fn measure_null_is_zero() {
-        assert_eq!(measure_content_bytes(&Value::Null), 0);
-    }
-
-    #[test]
-    fn bytes_to_approx_tokens_zero_for_empty() {
+    fn bytes_to_approx_tokens_rounds_up() {
         assert_eq!(bytes_to_approx_tokens(0), 0);
         assert_eq!(bytes_to_approx_tokens(1), 1);
         assert_eq!(bytes_to_approx_tokens(4), 1);
@@ -202,18 +55,8 @@ mod tests {
     }
 
     #[test]
-    fn token_counter_dispatches_via_generics() {
-        // Use a custom counter to verify dispatch is generic, not virtual.
-        struct Constant(u64);
-        impl TokenCounter for Constant {
-            fn tokenizer(&self) -> UserTurnTokenizer {
-                UserTurnTokenizer::Heuristic
-            }
-            fn count(&self, _content: &Value, _byte_len: u64) -> u64 {
-                self.0
-            }
-        }
-        let block = UserTurnBlock::text("anything", &Constant(7));
-        assert_eq!(block.approx_tokens, 7);
+    fn join_nonempty_skips_empty_parts() {
+        assert_eq!(join_nonempty(&["a", "", "b"], "\n"), "a\nb");
+        assert_eq!(join_nonempty(&["", ""], "\n"), "");
     }
 }

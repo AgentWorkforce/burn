@@ -44,7 +44,9 @@ pub struct HistoryStoreOptions {
     /// The ai-hist database. Defaults to `$AI_HIST_DB`, then the XDG data
     /// path (`<home>/.local/share/ai-hist/ai-history.db` when `home` is set).
     pub db_path: Option<PathBuf>,
-    /// Provider home whose harness stores are discovered, instead of `$HOME`.
+    /// Provider home whose harness stores are read (`<home>/.claude`,
+    /// `<home>/.codex`, `<home>/.local/share/opencode`), instead of `$HOME`
+    /// with the `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `OPENCODE_DB` overrides.
     pub home: Option<PathBuf>,
 }
 
@@ -82,15 +84,36 @@ pub(crate) fn source_of(harness: Harness) -> Source {
     }
 }
 
+/// Open (creating it on first use) the relayhistory store `opts` names.
+pub(crate) fn open_store(opts: &HistoryStoreOptions) -> Result<SessionStore> {
+    SessionStore::open(store_options(opts, false)).context("open relayhistory store")
+}
+
+/// The relayhistory store `opts` names, read-only; an error when it does
+/// not exist yet.
+pub(crate) fn open_existing_store(opts: &HistoryStoreOptions) -> Result<SessionStore> {
+    SessionStore::open(store_options(opts, true)).context("open relayhistory store")
+}
+
+/// An explicit provider home is the whole layout: its harness stores are
+/// read from under it, whatever the process environment says.
+fn store_options(opts: &HistoryStoreOptions, read_only: bool) -> StoreOptions {
+    let mut options = StoreOptions::default();
+    options.db_path = opts.db_path.clone();
+    options.home = opts.home.clone();
+    options.roots = opts.home.as_ref().map(|home| {
+        ProviderRoots::from_home(home.clone(), home.join(".local/share/opencode/opencode.db"))
+    });
+    options.read_only = read_only;
+    options
+}
+
 fn load_by_id(
     harness: Harness,
     session_id: &str,
     opts: &HistoryStoreOptions,
 ) -> Result<LoadedSession> {
-    let mut store_options = StoreOptions::default();
-    store_options.db_path = opts.db_path.clone();
-    store_options.home = opts.home.clone();
-    let store = SessionStore::open(store_options).context("open relayhistory store")?;
+    let store = open_store(opts)?;
     let reference = SessionRef::id(source_of(harness), session_id);
     hydrate_catalogued(&store, &reference).map_err(|error| {
         anyhow!(
