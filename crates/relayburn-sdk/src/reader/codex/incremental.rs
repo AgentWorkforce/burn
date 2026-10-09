@@ -931,17 +931,14 @@ pub(super) fn parse_codex_buffer<R: BufRead>(
             project_key: None,
             usage: f.usage.clone(),
             tool_calls: f.tool_calls.clone(),
-            files_touched: if f.files_touched.is_empty() {
-                None
-            } else {
-                Some(f.files_touched.clone())
-            },
+            files_touched: (!f.files_touched.is_empty()).then(|| f.files_touched.clone()),
             subagent: None,
             stop_reason: None,
             activity: None,
             retries: None,
             has_edits: None,
             fidelity: Some(f.fidelity.clone()),
+            reasoning: None,
         };
         if let Some(p) = f.project.as_ref() {
             let resolved = project_resolver.resolve(p);

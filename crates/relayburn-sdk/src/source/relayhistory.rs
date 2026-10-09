@@ -190,6 +190,7 @@ impl<'a> Context<'a> {
                         ..coverage
                     },
                 )),
+                reasoning: None,
             };
             if let Some(cwd) = first.cwd.as_deref().or(self.ev.session.cwd.as_deref()) {
                 let resolved = resolve_project(cwd);

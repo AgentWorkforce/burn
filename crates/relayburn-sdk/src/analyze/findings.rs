@@ -1131,6 +1131,7 @@ mod tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
         let finding_without_token_savings =
             finding_with("retry-loop", WasteSeverity::Info, "unknown-session", 0.0);
@@ -1191,6 +1192,7 @@ mod tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
 
         let findings = unpriced_usage_findings(&[turn], &PricingTable::new());

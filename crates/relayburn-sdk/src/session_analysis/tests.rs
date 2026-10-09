@@ -396,3 +396,113 @@ fn unpriced_instruction_files_still_report_their_tokens() {
     assert!(trim.impact.tokens.unwrap() > 0);
     assert_eq!(trim.impact.cost_usd, None);
 }
+
+/// Codex evidence of three tasks whose `turn_context` is stored only when it
+/// changes: `low` for the first two, `high` for the third.
+fn codex_effort_evidence() -> ai_hist::SessionEvidence {
+    let marker = |line: u64, kind: &str, turn: Option<&str>, payload: serde_json::Value| {
+        serde_json::json!({
+            "marker_uid": format!("{line}:marker"), "ts_ms": 1_790_000_000_000u64 + line * 1000,
+            "message_id": null, "parent_id": null, "turn_id": turn,
+            "kind": kind, "subkind": kind, "text": null, "payload": payload
+        })
+    };
+    let context = |line: u64, turn: &str, effort: &str| {
+        marker(
+            line,
+            "turn_context",
+            Some(turn),
+            serde_json::json!({"turn_id": turn, "model": "gpt-5.4", "cwd": "/tmp/project",
+                               "effort": effort, "summary": "detailed"}),
+        )
+    };
+    let snapshot = |line: u64, input: u64, output: u64, reasoning: u64| {
+        marker(
+            line,
+            "usage_snapshot",
+            None,
+            serde_json::json!({"total_token_usage": {
+                "input_tokens": input, "cached_input_tokens": 0,
+                "output_tokens": output, "reasoning_output_tokens": reasoning
+            }}),
+        )
+    };
+    let mut markers = Vec::new();
+    for (i, turn) in ["t1", "t2", "t3"].iter().enumerate() {
+        let line = 10 + 10 * i as u64;
+        let n = i as u64 + 1;
+        markers.push(marker(
+            line,
+            "task_started",
+            Some(turn),
+            serde_json::Value::Null,
+        ));
+        if i != 1 {
+            markers.push(context(line + 1, turn, if i == 0 { "low" } else { "high" }));
+        }
+        markers.push(snapshot(line + 2, 1000 * n, 100 * n * n, 50 * n * n));
+        markers.push(marker(
+            line + 9,
+            "task_complete",
+            Some(turn),
+            serde_json::Value::Null,
+        ));
+    }
+    serde_json::from_value(serde_json::json!({
+        "session": {
+            "source": "codex", "session_id": "effort-session", "cwd": "/tmp/project",
+            "git_branch": null, "first_activity_ms": 0, "last_activity_ms": 0,
+            "first_prompt": null, "last_assistant_text": null, "models": [],
+            "originator": null, "agent_version": null, "repo_url": null,
+            "initial_commit": null, "workspace_roots": [], "project_key": null,
+            "project_key_method": null, "raw_path": null, "source_stamp": null,
+            "discovery_state": "full", "locations": ["local"]
+        },
+        "prompts": [], "messages": [], "tool_calls": [], "tool_results": [],
+        "file_edits": [], "markers": markers, "relationships": [], "requests": [],
+        "usage": null, "user_turns": [], "coverage": [], "loaded": [],
+        "include_text": true, "diagnostics": []
+    }))
+    .unwrap()
+}
+
+#[test]
+fn codex_turn_context_effort_reaches_the_reasoning_section() {
+    let analysis = analyze_evidence(&codex_effort_evidence(), &AnalysisSettings::default())
+        .expect("analyze evidence");
+    let reasoning = analysis.reasoning.data().expect("reasoning section");
+    let levels: Vec<(Option<&str>, u64, u64)> = reasoning
+        .levels
+        .iter()
+        .map(|row| (row.effort.as_deref(), row.turns, row.reasoning_tokens))
+        .collect();
+    // Cumulative reasoning 50, 200, 450: t2 carries t1's `low` forward.
+    assert_eq!(levels, [(Some("low"), 2, 200), (Some("high"), 1, 250)]);
+    assert!(reasoning.levels.iter().all(|row| row.cost_usd.is_some()));
+    let change = &reasoning.changes[0];
+    assert_eq!(
+        (
+            change.turn_id.as_str(),
+            change.from.as_str(),
+            change.to.as_str()
+        ),
+        ("t3", "low", "high")
+    );
+    let finding = finding(&analysis, "reasoning-effort-change");
+    assert!(finding.explanation.contains("low to high at turn 2"));
+    let json = serde_json::to_value(&analysis).unwrap();
+    assert_eq!(json["reasoning"]["status"], "available");
+    assert_eq!(
+        json["reasoning"]["data"]["levels"][0]["reasoningTokens"],
+        200
+    );
+}
+
+#[test]
+fn sessions_without_recorded_effort_leave_the_reasoning_section_unavailable() {
+    let analysis = by_path(Harness::ClaudeCode, fixture("claude/retry-loop.jsonl"));
+    assert_eq!(
+        analysis.reasoning.reason(),
+        Some("no turn of this claude-code session records a reasoning effort")
+    );
+}

@@ -24,6 +24,8 @@ pub struct SessionAnalysis {
     /// Token and cost totals per model (`burn.session-metrics.v1`).
     pub metrics: Section<SessionMetrics>,
     pub activity: Section<ActivityBreakdown>,
+    /// Turns, tokens and cost per recorded reasoning effort.
+    pub reasoning: Section<super::ReasoningBreakdown>,
     /// Session cost attributed to files, commands, subagents and MCP servers.
     pub hotspots: Section<HotspotsAttributionResult>,
     /// Cost of the project instruction files the session loaded.

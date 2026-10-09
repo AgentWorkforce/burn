@@ -8,6 +8,7 @@ use ai_hist::SessionEvidence;
 
 use crate::source::SessionRecords;
 
+mod context;
 mod events;
 mod records;
 mod relationships;

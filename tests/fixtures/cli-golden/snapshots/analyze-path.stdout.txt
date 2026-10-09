@@ -28,5 +28,8 @@ subagents     none
 outcome       abandoned (user-ended)
 stop reasons  tool_use 4
 
+unavailable
+  reasoning      no turn of this claude-code session records a reasoning effort
+
 skipped checks
   ghost-surface  the session was read outside a harness install, so its installed skills, agents and commands are unknown

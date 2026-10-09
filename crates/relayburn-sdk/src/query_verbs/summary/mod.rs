@@ -237,11 +237,7 @@ pub(crate) fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> S
     }
 
     let savings = summarize_replacement_savings(turns, None);
-    let replacement_savings = if savings.calls > 0 {
-        Some(savings)
-    } else {
-        None
-    };
+    let replacement_savings = (savings.calls > 0).then_some(savings);
 
     // Use the same pricing table that was used for cost accumulation so the
     // count precisely matches which turns contributed $0 to `total_cost`.
@@ -447,6 +443,10 @@ pub struct SummaryGroupedReport {
     /// Empty when all models are priced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unpriced_models: Vec<String>,
+    /// Turns, tokens and cost per recorded reasoning effort; empty when no
+    /// turn recorded one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<crate::ReasoningEffortRow>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -763,6 +763,7 @@ impl LedgerHandle {
                     quality,
                     unpriced_turns,
                     unpriced_models,
+                    reasoning_efforts: crate::reasoning_effort_rows(&turns, &pricing),
                 }))
             }
             SummaryReportMode::ByTool => {

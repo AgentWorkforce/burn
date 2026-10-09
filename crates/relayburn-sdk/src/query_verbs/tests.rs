@@ -53,6 +53,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     let turn2 = TurnRecord {
         v: 1,
@@ -92,6 +93,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle
         .raw_mut()
@@ -267,6 +269,87 @@ fn summary_report_grouped_owns_rows_and_stable_fidelity_shape() {
     assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
 }
 
+/// Reasoning settings ride in the turn's `record_json`, so the grouped
+/// summary breaks spend down per effort without a schema change.
+#[test]
+fn summary_report_breaks_spend_down_per_reasoning_effort() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).expect("open ledger");
+    let make_turn = |idx: u64, effort: Option<&str>| -> TurnRecord {
+        TurnRecord {
+            v: 1,
+            source: SourceKind::Codex,
+            session_id: "sess-effort".into(),
+            session_path: None,
+            message_id: format!("t{idx}"),
+            turn_index: idx,
+            ts: format!("2026-05-25T00:0{idx}:00.000Z"),
+            model: "gpt-5.4".into(),
+            project: Some("/tmp/proj".into()),
+            project_key: None,
+            usage: Usage {
+                input: 1000 + idx,
+                output: 400,
+                reasoning: 300,
+                ..Usage::default()
+            },
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+            reasoning: effort.map(|effort| crate::ReasoningConfig {
+                effort: Some(effort.into()),
+                summary: Some("detailed".into()),
+            }),
+        }
+    };
+    handle
+        .raw_mut()
+        .append_turns(&[
+            make_turn(0, Some("high")),
+            make_turn(1, Some("low")),
+            make_turn(2, Some("high")),
+            make_turn(3, None),
+        ])
+        .expect("append turns");
+    let SummaryReport::Grouped(grouped) = handle
+        .summary_report(SummaryReportOptions::default())
+        .expect("summary report")
+    else {
+        panic!("expected grouped report");
+    };
+    let rows: Vec<(Option<&str>, u64, u64)> = grouped
+        .reasoning_efforts
+        .iter()
+        .map(|row| (row.effort.as_deref(), row.turns, row.reasoning_tokens))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (Some("low"), 1, 300),
+            (Some("high"), 2, 600),
+            (None, 1, 300)
+        ]
+    );
+    assert!(grouped
+        .reasoning_efforts
+        .iter()
+        .all(|r| r.cost_usd.is_some()));
+
+    let (_dir, plain) = fixture_handle();
+    let SummaryReport::Grouped(plain) = plain
+        .summary_report(SummaryReportOptions::default())
+        .expect("summary report")
+    else {
+        panic!("expected grouped report");
+    };
+    assert!(plain.reasoning_efforts.is_empty());
+}
+
 /// Acceptance test for issue #437: a turn carrying `stop_reason:
 /// "max_tokens"` surfaces in the summary outcome counts. Mixes a
 /// `max_tokens` turn with a `none` turn (no field on the row) to
@@ -305,6 +388,7 @@ fn summary_report_aggregates_stop_reasons_per_outcome() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     };
 
@@ -370,6 +454,7 @@ fn compute_summary_tracks_unpriced_turns_and_models() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     let unpriced_turn = TurnRecord {
         message_id: "m-unpriced".into(),
@@ -425,6 +510,7 @@ fn summary_report_grouped_tracks_unpriced_turns_and_models() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     };
 
@@ -544,6 +630,7 @@ fn summary_legacy_surface_includes_stop_reason_counts_with_none_for_missing_fiel
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle
         .raw_mut()
@@ -608,6 +695,7 @@ fn summary_subagent_session_filter_collects_session_ids_when_filtered() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     let turns = vec![mk("sess-a"), mk("sess-a")];
     let filter = summary_subagent_session_filter(&opts, &turns)
@@ -1124,6 +1212,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
                 retries: None,
                 has_edits: None,
                 fidelity: None,
+                reasoning: None,
             },
             TurnRecord {
                 v: 1,
@@ -1152,6 +1241,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
                 retries: None,
                 has_edits: None,
                 fidelity: None,
+                reasoning: None,
             },
         ])
         .expect("append unpriced turn");
@@ -1382,6 +1472,7 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle.raw_mut().append_turns(&[extra]).unwrap();
 
@@ -1642,6 +1733,7 @@ fn free_function_summary_round_trips_through_ledger_home() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
         handle.raw_mut().append_turns(&[t]).unwrap();
     }
@@ -1836,6 +1928,7 @@ fn summary_test_turn(
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -1896,6 +1989,7 @@ fn make_turn_with_calls(calls: Vec<ToolCall>) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -2017,6 +2111,7 @@ fn multi_session_handle() -> (TempDir, LedgerHandle) {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     };
 
@@ -2220,6 +2315,7 @@ fn fingerprint_changes_when_a_new_turn_is_appended() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle.raw_mut().append_turns(&[extra]).unwrap();
 
@@ -2262,6 +2358,7 @@ fn fingerprint_per_session_differs_from_global() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle.raw_mut().append_turns(&[other]).unwrap();
 
@@ -2453,6 +2550,7 @@ fn bucket_turn(message_id: &str, ts: &str, tool_use_ids: &[&str]) -> TurnRecord 
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -2643,6 +2741,7 @@ fn summary_report_by_tool_aggregates_across_multiple_sessions() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
 
     // Attribution works by attributing turn[i]'s input cost to the tool
@@ -2750,6 +2849,7 @@ mod fingerprint_bench {
                 retries: None,
                 has_edits: None,
                 fidelity: None,
+                reasoning: None,
             });
         }
         handle.raw_mut().append_turns(&turns).unwrap();
@@ -2825,6 +2925,7 @@ fn bucket_test_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnR
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 

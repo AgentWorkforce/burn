@@ -42,7 +42,7 @@ impl Spend {
         (!self.unpriced).then_some(self.usd)
     }
 
-    fn rank(&self) -> (bool, f64, u64) {
+    pub(super) fn rank(&self) -> (bool, f64, u64) {
         (self.unpriced, self.usd, self.tokens)
     }
 }

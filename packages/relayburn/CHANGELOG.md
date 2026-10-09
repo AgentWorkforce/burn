@@ -5,6 +5,7 @@ All notable changes to `relayburn`.
 ## [Unreleased]
 
 - `burn analyze` diagnoses one session's token spend — by id or `--path` — with explained, evidence-backed findings and no ledger; `--json` emits `burn.session-analysis.v1`.
+- `burn analyze` reports spend per reasoning effort and flags high effort on routine work and mid-session effort changes; `burn summary` adds a reasoning-effort table when turns recorded one.
 - `burn mcp-server` serves `burn__analyzeSession`.
 - `burn hotspots` edit-heavy findings count Bash file reads (`cat`, `sed -n`, …); on unpriced models attribution still reports tokens and finding text reads "unknown" rather than `$0.0000`.
 ## [4.1.0] - 2026-09-20

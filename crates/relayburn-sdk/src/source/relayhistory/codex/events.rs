@@ -23,6 +23,10 @@ pub(super) enum Event<'a> {
     Compacted {
         ts_ms: i64,
     },
+    /// A `turn_context` record's payload.
+    TurnContext {
+        payload: &'a Value,
+    },
     /// A `token_count`'s `info`, verbatim.
     UsageSnapshot {
         info: &'a Value,
@@ -106,6 +110,9 @@ fn marker_event(marker: &Marker) -> Option<Located<'_>> {
         },
         ("task_complete", _) => Event::TaskComplete { turn_id: turn_id? },
         ("compaction_boundary", Some("compacted")) => Event::Compacted { ts_ms },
+        ("turn_context", _) => Event::TurnContext {
+            payload: marker.payload.as_ref()?,
+        },
         ("usage_snapshot", _) => Event::UsageSnapshot {
             info: marker.payload.as_ref()?,
         },

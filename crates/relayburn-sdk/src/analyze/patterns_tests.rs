@@ -100,6 +100,7 @@ fn turn(session_id: &str, message_id: &str, turn_index: u64) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 

@@ -3,8 +3,8 @@
 
 use relayburn_sdk::{
     ActivityBreakdown, BashAggregation, FileAggregation, Finding, FindingImpact,
-    HotspotsAttributionResult, OverheadReport as SessionOverheadReport, SessionAnalysis,
-    StopReasonCounts, WasteSeverity,
+    HotspotsAttributionResult, OverheadReport as SessionOverheadReport, ReasoningBreakdown,
+    SessionAnalysis, StopReasonCounts, WasteSeverity,
 };
 
 use crate::render::format::{format_uint, format_usd, render_table};
@@ -20,6 +20,9 @@ pub(super) fn render(a: &SessionAnalysis) -> String {
     findings(&a.findings, &mut out);
     if let Some(activity) = a.activity.data() {
         activity_tables(activity, &mut out);
+    }
+    if let Some(reasoning) = a.reasoning.data() {
+        reasoning_table(reasoning, &mut out);
     }
     sections(a, &mut out);
     unavailable(a, &mut out);
@@ -182,6 +185,29 @@ fn activity_tables(activity: &ActivityBreakdown, out: &mut Vec<String>) {
             format_uint(row.calls),
             format_uint(row.errors),
             format_uint(row.tokens),
+            usd(row.cost_usd),
+        ]
+    }));
+    out.push(String::new());
+    out.push(render_table(&rows));
+}
+
+fn reasoning_table(reasoning: &ReasoningBreakdown, out: &mut Vec<String>) {
+    let mut rows = vec![vec![
+        "effort".to_string(),
+        "turns".to_string(),
+        "tokens".to_string(),
+        "reasoning".to_string(),
+        "cost".to_string(),
+    ]];
+    rows.extend(reasoning.levels.iter().map(|row| {
+        vec![
+            row.effort
+                .clone()
+                .unwrap_or_else(|| "unrecorded".to_string()),
+            format_uint(row.turns),
+            format_uint(row.tokens),
+            format_uint(row.reasoning_tokens),
             usd(row.cost_usd),
         ]
     }));
@@ -372,6 +398,7 @@ fn unavailable(a: &SessionAnalysis, out: &mut Vec<String>) {
     let reasons: Vec<(&str, &str)> = [
         ("metrics", a.metrics.reason()),
         ("activity", a.activity.reason()),
+        ("reasoning", a.reasoning.reason()),
         ("hotspots", a.hotspots.reason()),
         ("overhead", a.overhead.reason()),
         ("subagents", a.subagents.reason()),
@@ -406,7 +433,10 @@ fn unavailable(a: &SessionAnalysis, out: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use relayburn_sdk::{analyze_session, AnalyzeSessionOptions, Harness, SessionLocator};
+    use relayburn_sdk::{
+        analyze_session, AnalyzeSessionOptions, Harness, ReasoningEffortRow, Section,
+        SessionLocator,
+    };
 
     #[test]
     fn long_commands_render_on_one_bounded_line() {
@@ -415,6 +445,41 @@ mod tests {
         let shown = one_line(&long);
         assert_eq!(shown.chars().count(), COMMAND_WIDTH);
         assert!(shown.ends_with('…'));
+    }
+
+    #[test]
+    fn reasoning_efforts_render_one_row_per_level() {
+        let mut analysis = analyze_session(AnalyzeSessionOptions::new(SessionLocator::Path {
+            harness: Harness::ClaudeCode,
+            path: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/claude/retry-loop.jsonl"),
+        }))
+        .unwrap();
+        assert!(render(&analysis).contains("  reasoning      no turn of this claude-code session"));
+        let row = |effort: Option<&str>, cost_usd: Option<f64>| ReasoningEffortRow {
+            effort: effort.map(str::to_string),
+            turns: 3,
+            tokens: 39_000,
+            reasoning_tokens: 6_000,
+            cost_usd,
+            reasoning_cost_usd: cost_usd,
+            activities: Vec::new(),
+        };
+        analysis.reasoning = Section::available(ReasoningBreakdown {
+            levels: vec![row(Some("high"), Some(0.165)), row(None, None)],
+            changes: Vec::new(),
+        });
+        let report = render(&analysis);
+        assert!(
+            report.contains("effort      turns  tokens  reasoning  cost"),
+            "{report}"
+        );
+        assert!(
+            report.contains("high        3      39,000  6,000      $0.165"),
+            "{report}"
+        );
+        assert!(report.contains("unrecorded  3      39,000  6,000      unknown (unpriced model)"));
+        assert!(!report.contains("  reasoning      no turn"));
     }
 
     #[test]

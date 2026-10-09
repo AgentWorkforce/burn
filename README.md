@@ -75,6 +75,10 @@ tokens they used, and what they cost.
 | `burn summary --tag persona=code-reviewer` | Cost for sessions stamped with that persona tag. |
 | `burn summary --group-by-tag persona` | Cost grouped by persona value. |
 
+When turns in scope recorded a reasoning effort, the grouped summary adds a
+`reasoning effort` table (turns, tokens, reasoning tokens, cost per level;
+JSON `reasoningEfforts`).
+
 Synthetic-routed models are recognized from `hf:*`,
 `accounts/fireworks/models/*`, and `synthetic/*`.
 
@@ -102,8 +106,9 @@ straight from a transcript file.
 | `burn --json analyze --path rollout-….jsonl` | The `burn.session-analysis.v1` document. |
 
 The `burn.session-analysis.v1` document has one section per analysis —
-`metrics` (the `burn.session-metrics.v1` totals), `activity`, `hotspots`,
-`overhead`, `subagents`, `flow`, `context`, `quality`, `stopReasons` — each
+`metrics` (the `burn.session-metrics.v1` totals), `activity`, `reasoning`,
+`hotspots`, `overhead`, `subagents`, `flow`, `context`, `quality`,
+`stopReasons` — each
 either `{"status":"available","data":…}` or
 `{"status":"unavailable","reason":…}`, plus `session` identity, `fidelity`,
 and `findings`. Every finding carries a stable `code`, `severity`, an
@@ -117,6 +122,25 @@ findings (1)
          turns 0-3 · tools Bash · 790 tokens · $0.0016
          why  Turns 0-3 are 4 consecutive errored Bash calls with the same arguments. …
          fix  Stop after the first identical failure: read the error and change the arguments or approach. …
+```
+
+`reasoning` groups the turns by the reasoning effort the harness recorded:
+per level, `turns`, `tokens`, `reasoningTokens`, `costUsd`,
+`reasoningCostUsd` (what the reasoning tokens alone cost) and the same spend
+per `activities` category, plus `changes` — the turns whose effort differs
+from the previous turn's. Codex records effort in its `turn_context`; a turn
+runs under the latest one in rollout order. Sessions whose turns record no
+effort report the section unavailable. Two findings read it:
+`high-effort-routine-work` (three or more `high`/`xhigh` turns on git, build,
+dependency, formatting, exploration, conversation or delegation work carrying
+at least a quarter of the session's spend; impact is their reasoning tokens,
+the most a lower effort could save) and `reasoning-effort-change` (where
+effort changed, with per-turn tokens and cost at each level).
+
+```text
+effort  turns  tokens  reasoning  cost
+low     2      2,400   200        $0.011
+high    1      1,500   250        $0.010
 ```
 
 ### Analyzing sessions from another project

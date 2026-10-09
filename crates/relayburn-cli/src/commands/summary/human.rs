@@ -95,8 +95,7 @@ pub(super) fn emit_grouped(
     if globals.json {
         return emit_json(report, ingest_report);
     }
-    emit_human(report, ingest_report, pricing_override)?;
-    Ok(())
+    emit_human(report, ingest_report, pricing_override)
 }
 
 pub(super) fn emit_ingest_prelude(
@@ -609,6 +608,7 @@ pub(super) fn emit_human(
         lines.push(format_stop_reasons_line(&report.stop_reasons));
         lines.push(String::new());
     }
+    lines.extend(reasoning_effort_lines(&report.reasoning_efforts));
 
     if !report.subagents.is_empty() {
         // `subagents: X paired, Y orphan` — paired sidecars resolved
@@ -634,9 +634,8 @@ pub(super) fn emit_human(
         lines.push(String::new());
     }
 
-    let out = lines.join("\n");
     // TS uses `process.stdout.write(lines.join('\n'))` — no trailing newline.
-    write_stdout(&out)?;
+    write_stdout(&lines.join("\n"))?;
 
     warn_unpriced_usage(
         report.unpriced_turns,

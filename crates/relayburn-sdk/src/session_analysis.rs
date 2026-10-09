@@ -35,10 +35,14 @@ use crate::source::{records_from_evidence, SessionRecords};
 mod document;
 mod explain;
 mod findings;
+mod reasoning;
 mod sections;
 mod structure;
 
 pub use document::*;
+pub use reasoning::{
+    reasoning_effort_rows, ReasoningBreakdown, ReasoningEffortChange, ReasoningEffortRow,
+};
 
 /// What [`analyze_session`] reads.
 #[derive(Debug, Clone, Deserialize)]
@@ -185,7 +189,17 @@ fn analyze(inputs: &Inputs<'_>) -> SessionAnalysis {
         Section::Unavailable { reason } if !turns.is_empty() => Some(reason.as_str()),
         _ => None,
     };
-    let findings = findings::findings(inputs, &detections, &overhead, &context, refusal);
+    let reasoning = reasoning::breakdown(inputs.harness, turns, inputs.pricing);
+    let findings = findings::findings(
+        inputs,
+        &detections,
+        &findings::Reports {
+            overhead: &overhead,
+            context: &context,
+            reasoning: &reasoning,
+        },
+        refusal,
+    );
     SessionAnalysis {
         schema: SESSION_ANALYSIS_SCHEMA.to_string(),
         session: sections::identity(inputs),
@@ -199,6 +213,7 @@ fn analyze(inputs: &Inputs<'_>) -> SessionAnalysis {
             Err(error) => Section::unavailable(error.to_string()),
         },
         activity: sections::activity(inputs),
+        reasoning,
         hotspots,
         overhead,
         subagents: structure::subagents(inputs),

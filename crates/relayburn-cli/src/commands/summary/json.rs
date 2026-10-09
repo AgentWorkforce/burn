@@ -150,6 +150,9 @@ pub(super) fn grouped_json_value(
     if !report.unpriced_models.is_empty() {
         payload.insert("unpricedModels".into(), json!(report.unpriced_models));
     }
+    if !report.reasoning_efforts.is_empty() {
+        payload.insert("reasoningEfforts".into(), json!(report.reasoning_efforts));
+    }
     if !report.subagents.is_empty() {
         // `subagents: {paired, orphan, total}` (issue #435). Skipped
         // when both buckets are zero so the JSON shape stays compact

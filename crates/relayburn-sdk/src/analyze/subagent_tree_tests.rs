@@ -42,6 +42,7 @@ fn make_turn(
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 

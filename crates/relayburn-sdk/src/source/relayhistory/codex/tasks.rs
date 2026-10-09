@@ -12,6 +12,7 @@ use ai_hist::SessionEvidence;
 mod tests;
 mod tools;
 
+use super::context::TurnContext;
 use super::events::{Event, Located};
 use super::records::{text_content, Slot, Spawn};
 use super::snapshots::{read_snapshot, spend, CounterError, Counters};
@@ -39,9 +40,10 @@ pub(super) struct Derived {
 }
 
 /// The task being read.
-struct Open {
+struct Open<'a> {
     turn_id: String,
     ts_ms: i64,
+    context: TurnContext<'a>,
     start: Counters,
     usage_observed: bool,
     counter_error: Option<CounterError>,
@@ -62,11 +64,12 @@ pub(super) struct Tasks<'a> {
     /// Calls Codex reported failed (`exec_command_end` exit code,
     /// `patch_apply_end` success).
     errored: HashSet<&'a str>,
-    /// turn id → (model, cwd) from the turn's `turn_context` record, else
-    /// as stamped on its messages.
-    contexts: HashMap<&'a str, (Option<&'a str>, Option<&'a str>)>,
+    /// The latest `turn_context` in rollout order.
+    context: TurnContext<'a>,
+    /// turn id → (model, cwd) as stamped on its messages.
+    stamps: HashMap<&'a str, (Option<&'a str>, Option<&'a str>)>,
     cumulative: Counters,
-    open: Option<Open>,
+    open: Option<Open<'a>>,
     pending_user_text: String,
     pending_content: Vec<ContentRecord>,
     finished: Vec<(TurnRecord, Vec<ContentRecord>)>,
@@ -86,20 +89,10 @@ pub(super) struct Tasks<'a> {
 
 impl<'a> Tasks<'a> {
     pub(super) fn new(ev: &'a SessionEvidence) -> Self {
-        let mut contexts: HashMap<&str, (Option<&str>, Option<&str>)> = HashMap::new();
-        for marker in ev.markers.iter().filter(|m| m.kind == "turn_context") {
-            let (Some(turn), Some(payload)) = (marker.turn_id.as_deref(), marker.payload.as_ref())
-            else {
-                continue;
-            };
-            let field = |key: &str| payload.get(key).and_then(|v| v.as_str());
-            let slot = contexts.entry(turn).or_default();
-            slot.0 = slot.0.or(field("model"));
-            slot.1 = slot.1.or(field("cwd"));
-        }
+        let mut stamps: HashMap<&str, (Option<&str>, Option<&str>)> = HashMap::new();
         for m in &ev.messages {
             if let Some(turn) = m.turn_id.as_deref() {
-                let slot = contexts.entry(turn).or_default();
+                let slot = stamps.entry(turn).or_default();
                 slot.0 = slot.0.or(m.model.as_deref());
                 slot.1 = slot.1.or(m.cwd.as_deref());
             }
@@ -113,7 +106,8 @@ impl<'a> Tasks<'a> {
                 .filter(|c| c.is_error == Some(true))
                 .map(|c| c.tool_use_id.as_str())
                 .collect(),
-            contexts,
+            context: TurnContext::default(),
+            stamps,
             cumulative: Counters::default(),
             open: None,
             pending_user_text: String::new(),
@@ -145,6 +139,12 @@ impl<'a> Tasks<'a> {
             Event::TaskStarted { turn_id, ts_ms } => self.task_started(turn_id, *ts_ms),
             Event::TaskComplete { turn_id } => self.task_complete(line, turn_id),
             Event::Compacted { ts_ms } => self.compacted(line, *ts_ms),
+            Event::TurnContext { payload } => {
+                self.context = TurnContext::read(payload);
+                if let Some(open) = self.open.as_mut() {
+                    open.context = self.context;
+                }
+            }
             Event::UsageSnapshot { info } => self.usage_snapshot(info),
             Event::UserText { text, ts_ms } => self.user_text(text, *ts_ms),
             Event::AssistantText { text, ts_ms } => self.assistant_output(text, *ts_ms, false),
@@ -177,6 +177,7 @@ impl<'a> Tasks<'a> {
         self.open = Some(Open {
             turn_id: turn_id.to_string(),
             ts_ms,
+            context: self.context,
             start: self.cumulative,
             usage_observed: false,
             counter_error: None,
@@ -311,7 +312,7 @@ impl<'a> Tasks<'a> {
         ));
     }
 
-    fn finish(&self, open: Open) -> (TurnRecord, Vec<ContentRecord>) {
+    fn finish(&self, open: Open<'a>) -> (TurnRecord, Vec<ContentRecord>) {
         let (usage, usage_known) = match (&open.counter_error, open.usage_observed) {
             (None, true) => match spend(&open.start, &self.cumulative) {
                 Ok(usage) => (usage, true),
@@ -319,12 +320,17 @@ impl<'a> Tasks<'a> {
             },
             _ => (Usage::default(), false),
         };
-        let (model, cwd) = self
-            .contexts
+        let (stamped_model, stamped_cwd) = self
+            .stamps
             .get(open.turn_id.as_str())
             .copied()
             .unwrap_or_default();
-        let cwd = cwd.or(self.ev.session.cwd.as_deref());
+        let model = open.context.model.or(stamped_model);
+        let cwd = open
+            .context
+            .cwd
+            .or(stamped_cwd)
+            .or(self.ev.session.cwd.as_deref());
         let resolved = cwd.map(resolve_project);
         let text = join_nonempty(&[&open.user_text, &open.assistant_text], "\n");
         let classified = classify_activity(ClassificationInput {
@@ -375,6 +381,7 @@ impl<'a> Tasks<'a> {
                     has_raw_content: true,
                 },
             )),
+            reasoning: open.context.reasoning(),
         };
         (turn, open.content)
     }

@@ -6,6 +6,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - `burn analyze <source> <session-id>` / `burn analyze --path <transcript>` diagnose one session without a ledger or ingest: metrics, activity, hotspots, instruction overhead, subagents, flow, context growth, quality, and stop reasons, plus findings that explain each cost, cite turns/tools/files, and suggest a fix. `--json` emits `burn.session-analysis.v1`; the same document comes from Rust `analyze_session`, Node `analyzeSession()`, and the MCP `burn__analyzeSession` tool.
 - `burn analyze` lists Claude Code subagents written as sidecar transcripts (`<session>/subagents/agent-<id>.jsonl`) in `subagents`, with their type and description; their token spend is not yet included.
+- Turn records carry an optional `reasoning` (`{ effort, summary }`) as the harness recorded it; Codex turns take it from the latest `turn_context`, which carries forward to later turns until it changes. Records without one serialize unchanged.
+- `burn analyze` adds a `reasoning` section (turns, tokens, reasoning tokens and cost per effort level, effort changes) and findings for high reasoning effort on routine work and for mid-session effort changes; unpriced spend reads unknown.
+- `burn summary` adds a reasoning-effort table (JSON `reasoningEfforts`) when any turn in scope recorded an effort.
 - `burn measure` / `measureSession()` read sessions through relayhistory, the same source path as `burn analyze`.
 - Edit-heavy findings count file reads made through any harness's shell (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`, `less`, `more`), so sessions that read via Bash are no longer flagged as editing blind.
 - Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.

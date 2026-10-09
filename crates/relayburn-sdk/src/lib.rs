@@ -86,7 +86,7 @@ pub use crate::reader::{
     ClaudeSpanTreeInputs, CodexSpanTreeInputs, CompactionEvent, ContentKind, ContentRecord,
     ContentRole, ContentStoreMode, ContentToolResult, ContentToolUse, Coverage, Fidelity,
     FidelityClass, Harness, Inference, InferenceKeySource, InferenceKind, ProjectResolver,
-    RelationshipSourceKind, RelationshipType, RequestIdLookup, ResolvedProject,
+    ReasoningConfig, RelationshipSourceKind, RelationshipType, RequestIdLookup, ResolvedProject,
     SessionRelationshipRecord, SourceKind, StopReason, Subagent, SubagentCounts,
     SubagentTranscript, ToolCall, ToolResultEventRecord, ToolResultEventSource, ToolResultStatus,
     ToolUseRef, TurnKey, TurnRecord, Usage, UsageAttribution, UsageGranularity, UserTurnBlock,

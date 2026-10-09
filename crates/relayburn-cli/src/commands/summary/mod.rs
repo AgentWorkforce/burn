@@ -39,9 +39,11 @@ use crate::render::progress::TaskProgress;
 
 mod human;
 mod json;
+mod reasoning;
 
 use human::*;
 use json::*;
+use reasoning::reasoning_effort_lines;
 
 #[cfg(test)]
 use relayburn_sdk::{
@@ -504,6 +506,7 @@ mod tests {
             quality: None,
             unpriced_turns: 0,
             unpriced_models: Vec::new(),
+            reasoning_efforts: Vec::new(),
         }
     }
 

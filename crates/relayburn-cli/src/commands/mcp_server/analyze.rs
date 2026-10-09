@@ -22,7 +22,7 @@ const FIELDS: &[&str] = &[
 pub(super) fn catalog_entry() -> Value {
     json!({
         "name": TOOL,
-        "description": "Diagnose one session's token spend without the burn ledger: metrics per model, activity, cost hotspots, instruction-file overhead, subagents, context growth, quality, and a ranked findings list where each finding explains what happened, why it costs tokens, its evidence and impact, and a concrete fix. Pass sessionId (defaults to the server's registered session) or path. Returns the burn.session-analysis.v1 document. Read-only.",
+        "description": "Diagnose one session's token spend without the burn ledger: metrics per model, activity, reasoning effort, cost hotspots, instruction-file overhead, subagents, context growth, quality, and a ranked findings list where each finding explains what happened, why it costs tokens, its evidence and impact, and a concrete fix. Pass sessionId (defaults to the server's registered session) or path. Returns the burn.session-analysis.v1 document. Read-only.",
         "inputSchema": {
             "type": "object",
             "properties": {

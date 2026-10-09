@@ -60,6 +60,7 @@ fn make_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 

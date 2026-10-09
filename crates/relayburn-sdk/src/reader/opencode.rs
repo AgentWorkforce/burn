@@ -220,11 +220,8 @@ pub fn parse_opencode_session_incremental(
             project_key: None,
             usage: usage.clone(),
             tool_calls: extracted.tool_calls.clone(),
-            files_touched: if extracted.files_touched.is_empty() {
-                None
-            } else {
-                Some(extracted.files_touched.clone())
-            },
+            files_touched: (!extracted.files_touched.is_empty())
+                .then(|| extracted.files_touched.clone()),
             subagent: None,
             stop_reason: stop_reason
                 .as_deref()
@@ -233,6 +230,7 @@ pub fn parse_opencode_session_incremental(
             retries: None,
             has_edits: None,
             fidelity: Some(build_opencode_fidelity(&usage_coverage)),
+            reasoning: None,
         };
         if let Some(p) = project.as_ref() {
             let resolved = project_resolver.resolve(p);

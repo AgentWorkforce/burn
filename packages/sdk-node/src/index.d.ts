@@ -268,6 +268,31 @@ export interface ActivityBreakdown {
   tools: ToolActivityRow[];
   replacementSavings: Record<string, unknown> | null;
 }
+export interface ReasoningEffortRow {
+  /** The effort as the harness recorded it (`low`, `high`, …); null for turns that recorded none. */
+  effort: string | null;
+  turns: number | bigint;
+  tokens: number | bigint;
+  reasoningTokens: number | bigint;
+  /** Null when any contributing turn's model is unpriced. */
+  costUsd: number | null;
+  /** What the reasoning tokens alone cost; null when unpriced. */
+  reasoningCostUsd: number | null;
+  /** The same turns per classified activity, most expensive first. */
+  activities: ActivityRow[];
+}
+export interface ReasoningEffortChange {
+  turnIndex: number | bigint;
+  turnId: string;
+  from: string;
+  to: string;
+}
+export interface ReasoningBreakdown {
+  /** Lowest effort first; turns that recorded no effort last. */
+  levels: ReasoningEffortRow[];
+  /** Turns whose effort differs from the previous turn that recorded one. */
+  changes: ReasoningEffortChange[];
+}
 export interface SessionOverheadReport {
   projectDir: string;
   attribution: OverheadResult;
@@ -326,6 +351,8 @@ export interface SessionAnalysis {
   fidelity: SessionFidelityReport;
   metrics: AnalysisSection<SessionMetrics>;
   activity: AnalysisSection<ActivityBreakdown>;
+  /** Turns, tokens and cost per recorded reasoning effort. */
+  reasoning: AnalysisSection<ReasoningBreakdown>;
   hotspots: AnalysisSection<HotspotsAttributionResult>;
   overhead: AnalysisSection<SessionOverheadReport>;
   subagents: AnalysisSection<SubagentTreeNode>;

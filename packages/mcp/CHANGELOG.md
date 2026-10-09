@@ -4,6 +4,8 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- `burn__analyzeSession` output includes the `reasoning` section and its reasoning-effort findings.
+
 ## [4.1.0] - 2026-09-20
 
 - Package tests compile TypeScript before running, so `pnpm run test` executes the MCP suite on a clean checkout.

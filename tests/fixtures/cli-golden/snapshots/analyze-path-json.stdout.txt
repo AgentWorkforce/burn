@@ -119,6 +119,10 @@
       "replacementSavings": null
     }
   },
+  "reasoning": {
+    "status": "unavailable",
+    "reason": "no turn of this claude-code session records a reasoning effort"
+  },
   "hotspots": {
     "status": "available",
     "data": {

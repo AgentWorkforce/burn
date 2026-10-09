@@ -61,6 +61,7 @@ fn make_turn(model: &str) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 

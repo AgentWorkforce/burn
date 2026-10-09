@@ -11,6 +11,7 @@ pub mod fidelity;
 pub mod git;
 pub mod hash;
 pub mod inference;
+pub mod reasoning;
 pub mod types;
 pub mod user_turn;
 
@@ -49,6 +50,7 @@ pub use inference::{
     build_inferences, Inference, InferenceKeySource, InferenceKind, RequestIdLookup, ToolUseRef,
     TurnKey,
 };
+pub use reasoning::ReasoningConfig;
 pub use types::{
     ActivityCategory, CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode,
     ContentToolResult, ContentToolUse, Coverage, Fidelity, FidelityClass, Harness,

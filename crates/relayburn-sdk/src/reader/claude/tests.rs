@@ -105,6 +105,7 @@ fn parse_result_from_incremental_result_copies_all_fields() {
             },
             class: crate::reader::types::FidelityClass::Full,
         }),
+        reasoning: None,
     };
     let content = ContentRecord {
         v: 1,

@@ -200,7 +200,7 @@ impl fmt::Display for UsageGranularity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Coverage {
     pub has_input_tokens: bool,
@@ -244,12 +244,6 @@ impl Coverage {
     /// `is_full` — usable for usage-only commands like `summary`.
     pub fn has_per_turn_usage(&self) -> bool {
         self.has_input_tokens && self.has_output_tokens
-    }
-}
-
-impl Default for Coverage {
-    fn default() -> Self {
-        Self::EMPTY
     }
 }
 
@@ -447,6 +441,10 @@ pub struct TurnRecord {
     pub has_edits: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<Fidelity>,
+    /// The reasoning configuration the harness recorded for the turn;
+    /// `None` when it recorded none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<super::reasoning::ReasoningConfig>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -746,6 +744,7 @@ mod tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
         let s = serde_json::to_string(&rec).unwrap();
         assert!(!s.contains("null"));

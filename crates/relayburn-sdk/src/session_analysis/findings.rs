@@ -7,6 +7,7 @@ use super::document::{
     ContextReport, Finding, FindingEvidence, FindingImpact, OverheadReport, Section,
 };
 use super::explain::guidance;
+use super::reasoning::{self, ReasoningBreakdown};
 use super::sections::{turn_tokens, Spend};
 use super::Inputs;
 use crate::analyze::findings::severity_from_usd;
@@ -34,7 +35,7 @@ pub(super) struct FindingContext<'a> {
 }
 
 impl<'a> FindingContext<'a> {
-    fn new(turns: &'a [TurnRecord]) -> Self {
+    pub(super) fn new(turns: &'a [TurnRecord]) -> Self {
         Self {
             turns: turns.iter().map(|t| (t.turn_index, t)).collect(),
         }
@@ -64,12 +65,18 @@ impl<'a> FindingContext<'a> {
     }
 }
 
+/// The analysis sections findings are drawn from.
+pub(super) struct Reports<'a> {
+    pub overhead: &'a Section<OverheadReport>,
+    pub context: &'a Section<ContextReport>,
+    pub reasoning: &'a Section<ReasoningBreakdown>,
+}
+
 /// Every finding for the session, most severe and most expensive first.
 pub(super) fn findings(
     inputs: &Inputs<'_>,
     detections: &HotspotDetections,
-    overhead: &Section<OverheadReport>,
-    context: &Section<ContextReport>,
+    reports: &Reports<'_>,
     attribution_refusal: Option<&str>,
 ) -> Vec<Finding> {
     let turns = &inputs.records.turns;
@@ -103,11 +110,14 @@ pub(super) fn findings(
         .zip(own_tokens)
         .map(|((waste, detail), tokens)| from_waste(waste, detail, tokens, &cx))
         .collect();
-    if let Some(report) = overhead.data() {
+    if let Some(report) = reports.overhead.data() {
         out.extend(overhead_findings(report, priced));
     }
-    if let Some(report) = context.data() {
+    if let Some(report) = reports.context.data() {
         out.extend(context_findings(report, priced));
+    }
+    if let Some(report) = reports.reasoning.data() {
+        out.extend(reasoning::findings(turns, report, inputs.pricing, &cx));
     }
     out.extend(stop_findings(turns, &cx, inputs.pricing));
     out.extend(fidelity_findings(turns, &cx, attribution_refusal));
@@ -146,7 +156,7 @@ fn from_waste(
 }
 
 /// A finding built here rather than by a detector adapter.
-fn finding(
+pub(super) fn finding(
     code: &str,
     severity: WasteSeverity,
     title: String,
@@ -167,7 +177,7 @@ fn finding(
     }
 }
 
-fn impact(tokens: u64, usd: Option<f64>, priced: bool) -> FindingImpact {
+pub(super) fn impact(tokens: u64, usd: Option<f64>, priced: bool) -> FindingImpact {
     FindingImpact {
         tokens: Some(tokens),
         cost_usd: usd.filter(|_| priced),

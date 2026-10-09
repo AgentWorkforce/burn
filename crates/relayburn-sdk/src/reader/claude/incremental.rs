@@ -723,11 +723,7 @@ pub(super) fn run_incremental<C: TokenCounter + ?Sized>(
             project_key: None,
             usage: w.usage.clone(),
             tool_calls: tool_calls.clone(),
-            files_touched: if files_touched.is_empty() {
-                None
-            } else {
-                Some(files_touched)
-            },
+            files_touched: (!files_touched.is_empty()).then_some(files_touched),
             subagent,
             stop_reason: w
                 .stop_reason
@@ -737,6 +733,7 @@ pub(super) fn run_incremental<C: TokenCounter + ?Sized>(
             retries: None,
             has_edits: None,
             fidelity: Some(build_claude_fidelity(&w.usage_coverage)),
+            reasoning: None,
         };
         if let Some(ref cwd) = w.cwd {
             let resolved = resolve_project(cwd);

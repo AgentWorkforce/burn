@@ -71,6 +71,14 @@ pub(super) fn guidance(code: &str) -> (&'static str, &'static str) {
             "A refused turn spends tokens without progress.",
             "Rephrase the request or supply the context the model needs to proceed.",
         ),
+        "high-effort-routine-work" => (
+            "Reasoning effort sets how many hidden reasoning tokens the model spends before it answers. They bill as output tokens, and routine steps such as git, builds, dependency changes or reading code rarely need them.",
+            "Run routine work at a lower reasoning effort (in Codex, /model or `model_reasoning_effort` in config.toml) and raise it for planning, debugging and design, or hand routine steps to a lower-effort subagent.",
+        ),
+        "reasoning-effort-change" => (
+            "Each effort level changes how many reasoning tokens every later turn spends, so a change mid-session moves the cost of all the turns after it.",
+            "Compare the per-turn figures: keep the higher effort only for the work it improved, and switch back once that work is done.",
+        ),
         "usage-unrecorded" => (
             "burn cannot count or price tokens the transcript did not record, so these turns are missing from every total.",
             "Analyze the harness's complete transcript; if the harness writes usage elsewhere, its capture is a relayhistory gap to report.",
