@@ -17,7 +17,7 @@ use super::pending_stamps::{
 };
 use super::IngestReport;
 use crate::ledger::Ledger;
-use crate::reader::{build_inferences, ContentStoreMode};
+use crate::reader::{build_inferences, ContentStoreMode, TurnRecord};
 use crate::source::SessionRecords;
 use crate::source::{
     delegated_children, records_from_evidence, records_query, records_with_children,
@@ -130,13 +130,30 @@ fn import_one(
         scanned_sessions: 1,
         ..IngestReport::empty()
     };
-    report.appended_turns = ledger.append_turns(&records.turns)?;
+    report.appended_turns = append_new_turns(ledger, &records)?;
     if report.appended_turns > 0 {
         report.ingested_sessions = 1;
         report.applied_pending_stamps = resolve_stamps(ledger, ctx, &evidence, &records);
     }
     append_derived(ledger, &records)?;
     Ok(report)
+}
+
+/// Append the turns the ledger does not hold yet. A session is rebuilt
+/// whole on every change, so most of its turns are already there; they are
+/// set aside by key up front rather than each re-offered to the insert.
+fn append_new_turns(ledger: &mut Ledger, records: &SessionRecords) -> anyhow::Result<usize> {
+    let Some(first) = records.turns.first() else {
+        return Ok(0);
+    };
+    let held = ledger.turn_message_ids(first.source, &first.session_id)?;
+    let fresh: Vec<TurnRecord> = records
+        .turns
+        .iter()
+        .filter(|t| !held.contains(&t.message_id))
+        .cloned()
+        .collect();
+    Ok(ledger.append_turns(&fresh)?)
 }
 
 /// Fold any pending launcher stamp onto a session that just gained turns.

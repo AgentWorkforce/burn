@@ -9,8 +9,7 @@ use std::thread;
 
 use crate::reader::{
     ContentKind, ContentRecord, ContentRole, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, ToolCall, TurnRecord, Usage, UserTurnBlock,
-    UserTurnBlockKind, UserTurnRecord,
+    SessionRelationshipRecord, SourceKind, ToolCall, TurnRecord, Usage,
 };
 use tempfile::TempDir;
 
@@ -1059,92 +1058,21 @@ fn concurrent_writers_serialize_via_wal() {
 }
 
 #[test]
-fn list_content_session_ids_returns_distinct_set() {
-    // #279: ingest's `reingest_missing_content` needs the set of session
-    // ids already covered in `content.sqlite` so it can skip them.
+fn turn_message_ids_are_one_sessions_held_turns() {
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
-    // Empty content store ⇒ empty set.
-    assert!(l.list_content_session_ids().unwrap().is_empty());
-
-    l.append_content(&[
-        make_content("ses_a", "m1", "alpha"),
-        make_content("ses_a", "m2", "beta"),
-        make_content("ses_b", "m1", "gamma"),
-        make_content("ses_c", "m1", "delta"),
+    l.append_turns(&[
+        make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10),
+        make_turn("s1", "m2", "2025-01-01T00:00:01Z", 11),
+        make_turn("s2", "m3", "2025-01-01T00:00:02Z", 12),
     ])
     .unwrap();
-
-    let ids = l.list_content_session_ids().unwrap();
-    assert_eq!(ids.len(), 3);
-    assert!(ids.contains("ses_a"));
-    assert!(ids.contains("ses_b"));
-    assert!(ids.contains("ses_c"));
-
-    // The `content` table is non-STRICT, so a row whose `session_id`
-    // column holds a non-TEXT storage class can land in the DB (e.g. via
-    // a future schema migration bug or direct ops intervention). The
-    // TEXT affinity coerces incoming integers/reals into text on insert,
-    // but it preserves BLOBs — so a BLOB literal is the way to plant a
-    // row that will not decode as `String`. The `list_session_ids` call
-    // must skip it rather than aborting the whole query.
-    l.conns
-        .content
-        .execute(
-            "INSERT INTO content (source, session_id, message_id, content_hash, body, byte_length, created_at)
-             VALUES ('claude-code', X'AABBCCDD', 'm-bad', 'h-bad', 'corrupt', 7, '2026-05-05T00:00:00Z')",
-            [],
-        )
-        .unwrap();
-    let ids = l.list_content_session_ids().unwrap();
-    assert_eq!(ids.len(), 3);
-    assert!(ids.contains("ses_a"));
-    assert!(ids.contains("ses_b"));
-    assert!(ids.contains("ses_c"));
-}
-
-#[test]
-fn list_user_turn_session_ids_returns_distinct_set() {
-    // #278: ingest's `reingest_missing_content` AND-combines content +
-    // user-turn coverage. Mirrors the `list_content_session_ids` test
-    // shape so a regression in either side surfaces the same way.
-    let tmp = TempDir::new().unwrap();
-    let mut l = open_in(&tmp);
-    // Empty user_turns ⇒ empty set.
-    assert!(l.list_user_turn_session_ids().unwrap().is_empty());
-
-    l.append_user_turns(&[
-        make_user_turn("ses_a", "u1", "2025-01-01T00:00:00Z"),
-        make_user_turn("ses_a", "u2", "2025-01-01T00:00:01Z"),
-        make_user_turn("ses_b", "u1", "2025-01-01T00:00:02Z"),
-        make_user_turn("ses_c", "u1", "2025-01-01T00:00:03Z"),
-    ])
-    .unwrap();
-
-    let ids = l.list_user_turn_session_ids().unwrap();
-    assert_eq!(ids.len(), 3);
-    assert!(ids.contains("ses_a"));
-    assert!(ids.contains("ses_b"));
-    assert!(ids.contains("ses_c"));
-}
-
-fn make_user_turn(session: &str, user_uuid: &str, ts: &str) -> UserTurnRecord {
-    UserTurnRecord {
-        v: 1,
-        source: SourceKind::ClaudeCode,
-        session_id: session.into(),
-        user_uuid: user_uuid.into(),
-        ts: ts.into(),
-        preceding_message_id: None,
-        following_message_id: None,
-        blocks: vec![UserTurnBlock {
-            kind: UserTurnBlockKind::Text,
-            tool_use_id: None,
-            byte_len: 4,
-            approx_tokens: 1,
-            is_error: None,
-        }],
-    }
+    let ids = l.turn_message_ids(SourceKind::ClaudeCode, "s1").unwrap();
+    assert_eq!(ids, ["m1", "m2"].map(String::from).into_iter().collect());
+    assert!(l
+        .turn_message_ids(SourceKind::Codex, "s1")
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
