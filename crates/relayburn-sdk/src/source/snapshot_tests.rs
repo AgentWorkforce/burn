@@ -130,7 +130,10 @@ fn render(records: &SessionRecords) -> String {
     let json = serde_json::to_string_pretty(records).unwrap() + "\n";
     let root = fixtures_root().canonicalize().unwrap();
     json.replace(&root.to_string_lossy().into_owned(), "<fixtures>")
-        .replace(&fixtures_root().to_string_lossy().into_owned(), "<fixtures>")
+        .replace(
+            &fixtures_root().to_string_lossy().into_owned(),
+            "<fixtures>",
+        )
 }
 
 #[test]
