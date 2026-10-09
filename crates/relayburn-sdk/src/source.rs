@@ -35,6 +35,7 @@ fn serialize_request_ids<S: serde::Serializer>(
     seq.end()
 }
 
+mod delegated;
 pub(crate) mod locate;
 #[cfg(test)]
 mod parity_tests;
@@ -44,4 +45,4 @@ mod snapshot_tests;
 mod stage;
 mod usage;
 
-pub(crate) use relayhistory::records_from_evidence;
+pub(crate) use delegated::{child_ids, records_with_children, subagent_transcripts};

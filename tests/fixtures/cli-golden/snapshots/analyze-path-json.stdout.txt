@@ -428,8 +428,10 @@
         "claude-sonnet-4-6"
       ],
       "selfTurns": 4,
+      "selfTokens": 790,
       "selfCost": 0.0015825000000000001,
       "cumulativeTurns": 4,
+      "cumulativeTokens": 790,
       "cumulativeCost": 0.0015825000000000001,
       "depth": 0,
       "children": []

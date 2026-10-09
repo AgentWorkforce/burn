@@ -2559,15 +2559,13 @@ fn bucket_subagent(
     paired_tool_use_id: Option<&str>,
     first_record_ts: Option<&str>,
 ) -> crate::reader::SubagentTranscript {
-    let records: Vec<serde_json::Value> = first_record_ts
-        .map(|ts| vec![serde_json::json!({ "timestamp": ts })])
-        .unwrap_or_default();
     crate::reader::SubagentTranscript {
         agent_id: agent_id.into(),
         agent_type: None,
         description: None,
         meta_tool_use_id: None,
-        records,
+        records: Vec::new(),
+        started_at_ms: first_record_ts.and_then(crate::util::time::parse_iso_ms),
         paired_tool_use_id: paired_tool_use_id.map(str::to_string),
         source_path: std::path::PathBuf::from(format!("/tmp/agent-{agent_id}.jsonl")),
     }

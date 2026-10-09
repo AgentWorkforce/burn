@@ -30,6 +30,13 @@ pub fn format_usd(n: f64) -> String {
     format!("${:.2}", n)
 }
 
+/// [`format_usd`] for a known cost; `cost unknown` for an unpriced one,
+/// never `$0.00`.
+pub fn format_cost(cost: Option<f64>) -> String {
+    cost.map(format_usd)
+        .unwrap_or_else(|| "cost unknown".to_string())
+}
+
 /// `formatInt` from `packages/cli/src/format.ts`. JS
 /// `Number.toLocaleString('en-US')` uses thousands separators (`,`)
 /// for non-negative integers. Token counts and row counts are all

@@ -227,11 +227,9 @@ pub(crate) fn bucket_subagents_per_turn(
         }
         if assigned.is_none() {
             // Orphan: pick the latest turn whose start_ms <= subagent
-            // start_ms. The subagent start is the earliest `timestamp`
-            // field on its raw records; fall back to the first turn
-            // when the sidecar carries no parseable timestamp.
-            let sa_start_ms = first_record_ts_ms(&sa.records);
-            assigned = Some(match sa_start_ms {
+            // start_ms; fall back to the first turn when the subagent
+            // carries no start time.
+            assigned = Some(match sa.started_at_ms {
                 Some(sa_ms) => turn_starts
                     .iter()
                     .enumerate()
@@ -247,28 +245,6 @@ pub(crate) fn bucket_subagents_per_turn(
         }
     }
     out
-}
-
-/// Extract the earliest `timestamp` field from a subagent's raw JSONL
-/// records, returning epoch-millis. Used by the orphan-assignment rule
-/// to place sidecars under the latest preceding turn.
-fn first_record_ts_ms(records: &[serde_json::Value]) -> Option<i64> {
-    let mut earliest: Option<i64> = None;
-    for rec in records {
-        let ts_str = rec
-            .get("timestamp")
-            .and_then(|v| v.as_str())
-            .or_else(|| rec.get("ts").and_then(|v| v.as_str()));
-        if let Some(s) = ts_str {
-            if let Some(ms) = crate::util::time::parse_iso_ms(s) {
-                earliest = Some(match earliest {
-                    Some(e) => e.min(ms),
-                    None => ms,
-                });
-            }
-        }
-    }
-    earliest
 }
 
 /// Resolve the Claude projects root and discover + pair subagent

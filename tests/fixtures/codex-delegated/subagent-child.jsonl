@@ -1,0 +1,7 @@
+{"timestamp":"2026-04-23T00:00:00.600Z","type":"session_meta","payload":{"id":"agent_inv_42","cwd":"/tmp/project","timestamp":"2026-04-23T00:00:00.600Z","cli_version":"0.121.0","thread_source":"subagent","source":{"subagent":{"thread_spawn":{"parent_thread_id":"sess_spawn_1","depth":1}}}}}
+{"timestamp":"2026-04-23T00:00:00.700Z","type":"turn_context","payload":{"turn_id":"turn_child_1","cwd":"/tmp/project","model":"gpt-5.4"}}
+{"timestamp":"2026-04-23T00:00:00.750Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"find why test_x fails"}]}}
+{"timestamp":"2026-04-23T00:00:00.800Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_child_1"}}
+{"timestamp":"2026-04-23T00:00:01.500Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"test_x reads a stale fixture"}]}}
+{"timestamp":"2026-04-23T00:00:01.600Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":800,"cached_input_tokens":0,"output_tokens":120,"reasoning_output_tokens":20,"total_tokens":920}}}}
+{"timestamp":"2026-04-23T00:00:01.700Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_child_1"}}

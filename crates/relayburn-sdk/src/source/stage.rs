@@ -8,14 +8,16 @@
 //!   included. Any other transcript is linked into a staged
 //!   `projects/` directory together with its `<id>/` sidecar directory.
 //! - **Codex** — the rollout is linked into a staged `sessions/` tree under
-//!   a `rollout-*.jsonl` name. Child rollouts it spawned are not staged.
+//!   a `rollout-*.jsonl` name and read by the thread id its `session_meta`
+//!   declares, a subagent thread's rollout included. Child rollouts it
+//!   spawned are not staged.
 //! - **OpenCode** — the session metadata file names its `storage/` tree,
 //!   which is read in place.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ai_hist::{CatalogQuery, ProviderRoots, SessionRef, SessionStore, Source, StoreOptions};
+use ai_hist::{ProviderRoots, SessionRef, SessionStore, Source, StoreOptions, SyncOptions};
 use anyhow::{anyhow, Context, Result};
 use tempfile::TempDir;
 
@@ -34,10 +36,12 @@ pub(crate) struct Staged {
 enum Target {
     /// A Claude transcript, hydrated by its path.
     Transcript(PathBuf),
-    /// The one session of `source` under the staged roots.
-    OnlySession(Source),
     /// A session of `source` named by id.
     Session(Source, String),
+    /// A Codex thread named by id, captured by a full sweep of the staged
+    /// roots: a subagent thread is a delegated child the catalog leaves out,
+    /// so only the sweep reads it, and it is then read by id like any other.
+    Thread(String),
 }
 
 pub(super) fn stage_path(harness: Harness, path: &Path) -> Result<Staged> {
@@ -72,9 +76,11 @@ impl Staged {
                 discover(store, *source)?;
                 SessionRef::id(*source, id)
             }
-            Target::OnlySession(source) => {
-                discover(store, *source)?;
-                only_session(store, *source)?
+            Target::Thread(id) => {
+                store
+                    .sync(SyncOptions::default())
+                    .context("capture the staged codex rollout")?;
+                return Ok(SessionRef::id(Source::Codex, id));
             }
         };
         hydrate_path(store, &reference)
@@ -90,16 +96,6 @@ fn staged_roots(home: &Path) -> ProviderRoots {
         home.to_path_buf(),
         home.join(".local/share/opencode/opencode.db"),
     )
-}
-
-fn only_session(store: &SessionStore, source: Source) -> Result<SessionRef> {
-    let mut query = CatalogQuery::default();
-    query.sources = Some(vec![source]);
-    let row = store
-        .sessions(query)
-        .next()
-        .ok_or_else(|| anyhow!("relayhistory recognized no {source} session in the file"))??;
-    Ok(row.session_ref())
 }
 
 /// `(in install, target)` for a Claude transcript.
@@ -135,7 +131,7 @@ fn stage_codex(roots: &ProviderRoots, path: &Path) -> Result<Target> {
         format!("rollout-{name}.jsonl")
     };
     link_or_copy(path, &day.join(name))?;
-    Ok(Target::OnlySession(Source::Codex))
+    Ok(Target::Thread(codex_session_id(path)?))
 }
 
 fn stage_opencode(roots: &mut ProviderRoots, path: &Path) -> Result<Target> {
@@ -156,6 +152,31 @@ fn stage_opencode(roots: &mut ProviderRoots, path: &Path) -> Result<Target> {
         opencode_session_id(path)?,
     ))
 }
+
+/// The thread id a Codex rollout's opening `session_meta` declares.
+fn codex_session_id(path: &Path) -> Result<String> {
+    use std::io::BufRead;
+    let file = fs::File::open(path)?;
+    for line in std::io::BufReader::new(file)
+        .lines()
+        .take(SESSION_META_LINES)
+    {
+        let value: serde_json::Value = match serde_json::from_str(&line?) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if value.get("type").and_then(|t| t.as_str()) != Some("session_meta") {
+            continue;
+        }
+        if let Some(id) = value.pointer("/payload/id").and_then(|id| id.as_str()) {
+            return Ok(id.to_string());
+        }
+    }
+    Err(anyhow!("relayhistory recognized no codex session in the file: it opens with no session_meta naming a thread id"))
+}
+
+/// Leading rollout lines searched for the `session_meta` record.
+const SESSION_META_LINES: usize = 16;
 
 /// The `id` an OpenCode session metadata file declares, else its file stem.
 fn opencode_session_id(path: &Path) -> Result<String> {

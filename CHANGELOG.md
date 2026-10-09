@@ -5,7 +5,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn analyze <source> <session-id>` / `burn analyze --path <transcript>` diagnose one session without a ledger or ingest: metrics, activity, hotspots, instruction overhead, subagents, flow, context growth, quality, and stop reasons, plus findings that explain each cost, cite turns/tools/files, and suggest a fix. `--json` emits `burn.session-analysis.v1`; the same document comes from Rust `analyze_session`, Node `analyzeSession()`, and the MCP `burn__analyzeSession` tool.
-- `burn analyze` lists Claude Code subagents written as sidecar transcripts (`<session>/subagents/agent-<id>.jsonl`) in `subagents`, with their type and description; their token spend is not yet included.
+- `burn analyze` and `burn measure` now include Claude Code subagent spend: every turn of a subagent sidecar transcript (`<session>/subagents/agent-<id>.jsonl`), nested subagents included, is billed once as subagent work of the session that spawned it.
+- `burn analyze` shows the subagent tree with each subagent's own and cumulative turns, tokens and cost, nested under the subagent that spawned it, and adds a `subagent-spend` finding when one subagent type carries at least a quarter of the session's tokens. Subagent tree nodes (`SubagentTreeNode`) add `selfTokens` / `cumulativeTokens`; `selfCost` / `cumulativeCost` are `null` when a turn they cover is unpriced, never `0`.
+- `burn analyze --path` reads a Codex subagent thread's rollout as its own session.
 - Turn records carry an optional `reasoning` (`{ effort, summary }`) as the harness recorded it; Codex turns take it from the latest `turn_context`, which carries forward to later turns until it changes. Records without one serialize unchanged.
 - `burn analyze` adds a `reasoning` section (turns, tokens, reasoning tokens and cost per effort level, effort changes) and findings for high reasoning effort on routine work and for mid-session effort changes; unpriced spend reads unknown.
 - `burn summary` adds a reasoning-effort table (JSON `reasoningEfforts`) when any turn in scope recorded an effort.

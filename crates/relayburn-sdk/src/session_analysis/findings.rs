@@ -19,6 +19,7 @@ use crate::query_verbs::HotspotDetections;
 use crate::reader::{StopReason, TurnRecord};
 
 mod detectors;
+mod subagents;
 
 use detectors::Detail;
 
@@ -119,6 +120,7 @@ pub(super) fn findings(
     if let Some(report) = reports.reasoning.data() {
         out.extend(reasoning::findings(turns, report, inputs.pricing, &cx));
     }
+    out.extend(subagents::subagent_findings(turns, &cx, inputs.pricing));
     out.extend(stop_findings(turns, &cx, inputs.pricing));
     out.extend(fidelity_findings(turns, &cx, attribution_refusal));
     out.sort_by(rank);

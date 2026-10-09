@@ -16,7 +16,7 @@ use crate::analyze::{
 use crate::query_verbs::{fidelity_summary_to_value, turn_passes_hotspots_coverage};
 use crate::reader::{resolve_project, ActivityCategory, TurnRecord};
 use crate::util::time::format_iso_ms;
-use crate::{SessionTokenMetrics, StopReasonCounts};
+use crate::StopReasonCounts;
 
 /// Tokens and USD of a set of turns; USD is unknown once any turn is
 /// unpriced.
@@ -48,11 +48,7 @@ impl Spend {
 }
 
 /// Billable tokens of one turn, counted as the session metrics count them.
-pub(super) fn turn_tokens(turn: &TurnRecord) -> u64 {
-    let mut metrics = SessionTokenMetrics::default();
-    metrics.add_turn(turn);
-    metrics.total_tokens
-}
+pub(super) use crate::session_metrics::turn_total_tokens as turn_tokens;
 
 pub(super) fn identity(inputs: &Inputs<'_>) -> SessionIdentity {
     let session = &inputs.evidence.session;

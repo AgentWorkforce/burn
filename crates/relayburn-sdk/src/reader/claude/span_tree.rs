@@ -868,6 +868,7 @@ mod tests {
             description: Some("ad-hoc".into()),
             meta_tool_use_id: None,
             records: vec![],
+            started_at_ms: None,
             paired_tool_use_id: None,
             source_path: std::path::PathBuf::from("/tmp/agent-orphan-1.jsonl"),
         };
@@ -921,6 +922,7 @@ mod tests {
             description: None,
             meta_tool_use_id: None,
             records: vec![],
+            started_at_ms: None,
             paired_tool_use_id: Some("toolu_task".into()),
             source_path: std::path::PathBuf::from("/tmp/agent-x.jsonl"),
         };

@@ -5,6 +5,7 @@ All notable changes to `@relayburn/mcp`.
 ## [Unreleased]
 
 - `burn__analyzeSession` output includes the `reasoning` section and its reasoning-effort findings.
+- `burn__analyzeSession` bills Claude Code subagent turns with their session and reports per-subagent tokens and cost in `subagents`.
 
 ## [4.1.0] - 2026-09-20
 

@@ -212,9 +212,13 @@ export interface SubagentTreeNode {
   description?: string;
   models: string[];
   selfTurns: number | bigint;
-  selfCost: number;
+  selfTokens: number | bigint;
+  /** `null` when any of the node's own turns is unpriced. */
+  selfCost: number | null;
   cumulativeTurns: number | bigint;
-  cumulativeCost: number;
+  cumulativeTokens: number | bigint;
+  /** `null` when any turn in the subtree is unpriced. */
+  cumulativeCost: number | null;
   depth: number;
   children: SubagentTreeNode[];
 }

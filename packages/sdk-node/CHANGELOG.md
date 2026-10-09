@@ -5,6 +5,7 @@
 - `analyzeSession({ harness, sessionId | path })` returns the ledger-less `burn.session-analysis.v1` diagnosis of one session, typed as `SessionAnalysis`.
 - `SessionAnalysis.reasoning` breaks a session's turns, tokens, reasoning tokens and cost down per recorded reasoning effort, with the turns where effort changed.
 - `measureSession()` reads sessions through relayhistory; an OpenCode input outside its `storage/session/<scope>/` tree is rejected with the expected layout.
+- `analyzeSession()` and `measureSession()` bill Claude Code subagent turns with the session that spawned them; `SubagentTreeNode` adds `selfTokens` / `cumulativeTokens`, and its costs are `null` when unpriced.
 ## [4.1.0] - 2026-09-20
 
 - `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.

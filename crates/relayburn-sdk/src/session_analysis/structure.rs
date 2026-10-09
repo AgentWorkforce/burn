@@ -2,7 +2,6 @@
 //! tree, inference flow, and context growth.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use super::document::{ContextReport, FlowSummary, OverheadReport, Section};
 use super::Inputs;
@@ -12,10 +11,10 @@ use crate::analyze::{
 };
 use crate::query_verbs::{
     build_session_span_trees, hotspots_attribution, load_overhead_files, overhead_report,
-    overhead_trim_report, pair_claude_subagents, subagent_tree_for_session, HotspotSideRecords,
-    SessionDetail, TrimShape,
+    overhead_trim_report, subagent_tree_for_session, HotspotSideRecords, SessionDetail, TrimShape,
 };
-use crate::reader::{build_inferences, SourceKind};
+use crate::reader::{build_inferences, TurnRecord};
+use crate::source::{child_ids, subagent_transcripts};
 use crate::{HotspotsAttributionResult, HotspotsGroupBy, HotspotsResult};
 
 /// Context-growth rows kept in [`ContextReport::largest_growth`].
@@ -101,22 +100,26 @@ pub(super) fn subagents(inputs: &Inputs<'_>) -> Section<SubagentTreeNode> {
     .unwrap_or_else(|| Section::unavailable("the session has no assistant turns"))
 }
 
-/// One span tree per turn, with Claude subagent sidecars paired in.
+/// One span tree per turn of the session's own conversation, with its
+/// delegated subagents paired to the tool uses that spawned them.
 pub(super) fn span_trees(inputs: &Inputs<'_>) -> Vec<TurnSpanTree> {
-    let turns = &inputs.records.turns;
-    let session = &inputs.evidence.session;
-    let subagents = match (
-        turns.first(),
-        session.raw_path.as_deref().and_then(Path::parent),
-    ) {
-        (Some(first), Some(project_dir)) if first.source == SourceKind::ClaudeCode => {
-            pair_claude_subagents(project_dir, &session.session_id)
-        }
-        _ => Vec::new(),
-    };
+    let delegated = child_ids(inputs.children);
+    let turns: Vec<TurnRecord> = inputs
+        .records
+        .turns
+        .iter()
+        .filter(|t| {
+            !t.subagent
+                .as_ref()
+                .and_then(|s| s.agent_id.as_deref())
+                .is_some_and(|id| delegated.contains(id))
+        })
+        .cloned()
+        .collect();
+    let subagents = subagent_transcripts(&turns, inputs.children);
     build_session_span_trees(
-        turns,
-        build_inferences(turns, &inputs.records.request_id_lookup),
+        &turns,
+        build_inferences(&turns, &inputs.records.request_id_lookup),
         inputs.records.tool_result_events.clone(),
         &subagents,
     )

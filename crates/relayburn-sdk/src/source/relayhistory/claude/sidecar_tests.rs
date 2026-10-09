@@ -1,5 +1,7 @@
 //! Subagent sidecars (`<sessionId>/subagents/agent-<agentId>.jsonl` plus
-//! `.meta.json`) become subagent relationships of the main session.
+//! `.meta.json`) the main session spawned become subagent relationships of
+//! it. A subagent a subagent spawned is delegated by that subagent, so its
+//! edge comes from the spawner's evidence (see `source::delegated`).
 
 use serde_json::{json, Value};
 
@@ -9,7 +11,7 @@ use crate::source::relayhistory::records_from_evidence;
 use crate::source::snapshot_tests::fixtures_root;
 
 #[test]
-fn sidecar_subagents_are_subagent_relationships_of_the_main_session() {
+fn sidecars_the_main_session_spawned_are_its_subagent_relationships() {
     let path = fixtures_root().join("claude-sidecars/sidecar-session.jsonl");
     let loaded = load_session(
         &SessionLocator::Path {
@@ -36,21 +38,12 @@ fn sidecar_subagents_are_subagent_relationships_of_the_main_session() {
     };
     assert_eq!(
         subagents,
-        vec![
-            edge(
-                "a1",
-                "2026-07-01T00:00:02.000Z",
-                "toolu_explore",
-                "Explore",
-                "Map the repo"
-            ),
-            edge(
-                "a2",
-                "2026-07-01T00:00:04.000Z",
-                "toolu_review",
-                "code-reviewer",
-                "Review the map"
-            ),
-        ]
+        vec![edge(
+            "a1",
+            "2026-07-01T00:00:02.000Z",
+            "toolu_explore",
+            "Explore",
+            "Map the repo"
+        )]
     );
 }

@@ -7,6 +7,7 @@ use relayburn_sdk::{
     SessionAnalysis, StopReasonCounts, WasteSeverity,
 };
 
+use super::subagents::subagent_lines;
 use crate::render::format::{format_uint, format_usd, render_table};
 
 /// Rows shown per table and per hotspot list.
@@ -245,14 +246,9 @@ fn sections(a: &SessionAnalysis, out: &mut Vec<String>) {
         ));
     }
     if let Some(root) = a.subagents.data() {
-        out.push(field(
-            "subagents",
-            match root.children.len() {
-                0 => "none".to_string(),
-                n if priced => format!("{n} · cumulative {}", format_usd(root.cumulative_cost)),
-                n => format!("{n} · cumulative cost unknown (unpriced model)"),
-            },
-        ));
+        let (summary, tree) = subagent_lines(root);
+        out.push(field("subagents", summary));
+        out.extend(tree);
     }
     if let Some(outcome) = a.quality.data().and_then(|q| q.outcome.as_ref()) {
         out.push(field(

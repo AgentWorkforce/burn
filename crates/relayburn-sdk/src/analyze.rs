@@ -34,6 +34,7 @@ pub mod quality;
 pub mod replacement_savings;
 pub mod span_tree;
 pub mod subagent_tree;
+pub mod subagent_types;
 pub mod tool_call_patterns;
 pub mod tool_output_bloat;
 mod util;
@@ -97,10 +98,10 @@ pub use quality::{OneShotMetrics, OutcomeLabel, QualityResult, SessionOutcome};
 pub(crate) use replacement_savings::summarize_replacement_savings;
 pub use replacement_savings::{ReplacementSavingsSummary, ToolSavingsAggregate};
 pub use span_tree::{AttrValue, SpanEvent, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
-pub(crate) use subagent_tree::{
-    aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions,
-};
-pub use subagent_tree::{SubagentTreeNode, SubagentTypeStats};
+pub use subagent_tree::SubagentTreeNode;
+pub(crate) use subagent_tree::{build_subagent_tree, BuildSubagentTreeOptions};
+pub(crate) use subagent_types::aggregate_subagent_type_stats;
+pub use subagent_types::SubagentTypeStats;
 pub(crate) use tool_call_patterns::detect_tool_call_patterns;
 pub use tool_call_patterns::{tool_call_pattern_to_finding, DetectToolCallPatternsOptions};
 pub(crate) use tool_output_bloat::detect_tool_output_bloat;

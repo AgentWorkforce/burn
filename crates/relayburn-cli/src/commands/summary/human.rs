@@ -446,7 +446,7 @@ pub(super) fn render_subagent_tree_report(
     out.push(format!("session: {}", report.session_id));
     out.push(format!(
         "total: {} across {} turn{}",
-        format_usd(root.cumulative_cost),
+        crate::render::format::format_cost(root.cumulative_cost),
         format_uint(root.cumulative_turns),
         if root.cumulative_turns == 1 { "" } else { "s" },
     ));
@@ -498,7 +498,7 @@ pub(super) fn render_node_line(node: &SubagentTreeNode, indent: &str) -> String 
         node.label,
         relationship,
         model,
-        format_usd(node.cumulative_cost),
+        crate::render::format::format_cost(node.cumulative_cost),
         format_uint(node.cumulative_turns),
         if node.cumulative_turns == 1 { "" } else { "s" },
     )

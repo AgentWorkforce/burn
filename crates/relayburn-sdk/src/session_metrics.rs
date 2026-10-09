@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::analyze::{cost_for_turn, load_pricing, provider_for, PricingTable};
 use crate::reader::TurnRecord;
 use crate::source::locate::{load_session, HistoryStoreOptions, SessionLocator};
-use crate::source::records_from_evidence;
+use crate::source::records_with_children;
 use crate::Harness;
 
 pub const SESSION_METRICS_SCHEMA: &str = "burn.session-metrics.v1";
@@ -54,20 +54,26 @@ impl SessionTokenMetrics {
         self.cache_read_tokens = self.cache_read_tokens.saturating_add(usage.cache_read);
         self.cache_write_tokens = self.cache_write_tokens.saturating_add(cache_write);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(usage.reasoning);
-        self.total_tokens = self
-            .total_tokens
-            .saturating_add(usage.input)
-            .saturating_add(usage.output)
-            // Codex includes reasoning in output; the other supported sources
-            // expose a separate, billable reasoning bucket.
-            .saturating_add(if matches!(turn.source, crate::reader::SourceKind::Codex) {
-                0
-            } else {
-                usage.reasoning
-            })
-            .saturating_add(usage.cache_read)
-            .saturating_add(cache_write);
+        self.total_tokens = self.total_tokens.saturating_add(turn_total_tokens(turn));
     }
+}
+
+/// Billable tokens of one turn.
+pub(crate) fn turn_total_tokens(turn: &TurnRecord) -> u64 {
+    let usage = &turn.usage;
+    usage
+        .input
+        .saturating_add(usage.output)
+        // Codex includes reasoning in output; the other supported sources
+        // expose a separate, billable reasoning bucket.
+        .saturating_add(if matches!(turn.source, crate::reader::SourceKind::Codex) {
+            0
+        } else {
+            usage.reasoning
+        })
+        .saturating_add(usage.cache_read)
+        .saturating_add(usage.cache_create_5m)
+        .saturating_add(usage.cache_create_1h)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,7 +132,7 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
         },
         &HistoryStoreOptions::default(),
     )?;
-    let records = records_from_evidence(&loaded.evidence);
+    let records = records_with_children(&loaded.evidence, &loaded.children);
     let pricing = load_pricing(options.pricing_path.as_deref());
     session_metrics(options.harness, &records.turns, &pricing)
 }

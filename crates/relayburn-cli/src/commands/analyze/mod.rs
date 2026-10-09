@@ -15,6 +15,7 @@ use crate::render::json::render_json;
 use crate::render::stdout::write_stdout;
 
 mod human;
+mod subagents;
 
 /// Per-command flags for `burn analyze`.
 #[derive(Debug, Clone, Args)]

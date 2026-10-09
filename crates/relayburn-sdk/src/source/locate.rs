@@ -15,6 +15,7 @@ use ai_hist::{
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use super::delegated::delegated_children;
 use super::stage::{stage_path, Staged};
 use crate::reader::Harness;
 
@@ -50,6 +51,9 @@ pub struct HistoryStoreOptions {
 /// One session's evidence plus where it was read from.
 pub(crate) struct LoadedSession {
     pub evidence: SessionEvidence,
+    /// Evidence of the Claude subagents the session delegated work to,
+    /// nested ones included; see [`super::delegated`].
+    pub children: Vec<SessionEvidence>,
     /// Provider roots of the harness install the session came from. `None`
     /// when the artifact was staged outside any harness install.
     pub roots: Option<ProviderRoots>,
@@ -95,8 +99,10 @@ fn load_by_id(
             store.roots().home.display(),
         )
     })?;
+    let evidence = read_evidence(&store, &reference)?;
     Ok(LoadedSession {
-        evidence: read_evidence(&store, &reference)?,
+        children: delegated_children(&store, &evidence)?,
+        evidence,
         roots: Some(store.roots().clone()),
         _staged: None,
     })
@@ -154,8 +160,10 @@ fn load_by_path(harness: Harness, path: &std::path::Path) -> Result<LoadedSessio
     let reference = staged
         .hydrate(&store)
         .map_err(|error| anyhow!("read {harness} session from {}: {error:#}", path.display()))?;
+    let evidence = read_evidence(&store, &reference)?;
     Ok(LoadedSession {
-        evidence: read_evidence(&store, &reference)?,
+        children: delegated_children(&store, &evidence)?,
+        evidence,
         roots: staged.install_roots(),
         _staged: Some(staged),
     })

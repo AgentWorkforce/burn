@@ -12,9 +12,9 @@ use crate::reader::{RelationshipType, SessionRelationshipRecord, TurnRecord};
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 
-use crate::analyze::cost::total_cost_for_turn;
+use crate::analyze::cost::cost_for_turn;
 use crate::analyze::pricing::PricingTable;
-use crate::analyze::util::percentile;
+use crate::session_metrics::turn_total_tokens;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,9 +28,16 @@ pub struct SubagentTreeNode {
     pub description: Option<String>,
     pub models: Vec<String>,
     pub self_turns: u64,
-    pub self_cost: f64,
+    /// Billable tokens of this node's own turns.
+    pub self_tokens: u64,
+    /// USD of this node's own turns; `None` (unknown) once any is unpriced.
+    pub self_cost: Option<f64>,
     pub cumulative_turns: u64,
-    pub cumulative_cost: f64,
+    /// Billable tokens of this node and every node under it.
+    pub cumulative_tokens: u64,
+    /// USD of this node and every node under it; `None` (unknown) once any
+    /// turn in the subtree is unpriced.
+    pub cumulative_cost: Option<f64>,
     pub depth: i32,
     pub children: Vec<SubagentTreeNode>,
 }
@@ -75,12 +82,33 @@ struct MutableNode {
     relationship_type: RelationshipType,
     subagent_type: Option<String>,
     description: Option<String>,
-    self_turns: u64,
-    self_cost: f64,
-    cumulative_turns: u64,
-    cumulative_cost: f64,
+    self_spend: Spend,
+    cumulative_spend: Spend,
     depth: i32,
     children: Vec<String>,
+}
+
+/// Turns, tokens and USD of a set of turns; USD is unknown once any turn
+/// is unpriced.
+#[derive(Debug, Default, Clone, Copy)]
+struct Spend {
+    turns: u64,
+    tokens: u64,
+    usd: f64,
+    unpriced: bool,
+}
+
+impl Spend {
+    fn add(&mut self, other: &Spend) {
+        self.turns += other.turns;
+        self.tokens += other.tokens;
+        self.usd += other.usd;
+        self.unpriced |= other.unpriced;
+    }
+
+    fn cost(&self) -> Option<f64> {
+        (!self.unpriced).then_some(self.usd)
+    }
 }
 
 impl MutableNode {
@@ -91,10 +119,8 @@ impl MutableNode {
             relationship_type,
             subagent_type: None,
             description: None,
-            self_turns: 0,
-            self_cost: 0.0,
-            cumulative_turns: 0,
-            cumulative_cost: 0.0,
+            self_spend: Spend::default(),
+            cumulative_spend: Spend::default(),
             depth: -1,
             children: Vec::new(),
         }
@@ -351,7 +377,7 @@ fn collect_attached_child_ids(state: &GraphState) -> IndexSet<String> {
 fn attach_turn_costs(state: &mut GraphState, turns: &[TurnRecord], pricing: &PricingTable) {
     let mut unresolved_by_parent: IndexMap<String, String> = IndexMap::new();
     for t in turns {
-        let cost = total_cost_for_turn(t, pricing);
+        let cost = cost_for_turn(t, pricing).map(|c| c.total);
         let sub = t.subagent.as_ref();
         if let Some(s) = sub {
             if s.agent_id.is_none() {
@@ -391,12 +417,16 @@ fn attach_turn_costs(state: &mut GraphState, turns: &[TurnRecord], pricing: &Pri
     }
 }
 
-fn add_turn_to_node(state: &mut GraphState, id: &str, turn: &TurnRecord, cost: f64) {
+fn add_turn_to_node(state: &mut GraphState, id: &str, turn: &TurnRecord, cost: Option<f64>) {
     let Some(node) = state.node_by_id.get_mut(id) else {
         return;
     };
-    node.self_turns += 1;
-    node.self_cost += cost;
+    node.self_spend.add(&Spend {
+        turns: 1,
+        tokens: turn_total_tokens(turn),
+        usd: cost.unwrap_or(0.0),
+        unpriced: cost.is_none(),
+    });
     if !turn.model.is_empty() {
         let entry = state.models_by_node.entry(id.to_string()).or_default();
         entry.insert(turn.model.clone());
@@ -431,21 +461,16 @@ fn finalize_tree(state: &mut GraphState, root_id: &str) {
 fn fold_cumulative(nodes: &mut IndexMap<String, MutableNode>, root_id: &str) {
     let order = topo_post_order(nodes, root_id);
     for id in order {
-        let (self_cost, self_turns, children) = {
+        let (mut spend, children) = {
             let n = nodes.get(&id).unwrap();
-            (n.self_cost, n.self_turns, n.children.clone())
+            (n.self_spend, n.children.clone())
         };
-        let mut cost = self_cost;
-        let mut turns = self_turns;
         for c in &children {
             if let Some(child) = nodes.get(c) {
-                cost += child.cumulative_cost;
-                turns += child.cumulative_turns;
+                spend.add(&child.cumulative_spend);
             }
         }
-        let n = nodes.get_mut(&id).unwrap();
-        n.cumulative_cost = cost;
-        n.cumulative_turns = turns;
+        nodes.get_mut(&id).unwrap().cumulative_spend = spend;
     }
 }
 
@@ -477,12 +502,22 @@ fn sort_tree(nodes: &mut IndexMap<String, MutableNode>, root_id: &str) {
     let order = topo_post_order(nodes, root_id);
     for id in order {
         let mut children = nodes.get(&id).unwrap().children.clone();
-        children.sort_by(|a, b| {
-            let ca = nodes.get(a).map(|n| n.cumulative_cost).unwrap_or(0.0);
-            let cb = nodes.get(b).map(|n| n.cumulative_cost).unwrap_or(0.0);
-            cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let spend = |id: &String| {
+            nodes
+                .get(id)
+                .map(|n| n.cumulative_spend)
+                .unwrap_or_default()
+        };
+        children.sort_by(|a, b| spend_order(&spend(b), &spend(a)));
         nodes.get_mut(&id).unwrap().children = children;
+    }
+}
+
+/// Larger spend first: by USD when both are priced, else by tokens.
+fn spend_order(a: &Spend, b: &Spend) -> std::cmp::Ordering {
+    match (a.cost(), b.cost()) {
+        (Some(ca), Some(cb)) => ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal),
+        _ => a.tokens.cmp(&b.tokens),
     }
 }
 
@@ -529,95 +564,15 @@ fn materialize_session_tree(
         subagent_type: n.subagent_type.clone(),
         description: n.description.clone(),
         models: model_vec,
-        self_turns: n.self_turns,
-        self_cost: n.self_cost,
-        cumulative_turns: n.cumulative_turns,
-        cumulative_cost: n.cumulative_cost,
+        self_turns: n.self_spend.turns,
+        self_tokens: n.self_spend.tokens,
+        self_cost: n.self_spend.cost(),
+        cumulative_turns: n.cumulative_spend.turns,
+        cumulative_tokens: n.cumulative_spend.tokens,
+        cumulative_cost: n.cumulative_spend.cost(),
         depth: n.depth,
         children,
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubagentTypeStats {
-    pub subagent_type: String,
-    pub invocations: u64,
-    pub turns: u64,
-    pub total_cost: f64,
-    pub median_cost: f64,
-    pub p95_cost: f64,
-    pub mean_cost: f64,
-}
-
-/// Aggregate subagent invocations across sessions by `subagentType`. An
-/// invocation is the unique `(sessionId, agentId)` pair so the same agent id
-/// re-used across sessions doesn't collide.
-pub(crate) fn aggregate_subagent_type_stats(
-    turns: &[TurnRecord],
-    opts: &BuildSubagentTreeOptions<'_>,
-) -> Vec<SubagentTypeStats> {
-    #[derive(Default)]
-    struct Inv {
-        ty: String,
-        turns: u64,
-        cost: f64,
-    }
-    let mut by_invocation: IndexMap<String, Inv> = IndexMap::new();
-    for t in turns {
-        let Some(sub) = &t.subagent else { continue };
-        let Some(agent_id) = &sub.agent_id else {
-            continue;
-        };
-        let ty = sub
-            .subagent_type
-            .clone()
-            .unwrap_or_else(|| "(unknown)".to_string());
-        let key = format!("{}:{}", t.session_id, agent_id);
-        let inv = by_invocation.entry(key).or_insert_with(|| Inv {
-            ty: ty.clone(),
-            turns: 0,
-            cost: 0.0,
-        });
-        if inv.ty == "(unknown)" && ty != "(unknown)" {
-            inv.ty = ty;
-        }
-        inv.turns += 1;
-        inv.cost += total_cost_for_turn(t, opts.pricing);
-    }
-    let mut by_type: IndexMap<String, Vec<f64>> = IndexMap::new();
-    let mut totals_by_type: IndexMap<String, (u64, f64)> = IndexMap::new();
-    for inv in by_invocation.values() {
-        by_type.entry(inv.ty.clone()).or_default().push(inv.cost);
-        let entry = totals_by_type.entry(inv.ty.clone()).or_insert((0, 0.0));
-        entry.0 += inv.turns;
-        entry.1 += inv.cost;
-    }
-    let mut out: Vec<SubagentTypeStats> = Vec::new();
-    for (ty, mut costs) in by_type {
-        let (turns, total) = *totals_by_type.get(&ty).unwrap();
-        costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let invocations = costs.len() as u64;
-        out.push(SubagentTypeStats {
-            subagent_type: ty,
-            invocations,
-            turns,
-            total_cost: total,
-            median_cost: percentile(&costs, 0.5),
-            p95_cost: percentile(&costs, 0.95),
-            mean_cost: if invocations > 0 {
-                total / invocations as f64
-            } else {
-                0.0
-            },
-        });
-    }
-    out.sort_by(|a, b| {
-        b.total_cost
-            .partial_cmp(&a.total_cost)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    out
 }
 
 #[cfg(test)]

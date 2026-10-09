@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::analyze::pricing::load_builtin_pricing;
+use crate::analyze::subagent_types::aggregate_subagent_type_stats;
 use crate::reader::{
     RelationshipSourceKind, RelationshipType, SourceKind, Subagent, ToolCall, TurnRecord, Usage,
 };
@@ -156,7 +157,9 @@ fn folds_cumulative_cost_from_nested_subagents_up_to_the_main_root() {
     assert_eq!(root.depth, 0);
     assert_eq!(root.self_turns, 2);
     assert_eq!(root.cumulative_turns, 5);
-    assert!(root.cumulative_cost > root.self_cost);
+    assert!(root.cumulative_cost.unwrap() > root.self_cost.unwrap());
+    assert_eq!(root.self_tokens, 4000);
+    assert_eq!(root.cumulative_tokens, 10_000);
 
     assert_eq!(root.children.len(), 1);
     let outer = &root.children[0];
@@ -171,12 +174,15 @@ fn folds_cumulative_cost_from_nested_subagents_up_to_the_main_root() {
     assert_eq!(inner.depth, 2);
     assert_eq!(inner.self_turns, 1);
     assert_eq!(inner.cumulative_turns, 1);
-    assert!((inner.cumulative_cost - inner.self_cost).abs() < 1e-12);
+    let cost = |c: Option<f64>| c.expect("priced");
+    assert!((cost(inner.cumulative_cost) - cost(inner.self_cost)).abs() < 1e-12);
 
     assert!(
-        (outer.cumulative_cost - (outer.self_cost + inner.cumulative_cost)).abs() < 1e-12,
+        (cost(outer.cumulative_cost) - (cost(outer.self_cost) + cost(inner.cumulative_cost))).abs()
+            < 1e-12,
         "outer cumulative is selfCost + inner.cumulativeCost"
     );
+    assert_eq!(outer.cumulative_tokens, 6000);
 }
 
 #[test]
@@ -455,4 +461,44 @@ fn reports_median_p95_mean_total_per_subagent_type_across_invocations() {
     assert_eq!(rev.turns, 1);
     assert!((rev.median_cost - rev.total_cost).abs() < 1e-12);
     assert!((rev.p95_cost - rev.total_cost).abs() < 1e-12);
+}
+
+#[test]
+fn an_unpriced_subagent_makes_its_cost_and_every_ancestors_unknown() {
+    let pricing = load_builtin_pricing();
+    let turns = vec![
+        make_turn(
+            "s",
+            "m1",
+            "claude-sonnet-4-6",
+            0,
+            SourceKind::ClaudeCode,
+            None,
+        ),
+        make_turn(
+            "s",
+            "m2",
+            "no-such-model",
+            1,
+            SourceKind::ClaudeCode,
+            Some(sub(Some("a-unpriced"), Some("s"), Some("Explore"), None)),
+        ),
+        make_turn(
+            "s",
+            "m3",
+            "claude-haiku-4-5",
+            2,
+            SourceKind::ClaudeCode,
+            Some(sub(Some("a-priced"), Some("s"), Some("Plan"), None)),
+        ),
+    ];
+    let trees = build_subagent_tree(&turns, &BuildSubagentTreeOptions::new(&pricing));
+    let root = trees.get("s").expect("root");
+    assert!(root.self_cost.is_some());
+    assert_eq!(root.cumulative_cost, None);
+    assert_eq!(root.cumulative_tokens, 6000);
+    let child = |id: &str| root.children.iter().find(|c| c.node_id == id).unwrap();
+    assert_eq!(child("a-unpriced").self_cost, None);
+    assert_eq!(child("a-unpriced").self_tokens, 2000);
+    assert!(child("a-priced").cumulative_cost.is_some_and(|c| c > 0.0));
 }

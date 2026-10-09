@@ -62,6 +62,9 @@ pub struct SubagentTranscript {
     /// Raw JSONL rows from the sidecar file, one `serde_json::Value` per
     /// line. Empty when the file existed but had no parseable lines.
     pub records: Vec<Value>,
+    /// Epoch-millis of the subagent's earliest record, which places an
+    /// unpaired subagent under the latest turn that started before it.
+    pub started_at_ms: Option<i64>,
     /// `tool_use.id` on the parent transcript's Task dispatch whose
     /// matching tool_result carries `toolUseResult.agentId == self.agent_id`.
     /// `None` for orphans — those should be surfaced as `UnattachedGroup`
@@ -127,6 +130,7 @@ pub fn discover_subagents(session_dir: &Path, session_id: &str) -> Vec<SubagentT
             agent_type,
             description,
             meta_tool_use_id,
+            started_at_ms: first_record_ts_ms(&records),
             records,
             paired_tool_use_id: None,
             source_path: path,
@@ -176,6 +180,28 @@ pub fn pair_to_main(main: &[Value], subs: Vec<SubagentTranscript>) -> Vec<Subage
             t
         })
         .collect()
+}
+
+/// Extract the earliest `timestamp` field from a subagent's raw JSONL
+/// records, returning epoch-millis. Used by the orphan-assignment rule
+/// to place sidecars under the latest preceding turn.
+fn first_record_ts_ms(records: &[serde_json::Value]) -> Option<i64> {
+    let mut earliest: Option<i64> = None;
+    for rec in records {
+        let ts_str = rec
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .or_else(|| rec.get("ts").and_then(|v| v.as_str()));
+        if let Some(s) = ts_str {
+            if let Some(ms) = crate::util::time::parse_iso_ms(s) {
+                earliest = Some(match earliest {
+                    Some(e) => e.min(ms),
+                    None => ms,
+                });
+            }
+        }
+    }
+    earliest
 }
 
 /// Strip `agent-` prefix and `.jsonl` suffix from a sidecar filename.
@@ -590,6 +616,7 @@ mod tests {
             description: None,
             meta_tool_use_id: None,
             records: vec![],
+            started_at_ms: None,
             paired_tool_use_id: None,
             source_path: PathBuf::from("/tmp/agent-aaa.jsonl"),
         }];
@@ -609,6 +636,7 @@ mod tests {
             description: None,
             meta_tool_use_id: None,
             records: vec![],
+            started_at_ms: None,
             paired_tool_use_id: None,
             source_path: PathBuf::from("/tmp/agent-orphan.jsonl"),
         }];
@@ -643,6 +671,7 @@ mod tests {
             description: None,
             meta_tool_use_id: Some("toolu_meta".to_string()),
             records: vec![],
+            started_at_ms: None,
             paired_tool_use_id: None,
             source_path: PathBuf::from("/tmp/agent-bbb.jsonl"),
         }];
@@ -662,6 +691,7 @@ mod tests {
             description: None,
             meta_tool_use_id: Some("toolu_phantom".to_string()),
             records: vec![],
+            started_at_ms: None,
             paired_tool_use_id: None,
             source_path: PathBuf::from("/tmp/agent-ccc.jsonl"),
         }];

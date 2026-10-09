@@ -30,7 +30,7 @@ use crate::analyze::{load_claude_settings, project_claude_settings_path, LoadedC
 use crate::query_verbs::{default_hotspots_finding_kinds, detect_hotspots, HotspotEnvironment};
 use crate::reader::Harness;
 use crate::source::locate::{load_session, HistoryStoreOptions, SessionLocator};
-use crate::source::{records_from_evidence, SessionRecords};
+use crate::source::{records_with_children, SessionRecords};
 
 mod document;
 mod explain;
@@ -82,6 +82,11 @@ pub struct AnalysisSettings {
     /// Provider roots of the harness install the session ran under. The
     /// installed-surface (ghost-surface) and settings checks need them.
     pub roots: Option<ProviderRoots>,
+    /// Evidence of the Claude subagents the session delegated work to
+    /// (each [`ai_hist::SessionStore::delegated_descendants`] id read with
+    /// [`ai_hist::SessionStore::session`]). Their turns are billed and
+    /// analyzed as subagent work of the session.
+    pub delegated_children: Vec<SessionEvidence>,
 }
 
 /// Analyze one session: resolve it through relayhistory, then run every
@@ -94,6 +99,7 @@ pub fn analyze_session(opts: AnalyzeSessionOptions) -> Result<SessionAnalysis> {
             pricing_path: opts.pricing_path,
             project_dir: opts.project_dir,
             roots: loaded.roots.clone(),
+            delegated_children: loaded.children,
         },
     )?;
     if let SessionLocator::Path { path, .. } = &opts.session {
@@ -114,11 +120,13 @@ pub fn analyze_evidence(
             evidence.session.source
         )
     })?;
-    let records = records_from_evidence(evidence);
+    let children = &settings.delegated_children;
+    let records = records_with_children(evidence, children);
     let pricing = load_pricing(settings.pricing_path.as_deref());
     let inputs = Inputs {
         harness,
         evidence,
+        children,
         records: &records,
         pricing: &pricing,
         project_dir: settings
@@ -143,6 +151,8 @@ fn harness_of(source: ai_hist::Source) -> Option<Harness> {
 pub(crate) struct Inputs<'a> {
     harness: Harness,
     evidence: &'a SessionEvidence,
+    /// The delegated subagents folded into `records`.
+    children: &'a [SessionEvidence],
     records: &'a SessionRecords,
     pricing: &'a PricingTable,
     project_dir: Option<PathBuf>,
