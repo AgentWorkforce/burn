@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 use ai_hist::SessionStore;
-use ai_hist::{DiscoveryState, SessionEvidence, SessionIdentity, SessionQuery, SessionRef, Source};
+use ai_hist::{DiscoveryState, SessionEvidence, SessionIdentity, SessionRef, Source};
 
 use super::pending_stamps::{
     resolve_pending_stamps_for_session_in, PendingStampHarness, PendingStampSessionCandidate,
@@ -19,7 +19,9 @@ use super::IngestReport;
 use crate::ledger::Ledger;
 use crate::reader::{build_inferences, ContentStoreMode};
 use crate::source::SessionRecords;
-use crate::source::{delegated_children, records_from_evidence, records_with_children};
+use crate::source::{
+    delegated_children, records_from_evidence, records_query, records_with_children,
+};
 
 pub(super) struct ImportContext<'a> {
     pub content_mode: ContentStoreMode,
@@ -109,7 +111,7 @@ fn import_one(
         return Ok(IngestReport::empty());
     };
     let reference = SessionRef::id(source, session.session_id.clone());
-    let Some(evidence) = store.session(&reference, SessionQuery::default())? else {
+    let Some(evidence) = store.session(&reference, records_query())? else {
         return Ok(IngestReport::empty());
     };
     // A Claude subagent with no spawner on record has no session to be

@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 
 use ai_hist::{
-    DiscoveryOptions, HydrateOptions, HydrateStatus, ProviderRoots, SessionEvidence, SessionQuery,
-    SessionRef, SessionStore, Source, StoreOptions,
+    DiscoveryOptions, HydrateOptions, HydrateStatus, ProviderRoots, SessionEvidence, SessionRef,
+    SessionStore, Source, StoreOptions,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -169,7 +169,7 @@ pub(super) fn read_evidence(
     reference: &SessionRef,
 ) -> Result<SessionEvidence> {
     store
-        .session(reference, SessionQuery::default())
+        .session(reference, super::records_query())
         .context("read session evidence")?
         .ok_or_else(|| anyhow!("relayhistory holds no evidence for {reference:?}"))
 }

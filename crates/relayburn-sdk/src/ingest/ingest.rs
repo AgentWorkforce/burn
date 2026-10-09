@@ -132,7 +132,7 @@ pub(super) fn pull(
     let (changed, head) = super::watermark::changed_since(store, from)?;
     opts.progress("importing sessions");
     let imported = import_sessions(ledger, store, &opts.context(), changed)?;
-    if imported.complete {
+    if imported.complete && from != Some(head) {
         super::watermark::store(ledger, head)?;
     }
     Ok(imported.report)

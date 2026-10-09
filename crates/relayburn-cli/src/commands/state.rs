@@ -268,7 +268,7 @@ fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
             return report_error(&err, globals);
         }
         if let Err(err) = writeln_stdout(
-            "  re-ingest from upstream session files via 'burn ingest' to \
+            "  re-ingest from session history via 'burn ingest' to \
              repopulate.",
         ) {
             return report_error(&err, globals);
@@ -446,8 +446,8 @@ fn parse_retention(s: &str) -> Option<relayburn_sdk::Retention> {
 //
 // Wipes derived state under `$RELAYBURN_HOME`: truncate every derivable
 // + first-party table inside `burn.sqlite` and the `content` table
-// inside `content.sqlite`, then blank the ingest cursors so the next
-// `burn ingest` walks every upstream file from offset 0.
+// inside `content.sqlite`, then blank the ingest watermark so the next
+// `burn ingest` rebuilds every session from the relayhistory store.
 //
 // Without `--force`, this is a dry-run: it opens the ledger, counts
 // what would be dropped, prints the report, and exits 0. With
@@ -592,7 +592,7 @@ fn print_reset_report(
             }
             None => {
                 if let Err(err) = writeln_stdout(
-                    "  re-ingest from upstream session files via 'burn ingest' to \
+                    "  re-ingest from session history via 'burn ingest' to \
                      repopulate (or re-run with --reingest).",
                 ) {
                     return report_error(&err, globals);

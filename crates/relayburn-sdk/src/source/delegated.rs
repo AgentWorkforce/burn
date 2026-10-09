@@ -40,7 +40,7 @@ pub(crate) fn delegated_children(
     if root.session.source != Source::Claude {
         return Ok(Vec::new());
     }
-    claude_children(store, &root.session.session_id, SessionQuery::default())
+    claude_children(store, &root.session.session_id, super::records_query())
 }
 
 /// [`delegated_children`] of the Claude session `session_id`, each read

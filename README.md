@@ -379,7 +379,7 @@ content/search data in `content.sqlite`.
 | `burn state prune --days 30` | Prune content older than 30 days. |
 
 Follow any `state rebuild` command with `burn ingest` to repopulate derived
-tables from the harness session stores. Before a forced reset, back up
+tables from the relayhistory store. Before a forced reset, back up
 enrichment with `burn stamps export`; ingest cannot reconstruct stamps from
 harness logs.
 
@@ -592,8 +592,8 @@ await writePendingStamp({
 });
 ```
 
-Then spawn the harness normally and let `burn ingest` or `ingest()` scan the
-session stores. Claude launchers can either preallocate `--session-id` and
+Then spawn the harness normally and let `burn ingest` or `ingest()` pick the
+session up. Claude launchers can either preallocate `--session-id` and
 write an exact session stamp from Rust, or use `writePendingStamp({ harness:
 "claude", ... })` when the final session ID is not available before spawn.
 

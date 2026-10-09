@@ -51,6 +51,21 @@ pub(crate) use delegated::{
 };
 pub(crate) use relayhistory::records_from_evidence;
 
+/// The evidence burn derives records from: everything but the prompt log
+/// and commit links, which no record reads.
+pub(crate) fn records_query() -> ai_hist::SessionQuery {
+    use ai_hist::EvidenceKind;
+    let mut query = ai_hist::SessionQuery::default();
+    query.kinds = Some(vec![
+        EvidenceKind::SessionEvent,
+        EvidenceKind::ToolCall,
+        EvidenceKind::FileEdit,
+        EvidenceKind::Relationship,
+        EvidenceKind::SessionMarker,
+    ]);
+    query
+}
+
 /// Whether burn accounts for sessions of `source`.
 pub(crate) fn is_accounted(source: ai_hist::Source) -> bool {
     relayhistory::source_kind(source).is_some()
