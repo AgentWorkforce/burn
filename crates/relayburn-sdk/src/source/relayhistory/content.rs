@@ -53,6 +53,13 @@ impl Context<'_> {
                     tool_result: None,
                 };
                 let record = match (message.role, block.kind) {
+                    // A block with no text (a signed thinking record, an
+                    // OpenCode step-only envelope) carries no content.
+                    (_, BlockKind::Text | BlockKind::Thinking)
+                        if block.text.as_deref().is_none_or(str::is_empty) =>
+                    {
+                        continue
+                    }
                     (role, BlockKind::Text) => ContentRecord {
                         role: content_role(role),
                         text: block.text.clone(),
