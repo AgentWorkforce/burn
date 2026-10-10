@@ -942,9 +942,14 @@ mod tests {
         std::fs::create_dir(&project).expect("create fixture project");
         std::fs::write(
             project.join("AGENTS.md"),
-            "# Fixture instructions\n\nKeep tests deterministic.\n",
+            "# Fixture instructions\n\nKeep tests deterministic.\n\n## Testing\n\nUse fakes for runtimes.\n\n## Style\n\nPrefer small functions.\n",
         )
         .expect("write fixture instruction file");
+        std::fs::write(
+            project.join("CLAUDE.md"),
+            "# Claude fixture\n\n## Notes\n\nClaude-only guidance.\n\n## More\n\nExtra notes.\n",
+        )
+        .expect("write fixture Claude instruction file");
         let mut handle =
             Ledger::open(LedgerOpenOptions::with_home(home.path())).expect("open fixture ledger");
         let project_string = project.to_string_lossy().into_owned();
@@ -1097,7 +1102,20 @@ mod tests {
             )
             .await
             .expect("known overhead trim tool");
-        assert!(assert_tool_success(&trim)["summary"].is_object());
+        let trim = assert_tool_success(&trim);
+        assert!(trim["summary"].is_object());
+        // `kind` and `top` reach the SDK: only AGENTS.md sections, and one
+        // recommendation for the project file despite its several sections.
+        let recs = trim["recommendations"].as_array().expect("recommendations");
+        assert!(
+            recs.iter().all(|r| r["kind"] == json!("agents-md")),
+            "{recs:?}"
+        );
+        let project_recs = recs
+            .iter()
+            .filter(|r| r["scope"] == json!("project"))
+            .count();
+        assert_eq!(project_recs, 1, "{recs:?}");
 
         let compare = server
             .call_tool(

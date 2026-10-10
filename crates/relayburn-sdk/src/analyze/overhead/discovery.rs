@@ -110,14 +110,9 @@ fn add_file(
     let Some(bytes) = readable_nonempty_bytes(path) else {
         return;
     };
+    // Callers pass a non-blank prefix: the whole (non-blank) file, or the
+    // Codex budget prefix that `add_codex_project_chain` already checked.
     let content_bytes = content_bytes.min(bytes.len());
-    if content_bytes == 0
-        || String::from_utf8_lossy(&bytes[..content_bytes])
-            .trim()
-            .is_empty()
-    {
-        return;
-    }
 
     // Canonical identity collapses symlink aliases such as
     // `.claude/CLAUDE.md -> ../CLAUDE.md`. Keep different filename kinds as

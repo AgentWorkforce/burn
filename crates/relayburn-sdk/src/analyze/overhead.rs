@@ -459,6 +459,76 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn scope_wire_strings_match_the_json_contract() {
+        assert_eq!(OverheadFileScope::User.wire_str(), "user");
+        assert_eq!(OverheadFileScope::Ancestor.wire_str(), "ancestor");
+        assert_eq!(OverheadFileScope::Project.wire_str(), "project");
+    }
+
+    #[test]
+    fn codex_project_budget_is_the_32_kib_default() {
+        assert_eq!(DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES, 32_768);
+    }
+
+    #[test]
+    fn process_roots_discover_project_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        mark_git_root(&root);
+        write_fixture(&root.join("CLAUDE.md"), "project instructions");
+        let root = fs::canonicalize(&root).unwrap();
+        let files = find_overhead_files(&root);
+        let project = root.join("CLAUDE.md").to_string_lossy().into_owned();
+        assert!(
+            files
+                .iter()
+                .any(|f| f.path == project && f.scope == OverheadFileScope::Project),
+            "{files:?}"
+        );
+    }
+
+    #[test]
+    fn same_harness_aliases_merge_only_within_one_filename_kind() {
+        use std::os::unix::fs::symlink;
+
+        // OpenCode reads one physical file twice: as its user-global
+        // CLAUDE.md fallback and as a project AGENTS.md symlinked to it.
+        // Codex's exhausted budget gives its AGENTS.md row a shorter prefix,
+        // so OpenCode's full-length AGENTS.md read gets its own row instead
+        // of folding into the CLAUDE.md-kind row.
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let shared = home.join(".claude/CLAUDE.md");
+        write_fixture(&shared, "shared physical instructions");
+        let root = home.join("repo");
+        mark_git_root(&root);
+        write_fixture(
+            &root.join("AGENTS.md"),
+            &"a".repeat(DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES - 8),
+        );
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        symlink(&shared, sub.join("AGENTS.md")).unwrap();
+
+        let files = discover_fixture(home, &sub);
+        let sub_agents: Vec<&OverheadFile> = files
+            .iter()
+            .filter(|f| f.kind == OverheadFileKind::AgentsMd && f.path.ends_with("sub/AGENTS.md"))
+            .collect();
+        assert_eq!(sub_agents.len(), 2, "{files:?}");
+        assert_eq!(sub_agents[0].applies_to, vec![SourceKind::Codex]);
+        assert_eq!(sub_agents[1].applies_to, vec![SourceKind::Opencode]);
+        let user = files
+            .iter()
+            .find(|f| f.path == shared.to_string_lossy())
+            .expect("user CLAUDE.md row");
+        assert_eq!(
+            user.applies_to,
+            vec![SourceKind::ClaudeCode, SourceKind::Opencode]
+        );
+    }
+
+    #[test]
     fn physical_identity_deduplicates_claude_symlink_and_hardlink_aliases() {
         use std::os::unix::fs::symlink;
 
