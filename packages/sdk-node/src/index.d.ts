@@ -338,7 +338,9 @@ export interface ContextDelta {
 
 export interface ContextDeltaOptions {
   session?: string;
-  /** Relative range (`24h`, `7d`, `4w`, `2m`). ISO timestamps are not accepted. */
+  /** Project path or project key. */
+  project?: string;
+  /** Relative range (`24h`, `7d`, `4w`, `2m`) or ISO timestamp. */
   since?: string;
   top?: number;
   minDelta?: number;

@@ -1069,8 +1069,10 @@ pub fn flow_graph(opts: FlowGraphOptions) -> Result<BigIntPromoting, BurnError> 
 #[napi(object)]
 pub struct ContextDeltaOptions {
     pub session: Option<String>,
-    /// Relative range (`24h`, `7d`, `4w`, `2m`). ISO timestamps are not
-    /// accepted — the SDK's context-delta window is a `Duration`.
+    /// Project path or project key; matches the ledger's `project` or
+    /// `project_key`.
+    pub project: Option<String>,
+    /// Relative range (`24h`, `7d`, `4w`, `2m`) or ISO timestamp.
     pub since: Option<String>,
     pub top: Option<u32>,
     pub min_delta: Option<u32>,
@@ -1087,6 +1089,7 @@ pub struct ContextDeltaOptions {
 pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(ContextDeltaOptions {
         session: None,
+        project: None,
         since: None,
         top: None,
         min_delta: None,
@@ -1095,7 +1098,8 @@ pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromotin
     });
     let raw = sdk::ContextDeltaOpts {
         session: opts.session,
-        since: parse_relative_duration(opts.since.as_deref())?,
+        project: opts.project,
+        since: opts.since,
         top: opts.top,
         min_delta: opts.min_delta.map(u64::from),
         owner: parse_owner_filter(opts.owner.as_deref())?,
@@ -1104,46 +1108,6 @@ pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromotin
     let value = serde_json::to_value(&result)
         .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize context_delta: {e}")))?;
     Ok(BigIntPromoting(value))
-}
-
-fn parse_relative_duration(raw: Option<&str>) -> Result<Option<Duration>, BurnError> {
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    let bytes = raw.as_bytes();
-    let hint = "expected a relative range like 24h, 7d, 4w, or 2m";
-    if bytes.len() < 2 {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let unit = bytes[bytes.len() - 1] as char;
-    if !matches!(unit, 'h' | 'd' | 'w' | 'm') {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let num = &raw[..raw.len() - 1];
-    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let n: u64 = num
-        .parse()
-        .map_err(|_| invalid_arg(format!("contextDelta: invalid since: {raw} ({hint})")))?;
-    let secs = match unit {
-        'h' => n.checked_mul(3_600),
-        'd' => n.checked_mul(86_400),
-        'w' => n.checked_mul(7 * 86_400),
-        'm' => n.checked_mul(30 * 86_400),
-        _ => None,
-    }
-    .ok_or_else(|| invalid_arg(format!("contextDelta: since overflow: {raw}")))?;
-    Ok(Some(Duration::from_secs(secs)))
 }
 
 fn parse_owner_filter(raw: Option<&str>) -> Result<sdk::ContextDeltaOwnerFilter, BurnError> {
@@ -1737,22 +1701,6 @@ mod tests {
         );
         assert_eq!(parse_fidelity_class(None).unwrap(), None);
         assert!(parse_fidelity_class(Some("usage_only")).is_err());
-    }
-
-    #[test]
-    fn parse_relative_duration_accepts_cli_ranges() {
-        assert_eq!(parse_relative_duration(None).unwrap(), None);
-        assert_eq!(parse_relative_duration(Some("")).unwrap(), None);
-        assert_eq!(
-            parse_relative_duration(Some("24h")).unwrap(),
-            Some(Duration::from_secs(24 * 3_600))
-        );
-        assert_eq!(
-            parse_relative_duration(Some("7d")).unwrap(),
-            Some(Duration::from_secs(7 * 86_400))
-        );
-        assert!(parse_relative_duration(Some("yesterday")).is_err());
-        assert!(parse_relative_duration(Some("2026-01-01T00:00:00Z")).is_err());
     }
 
     #[test]
