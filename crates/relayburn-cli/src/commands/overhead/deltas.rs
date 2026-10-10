@@ -66,70 +66,77 @@ pub(super) fn run(
 fn render_human_deltas(deltas: &[ContextDelta], explain: bool) -> io::Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
+    write_human_deltas(&mut handle, deltas, explain)
+        .and_then(|()| handle.flush())
+        .map_err(stdout_error)
+}
 
+fn write_human_deltas<W: Write>(
+    out: &mut W,
+    deltas: &[ContextDelta],
+    explain: bool,
+) -> io::Result<()> {
     if deltas.is_empty() {
-        return handle
-            .write_all(b"# no context deltas above threshold\n")
-            .map_err(stdout_error);
+        return out.write_all(b"# no context deltas above threshold\n");
     }
-
-    let mut table: Vec<Vec<String>> = Vec::with_capacity(deltas.len() + 1);
-    table.push(vec![
-        "Inference".to_string(),
-        "Owner".to_string(),
-        "Delta".to_string(),
-        "Cost".to_string(),
-        "Driver".to_string(),
-    ]);
-    for d in deltas {
-        let inf_label = format!("{}/inf{}", short_turn_label(&d.turn_id), d.inference_idx);
-        let owner_label = match &d.owner_rail {
-            OwnerRail::Main => "main".to_string(),
-            OwnerRail::Subagent { agent_id } => format!("sub:{}", short_agent_label(agent_id)),
-        };
-        let delta_label = format_signed_tokens(d.delta_tokens);
-        let cost_label = format_usd(d.attributed_cost_usd);
-        let driver_label = driver_summary(&d.intervening);
-        table.push(vec![
-            inf_label,
-            owner_label,
-            delta_label,
-            cost_label,
-            driver_label,
-        ]);
-    }
-    handle
-        .write_all(render_table(&table).as_bytes())
-        .map_err(stdout_error)?;
-    handle.write_all(b"\n").map_err(stdout_error)?;
-
+    out.write_all(render_table(&deltas_table(deltas)).as_bytes())?;
+    out.write_all(b"\n")?;
     if explain {
-        handle.write_all(b"\n").map_err(stdout_error)?;
+        out.write_all(b"\n")?;
         for d in deltas {
-            let inf_label = format!("{}/inf{}", short_turn_label(&d.turn_id), d.inference_idx);
-            let header = format!(
-                "{inf_label} — {} steps, prior {} -> current {} tok\n",
-                d.intervening.len(),
-                format_tokens(d.prior_context_tokens),
-                format_tokens(d.current_context_tokens),
-            );
-            handle.write_all(header.as_bytes()).map_err(stdout_error)?;
-            for step in &d.intervening {
-                let line = format!("    - {}\n", explain_step(step));
-                handle.write_all(line.as_bytes()).map_err(stdout_error)?;
-            }
+            write_explain(out, d)?;
         }
     }
+    out.write_all(
+        b"\n# token / cost figures are approximate (bytes/4 for tool results,\n\
+          # cache-read rate for cost). Compaction rows surface separately and\n\
+          # never appear as negative deltas.\n",
+    )
+}
 
-    handle
-        .write_all(
-            b"\n# token / cost figures are approximate (bytes/4 for tool results,\n\
-              # cache-read rate for cost). Compaction rows surface separately and\n\
-              # never appear as negative deltas.\n",
-        )
-        .map_err(stdout_error)?;
-    handle.flush().map_err(stdout_error)?;
+fn deltas_table(deltas: &[ContextDelta]) -> Vec<Vec<String>> {
+    let mut table: Vec<Vec<String>> = Vec::with_capacity(deltas.len() + 1);
+    table.push(
+        ["Inference", "Owner", "Delta", "Cost", "Driver"]
+            .map(String::from)
+            .to_vec(),
+    );
+    for d in deltas {
+        table.push(vec![
+            inference_label(d),
+            owner_label(&d.owner_rail),
+            format_signed_tokens(d.delta_tokens),
+            format_usd(d.attributed_cost_usd),
+            driver_summary(&d.intervening),
+        ]);
+    }
+    table
+}
+
+fn write_explain<W: Write>(out: &mut W, d: &ContextDelta) -> io::Result<()> {
+    writeln!(
+        out,
+        "{} — {} steps, prior {} -> current {} tok",
+        inference_label(d),
+        d.intervening.len(),
+        format_tokens(d.prior_context_tokens),
+        format_tokens(d.current_context_tokens),
+    )?;
+    for step in &d.intervening {
+        writeln!(out, "    - {}", explain_step(step))?;
+    }
     Ok(())
+}
+
+fn inference_label(d: &ContextDelta) -> String {
+    format!("{}/inf{}", short_turn_label(&d.turn_id), d.inference_idx)
+}
+
+fn owner_label(rail: &OwnerRail) -> String {
+    match rail {
+        OwnerRail::Main => "main".to_string(),
+        OwnerRail::Subagent { agent_id } => format!("sub:{}", short_agent_label(agent_id)),
+    }
 }
 
 fn short_turn_label(turn_id: &str) -> String {
@@ -339,5 +346,111 @@ mod tests {
             std::fs::canonicalize(&link).expect("canonical project")
         );
         assert_eq!(resolve_deltas_project(&link), link);
+    }
+
+    fn sample_delta(owner_rail: OwnerRail, intervening: Vec<InterveningStep>) -> ContextDelta {
+        ContextDelta {
+            session_id: "sess-1".into(),
+            turn_id: "msg_abcdef1234".into(),
+            inference_idx: 3,
+            owner_rail,
+            prior_context_tokens: 1_000,
+            current_context_tokens: 6_000,
+            delta_tokens: 5_000,
+            intervening,
+            attributed_cost_usd: 0.0,
+        }
+    }
+
+    fn render(deltas: &[ContextDelta], explain: bool) -> String {
+        let mut buf = Vec::new();
+        write_human_deltas(&mut buf, deltas, explain).expect("render");
+        String::from_utf8(buf).expect("utf8")
+    }
+
+    #[test]
+    fn write_human_deltas_reports_empty_result() {
+        assert_eq!(render(&[], true), "# no context deltas above threshold\n");
+    }
+
+    #[test]
+    fn write_human_deltas_table_without_explain() {
+        let d = sample_delta(
+            OwnerRail::Subagent {
+                agent_id: "agent-0123456789".into(),
+            },
+            Vec::new(),
+        );
+        let out = render(&[d], false);
+        assert!(out.contains("Inference"), "got {out}");
+        assert!(out.contains("Tabcdef12/inf3"), "got {out}");
+        assert!(out.contains("sub:01234567"), "got {out}");
+        assert!(out.contains("(no intervening leaves)"), "got {out}");
+        assert!(!out.contains(" steps, prior "), "got {out}");
+        assert!(
+            out.ends_with("# never appear as negative deltas.\n"),
+            "got {out}"
+        );
+    }
+
+    #[test]
+    fn write_human_deltas_explain_lists_every_step_kind() {
+        let steps = vec![
+            InterveningStep::ToolResult {
+                tool_use_id: "tu-1".into(),
+                tool_name: "Bash".into(),
+                approx_tokens: 100,
+                approx_bytes: 400,
+                truncated: true,
+            },
+            InterveningStep::UserPrompt {
+                approx_tokens: 20,
+                has_system_reminder: true,
+            },
+            InterveningStep::UserPrompt {
+                approx_tokens: 30,
+                has_system_reminder: false,
+            },
+            InterveningStep::SystemReminder {
+                source: relayburn_sdk::ReminderSource::Other,
+                approx_tokens: 40,
+            },
+            InterveningStep::Compaction { tokens_freed: 50 },
+            InterveningStep::Other,
+        ];
+        let out = render(&[sample_delta(OwnerRail::Main, steps)], true);
+        let explain: Vec<&str> = out
+            .lines()
+            .skip_while(|line| !line.contains(" steps, prior "))
+            .take(7)
+            .collect();
+        assert_eq!(
+            explain,
+            vec![
+                "Tabcdef12/inf3 — 6 steps, prior 1.0k -> current 6.0k tok",
+                "    - tool_result Bash (id=tu-1): ~100 tok / 400 bytes [truncated]",
+                "    - user prompt: ~20 tok (with system-reminder)",
+                "    - user prompt: ~30 tok",
+                "    - system-reminder (Other): ~40 tok",
+                "    - compaction: -50 tok freed",
+                "    - other",
+            ]
+        );
+        assert!(out.contains("main"), "got {out}");
+    }
+
+    #[test]
+    fn explain_step_tool_result_omits_truncated_marker_when_complete() {
+        let step = InterveningStep::ToolResult {
+            tool_use_id: "tu-2".into(),
+            tool_name: "Read".into(),
+            approx_tokens: 1,
+            approx_bytes: 4,
+            truncated: false,
+        };
+        assert_eq!(
+            explain_step(&step),
+            "tool_result Read (id=tu-2): ~1 tok / 4 bytes"
+        );
     }
 }
