@@ -91,3 +91,38 @@ fn command_name(command: &Command) -> &'static str {
         Command::Init(_) => "init",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed_command(argv: &[&str]) -> Command {
+        let mut full = vec!["burn"];
+        full.extend_from_slice(argv);
+        Args::try_parse_from(full).expect("argv parses").command
+    }
+
+    #[test]
+    fn command_name_matches_cli_spelling() {
+        let cases: &[(&[&str], &str)] = &[
+            (
+                &["measure", "--input", "x.jsonl", "--harness", "codex"],
+                "measure",
+            ),
+            (&["summary"], "summary"),
+            (&["hotspots"], "hotspots"),
+            (&["overhead"], "overhead"),
+            (&["compare"], "compare"),
+            (&["state"], "state"),
+            (&["sessions", "list"], "sessions"),
+            (&["flow", "--session", "s1"], "flow"),
+            (&["stamps", "export"], "stamps"),
+            (&["ingest"], "ingest"),
+            (&["mcp-server"], "mcp-server"),
+            (&["update"], "update"),
+        ];
+        for (argv, expected) in cases {
+            assert_eq!(command_name(&parsed_command(argv)), *expected);
+        }
+    }
+}
