@@ -28,6 +28,7 @@ const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
     "ghost-surface",
     "tool-output-bloat",
     "tool-call-pattern",
+    "cache-expiry",
     "unpriced-usage",
 ];
 
@@ -558,6 +559,12 @@ fn run_hotspots_findings(
         let patterns = detect_tool_call_patterns(turns, &DetectToolCallPatternsOptions { pricing });
         for p in patterns {
             findings.push(tool_call_pattern_to_finding(&p));
+        }
+    }
+
+    if wanted_set.contains("cache-expiry") {
+        for expiry in detect_cache_expiry(turns, &user_turns_all, pricing) {
+            findings.push(cache_expiry_to_finding(&expiry));
         }
     }
 
