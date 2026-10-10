@@ -823,3 +823,7 @@ pub(super) fn render_fidelity_notice(f: &FidelitySummary) -> Option<String> {
         parts.join(" / ")
     ))
 }
+
+#[cfg(test)]
+#[path = "human_tests.rs"]
+mod tests;
