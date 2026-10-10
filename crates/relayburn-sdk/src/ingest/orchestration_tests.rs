@@ -321,6 +321,14 @@ fn ingest_opencode_sessions_round_trips_a_fixture_session() {
         Some(FileCursor::Opencode(_)) => {}
         other => panic!("expected OpencodeCursor for {key}, got {other:?}"),
     }
+
+    // Opencode exposes no native request rows, so ingest rebuilds one
+    // inference per persisted turn.
+    let all = Query::default();
+    let turns = ledger.query_turns(&all).unwrap();
+    let inferences = ledger.query_inferences(&all).unwrap();
+    assert!(!turns.is_empty());
+    assert_eq!(inferences.len(), turns.len());
 }
 
 #[test]
