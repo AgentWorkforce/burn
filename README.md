@@ -100,7 +100,6 @@ mistake unknown spend for free usage.
 Supported harness values are `claude-code` (or `claude`), `codex`, and
 `opencode`. Use `--pricing <models.dev.json>` to overlay custom rates.
 
-
 ## `burn search`
 
 Use `burn search` to find text across ingested prompts, responses, and tool
