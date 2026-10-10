@@ -271,6 +271,67 @@ fn request_count_drives_summary_and_session_denominators() {
     assert_eq!(session.turn_count, 4);
 }
 
+fn multi_request_turns() -> Vec<TurnRecord> {
+    let mut two = summary_test_turn(0, "task-two", Usage::default(), vec![]);
+    two.request_count = 2;
+    two.usage.input = 100;
+    let mut three = summary_test_turn(1, "task-three", Usage::default(), vec![]);
+    three.request_count = 3;
+    three.usage.input = 200;
+    vec![two, three]
+}
+
+#[test]
+fn summary_by_tag_counts_requests_per_tag_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+    handle
+        .raw_mut()
+        .append_turns(&multi_request_turns())
+        .unwrap();
+
+    let summary = handle
+        .summary(SummaryOptions {
+            group_by_tag: Some("workflowId".into()),
+            ..SummaryOptions::default()
+        })
+        .unwrap();
+    let rows = summary.by_tag.expect("by_tag rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].value, None);
+    assert_eq!(rows[0].turn_count, 5);
+    assert_eq!(rows[0].tokens, 300);
+}
+
+#[test]
+fn summary_aggregate_by_model_counts_requests() {
+    let pricing = load_pricing(None);
+    let rows = super::summary::summary_aggregate_by_model(&multi_request_turns(), &pricing);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "claude-sonnet-4-6");
+    assert_eq!(rows[0].turns, 5);
+    assert_eq!(rows[0].usage.input, 300);
+}
+
+#[test]
+fn relationship_matches_count_requests_of_matched_turns() {
+    let pricing = load_pricing(None);
+    let mut root = relationship("session", "parent", None);
+    root.relationship_type = RelationshipType::Root;
+    root.related_session_id = None;
+    let unmatched = relationship("no-turns-session", "session", Some("agent-x"));
+    let matches = super::summary::match_summary_relationships_to_turns(
+        &[root.clone(), root, unmatched],
+        &multi_request_turns(),
+        &pricing,
+    );
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].relationship_type, RelationshipType::Root);
+    assert_eq!(matches[0].session_id, "session");
+    assert_eq!(matches[0].turn_count, 5);
+    assert!(matches[0].cost > 0.0);
+}
+
 #[test]
 fn summary_session_filter_narrows_to_session() {
     let (_dir, handle) = fixture_handle();

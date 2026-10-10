@@ -489,6 +489,42 @@ mod tests {
     }
 
     #[test]
+    fn multi_request_turns_weight_totals_while_sample_gate_counts_records() {
+        let pricing = load_builtin_pricing();
+        let mut turns = vec![
+            turn(
+                "claude-sonnet-4-6",
+                Some(ActivityCategory::Coding),
+                default_usage(),
+                Some(true),
+                Some(0),
+            ),
+            turn(
+                "claude-sonnet-4-6",
+                Some(ActivityCategory::Coding),
+                default_usage(),
+                Some(true),
+                Some(0),
+            ),
+        ];
+        turns[0].turn.request_count = 2;
+        turns[1].turn.request_count = 3;
+        let opts = CompareOptions {
+            pricing: &pricing,
+            models: None,
+            min_sample: Some(2),
+        };
+        let t = build_compare_table(&turns, &opts);
+        assert_eq!(t.totals["claude-sonnet-4-6"].turns, 5);
+        let cell = &t.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 5);
+        assert!(
+            !cell.insufficient_sample,
+            "two records meet a min_sample of two"
+        );
+    }
+
+    #[test]
     fn flags_low_sample_cells_as_insufficient_not_no_data() {
         let pricing = load_builtin_pricing();
         let turns = vec![
