@@ -267,11 +267,11 @@ impl ContextDeltaOpts {
 /// `curr` inference's model. Models the pricing table doesn't recognize
 /// charge `0.0` (matching the rest of the analyze surface, which never
 /// surfaces costs it can't price).
-/// Time-filtered form used by the ledger verb after it has normalized the
-/// user-facing `since` expression. A delta is retained when its current
-/// inference is on/after `since_ms`. Inferences with an unknown timestamp
-/// (`start_ms == 0`) remain eligible, matching ledger query semantics for
-/// records whose timestamp is unavailable.
+/// A delta is retained when its current inference is on/after `since_ms`
+/// (the ledger verb normalizes the user-facing `since` expression first).
+/// Inferences with an unknown timestamp (`start_ms == 0`) remain eligible,
+/// matching ledger query semantics for records whose timestamp is
+/// unavailable.
 pub(crate) fn deltas_for_session_since(
     trees: &[TurnSpanTree],
     compactions: &[CompactionEvent],
@@ -283,117 +283,69 @@ pub(crate) fn deltas_for_session_since(
         return Vec::new();
     }
     let timeline = build_timeline(trees);
-    let mut compactions_sorted: Vec<&CompactionEvent> = compactions.iter().collect();
-    // `sort_by_cached_key` so the relatively expensive `parse_iso_ms` runs once
-    // per element rather than once per comparison.
-    compactions_sorted.sort_by_cached_key(|c| parse_iso_ms(&c.ts).unwrap_or(0));
+    let ctx = PairContext {
+        timeline: &timeline,
+        compaction_ms: sorted_compaction_ms(compactions),
+        pricing,
+        min_delta: opts.effective_min_delta() as i64,
+    };
 
+    let mut out: Vec<ContextDelta> = Vec::new();
+    for (rail, inf_indices) in inferences_by_rail(&timeline) {
+        if !rail_passes_filter(&rail, opts.owner) {
+            continue;
+        }
+        for (pair_idx, window) in inf_indices.windows(2).enumerate() {
+            let curr_start = timeline[window[1]].start_ms;
+            if !passes_since(curr_start, since_ms) {
+                continue;
+            }
+            if let Some(delta) = ctx.delta_for_pair(&rail, pair_idx, window[0], window[1]) {
+                out.push(delta);
+            }
+        }
+    }
+
+    sort_and_truncate(&mut out, opts.effective_top() as usize);
+    out
+}
+
+/// Compaction timestamps in ascending order. Each `ts` is parsed exactly
+/// once; unparseable timestamps map to `0`.
+fn sorted_compaction_ms(compactions: &[CompactionEvent]) -> Vec<i64> {
+    let mut ms: Vec<i64> = compactions
+        .iter()
+        .map(|c| parse_iso_ms(&c.ts).unwrap_or(0))
+        .collect();
+    ms.sort_unstable();
+    ms
+}
+
+/// Timeline positions of every inference, bucketed by owner rail in
+/// timeline order.
+fn inferences_by_rail(timeline: &[TimelineItem]) -> HashMap<OwnerRail, Vec<usize>> {
     let mut per_rail: HashMap<OwnerRail, Vec<usize>> = HashMap::new();
     for (idx, item) in timeline.iter().enumerate() {
         if matches!(item.kind, TimelineKind::Inference { .. }) {
             per_rail.entry(item.owner.clone()).or_default().push(idx);
         }
     }
+    per_rail
+}
 
-    let min_delta = opts.effective_min_delta() as i64;
-    let mut out: Vec<ContextDelta> = Vec::new();
-    for (rail, inf_indices) in per_rail.iter() {
-        if !rail_passes_filter(rail, opts.owner) {
-            continue;
-        }
-        for (pair_idx, window) in inf_indices.windows(2).enumerate() {
-            let prev_pos = window[0];
-            let curr_pos = window[1];
-            if let Some(cutoff) = since_ms {
-                let curr_start = timeline[curr_pos].start_ms;
-                if curr_start != 0 && curr_start < cutoff {
-                    continue;
-                }
-            }
-            let TimelineKind::Inference {
-                context_tokens: prev_ctx,
-                ..
-            } = timeline[prev_pos].kind
-            else {
-                continue;
-            };
-            let TimelineKind::Inference {
-                context_tokens: curr_ctx,
-                model: ref curr_model,
-            } = timeline[curr_pos].kind
-            else {
-                continue;
-            };
-
-            let raw_delta = curr_ctx as i64 - prev_ctx as i64;
-
-            // Collect intervening leaves between (prev_pos, curr_pos) on
-            // the same rail. Walk the flat timeline; ignore items on
-            // other rails so subagent leaves never enter a main-rail
-            // delta (and vice versa).
-            let mut intervening: Vec<InterveningStep> = Vec::new();
-            for item in &timeline[prev_pos + 1..curr_pos] {
-                if item.owner != *rail {
-                    continue;
-                }
-                if let Some(step) = item.to_intervening_step() {
-                    intervening.push(step);
-                }
-            }
-
-            // Compaction handling: if there's a compaction event between
-            // prev.end_ms and curr.start_ms AND the delta is negative,
-            // surface it as a Compaction row and clamp delta to 0.
-            let prev_end = timeline[prev_pos].end_ms;
-            let curr_start = timeline[curr_pos].start_ms;
-            let compaction_between = compactions_sorted.iter().any(|c| {
-                let ms = parse_iso_ms(&c.ts).unwrap_or(0);
-                ms >= prev_end && ms <= curr_start
-            });
-            let (delta_tokens, intervening) = if raw_delta < 0 && compaction_between {
-                let freed = prev_ctx - curr_ctx;
-                let mut steps = intervening;
-                steps.push(InterveningStep::Compaction {
-                    tokens_freed: freed,
-                });
-                (0i64, steps)
-            } else {
-                (raw_delta, intervening)
-            };
-
-            if delta_tokens < min_delta
-                && !intervening
-                    .iter()
-                    .any(|s| matches!(s, InterveningStep::Compaction { .. }))
-            {
-                continue;
-            }
-
-            let session_id = timeline[curr_pos].session_id.clone();
-            let turn_id = timeline[curr_pos].turn_id.clone();
-            let cost = attributed_cost(delta_tokens, curr_model, pricing);
-
-            out.push(ContextDelta {
-                session_id,
-                turn_id,
-                // 1-indexed position within the rail. `windows(2)`
-                // gives us pair index 0 = first pair = curr is the
-                // second inference, so the curr inference index is
-                // `pair_idx + 2` in 1-indexed terms.
-                inference_idx: (pair_idx as u32) + 2,
-                owner_rail: rail.clone(),
-                prior_context_tokens: prev_ctx,
-                current_context_tokens: curr_ctx,
-                delta_tokens,
-                intervening,
-                attributed_cost_usd: cost,
-            });
-        }
+/// Whether an inference starting at `start_ms` falls inside the `since`
+/// window. Unknown timestamps (`0`) always pass.
+fn passes_since(start_ms: i64, since_ms: Option<i64>) -> bool {
+    match since_ms {
+        Some(cutoff) => start_ms == 0 || start_ms >= cutoff,
+        None => true,
     }
+}
 
-    // Sort by delta descending, with a full lex chain so the output is
-    // deterministic across HashMap iteration order even when multiple
-    // rails / sessions tie on (delta_tokens, turn_id, inference_idx).
+/// Sort by delta descending, with a full lex chain so the output is
+/// deterministic across HashMap iteration order even when multiple rails /
+/// sessions tie on (delta_tokens, turn_id, inference_idx); then cap at `top`.
+fn sort_and_truncate(out: &mut Vec<ContextDelta>, top: usize) {
     out.sort_by(|a, b| {
         b.delta_tokens
             .cmp(&a.delta_tokens)
@@ -404,12 +356,97 @@ pub(crate) fn deltas_for_session_since(
             })
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
+    out.truncate(top);
+}
 
-    let top = opts.effective_top() as usize;
-    if out.len() > top {
-        out.truncate(top);
+/// Session-wide inputs shared by every (`prev`, `curr`) pair.
+struct PairContext<'a> {
+    timeline: &'a [TimelineItem],
+    compaction_ms: Vec<i64>,
+    pricing: &'a PricingTable,
+    min_delta: i64,
+}
+
+impl PairContext<'_> {
+    /// Build the [`ContextDelta`] for one same-rail inference pair, or
+    /// `None` when it falls below the noise floor without a compaction.
+    fn delta_for_pair(
+        &self,
+        rail: &OwnerRail,
+        pair_idx: usize,
+        prev_pos: usize,
+        curr_pos: usize,
+    ) -> Option<ContextDelta> {
+        let prev = &self.timeline[prev_pos];
+        let curr = &self.timeline[curr_pos];
+        let TimelineKind::Inference {
+            context_tokens: prev_ctx,
+            ..
+        } = prev.kind
+        else {
+            return None;
+        };
+        let TimelineKind::Inference {
+            context_tokens: curr_ctx,
+            model: ref curr_model,
+        } = curr.kind
+        else {
+            return None;
+        };
+
+        let mut intervening = self.intervening_steps(rail, prev_pos, curr_pos);
+        let raw_delta = curr_ctx as i64 - prev_ctx as i64;
+        // A negative delta with a compaction between prev.end_ms and
+        // curr.start_ms surfaces as a Compaction row and clamps to 0.
+        let compacted = raw_delta < 0 && self.compaction_between(prev.end_ms, curr.start_ms);
+        let delta_tokens = if compacted {
+            intervening.push(InterveningStep::Compaction {
+                tokens_freed: prev_ctx - curr_ctx,
+            });
+            0
+        } else {
+            raw_delta
+        };
+        if delta_tokens < self.min_delta && !compacted {
+            return None;
+        }
+
+        Some(ContextDelta {
+            session_id: curr.session_id.clone(),
+            turn_id: curr.turn_id.clone(),
+            // 1-indexed position within the rail. `windows(2)` pair index 0
+            // has curr as the second inference, so curr is `pair_idx + 2`.
+            inference_idx: (pair_idx as u32) + 2,
+            owner_rail: rail.clone(),
+            prior_context_tokens: prev_ctx,
+            current_context_tokens: curr_ctx,
+            delta_tokens,
+            intervening,
+            attributed_cost_usd: attributed_cost(delta_tokens, curr_model, self.pricing),
+        })
     }
-    out
+
+    /// Leaves strictly between `prev_pos` and `curr_pos` on `rail`. Items on
+    /// other rails are skipped so subagent leaves never enter a main-rail
+    /// delta (and vice versa).
+    fn intervening_steps(
+        &self,
+        rail: &OwnerRail,
+        prev_pos: usize,
+        curr_pos: usize,
+    ) -> Vec<InterveningStep> {
+        self.timeline[prev_pos + 1..curr_pos]
+            .iter()
+            .filter(|item| item.owner == *rail)
+            .filter_map(TimelineItem::to_intervening_step)
+            .collect()
+    }
+
+    fn compaction_between(&self, prev_end: i64, curr_start: i64) -> bool {
+        self.compaction_ms
+            .iter()
+            .any(|&ms| ms >= prev_end && ms <= curr_start)
+    }
 }
 
 /// Stable lex key for sorting `OwnerRail` so tie-breakers are deterministic

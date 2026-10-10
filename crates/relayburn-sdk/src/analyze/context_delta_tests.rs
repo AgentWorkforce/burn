@@ -464,3 +464,46 @@ fn system_reminder_step_round_trips_in_json() {
     let back: InterveningStep = serde_json::from_str(&s).unwrap();
     assert_eq!(back, step);
 }
+
+#[test]
+fn passes_since_is_inclusive_and_keeps_unknown_timestamps() {
+    assert!(passes_since(100, None));
+    assert!(passes_since(0, Some(500)));
+    assert!(passes_since(500, Some(500)));
+    assert!(passes_since(501, Some(500)));
+    assert!(!passes_since(499, Some(500)));
+}
+
+#[test]
+fn sorted_compaction_ms_parses_and_orders_timestamps() {
+    let compaction = |ts: &str| CompactionEvent {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: "s".into(),
+        ts: ts.into(),
+        preceding_message_id: None,
+        tokens_before_compact: None,
+    };
+    let ms = sorted_compaction_ms(&[
+        compaction("1970-01-01T00:00:02.000Z"),
+        compaction("not a timestamp"),
+        compaction("1970-01-01T00:00:01.000Z"),
+    ]);
+    assert_eq!(ms, vec![0, 1_000, 2_000]);
+}
+
+#[test]
+fn compaction_between_is_inclusive_on_both_ends() {
+    let timeline: Vec<TimelineItem> = Vec::new();
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let ctx = PairContext {
+        timeline: &timeline,
+        compaction_ms: vec![1_000],
+        pricing: &pricing,
+        min_delta: 0,
+    };
+    assert!(ctx.compaction_between(1_000, 2_000));
+    assert!(ctx.compaction_between(500, 1_000));
+    assert!(!ctx.compaction_between(1_001, 2_000));
+    assert!(!ctx.compaction_between(0, 999));
+}

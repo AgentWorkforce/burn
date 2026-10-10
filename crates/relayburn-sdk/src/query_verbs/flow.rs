@@ -389,6 +389,18 @@ fn is_schema_missing(err: &crate::ledger::LedgerError) -> bool {
     msg.contains("no such table") || msg.contains("no such column")
 }
 
+/// Treat a pre-schema "table / column missing" failure as an empty result
+/// and propagate every other ledger-read error.
+fn schema_missing_as_empty<T>(
+    rows: std::result::Result<Vec<T>, crate::ledger::LedgerError>,
+) -> Result<Vec<T>> {
+    match rows {
+        Ok(rows) => Ok(rows),
+        Err(err) if is_schema_missing(&err) => Ok(Vec::new()),
+        Err(err) => Err(err.into()),
+    }
+}
+
 /// Lex key for sorting cross-session [`ContextDelta`] rows by owner_rail
 /// when other tie-breakers are equal. Mirrors the per-session helper in
 /// `analyze::context_delta`.
@@ -434,6 +446,43 @@ fn project_filter_variants(project: Option<&str>) -> Vec<Option<String>> {
 }
 
 impl LedgerHandle {
+    /// Sessions that contribute to [`LedgerHandle::context_delta`]: narrowed
+    /// by project/session, then kept when a turn or inference falls in the
+    /// window. Timestamps are inspected in memory instead of pushing `since`
+    /// into SQL: the ledger query omits unknown timestamps, while deltas
+    /// preserve those rows by contract.
+    fn context_delta_session_ids(
+        &self,
+        opts: &ContextDeltaOpts,
+        since_ms: Option<i64>,
+    ) -> Result<Vec<String>> {
+        let timestamp_passes = |ms: i64| since_ms.is_none_or(|cutoff| ms == 0 || ms >= cutoff);
+        let mut ids: BTreeSet<String> = BTreeSet::new();
+        for project in project_filter_variants(opts.project.as_deref()) {
+            let session_query = Query {
+                project,
+                session_id: opts.session.clone(),
+                ..Default::default()
+            };
+            for enriched in self.inner.query_turns(&session_query)? {
+                let ms = crate::util::time::parse_iso_ms(&enriched.turn.ts).unwrap_or(0);
+                if timestamp_passes(ms) {
+                    ids.insert(enriched.turn.session_id);
+                }
+            }
+            if since_ms.is_some() {
+                let inferences =
+                    schema_missing_as_empty(self.inner.query_inferences(&session_query))?;
+                for inference in inferences {
+                    if timestamp_passes(inference.start_ms) {
+                        ids.insert(inference.session_id);
+                    }
+                }
+            }
+        }
+        Ok(ids.into_iter().collect())
+    }
+
     /// Per-inference context-window deltas.
     ///
     /// Walks each session's [`TurnSpanTree`] timeline, pairs same-rail
@@ -457,39 +506,7 @@ impl LedgerHandle {
             .as_deref()
             .and_then(crate::util::time::parse_iso_ms);
 
-        // First narrow by project/session, then select sessions with a turn or
-        // inference in the window. We intentionally inspect timestamps in
-        // memory instead of pushing `since` into SQL: the ledger query omits
-        // unknown timestamps, while deltas preserve those rows by contract.
-        let timestamp_passes = |ms: i64| since_ms.is_none_or(|cutoff| ms == 0 || ms >= cutoff);
-        let mut ids: BTreeSet<String> = BTreeSet::new();
-        for project in project_filter_variants(opts.project.as_deref()) {
-            let session_query = Query {
-                project,
-                session_id: opts.session.clone(),
-                ..Default::default()
-            };
-            for enriched in self.inner.query_turns(&session_query)? {
-                let ms = crate::util::time::parse_iso_ms(&enriched.turn.ts).unwrap_or(0);
-                if timestamp_passes(ms) {
-                    ids.insert(enriched.turn.session_id);
-                }
-            }
-            if since_ms.is_some() {
-                match self.inner.query_inferences(&session_query) {
-                    Ok(inferences) => {
-                        for inference in inferences {
-                            if timestamp_passes(inference.start_ms) {
-                                ids.insert(inference.session_id);
-                            }
-                        }
-                    }
-                    Err(err) if is_schema_missing(&err) => {}
-                    Err(err) => return Err(err.into()),
-                }
-            }
-        }
-        let session_ids: Vec<String> = ids.into_iter().collect();
+        let session_ids = self.context_delta_session_ids(&opts, since_ms)?;
 
         let mut out: Vec<ContextDelta> = Vec::new();
         for session_id in session_ids {
