@@ -507,3 +507,108 @@ fn compaction_between_is_inclusive_on_both_ends() {
     assert!(!ctx.compaction_between(1_001, 2_000));
     assert!(!ctx.compaction_between(0, 999));
 }
+
+fn timed_two_inf_tree(ctx1: i64, ctx2: i64) -> TurnSpanTree {
+    let mut inf1 = make_inf("req-1", "claude-sonnet-4-6", ctx1, 0, 0);
+    inf1.start_ms = 1_000;
+    inf1.end_ms = 2_000;
+    let mut inf2 = make_inf("req-2", "claude-sonnet-4-6", ctx2, 0, 0);
+    inf2.start_ms = 4_000;
+    inf2.end_ms = 5_000;
+    let mut root = SpanNode::new(SpanKind::Turn, "turn");
+    root.children.push(inf1);
+    root.children.push(inf2);
+    turn_tree("sess-1", "msg-1", root)
+}
+
+fn compaction_at(ts: &str) -> CompactionEvent {
+    CompactionEvent {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: "sess-1".into(),
+        ts: ts.into(),
+        preceding_message_id: None,
+        tokens_before_compact: None,
+    }
+}
+
+/// A compaction between two inferences only rewrites the row when the
+/// context actually shrank; growth keeps its raw delta.
+#[test]
+fn compaction_does_not_rewrite_positive_delta() {
+    let tree = timed_two_inf_tree(10_000, 15_000);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let deltas = deltas_for_session_since(
+        &[tree],
+        &[compaction_at("1970-01-01T00:00:03.000Z")],
+        &pricing,
+        &ContextDeltaOpts::default(),
+        None,
+    );
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].delta_tokens, 5_000);
+    assert!(
+        deltas[0].intervening.is_empty(),
+        "{:?}",
+        deltas[0].intervening
+    );
+}
+
+/// A shrink with no compaction between the inferences is a negative delta
+/// below the noise floor and is dropped.
+#[test]
+fn shrink_without_compaction_is_dropped() {
+    let tree = timed_two_inf_tree(15_000, 10_000);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let deltas = deltas_for_session_since(
+        &[tree],
+        &[compaction_at("1970-01-01T00:00:09.000Z")],
+        &pricing,
+        &ContextDeltaOpts::default(),
+        None,
+    );
+    assert!(deltas.is_empty(), "{deltas:?}");
+}
+
+/// The noise floor is inclusive: a delta exactly equal to `min_delta` stays.
+#[test]
+fn min_delta_threshold_is_inclusive() {
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let opts = ContextDeltaOpts {
+        min_delta: Some(1_000),
+        ..ContextDeltaOpts::default()
+    };
+    let at = deltas_for_session_since(
+        &[timed_two_inf_tree(5_000, 6_000)],
+        &[],
+        &pricing,
+        &opts,
+        None,
+    );
+    assert_eq!(at.len(), 1);
+    assert_eq!(at[0].delta_tokens, 1_000);
+    assert_eq!(at[0].inference_idx, 2);
+    let below = deltas_for_session_since(
+        &[timed_two_inf_tree(5_000, 5_999)],
+        &[],
+        &pricing,
+        &opts,
+        None,
+    );
+    assert!(below.is_empty(), "{below:?}");
+}
+
+/// An unchanged context is not a compaction even when a compaction event sits
+/// between the inferences; the zero delta falls under the noise floor.
+#[test]
+fn zero_delta_with_compaction_is_not_a_compaction_row() {
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let deltas = deltas_for_session_since(
+        &[timed_two_inf_tree(10_000, 10_000)],
+        &[compaction_at("1970-01-01T00:00:03.000Z")],
+        &pricing,
+        &ContextDeltaOpts::default(),
+        None,
+    );
+    assert!(deltas.is_empty(), "{deltas:?}");
+}

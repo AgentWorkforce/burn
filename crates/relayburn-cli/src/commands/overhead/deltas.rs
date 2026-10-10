@@ -95,22 +95,19 @@ fn write_human_deltas<W: Write>(
 }
 
 fn deltas_table(deltas: &[ContextDelta]) -> Vec<Vec<String>> {
-    let mut table: Vec<Vec<String>> = Vec::with_capacity(deltas.len() + 1);
-    table.push(
-        ["Inference", "Owner", "Delta", "Cost", "Driver"]
-            .map(String::from)
-            .to_vec(),
-    );
-    for d in deltas {
-        table.push(vec![
+    let header = ["Inference", "Owner", "Delta", "Cost", "Driver"]
+        .map(String::from)
+        .to_vec();
+    let rows = deltas.iter().map(|d| {
+        vec![
             inference_label(d),
             owner_label(&d.owner_rail),
             format_signed_tokens(d.delta_tokens),
             format_usd(d.attributed_cost_usd),
             driver_summary(&d.intervening),
-        ]);
-    }
-    table
+        ]
+    });
+    std::iter::once(header).chain(rows).collect()
 }
 
 fn write_explain<W: Write>(out: &mut W, d: &ContextDelta) -> io::Result<()> {
@@ -281,8 +278,7 @@ mod tests {
             },
             InterveningStep::Compaction { tokens_freed: 5000 },
         ];
-        let s = driver_summary(&steps);
-        assert!(s.contains("compaction"));
+        assert_eq!(driver_summary(&steps), "compaction -5000 tok");
     }
 
     #[test]
@@ -303,15 +299,19 @@ mod tests {
                 truncated: false,
             },
         ];
-        let s = driver_summary(&steps);
-        assert!(s.contains("Read"), "got {s}");
-        assert!(s.contains("more"), "got {s}");
+        assert_eq!(driver_summary(&steps), "Read result (+1 more step)");
+        assert_eq!(driver_summary(&steps[..1]), "Bash result");
+        let mut three = steps.clone();
+        three.push(InterveningStep::Other);
+        assert_eq!(driver_summary(&three), "Read result (+2 more steps)");
     }
 
     #[test]
-    fn format_signed_tokens_handles_positive_and_zero() {
+    fn format_signed_tokens_signs_positive_and_negative() {
         assert_eq!(format_signed_tokens(0), "0");
-        assert!(format_signed_tokens(5_000).starts_with('+'));
+        assert_eq!(format_signed_tokens(5_000), "+5.0k");
+        assert_eq!(format_signed_tokens(-5_000), "-5.0k");
+        assert_eq!(format_signed_tokens(-1), "-1");
     }
 
     #[test]

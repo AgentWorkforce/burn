@@ -1,4 +1,5 @@
 use super::*;
+use crate::analyze::context_delta::passes_since;
 
 // ---------------------------------------------------------------------------
 // Span trees — pure derived view (#430)
@@ -391,7 +392,7 @@ fn is_schema_missing(err: &crate::ledger::LedgerError) -> bool {
 
 /// Treat a pre-schema "table / column missing" failure as an empty result
 /// and propagate every other ledger-read error.
-fn schema_missing_as_empty<T>(
+pub(super) fn schema_missing_as_empty<T>(
     rows: std::result::Result<Vec<T>, crate::ledger::LedgerError>,
 ) -> Result<Vec<T>> {
     match rows {
@@ -456,7 +457,6 @@ impl LedgerHandle {
         opts: &ContextDeltaOpts,
         since_ms: Option<i64>,
     ) -> Result<Vec<String>> {
-        let timestamp_passes = |ms: i64| since_ms.is_none_or(|cutoff| ms == 0 || ms >= cutoff);
         let mut ids: BTreeSet<String> = BTreeSet::new();
         for project in project_filter_variants(opts.project.as_deref()) {
             let session_query = Query {
@@ -466,7 +466,7 @@ impl LedgerHandle {
             };
             for enriched in self.inner.query_turns(&session_query)? {
                 let ms = crate::util::time::parse_iso_ms(&enriched.turn.ts).unwrap_or(0);
-                if timestamp_passes(ms) {
+                if passes_since(ms, since_ms) {
                     ids.insert(enriched.turn.session_id);
                 }
             }
@@ -474,7 +474,7 @@ impl LedgerHandle {
                 let inferences =
                     schema_missing_as_empty(self.inner.query_inferences(&session_query))?;
                 for inference in inferences {
-                    if timestamp_passes(inference.start_ms) {
+                    if passes_since(inference.start_ms, since_ms) {
                         ids.insert(inference.session_id);
                     }
                 }

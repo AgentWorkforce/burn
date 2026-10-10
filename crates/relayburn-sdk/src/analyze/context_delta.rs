@@ -333,9 +333,9 @@ fn inferences_by_rail(timeline: &[TimelineItem]) -> HashMap<OwnerRail, Vec<usize
     per_rail
 }
 
-/// Whether an inference starting at `start_ms` falls inside the `since`
-/// window. Unknown timestamps (`0`) always pass.
-fn passes_since(start_ms: i64, since_ms: Option<i64>) -> bool {
+/// Whether a record timestamped `start_ms` falls inside the `since` window.
+/// Unknown timestamps (`0`) always pass.
+pub(crate) fn passes_since(start_ms: i64, since_ms: Option<i64>) -> bool {
     match since_ms {
         Some(cutoff) => start_ms == 0 || start_ms >= cutoff,
         None => true,
@@ -428,14 +428,15 @@ impl PairContext<'_> {
 
     /// Leaves strictly between `prev_pos` and `curr_pos` on `rail`. Items on
     /// other rails are skipped so subagent leaves never enter a main-rail
-    /// delta (and vice versa).
+    /// delta (and vice versa). The slice starts at `prev` itself, which is an
+    /// inference and therefore never yields a step.
     fn intervening_steps(
         &self,
         rail: &OwnerRail,
         prev_pos: usize,
         curr_pos: usize,
     ) -> Vec<InterveningStep> {
-        self.timeline[prev_pos + 1..curr_pos]
+        self.timeline[prev_pos..curr_pos]
             .iter()
             .filter(|item| item.owner == *rail)
             .filter_map(TimelineItem::to_intervening_step)

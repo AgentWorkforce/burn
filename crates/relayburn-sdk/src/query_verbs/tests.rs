@@ -1,4 +1,4 @@
-use super::flow::bucket_subagents_per_turn;
+use super::flow::{bucket_subagents_per_turn, schema_missing_as_empty};
 use super::summary::{
     aggregate_summary_relationship_stats, attribute_summary_cost_to_tools,
     collect_summary_agent_session_tree, collect_summary_connected_relationships, compute_summary,
@@ -110,6 +110,36 @@ fn normalize_since_relative_emits_canonical_mmm_z() {
 }
 
 #[test]
+fn normalize_since_relative_units_subtract_exact_seconds() {
+    for (raw, secs_back) in [
+        ("3h", 3 * 3_600),
+        ("2d", 2 * 86_400),
+        ("2w", 2 * 7 * 86_400),
+        ("2m", 2 * 30 * 86_400),
+    ] {
+        let before = system_now_secs() as i64;
+        let v = normalize_since(Some(raw)).unwrap().unwrap();
+        let after = system_now_secs() as i64;
+        let cutoff = crate::util::time::parse_iso_ms(&v).expect("iso cutoff") / 1_000;
+        assert!(
+            (before - secs_back..=after - secs_back).contains(&cutoff),
+            "{raw}: cutoff {cutoff} outside [{}, {}]",
+            before - secs_back,
+            after - secs_back
+        );
+    }
+}
+
+#[test]
+fn normalize_since_rejects_overflowing_relative_range() {
+    let err = normalize_since(Some("18446744073709551615h")).expect_err("overflow must error");
+    assert!(
+        err.to_string().contains("relative range is too large"),
+        "got {err}"
+    );
+}
+
+#[test]
 fn normalize_since_widens_no_fraction_iso_to_three_zeros() {
     // Same-second ledger row `...12.500Z` would sort *before* a `--since`
     // cutoff of `...12Z`, dropping valid turns. Canonicalizing widens to
@@ -195,11 +225,6 @@ fn normalize_since_rejects_garbage() {
     assert!(normalize_since(Some("2026-13-01T00:00:00Z")).is_err());
     assert!(normalize_since(Some("2026-05-06T25:00:00Z")).is_err());
     assert!(normalize_since(Some("2026-05-06T00:00:00+9")).is_err());
-}
-
-#[test]
-fn normalize_since_rejects_overflowing_relative_range() {
-    assert!(normalize_since(Some("18446744073709551615h")).is_err());
 }
 
 #[test]
@@ -3231,4 +3256,28 @@ fn summary_timeseries_rejects_oversized_window() {
         )
         .expect_err("oversized bucket window must be rejected");
     assert!(err.to_string().contains("buckets"));
+}
+
+#[test]
+fn schema_missing_as_empty_tolerates_only_missing_schema() {
+    use crate::ledger::LedgerError;
+
+    let sqlite_failure = |msg: &str| {
+        LedgerError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            Some(msg.to_string()),
+        ))
+    };
+    assert_eq!(schema_missing_as_empty(Ok(vec![1, 2])).unwrap(), vec![1, 2]);
+    assert_eq!(
+        schema_missing_as_empty::<u8>(Err(sqlite_failure("no such table: inferences"))).unwrap(),
+        Vec::<u8>::new()
+    );
+    assert_eq!(
+        schema_missing_as_empty::<u8>(Err(sqlite_failure("no such column: start_ms"))).unwrap(),
+        Vec::<u8>::new()
+    );
+    let err = schema_missing_as_empty::<u8>(Err(sqlite_failure("disk I/O error")))
+        .expect_err("non-schema failures propagate");
+    assert!(err.to_string().contains("disk I/O error"), "got {err}");
 }
