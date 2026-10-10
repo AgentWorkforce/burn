@@ -12,6 +12,18 @@
     "enabled": true
   },
   {
+    "name": "search",
+    "args": ["search", "burnsearchneedle"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
+    "name": "search-json",
+    "args": ["search", "burnsearchneedle", "--json"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
     "name": "hotspots",
     "args": ["hotspots"],
     "expectStatus": 0,

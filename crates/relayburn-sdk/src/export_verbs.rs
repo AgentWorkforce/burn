@@ -265,6 +265,38 @@ mod tests {
     }
 
     #[test]
+    fn search_hit_serializes_camel_case() {
+        let hit = SearchHit {
+            session_id: "ses_a".into(),
+            message_id: "m1".into(),
+            source: "claude-code".into(),
+            rank: -1.0,
+            snippet: "<b>needle</b>".into(),
+        };
+
+        let value = serde_json::to_value(&hit).unwrap();
+        assert_eq!(value["sessionId"], "ses_a");
+        assert_eq!(value["messageId"], "m1");
+        assert!(value.get("session_id").is_none());
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn search_rejects_limits_above_sqlite_signed_range() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let handle = open_handle(&tmp);
+        let err = handle
+            .search(SearchQueryOptions {
+                query: "needle".into(),
+                limit: Some(usize::MAX),
+                session_id: None,
+                ledger_home: None,
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds SQLite maximum"));
+    }
+
+    #[test]
     fn search_free_function_opens_its_own_ledger() {
         let tmp = tempfile::TempDir::new().unwrap();
         {

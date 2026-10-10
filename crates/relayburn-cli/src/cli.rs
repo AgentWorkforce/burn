@@ -110,6 +110,9 @@ pub enum Command {
     /// Enumerate sessions in the ledger.
     Sessions(SessionsArgs),
 
+    /// Search ingested session content with SQLite FTS5.
+    Search(SearchArgs),
+
     /// Visualize a session's inference flow as an SVG / Mermaid DAG.
     Flow(FlowArgs),
 
@@ -126,6 +129,45 @@ pub enum Command {
 
     /// Check for, install, or configure `burn` self-updates.
     Update(UpdateArgs),
+}
+
+/// `burn search <query>` — full-text search over the content sidecar.
+///
+/// The SDK always returns highlighted snippets. `--snippet` controls
+/// whether the human presenter includes them; JSON output always includes
+/// the raw snippet with `<b>...</b>` match markers.
+#[derive(Debug, Clone, ClapArgs)]
+pub struct SearchArgs {
+    /// FTS5 query. Supports phrases, boolean expressions, and prefix terms.
+    #[arg(value_name = "QUERY")]
+    pub query: String,
+
+    /// Restrict matches to one session id.
+    #[arg(long, value_name = "ID")]
+    pub session: Option<String>,
+
+    /// Maximum number of hits. Defaults to 25.
+    #[arg(long, value_name = "N", value_parser = parse_search_limit)]
+    pub limit: Option<std::num::NonZeroUsize>,
+
+    /// Include highlighted content excerpts in human output.
+    #[arg(long)]
+    pub snippet: bool,
+}
+
+fn parse_search_limit(raw: &str) -> Result<std::num::NonZeroUsize, String> {
+    let parsed = raw
+        .parse::<u64>()
+        .map_err(|_| "limit must be a positive integer".to_string())?;
+    if parsed == 0 {
+        return Err("limit must be greater than zero".into());
+    }
+    if parsed > i64::MAX as u64 {
+        return Err(format!("limit must not exceed {}", i64::MAX));
+    }
+    let value =
+        usize::try_from(parsed).map_err(|_| "limit is too large for this platform".to_string())?;
+    std::num::NonZeroUsize::new(value).ok_or_else(|| "limit must be greater than zero".into())
 }
 
 #[derive(Debug, Clone, ClapArgs)]
@@ -700,4 +742,22 @@ pub struct FlowArgs {
     /// `0` to disable the cap.
     #[arg(long, value_name = "N")]
     pub max_turns: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_search_limit;
+
+    #[test]
+    fn search_limit_accepts_the_sqlite_maximum_and_rejects_beyond() {
+        let max = i64::MAX.to_string();
+        assert_eq!(
+            parse_search_limit(&max).map(|n| n.get() as u64),
+            Ok(i64::MAX as u64)
+        );
+        let beyond = (i64::MAX as u64 + 1).to_string();
+        assert!(parse_search_limit(&beyond).is_err());
+        assert!(parse_search_limit("0").is_err());
+        assert!(parse_search_limit("-1").is_err());
+    }
 }

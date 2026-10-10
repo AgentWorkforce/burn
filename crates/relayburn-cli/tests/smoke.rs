@@ -31,6 +31,7 @@ const SUBCOMMANDS: &[&str] = &[
     "compare",
     "state",
     "sessions",
+    "search",
     "stamps",
     "flow",
     "ingest",

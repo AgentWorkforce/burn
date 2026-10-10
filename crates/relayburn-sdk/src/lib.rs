@@ -91,7 +91,7 @@ pub use crate::ledger::{
     EnrichedTurn, Enrichment, Ledger as RawLedger, LedgerError, LedgerFingerprintScope,
     MessageRange, PruneStats, Query, RebuildSummary, ResetSummary, Retention, SearchHit,
     SearchOptions, StalenessConfig, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
-    DEFAULT_STALE_AFTER_HOURS,
+    DEFAULT_SEARCH_LIMIT, DEFAULT_STALE_AFTER_HOURS,
 };
 
 pub use crate::analyze::{
