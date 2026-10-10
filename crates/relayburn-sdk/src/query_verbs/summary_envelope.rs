@@ -147,38 +147,22 @@ impl LedgerHandle {
     }
 }
 
+// The handle methods ignore `ledger_home`; it only selects the ledger opened here.
+
 pub fn summary_report_envelope(opts: SummaryReportOptions) -> Result<SummaryReportEnvelope> {
-    let handle = open_with(opts.ledger_home.as_deref())?;
-    handle.summary_report_envelope(SummaryReportOptions {
-        ledger_home: None,
-        ..opts
-    })
+    open_with(opts.ledger_home.as_deref())?.summary_report_envelope(opts)
 }
 
 pub fn summary_timeseries(
     opts: SummaryReportOptions,
     bucket_secs: u64,
 ) -> Result<SummaryTimeseries> {
-    let handle = open_with(opts.ledger_home.as_deref())?;
-    handle.summary_timeseries(
-        SummaryReportOptions {
-            ledger_home: None,
-            ..opts
-        },
-        bucket_secs,
-    )
+    open_with(opts.ledger_home.as_deref())?.summary_timeseries(opts, bucket_secs)
 }
 
 pub fn summary_timeseries_envelope(
     opts: SummaryReportOptions,
     bucket_secs: u64,
 ) -> Result<SummaryTimeseriesEnvelope> {
-    let handle = open_with(opts.ledger_home.as_deref())?;
-    handle.summary_timeseries_envelope(
-        SummaryReportOptions {
-            ledger_home: None,
-            ..opts
-        },
-        bucket_secs,
-    )
+    open_with(opts.ledger_home.as_deref())?.summary_timeseries_envelope(opts, bucket_secs)
 }

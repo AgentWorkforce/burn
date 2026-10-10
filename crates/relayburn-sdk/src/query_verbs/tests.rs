@@ -1484,6 +1484,30 @@ fn hotspots_ghost_surface_user_text_follows_selected_turns() {
         ])
         .unwrap();
 
+    // Prompts from another session, and from another source sharing the
+    // session id, never attach to the selected turn.
+    let mut foreign_source = timed_content(
+        "ghost-window",
+        "codex-u1",
+        "2026-04-23T00:00:04.000Z",
+        ContentRole::User,
+        "/codex-only",
+    );
+    foreign_source.source = SourceKind::Codex;
+    handle
+        .raw_mut()
+        .append_content(&[
+            timed_content(
+                "ghost-other",
+                "o1",
+                "2026-04-23T00:00:05.000Z",
+                ContentRole::User,
+                "/other-session",
+            ),
+            foreign_source,
+        ])
+        .unwrap();
+
     assert_eq!(
         ghost_user_texts(&handle, std::slice::from_ref(&selected)),
         vec!["/openspec-apply".to_string(), "tie prompt".to_string()],
