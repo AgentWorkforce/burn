@@ -234,3 +234,7 @@ fn is_signed_integer(token: &str) -> bool {
     };
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
+
+#[cfg(test)]
+#[path = "shell_tests.rs"]
+mod tests;

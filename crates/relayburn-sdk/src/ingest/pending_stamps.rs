@@ -25,14 +25,12 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use time::format_description::well_known::Rfc3339;
-use time::macros::format_description;
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::ledger::{ledger_home, Enrichment, Ledger, Stamp, StampSelector};
+use crate::util::time::{format_iso_ms, parse_iso_ms};
 use serde::{Deserialize, Serialize};
 
 /// 24h — manifests older than this are presumed orphaned (the spawner died
@@ -423,23 +421,7 @@ pub fn serialize_stamp(stamp: &PendingStamp) -> String {
 }
 
 fn format_iso_8601(t: SystemTime) -> String {
-    // Mirror JS `toISOString()` — ms-precision UTC: `2024-05-04T12:34:56.789Z`.
-    let dur = t
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::from_secs(0));
-    let nanos = dur.as_nanos() as i128;
-    let dt = OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let fmt =
-        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
-    dt.format(&fmt).expect("format ms iso")
-}
-
-fn parse_iso_ms(s: &str) -> Option<i64> {
-    // Accept the JS `Date.parse` shapes we actually emit:
-    // `YYYY-MM-DDTHH:MM:SS[.fff]Z`. RFC3339 covers both — variable
-    // subsecond precision plus a `Z` suffix.
-    let dt = OffsetDateTime::parse(s, &Rfc3339).ok()?;
-    Some((dt.unix_timestamp_nanos() / 1_000_000) as i64)
+    format_iso_ms(system_time_ms(t))
 }
 
 fn system_time_ms(t: SystemTime) -> i64 {
