@@ -470,7 +470,10 @@ fn candidate_from_record(
             "gen_ai.usage.reasoning_tokens",
         ],
     );
-    if input + output + cache_read + cache_write + reasoning == 0 {
+    if [input, output, cache_read, cache_write, reasoning]
+        .iter()
+        .all(|tokens| *tokens == 0)
+    {
         return None;
     }
 
@@ -507,10 +510,7 @@ fn candidate_from_record(
         kind,
         trace_id: trace_id(record).map(str::to_string),
         span_id: span_id(record).map(str::to_string),
-        response_id: attr_str(attributes, "gen_ai.response.id")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
+        response_id: first_non_empty_attr(attributes, &["gen_ai.response.id"]).map(str::to_string),
         model: first_non_empty_attr(attributes, MODEL_ATTRS)
             .map(str::to_string)
             .or_else(|| model_from_span_name(span_name).map(str::to_string)),

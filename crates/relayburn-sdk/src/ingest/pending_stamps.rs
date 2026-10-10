@@ -41,9 +41,13 @@ use serde::{Deserialize, Serialize};
 pub const PENDING_STAMP_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// Slack the mtime comparison uses when matching a manifest against a
-/// candidate session. Filesystem mtimes round to 1ms on macOS APFS, so an
-/// exact `>=` would falsely reject same-instant pairs.
-const MTIME_SLOP_MS: i64 = 1;
+/// candidate session. File timestamps come from the kernel's coarse clock
+/// (Linux stamps inodes at jiffy granularity, several ms behind
+/// `SystemTime::now()`) and some filesystems store whole seconds, so a
+/// session written just after the spawn can carry an mtime slightly before
+/// `spawnStartTs`. Two seconds covers every common timestamp resolution
+/// while still rejecting sessions last written before the spawn.
+const MTIME_SLOP_MS: i64 = 2_000;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -555,6 +559,38 @@ mod tests {
     /// there is no cwd the fallback must return `true` (mtime is not "before"
     /// spawn). Before the `saturating_add` fix, `i64::MAX + 1` wraps negative
     /// in release builds (or panics in debug), inverting the comparison.
+    #[test]
+    fn pending_stamp_matches_tolerates_coarse_mtime_but_rejects_older_sessions() {
+        let record = PendingStamp {
+            v: 1,
+            harness: PendingStampHarness::Claude,
+            spawner_pid: 1,
+            spawn_start_ts: "2024-01-01T00:00:10.000Z".to_string(),
+            cwd: "/some/project".to_string(),
+            enrichment: Enrichment::new(),
+            session_dir_hint: None,
+        };
+        let spawn_ms = parse_iso_ms(&record.spawn_start_ts).unwrap();
+        let candidate = |mtime: i64| PendingStampSessionCandidate {
+            harness: PendingStampHarness::Claude,
+            session_id: "sess-coarse".to_string(),
+            session_path: None,
+            session_mtime_ms: Some(mtime),
+            cwd: None,
+        };
+        // Written right after the spawn but stamped by a coarse clock.
+        assert!(pending_stamp_matches(&record, &candidate(spawn_ms - 4)));
+        assert!(pending_stamp_matches(
+            &record,
+            &candidate(spawn_ms - MTIME_SLOP_MS)
+        ));
+        // Last written well before the spawn: a different, older session.
+        assert!(!pending_stamp_matches(
+            &record,
+            &candidate(spawn_ms - MTIME_SLOP_MS - 1)
+        ));
+    }
+
     #[test]
     fn pending_stamp_matches_saturates_i64_max_mtime() {
         // A real spawn timestamp (well in the past relative to i64::MAX).

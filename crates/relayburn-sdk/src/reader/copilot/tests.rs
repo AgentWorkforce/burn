@@ -86,11 +86,15 @@ fn chat_spans_fixture() {
     assert_eq!(vsc.model, "gpt-5.4");
     assert_eq!(vsc.ts, format_iso_ms(1_775_934_700_250));
 
-    // Every turn declares usage-only fidelity at per-message granularity.
+    // Every turn declares usage-only fidelity at per-message granularity,
+    // with every token bucket covered.
     for t in turns {
         let fidelity = t.fidelity.as_ref().expect("fidelity set");
         assert_eq!(fidelity.granularity, UsageGranularity::PerMessage);
         assert_eq!(fidelity.class, FidelityClass::UsageOnly);
+        let c = &fidelity.coverage;
+        assert!(c.has_input_tokens && c.has_output_tokens && c.has_reasoning_tokens);
+        assert!(c.has_cache_read_tokens && c.has_cache_create_tokens);
         assert!(t.tool_calls.is_empty());
     }
 }
@@ -359,4 +363,205 @@ fn chat_trace_ids_stay_bounded_and_evict_oldest() {
         ids.last().map(String::as_str),
         Some(format!("t-cap-{CHAT_TRACE_ID_CAP}").as_str())
     );
+}
+
+/// Parse `lines` (one JSON record each) as a fresh export file.
+fn parse_lines(lines: &[String]) -> ParseCopilotIncrementalResult {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("copilot.jsonl");
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    parse_copilot_otel_incremental(
+        &path,
+        &ParseCopilotIncrementalOptions {
+            fallback_ts_ms: Some(42),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+}
+
+/// A record with `fields` spliced into its top level and `attrs` into its
+/// attributes (both JSON object bodies without braces).
+fn record(fields: &str, attrs: &str) -> String {
+    let sep = if attrs.is_empty() { "" } else { "," };
+    format!(
+        "{{{fields},\"attributes\":{{\"gen_ai.conversation.id\":\"conv-shape\",\"gen_ai.usage.input_tokens\":10{sep}{attrs}}}}}"
+    )
+}
+
+#[test]
+fn only_span_records_become_turns() {
+    // A non-span record with chat attributes and usage is ignored.
+    let log = record(
+        r#""type":"log","traceId":"t-l","spanId":"s-l","name":"chat m""#,
+        r#""gen_ai.operation.name":"chat""#,
+    );
+    // Without `type`, span-ness needs both a name and a span id.
+    let nameless = record(
+        r#""traceId":"t-n","spanId":"s-n""#,
+        r#""gen_ai.operation.name":"chat""#,
+    );
+    let idless = record(
+        r#""traceId":"t-i","name":"chat m""#,
+        r#""gen_ai.operation.name":"chat""#,
+    );
+    let vscode = record(
+        r#""name":"chat m","spanContext":{"traceId":"t-v","spanId":"s-v"}"#,
+        r#""gen_ai.operation.name":"chat""#,
+    );
+    let parsed = parse_lines(&[log, nameless, idless, vscode]);
+    let ids: Vec<&str> = parsed.turns.iter().map(|t| t.message_id.as_str()).collect();
+    assert_eq!(ids, ["s-v"]);
+}
+
+#[test]
+fn spans_classify_by_operation_or_by_name() {
+    let lines = [
+        // Chat by operation attribute alone, and by `chat <model>` name alone.
+        record(
+            r#""type":"span","traceId":"t-1","spanId":"op-chat","name":"llm call""#,
+            r#""gen_ai.operation.name":"chat""#,
+        ),
+        record(
+            r#""type":"span","traceId":"t-2","spanId":"name-chat","name":"chat m""#,
+            "",
+        ),
+        // Agent summaries by operation, by `invoke_agent <name>`, and by the
+        // bare `invoke_agent` name.
+        record(
+            r#""type":"span","traceId":"t-3","spanId":"op-agent","name":"agent run""#,
+            r#""gen_ai.operation.name":"invoke_agent""#,
+        ),
+        record(
+            r#""type":"span","traceId":"t-4","spanId":"named-agent","name":"invoke_agent burn""#,
+            "",
+        ),
+        record(
+            r#""type":"span","traceId":"t-5","spanId":"bare-agent","name":"invoke_agent""#,
+            "",
+        ),
+        // Neither: a tool span with usage stays out.
+        record(
+            r#""type":"span","traceId":"t-6","spanId":"tool","name":"execute_tool rg""#,
+            r#""gen_ai.operation.name":"execute_tool""#,
+        ),
+    ];
+    let parsed = parse_lines(&lines);
+    let ids: Vec<&str> = parsed.turns.iter().map(|t| t.message_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "op-chat",
+            "name-chat",
+            "op-agent",
+            "named-agent",
+            "bare-agent"
+        ]
+    );
+}
+
+#[test]
+fn sentinel_and_blank_span_ids_are_absent() {
+    let lines = [
+        record(
+            r#""type":"span","traceId":"t-z","spanId":"0000000000000000","name":"chat m""#,
+            "",
+        ),
+        record(
+            r#""type":"span","traceId":"t-d","spanId":"00-00","name":"chat m""#,
+            r#""gen_ai.usage.output_tokens":1"#,
+        ),
+        record(
+            r#""type":"span","traceId":"t-b","spanId":"  ","name":"chat m""#,
+            r#""gen_ai.response.id":" ","gen_ai.usage.output_tokens":2"#,
+        ),
+        record(
+            r#""type":"span","traceId":"t-ok","spanId":"abc123","name":"chat m""#,
+            "",
+        ),
+        record(
+            r#""type":"span","traceId":"t-r","name":"chat m""#,
+            r#""gen_ai.response.id":"resp9""#,
+        ),
+    ];
+    let parsed = parse_lines(&lines);
+    let ids: Vec<&str> = parsed.turns.iter().map(|t| t.message_id.as_str()).collect();
+    assert_eq!(ids.len(), 5);
+    for id in &ids[..3] {
+        assert!(
+            id.starts_with("line-"),
+            "{id} should use the digest fallback"
+        );
+    }
+    assert_eq!(&ids[3..], ["abc123", "resp9"]);
+}
+
+#[test]
+fn timestamps_accept_pairs_iso_and_scalar_units() {
+    let at = |start: &str, id: &str| {
+        record(
+            &format!(
+                r#""type":"span","traceId":"t-{id}","spanId":"{id}","name":"chat m","startTime":{start}"#
+            ),
+            "",
+        )
+    };
+    let parsed = parse_lines(&[
+        at("[1775934260,133000000]", "pair"),
+        at(r#""2026-04-11T19:04:20.133Z""#, "iso"),
+        at("1775934260133000000", "ns"),
+        at("1775934260133000", "us"),
+        at("1775934260133", "ms"),
+        at("1775934260", "s"),
+        at("[]", "empty"),
+    ]);
+    let ts: Vec<&str> = parsed.turns.iter().map(|t| t.ts.as_str()).collect();
+    let expected = format_iso_ms(1_775_934_260_133);
+    assert_eq!(&ts[..5], [expected.as_str(); 5]);
+    assert_eq!(ts[5], format_iso_ms(1_775_934_260_000));
+    // An empty pair is no timestamp: the file-mtime fallback applies.
+    assert_eq!(ts[6], format_iso_ms(42));
+}
+
+#[test]
+fn usage_spans_need_any_nonzero_bucket() {
+    let span = |id: &str, attrs: &str| {
+        format!(
+            "{{\"type\":\"span\",\"traceId\":\"t-{id}\",\"spanId\":\"{id}\",\"name\":\"chat m\",\"attributes\":{{\"gen_ai.conversation.id\":\"conv-u\",{attrs}}}}}"
+        )
+    };
+    let parsed = parse_lines(&[
+        span("in", r#""gen_ai.usage.input_tokens":5"#),
+        span("out", r#""gen_ai.usage.output_tokens":5"#),
+        span("cr", r#""gen_ai.usage.cache_read.input_tokens":5"#),
+        span("cw", r#""gen_ai.usage.cache_write.input_tokens":5"#),
+        span("rs", r#""gen_ai.usage.reasoning.output_tokens":5"#),
+        span(
+            "zero",
+            r#""gen_ai.usage.input_tokens":0,"gen_ai.usage.output_tokens":0"#,
+        ),
+    ]);
+    let ids: Vec<&str> = parsed.turns.iter().map(|t| t.message_id.as_str()).collect();
+    assert_eq!(ids, ["in", "out", "cr", "cw", "rs"]);
+}
+
+#[test]
+fn finish_reason_accepts_a_bare_string() {
+    let parsed = parse_lines(&[record(
+        r#""type":"span","traceId":"t-f","spanId":"s-f","name":"chat m""#,
+        r#""gen_ai.response.finish_reasons":"stop""#,
+    )]);
+    assert_eq!(parsed.turns[0].stop_reason, Some(StopReason::EndTurn));
+}
+
+#[test]
+fn sibling_spans_supply_missing_model_and_session() {
+    // The usage span names neither its model nor its session; a sibling in
+    // the same trace carries both.
+    let usage = r#"{"type":"span","traceId":"t-ctx","spanId":"s-ctx","name":"llm call","attributes":{"gen_ai.operation.name":"chat","gen_ai.usage.input_tokens":10}}"#;
+    let sibling = r#"{"type":"span","traceId":"t-ctx","spanId":"s-tool","name":"execute_tool rg","attributes":{"gen_ai.request.model":"gpt-5.4","copilot_chat.session_id":"conv-ctx"}}"#;
+    let parsed = parse_lines(&[usage.to_string(), sibling.to_string()]);
+    assert_eq!(parsed.turns.len(), 1);
+    assert_eq!(parsed.turns[0].model, "gpt-5.4");
+    assert_eq!(parsed.turns[0].session_id, "conv-ctx");
 }

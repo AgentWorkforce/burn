@@ -454,6 +454,17 @@ fn init_copilot_prints_otel_exporter_setup() {
 }
 
 #[test]
+fn init_dispatch_logs_its_command_name() {
+    burn()
+        .args(["init", "copilot"])
+        .env("RELAYBURN_LOG", "debug")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("dispatching command"))
+        .stderr(predicate::str::contains("\"init\""));
+}
+
+#[test]
 fn version_flag_exits_zero() {
     burn()
         .arg("--version")

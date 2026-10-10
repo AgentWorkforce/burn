@@ -6,17 +6,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{
-    apply_parsed_extras, file_inode, fingerprint_entry_hash, mtime_ms, run_single_harness,
-    DerivedRecords, IngestOptions, IngestReport, IngestRoots,
+    file_inode, fingerprint_entry_hash, mtime_ms, run_single_harness, IngestOptions, IngestReport,
+    IngestRoots,
 };
 use crate::ingest::cursors::{CopilotCursor, Cursors, FileCursor};
 use crate::ingest::gap::AdapterName;
 use crate::ingest::walk::list_jsonl_files;
 use crate::ledger::Ledger;
 use crate::reader::{
-    parse_copilot_otel_incremental, CompactionEvent, ContentRecord, ContentStoreMode,
-    CopilotResumeState, ParseCopilotIncrementalOptions, ParseCopilotIncrementalResult,
-    SessionRelationshipRecord, SourceKind, ToolResultEventRecord, TurnRecord, UserTurnRecord,
+    build_inferences, parse_copilot_otel_incremental, ContentStoreMode, CopilotResumeState,
+    ParseCopilotIncrementalOptions, ParseCopilotIncrementalResult, RequestIdLookup, SourceKind,
 };
 use crate::util::home_dir;
 
@@ -203,10 +202,15 @@ fn ingest_copilot_file(
         report.ingested_sessions += 1;
         ledger.append_turns(&parsed.turns)?;
     }
-    // Keep the inference table in lockstep with the persisted turns,
-    // like every other harness path (issue #434) — otherwise
-    // `burn flow` and span-tree reads see no Copilot API calls.
-    apply_parsed_extras(ledger, &parsed)?;
+    // Keep the inference table in lockstep with the persisted turns, like
+    // every other harness path (issue #434) — otherwise `burn flow` and
+    // span-tree reads see no Copilot API calls. Spans carry no `requestId`
+    // equivalent, so inferences key on `message_id`; OTEL exports hold no
+    // content, compaction, relationship, or user-turn records.
+    let inferences = build_inferences(&parsed.turns, &RequestIdLookup::new());
+    if !inferences.is_empty() {
+        ledger.append_inferences(&inferences)?;
+    }
 
     let next = CopilotCursor {
         inode,
@@ -217,33 +221,6 @@ fn ingest_copilot_file(
     };
     cursors.insert(key, FileCursor::Copilot(next));
     Ok(())
-}
-
-/// The Copilot OTEL parser emits usage-only turns with no trailing content,
-/// compaction, relationship, tool-result, or user-turn buckets, so every
-/// bucket but `turns` is empty. The `turns` slice feeds the
-/// `apply_parsed_extras` inference materializer; the request-id lookup
-/// stays the trait default (empty) since Copilot spans carry no `requestId`
-/// equivalent, and the inference builder falls back to `message_id`.
-impl DerivedRecords for ParseCopilotIncrementalResult {
-    fn content(&self) -> &[ContentRecord] {
-        &[]
-    }
-    fn events(&self) -> &[CompactionEvent] {
-        &[]
-    }
-    fn relationships(&self) -> &[SessionRelationshipRecord] {
-        &[]
-    }
-    fn tool_result_events(&self) -> &[ToolResultEventRecord] {
-        &[]
-    }
-    fn user_turns(&self) -> &[UserTurnRecord] {
-        &[]
-    }
-    fn turns(&self) -> &[TurnRecord] {
-        &self.turns
-    }
 }
 
 #[cfg(test)]
