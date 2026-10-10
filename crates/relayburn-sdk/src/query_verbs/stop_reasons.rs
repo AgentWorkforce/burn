@@ -178,4 +178,22 @@ mod tests {
         }
         assert!(!counts_with(&ALL_REASONS).is_empty());
     }
+
+    #[test]
+    fn is_empty_is_false_for_any_two_adjacent_buckets() {
+        // Field order of the OR chain in `is_empty`.
+        let chain_order = [
+            Some(StopReason::EndTurn),
+            Some(StopReason::MaxTokens),
+            Some(StopReason::PauseTurn),
+            Some(StopReason::StopSequence),
+            Some(StopReason::ToolUse),
+            Some(StopReason::Refusal),
+            Some(StopReason::Silent),
+            None,
+        ];
+        for pair in chain_order.windows(2) {
+            assert!(!counts_with(pair).is_empty(), "{pair:?}");
+        }
+    }
 }
