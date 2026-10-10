@@ -39,10 +39,23 @@ on:
         required: true
         default: false
         type: boolean
+      resume_publish:
+        description: 'Resume an interrupted release by reusing exact package versions already published to npm'
+        required: true
+        default: false
+        type: boolean
+      resume_source_sha:
+        description: 'Original failed release commit SHA (required with resume_publish)'
+        required: false
+      resume_run_id:
+        description: 'Original failed GitHub Actions run ID (required with resume_publish)'
+        required: false
 
 permissions:
+  actions: read
   contents: write
   id-token: write
+  pull-requests: write
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -94,9 +107,73 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_version: ${{ steps.compute.outputs.release_version }}
+      recovery_source: ${{ steps.recovery.outputs.source_commit }}
+      recovery_run_id: ${{ steps.recovery.outputs.run_id }}
+      recovery_release_date: ${{ steps.recovery.outputs.release_date }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate recovery inputs and source
+        id: recovery
+        if: ${{ github.event.inputs.resume_publish == 'true' }}
+        env:
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          RESUME_SOURCE_SHA: ${{ github.event.inputs.resume_source_sha }}
+          RESUME_RUN_ID: ${{ github.event.inputs.resume_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CUSTOM_VERSION" ]; then
+            echo "::error title=Exact recovery version required::Set custom_version to the interrupted release version when resume_publish is enabled."
+            exit 1
+          fi
+          if [ -z "$RESUME_SOURCE_SHA" ]; then
+            echo "::error title=Recovery source required::Set resume_source_sha to the original failed release commit when resume_publish is enabled."
+            exit 1
+          fi
+          if ! [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error title=Recovery run required::Set resume_run_id to the numeric ID of the original failed release run."
+            exit 1
+          fi
+
+          SOURCE_COMMIT=$(git rev-parse "$RESUME_SOURCE_SHA^{commit}" 2>/dev/null || true)
+          if [ -z "$SOURCE_COMMIT" ]; then
+            echo "::error title=Invalid recovery source::$RESUME_SOURCE_SHA does not resolve to a commit."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD; then
+            echo "::error title=Recovery source is not an ancestor::$SOURCE_COMMIT is not an ancestor of the dispatched ref."
+            exit 1
+          fi
+
+          RUN_HEAD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN_ID" --jq .head_sha)
+          RUN_CREATED_AT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN_ID" --jq .created_at)
+          if [ "$RUN_HEAD_SHA" != "$SOURCE_COMMIT" ]; then
+            echo "::error title=Recovery run/source mismatch::Run $RESUME_RUN_ID used $RUN_HEAD_SHA, not $SOURCE_COMMIT."
+            exit 1
+          fi
+          RELEASE_DATE="${RUN_CREATED_AT%%T*}"
+          if ! [[ "$RELEASE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "::error title=Invalid recovery date::Could not derive the release date from run $RESUME_RUN_ID."
+            exit 1
+          fi
+
+          # Recovery may contain the workflow repair that makes resumption
+          # possible, but no release inputs or artifact sources may have moved.
+          if ! git diff --quiet "${SOURCE_COMMIT}..HEAD" -- . ':(exclude).github/workflows/publish.yml'; then
+            echo "::error title=Recovery source drift::Files outside the publish workflow changed after $SOURCE_COMMIT. Resume from a ref with identical release sources."
+            git diff --name-only "${SOURCE_COMMIT}..HEAD" -- . ':(exclude).github/workflows/publish.yml'
+            exit 1
+          fi
+          {
+            echo "source_commit=$SOURCE_COMMIT"
+            echo "run_id=$RESUME_RUN_ID"
+            echo "release_date=$RELEASE_DATE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Recovery source verified: $SOURCE_COMMIT (run $RESUME_RUN_ID, date $RELEASE_DATE)"
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -298,8 +375,42 @@ jobs:
       - name: Build workspace
         run: pnpm -r run build
 
+      # Reuse the napi matrix outputs for both conformance tests and package
+      # staging. The x64 Linux artifact is native to this publish runner.
+      - name: Download SDK napi artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/sdk-artifacts
+          pattern: relayburn-sdk-*
+          merge-multiple: false
+          run-id: ${{ needs.resolve-release-version.outputs.recovery_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Stage native SDK binding for tests
+        run: |
+          set -euo pipefail
+          sdk_test_dir="/tmp/sdk-artifacts/relayburn-sdk-linux-x64-gnu"
+          if [ ! -d "$sdk_test_dir" ]; then
+            echo "::error title=Missing SDK test artifact dir::expected $sdk_test_dir" >&2
+            ls -la /tmp/sdk-artifacts/ 2>/dev/null || true
+            exit 1
+          fi
+          sdk_test_node=$(find "$sdk_test_dir" -maxdepth 2 -type f -name '*.node' -print -quit)
+          if [ -z "$sdk_test_node" ]; then
+            echo "::error title=Missing SDK test artifact::expected a .node file under $sdk_test_dir" >&2
+            find "$sdk_test_dir" -maxdepth 2 -type f -print >&2 || true
+            exit 1
+          fi
+          cp "$sdk_test_node" packages/sdk-node/src/index.linux-x64-gnu.node
+
       - name: Run tests
-        run: pnpm run test
+        env:
+          HOME: ${{ runner.temp }}/relayburn-node-tests/home
+          RELAYBURN_HOME: ${{ runner.temp }}/relayburn-node-tests/ledger
+          RELAYBURN_SDK_NAPI_BUILT: '1'
+        run: |
+          mkdir -p "$HOME" "$RELAYBURN_HOME"
+          pnpm run test
 
       # Rust port build + test gates the whole publish job. If the Rust
       # tree is red at this commit, abort before npm ships anything so the
@@ -312,6 +423,8 @@ jobs:
         run: rustup toolchain install
 
       - name: Cargo build + test
+        env:
+          BURN_GOLDEN: '1'
         run: |
           cargo build --workspace --all-targets
           cargo test --workspace
@@ -450,9 +563,10 @@ jobs:
       # manually published a one-off from another branch between when
       # the precursor ran and now). Catch it before we waste a build +
       # before npm rejects with a less specific error.
-      - name: Verify new versions are not yet published
+      - name: Verify npm package versions
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          RESUME_PUBLISH: ${{ github.event.inputs.resume_publish }}
         run: |
           set -euo pipefail
           declare -A DIRS
@@ -468,10 +582,14 @@ jobs:
             NPM_NAME=$(node -p "require('./$dir/package.json').name")
             EXISTS=$(npm view "$NPM_NAME@$ver" version 2>/dev/null || true)
             if [ -n "$EXISTS" ]; then
-              echo "::error title=Version already published::$NPM_NAME@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
-              exit 1
+              if [ "$RESUME_PUBLISH" != "true" ]; then
+                echo "::error title=Version already published::$NPM_NAME@$ver is already on npm. Pick a different bump type, set custom_version to a higher version, or explicitly resume the interrupted release."
+                exit 1
+              fi
+              echo "$NPM_NAME@$ver: already published — recovery will reuse it"
+            else
+              echo "$NPM_NAME@$ver: unpublished — OK"
             fi
-            echo "$NPM_NAME@$ver: unpublished — OK"
           done
 
       # Per-package CHANGELOG.md generation. For each TS-only package being
@@ -494,13 +612,16 @@ jobs:
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          CHANGELOG_END_REF: ${{ needs.resolve-release-version.outputs.recovery_source }}
+          RECOVERY_RELEASE_DATE: ${{ needs.resolve-release-version.outputs.recovery_release_date }}
         run: |
-          TODAY=$(date -u +%Y-%m-%d)
+          TODAY="${RECOVERY_RELEASE_DATE:-$(date -u +%Y-%m-%d)}"
           cat > /tmp/gen-changelog.mjs << 'GENEOF'
           import { execSync } from 'node:child_process';
           import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
           const [,, key, dir, newVersion, today] = process.argv;
+          const endRef = process.env.CHANGELOG_END_REF || 'HEAD';
           const path = `${dir}/CHANGELOG.md`;
 
           if (newVersion.includes('-')) {
@@ -563,7 +684,7 @@ jobs:
             process.exit(0);
           } else {
             const log = execSync(
-              `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- ${dir}`,
+              `git log ${lastTag}..${endRef} --pretty=format:"%H|%s|%b%x00" --no-merges -- ${dir}`,
               { encoding: 'utf-8' }
             ).trim();
             if (!log) {
@@ -709,8 +830,9 @@ jobs:
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
         env:
           RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
+          RECOVERY_RELEASE_DATE: ${{ needs.resolve-release-version.outputs.recovery_release_date }}
         run: |
-          TODAY=$(date -u +%Y-%m-%d)
+          TODAY="${RECOVERY_RELEASE_DATE:-$(date -u +%Y-%m-%d)}"
           cat > /tmp/gen-root-changelog.mjs << 'GENEOF'
           import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
@@ -915,13 +1037,8 @@ jobs:
           path: /tmp/cli-artifacts
           pattern: relayburn-cli-*
           merge-multiple: false
-
-      - name: Download SDK napi artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: /tmp/sdk-artifacts
-          pattern: relayburn-sdk-*
-          merge-multiple: false
+          run-id: ${{ needs.resolve-release-version.outputs.recovery_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Stage prebuilt binaries into platform packages
         run: |
@@ -1025,9 +1142,14 @@ jobs:
             exit 1
           fi
 
-      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
-      - name: Install latest npm
-        run: npm install -g npm@latest
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow. Keep the
+      # exact npm release compatible with the Node version pinned above: an
+      # unconstrained npm@latest upgraded this job to npm 12, whose engine
+      # rejected Node 22.14.0 before any npm package could be published.
+      - name: Install OIDC-capable npm
+        run: |
+          npm install -g npm@11.19.1
+          test "$(npm --version)" = "11.19.1"
 
       # Authentication note: this workflow does NOT use an NPM_TOKEN. It relies
       # on npm's OIDC trusted-publisher flow — the `id-token: write` permission
@@ -1057,6 +1179,7 @@ jobs:
       - name: Pack + publish
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          RESUME_PUBLISH: ${{ github.event.inputs.resume_publish }}
         run: |
           set -euo pipefail
           PACK_DIR="$RUNNER_TEMP/packs"
@@ -1109,8 +1232,78 @@ jobs:
               exit 1
             fi
 
+            # npm package versions are immutable. A recovery may reuse a
+            # published version only when its unpacked files and executable
+            # modes match the artifact built from the verified source. Compare
+            # canonical contents rather than tarball bytes because gzip/tar
+            # metadata can differ across otherwise identical pack operations.
+            EXISTS=$(npm view "$NPM_NAME@$version" version 2>/dev/null || true)
+            if [ -n "$EXISTS" ]; then
+              if [ "$RESUME_PUBLISH" != "true" ]; then
+                echo "::error title=Version already published::$NPM_NAME@$version appeared after preflight; aborting normal release."
+                exit 1
+              fi
+              COMPARE_DIR="$RUNNER_TEMP/recovery-compare/$key"
+              mkdir -p "$COMPARE_DIR/local" "$COMPARE_DIR/remote" "$COMPARE_DIR/registry"
+              tar -xzf "$TARBALL" -C "$COMPARE_DIR/local"
+              REMOTE_TARBALL_BASENAME=$(npm pack "$NPM_NAME@$version" --silent --pack-destination "$COMPARE_DIR/registry")
+              REMOTE_TARBALL="$COMPARE_DIR/registry/$REMOTE_TARBALL_BASENAME"
+              tar -xzf "$REMOTE_TARBALL" -C "$COMPARE_DIR/remote"
+              if ! diff -qr "$COMPARE_DIR/local/package" "$COMPARE_DIR/remote/package"; then
+                echo "::error title=Published artifact mismatch::$NPM_NAME@$version contents do not match the artifact packed from the verified recovery source."
+                exit 1
+              fi
+              if ! diff \
+                <(cd "$COMPARE_DIR/local/package" && find . -type f -printf '%m %p\n' | sort) \
+                <(cd "$COMPARE_DIR/remote/package" && find . -type f -printf '%m %p\n' | sort); then
+                echo "::error title=Published artifact mode mismatch::$NPM_NAME@$version executable modes do not match the artifact packed from the verified recovery source."
+                exit 1
+              fi
+              echo "==> Reusing $NPM_NAME@$version (artifact contents verified)"
+              continue
+            fi
+
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
             npm publish "$TARBALL" $COMMON_FLAGS
+          done
+
+      # npm's OIDC publisher can return success while the registry still says
+      # a package is being processed. Do not regenerate the lockfile until all
+      # eleven exact versions are readable; pnpm otherwise silently drops an
+      # unavailable optional dependency from the importer and only reports the
+      # mismatch in the later frozen-lockfile check.
+      - name: Wait for npm registry propagation
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          TARGETS: ${{ steps.targets.outputs.targets }}
+        run: |
+          set -euo pipefail
+          declare -A DIRS
+          while IFS=: read -r key dir; do
+            [ -z "$key" ] && continue
+            DIRS[$key]="$dir"
+          done <<< "$TARGETS"
+
+          attempts=30
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            key="${entry%%:*}"
+            version="${entry##*:}"
+            dir="${DIRS[$key]}"
+            NPM_NAME=$(node -p "require('./$dir/package.json').name")
+
+            for i in $(seq 1 "$attempts"); do
+              visible=$(npm view "$NPM_NAME@$version" version 2>/dev/null || true)
+              if [ "$visible" = "$version" ]; then
+                echo "$NPM_NAME@$version: visible (attempt $i/$attempts)"
+                break
+              fi
+              if [ "$i" -eq "$attempts" ]; then
+                echo "::error title=npm propagation timeout::$NPM_NAME@$version was not readable after $attempts attempts. Rerun with resume_publish enabled once npm finishes processing it."
+                exit 1
+              fi
+              echo "$NPM_NAME@$version: not visible yet (attempt $i/$attempts); retrying in 10s..."
+              sleep 10
+            done
           done
 
       # Refresh pnpm-lock.yaml AFTER the publish loop so the umbrella
@@ -1127,10 +1320,10 @@ jobs:
       # `pnpm install --frozen-lockfile` on `main` fails.
       #
       # The lockfile change is amended into the version commit created by
-      # the "Commit version bumps" step earlier so the release is one
-      # atomic commit on `main`. The amend is safe because nothing has
-      # been pushed yet (the "Tag + push" step below pushes both the
-      # amended commit and the tags created against it).
+      # the "Commit version bumps" step earlier so the release metadata is
+      # one atomic commit. The amend is safe because nothing has been pushed
+      # yet. The finalization step publishes immutable tags, then puts this
+      # commit on a release branch and opens a PR because `main` is protected.
       #
       # `--lockfile-only` skips node_modules churn — we already installed
       # dependencies near the top of the job. On dry runs there's nothing
@@ -1210,8 +1403,11 @@ jobs:
             sleep 10
           done
 
-      # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
-      # lightweight tags are skipped by --follow-tags.
+      # Annotated tags (-a) and the release branch are pushed as one atomic
+      # transaction. Do not push HEAD directly to `main`: the branch is
+      # protected and requires changes to arrive via a pull request. On a
+      # recovery run, existing refs are reused only when their release tree
+      # matches the tree generated by this run.
       #
       # Tag scheme:
       #   - `<key>-v<ver>` for each of the 11 npm targets (mcp-v…,
@@ -1221,33 +1417,131 @@ jobs:
       #   - `relayburn-{sdk,cli}-v<ver>` for the two crates.io crates,
       #     reusing the same lockstep version. Disambiguated from the npm
       #     `sdk-v…` / (legacy) `cli-v…` tags via the `relayburn-` prefix.
-      - name: Tag + push
+      - name: Finalize release refs
+        id: finalize
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         env:
           TARGETS: ${{ steps.targets.outputs.targets }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
         run: |
           set -euo pipefail
           declare -A DIRS
+          missing_tags=()
+          canonical_commit=""
+          expected_tree=$(git rev-parse 'HEAD^{tree}')
           while IFS=: read -r key dir; do
             [ -z "$key" ] && continue
             DIRS[$key]="$dir"
           done <<< "$TARGETS"
+
+          add_release_tag() {
+            local tag="$1"
+            local message="$2"
+            local tagged_commit tagged_tree
+
+            if git show-ref --verify --quiet "refs/tags/$tag"; then
+              tagged_commit=$(git rev-parse "refs/tags/$tag^{commit}")
+              tagged_tree=$(git rev-parse "refs/tags/$tag^{tree}")
+              if [ "$tagged_tree" != "$expected_tree" ]; then
+                echo "::error title=Release tag conflict::$tag already exists but its release tree does not match this run. Refusing to move an immutable tag."
+                exit 1
+              fi
+              if [ -n "$canonical_commit" ] && [ "$canonical_commit" != "$tagged_commit" ]; then
+                echo "::error title=Inconsistent release tags::$tag points to $tagged_commit, while another release tag points to $canonical_commit."
+                exit 1
+              fi
+              canonical_commit="$tagged_commit"
+              echo "Reusing verified release tag $tag at $tagged_commit."
+            else
+              missing_tags+=("$tag:$message")
+            fi
+          }
 
           for entry in ${{ steps.bump.outputs.versions }}; do
             key="${entry%%:*}"
             version="${entry##*:}"
             dir="${DIRS[$key]}"
             NPM_NAME=$(node -p "require('./$dir/package.json').name")
-            git tag -a "$key-v$version" -m "$NPM_NAME@$version"
+            tag="$key-v$version"
+            add_release_tag "$tag" "$NPM_NAME@$version"
             # crates.io tags. Lockstep, so reuse $version. Only emit on the
             # `sdk` (napi umbrella) entry to avoid duplicate tags across
             # the 11 npm targets.
             if [ "$key" = "sdk" ]; then
-              git tag -a "relayburn-sdk-v$version" -m "relayburn-sdk@$version"
-              git tag -a "relayburn-cli-v$version" -m "relayburn-cli@$version"
+              add_release_tag "relayburn-sdk-v$version" "relayburn-sdk@$version"
+              add_release_tag "relayburn-cli-v$version" "relayburn-cli@$version"
             fi
           done
-          git push origin HEAD --follow-tags
+
+          # If this is a recovery after refs were published, anchor any missing
+          # refs to the already-verified immutable release commit. Otherwise the
+          # release commit produced by this run is canonical.
+          if [ -z "$canonical_commit" ]; then
+            canonical_commit=$(git rev-parse HEAD)
+          fi
+
+          for item in "${missing_tags[@]}"; do
+            tag="${item%%:*}"
+            message="${item#*:}"
+            git tag -a "$tag" "$canonical_commit" -m "$message"
+          done
+
+          release_branch="release/v$RELEASE_VERSION"
+          push_refspecs=()
+          remote_branch_commit=$(git ls-remote --heads origin "refs/heads/$release_branch" | awk '{print $1}')
+          if [ -n "$remote_branch_commit" ]; then
+            git fetch --no-tags origin "refs/heads/$release_branch"
+            branch_tree=$(git rev-parse 'FETCH_HEAD^{tree}')
+            if [ "$branch_tree" != "$expected_tree" ]; then
+              echo "::error title=Release branch conflict::$release_branch already exists but its release tree does not match this run."
+              exit 1
+            fi
+            echo "Reusing verified release branch $release_branch at $remote_branch_commit."
+          else
+            push_refspecs+=("$canonical_commit:refs/heads/$release_branch")
+          fi
+
+          for item in "${missing_tags[@]}"; do
+            tag="${item%%:*}"
+            push_refspecs+=("refs/tags/$tag:refs/tags/$tag")
+          done
+
+          if [ "${#push_refspecs[@]}" -gt 0 ]; then
+            # The branch and all missing tags either land together or not at
+            # all, preventing a retry from observing partially finalized refs.
+            git push --atomic origin "${push_refspecs[@]}"
+          else
+            echo "All release refs already exist and match this release tree."
+          fi
+          echo "branch=$release_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open release metadata pull request
+        id: release_pr
+        if: ${{ steps.finalize.outputs.branch != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ steps.finalize.outputs.branch }}
+          RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          pr_url=$(gh pr list \
+            --base main \
+            --head "$RELEASE_BRANCH" \
+            --state open \
+            --json url \
+            --jq '.[0].url // empty')
+
+          if [ -z "$pr_url" ]; then
+            pr_url=$(gh pr create \
+              --base main \
+              --head "$RELEASE_BRANCH" \
+              --title "chore(release): v$RELEASE_VERSION" \
+              --body "Generated by the publish workflow after the v$RELEASE_VERSION registry artifacts and release tags were verified. This PR records the version, changelog, and lockfile updates on protected main.")
+          fi
+
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          echo "Release metadata PR: $pr_url"
 
       - name: Summary
         env:
@@ -1279,6 +1573,9 @@ jobs:
             echo ""
             echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
             echo "- **dry run**: \`${{ github.event.inputs.dry_run }}\`"
+            if [ -n "${{ steps.release_pr.outputs.url }}" ]; then
+              echo "- **release metadata PR**: ${{ steps.release_pr.outputs.url }}"
+            fi
             echo ""
             if [ "${{ github.event.inputs.dry_run }}" != "true" ]; then
               echo "Next step: verify the published artifact by running the \`Verify Publish\` workflow."

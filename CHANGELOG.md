@@ -5,8 +5,26 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn overhead` discovers the default Claude Code, Codex, and OpenCode user/ancestor/project instruction chains with harness-accurate precedence, boundaries, deduplication, and scope labels.
+- CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+
+## [4.1.0] - 2026-09-20
+
+- `burn measure` and `@relayburn/sdk.measureSession()` turn one explicit Claude Code, Codex, or OpenCode session source into a versioned per-model token/cost document without discovery or a ledger; incomplete and zero-turn inputs fail closed.
+- `@relayburn/sdk` exposes `turnSpanTree`, `sessionSpanTrees`, `flowGraph`, and `contextDelta`, matching the Rust SDK verbs for span trees, inference-flow DAGs, and context-window deltas.
+- `@relayburn/mcp` tests compile TypeScript before running, so the package suite executes on a clean checkout.
+- `summary`, `hotspots`, and `sessions list` warn on stale data (24-hour default, configurable), including older imported or rebuilt ledgers. SDK and MCP consumers receive freshness metadata; summary and MCP reads remain usable when that metadata is unavailable.
+- `burn flow` now connects the main rail across turn boundaries, so session DAGs render as one continuous inference flow in JSON, Mermaid, and SVG.
+- `burn summary` marks unpriced model rows and labels totals as priced-only; JSON adds `unpricedTurns` and `unpricedModels` so unknown-model spend is never mistaken for free usage.
+- `burn compare` human totals mark models whose cells have `turns > pricedTurns` as unpriced instead of `$0.00`; `burn summary --bucket` annotates windows with a nonzero unpriced-turn count. Unpriced warnings print the resolved ledger-home `models.dev.json` path.
+- Removed the macOS menu bar app and its build, test, and release tooling.
+- Documentation covers the complete `burn` command surface and the SQLite/WAL storage and maintenance workflow.
+- `burn mcp-server` now exposes summary, hotspots, overhead attribution,
+  overhead trimming, and model comparison through validated read-only tools.
+- `burn --json` commands, stdout `burn stamps export` streams, and human-readable output now exit quietly when a downstream pipe closes early instead of panicking or reporting the pipe closure as a generic error.
 - Pricing recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs over reseller duplicates, and applies long-context price tiers.
+- Pricing reports retired first-party models, including the `codex-auto-review` alias, as unpriced instead of inheriting reseller tariffs; summary buckets expose their unpriced-turn count, while a ledger-home `models.dev.json` override can explicitly restore pricing.
 - `burn hotspots --findings` surfaces unknown model pricing explicitly and ranks unpriced sessions by token volume instead of treating them as $0.00.
+- Licensed under Apache-2.0 (Copyright 2026 Agent Workforce Incorporated), matching Relay: added the repo `LICENSE`, set the Rust workspace `license` to `Apache-2.0`, declared `license` on the published npm packages, and shipped the license text inside every published npm package and crate.
 
 ## [4.0.0] - 2026-06-23
 

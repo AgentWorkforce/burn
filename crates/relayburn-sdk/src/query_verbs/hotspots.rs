@@ -208,7 +208,7 @@ impl LedgerHandle {
                 filter.contains(&provider.to_ascii_lowercase())
             });
         }
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
 
         if matches!(opts.group_by, Some(HotspotsGroupBy::Findings)) {
             let patterns = match opts.patterns {

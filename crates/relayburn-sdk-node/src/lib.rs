@@ -18,7 +18,8 @@
 //!   2^53; the SDK already deals in u64 internally so the boundary is the
 //!   right place to surface that. For verbs whose result is too recursive
 //!   to mirror as a `#[napi(object)]` struct (`overhead`, `overheadTrim`,
-//!   `hotspots`, `exportLedger`, `exportStamps`), we serialize through
+//!   `hotspots`, `exportLedger`, `exportStamps`, `turnSpanTree`,
+//!   `sessionSpanTrees`, `flowGraph`, `contextDelta`), we serialize through
 //!   serde_json and emit the result via the [`BigIntPromoting`] wrapper,
 //!   which walks the JSON tree and substitutes `BigInt` for any numeric
 //!   value sitting under one of the well-known u64 field names listed in
@@ -34,8 +35,9 @@
 //!   rather than dragging `chrono::DateTime` or `Date` through the FFI.
 //!   Matches the public Node facade types.
 //! - **`async fn` SDK verbs → `Promise<T>` on the JS side.** napi-rs's
-//!   `tokio_rt` feature drives this; we mark `ingest` `async fn` and the
-//!   sync verbs (`summary`, `sessionCost`, …) as plain `fn` returning
+//!   `tokio_rt` feature drives this; blocking operations such as `ingest` and
+//!   `ledgerFreshness` run through Tokio's blocking pool. Lightweight sync
+//!   verbs (`summary`, `sessionCost`, …) remain plain `fn` returning
 //!   `Result<T, BurnError>`.
 //! - **Errors → typed `BurnError` JS class (sync verbs only).** Domain
 //!   failures from the SDK (`anyhow::Error`) and argument-shape errors
@@ -48,7 +50,7 @@
 //!   [`BurnErrorCode`] enum is exported as a `string_enum` so TS code
 //!   can reference the codes by name without stringly-typed literals.
 //!
-//!   **Async exception — [`ingest`].** napi-rs 2.x's `async fn` lowering
+//!   **Async exception — [`ingest`] and [`ledger_freshness`].** napi-rs 2.x's `async fn` lowering
 //!   in `napi-derive` runs through `napi::bindgen_prelude::execute_tokio_future`
 //!   ([`napi-derive-backend`]'s `codegen/fn.rs`), which is hard-typed to
 //!   `Result<T, napi::Error<Status>>` — and `Status` is a *closed* enum
@@ -62,12 +64,12 @@
 //!   `crates/relayburn-sdk-node/src/lib.rs` git history for the
 //!   evaluation. We deliberately don't pay that complexity in v1.
 //!
-//!   **Concrete contract for [`ingest`]:** the returned `Promise<IngestReport>`
-//!   rejects with a JS `Error` whose `.code === 'GenericFailure'` and
-//!   whose `.message` is the rendered `anyhow::Error` chain from the
-//!   SDK. JS callers branching on `e.code` should match `'GenericFailure'`
-//!   for ingest failures (or, more robustly, gate on `e.message`
-//!   substrings if discrimination is required). A future PR can tighten
+//!   **Concrete contract for async bindings:** the returned promise rejects
+//!   with a JS `Error` whose `.code === 'GenericFailure'` and whose `.message`
+//!   is the rendered `anyhow::Error` chain from the SDK. JS callers branching
+//!   on `e.code` should match `'GenericFailure'` for these failures (or, more
+//!   robustly, gate on `e.message` substrings if discrimination is required).
+//!   A future PR can tighten
 //!   this — likely by upgrading to napi-rs 3.x once the `string_enum`
 //!   and `BigInt` ergonomics there are validated against the rest of
 //!   the binding — at which point `e.code` becomes one of the
@@ -75,8 +77,14 @@
 //!
 //! # Surface
 //!
-//! Every public verb in `relayburn-sdk` (free-function form) is bound
-//! here. The `Ledger` / `LedgerHandle` method form is omitted from the JS
+//! Public free-function query/ingest/export verbs in `relayburn-sdk` are
+//! bound here, including `turn_span_tree`, `session_span_trees`,
+//! `flow_graph`, and `context_delta`. The following free functions stay
+//! Rust-only — CLI and MCP presenters call the matching `LedgerHandle`
+//! methods, and the Node facade does not promise them: `summary_report`,
+//! `state_status`, `inferences`, and `sessions_list`.
+//!
+//! The `Ledger` / `LedgerHandle` method form is omitted from the JS
 //! surface for now — the Node facade exposes the free-function shape, and a
 //! future PR can add a `Ledger` JS class without breaking compatibility.
 //!
@@ -90,7 +98,9 @@ use std::path::PathBuf;
 use std::ptr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use napi::bindgen_prelude::{BigInt, Error as NapiError, Result as NapiResult, ToNapiValue};
+use napi::bindgen_prelude::{
+    BigInt, Either, Error as NapiError, Null, Result as NapiResult, ToNapiValue,
+};
 use napi::sys;
 use napi_derive::napi;
 use serde_json::Value as JsonValue;
@@ -193,7 +203,8 @@ fn maybe_path(s: Option<String>) -> Option<PathBuf> {
 // BigIntPromoting — JsonValue → JS value walker that emits BigInt for the
 // well-known u64 field names below.
 //
-// `overhead`, `overheadTrim`, `hotspots`, and `compare` return shapes that
+// `overhead`, `overheadTrim`, `hotspots`, `compare`, span trees, flow
+// graphs, and context deltas return shapes that
 // are too recursive (or, in `hotspots`'s case, a discriminated union) to mirror
 // cleanly as a single `#[napi(object)]` struct. We keep them on the
 // `serde_json::Value` boundary but wrap the result so the standard
@@ -243,6 +254,15 @@ const BIGINT_FIELDS: &[&str] = &[
     "partial",
     "usageOnly",
     "unknown",
+    // measureSession
+    "turnCount",
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "reasoningTokens",
+    "totalTokens",
+    "costUsdMicros",
     // export_ledger / export_stamps record bodies — every camelCased
     // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /
     // CompactionEvent / nested Usage and ToolCall payloads. These values
@@ -267,6 +287,20 @@ const BIGINT_FIELDS: &[&str] = &[
     "cacheRead",
     "cacheCreate5m",
     "cacheCreate1h",
+    // span-tree attribute keys: untagged `AttrValue::Int` serializes as a
+    // JSON number under the raw attribute name (dots included).
+    "tokens.input",
+    "tokens.output",
+    "tokens.cache_read",
+    "tokens.cache_write",
+    "tokens.reasoning",
+    // flow-graph `TurnTokens` + context-delta counters
+    "cacheWrite",
+    "priorContextTokens",
+    "currentContextTokens",
+    "deltaTokens",
+    "approxBytes",
+    "tokensFreed",
 ];
 
 fn is_bigint_field(name: &str) -> bool {
@@ -278,6 +312,8 @@ fn is_bigint_field(name: &str) -> bool {
 /// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
 /// `hotspots`, `compare`, `exportLedger`, and `exportStamps` verbs whose
 /// result shapes are documented in `packages/sdk-node/src/index.d.ts`.
+/// Also used by `turnSpanTree`, `sessionSpanTrees`, `flowGraph`, and
+/// `contextDelta`.
 pub struct BigIntPromoting(JsonValue);
 
 impl ToNapiValue for BigIntPromoting {
@@ -372,6 +408,41 @@ fn open_options(home: Option<String>, content_home: Option<String>) -> sdk::Ledg
         home: maybe_path(home),
         content_home: maybe_path(content_home),
     }
+}
+
+#[napi(object)]
+pub struct LedgerFreshnessOptions {
+    pub ledger_home: Option<String>,
+}
+
+#[napi(object)]
+pub struct LedgerFreshness {
+    pub last_write_at_ms: Option<f64>,
+    pub stale_after_ms: Either<f64, Null>,
+    pub stale: bool,
+}
+
+/// Return the shared SDK staleness flag without printing. MCP and other Node
+/// presenters can attach this data to their own response envelopes.
+#[napi]
+pub async fn ledger_freshness(
+    opts: Option<LedgerFreshnessOptions>,
+) -> Result<LedgerFreshness, NapiError> {
+    let home = opts.and_then(|o| o.ledger_home);
+    let freshness = tokio::task::spawn_blocking(move || {
+        let handle = sdk::Ledger::open(open_options(home, None))?;
+        handle.ledger_freshness()
+    })
+    .await
+    .map_err(|e| NapiError::from_reason(format!("ledger freshness task panicked: {e}")))?
+    .map_err(|e| NapiError::from_reason(format!("{e:#}")))?;
+    Ok(LedgerFreshness {
+        last_write_at_ms: freshness.last_write_at_ms.map(|v| v as f64),
+        stale_after_ms: freshness
+            .stale_after_ms
+            .map_or(Either::B(Null), |v| Either::A(v as f64)),
+        stale: freshness.stale,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +911,43 @@ pub fn session_cost(opts: Option<SessionCostOptions>) -> Result<SessionCostResul
 }
 
 // ---------------------------------------------------------------------------
+// measure_session — one explicit transcript in, one metrics document out.
+// No ledger or harness-store discovery is involved.
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct MeasureSessionOptions {
+    pub input_path: String,
+    pub harness: String,
+    pub pricing_path: Option<String>,
+}
+
+fn parse_measure_harness(value: &str) -> Result<sdk::Harness, BurnError> {
+    match value {
+        "claude-code" | "claude" => Ok(sdk::Harness::ClaudeCode),
+        "codex" => Ok(sdk::Harness::Codex),
+        "opencode" => Ok(sdk::Harness::Opencode),
+        other => Err(invalid_arg(format!(
+            "measureSession: invalid harness {other:?} (expected claude-code, codex, or opencode)"
+        ))),
+    }
+}
+
+/// Parse one exact session artifact and return Cloud-ready token/cost metrics.
+#[napi(js_name = "measureSession")]
+pub fn measure_session(opts: MeasureSessionOptions) -> Result<BigIntPromoting, BurnError> {
+    let result = sdk::measure_session(sdk::MeasureSessionOptions {
+        input_path: PathBuf::from(opts.input_path),
+        harness: parse_measure_harness(&opts.harness)?,
+        pricing_path: opts.pricing_path.map(PathBuf::from),
+    })
+    .map_err(sdk_err)?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize measureSession: {e}")))?;
+    Ok(BigIntPromoting(value))
+}
+
+// ---------------------------------------------------------------------------
 // fingerprint — cheap polling primitive (count:maxMtimeUnix:totalBytes).
 // Mirrors `sdk::fingerprint`. Powers the MCP `burn__fingerprint` tool and
 // is exposed bare on `@relayburn/sdk` for embedders that want to poll.
@@ -878,6 +986,175 @@ pub fn fingerprint(opts: Option<FingerprintOptions>) -> Result<FingerprintResult
             fingerprint: fp.into_inner(),
         })
         .map_err(sdk_err)
+}
+
+// ---------------------------------------------------------------------------
+// span trees, flow graphs, context deltas — recursive JSON shapes wrapped
+// in BigIntPromoting so token counters cross as BigInt.
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct TurnSpanTreeOptions {
+    pub session_id: String,
+    pub turn_id: String,
+    pub ledger_home: Option<String>,
+}
+
+/// Per-turn span tree for one `(sessionId, turnId)` pair. Powers
+/// `burn flow` / context-delta derivation. Token attributes under
+/// `tokens.*` cross as `BigInt`.
+#[napi(
+    js_name = "turnSpanTree",
+    ts_return_type = "import('./index').TurnSpanTree"
+)]
+pub fn turn_span_tree(opts: TurnSpanTreeOptions) -> Result<BigIntPromoting, BurnError> {
+    let result = sdk::turn_span_tree(
+        &opts.session_id,
+        &opts.turn_id,
+        maybe_path(opts.ledger_home),
+    )
+    .map_err(sdk_err)?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize turn_span_tree: {e}")))?;
+    Ok(BigIntPromoting(value))
+}
+
+#[napi(object)]
+pub struct SessionSpanTreesOptions {
+    pub session_id: String,
+    pub ledger_home: Option<String>,
+}
+
+/// Span tree for every turn in a session, in stored order. Unknown
+/// session ids return an empty array.
+#[napi(
+    js_name = "sessionSpanTrees",
+    ts_return_type = "import('./index').TurnSpanTree[]"
+)]
+pub fn session_span_trees(opts: SessionSpanTreesOptions) -> Result<BigIntPromoting, BurnError> {
+    let result =
+        sdk::session_span_trees(&opts.session_id, maybe_path(opts.ledger_home)).map_err(sdk_err)?;
+    let value = serde_json::to_value(&result).map_err(|e| {
+        NapiError::new(SDK_ERROR_CODE, format!("serialize session_span_trees: {e}"))
+    })?;
+    Ok(BigIntPromoting(value))
+}
+
+#[napi(object)]
+pub struct FlowGraphOptions {
+    pub session_id: String,
+    /// Cap the number of turns rendered. Omit for the SDK default (50).
+    /// Pass `0` to disable the cap.
+    pub max_turns: Option<u32>,
+    pub ledger_home: Option<String>,
+}
+
+/// Per-session inference-flow DAG projected from the session's span
+/// trees. Powers `burn flow`.
+#[napi(js_name = "flowGraph", ts_return_type = "import('./index').FlowGraph")]
+pub fn flow_graph(opts: FlowGraphOptions) -> Result<BigIntPromoting, BurnError> {
+    let result = sdk::flow_graph(
+        &opts.session_id,
+        sdk::FlowOpts {
+            max_turns: opts.max_turns,
+        },
+        maybe_path(opts.ledger_home),
+    )
+    .map_err(sdk_err)?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize flow_graph: {e}")))?;
+    Ok(BigIntPromoting(value))
+}
+
+#[napi(object)]
+pub struct ContextDeltaOptions {
+    pub session: Option<String>,
+    /// Relative range (`24h`, `7d`, `4w`, `2m`). ISO timestamps are not
+    /// accepted — the SDK's context-delta window is a `Duration`.
+    pub since: Option<String>,
+    pub top: Option<u32>,
+    pub min_delta: Option<u32>,
+    /// `'all'` (default), `'main'`, or `'subagent'`.
+    pub owner: Option<String>,
+    pub ledger_home: Option<String>,
+}
+
+/// Per-inference context-window deltas. Powers `burn overhead deltas`.
+#[napi(
+    js_name = "contextDelta",
+    ts_return_type = "import('./index').ContextDelta[]"
+)]
+pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromoting, BurnError> {
+    let opts = opts.unwrap_or(ContextDeltaOptions {
+        session: None,
+        since: None,
+        top: None,
+        min_delta: None,
+        owner: None,
+        ledger_home: None,
+    });
+    let raw = sdk::ContextDeltaOpts {
+        session: opts.session,
+        since: parse_relative_duration(opts.since.as_deref())?,
+        top: opts.top,
+        min_delta: opts.min_delta.map(u64::from),
+        owner: parse_owner_filter(opts.owner.as_deref())?,
+    };
+    let result = sdk::context_delta(raw, maybe_path(opts.ledger_home)).map_err(sdk_err)?;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize context_delta: {e}")))?;
+    Ok(BigIntPromoting(value))
+}
+
+fn parse_relative_duration(raw: Option<&str>) -> Result<Option<Duration>, BurnError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let bytes = raw.as_bytes();
+    let hint = "expected a relative range like 24h, 7d, 4w, or 2m";
+    if bytes.len() < 2 {
+        return Err(invalid_arg(format!(
+            "contextDelta: invalid since: {raw} ({hint})"
+        )));
+    }
+    let unit = bytes[bytes.len() - 1] as char;
+    if !matches!(unit, 'h' | 'd' | 'w' | 'm') {
+        return Err(invalid_arg(format!(
+            "contextDelta: invalid since: {raw} ({hint})"
+        )));
+    }
+    let num = &raw[..raw.len() - 1];
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid_arg(format!(
+            "contextDelta: invalid since: {raw} ({hint})"
+        )));
+    }
+    let n: u64 = num
+        .parse()
+        .map_err(|_| invalid_arg(format!("contextDelta: invalid since: {raw} ({hint})")))?;
+    let secs = match unit {
+        'h' => n.checked_mul(3_600),
+        'd' => n.checked_mul(86_400),
+        'w' => n.checked_mul(7 * 86_400),
+        'm' => n.checked_mul(30 * 86_400),
+        _ => None,
+    }
+    .ok_or_else(|| invalid_arg(format!("contextDelta: since overflow: {raw}")))?;
+    Ok(Some(Duration::from_secs(secs)))
+}
+
+fn parse_owner_filter(raw: Option<&str>) -> Result<sdk::ContextDeltaOwnerFilter, BurnError> {
+    match raw {
+        None | Some("all") => Ok(sdk::ContextDeltaOwnerFilter::All),
+        Some("main") => Ok(sdk::ContextDeltaOwnerFilter::Main),
+        Some("subagent") => Ok(sdk::ContextDeltaOwnerFilter::Subagent),
+        Some(other) => Err(invalid_arg(format!(
+            "contextDelta: invalid owner: {other} (expected one of all, main, subagent)"
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1469,6 +1746,39 @@ mod tests {
     }
 
     #[test]
+    fn parse_relative_duration_accepts_cli_ranges() {
+        assert_eq!(parse_relative_duration(None).unwrap(), None);
+        assert_eq!(parse_relative_duration(Some("")).unwrap(), None);
+        assert_eq!(
+            parse_relative_duration(Some("24h")).unwrap(),
+            Some(Duration::from_secs(24 * 3_600))
+        );
+        assert_eq!(
+            parse_relative_duration(Some("7d")).unwrap(),
+            Some(Duration::from_secs(7 * 86_400))
+        );
+        assert!(parse_relative_duration(Some("yesterday")).is_err());
+        assert!(parse_relative_duration(Some("2026-01-01T00:00:00Z")).is_err());
+    }
+
+    #[test]
+    fn parse_owner_filter_accepts_wire_values() {
+        assert_eq!(
+            parse_owner_filter(None).unwrap(),
+            sdk::ContextDeltaOwnerFilter::All
+        );
+        assert_eq!(
+            parse_owner_filter(Some("main")).unwrap(),
+            sdk::ContextDeltaOwnerFilter::Main
+        );
+        assert_eq!(
+            parse_owner_filter(Some("subagent")).unwrap(),
+            sdk::ContextDeltaOwnerFilter::Subagent
+        );
+        assert!(parse_owner_filter(Some("both")).is_err());
+    }
+
+    #[test]
     fn bigint_field_membership_covers_documented_keys() {
         // Every camelCased u64 field that crosses the boundary today
         // must be in BIGINT_FIELDS so the walker promotes it.
@@ -1522,6 +1832,18 @@ mod tests {
             "cacheRead",
             "cacheCreate5m",
             "cacheCreate1h",
+            // span trees / flow graphs / context deltas
+            "tokens.input",
+            "tokens.output",
+            "tokens.cache_read",
+            "tokens.cache_write",
+            "tokens.reasoning",
+            "cacheWrite",
+            "priorContextTokens",
+            "currentContextTokens",
+            "deltaTokens",
+            "approxBytes",
+            "tokensFreed",
         ] {
             assert!(is_bigint_field(key), "{key} missing from BIGINT_FIELDS");
         }

@@ -89,6 +89,9 @@ impl Args {
 /// "not yet implemented" message and exits 1.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Measure one explicit session artifact without discovery or a ledger.
+    Measure(MeasureArgs),
+
     /// Aggregate session usage and cost.
     Summary(crate::commands::summary::SummaryArgs),
 
@@ -123,6 +126,40 @@ pub enum Command {
 
     /// Check for, install, or configure `burn` self-updates.
     Update(UpdateArgs),
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+pub struct MeasureArgs {
+    /// Exact session source to parse. OpenCode expects its session metadata
+    /// file inside a complete storage tree.
+    #[arg(long, value_name = "PATH")]
+    pub input: PathBuf,
+
+    /// Harness format of the input artifact.
+    #[arg(long, value_enum, value_name = "HARNESS")]
+    pub harness: MeasureHarness,
+
+    /// Optional models.dev-compatible pricing overlay.
+    #[arg(long, value_name = "PATH")]
+    pub pricing: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MeasureHarness {
+    #[value(name = "claude-code", alias = "claude")]
+    ClaudeCode,
+    Codex,
+    Opencode,
+}
+
+impl From<MeasureHarness> for relayburn_sdk::Harness {
+    fn from(value: MeasureHarness) -> Self {
+        match value {
+            MeasureHarness::ClaudeCode => relayburn_sdk::Harness::ClaudeCode,
+            MeasureHarness::Codex => relayburn_sdk::Harness::Codex,
+            MeasureHarness::Opencode => relayburn_sdk::Harness::Opencode,
+        }
+    }
 }
 
 /// Per-command flags for `burn update`.
@@ -221,18 +258,17 @@ pub struct IngestArgs {
 
 /// Per-command flags for `burn mcp-server`. The stdio MCP server speaks
 /// JSON-RPC 2.0 line-delimited frames over stdin/stdout and exposes the
-/// `burn__sessionCost` read-only tool. Closes #210.
+/// read-only burn MCP tool catalog.
 ///
 /// Global `--ledger-path` (on [`Args`]) is consulted as the SDK ledger
-/// home. `--session-id` registers a default session id so MCP clients
-/// that omit `sessionId` in `tools/call` get a useful answer (the
-/// running agent's own session).
+/// home. `--session-id` registers a default session id so MCP clients that
+/// omit a session selector get a useful answer (the running agent's own
+/// session).
 #[derive(Debug, Clone, ClapArgs)]
 pub struct McpServerArgs {
-    /// Default sessionId to use when `tools/call burn__sessionCost`
-    /// omits the argument. Lets the host wrap the server with the
-    /// running agent's own session id so the agent can self-query
-    /// without knowing it.
+    /// Default sessionId used by sessionCost, summary, and hotspots when
+    /// their session argument is omitted. Lets the host register the running
+    /// agent's own session so it can self-query without knowing the id.
     #[arg(long = "session-id", value_name = "ID")]
     pub session_id: Option<String>,
 

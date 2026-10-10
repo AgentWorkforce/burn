@@ -34,7 +34,7 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
 
 use relayburn_sdk::{
@@ -128,13 +128,12 @@ fn run_inner(globals: &GlobalArgs, args: FlowArgs) -> anyhow::Result<i32> {
     }
 
     // Stdout output: Mermaid when (a) no `--output`, or (b) `--mermaid`
-    // was passed explicitly to layer it on top of an SVG render.
+    // was passed explicitly to layer it on top of an SVG render. The
+    // shared helper marks stdout errors so an early-closing consumer
+    // exits quietly instead of surfacing a generic I/O failure.
     if args.output.is_none() || args.mermaid {
         let mermaid = render_mermaid(&graph);
-        let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        handle.write_all(mermaid.as_bytes())?;
-        handle.flush()?;
+        crate::render::stdout::write_stdout(&mermaid)?;
     }
 
     Ok(0)

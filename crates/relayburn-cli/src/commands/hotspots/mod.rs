@@ -265,6 +265,7 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         let raw_opts = progress.ingest_options(ledger_home.clone());
         ingest_all(handle.raw_mut(), &raw_opts)?;
     }
+    let freshness = handle.ledger_freshness()?;
     drop(handle);
 
     let session_filter = match args.session.as_deref() {
@@ -284,12 +285,13 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         ledger_home,
     })?;
     progress.finish_and_clear();
+    crate::commands::freshness::warn_if_stale(&freshness, globals);
 
     if globals.json {
         emit_json(&result)?;
         return Ok(0);
     }
     let limit = if args.all { usize::MAX } else { DEFAULT_TOP_N };
-    emit_human(&result, limit, args.findings, args.rank_by);
+    emit_human(&result, limit, args.findings, args.rank_by)?;
     Ok(0)
 }

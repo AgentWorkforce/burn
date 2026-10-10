@@ -427,7 +427,7 @@ impl LedgerHandle {
     /// span trees get loaded. The same window is then applied to the
     /// returned [`Vec<ContextDelta>`] cap.
     pub fn context_delta(&self, opts: ContextDeltaOpts) -> Result<Vec<ContextDelta>> {
-        let pricing = load_pricing(None);
+        let pricing = load_pricing_for_ledger(self);
 
         // Build the seed `since` filter from `opts.since`. We always have a
         // sensible `effective_since()` default, but only apply it when the

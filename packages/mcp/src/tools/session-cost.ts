@@ -1,5 +1,5 @@
-import { sessionCost as sdkSessionCost } from '@relayburn/sdk';
-import type { SessionCostResult as SdkSessionCostResult } from '@relayburn/sdk';
+import { ledgerFreshness as sdkLedgerFreshness, sessionCost as sdkSessionCost } from '@relayburn/sdk';
+import type { LedgerFreshness, SessionCostResult as SdkSessionCostResult } from '@relayburn/sdk';
 
 import type { ToolDefinition } from '../types.js';
 
@@ -7,7 +7,7 @@ export interface SessionCostInput {
   sessionId?: string;
 }
 
-export type SessionCostResult = SdkSessionCostResult;
+export type SessionCostResult = SdkSessionCostResult & { ledgerFreshness: LedgerFreshness };
 
 export interface SessionCostDeps {
   defaultSessionId: string | undefined;
@@ -16,10 +16,12 @@ export interface SessionCostDeps {
    * exercise the tool surface without touching the on-disk ledger.
    */
   sessionCost?: (opts: { session?: string }) => Promise<SdkSessionCostResult>;
+  ledgerFreshness?: () => Promise<LedgerFreshness>;
 }
 
 export function createSessionCostTool(deps: SessionCostDeps): ToolDefinition {
   const callSessionCost = deps.sessionCost ?? sdkSessionCost;
+  const callLedgerFreshness = deps.ledgerFreshness ?? sdkLedgerFreshness;
   return {
     name: 'burn__sessionCost',
     description:
@@ -43,15 +45,18 @@ export function createSessionCostTool(deps: SessionCostDeps): ToolDefinition {
       const sessionId = input.sessionId ?? deps.defaultSessionId;
       const opts: { session?: string } = {};
       if (sessionId !== undefined) opts.session = sessionId;
-      const result = await callSessionCost(opts);
+      const [result, ledgerFreshness] = await Promise.all([
+        callSessionCost(opts),
+        callLedgerFreshness(),
+      ]);
       // The SDK's "no session id" note is generic ("no session id provided");
       // keep the more descriptive variant the MCP tool used to surface so the
       // hint that the *server* should have been registered with one stays
       // visible to MCP clients.
       if (result.sessionId === null && sessionId === undefined) {
-        return { ...result, note: 'no session id provided and server was not registered with one' };
+        return { ...result, ledgerFreshness, note: 'no session id provided and server was not registered with one' };
       }
-      return result;
+      return { ...result, ledgerFreshness };
     },
   };
 }

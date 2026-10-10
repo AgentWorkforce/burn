@@ -1,14 +1,17 @@
 //! JSON serialization for `burn summary` reports.
 
+use std::path::Path;
+
 use relayburn_sdk::{
     summary_fidelity_summary_to_value, summary_replacement_savings_to_value, CostBreakdown,
-    StopReasonCounts, SummaryGroupBy, SummaryGroupedReport,
+    StopReasonCounts, SummaryBucket, SummaryGroupBy, SummaryGroupedReport,
 };
 use serde_json::{json, Map, Value};
 
 use crate::cli::GlobalArgs;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd};
 use crate::render::json::render_json;
+use crate::render::pricing::warn_unpriced_usage;
 
 use super::*;
 
@@ -26,26 +29,50 @@ pub(super) fn emit_summary_timeseries(
     globals: &GlobalArgs,
     series: &relayburn_sdk::SummaryTimeseries,
     ingest_report: &relayburn_sdk::IngestReport,
+    pricing_override: &Path,
 ) -> anyhow::Result<i32> {
     if globals.json {
         render_json(series)?;
         return Ok(0);
     }
-    emit_human_ingest_prelude(ingest_report);
+    emit_human_ingest_prelude(ingest_report)?;
     if series.buckets.is_empty() {
-        println!("(no data in range)");
+        crate::render::stdout::writeln_stdout("(no data in range)")?;
         return Ok(0);
     }
+    let mut unpriced_turns = 0u64;
     for bucket in &series.buckets {
-        println!(
-            "{}  {:>5} turns  {:>14} tok  {}",
-            bucket.start,
-            bucket.turn_count,
-            format_uint(bucket.total_tokens),
-            format_usd(bucket.total_cost.total),
-        );
+        unpriced_turns += bucket.unpriced_turns;
+        crate::render::stdout::writeln_stdout(&format_timeseries_bucket_line(bucket))?;
     }
+    warn_unpriced_usage(unpriced_turns, &[], pricing_override);
     Ok(0)
+}
+
+/// One human `--bucket` line. Nonzero `unpricedTurns` is called out so a
+/// priced-only subtotal cannot look like a complete `$0.00` window.
+pub(super) fn format_timeseries_bucket_line(bucket: &SummaryBucket) -> String {
+    format!(
+        "{}  {:>5} turns  {:>14} tok  {}",
+        bucket.start,
+        bucket.turn_count,
+        format_uint(bucket.total_tokens),
+        format_bucket_cost(bucket),
+    )
+}
+
+pub(super) fn format_bucket_cost(bucket: &SummaryBucket) -> String {
+    if bucket.turn_count > 0 && bucket.unpriced_turns >= bucket.turn_count {
+        "unpriced".to_string()
+    } else if bucket.unpriced_turns > 0 {
+        format!(
+            "{} ({} unpriced)",
+            format_usd(bucket.total_cost.total),
+            format_uint(bucket.unpriced_turns),
+        )
+    } else {
+        format_usd(bucket.total_cost.total)
+    }
 }
 
 pub(super) fn grouped_json_value(
@@ -119,6 +146,10 @@ pub(super) fn grouped_json_value(
         "stopReasons".into(),
         stop_reasons_to_json(&report.stop_reasons),
     );
+    payload.insert("unpricedTurns".into(), json!(report.unpriced_turns));
+    if !report.unpriced_models.is_empty() {
+        payload.insert("unpricedModels".into(), json!(report.unpriced_models));
+    }
     if !report.subagents.is_empty() {
         // `subagents: {paired, orphan, total}` (issue #435). Skipped
         // when both buckets are zero so the JSON shape stays compact
