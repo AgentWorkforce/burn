@@ -132,25 +132,27 @@ struct ModelsDevProvider {
 // from later reseller copies in `flatten`.
 type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
 
-/// models.dev publishes a single `cache_write` tariff, which for Anthropic is
-/// the 5-minute-TTL write (1.25x input). Anthropic bills 1-hour-TTL writes at
-/// 2x the base input tariff (long-context tiers included), so entries under
-/// the `anthropic` provider derive `cache_write_1h` from `input` unless the
-/// entry sets `cache_write_1h` explicitly. Every other provider has one
-/// cache-write tariff regardless of TTL.
-const ANTHROPIC_PROVIDER: &str = "anthropic";
-const ANTHROPIC_CACHE_WRITE_1H_INPUT_MULTIPLIER: f64 = 2.0;
+/// models.dev publishes a single `cache_write` tariff, which for Claude is
+/// the 5-minute-TTL write (1.25x input). Claude prompt caching bills
+/// 1-hour-TTL writes at 2x the base input tariff (long-context tiers
+/// included) on every host that offers the 1-hour TTL — Anthropic, Vertex
+/// AI, Bedrock — so Claude entries derive `cache_write_1h` from `input`
+/// unless the entry sets `cache_write_1h` explicitly. Other model families
+/// have one cache-write tariff regardless of TTL.
+const CLAUDE_CACHE_WRITE_1H_INPUT_MULTIPLIER: f64 = 2.0;
 
-/// Resolve the 1-hour cache-write tariff: explicit field, then the
-/// provider's TTL rule, then the single cache-write tariff.
-fn cache_write_1h_rate(
-    provider_id: &str,
-    explicit: Option<f64>,
-    input: f64,
-    cache_write: f64,
-) -> f64 {
-    explicit.unwrap_or(if provider_id == ANTHROPIC_PROVIDER {
-        input * ANTHROPIC_CACHE_WRITE_1H_INPUT_MULTIPLIER
+/// Claude ids across hosts: `claude-sonnet-4-6`, `claude-sonnet-4-6@default`
+/// (Vertex), `us.anthropic.claude-sonnet-4-6` (Bedrock),
+/// `anthropic/claude-sonnet-4.6` (routers).
+fn is_claude_model(model_id: &str) -> bool {
+    model_id.to_ascii_lowercase().contains("claude")
+}
+
+/// Resolve the 1-hour cache-write tariff: explicit field, then the Claude
+/// TTL rule, then the single cache-write tariff.
+fn cache_write_1h_rate(model_id: &str, explicit: Option<f64>, input: f64, cache_write: f64) -> f64 {
+    explicit.unwrap_or(if is_claude_model(model_id) {
+        input * CLAUDE_CACHE_WRITE_1H_INPUT_MULTIPLIER
     } else {
         cache_write
     })
@@ -257,19 +259,14 @@ fn flatten(root: &ModelsDevRoot, protected_models: &HashSet<String>) -> PricingT
                 output,
                 cache_read: cost.cache_read.unwrap_or(0.0),
                 cache_write,
-                cache_write_1h: cache_write_1h_rate(
-                    provider_id,
-                    cost.cache_write_1h,
-                    input,
-                    cache_write,
-                ),
+                cache_write_1h: cache_write_1h_rate(id, cost.cache_write_1h, input, cache_write),
                 reasoning: cost.reasoning,
                 reasoning_mode: if has_reasoning {
                     ReasoningMode::Separate
                 } else {
                     ReasoningMode::SameAsOutput
                 },
-                context_tiers: context_tiers(provider_id, cost),
+                context_tiers: context_tiers(id, cost),
             };
             out.insert(id.clone(), entry);
             if primary_provider {
@@ -280,7 +277,7 @@ fn flatten(root: &ModelsDevRoot, protected_models: &HashSet<String>) -> PricingT
     out
 }
 
-fn context_tiers(provider_id: &str, cost: &ModelsDevCost) -> Vec<ModelCostTier> {
+fn context_tiers(model_id: &str, cost: &ModelsDevCost) -> Vec<ModelCostTier> {
     let mut tiers: Vec<ModelCostTier> = cost
         .tiers
         .iter()
@@ -299,7 +296,7 @@ fn context_tiers(provider_id: &str, cost: &ModelsDevCost) -> Vec<ModelCostTier> 
                 cache_read: tier.cache_read.unwrap_or(0.0),
                 cache_write,
                 cache_write_1h: cache_write_1h_rate(
-                    provider_id,
+                    model_id,
                     tier.cache_write_1h,
                     input,
                     cache_write,
@@ -459,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn flatten_derives_anthropic_1h_cache_write_from_input() {
+    fn flatten_derives_claude_1h_cache_write_from_input() {
         let raw = r#"{
             "anthropic": {
                 "models": {
@@ -490,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn flatten_keeps_single_cache_write_tariff_for_other_providers() {
+    fn flatten_keeps_single_cache_write_tariff_for_other_models() {
         let raw = r#"{
             "acme": {
                 "models": {
@@ -519,6 +516,45 @@ mod tests {
             table.get("acme-no-cache-write").unwrap().cache_write_1h,
             2.0
         );
+    }
+
+    #[test]
+    fn flatten_derives_1h_cache_write_for_claude_on_every_host() {
+        let raw = r#"{
+            "google-vertex": {
+                "models": {
+                    "claude-sonnet-4-6@default": {
+                        "cost": { "input": 3, "output": 15, "cache_write": 3.75 }
+                    },
+                    "gemini-example": {
+                        "cost": { "input": 1.25, "output": 10, "cache_write": 1.5 }
+                    }
+                }
+            },
+            "amazon-bedrock": {
+                "models": {
+                    "us.anthropic.Claude-Fable-5": {
+                        "cost": { "input": 10, "output": 50, "cache_write": 12.5 }
+                    }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        assert_eq!(
+            table
+                .get("claude-sonnet-4-6@default")
+                .unwrap()
+                .cache_write_1h,
+            6.0
+        );
+        assert_eq!(
+            table
+                .get("us.anthropic.Claude-Fable-5")
+                .unwrap()
+                .cache_write_1h,
+            20.0
+        );
+        assert_eq!(table.get("gemini-example").unwrap().cache_write_1h, 1.5);
     }
 
     #[test]
@@ -558,9 +594,14 @@ mod tests {
     }
 
     #[test]
-    fn builtin_snapshot_prices_1h_cache_writes_per_provider() {
+    fn builtin_snapshot_prices_1h_cache_writes_per_model_family() {
         let table = load_builtin_pricing();
-        for model in ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"] {
+        for model in [
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "us.anthropic.claude-fable-5",
+        ] {
             let cost = table.get(model).unwrap();
             assert_eq!(cost.cache_write_1h, cost.input * 2.0, "{model}");
         }
