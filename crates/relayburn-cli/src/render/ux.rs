@@ -50,8 +50,10 @@ pub fn stderr_is_pretty(globals: &GlobalArgs) -> bool {
     !globals.json && io::stderr().is_terminal() && !term_is_dumb()
 }
 
-pub fn stdout_is_pretty(globals: &GlobalArgs) -> bool {
-    !globals.json && io::stdout().is_terminal() && !term_is_dumb()
+/// Whether a stream with the given terminal-ness gets decorated output:
+/// never under `--json`, never off a terminal, never on `TERM=dumb`.
+pub fn is_pretty(json: bool, is_terminal: bool, term_dumb: bool) -> bool {
+    !json && is_terminal && !term_dumb
 }
 
 pub fn term_is_dumb() -> bool {
@@ -156,6 +158,14 @@ mod tests {
             ledger_path: None,
             no_color: false,
         }
+    }
+
+    #[test]
+    fn is_pretty_requires_human_mode_terminal_and_capable_term() {
+        assert!(is_pretty(false, true, false));
+        assert!(!is_pretty(true, true, false));
+        assert!(!is_pretty(false, false, false));
+        assert!(!is_pretty(false, true, true));
     }
 
     #[test]

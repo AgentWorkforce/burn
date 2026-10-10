@@ -91,3 +91,23 @@ fn command_name(command: &Command) -> &'static str {
         Command::Update(_) => "update",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::command_name;
+    use crate::cli::Args;
+
+    #[test]
+    fn command_name_labels_each_subcommand() {
+        for (argv, name) in [
+            (&["burn", "search", "needle"][..], "search"),
+            (&["burn", "summary"][..], "summary"),
+            (&["burn", "update", "--check"][..], "update"),
+        ] {
+            let args = Args::try_parse_from(argv).expect("parse argv");
+            assert_eq!(command_name(&args.command), name);
+        }
+    }
+}

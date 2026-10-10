@@ -242,3 +242,55 @@ fn search_reports_an_unavailable_content_store_without_panicking() {
             "unable to open ledger/content store",
         ));
 }
+
+#[test]
+fn search_human_exits_zero_when_consumer_closes_early() {
+    use std::io::Read;
+    use std::process::{Command as StdCommand, Stdio};
+
+    // Thousands of hits render far more than a pipe buffer holds, so the
+    // writer is still mid-output when the reader closes.
+    const HITS: usize = 4_096;
+    let records: Vec<_> = (0..HITS)
+        .map(|i| {
+            content(
+                &format!("ses_pipe_{i:04}"),
+                &format!("msg_{i:04}"),
+                "pipeclosureneedle in a long enough line of searchable text",
+            )
+        })
+        .collect();
+    let home = seeded_home(&records);
+
+    let mut child = StdCommand::new(env!("CARGO_BIN_EXE_burn"))
+        .args([
+            "--ledger-path",
+            home.path().to_str().unwrap(),
+            "search",
+            "pipeclosureneedle",
+            "--limit",
+            &HITS.to_string(),
+        ])
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn burn");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut prefix = [0_u8; 1];
+    stdout.read_exact(&mut prefix).expect("read output prefix");
+    drop(stdout);
+
+    let output = child.wait_with_output().expect("wait for burn");
+    assert!(
+        output.status.success(),
+        "early pipe closure should exit 0, got {:?}; stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -743,3 +743,21 @@ pub struct FlowArgs {
     #[arg(long, value_name = "N")]
     pub max_turns: Option<u32>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_search_limit;
+
+    #[test]
+    fn search_limit_accepts_the_sqlite_maximum_and_rejects_beyond() {
+        let max = i64::MAX.to_string();
+        assert_eq!(
+            parse_search_limit(&max).map(|n| n.get() as u64),
+            Ok(i64::MAX as u64)
+        );
+        let beyond = (i64::MAX as u64 + 1).to_string();
+        assert!(parse_search_limit(&beyond).is_err());
+        assert!(parse_search_limit("0").is_err());
+        assert!(parse_search_limit("-1").is_err());
+    }
+}

@@ -1,6 +1,6 @@
 //! `burn search <query>` — thin CLI presenter over the SDK FTS5 verb.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use anyhow::bail;
 use relayburn_sdk::{
@@ -69,7 +69,8 @@ fn run_inner(globals: &GlobalArgs, args: SearchArgs) -> anyhow::Result<i32> {
             applied_limit,
             args.session.as_deref(),
             args.snippet,
-            ux::stdout_is_pretty(globals) && ux::colors_enabled(globals),
+            ux::is_pretty(globals.json, io::stdout().is_terminal(), ux::term_is_dumb())
+                && ux::colors_enabled(globals),
         )?;
     }
     Ok(0)
