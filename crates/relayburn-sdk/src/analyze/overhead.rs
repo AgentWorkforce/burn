@@ -178,6 +178,7 @@ mod tests {
                 output: 15.0,
                 cache_read,
                 cache_write: 3.75,
+                cache_write_1h: 3.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::IncludedInOutput,
                 context_tiers: Vec::new(),
