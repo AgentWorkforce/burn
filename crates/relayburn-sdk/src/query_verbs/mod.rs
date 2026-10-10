@@ -415,6 +415,9 @@ pub use sessions::*;
 mod overhead;
 pub use overhead::*;
 
+mod cache_expiry;
+use cache_expiry::cache_expiry_findings;
+
 mod hotspots;
 pub use hotspots::*;
 

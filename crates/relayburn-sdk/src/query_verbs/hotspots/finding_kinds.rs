@@ -14,6 +14,7 @@ const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
     "ghost-surface",
     "tool-output-bloat",
     "tool-call-pattern",
+    "cache-expiry",
     "unpriced-usage",
 ];
 
@@ -46,6 +47,7 @@ mod tests {
                 "ghost-surface",
                 "tool-output-bloat",
                 "tool-call-pattern",
+                "cache-expiry",
                 "unpriced-usage",
             ]
         );
