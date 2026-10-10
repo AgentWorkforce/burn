@@ -2,6 +2,7 @@ import { overheadTrim as sdkOverheadTrim } from '@relayburn/sdk';
 import type { OverheadFileKind, OverheadTrimOptions, OverheadTrimResult } from '@relayburn/sdk';
 
 import type { ToolDefinition } from '../types.js';
+import { FRESHNESS_NOTE, withLedgerFreshness, type LedgerFreshnessProbe } from './freshness.js';
 import {
   optionalBoolean,
   optionalEnum,
@@ -21,6 +22,7 @@ export interface OverheadTrimInput {
 export type { OverheadTrimResult } from '@relayburn/sdk';
 
 export interface OverheadTrimDeps {
+  ledgerFreshness?: LedgerFreshnessProbe;
   overheadTrim?: (opts: OverheadTrimOptions) => Promise<OverheadTrimResult>;
 }
 
@@ -32,7 +34,7 @@ export function createOverheadTrimTool(deps: OverheadTrimDeps = {}): ToolDefinit
   return {
     name: 'burn__overheadTrim',
     description:
-      'Recommend high-cost instruction-file sections to trim and estimate their savings, optionally with suggested diffs. Read-only.',
+      'Recommend high-cost instruction-file sections to trim and estimate their savings, optionally with suggested diffs. Read-only.' + FRESHNESS_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -63,7 +65,7 @@ export function createOverheadTrimTool(deps: OverheadTrimDeps = {}): ToolDefinit
       if (kind !== undefined) opts.kind = kind;
       if (top !== undefined) opts.top = top;
       if (includeDiff !== undefined) opts.includeDiff = includeDiff;
-      return callOverheadTrim(opts);
+      return withLedgerFreshness(callOverheadTrim(opts), deps.ledgerFreshness);
     },
   };
 }

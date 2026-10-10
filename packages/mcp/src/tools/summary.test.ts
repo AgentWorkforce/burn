@@ -4,7 +4,8 @@ import { describe, it } from 'node:test';
 import { createSummaryTool, type SummaryResult } from './summary.js';
 
 describe('createSummaryTool', () => {
-  it('forwards every option, defaults session, and returns the SDK result verbatim', async () => {
+  it('forwards every option, defaults session, and returns the SDK result with ledger freshness', async () => {
+    const ledgerFreshness = { lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false };
     const expected: SummaryResult = {
       totalTokens: 12,
       totalCost: 0.5,
@@ -14,6 +15,7 @@ describe('createSummaryTool', () => {
     };
     const tool = createSummaryTool({
       defaultSessionId: 'default-session',
+      ledgerFreshness: async () => ledgerFreshness,
       summary: async (opts) => {
         assert.deepEqual(opts, {
           session: 'default-session',
@@ -31,7 +33,7 @@ describe('createSummaryTool', () => {
       tags: { workflowId: 'review' },
       groupByTag: 'agentId',
     });
-    assert.equal(result, expected);
+    assert.deepEqual(result, { ...expected, ledgerFreshness });
   });
 
   it('rejects unknown properties and non-string tag values', async () => {

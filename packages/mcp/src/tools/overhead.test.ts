@@ -4,15 +4,17 @@ import { describe, it } from 'node:test';
 import { createOverheadTool, type OverheadResult } from './overhead.js';
 
 describe('createOverheadTool', () => {
-  it('forwards supplied options, leaves project defaulting to the SDK, and returns verbatim', async () => {
+  it('forwards supplied options, leaves project defaulting to the SDK, and attaches ledger freshness', async () => {
+    const ledgerFreshness = { lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false };
     const expected: OverheadResult = { project: '/repo', files: [], perFile: [], grandTotal: 0 };
     const tool = createOverheadTool({
+      ledgerFreshness: async () => ledgerFreshness,
       overhead: async (opts) => {
         assert.deepEqual(opts, { since: '24h', kind: 'agents-md' });
         return expected;
       },
     });
-    assert.equal(await tool.handler({ since: '24h', kind: 'agents-md' }), expected);
+    assert.deepEqual(await tool.handler({ since: '24h', kind: 'agents-md' }), { ...expected, ledgerFreshness });
   });
 
   it('rejects invalid kinds and unknown properties', async () => {

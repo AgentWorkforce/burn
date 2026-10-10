@@ -2,6 +2,7 @@ import { compare as sdkCompare } from '@relayburn/sdk';
 import type { CompareOptions, CompareResult, FidelityClass } from '@relayburn/sdk';
 
 import type { ToolDefinition } from '../types.js';
+import { FRESHNESS_NOTE, withLedgerFreshness, type LedgerFreshnessProbe } from './freshness.js';
 import {
   optionalEnum,
   optionalNonNegativeInteger,
@@ -26,6 +27,7 @@ export interface CompareInput {
 export type { CompareResult } from '@relayburn/sdk';
 
 export interface CompareDeps {
+  ledgerFreshness?: LedgerFreshnessProbe;
   compare?: (opts: CompareOptions) => Promise<CompareResult>;
 }
 
@@ -37,7 +39,7 @@ export function createCompareTool(deps: CompareDeps = {}): ToolDefinition {
   return {
     name: 'burn__compare',
     description:
-      'Compare cost and outcome metrics across at least two models, grouped by activity category. Read-only.',
+      'Compare cost and outcome metrics across at least two models, grouped by activity category. Read-only.' + FRESHNESS_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -78,7 +80,7 @@ export function createCompareTool(deps: CompareDeps = {}): ToolDefinition {
       if (provider !== undefined) opts.provider = provider;
       if (minSample !== undefined) opts.minSample = minSample;
       if (minFidelity !== undefined) opts.minFidelity = minFidelity;
-      return callCompare(opts);
+      return withLedgerFreshness(callCompare(opts), deps.ledgerFreshness);
     },
   };
 }

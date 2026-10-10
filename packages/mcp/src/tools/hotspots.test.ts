@@ -4,10 +4,12 @@ import { describe, it } from 'node:test';
 import { createHotspotsTool, type HotspotsResult } from './hotspots.js';
 
 describe('createHotspotsTool', () => {
-  it('supports findings mode, defaults session, and returns the union result verbatim', async () => {
+  it('supports findings mode, defaults session, and returns the union result with ledger freshness', async () => {
+    const ledgerFreshness = { lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false };
     const expected: HotspotsResult = { kind: 'findings', findings: [], summary: { count: 0 } };
     const tool = createHotspotsTool({
       defaultSessionId: 'default-session',
+      ledgerFreshness: async () => ledgerFreshness,
       hotspots: async (opts) => {
         assert.deepEqual(opts, {
           session: 'default-session',
@@ -29,7 +31,7 @@ describe('createHotspotsTool', () => {
       workflow: 'review',
       provider: ['anthropic'],
     });
-    assert.equal(result, expected);
+    assert.deepEqual(result, { ...expected, ledgerFreshness });
   });
 
   it('rejects invalid groupBy values and non-string arrays', async () => {

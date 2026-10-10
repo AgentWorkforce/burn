@@ -2,6 +2,7 @@ import { hotspots as sdkHotspots } from '@relayburn/sdk';
 import type { HotspotsGroupBy, HotspotsOptions, HotspotsResult } from '@relayburn/sdk';
 
 import type { ToolDefinition } from '../types.js';
+import { FRESHNESS_NOTE, withLedgerFreshness, type LedgerFreshnessProbe } from './freshness.js';
 import {
   optionalEnum,
   optionalString,
@@ -22,6 +23,7 @@ export interface HotspotsInput {
 export type { HotspotsResult } from '@relayburn/sdk';
 
 export interface HotspotsDeps {
+  ledgerFreshness?: LedgerFreshnessProbe;
   defaultSessionId: string | undefined;
   hotspots?: (opts: HotspotsOptions) => Promise<HotspotsResult>;
 }
@@ -34,7 +36,7 @@ export function createHotspotsTool(deps: HotspotsDeps): ToolDefinition {
   return {
     name: 'burn__hotspots',
     description:
-      'Find expensive tool-output persistence and repeated workflow patterns, with attribution or grouped findings views. When the server has a registered default session, omitting session restricts the query to it. Read-only.',
+      'Find expensive tool-output persistence and repeated workflow patterns, with attribution or grouped findings views. When the server has a registered default session, omitting session restricts the query to it. Read-only.' + FRESHNESS_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -73,7 +75,7 @@ export function createHotspotsTool(deps: HotspotsDeps): ToolDefinition {
       if (patterns !== undefined) opts.patterns = patterns;
       if (workflow !== undefined) opts.workflow = workflow;
       if (provider !== undefined) opts.provider = provider;
-      return callHotspots(opts);
+      return withLedgerFreshness(callHotspots(opts), deps.ledgerFreshness);
     },
   };
 }

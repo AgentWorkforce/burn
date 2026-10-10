@@ -2,6 +2,7 @@ import { overhead as sdkOverhead } from '@relayburn/sdk';
 import type { OverheadFileKind, OverheadOptions, OverheadResult } from '@relayburn/sdk';
 
 import type { ToolDefinition } from '../types.js';
+import { FRESHNESS_NOTE, withLedgerFreshness, type LedgerFreshnessProbe } from './freshness.js';
 import { optionalEnum, optionalString, validateObjectInput } from './input.js';
 
 export interface OverheadInput {
@@ -13,6 +14,7 @@ export interface OverheadInput {
 export type { OverheadResult } from '@relayburn/sdk';
 
 export interface OverheadDeps {
+  ledgerFreshness?: LedgerFreshnessProbe;
   overhead?: (opts: OverheadOptions) => Promise<OverheadResult>;
 }
 
@@ -24,7 +26,7 @@ export function createOverheadTool(deps: OverheadDeps = {}): ToolDefinition {
   return {
     name: 'burn__overhead',
     description:
-      'Attribute CLAUDE.md and AGENTS.md instruction-file token overhead and cost by file and section. Read-only.',
+      'Attribute CLAUDE.md and AGENTS.md instruction-file token overhead and cost by file and section. Read-only.' + FRESHNESS_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -44,7 +46,7 @@ export function createOverheadTool(deps: OverheadDeps = {}): ToolDefinition {
       if (project !== undefined) opts.project = project;
       if (since !== undefined) opts.since = since;
       if (kind !== undefined) opts.kind = kind;
-      return callOverhead(opts);
+      return withLedgerFreshness(callOverhead(opts), deps.ledgerFreshness);
     },
   };
 }

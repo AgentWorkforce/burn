@@ -4,7 +4,8 @@ import { describe, it } from 'node:test';
 import { createOverheadTrimTool, type OverheadTrimResult } from './overhead-trim.js';
 
 describe('createOverheadTrimTool', () => {
-  it('forwards every supplied option and returns the SDK result verbatim', async () => {
+  it('forwards every supplied option and returns the SDK result with ledger freshness', async () => {
+    const ledgerFreshness = { lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false };
     const expected: OverheadTrimResult = {
       project: '/repo',
       since: '7d',
@@ -18,6 +19,7 @@ describe('createOverheadTrimTool', () => {
       },
     };
     const tool = createOverheadTrimTool({
+      ledgerFreshness: async () => ledgerFreshness,
       overheadTrim: async (opts) => {
         assert.deepEqual(opts, {
           project: '/repo', since: '7d', kind: 'claude-md', top: 3, includeDiff: true,
@@ -25,9 +27,9 @@ describe('createOverheadTrimTool', () => {
         return expected;
       },
     });
-    assert.equal(await tool.handler({
+    assert.deepEqual(await tool.handler({
       project: '/repo', since: '7d', kind: 'claude-md', top: 3, includeDiff: true,
-    }), expected);
+    }), { ...expected, ledgerFreshness });
   });
 
   it('rejects zero, negative, fractional, and incorrectly typed options', async () => {

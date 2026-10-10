@@ -14,7 +14,12 @@ callers choose which factories to register.
 | `burn__overheadTrim` | `overheadTrim()` | Ranked instruction-file trimming recommendations. |
 | `burn__compare` | `compare()` | Per-model, per-activity cost and outcome comparison. |
 
-Each factory accepts an optional injected SDK function for tests. Production
-callers can omit that override and the tool calls `@relayburn/sdk` directly.
+Every tool result carries `ledgerFreshness` (last-write timestamp, staleness
+threshold, and `stale` flag); clients check `ledgerFreshness.stale` before
+trusting ledger data.
+
+Each factory accepts optional injected SDK and `ledgerFreshness` functions for
+tests. Production callers can omit those overrides and the tool calls
+`@relayburn/sdk` directly.
 Tool results are returned as both MCP text content and unmodified structured
 content by `startStdioServer()`.

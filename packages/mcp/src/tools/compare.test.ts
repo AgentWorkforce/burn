@@ -5,6 +5,7 @@ import { createCompareTool, type CompareResult } from './compare.js';
 
 describe('createCompareTool', () => {
   it('forwards every SDK option without implicitly scoping to a server session', async () => {
+    const ledgerFreshness = { lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false };
     const expected: CompareResult = {
       analyzedTurns: 0,
       minSample: 2,
@@ -19,6 +20,7 @@ describe('createCompareTool', () => {
       },
     };
     const tool = createCompareTool({
+      ledgerFreshness: async () => ledgerFreshness,
       compare: async (opts) => {
         assert.deepEqual(opts, {
           models: ['a', 'b'], project: '/repo', since: '4w', workflow: 'review',
@@ -27,10 +29,10 @@ describe('createCompareTool', () => {
         return expected;
       },
     });
-    assert.equal(await tool.handler({
+    assert.deepEqual(await tool.handler({
       models: ['a', 'b'], project: '/repo', since: '4w', workflow: 'review',
       agent: 'worker', provider: ['anthropic'], minSample: 2, minFidelity: 'partial',
-    }), expected);
+    }), { ...expected, ledgerFreshness });
   });
 
   it('rejects missing/short model lists and invalid numeric or enum constraints', async () => {

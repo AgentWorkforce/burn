@@ -61,23 +61,28 @@ describe('end-to-end: read tool catalog over stdio', () => {
         ledgerFreshness: async () => ledgerFreshness,
       }),
       createSummaryTool({
+        ledgerFreshness: async () => ledgerFreshness,
         defaultSessionId: 'S',
         summary: async () => ({ totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [] }),
       }),
       createHotspotsTool({
+        ledgerFreshness: async () => ledgerFreshness,
         defaultSessionId: 'S',
         hotspots: async () => ({ kind: 'findings', findings: [], summary: { fixture: true } }),
       }),
       createOverheadTool({
+        ledgerFreshness: async () => ledgerFreshness,
         overhead: async () => ({ project: '/fixture', files: [], perFile: [], grandTotal: 0 }),
       }),
       createOverheadTrimTool({
+        ledgerFreshness: async () => ledgerFreshness,
         overheadTrim: async () => ({
           project: '/fixture', since: '24h', recommendations: [],
           summary: { filesAnalyzed: 0, filesWithRecommendations: 0, totalRecommendations: 0, totalProjectedSavingsPerSession: 0, totalProjectedSavingsAcrossWindow: 0 },
         }),
       }),
       createCompareTool({
+        ledgerFreshness: async () => ledgerFreshness,
         compare: async (opts) => ({
           analyzedTurns: 0, minSample: 1, models: opts.models, categories: [], totals: {}, cells: [],
           fidelity: {
@@ -115,9 +120,9 @@ describe('end-to-end: read tool catalog over stdio', () => {
     const expectedStructuredContent = new Map<number, unknown>([
       [3, { sessionId: 'S', totalUSD: 3, totalTokens: 100, turnCount: 1, models: ['a'], ledgerFreshness }],
       [4, { fingerprint: '1:2:3', ledgerFreshness }],
-      [5, { totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [] }],
-      [6, { kind: 'findings', findings: [], summary: { fixture: true } }],
-      [7, { project: '/fixture', files: [], perFile: [], grandTotal: 0 }],
+      [5, { totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [], ledgerFreshness }],
+      [6, { kind: 'findings', findings: [], summary: { fixture: true }, ledgerFreshness }],
+      [7, { project: '/fixture', files: [], perFile: [], grandTotal: 0, ledgerFreshness }],
       [8, {
         project: '/fixture',
         since: '24h',
@@ -129,6 +134,7 @@ describe('end-to-end: read tool catalog over stdio', () => {
           totalProjectedSavingsPerSession: 0,
           totalProjectedSavingsAcrossWindow: 0,
         },
+        ledgerFreshness,
       }],
       [9, {
         analyzedTurns: 0,
@@ -147,6 +153,7 @@ describe('end-to-end: read tool catalog over stdio', () => {
             missingCoverage: {},
           },
         },
+        ledgerFreshness,
       }],
     ]);
     for (const [id] of calls) {

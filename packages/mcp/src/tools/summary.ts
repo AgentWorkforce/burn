@@ -2,6 +2,7 @@ import { summary as sdkSummary } from '@relayburn/sdk';
 import type { SummaryOptions } from '@relayburn/sdk';
 
 import type { ToolDefinition } from '../types.js';
+import { FRESHNESS_NOTE, withLedgerFreshness, type LedgerFreshnessProbe } from './freshness.js';
 import {
   optionalString,
   optionalStringRecord,
@@ -19,6 +20,7 @@ export interface SummaryInput {
 export type SummaryResult = Awaited<ReturnType<typeof sdkSummary>>;
 
 export interface SummaryDeps {
+  ledgerFreshness?: LedgerFreshnessProbe;
   defaultSessionId: string | undefined;
   summary?: (opts: SummaryOptions) => Promise<SummaryResult>;
 }
@@ -30,7 +32,7 @@ export function createSummaryTool(deps: SummaryDeps): ToolDefinition {
   return {
     name: 'burn__summary',
     description:
-      'Summarize token use and cost by tool and model, optionally filtered by session, project, time window, or enrichment tags. When the server has a registered default session, omitting session restricts the query to it. Read-only.',
+      'Summarize token use and cost by tool and model, optionally filtered by session, project, time window, or enrichment tags. When the server has a registered default session, omitting session restricts the query to it. Read-only.' + FRESHNESS_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -63,7 +65,7 @@ export function createSummaryTool(deps: SummaryDeps): ToolDefinition {
       if (since !== undefined) opts.since = since;
       if (tags !== undefined) opts.tags = tags;
       if (groupByTag !== undefined) opts.groupByTag = groupByTag;
-      return callSummary(opts);
+      return withLedgerFreshness(callSummary(opts), deps.ledgerFreshness);
     },
   };
 }
