@@ -1165,6 +1165,42 @@ mod tests {
     }
 
     #[test]
+    fn zero_token_turns_without_a_tariff_leave_session_priced() {
+        let turn = TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: "s".to_string(),
+            session_path: None,
+            message_id: "m1".to_string(),
+            turn_index: 0,
+            ts: "2026-08-01T00:00:00.000Z".to_string(),
+            model: "<synthetic>".to_string(),
+            project: None,
+            project_key: None,
+            usage: crate::reader::Usage::default(),
+            tool_calls: Vec::new(),
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        };
+        let mut findings = vec![finding_with("retry-loop", WasteSeverity::Warn, "s", 0.25)];
+
+        mark_findings_with_unpriced_sessions(
+            &mut findings,
+            std::slice::from_ref(&turn),
+            &PricingTable::new(),
+        );
+
+        assert_eq!(findings[0].pricing_status, FindingPricingStatus::Priced);
+        assert_eq!(findings[0].estimated_savings.usd_per_session, Some(0.25));
+        assert!(unpriced_usage_findings(&[turn], &PricingTable::new()).is_empty());
+    }
+
+    #[test]
     fn unpriced_codex_volume_does_not_double_count_reasoning_inside_output() {
         let turn = TurnRecord {
             v: 1,

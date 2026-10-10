@@ -60,6 +60,19 @@ pub(crate) fn cost_for_usage(
     pricing: &PricingTable,
     options: CostForUsageOptions,
 ) -> Option<CostBreakdown> {
+    if usage == &Usage::default() {
+        // No tokens cost $0 under any tariff, so the cost is known even for
+        // models without one (e.g. Claude Code's `<synthetic>` messages).
+        return Some(CostBreakdown {
+            model: Cow::Owned(model.to_string()),
+            total: 0.0,
+            input: 0.0,
+            output: 0.0,
+            reasoning: 0.0,
+            cache_read: 0.0,
+            cache_create: 0.0,
+        });
+    }
     let rate = lookup_model_rate(model, pricing)?;
     let effective = effective_model_rate(usage, rate);
     let mode = options.reasoning_mode.unwrap_or(rate.reasoning_mode);
@@ -201,14 +214,14 @@ fn pricing_model_alias(model: &str) -> Option<&'static str> {
     }
 }
 
-/// Count turns whose model has no pricing entry, and collect the distinct
-/// model names, first-seen order. Used by summary surfaces to make pricing
+/// Count turns whose cost is unknown because their model has no pricing
+/// entry, and collect the distinct model names, first-seen order. Used by summary surfaces to make pricing
 /// gaps visible instead of silently folding them in at $0.
 pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec<String>) {
     let mut count = 0u64;
     let mut models: Vec<String> = Vec::new();
     for t in turns {
-        if lookup_model_rate(&t.model, pricing).is_none() {
+        if cost_for_turn(t, pricing).is_none() {
             count += 1;
             if !models.iter().any(|m| m == &t.model) {
                 models.push(t.model.clone());
@@ -769,6 +782,35 @@ mod tests {
             vec!["made-up-model-xyz"],
             "model listed exactly once"
         );
+    }
+
+    #[test]
+    fn zero_token_turns_cost_nothing_even_without_a_tariff() {
+        let p = load_builtin_pricing();
+        let c = cost_for_turn(
+            &turn("<synthetic>", Usage::default(), SourceKind::ClaudeCode),
+            &p,
+        )
+        .expect("zero tokens have a known cost");
+        assert_eq!(c.model, "<synthetic>");
+        assert_eq!(c.total, 0.0);
+        assert_eq!(
+            (c.input, c.output, c.reasoning, c.cache_read, c.cache_create),
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        );
+        let (count, models) = tally_unpriced(
+            &[
+                turn("<synthetic>", Usage::default(), SourceKind::ClaudeCode),
+                turn(
+                    "made-up-model-xyz",
+                    usage_with(0, 1, 0),
+                    SourceKind::ClaudeCode,
+                ),
+            ],
+            &p,
+        );
+        assert_eq!(count, 1);
+        assert_eq!(models, vec!["made-up-model-xyz"]);
     }
 
     #[test]

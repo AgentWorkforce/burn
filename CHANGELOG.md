@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- Turns with no tokens price at $0 regardless of model, so Claude Code's zero-token `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 
 ## [4.1.0] - 2026-09-20
