@@ -67,6 +67,9 @@ pub struct OverheadPerFileEntry {
 pub struct OverheadResult {
     pub project: String,
     pub files: Vec<OverheadFileSummary>,
+    /// Attribution for each discovered file: `per_file[i]` attributes
+    /// `files[i]`. One path can appear twice when harnesses inject different
+    /// prefixes of it (Codex's 32 KiB budget vs OpenCode's full file).
     pub per_file: Vec<OverheadPerFileEntry>,
     pub grand_total: f64,
 }
