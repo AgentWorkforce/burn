@@ -421,11 +421,9 @@ pub struct SummaryGroupedReport {
     /// Per-outcome turn counts (issue #437). Always populated; presenters
     /// decide whether to render the line based on `is_empty()`.
     pub stop_reasons: StopReasonCounts,
-    /// Paired / orphan subagent transcript counts (issue #435). Populated
-    /// by a lazy walk over the Claude `~/.claude/projects/` tree at
-    /// summary time — when no sidecars exist anywhere reachable the
-    /// `read_dir` short-circuits and the field stays at
-    /// `SubagentCounts::default()`. Presenters render the
+    /// Paired / orphan Claude subagent counts for the summarized sessions,
+    /// from the delegation edges in the relayhistory store; empty when the
+    /// store is absent or no session delegated work. Presenters render the
     /// `subagents: X paired, Y orphan` line only when
     /// `!subagents.is_empty()`.
     #[serde(

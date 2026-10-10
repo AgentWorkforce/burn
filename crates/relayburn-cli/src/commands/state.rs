@@ -516,7 +516,7 @@ fn run_reset(globals: &GlobalArgs, args: crate::cli::StateResetArgs) -> i32 {
 /// Drive a single `ingest_all` sweep on the open handle.
 ///
 /// `ledger_home` propagates the global `--ledger-path` override into
-/// `RawIngestOptions::ledger_home` so sidecar ingest state (config and
+/// `IngestOptions::ledger_home` so sidecar ingest state (config and
 /// pending-stamp manifests) resolves under the same home as the open
 /// handle. Without this, `burn --ledger-path <custom> state reset
 /// --force --reingest` would write turns into the custom DB while
