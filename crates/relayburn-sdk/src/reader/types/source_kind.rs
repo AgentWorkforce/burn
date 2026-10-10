@@ -36,3 +36,14 @@ impl fmt::Display for SourceKind {
         f.write_str(self.wire_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SourceKind;
+
+    #[test]
+    fn display_matches_the_wire_label() {
+        assert_eq!(SourceKind::CopilotCli.to_string(), "copilot-cli");
+        assert_eq!(SourceKind::ClaudeCode.to_string(), "claude-code");
+    }
+}

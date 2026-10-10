@@ -72,3 +72,19 @@ fn fingerprint_counts_existing_export_files_only() {
     assert_eq!(total_bytes, 17);
     assert_ne!(hash_sum, 0);
 }
+
+#[test]
+fn default_session_roots_list_harness_roots_then_copilot_exports() {
+    let roots = IngestRoots {
+        claude_projects_dir: Some(PathBuf::from("/x/claude")),
+        codex_sessions_dir: Some(PathBuf::from("/x/codex")),
+        opencode_storage_dir: Some(PathBuf::from("/x/opencode")),
+        copilot_otel_files: Some(vec![PathBuf::from("/x/otel/copilot.jsonl")]),
+    };
+    assert_eq!(
+        super::super::default_session_roots(&roots),
+        ["/x/claude", "/x/codex", "/x/opencode", "/x/otel"]
+            .map(PathBuf::from)
+            .to_vec()
+    );
+}
