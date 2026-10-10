@@ -278,3 +278,7 @@ pub(super) fn mcp_server_to_json(m: &McpServerAggregation) -> Value {
         "topTools": m.top_tools,
     })
 }
+
+#[cfg(test)]
+#[path = "json_tests.rs"]
+mod tests;

@@ -7,6 +7,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `summary` now reports context tokens per generated output token and p50/p95/max context size for the ten highest-ratio sessions; context is input + cache-read + cache-creation tokens, while the denominator includes reasoning whether a harness folds it into output (Codex) or reports it separately.
 - `hotspots --findings` now flags high-volume sessions at or above a configurable context-to-output ratio (default 382:1 inclusive, with a configurable 1M-context-token floor), independently of dollar cost. The default is an inspection signal, not a length-normalized anomaly score.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+- Timestamps everywhere (ingest, `--since`, quality outcomes, pending stamps) go through one strict ISO-8601 parser: `±HH:MM` offsets are applied rather than ignored, and out-of-range components, leap seconds, or trailing text are rejected.
 
 ## [4.1.0] - 2026-09-20
 
