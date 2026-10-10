@@ -16,6 +16,8 @@ few numbers that were wrong before.
 - **OpenCode's SQLite store is read.** Current OpenCode releases keep sessions
   in `~/.local/share/opencode/opencode.db`; burn reads it (and the older
   `storage/` JSON tree).
+- **Archived Codex threads are read.** Rollouts Codex moved to
+  `~/.codex/archived_sessions/` are ingested like live ones.
 - **Codex usage comes from each response's raw token snapshot**, and a Codex
   subagent thread is a session of its own.
 - Two deliberate record changes, also in the sourcing snapshots: a failed
@@ -36,8 +38,8 @@ The first `burn ingest` (or any command run with `--ingest`):
 3. Reconciles the ledger: an existing 4.x ledger has no relayhistory
    watermark, so every session in the store is rebuilt and appended. Turn
    identities match the 4.x readers', so turns already in the ledger are not
-   duplicated; only turns 4.x never counted (subagent turns, OpenCode
-   SQLite sessions) are added. The ledger then records the store's change-feed
+   duplicated; only turns 4.x never counted (subagent turns, archived Codex
+   threads, OpenCode SQLite sessions) are added. The ledger then records the store's change-feed
    watermark, and later ingests read only sessions that changed.
 
 ## Commands

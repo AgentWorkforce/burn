@@ -19,6 +19,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - Claude Code subagent spend is billed: every turn of a subagent transcript, nested subagents included, is a turn of the session that spawned it. Ledger totals for sessions that delegated work go up by exactly that spend.
 - OpenCode sessions in the SQLite store (`opencode.db`, current OpenCode releases) are ingested, as well as the `storage/` JSON tree.
 - A Codex subagent thread is ingested as a session of its own.
+- Codex threads in `~/.codex/archived_sessions/` are ingested.
 - `burn summary`'s `subagents: X paired, Y orphan` line counts the delegated subagents of the sessions in scope from the store's delegation edges.
 
 ### Fixed
