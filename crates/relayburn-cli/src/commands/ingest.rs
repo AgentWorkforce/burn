@@ -55,6 +55,7 @@ use relayburn_sdk::{
 use crate::cli::{GlobalArgs, IngestArgs};
 use crate::render::error::report_error;
 use crate::render::progress::TaskProgress;
+use crate::render::stdout::write_stdout;
 
 /// Exit codes mirror the TS CLI:
 /// - `0` happy path (including hook-mode empty-payload no-op).
@@ -121,7 +122,9 @@ fn run_once(globals: &GlobalArgs, quiet: bool) -> i32 {
     }
     match result {
         Ok(report) => {
-            log_report_oneshot(&report);
+            if let Err(err) = log_report_oneshot(&report) {
+                return report_error(&err, globals);
+            }
             0
         }
         Err(err) => report_error(&err, globals),
@@ -425,8 +428,8 @@ fn render_ingest_line(report: &IngestReport) -> String {
 /// report via `process.stdout.write`, so pipelines that capture stdout
 /// see the summary. `--watch` and `--hook` keep their own stderr
 /// emitters (`render_ingest_line` is the shared formatter).
-fn log_report_oneshot(report: &IngestReport) {
-    print!("{}", render_ingest_line(report));
+fn log_report_oneshot(report: &IngestReport) -> std::io::Result<()> {
+    write_stdout(&render_ingest_line(report))
 }
 
 /// Read all of stdin into a String. Returns empty string when stdin is

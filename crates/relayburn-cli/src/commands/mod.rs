@@ -20,9 +20,11 @@
 
 pub mod compare;
 pub mod flow;
+mod freshness;
 pub mod hotspots;
 pub mod ingest;
 pub mod mcp_server;
+pub mod measure;
 pub mod overhead;
 pub mod sessions;
 pub mod stamps;
