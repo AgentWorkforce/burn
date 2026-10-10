@@ -51,7 +51,16 @@ pub(crate) struct EffectiveModelRate {
     pub output: f64,
     pub cache_read: f64,
     pub cache_write: f64,
+    pub cache_write_1h: f64,
     pub reasoning: Option<f64>,
+}
+
+impl EffectiveModelRate {
+    /// USD for the usage's cache creation, each TTL bucket at its own tariff.
+    pub(crate) fn cache_create_cost(&self, usage: &Usage) -> f64 {
+        (usage.cache_create_5m as f64 / PER_MILLION) * self.cache_write
+            + (usage.cache_create_1h as f64 / PER_MILLION) * self.cache_write_1h
+    }
 }
 
 pub(crate) fn cost_for_usage(
@@ -67,9 +76,7 @@ pub(crate) fn cost_for_usage(
     let output = (usage.output as f64 / PER_MILLION) * effective.output;
     let reasoning = reasoning_cost(usage.reasoning, effective.output, effective.reasoning, mode);
     let cache_read = (usage.cache_read as f64 / PER_MILLION) * effective.cache_read;
-    let cache_create = ((usage.cache_create_5m as f64 + usage.cache_create_1h as f64)
-        / PER_MILLION)
-        * effective.cache_write;
+    let cache_create = effective.cache_create_cost(usage);
     Some(CostBreakdown {
         model: Cow::Owned(model.to_string()),
         total: input + output + reasoning + cache_read + cache_create,
@@ -150,6 +157,7 @@ pub(crate) fn effective_model_rate(usage: &Usage, rate: &ModelCost) -> Effective
         output: tier.map_or(rate.output, |tier| tier.output),
         cache_read: tier.map_or(rate.cache_read, |tier| tier.cache_read),
         cache_write: tier.map_or(rate.cache_write, |tier| tier.cache_write),
+        cache_write_1h: tier.map_or(rate.cache_write_1h, |tier| tier.cache_write_1h),
         reasoning: tier.and_then(|tier| tier.reasoning).or(rate.reasoning),
     }
 }
@@ -337,27 +345,87 @@ mod tests {
         assert_eq!(c.total, rate.input + rate.output);
     }
 
+    fn cache_create_usage(create_5m: u64, create_1h: u64) -> Usage {
+        Usage {
+            cache_create_5m: create_5m,
+            cache_create_1h: create_1h,
+            ..Usage::default()
+        }
+    }
+
     #[test]
-    fn applies_cache_write_rate_to_both_5m_and_1h_cache_creation() {
-        let p = load_builtin_pricing();
-        let c = cost_for_usage(
-            &Usage {
-                input: 0,
-                output: 0,
-                reasoning: 0,
-                cache_read: 0,
-                cache_create_5m: 500_000,
-                cache_create_1h: 500_000,
+    fn bills_each_cache_creation_ttl_at_its_own_tariff() {
+        let mut p = PricingTable::new();
+        p.insert(
+            "ttl-model".into(),
+            ModelCost {
+                input: 4.0,
+                output: 20.0,
+                cache_read: 0.4,
+                cache_write: 5.0,
+                cache_write_1h: 8.0,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
+        );
+        let c = cost_for_usage(
+            &cache_create_usage(500_000, 250_000),
+            "ttl-model",
+            &p,
+            CostForUsageOptions::default(),
+        )
+        .expect("priced");
+        assert_eq!(c.cache_create, 0.5 * 5.0 + 0.25 * 8.0);
+        assert_eq!(c.total, c.cache_create);
+    }
+
+    #[test]
+    fn bills_claude_1h_cache_creation_at_twice_input() {
+        let p = load_builtin_pricing();
+        let rate = p.get("claude-opus-4-7").unwrap();
+        let c = cost_for_usage(
+            &cache_create_usage(1_000_000, 1_000_000),
             "claude-opus-4-7",
             &p,
             CostForUsageOptions::default(),
         )
         .expect("priced");
-        assert_eq!(
-            c.cache_create,
-            p.get("claude-opus-4-7").unwrap().cache_write
+        assert_eq!(c.cache_create, rate.cache_write + 2.0 * rate.input);
+    }
+
+    #[test]
+    fn long_context_tier_supplies_its_own_1h_cache_write_tariff() {
+        let mut p = PricingTable::new();
+        p.insert(
+            "tiered-ttl-model".into(),
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+                cache_write_1h: 6.0,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: vec![ModelCostTier {
+                    context_tokens: 200_000,
+                    input: 6.0,
+                    output: 22.5,
+                    cache_read: 0.6,
+                    cache_write: 7.5,
+                    cache_write_1h: 12.0,
+                    reasoning: None,
+                }],
+            },
         );
+        let c = cost_for_usage(
+            &cache_create_usage(0, 1_000_000),
+            "tiered-ttl-model",
+            &p,
+            CostForUsageOptions::default(),
+        )
+        .expect("priced");
+        assert_eq!(c.cache_create, 12.0);
     }
 
     #[test]
@@ -391,6 +459,7 @@ mod tests {
                 output: 30.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                cache_write_1h: 6.25,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: vec![ModelCostTier {
@@ -399,6 +468,7 @@ mod tests {
                     output: 45.0,
                     cache_read: 1.0,
                     cache_write: 12.5,
+                    cache_write_1h: 12.5,
                     reasoning: None,
                 }],
             },
@@ -448,6 +518,7 @@ mod tests {
                 output: 15.0,
                 cache_read: 0.0,
                 cache_write: 2.5,
+                cache_write_1h: 2.5,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -486,6 +557,7 @@ mod tests {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 1.25,
+                cache_write_1h: 1.25,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -531,6 +603,7 @@ mod tests {
                 output: 4.0,
                 cache_read: 0.0,
                 cache_write: 1.0,
+                cache_write_1h: 1.0,
                 reasoning: Some(8.0),
                 reasoning_mode: ReasoningMode::Separate,
                 context_tiers: Vec::new(),
@@ -559,6 +632,7 @@ mod tests {
                 output: 10.0,
                 cache_read: 0.0,
                 cache_write: 1.0,
+                cache_write_1h: 1.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -615,6 +689,7 @@ mod tests {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 1.0,
+                cache_write_1h: 1.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -635,6 +710,7 @@ mod tests {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 1.75,
+                cache_write_1h: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -656,6 +732,7 @@ mod tests {
                 output: 10.0,
                 cache_read: 1.0,
                 cache_write: 9.0,
+                cache_write_1h: 9.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -668,6 +745,7 @@ mod tests {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 1.75,
+                cache_write_1h: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -690,6 +768,7 @@ mod tests {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 1.75,
+                cache_write_1h: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
