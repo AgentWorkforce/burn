@@ -292,6 +292,6 @@ fn run_inner(globals: &GlobalArgs, args: HotspotsArgs) -> anyhow::Result<i32> {
         return Ok(0);
     }
     let limit = if args.all { usize::MAX } else { DEFAULT_TOP_N };
-    emit_human(&result, limit, args.findings, args.rank_by);
+    emit_human(&result, limit, args.findings, args.rank_by)?;
     Ok(0)
 }

@@ -7,6 +7,11 @@ All notable changes to `@relayburn/mcp`.
 - Added `burn__summary`, `burn__hotspots`, `burn__overhead`,
   `burn__overheadTrim`, and `burn__compare` tool factories, exposing the
   current `@relayburn/sdk` read surface through validated MCP inputs.
+
+
+## [4.1.0] - 2026-09-20
+
+- Package tests compile TypeScript before running, so `pnpm run test` executes the MCP suite on a clean checkout.
 - Read-tool responses now include `ledgerFreshness` with the ledger's last-write timestamp, threshold, and stale flag.
 - Cost output recognizes Claude 5 and GPT-5.6 models, prefers first-party tariffs, and applies long-context price tiers.
 

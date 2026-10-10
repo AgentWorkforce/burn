@@ -1,5 +1,7 @@
 //! Human-readable table rendering and ingest-prelude text for `burn summary`.
 
+use std::path::Path;
+
 use relayburn_sdk::{
     summary_fidelity_summary_to_value, summary_replacement_savings_to_value, CoverageField,
     FidelityClass, FidelitySummary, OutcomeLabel, QualityResult, RelationshipType,
@@ -12,6 +14,8 @@ use serde_json::{json, Map, Value};
 use crate::cli::GlobalArgs;
 use crate::render::format::{coerce_whole_f64_to_int, format_uint, format_usd, render_table};
 use crate::render::json::render_json;
+use crate::render::pricing::warn_unpriced_usage;
+use crate::render::stdout::{write_stdout, writeln_stdout};
 
 use super::*;
 
@@ -86,26 +90,29 @@ pub(super) fn emit_grouped(
     globals: &GlobalArgs,
     report: &SummaryGroupedReport,
     ingest_report: &relayburn_sdk::IngestReport,
+    pricing_override: &Path,
 ) -> std::io::Result<()> {
     if globals.json {
         return emit_json(report, ingest_report);
     }
-    emit_human(report, ingest_report);
+    emit_human(report, ingest_report, pricing_override)?;
     Ok(())
 }
 
 pub(super) fn emit_ingest_prelude(
     globals: &GlobalArgs,
     ingest_report: &relayburn_sdk::IngestReport,
-) {
+) -> std::io::Result<()> {
     if globals.json {
-        return;
+        return Ok(());
     }
-    emit_human_ingest_prelude(ingest_report);
+    emit_human_ingest_prelude(ingest_report)
 }
 
-pub(super) fn emit_human_ingest_prelude(ingest_report: &relayburn_sdk::IngestReport) {
-    print!("{}", ingest_prelude_text(ingest_report));
+pub(super) fn emit_human_ingest_prelude(
+    ingest_report: &relayburn_sdk::IngestReport,
+) -> std::io::Result<()> {
+    write_stdout(&ingest_prelude_text(ingest_report))
 }
 
 pub(super) fn ingest_prelude_text(ingest_report: &relayburn_sdk::IngestReport) -> String {
@@ -184,7 +191,7 @@ pub(super) fn render_by_tool_report(
         out.push("no tool calls found for filters.".to_string());
         let mut text = out.join("\n");
         text.push('\n');
-        print!("{text}");
+        write_stdout(&text)?;
         return Ok(0);
     }
 
@@ -228,7 +235,7 @@ pub(super) fn render_by_tool_report(
         out.push(format_replacement_savings_line(&report.replacement_savings));
     }
     out.push(String::new());
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))?;
     Ok(0)
 }
 
@@ -253,12 +260,12 @@ pub(super) fn render_subagent_type_report(
     if stats.is_empty() {
         out.push("  (no subagent turns in range)".to_string());
         out.push(String::new());
-        print!("{}", out.join("\n"));
+        write_stdout(&out.join("\n"))?;
         return Ok(0);
     }
     out.push(render_subagent_stats_table(stats));
     out.push(String::new());
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))?;
     Ok(0)
 }
 
@@ -336,7 +343,7 @@ pub(super) fn render_relationship_report(
     }
     out.push(render_table(&rows));
     out.push(String::new());
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))?;
     Ok(0)
 }
 
@@ -396,7 +403,7 @@ pub(super) fn render_relationship_subagent_report(
     }
     out.push(render_table(&rows));
     out.push(String::new());
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))?;
     Ok(0)
 }
 
@@ -407,7 +414,7 @@ pub(super) fn render_no_relationships(globals: &GlobalArgs) -> anyhow::Result<i3
             "message": NO_RELATIONSHIPS_MESSAGE,
         }))?;
     } else {
-        println!("{NO_RELATIONSHIPS_MESSAGE}");
+        writeln_stdout(NO_RELATIONSHIPS_MESSAGE)?;
     }
     Ok(0)
 }
@@ -431,7 +438,7 @@ pub(super) fn render_subagent_tree_report(
     }
 
     let Some(root) = report.root.as_ref() else {
-        println!("no turns found for session {}", report.session_id);
+        writeln_stdout(&format!("no turns found for session {}", report.session_id))?;
         return Ok(0);
     };
 
@@ -447,7 +454,7 @@ pub(super) fn render_subagent_tree_report(
     out.push(String::new());
     out.extend(render_tree(root));
     out.push(String::new());
-    print!("{}", out.join("\n"));
+    write_stdout(&out.join("\n"))?;
     Ok(0)
 }
 
@@ -501,9 +508,10 @@ pub(super) fn render_node_line(node: &SubagentTreeNode, indent: &str) -> String 
 pub(super) fn emit_human(
     report: &SummaryGroupedReport,
     ingest_report: &relayburn_sdk::IngestReport,
-) {
+    pricing_override: &Path,
+) -> std::io::Result<()> {
     let mut lines: Vec<String> = Vec::new();
-    emit_human_ingest_prelude(ingest_report);
+    emit_human_ingest_prelude(ingest_report)?;
     lines.push(String::new());
 
     lines.push(format!(
@@ -516,8 +524,8 @@ pub(super) fn emit_human(
         lines.push("no turns match the current filters.".to_string());
         let mut out = lines.join("\n");
         out.push('\n');
-        print!("{}", out);
-        return;
+        write_stdout(&out)?;
+        return Ok(());
     }
 
     let header_label = if report.group_by == SummaryGroupBy::Tag {
@@ -628,18 +636,14 @@ pub(super) fn emit_human(
 
     let out = lines.join("\n");
     // TS uses `process.stdout.write(lines.join('\n'))` — no trailing newline.
-    print!("{}", out);
+    write_stdout(&out)?;
 
-    if report.unpriced_turns > 0 {
-        let models = report.unpriced_models.join(", ");
-        eprintln!(
-            "warning: {} turn(s) had no pricing for model(s): {}.",
-            report.unpriced_turns, models,
-        );
-        eprintln!(
-            "         Update the snapshot (pnpm run pricing:update) or add an override at <ledger-home>/models.dev.json.",
-        );
-    }
+    warn_unpriced_usage(
+        report.unpriced_turns,
+        &report.unpriced_models,
+        pricing_override,
+    );
+    Ok(())
 }
 
 pub(super) fn render_quality(q: &QualityResult) -> String {

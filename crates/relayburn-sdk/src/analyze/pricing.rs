@@ -273,32 +273,33 @@ mod tests {
 
     #[test]
     fn builtin_snapshot_parses_and_has_anthropic_models() {
+        // Presence and shape only: exact tariffs move with upstream
+        // repricings, which the refresh workflow already reports.
         let table = load_builtin_pricing();
-        let opus_4_8 = table.get("claude-opus-4-8").expect("opus-4-8 present");
-        assert_eq!(opus_4_8.input, 5.0);
-        assert_eq!(opus_4_8.output, 25.0);
-        assert_eq!(opus_4_8.cache_read, 0.5);
-        assert_eq!(opus_4_8.cache_write, 6.25);
+        for model in ["claude-opus-4-8", "claude-fable-5"] {
+            let cost = table
+                .get(model)
+                .unwrap_or_else(|| panic!("{model} present"));
+            assert!(cost.input > 0.0, "{model} has an input tariff");
+            assert!(cost.output > 0.0, "{model} has an output tariff");
+            assert!(cost.cache_read >= 0.0, "{model} has a cache-read tariff");
+            assert!(cost.cache_write > 0.0, "{model} has a cache-write tariff");
+        }
         assert!(table.contains_key("claude-opus-4-7"), "opus-4-7 present");
         assert!(
             table.contains_key("claude-sonnet-4-6"),
             "sonnet-4-6 present"
         );
         assert!(table.contains_key("claude-haiku-4-5"), "haiku-4-5 present");
-        let fable_5 = table.get("claude-fable-5").expect("fable-5 present");
-        assert_eq!(fable_5.input, 10.0);
-        assert_eq!(fable_5.output, 50.0);
-        assert_eq!(fable_5.cache_read, 1.0);
-        assert_eq!(fable_5.cache_write, 12.5);
     }
 
     #[test]
     fn builtin_snapshot_has_gpt_5_5_pricing() {
         let table = load_builtin_pricing();
         let cost = table.get("gpt-5.5").expect("gpt-5.5 present");
-        assert_eq!(cost.input, 5.0);
-        assert_eq!(cost.cache_read, 0.5);
-        assert_eq!(cost.output, 30.0);
+        assert!(cost.input > 0.0, "gpt-5.5 has an input tariff");
+        assert!(cost.output > 0.0, "gpt-5.5 has an output tariff");
+        assert!(cost.cache_read >= 0.0, "gpt-5.5 has a cache-read tariff");
     }
 
     #[test]
@@ -313,11 +314,16 @@ mod tests {
         ] {
             assert!(table.contains_key(model), "{model} present");
         }
+        // Structural tier assertion only: the dollar tariffs move with
+        // upstream repricings, which the refresh workflow already reports.
         let sol = table.get("gpt-5.6-sol").unwrap();
-        assert_eq!(sol.context_tiers.len(), 1);
-        assert_eq!(sol.context_tiers[0].context_tokens, 272_000);
-        assert_eq!(sol.context_tiers[0].input, 10.0);
-        assert_eq!(sol.context_tiers[0].output, 45.0);
+        let tier = sol
+            .context_tiers
+            .iter()
+            .find(|tier| tier.context_tokens == 272_000)
+            .expect("gpt-5.6-sol has a 272k context tier");
+        assert!(tier.input > 0.0, "tier has an input tariff");
+        assert!(tier.output > 0.0, "tier has an output tariff");
     }
 
     #[test]

@@ -64,6 +64,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'summary',
     'ledgerFreshness',
     'sessionCost',
+    'measureSession',
     'fingerprint',
     'overhead',
     'overheadTrim',
@@ -75,9 +76,73 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'search',
     'exportLedger',
     'exportStamps',
+    'turnSpanTree',
+    'sessionSpanTrees',
+    'flowGraph',
+    'contextDelta',
   ]) {
     assert.equal(typeof sdk[name], 'function', `${name} should be exported`);
   }
+});
+
+test('measureSession reports one explicit transcript without a ledger', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const result = await sdk.measureSession({
+    harness: 'codex',
+    inputPath: join(REPO_ROOT, 'tests', 'fixtures', 'codex', 'simple-turn.jsonl'),
+  });
+  assert.equal(result.schema, 'burn.session-metrics.v1');
+  assert.equal(result.sessionId, 'sess_simple_1');
+  assert.equal(result.turnCount, 1);
+  assert.equal(result.usage.inputTokens, 600);
+  assert.equal(result.usage.cacheReadTokens, 400);
+  assert.equal(result.usage.outputTokens, 120);
+  assert.equal(result.usage.reasoningTokens, 30);
+  assert.equal(result.models[0].provider, 'openai');
+});
+
+test('measureSession counts OpenCode reasoning and reconciles model costs', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const result = await sdk.measureSession({
+    harness: 'opencode',
+    inputPath: join(
+      REPO_ROOT,
+      'tests',
+      'fixtures',
+      'opencode',
+      'multi-turn',
+      'storage',
+      'session',
+      'global',
+      'ses_multi.json',
+    ),
+  });
+  assert.equal(result.turnCount, 2);
+  assert.equal(result.usage.reasoningTokens, 50);
+  assert.equal(result.usage.totalTokens, 33_360);
+  assert.equal(
+    result.costUsdMicros,
+    result.models.reduce((total, model) => total + model.costUsdMicros, 0),
+  );
+});
+
+test('measureSession rejects an incomplete OpenCode session tree', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const root = mkdtempSync(join(tmpdir(), 'relayburn-sdk-opencode-incomplete-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const inputPath = join(root, 'ses_incomplete.json');
+  writeFileSync(inputPath, JSON.stringify({ id: 'ses_incomplete', directory: '/tmp' }));
+
+  await assert.rejects(
+    sdk.measureSession({ harness: 'opencode', inputPath }),
+    /no measurable turns/,
+  );
 });
 
 test('read verbs return stable shapes against the fixture ledger', async (t) => {
@@ -156,6 +221,75 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
       session: '11111111-1111-1111-1111-111111111111',
     });
     assert.notEqual(fp.fingerprint, fpSession.fingerprint);
+  } finally {
+    rmSync(ledgerHome, { recursive: true, force: true });
+  }
+});
+
+test('span tree, flow graph, and context delta verbs return stable shapes', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const ledgerHome = makeLedgerHome();
+  const session = '11111111-1111-1111-1111-111111111111';
+  try {
+    const trees = await sdk.sessionSpanTrees({ sessionId: session, ledgerHome });
+    assert.ok(Array.isArray(trees));
+    if (trees.length > 0) {
+      assert.equal(trees[0].sessionId, session);
+      assert.equal(typeof trees[0].turnId, 'string');
+      assert.equal(typeof trees[0].root.kind, 'string');
+      assert.ok(Array.isArray(trees[0].root.children));
+
+      const single = await sdk.turnSpanTree({
+        sessionId: session,
+        turnId: trees[0].turnId,
+        ledgerHome,
+      });
+      assert.equal(single.turnId, trees[0].turnId);
+      assert.equal(single.root.kind, trees[0].root.kind);
+    }
+
+    const empty = await sdk.sessionSpanTrees({
+      sessionId: 'not-a-session',
+      ledgerHome,
+    });
+    assert.deepEqual(empty, []);
+
+    await assert.rejects(
+      () => sdk.turnSpanTree({ sessionId: session, turnId: 'missing-turn', ledgerHome }),
+      /turn not found/,
+    );
+
+    const graph = await sdk.flowGraph({ sessionId: session, ledgerHome });
+    assert.equal(graph.sessionId, session);
+    assert.equal(typeof graph.turnCount, 'number');
+    assert.ok(Array.isArray(graph.nodes));
+    assert.ok(Array.isArray(graph.edges));
+    for (const node of graph.nodes) {
+      assert.ok(node.model === null || typeof node.model === 'string');
+    }
+
+    const deltas = await sdk.contextDelta({ session, ledgerHome });
+    assert.ok(Array.isArray(deltas));
+    for (const d of deltas) {
+      assert.equal(typeof d.sessionId, 'string');
+      assert.equal(typeof d.turnId, 'string');
+      assert.equal(typeof d.ownerRail.kind, 'string');
+      assert.ok(
+        typeof d.priorContextTokens === 'number' || typeof d.priorContextTokens === 'bigint',
+      );
+      assert.ok(
+        typeof d.currentContextTokens === 'number' || typeof d.currentContextTokens === 'bigint',
+      );
+      assert.ok(typeof d.deltaTokens === 'number' || typeof d.deltaTokens === 'bigint');
+      assert.ok(Array.isArray(d.intervening));
+    }
+
+    await assert.rejects(
+      () => sdk.contextDelta({ ledgerHome, owner: 'both' }),
+      /invalid owner/,
+    );
   } finally {
     rmSync(ledgerHome, { recursive: true, force: true });
   }

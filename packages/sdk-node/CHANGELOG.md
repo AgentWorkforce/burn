@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-20
+
+- `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.
+- `turnSpanTree()`, `sessionSpanTrees()`, `flowGraph()`, and `contextDelta()` expose the matching Rust SDK verbs; token counters in their JSON output promote through BigInt.
 - `ledgerFreshness()` exposes the ledger's last-write timestamp, configured threshold, and stale flag for Node and MCP presenters.
 - Local napi builds load ahead of installed platform packages, so development and conformance tests use the current checkout's native binding.
 - Cost calculations recognize Claude 5 and GPT-5.6 models, prefer first-party tariffs, and apply long-context price tiers.

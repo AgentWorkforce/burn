@@ -95,12 +95,14 @@ fn is_id_char(b: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     /// Serialises tests that mutate `RELAYBURN_HOME` / `HOME` so they
     /// don't trample one another (cargo runs tests in parallel by
-    /// default; env vars are process-global).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    /// default; env vars are process-global). This must be the same
+    /// mutex the ingest test modules hold while pinning
+    /// `RELAYBURN_HOME`: two groups guarding one variable with
+    /// different locks still race.
+    use crate::ingest::TEST_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn ledger_home_defaults_to_agentworkforce_burn_under_home() {

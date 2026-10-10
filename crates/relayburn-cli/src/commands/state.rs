@@ -20,6 +20,7 @@ use crate::render::error::{report_error, report_ledger_error};
 use crate::render::format::format_uint;
 use crate::render::json::render_json;
 use crate::render::progress::TaskProgress;
+use crate::render::stdout::{write_stdout, writeln_stdout};
 
 pub fn run(globals: &GlobalArgs, args: StateArgs) -> i32 {
     let sub = args
@@ -69,7 +70,9 @@ fn run_status(globals: &GlobalArgs) -> i32 {
         return 0;
     }
 
-    print!("{}", format_status(&status));
+    if let Err(err) = write_stdout(&format_status(&status)) {
+        return report_error(&err, globals);
+    }
     0
 }
 
@@ -257,15 +260,19 @@ fn run_rebuild_derivable(globals: &GlobalArgs) -> i32 {
             return report_error(&err, globals);
         }
     } else {
-        println!(
+        if let Err(err) = writeln_stdout(&format!(
             "rebuilt derivable state: dropped {} event rows + {} content rows",
             format_uint(summary.rows_dropped as u64),
             format_uint(summary.content_rows_dropped as u64),
-        );
-        println!(
+        )) {
+            return report_error(&err, globals);
+        }
+        if let Err(err) = writeln_stdout(
             "  re-ingest from upstream session files via 'burn ingest' to \
-             repopulate."
-        );
+             repopulate.",
+        ) {
+            return report_error(&err, globals);
+        }
     }
     0
 }
@@ -318,7 +325,9 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
                 let payload = serde_json::json!({ "rowsDeleted": 0, "bytesFreed": 0, "retention": "forever" });
                 let _ = render_json(&payload);
             } else {
-                println!("content retention=forever - nothing to prune");
+                if let Err(err) = writeln_stdout("content retention=forever - nothing to prune") {
+                    return report_error(&err, globals);
+                }
             }
             return 0;
         }
@@ -332,7 +341,10 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
                     });
                     let _ = render_json(&payload);
                 } else {
-                    println!("content retention=forever - nothing to prune");
+                    if let Err(err) = writeln_stdout("content retention=forever - nothing to prune")
+                    {
+                        return report_error(&err, globals);
+                    }
                 }
                 return 0;
             }
@@ -386,12 +398,14 @@ fn run_prune(globals: &GlobalArgs, args: crate::cli::StatePruneArgs) -> i32 {
             return report_error(&err, globals);
         }
     } else {
-        println!(
+        if let Err(err) = writeln_stdout(&format!(
             "pruned {} content row{} ({})",
             format_uint(stats.rows_deleted as u64),
             if stats.rows_deleted == 1 { "" } else { "s" },
             format_bytes(stats.bytes_freed.max(0) as u64)
-        );
+        )) {
+            return report_error(&err, globals);
+        }
     }
     0
 }
@@ -545,7 +559,7 @@ fn print_reset_report(
     }
 
     if executed {
-        println!(
+        if let Err(err) = writeln_stdout(&format!(
             "reset derived state: dropped {} event row{} + {} stamp{} + {} content row{}",
             format_uint(summary.rows_dropped as u64),
             if summary.rows_dropped == 1 { "" } else { "s" },
@@ -557,10 +571,12 @@ fn print_reset_report(
             } else {
                 "s"
             },
-        );
+        )) {
+            return report_error(&err, globals);
+        }
         match ingest_report {
             Some(report) => {
-                println!(
+                if let Err(err) = writeln_stdout(&format!(
                     "  re-ingested {} session{} (+{} turn{}).",
                     format_uint(report.ingested_sessions as u64),
                     if report.ingested_sessions == 1 {
@@ -570,17 +586,21 @@ fn print_reset_report(
                     },
                     format_uint(report.appended_turns as u64),
                     if report.appended_turns == 1 { "" } else { "s" },
-                );
+                )) {
+                    return report_error(&err, globals);
+                }
             }
             None => {
-                println!(
+                if let Err(err) = writeln_stdout(
                     "  re-ingest from upstream session files via 'burn ingest' to \
-                     repopulate (or re-run with --reingest)."
-                );
+                     repopulate (or re-run with --reingest).",
+                ) {
+                    return report_error(&err, globals);
+                }
             }
         }
     } else {
-        println!(
+        if let Err(err) = writeln_stdout(&format!(
             "burn state reset (dry run): would drop {} event row{} + {} stamp{} + {} content row{}.",
             format_uint(summary.rows_dropped as u64),
             if summary.rows_dropped == 1 { "" } else { "s" },
@@ -588,8 +608,14 @@ fn print_reset_report(
             if summary.stamps_dropped == 1 { "" } else { "s" },
             format_uint(summary.content_rows_dropped as u64),
             if summary.content_rows_dropped == 1 { "" } else { "s" },
-        );
-        println!("  re-run with --force to actually wipe (add --reingest to repopulate).");
+        )) {
+            return report_error(&err, globals);
+        }
+        if let Err(err) =
+            writeln_stdout("  re-run with --force to actually wipe (add --reingest to repopulate).")
+        {
+            return report_error(&err, globals);
+        }
     }
     0
 }
@@ -638,7 +664,9 @@ fn run_fingerprint(globals: &GlobalArgs, args: StateFingerprintArgs) -> i32 {
             return report_error(&err, globals);
         }
     } else {
-        println!("{fp}");
+        if let Err(err) = writeln_stdout(fp.as_str()) {
+            return report_error(&err, globals);
+        }
     }
     0
 }
