@@ -51,7 +51,16 @@ pub(crate) struct EffectiveModelRate {
     pub output: f64,
     pub cache_read: f64,
     pub cache_write: f64,
+    pub cache_write_1h: f64,
     pub reasoning: Option<f64>,
+}
+
+impl EffectiveModelRate {
+    /// USD for the usage's cache creation, each TTL bucket at its own tariff.
+    pub(crate) fn cache_create_cost(&self, usage: &Usage) -> f64 {
+        (usage.cache_create_5m as f64 / PER_MILLION) * self.cache_write
+            + (usage.cache_create_1h as f64 / PER_MILLION) * self.cache_write_1h
+    }
 }
 
 pub(crate) fn cost_for_usage(
@@ -67,9 +76,7 @@ pub(crate) fn cost_for_usage(
     let output = (usage.output as f64 / PER_MILLION) * effective.output;
     let reasoning = reasoning_cost(usage.reasoning, effective.output, effective.reasoning, mode);
     let cache_read = (usage.cache_read as f64 / PER_MILLION) * effective.cache_read;
-    let cache_create = ((usage.cache_create_5m as f64 + usage.cache_create_1h as f64)
-        / PER_MILLION)
-        * effective.cache_write;
+    let cache_create = effective.cache_create_cost(usage);
     Some(CostBreakdown {
         model: Cow::Owned(model.to_string()),
         total: input + output + reasoning + cache_read + cache_create,
@@ -82,10 +89,32 @@ pub(crate) fn cost_for_usage(
 }
 
 pub fn cost_for_turn(turn: &TurnRecord, pricing: &PricingTable) -> Option<CostBreakdown> {
+    if has_measured_zero_usage(turn) {
+        // Measured zero tokens cost $0 under any tariff, so the cost is known
+        // even for models without one (e.g. Claude Code's `<synthetic>`
+        // messages). Zero usage the reader did not measure stays unknown.
+        return Some(CostBreakdown {
+            model: Cow::Owned(turn.model.clone()),
+            total: 0.0,
+            input: 0.0,
+            output: 0.0,
+            reasoning: 0.0,
+            cache_read: 0.0,
+            cache_create: 0.0,
+        });
+    }
     let opts = CostForUsageOptions {
         reasoning_mode: reasoning_mode_for_source(turn.source),
     };
     cost_for_usage(&turn.usage, &turn.model, pricing, opts)
+}
+
+fn has_measured_zero_usage(turn: &TurnRecord) -> bool {
+    turn.usage == Usage::default()
+        && turn
+            .fidelity
+            .as_ref()
+            .is_some_and(|f| f.coverage.has_per_turn_usage())
 }
 
 /// Total USD cost of a single turn, treating an unpriced turn as `$0`.
@@ -128,6 +157,7 @@ pub(crate) fn effective_model_rate(usage: &Usage, rate: &ModelCost) -> Effective
         output: tier.map_or(rate.output, |tier| tier.output),
         cache_read: tier.map_or(rate.cache_read, |tier| tier.cache_read),
         cache_write: tier.map_or(rate.cache_write, |tier| tier.cache_write),
+        cache_write_1h: tier.map_or(rate.cache_write_1h, |tier| tier.cache_write_1h),
         reasoning: tier.and_then(|tier| tier.reasoning).or(rate.reasoning),
     }
 }
@@ -202,14 +232,14 @@ fn pricing_model_alias(model: &str) -> Option<&'static str> {
 }
 
 /// Count model requests (`TurnRecord::effective_request_count`, the unit of
-/// summary `turnCount`) whose model has no pricing entry, and collect the
-/// distinct model names, first-seen order. Used by summary surfaces to make pricing
+/// summary `turnCount`) whose cost is unknown because their model has no
+/// pricing entry, and collect the distinct model names, first-seen order. Used by summary surfaces to make pricing
 /// gaps visible instead of silently folding them in at $0.
 pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec<String>) {
     let mut count = 0u64;
     let mut models: Vec<String> = Vec::new();
     for t in turns {
-        if lookup_model_rate(&t.model, pricing).is_none() {
+        if cost_for_turn(t, pricing).is_none() {
             count += t.effective_request_count();
             if !models.iter().any(|m| m == &t.model) {
                 models.push(t.model.clone());
@@ -249,7 +279,10 @@ where
 mod tests {
     use super::*;
     use crate::analyze::pricing::{load_builtin_pricing, ModelCost, ModelCostTier, ReasoningMode};
-    use crate::reader::{SourceKind, ToolCall, TurnRecord, Usage};
+    use crate::reader::{
+        Coverage, Fidelity, FidelityClass, SourceKind, ToolCall, TurnRecord, Usage,
+        UsageGranularity,
+    };
 
     fn turn(model: &str, usage: Usage, source: SourceKind) -> TurnRecord {
         TurnRecord {
@@ -314,27 +347,87 @@ mod tests {
         assert_eq!(c.total, rate.input + rate.output);
     }
 
+    fn cache_create_usage(create_5m: u64, create_1h: u64) -> Usage {
+        Usage {
+            cache_create_5m: create_5m,
+            cache_create_1h: create_1h,
+            ..Usage::default()
+        }
+    }
+
     #[test]
-    fn applies_cache_write_rate_to_both_5m_and_1h_cache_creation() {
-        let p = load_builtin_pricing();
-        let c = cost_for_usage(
-            &Usage {
-                input: 0,
-                output: 0,
-                reasoning: 0,
-                cache_read: 0,
-                cache_create_5m: 500_000,
-                cache_create_1h: 500_000,
+    fn bills_each_cache_creation_ttl_at_its_own_tariff() {
+        let mut p = PricingTable::new();
+        p.insert(
+            "ttl-model".into(),
+            ModelCost {
+                input: 4.0,
+                output: 20.0,
+                cache_read: 0.4,
+                cache_write: 5.0,
+                cache_write_1h: 8.0,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: Vec::new(),
             },
+        );
+        let c = cost_for_usage(
+            &cache_create_usage(500_000, 250_000),
+            "ttl-model",
+            &p,
+            CostForUsageOptions::default(),
+        )
+        .expect("priced");
+        assert_eq!(c.cache_create, 0.5 * 5.0 + 0.25 * 8.0);
+        assert_eq!(c.total, c.cache_create);
+    }
+
+    #[test]
+    fn bills_claude_1h_cache_creation_at_twice_input() {
+        let p = load_builtin_pricing();
+        let rate = p.get("claude-opus-4-7").unwrap();
+        let c = cost_for_usage(
+            &cache_create_usage(1_000_000, 1_000_000),
             "claude-opus-4-7",
             &p,
             CostForUsageOptions::default(),
         )
         .expect("priced");
-        assert_eq!(
-            c.cache_create,
-            p.get("claude-opus-4-7").unwrap().cache_write
+        assert_eq!(c.cache_create, rate.cache_write + 2.0 * rate.input);
+    }
+
+    #[test]
+    fn long_context_tier_supplies_its_own_1h_cache_write_tariff() {
+        let mut p = PricingTable::new();
+        p.insert(
+            "tiered-ttl-model".into(),
+            ModelCost {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.3,
+                cache_write: 3.75,
+                cache_write_1h: 6.0,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: vec![ModelCostTier {
+                    context_tokens: 200_000,
+                    input: 6.0,
+                    output: 22.5,
+                    cache_read: 0.6,
+                    cache_write: 7.5,
+                    cache_write_1h: 12.0,
+                    reasoning: None,
+                }],
+            },
         );
+        let c = cost_for_usage(
+            &cache_create_usage(0, 1_000_000),
+            "tiered-ttl-model",
+            &p,
+            CostForUsageOptions::default(),
+        )
+        .expect("priced");
+        assert_eq!(c.cache_create, 12.0);
     }
 
     #[test]
@@ -368,6 +461,7 @@ mod tests {
                 output: 30.0,
                 cache_read: 0.5,
                 cache_write: 6.25,
+                cache_write_1h: 6.25,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: vec![ModelCostTier {
@@ -376,6 +470,7 @@ mod tests {
                     output: 45.0,
                     cache_read: 1.0,
                     cache_write: 12.5,
+                    cache_write_1h: 12.5,
                     reasoning: None,
                 }],
             },
@@ -425,6 +520,7 @@ mod tests {
                 output: 15.0,
                 cache_read: 0.0,
                 cache_write: 2.5,
+                cache_write_1h: 2.5,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -463,6 +559,7 @@ mod tests {
                 output: 10.0,
                 cache_read: 0.125,
                 cache_write: 1.25,
+                cache_write_1h: 1.25,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -508,6 +605,7 @@ mod tests {
                 output: 4.0,
                 cache_read: 0.0,
                 cache_write: 1.0,
+                cache_write_1h: 1.0,
                 reasoning: Some(8.0),
                 reasoning_mode: ReasoningMode::Separate,
                 context_tiers: Vec::new(),
@@ -536,6 +634,7 @@ mod tests {
                 output: 10.0,
                 cache_read: 0.0,
                 cache_write: 1.0,
+                cache_write_1h: 1.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -592,6 +691,7 @@ mod tests {
                 output: 2.0,
                 cache_read: 0.0,
                 cache_write: 1.0,
+                cache_write_1h: 1.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -612,6 +712,7 @@ mod tests {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 1.75,
+                cache_write_1h: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -633,6 +734,7 @@ mod tests {
                 output: 10.0,
                 cache_read: 1.0,
                 cache_write: 9.0,
+                cache_write_1h: 9.0,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -645,6 +747,7 @@ mod tests {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 1.75,
+                cache_write_1h: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -667,6 +770,7 @@ mod tests {
                 output: 14.0,
                 cache_read: 0.175,
                 cache_write: 1.75,
+                cache_write_1h: 1.75,
                 reasoning: None,
                 reasoning_mode: ReasoningMode::SameAsOutput,
                 context_tiers: Vec::new(),
@@ -771,6 +875,68 @@ mod tests {
             vec!["made-up-model-xyz"],
             "model listed exactly once"
         );
+    }
+
+    fn with_coverage(mut t: TurnRecord, has_input: bool, has_output: bool) -> TurnRecord {
+        t.fidelity = Some(Fidelity {
+            granularity: UsageGranularity::PerTurn,
+            coverage: Coverage {
+                has_input_tokens: has_input,
+                has_output_tokens: has_output,
+                ..Coverage::EMPTY
+            },
+            class: FidelityClass::UsageOnly,
+        });
+        t
+    }
+
+    #[test]
+    fn measured_zero_token_turns_cost_nothing_even_without_a_tariff() {
+        let p = load_builtin_pricing();
+        let synthetic = with_coverage(
+            turn("<synthetic>", Usage::default(), SourceKind::ClaudeCode),
+            true,
+            true,
+        );
+        let c = cost_for_turn(&synthetic, &p).expect("measured zero tokens have a known cost");
+        assert_eq!(c.model, "<synthetic>");
+        assert_eq!(c.total, 0.0);
+        assert_eq!(
+            (c.input, c.output, c.reasoning, c.cache_read, c.cache_create),
+            (0.0, 0.0, 0.0, 0.0, 0.0)
+        );
+        let (count, models) = tally_unpriced(
+            &[
+                synthetic,
+                turn(
+                    "made-up-model-xyz",
+                    usage_with(0, 1, 0),
+                    SourceKind::ClaudeCode,
+                ),
+            ],
+            &p,
+        );
+        assert_eq!(count, 1);
+        assert_eq!(models, vec!["made-up-model-xyz"]);
+    }
+
+    #[test]
+    fn unmeasured_zero_usage_stays_unpriced_without_a_tariff() {
+        let p = load_builtin_pricing();
+        let zero = || turn("made-up-model-xyz", Usage::default(), SourceKind::Codex);
+        assert!(cost_for_turn(&zero(), &p).is_none(), "no fidelity record");
+        assert!(cost_for_turn(&with_coverage(zero(), true, false), &p).is_none());
+        assert!(cost_for_turn(&with_coverage(zero(), false, true), &p).is_none());
+        let some_tokens = with_coverage(
+            turn(
+                "made-up-model-xyz",
+                usage_with(0, 1, 0),
+                SourceKind::ClaudeCode,
+            ),
+            true,
+            true,
+        );
+        assert!(cost_for_turn(&some_tokens, &p).is_none());
     }
 
     #[test]
