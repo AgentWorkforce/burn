@@ -213,3 +213,7 @@ pub(crate) fn stringify_tool_result(content: &Value) -> String {
         _ => serde_json::to_string(content).unwrap_or_default(),
     }
 }
+
+#[cfg(test)]
+#[path = "util_tests.rs"]
+mod tests;
