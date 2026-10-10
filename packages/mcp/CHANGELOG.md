@@ -4,6 +4,11 @@ All notable changes to `@relayburn/mcp`.
 
 ## [Unreleased]
 
+- Added `burn__summary`, `burn__hotspots`, `burn__overhead`,
+  `burn__overheadTrim`, and `burn__compare` tool factories, exposing the
+  current `@relayburn/sdk` read surface through validated MCP inputs; each
+  result carries `ledgerFreshness` like the existing read tools.
+
 ## [4.1.0] - 2026-09-20
 
 - Package tests compile TypeScript before running, so `pnpm run test` executes the MCP suite on a clean checkout.
