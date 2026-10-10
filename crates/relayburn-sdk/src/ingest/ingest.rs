@@ -1274,8 +1274,8 @@ fn apply_parsed_extras<P: DerivedRecords>(ledger: &mut Ledger, p: &P) -> anyhow:
     // appended. Building here (not in the parser) keeps the inference
     // table in lockstep with what actually got persisted — if a turn
     // was deduped at append time by the content-fingerprint check, its
-    // inference will simply re-replace the prior row via the
-    // `INSERT OR REPLACE` writer, which is the correct steady-state.
+    // inference is a no-op when unchanged; the writer updates the row and
+    // freshness clock only when its persisted values differ.
     if !p.turns().is_empty() {
         let lookup = p.request_id_lookup();
         let inferences = crate::reader::build_inferences(p.turns(), lookup.as_ref());
