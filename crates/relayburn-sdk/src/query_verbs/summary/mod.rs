@@ -327,6 +327,7 @@ pub struct SummaryReportOptions {
     pub session: Option<String>,
     pub project: Option<String>,
     pub since: Option<String>,
+    pub until: Option<String>,
     pub workflow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Enrichment>,
@@ -603,9 +604,8 @@ impl LedgerHandle {
         );
         let turns = summary_turns_from_enriched(&enriched);
 
-        let Some((buckets, per_bucket)) =
-            super::partition_into_buckets(turns, q.since.as_deref(), bucket_secs, |t| &t.ts)?
-        else {
+        let partitioned = super::partition_into_buckets(turns, &q, bucket_secs, |t| &t.ts)?;
+        let Some((buckets, per_bucket)) = partitioned else {
             return Ok(SummaryTimeseries {
                 bucket_secs,
                 buckets: Vec::new(),

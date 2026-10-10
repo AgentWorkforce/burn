@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Added `summaryReport()`, `summaryTimeseries()`, and `capabilities()` APIs for the SDK-owned versioned summary report contract.
 ## [4.1.0] - 2026-09-20
 
 - `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.

@@ -546,7 +546,7 @@ fn run_hotspots_findings(
 
     if wanted_set.contains("ghost-surface") {
         let options = GhostSurfaceFindingOptions::default();
-        let ghosts = detect_ghost_surface(&build_ghost_surface_inputs(turns, pricing, None));
+        let ghosts = detect_ghost_surface(&prompted_ghost_surface_inputs(handle, turns, pricing));
         findings.extend(ghosts.iter().map(|g| ghost_surface_to_finding(g, &options)));
     }
 

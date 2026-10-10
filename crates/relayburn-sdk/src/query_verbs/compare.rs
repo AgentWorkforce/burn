@@ -185,9 +185,8 @@ impl LedgerHandle {
         }
         let pricing = load_pricing_for_ledger(self);
 
-        let Some((buckets, per_bucket)) =
-            super::partition_into_buckets(turns, q.since.as_deref(), bucket_secs, |t| &t.turn.ts)?
-        else {
+        let partitioned = super::partition_into_buckets(turns, &q, bucket_secs, |t| &t.turn.ts)?;
+        let Some((buckets, per_bucket)) = partitioned else {
             return Ok(CompareTimeseries {
                 bucket_secs,
                 buckets: Vec::new(),
