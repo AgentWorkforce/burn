@@ -2115,3 +2115,75 @@ mod edit_revert_sample_preview {
         assert!(result.edit_reverts[0].sample_preview.is_none());
     }
 }
+
+mod find_turn_for_event {
+    use super::*;
+    use crate::analyze::patterns::find_turn_for_event;
+
+    fn turn_at(message_id: &str, ts: &str) -> TurnRecord {
+        let mut t = turn("s1", message_id, 0);
+        t.ts = ts.into();
+        t
+    }
+
+    fn evt_at(message_id: Option<&str>, ts: Option<&str>) -> ToolResultEventRecord {
+        let mut e = evt("s1", "tu", 0, ToolResultStatus::Completed);
+        e.message_id = message_id.map(String::from);
+        e.ts = ts.map(String::from);
+        e
+    }
+
+    fn pick(
+        event: &ToolResultEventRecord,
+        turns: &[&TurnRecord],
+        by_id: &HashMap<&str, &TurnRecord>,
+    ) -> Option<String> {
+        find_turn_for_event(event, turns, by_id).map(|t| t.message_id.clone())
+    }
+
+    #[test]
+    fn prefers_message_id_lookup_over_timestamp() {
+        let a = turn_at("a", "2026-01-01T00:00:01.000Z");
+        let b = turn_at("b", "2026-01-01T00:00:02.000Z");
+        let turns = [&a, &b];
+        let by_id: HashMap<&str, &TurnRecord> = HashMap::from([("a", &a)]);
+        let e = evt_at(Some("a"), Some("2026-01-01T00:00:09.000Z"));
+        assert_eq!(pick(&e, &turns, &by_id).as_deref(), Some("a"));
+        let unknown = evt_at(Some("zzz"), Some("2026-01-01T00:00:09.000Z"));
+        assert_eq!(pick(&unknown, &turns, &by_id).as_deref(), Some("b"));
+        let unknown_no_ts = evt_at(Some("zzz"), None);
+        assert_eq!(pick(&unknown_no_ts, &turns, &by_id), None);
+    }
+
+    #[test]
+    fn falls_back_to_latest_turn_at_or_before_event_ts() {
+        let a = turn_at("a", "2026-01-01T00:00:01.000Z");
+        let b = turn_at("b", "2026-01-01T00:00:02.000Z");
+        let c = turn_at("c", "2026-01-01T00:00:03.000Z");
+        let turns = [&a, &b, &c];
+        let by_id = HashMap::new();
+        let at = |ts: &str| pick(&evt_at(None, Some(ts)), &turns, &by_id);
+        assert_eq!(at("2026-01-01T00:00:00.000Z").as_deref(), Some("a"));
+        assert_eq!(at("2026-01-01T00:00:02.000Z").as_deref(), Some("b"));
+        assert_eq!(at("2026-01-01T00:00:02.500Z").as_deref(), Some("b"));
+        assert_eq!(at("2026-01-01T00:00:09.000Z").as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn stops_at_first_turn_after_event_ts() {
+        let a = turn_at("a", "2026-01-01T00:00:01.000Z");
+        let c = turn_at("c", "2026-01-01T00:00:03.000Z");
+        let b = turn_at("b", "2026-01-01T00:00:02.000Z");
+        let turns = [&a, &c, &b];
+        let e = evt_at(None, Some("2026-01-01T00:00:02.500Z"));
+        assert_eq!(pick(&e, &turns, &HashMap::new()).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn returns_none_without_ts_or_turns() {
+        let a = turn_at("a", "2026-01-01T00:00:01.000Z");
+        assert_eq!(pick(&evt_at(None, None), &[&a], &HashMap::new()), None);
+        let e = evt_at(None, Some("2026-01-01T00:00:01.000Z"));
+        assert_eq!(pick(&e, &[], &HashMap::new()), None);
+    }
+}

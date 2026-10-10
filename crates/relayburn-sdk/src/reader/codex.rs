@@ -800,3 +800,6 @@ pub use self::test_support::{parse_codex_session, ParseCodexOptions, ParseCodexR
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod helpers_tests;

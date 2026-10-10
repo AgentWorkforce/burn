@@ -6,6 +6,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 - Codex turns and inference rows now reflect each model API request represented by an advancing usage snapshot, so summary, sessions, and compare per-turn metrics (including unpriced-turn counts) no longer collapse long agent loops into one turn. Run `burn state rebuild` to correct previously ingested Codex sessions.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+- Timestamps everywhere (ingest, `--since`, quality outcomes, pending stamps) go through one strict ISO-8601 parser: `±HH:MM` offsets are applied rather than ignored, and out-of-range components, leap seconds, or trailing text are rejected.
 
 ## [4.1.0] - 2026-09-20
 

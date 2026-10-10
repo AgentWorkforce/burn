@@ -169,4 +169,61 @@ mod tests {
             "burn: boom"
         );
     }
+
+    #[test]
+    fn non_tty_success_and_info_pass_message_through() {
+        let globals = piped_globals();
+        assert_eq!(
+            format_message(MessageKind::Success, "done\n  more", &globals),
+            "done\n  more"
+        );
+        assert_eq!(format_message(MessageKind::Info, "fyi", &globals), "fyi");
+    }
+
+    #[test]
+    fn json_mode_keeps_scriptable_prefix() {
+        let globals = GlobalArgs {
+            json: true,
+            ledger_path: None,
+            no_color: false,
+        };
+        assert_eq!(
+            format_message(MessageKind::Warning, "w", &globals),
+            "burn: warning: w"
+        );
+    }
+
+    #[test]
+    fn paint_kind_without_color_is_plain() {
+        for kind in [
+            MessageKind::Success,
+            MessageKind::Error,
+            MessageKind::Warning,
+            MessageKind::Info,
+        ] {
+            assert_eq!(paint_kind(kind, "x", false, true), "x");
+            assert_eq!(paint_kind(kind, "x", false, false), "x");
+        }
+    }
+
+    #[test]
+    fn paint_kind_with_color_uses_kind_color_and_weight() {
+        console::set_colors_enabled(true);
+        let cases = [
+            (MessageKind::Success, "32"),
+            (MessageKind::Error, "31"),
+            (MessageKind::Warning, "33"),
+            (MessageKind::Info, "36"),
+        ];
+        for (kind, code) in cases {
+            assert_eq!(
+                paint_kind(kind, "x", true, true),
+                format!("\u{1b}[{code}m\u{1b}[1mx\u{1b}[0m")
+            );
+            assert_eq!(
+                paint_kind(kind, "x", true, false),
+                format!("\u{1b}[{code}m\u{1b}[2mx\u{1b}[0m")
+            );
+        }
+    }
 }

@@ -341,4 +341,27 @@ mod tests {
         );
         assert_eq!(format_last_seen("not-a-date"), "not-a-date");
     }
+
+    #[test]
+    fn month_name_maps_every_month_and_rejects_out_of_range() {
+        let expected = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+        for (i, name) in expected.iter().enumerate() {
+            assert_eq!(month_name(i as u32 + 1), Some(*name));
+        }
+        assert_eq!(month_name(0), None);
+        assert_eq!(month_name(13), None);
+    }
 }
