@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- Codex turns and inference rows now reflect each model API request represented by an advancing usage snapshot, so summary, sessions, and compare per-turn metrics no longer collapse long agent loops into one turn. Run `burn state rebuild` to correct previously ingested Codex sessions.
+- Codex turns and inference rows now reflect each model API request represented by an advancing usage snapshot, so summary, sessions, and compare per-turn metrics (including unpriced-turn counts) no longer collapse long agent loops into one turn. Run `burn state rebuild` to correct previously ingested Codex sessions.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 
 ## [4.1.0] - 2026-09-20

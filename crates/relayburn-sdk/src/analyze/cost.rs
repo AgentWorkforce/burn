@@ -201,15 +201,16 @@ fn pricing_model_alias(model: &str) -> Option<&'static str> {
     }
 }
 
-/// Count turns whose model has no pricing entry, and collect the distinct
-/// model names, first-seen order. Used by summary surfaces to make pricing
+/// Count model requests (`TurnRecord::effective_request_count`, the unit of
+/// summary `turnCount`) whose model has no pricing entry, and collect the
+/// distinct model names, first-seen order. Used by summary surfaces to make pricing
 /// gaps visible instead of silently folding them in at $0.
 pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec<String>) {
     let mut count = 0u64;
     let mut models: Vec<String> = Vec::new();
     for t in turns {
         if lookup_model_rate(&t.model, pricing).is_none() {
-            count += 1;
+            count += t.effective_request_count();
             if !models.iter().any(|m| m == &t.model) {
                 models.push(t.model.clone());
             }
@@ -770,6 +771,25 @@ mod tests {
             vec!["made-up-model-xyz"],
             "model listed exactly once"
         );
+    }
+
+    #[test]
+    fn tally_unpriced_counts_every_model_request() {
+        let p = load_builtin_pricing();
+        let mut multi = turn(
+            "made-up-model-xyz",
+            usage_with(100, 50, 0),
+            SourceKind::Codex,
+        );
+        multi.request_count = 7;
+        let priced = turn(
+            "claude-sonnet-4-6",
+            usage_with(300, 150, 0),
+            SourceKind::ClaudeCode,
+        );
+        let (count, models) = tally_unpriced(&[multi, priced], &p);
+        assert_eq!(count, 7, "unpriced count shares turnCount's request unit");
+        assert_eq!(models, vec!["made-up-model-xyz"]);
     }
 
     #[test]
