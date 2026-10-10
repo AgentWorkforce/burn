@@ -4,7 +4,7 @@
 
 use super::*;
 
-pub(super) fn build_hotspots_ghost_surface_inputs(
+pub(super) fn prompted_ghost_surface_inputs(
     handle: &LedgerHandle,
     turns: &[TurnRecord],
     pricing: &PricingTable,

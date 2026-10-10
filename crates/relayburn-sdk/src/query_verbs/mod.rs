@@ -448,11 +448,14 @@ pub use sessions::*;
 mod overhead;
 pub use overhead::*;
 
+mod cache_expiry;
+use cache_expiry::cache_expiry_findings;
+
 mod hotspots;
 pub use hotspots::*;
 
 mod ghost_surface_text;
-use ghost_surface_text::build_hotspots_ghost_surface_inputs;
+use ghost_surface_text::prompted_ghost_surface_inputs;
 
 mod compare;
 pub use compare::*;
