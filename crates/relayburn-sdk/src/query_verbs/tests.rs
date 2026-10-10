@@ -1,9 +1,9 @@
 use super::flow::bucket_subagents_per_turn;
 use super::summary::{
-    aggregate_summary_relationship_stats, attribute_summary_cost_to_tools,
-    collect_summary_agent_session_tree, collect_summary_connected_relationships, compute_summary,
-    summary_subagent_session_filter, summary_tool_attribution_method, summary_turn_identity_key,
-    SummaryRelationshipMatch,
+    aggregate_summary_relationship_stats, aggregate_summary_relationship_subagent_stats,
+    attribute_summary_cost_to_tools, collect_summary_agent_session_tree,
+    collect_summary_connected_relationships, compute_summary, summary_subagent_session_filter,
+    summary_tool_attribution_method, summary_turn_identity_key, SummaryRelationshipMatch,
 };
 use super::*;
 use crate::analyze::FindingPricingStatus;
@@ -824,6 +824,56 @@ fn summary_relationship_stats_count_relationships_separately_from_sessions() {
     assert_eq!(fork.session_count, 1);
     assert_eq!(fork.turn_count, 5);
     assert_eq!(fork.total_cost, 3.0);
+}
+
+#[test]
+fn summary_relationship_subagent_stats_roll_up_by_type_sorted_by_cost() {
+    let subagent =
+        |subagent_type: Option<&str>, turn_count: u64, cost: f64| SummaryRelationshipMatch {
+            relationship_type: RelationshipType::Subagent,
+            session_id: "session".to_string(),
+            subagent_type: subagent_type.map(str::to_string),
+            turn_count,
+            cost,
+        };
+    let matches = vec![
+        subagent(Some("Explore"), 1, 4.0),
+        subagent(None, 7, 0.5),
+        subagent(Some("Plan"), 5, 10.0),
+        subagent(Some("Explore"), 2, 1.0),
+        subagent(Some("Explore"), 3, 2.0),
+        SummaryRelationshipMatch {
+            relationship_type: RelationshipType::Fork,
+            session_id: "session".to_string(),
+            subagent_type: Some("Explore".to_string()),
+            turn_count: 100,
+            cost: 100.0,
+        },
+    ];
+
+    let stats: Vec<(String, u64, u64, f64, f64, f64, f64)> =
+        aggregate_summary_relationship_subagent_stats(&matches)
+            .into_iter()
+            .map(|s| {
+                (
+                    s.subagent_type,
+                    s.invocations,
+                    s.turns,
+                    s.total_cost,
+                    s.median_cost,
+                    s.p95_cost,
+                    s.mean_cost,
+                )
+            })
+            .collect();
+    assert_eq!(
+        stats,
+        vec![
+            ("Plan".to_string(), 1, 5, 10.0, 10.0, 10.0, 10.0),
+            ("Explore".to_string(), 3, 6, 7.0, 2.0, 4.0, 7.0 / 3.0),
+            ("(unknown)".to_string(), 1, 7, 0.5, 0.5, 0.5, 0.5),
+        ]
+    );
 }
 
 #[test]
