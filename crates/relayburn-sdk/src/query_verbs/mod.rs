@@ -20,7 +20,7 @@ use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
     aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
     attribute_hotspots, attribute_overhead, build_compare_table, build_ghost_surface_inputs,
-    build_subagent_tree, build_trim_recommendations, cost_for_turn, deltas_for_session,
+    build_subagent_tree, build_trim_recommendations, cost_for_turn, deltas_for_session_since,
     detect_ghost_surface, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
     find_overhead_files, findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity,
     load_claude_settings, load_overhead_file, load_pricing, mark_findings_with_unpriced_sessions,
@@ -83,12 +83,13 @@ pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
 
     if let Some((n, unit)) = parse_relative(raw) {
         let secs_back = match unit {
-            'h' => n * 3_600,
-            'd' => n * 86_400,
-            'w' => n * 7 * 86_400,
-            'm' => n * 30 * 86_400,
+            'h' => n.checked_mul(3_600),
+            'd' => n.checked_mul(86_400),
+            'w' => n.checked_mul(7 * 86_400),
+            'm' => n.checked_mul(30 * 86_400),
             _ => unreachable!(),
-        };
+        }
+        .ok_or_else(|| anyhow::anyhow!("invalid since: {raw} (relative range is too large)"))?;
         let now = system_now_secs();
         let when = now.saturating_sub(secs_back) as i64;
         return Ok(Some(format_iso_z_ms(when, 0)));

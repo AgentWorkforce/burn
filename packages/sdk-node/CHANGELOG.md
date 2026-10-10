@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `contextDelta()` accepts `project` and ISO-timestamp or relative `since` values; invalid `since` values reject with an error.
+
 ## [4.1.0] - 2026-09-20
 
 - `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.

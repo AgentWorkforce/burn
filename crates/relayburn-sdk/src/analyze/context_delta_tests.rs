@@ -73,7 +73,7 @@ fn bash_blowup_surfaces_as_top_delta_with_bash_driver() {
     let tree = turn_tree("sess-1", "msg-1", root);
     let pricing = crate::analyze::pricing::load_builtin_pricing();
     let opts = ContextDeltaOpts::default();
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
     assert_eq!(deltas.len(), 1, "one pairwise delta expected");
     let d = &deltas[0];
     assert_eq!(d.session_id, "sess-1");
@@ -142,7 +142,7 @@ fn compaction_replaces_negative_delta() {
         min_delta: Some(0),
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(&[tree], &[compaction], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[compaction], &pricing, &opts, None);
     assert_eq!(deltas.len(), 1);
     let d = &deltas[0];
     assert_eq!(d.delta_tokens, 0, "compaction clamps to 0");
@@ -200,7 +200,7 @@ fn subagent_isolation_main_rail_excludes_subagent_results() {
         min_delta: Some(0),
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
 
     // We expect one main-rail delta and one subagent-rail delta.
     let main_delta = deltas
@@ -245,11 +245,58 @@ fn single_inference_yields_no_delta() {
     root.children.push(inf1);
     let tree = turn_tree("sess-1", "msg-1", root);
     let pricing = crate::analyze::pricing::load_builtin_pricing();
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &ContextDeltaOpts::default());
+    let deltas =
+        deltas_for_session_since(&[tree], &[], &pricing, &ContextDeltaOpts::default(), None);
     assert!(
         deltas.is_empty(),
         "single inference must not emit a pairwise delta"
     );
+}
+
+#[test]
+fn since_filters_on_current_inference_and_keeps_older_baseline() {
+    let mut inf1 = make_inf("req-1", "claude-sonnet-4-6", 1000, 0, 0);
+    inf1.start_ms = 100;
+    let mut inf2 = make_inf("req-2", "claude-sonnet-4-6", 3000, 0, 0);
+    inf2.start_ms = 200;
+    let mut inf3 = make_inf("req-3", "claude-sonnet-4-6", 6000, 0, 0);
+    inf3.start_ms = 300;
+    let mut root = SpanNode::new(SpanKind::Turn, "turn");
+    root.children.extend([inf1, inf2, inf3]);
+    let tree = turn_tree("sess-1", "msg-1", root);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let opts = ContextDeltaOpts {
+        min_delta: Some(0),
+        ..ContextDeltaOpts::default()
+    };
+
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, Some(200));
+    assert_eq!(
+        deltas.len(),
+        2,
+        "the pair ending exactly at the cutoff qualifies"
+    );
+    assert!(deltas.iter().any(|delta| {
+        delta.prior_context_tokens == 1000 && delta.current_context_tokens == 3000
+    }));
+}
+
+#[test]
+fn since_keeps_delta_when_current_timestamp_is_unknown() {
+    let mut inf1 = make_inf("req-1", "claude-sonnet-4-6", 1000, 0, 0);
+    inf1.start_ms = 100;
+    let inf2 = make_inf("req-2", "claude-sonnet-4-6", 3000, 0, 0);
+    let mut root = SpanNode::new(SpanKind::Turn, "turn");
+    root.children.extend([inf1, inf2]);
+    let tree = turn_tree("sess-1", "msg-1", root);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let opts = ContextDeltaOpts {
+        min_delta: Some(0),
+        ..ContextDeltaOpts::default()
+    };
+
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, Some(10_000));
+    assert_eq!(deltas.len(), 1);
 }
 
 /// `min_delta` filters out small jumps.
@@ -266,7 +313,8 @@ fn min_delta_filters_small_jumps() {
     let tree = turn_tree("sess-1", "msg-1", root);
     let pricing = crate::analyze::pricing::load_builtin_pricing();
     // Default min_delta is 1000; 500 < 1000 → filtered out.
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &ContextDeltaOpts::default());
+    let deltas =
+        deltas_for_session_since(&[tree], &[], &pricing, &ContextDeltaOpts::default(), None);
     assert!(deltas.is_empty(), "500 token jump must be filtered");
 
     // Lower the threshold to 100 → row appears.
@@ -274,11 +322,12 @@ fn min_delta_filters_small_jumps() {
         min_delta: Some(100),
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(
+    let deltas = deltas_for_session_since(
         &[turn_tree("sess-1", "msg-1", root_with_two_infs(1000, 1500))],
         &[],
         &pricing,
         &opts,
+        None,
     );
     assert_eq!(deltas.len(), 1);
     assert_eq!(deltas[0].delta_tokens, 500);
@@ -313,7 +362,7 @@ fn top_caps_output() {
         min_delta: Some(0),
         ..ContextDeltaOpts::default()
     };
-    let all = deltas_for_session(std::slice::from_ref(&tree), &[], &pricing, &opts);
+    let all = deltas_for_session_since(std::slice::from_ref(&tree), &[], &pricing, &opts, None);
     assert_eq!(all.len(), 4);
 
     // Cap at 2 → only the top 2 deltas.
@@ -322,7 +371,7 @@ fn top_caps_output() {
         top: Some(2),
         ..ContextDeltaOpts::default()
     };
-    let top2 = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let top2 = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
     assert_eq!(top2.len(), 2);
 }
 
@@ -356,7 +405,7 @@ fn owner_filter_main_excludes_subagent_rail() {
         owner: OwnerFilter::Main,
         ..ContextDeltaOpts::default()
     };
-    let deltas = deltas_for_session(&[tree], &[], &pricing, &opts);
+    let deltas = deltas_for_session_since(&[tree], &[], &pricing, &opts, None);
     for d in &deltas {
         assert_eq!(
             d.owner_rail,
@@ -414,4 +463,152 @@ fn system_reminder_step_round_trips_in_json() {
     assert!(s.contains("\"source\":\"other\""), "got {s}");
     let back: InterveningStep = serde_json::from_str(&s).unwrap();
     assert_eq!(back, step);
+}
+
+#[test]
+fn passes_since_is_inclusive_and_keeps_unknown_timestamps() {
+    assert!(passes_since(100, None));
+    assert!(passes_since(0, Some(500)));
+    assert!(passes_since(500, Some(500)));
+    assert!(passes_since(501, Some(500)));
+    assert!(!passes_since(499, Some(500)));
+}
+
+#[test]
+fn sorted_compaction_ms_parses_and_orders_timestamps() {
+    let compaction = |ts: &str| CompactionEvent {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: "s".into(),
+        ts: ts.into(),
+        preceding_message_id: None,
+        tokens_before_compact: None,
+    };
+    let ms = sorted_compaction_ms(&[
+        compaction("1970-01-01T00:00:02.000Z"),
+        compaction("not a timestamp"),
+        compaction("1970-01-01T00:00:01.000Z"),
+    ]);
+    assert_eq!(ms, vec![0, 1_000, 2_000]);
+}
+
+#[test]
+fn compaction_between_is_inclusive_on_both_ends() {
+    let timeline: Vec<TimelineItem> = Vec::new();
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let ctx = PairContext {
+        timeline: &timeline,
+        compaction_ms: vec![1_000],
+        pricing: &pricing,
+        min_delta: 0,
+    };
+    assert!(ctx.compaction_between(1_000, 2_000));
+    assert!(ctx.compaction_between(500, 1_000));
+    assert!(!ctx.compaction_between(1_001, 2_000));
+    assert!(!ctx.compaction_between(0, 999));
+}
+
+fn timed_two_inf_tree(ctx1: i64, ctx2: i64) -> TurnSpanTree {
+    let mut inf1 = make_inf("req-1", "claude-sonnet-4-6", ctx1, 0, 0);
+    inf1.start_ms = 1_000;
+    inf1.end_ms = 2_000;
+    let mut inf2 = make_inf("req-2", "claude-sonnet-4-6", ctx2, 0, 0);
+    inf2.start_ms = 4_000;
+    inf2.end_ms = 5_000;
+    let mut root = SpanNode::new(SpanKind::Turn, "turn");
+    root.children.push(inf1);
+    root.children.push(inf2);
+    turn_tree("sess-1", "msg-1", root)
+}
+
+fn compaction_at(ts: &str) -> CompactionEvent {
+    CompactionEvent {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: "sess-1".into(),
+        ts: ts.into(),
+        preceding_message_id: None,
+        tokens_before_compact: None,
+    }
+}
+
+/// A compaction between two inferences only rewrites the row when the
+/// context actually shrank; growth keeps its raw delta.
+#[test]
+fn compaction_does_not_rewrite_positive_delta() {
+    let tree = timed_two_inf_tree(10_000, 15_000);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let deltas = deltas_for_session_since(
+        &[tree],
+        &[compaction_at("1970-01-01T00:00:03.000Z")],
+        &pricing,
+        &ContextDeltaOpts::default(),
+        None,
+    );
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].delta_tokens, 5_000);
+    assert!(
+        deltas[0].intervening.is_empty(),
+        "{:?}",
+        deltas[0].intervening
+    );
+}
+
+/// A shrink with no compaction between the inferences is a negative delta
+/// below the noise floor and is dropped.
+#[test]
+fn shrink_without_compaction_is_dropped() {
+    let tree = timed_two_inf_tree(15_000, 10_000);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let deltas = deltas_for_session_since(
+        &[tree],
+        &[compaction_at("1970-01-01T00:00:09.000Z")],
+        &pricing,
+        &ContextDeltaOpts::default(),
+        None,
+    );
+    assert!(deltas.is_empty(), "{deltas:?}");
+}
+
+/// The noise floor is inclusive: a delta exactly equal to `min_delta` stays.
+#[test]
+fn min_delta_threshold_is_inclusive() {
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let opts = ContextDeltaOpts {
+        min_delta: Some(1_000),
+        ..ContextDeltaOpts::default()
+    };
+    let at = deltas_for_session_since(
+        &[timed_two_inf_tree(5_000, 6_000)],
+        &[],
+        &pricing,
+        &opts,
+        None,
+    );
+    assert_eq!(at.len(), 1);
+    assert_eq!(at[0].delta_tokens, 1_000);
+    assert_eq!(at[0].inference_idx, 2);
+    let below = deltas_for_session_since(
+        &[timed_two_inf_tree(5_000, 5_999)],
+        &[],
+        &pricing,
+        &opts,
+        None,
+    );
+    assert!(below.is_empty(), "{below:?}");
+}
+
+/// An unchanged context is not a compaction even when a compaction event sits
+/// between the inferences; the zero delta falls under the noise floor.
+#[test]
+fn zero_delta_with_compaction_is_not_a_compaction_row() {
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let deltas = deltas_for_session_since(
+        &[timed_two_inf_tree(10_000, 10_000)],
+        &[compaction_at("1970-01-01T00:00:03.000Z")],
+        &pricing,
+        &ContextDeltaOpts::default(),
+        None,
+    );
+    assert!(deltas.is_empty(), "{deltas:?}");
 }

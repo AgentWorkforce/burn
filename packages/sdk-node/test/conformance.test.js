@@ -290,6 +290,18 @@ test('span tree, flow graph, and context delta verbs return stable shapes', asyn
       () => sdk.contextDelta({ ledgerHome, owner: 'both' }),
       /invalid owner/,
     );
+    await assert.rejects(
+      () => sdk.contextDelta({ ledgerHome, since: 'yesterday' }),
+      /invalid since/,
+    );
+    assert.deepEqual(
+      await sdk.contextDelta({ session, ledgerHome, since: '2000-01-01T00:00:00Z' }),
+      deltas,
+    );
+    assert.deepEqual(
+      await sdk.contextDelta({ ledgerHome, project: '/no/such/project' }),
+      [],
+    );
   } finally {
     rmSync(ledgerHome, { recursive: true, force: true });
   }
