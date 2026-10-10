@@ -84,8 +84,6 @@ export interface SummaryOptions {
   project?: string;
   /** ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range (`24h`, `7d`, `4w`, `2m`). */
   since?: string;
-  /** Inclusive upper bound. Accepts the same ISO/relative grammar as `since`. */
-  until?: string;
   /** Folded enrichment tag filters; every key/value pair must match. */
   tags?: Record<string, string>;
   /** Group summary costs/tokens by this folded enrichment tag key. */
@@ -151,6 +149,7 @@ export interface SummaryReportOptions {
   session?: string;
   project?: string;
   since?: string;
+  /** Inclusive upper bound (ISO timestamp or relative range); a bound without sub-second digits covers its whole final second. */
   until?: string;
   workflow?: string;
   tags?: Record<string, string>;

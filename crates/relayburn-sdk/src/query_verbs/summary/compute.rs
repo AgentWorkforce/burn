@@ -22,7 +22,7 @@ use crate::reader::{
     UserTurnBlockKind, UserTurnRecord,
 };
 
-use super::super::build_query;
+use super::super::{build_query, normalize_until};
 use super::*;
 
 pub(crate) fn build_summary_report_query(opts: &SummaryReportOptions) -> Result<Query> {
@@ -30,8 +30,8 @@ pub(crate) fn build_summary_report_query(opts: &SummaryReportOptions) -> Result<
         opts.session.as_deref(),
         opts.project.as_deref(),
         opts.since.as_deref(),
-        opts.until.as_deref(),
     )?;
+    q.until = normalize_until(opts.until.as_deref())?;
     if let Some(tag) = opts.group_by_tag.as_deref() {
         validate_tag_key(tag, "groupByTag")?;
     }
@@ -256,11 +256,7 @@ pub(crate) fn summary_subagent_session_filter(
         || opts.workflow.is_some()
         || opts.agent.is_some()
         || opts.tags.as_ref().map(|t| !t.is_empty()).unwrap_or(false)
-        || opts
-            .providers
-            .as_ref()
-            .map(|p| !p.is_empty())
-            .unwrap_or(false);
+        || opts.providers.as_ref().is_some_and(|p| !p.is_empty());
     if !has_filter {
         return None;
     }

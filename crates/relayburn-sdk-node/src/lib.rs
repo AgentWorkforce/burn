@@ -23,7 +23,7 @@
 //!   serde_json and emit the result via the [`BigIntPromoting`] wrapper,
 //!   which walks the JSON tree and substitutes `BigInt` for any numeric
 //!   value sitting under one of the well-known u64 field names listed in
-//!   [`BIGINT_FIELDS`]. The lighter walker keeps shapes like
+//!   `BIGINT_FIELDS` (in `bigint_promoting`). The lighter walker keeps shapes like
 //!   `HotspotsResult` and `CompareResult` intact (both are awkward to
 //!   express as single typed napi objects) and lets the export verbs surface
 //!   every nested u64 (`turnIndex`, `eventIndex`, `contentLength`,
@@ -95,18 +95,18 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::ptr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use napi::bindgen_prelude::{
-    BigInt, Either, Error as NapiError, Null, Result as NapiResult, ToNapiValue,
-};
-use napi::sys;
+use napi::bindgen_prelude::{BigInt, Either, Error as NapiError, Null};
 use napi_derive::napi;
-use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use relayburn_sdk as sdk;
+
+mod bigint_promoting;
+pub mod summary_report;
+
+use bigint_promoting::BigIntPromoting;
 
 // ---------------------------------------------------------------------------
 // Error mapping
@@ -198,226 +198,6 @@ fn bigint_to_u64(v: BigInt) -> std::result::Result<u64, BurnError> {
 
 fn maybe_path(s: Option<String>) -> Option<PathBuf> {
     s.map(PathBuf::from)
-}
-
-// ---------------------------------------------------------------------------
-// BigIntPromoting — JsonValue → JS value walker that emits BigInt for the
-// well-known u64 field names below.
-//
-// `overhead`, `overheadTrim`, `hotspots`, `compare`, span trees, flow
-// graphs, and context deltas return shapes that
-// are too recursive (or, in `hotspots`'s case, a discriminated union) to mirror
-// cleanly as a single `#[napi(object)]` struct. We keep them on the
-// `serde_json::Value` boundary but wrap the result so the standard
-// number→JsNumber conversion in napi-rs's serde-json bridge gets
-// overridden for the named fields. Anything not in this list rides
-// through as a plain JS number, matching the existing TS contract.
-// ---------------------------------------------------------------------------
-
-/// Field names that carry `u64` values in the SDK and therefore must be
-/// surfaced as JS `BigInt`. Names are camelCased (matching `serde(rename_all
-/// = "camelCase")` on the SDK structs); the walker matches these literally
-/// against the JSON object's key list.
-///
-/// Audit checklist when adding a new u64 field to the SDK: drop its
-/// camelCase name here so the napi-rs bindings keep the BigInt contract.
-const BIGINT_FIELDS: &[&str] = &[
-    // overhead + overhead_trim
-    "tokens",
-    "bytes",
-    "totalLines",
-    "sessionCount",
-    "startLine",
-    "endLine",
-    "filesAnalyzed",
-    "filesWithRecommendations",
-    "totalRecommendations",
-    "tokensPerSession",
-    // SDK-owned summary report envelopes
-    "bucketSeconds",
-    "seconds",
-    "turnCount",
-    "totalTokens",
-    "unpricedTurns",
-    "turns",
-    "known",
-    "missing",
-    "count",
-    "calls",
-    "invocations",
-    "estimatedTokensSaved",
-    "endTurn",
-    "maxTokens",
-    "pauseTurn",
-    "stopSequence",
-    "toolUse",
-    "refusal",
-    "silent",
-    "none",
-    // hotspots aggregations
-    "callCount",
-    "distinctCommands",
-    "ridingTurns",
-    "firstEmitTurnIndex",
-    "toolCallCount",
-    "turnsAnalyzed",
-    "analyzed",
-    "excluded",
-    // compare
-    "analyzedTurns",
-    "minSample",
-    "turns",
-    "editTurns",
-    "oneShotTurns",
-    "pricedTurns",
-    "total",
-    "aggregateOnly",
-    "costOnly",
-    "partial",
-    "usageOnly",
-    "unknown",
-    // measureSession
-    "turnCount",
-    "inputTokens",
-    "outputTokens",
-    "cacheReadTokens",
-    "cacheWriteTokens",
-    "reasoningTokens",
-    "totalTokens",
-    "costUsdMicros",
-    // export_ledger / export_stamps record bodies — every camelCased
-    // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /
-    // CompactionEvent / nested Usage and ToolCall payloads. These values
-    // already round-trip as u64 inside the SDK; without explicit
-    // promotion the serde-json bridge emits them as JS `number` (f64)
-    // and silently truncates anything above 2^53 when crossing the
-    // napi boundary.
-    "turnIndex",
-    "eventIndex",
-    "callIndex",
-    "contentLength",
-    "tokensBeforeCompact",
-    "byteLen",
-    "approxTokens",
-    "retries",
-    "collapsedCalls",
-    // nested `usage` shape on TurnRecord / ToolResultEventRecord —
-    // every field is u64, all six need promotion.
-    "input",
-    "output",
-    "reasoning",
-    "cacheRead",
-    "cacheCreate5m",
-    "cacheCreate1h",
-    // span-tree attribute keys: untagged `AttrValue::Int` serializes as a
-    // JSON number under the raw attribute name (dots included).
-    "tokens.input",
-    "tokens.output",
-    "tokens.cache_read",
-    "tokens.cache_write",
-    "tokens.reasoning",
-    // flow-graph `TurnTokens` + context-delta counters
-    "cacheWrite",
-    "priorContextTokens",
-    "currentContextTokens",
-    "deltaTokens",
-    "approxBytes",
-    "tokensFreed",
-];
-
-fn is_bigint_field(name: &str) -> bool {
-    BIGINT_FIELDS.contains(&name)
-}
-
-/// Keys whose whole subtree carries only `u64` counters, including maps keyed
-/// by data values (fidelity `byClass`, `byGranularity`, `missingCoverage`)
-/// that a field-name list cannot enumerate. Every unsigned integer leaf under
-/// one of these keys is promoted.
-const BIGINT_SUBTREES: &[&str] = &["fidelity"];
-
-/// Wraps a `serde_json::Value` so that, when napi-rs converts it to a JS
-/// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
-/// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
-/// `hotspots`, `compare`, `exportLedger`, and `exportStamps` verbs whose
-/// result shapes are documented in `packages/sdk-node/src/index.d.ts`.
-/// Also used by `turnSpanTree`, `sessionSpanTrees`, `flowGraph`, and
-/// `contextDelta`.
-pub struct BigIntPromoting(JsonValue);
-
-impl ToNapiValue for BigIntPromoting {
-    unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> NapiResult<sys::napi_value> {
-        promote_value(env, val.0, /*key=*/ None, /*in_subtree=*/ false)
-    }
-}
-
-/// `in_subtree` is true below a [`BIGINT_SUBTREES`] key.
-unsafe fn promote_value(
-    env: sys::napi_env,
-    val: JsonValue,
-    key: Option<&str>,
-    in_subtree: bool,
-) -> NapiResult<sys::napi_value> {
-    match val {
-        JsonValue::Number(n) => {
-            if let Some(u) = n.as_u64() {
-                if in_subtree || key.is_some_and(is_bigint_field) {
-                    return BigInt::to_napi_value(env, u64_to_bigint(u));
-                }
-            }
-            // Fall back to napi-rs's default serde number conversion.
-            serde_json::Number::to_napi_value(env, n)
-        }
-        JsonValue::Object(map) => {
-            // Build a JS object, recursing per-value with the field name
-            // so `is_bigint_field` can match.
-            let mut obj: sys::napi_value = ptr::null_mut();
-            napi::check_status!(
-                sys::napi_create_object(env, &mut obj),
-                "promote_value: napi_create_object"
-            )?;
-            for (k, v) in map.into_iter() {
-                let child_in_subtree = in_subtree || BIGINT_SUBTREES.contains(&k.as_str());
-                let child = promote_value(env, v, Some(&k), child_in_subtree)?;
-                let key_buf = std::ffi::CString::new(k.as_str()).map_err(|e| {
-                    NapiError::new(
-                        napi::Status::GenericFailure,
-                        format!("invalid object key (contains NUL): {e}"),
-                    )
-                })?;
-                napi::check_status!(
-                    sys::napi_set_named_property(env, obj, key_buf.as_ptr(), child),
-                    "promote_value: napi_set_named_property"
-                )?;
-            }
-            Ok(obj)
-        }
-        JsonValue::Array(arr) => {
-            // Arrays don't carry a key context for their elements — the
-            // outer object's key (e.g. `sections`) doesn't apply to each
-            // element's leaf scalars; pass `None` so per-element
-            // promotion is decided by the inner object's keys.
-            let mut js_arr: sys::napi_value = ptr::null_mut();
-            napi::check_status!(
-                sys::napi_create_array_with_length(env, arr.len(), &mut js_arr),
-                "promote_value: napi_create_array_with_length"
-            )?;
-            for (i, v) in arr.into_iter().enumerate() {
-                let child = promote_value(env, v, /*key=*/ None, in_subtree)?;
-                napi::check_status!(
-                    sys::napi_set_element(env, js_arr, i as u32, child),
-                    "promote_value: napi_set_element"
-                )?;
-            }
-            Ok(js_arr)
-        }
-        // Booleans / strings / nulls — defer to napi-rs's standard
-        // serde_json::Value conversion via the leaf wrappers.
-        JsonValue::Bool(b) => bool::to_napi_value(env, b),
-        JsonValue::String(s) => String::to_napi_value(env, s),
-        JsonValue::Null => {
-            napi::bindgen_prelude::Null::to_napi_value(env, napi::bindgen_prelude::Null)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -746,8 +526,6 @@ pub struct SummaryOptions {
     /// ISO timestamp (e.g. `2026-04-01T00:00:00Z`) or relative range
     /// (`24h`, `7d`, `4w`, `2m`).
     pub since: Option<String>,
-    /// Inclusive upper bound. Accepts the same ISO/relative grammar as `since`.
-    pub until: Option<String>,
     pub tags: Option<HashMap<String, String>>,
     pub group_by_tag: Option<String>,
     pub ledger_home: Option<String>,
@@ -871,7 +649,6 @@ pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
         session: None,
         project: None,
         since: None,
-        until: None,
         tags: None,
         group_by_tag: None,
         ledger_home: None,
@@ -880,7 +657,6 @@ pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
         session: opts.session,
         project: opts.project,
         since: opts.since,
-        until: opts.until,
         tags: opts
             .tags
             .map(|tags| tags.into_iter().collect::<BTreeMap<_, _>>()),
@@ -888,111 +664,6 @@ pub fn summary(opts: Option<SummaryOptions>) -> Result<Summary, BurnError> {
         ledger_home: maybe_path(opts.ledger_home),
     };
     sdk::summary(raw).map(Summary::from).map_err(sdk_err)
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SummaryTimeseriesEnvelopeOptions {
-    #[serde(default)]
-    bucket_seconds: Option<u64>,
-    #[serde(default)]
-    session: Option<String>,
-    #[serde(default)]
-    project: Option<String>,
-    #[serde(default)]
-    since: Option<String>,
-    #[serde(default)]
-    until: Option<String>,
-    #[serde(default)]
-    workflow: Option<String>,
-    #[serde(default)]
-    tags: Option<BTreeMap<String, String>>,
-    #[serde(default)]
-    group_by_tag: Option<String>,
-    #[serde(default)]
-    agent: Option<String>,
-    #[serde(default)]
-    providers: Option<Vec<String>>,
-    #[serde(default)]
-    mode: sdk::SummaryReportMode,
-    #[serde(default)]
-    include_quality: bool,
-    #[serde(default)]
-    ledger_home: Option<PathBuf>,
-}
-
-impl SummaryTimeseriesEnvelopeOptions {
-    fn into_parts(self) -> Result<(sdk::SummaryReportOptions, u64), BurnError> {
-        let bucket_seconds = self
-            .bucket_seconds
-            .filter(|n| *n > 0)
-            .ok_or_else(|| invalid_arg("summaryTimeseries requires a positive bucketSeconds"))?;
-        Ok((
-            sdk::SummaryReportOptions {
-                session: self.session,
-                project: self.project,
-                since: self.since,
-                until: self.until,
-                workflow: self.workflow,
-                tags: self.tags,
-                group_by_tag: self.group_by_tag,
-                agent: self.agent,
-                providers: self.providers,
-                mode: self.mode,
-                include_quality: self.include_quality,
-                ledger_home: self.ledger_home,
-            },
-            bucket_seconds,
-        ))
-    }
-}
-
-fn summary_report_options_from_value(
-    opts: Option<JsonValue>,
-) -> Result<sdk::SummaryReportOptions, BurnError> {
-    opts.map(serde_json::from_value)
-        .transpose()
-        .map_err(|e| invalid_arg(format!("invalid summaryReport options: {e}")))?
-        .map(Ok)
-        .unwrap_or_else(|| Ok(sdk::SummaryReportOptions::default()))
-}
-
-/// Version/capability handshake for SDK-owned report contracts.
-#[napi(ts_return_type = "import('./index').ReportCapabilities")]
-pub fn capabilities() -> Result<BigIntPromoting, BurnError> {
-    let value = serde_json::to_value(sdk::report_capabilities())
-        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize capabilities: {e}")))?;
-    Ok(BigIntPromoting(value))
-}
-
-/// SDK-owned summary report envelope. The result shape is documented as
-/// `SummaryReportEnvelope` in the Node facade types.
-#[napi(
-    js_name = "summaryReport",
-    ts_return_type = "import('./index').SummaryReportEnvelope"
-)]
-pub fn summary_report(opts: Option<JsonValue>) -> Result<BigIntPromoting, BurnError> {
-    let raw = summary_report_options_from_value(opts)?;
-    let result = sdk::summary_report_envelope(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result)
-        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize summary_report: {e}")))?;
-    Ok(BigIntPromoting(value))
-}
-
-/// SDK-owned bucketed summary time-series envelope.
-#[napi(
-    js_name = "summaryTimeseries",
-    ts_return_type = "import('./index').SummaryTimeseriesEnvelope"
-)]
-pub fn summary_timeseries(opts: JsonValue) -> Result<BigIntPromoting, BurnError> {
-    let parsed: SummaryTimeseriesEnvelopeOptions = serde_json::from_value(opts)
-        .map_err(|e| invalid_arg(format!("invalid summaryTimeseries options: {e}")))?;
-    let (raw, bucket_seconds) = parsed.into_parts()?;
-    let result = sdk::summary_timeseries_envelope(raw, bucket_seconds).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result).map_err(|e| {
-        NapiError::new(SDK_ERROR_CODE, format!("serialize summary_timeseries: {e}"))
-    })?;
-    Ok(BigIntPromoting(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -1808,6 +1479,7 @@ pub fn ledger_open(opts: Option<LedgerOpenOptions>) -> Result<String, BurnError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bigint_promoting::is_bigint_field;
 
     #[test]
     fn u64_to_bigint_round_trip_small() {

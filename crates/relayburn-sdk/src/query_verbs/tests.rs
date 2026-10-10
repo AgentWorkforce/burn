@@ -1324,8 +1324,7 @@ fn hotspots_ghost_surface_inputs_deghost_claude_command_from_user_text() {
         .unwrap();
 
     let pricing = load_pricing(None);
-    let mut inputs =
-        super::hotspots::build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
+    let mut inputs = build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("claude"));
     inputs.codex_home = Some(root.join("missing-codex"));
@@ -1369,8 +1368,7 @@ fn hotspots_ghost_surface_inputs_deghost_codex_command_from_user_text() {
         .unwrap();
 
     let pricing = load_pricing(None);
-    let mut inputs =
-        super::hotspots::build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
+    let mut inputs = build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("missing-claude"));
     inputs.codex_home = Some(root.join("codex"));
@@ -1418,7 +1416,7 @@ fn timed_content(
 
 fn ghost_user_texts(handle: &LedgerHandle, turns: &[TurnRecord]) -> Vec<String> {
     let pricing = load_pricing(None);
-    let inputs = super::hotspots::build_hotspots_ghost_surface_inputs(handle, turns, &pricing);
+    let inputs = build_hotspots_ghost_surface_inputs(handle, turns, &pricing);
     inputs
         .user_turn_text_by_session
         .and_then(|by_source| by_source.get(&SourceKind::ClaudeCode).cloned())
@@ -1497,8 +1495,7 @@ fn hotspots_ghost_surface_inputs_fall_back_when_content_missing() {
     let (_dir, handle) = fixture_handle();
     let turn = ghost_surface_turn(SourceKind::Codex, "ghost-empty", "ghost-empty-turn");
     let pricing = load_pricing(None);
-    let mut inputs =
-        super::hotspots::build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
+    let mut inputs = build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("missing-claude"));
     inputs.codex_home = Some(root.join("codex"));

@@ -429,15 +429,16 @@ pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Res
 /// Partition `items` into time buckets by their timestamp string. Returns the
 /// `Buckets` window plus a per-bucket vector of items, or `Ok(None)` when there
 /// is no anchor (no `--since` and no parseable timestamps) so each caller can
-/// return its own empty-timeseries shape. `ts_of` extracts the ISO timestamp
+/// return its own empty-timeseries shape. `window` supplies the normalized
+/// `since` anchor and inclusive `until` end of the query that fetched
+/// `items`. `ts_of` extracts the ISO timestamp
 /// from an item (`|t| &t.ts` for `TurnRecord`, `|t| &t.turn.ts` for
 /// `EnrichedTurn`). Shared by the `summary` and `compare` `--bucket` paths.
 /// A zero `bucket_secs` is rejected so a result never reports a bucket width
 /// different from the one its data was partitioned with.
 pub(crate) fn partition_into_buckets<T>(
     items: Vec<T>,
-    since: Option<&str>,
-    until: Option<&str>,
+    window: &Query,
     bucket_secs: u64,
     ts_of: impl Fn(&T) -> &str,
 ) -> Result<Option<(Buckets, Vec<Vec<T>>)>> {
@@ -445,12 +446,14 @@ pub(crate) fn partition_into_buckets<T>(
         anyhow::bail!("bucket width must be a positive number of seconds");
     }
     let Some(anchor) = bucket_anchor_secs(
-        since,
+        window.since.as_deref(),
         items.iter().filter_map(|t| iso_z_to_epoch_secs(ts_of(t))),
     ) else {
         return Ok(None);
     };
-    let end = until
+    let end = window
+        .until
+        .as_deref()
         .and_then(iso_z_to_epoch_secs)
         // `Query::until` is inclusive. Buckets are `[start, end)`, so include
         // the final until second by making the partition end exclusive.
@@ -474,12 +477,7 @@ pub(crate) fn partition_into_buckets<T>(
 // Shared helpers — query construction + hotspots coverage gate
 // ---------------------------------------------------------------------------
 
-fn build_query(
-    session: Option<&str>,
-    project: Option<&str>,
-    since: Option<&str>,
-    until: Option<&str>,
-) -> Result<Query> {
+fn build_query(session: Option<&str>, project: Option<&str>, since: Option<&str>) -> Result<Query> {
     let mut q = Query::default();
     if let Some(s) = session {
         q.session_id = Some(s.to_string());
@@ -489,9 +487,6 @@ fn build_query(
     }
     if let Some(since_norm) = normalize_since(since)? {
         q.since = Some(since_norm);
-    }
-    if let Some(until_norm) = normalize_until(until)? {
-        q.until = Some(until_norm);
     }
     Ok(q)
 }
@@ -585,6 +580,9 @@ fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFi
 mod summary;
 pub use summary::*;
 
+mod summary_envelope;
+pub use summary_envelope::*;
+
 mod sessions;
 pub use sessions::*;
 
@@ -593,6 +591,9 @@ pub use overhead::*;
 
 mod hotspots;
 pub use hotspots::*;
+
+mod ghost_surface_text;
+use ghost_surface_text::build_hotspots_ghost_surface_inputs;
 
 mod compare;
 pub use compare::*;
