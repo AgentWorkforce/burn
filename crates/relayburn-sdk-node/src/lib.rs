@@ -107,6 +107,14 @@ use serde_json::Value as JsonValue;
 
 use relayburn_sdk as sdk;
 
+mod context_efficiency;
+mod hotspots;
+
+pub use context_efficiency::{
+    ContextEfficiencySummary, ContextSizeDistribution, SessionContextEfficiency,
+};
+pub use hotspots::{hotspots, HotspotsGroupBy, HotspotsOptions};
+
 // ---------------------------------------------------------------------------
 // Error mapping
 // ---------------------------------------------------------------------------
@@ -785,6 +793,7 @@ pub struct Summary {
     pub total_tokens: BigInt,
     pub total_cost: f64,
     pub turn_count: BigInt,
+    pub context_efficiency: ContextEfficiencySummary,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
     pub by_tag: Option<Vec<SummaryTagRow>>,
@@ -797,6 +806,7 @@ impl From<sdk::Summary> for Summary {
             total_tokens: u64_to_bigint(s.total_tokens),
             total_cost: s.total_cost,
             turn_count: u64_to_bigint(s.turn_count),
+            context_efficiency: s.context_efficiency.into(),
             by_tool: s
                 .by_tool
                 .into_iter()
@@ -1256,85 +1266,6 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result)
         .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize overhead_trim: {e}")))?;
-    Ok(BigIntPromoting(value))
-}
-
-// ---------------------------------------------------------------------------
-// hotspots — discriminated union; serialized via serde_json so the
-// `kind` discriminant + per-variant rows survive the boundary. The TS
-// .d.ts already documents the shape (`HotspotsResult` union).
-// ---------------------------------------------------------------------------
-
-/// Mirror of `sdk::HotspotsGroupBy`. Wire values match
-/// The Node facade's
-/// `'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent' |
-/// 'findings'` literal union.
-#[napi(string_enum = "kebab-case")]
-pub enum HotspotsGroupBy {
-    Attribution,
-    Bash,
-    BashVerb,
-    File,
-    Subagent,
-    Findings,
-}
-
-impl From<HotspotsGroupBy> for sdk::HotspotsGroupBy {
-    fn from(g: HotspotsGroupBy) -> Self {
-        match g {
-            HotspotsGroupBy::Attribution => sdk::HotspotsGroupBy::Attribution,
-            HotspotsGroupBy::Bash => sdk::HotspotsGroupBy::Bash,
-            HotspotsGroupBy::BashVerb => sdk::HotspotsGroupBy::BashVerb,
-            HotspotsGroupBy::File => sdk::HotspotsGroupBy::File,
-            HotspotsGroupBy::Subagent => sdk::HotspotsGroupBy::Subagent,
-            HotspotsGroupBy::Findings => sdk::HotspotsGroupBy::Findings,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct HotspotsOptions {
-    pub session: Option<String>,
-    pub project: Option<String>,
-    pub since: Option<String>,
-    pub group_by: Option<HotspotsGroupBy>,
-    pub patterns: Option<Vec<String>>,
-    pub workflow: Option<String>,
-    pub provider: Option<Vec<String>>,
-    pub ledger_home: Option<String>,
-}
-
-/// Per-axis hotspot attribution + pattern-finding queries. Returns a
-/// JSON-shaped discriminated union — see `HotspotsResult` in
-/// `packages/sdk-node/src/index.d.ts`. u64 row counts (`callCount`,
-/// `distinctCommands`, `ridingTurns`, `firstEmitTurnIndex`,
-/// `toolCallCount`, `turnsAnalyzed`, `analyzed`, `excluded`) cross as
-/// `BigInt` per the file header rule.
-#[napi(ts_return_type = "import('./index').HotspotsResult")]
-pub fn hotspots(opts: Option<HotspotsOptions>) -> Result<BigIntPromoting, BurnError> {
-    let opts = opts.unwrap_or(HotspotsOptions {
-        session: None,
-        project: None,
-        since: None,
-        group_by: None,
-        patterns: None,
-        workflow: None,
-        provider: None,
-        ledger_home: None,
-    });
-    let raw = sdk::HotspotsOptions {
-        session: opts.session,
-        project: opts.project,
-        since: opts.since,
-        group_by: opts.group_by.map(Into::into),
-        patterns: opts.patterns,
-        workflow: opts.workflow,
-        provider: opts.provider,
-        ledger_home: maybe_path(opts.ledger_home),
-    };
-    let result = sdk::hotspots(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result)
-        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize hotspots: {e}")))?;
     Ok(BigIntPromoting(value))
 }
 

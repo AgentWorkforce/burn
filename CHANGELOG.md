@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `summary` now reports context tokens per generated output token and p50/p95/max context size for the ten highest-ratio sessions; context is input + cache-read + cache-creation tokens, while the denominator includes reasoning whether a harness folds it into output (Codex) or reports it separately.
+- `hotspots --findings` now flags high-volume sessions at or above a configurable context-to-output ratio (default 382:1 inclusive, with a configurable 1M-context-token floor), independently of dollar cost. The default is an inspection signal, not a length-normalized anomaly score.
 - `burn hotspots --findings` adds a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL.
 - Pricing bills Claude 1-hour cache writes at 2x the input tariff on every host (Anthropic, Vertex AI, Bedrock; 5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Claude models keep a single cache-write tariff.
 - Turns whose usage was measured as zero price at $0 regardless of model, so Claude Code's `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session; unmeasured usage stays unpriced. `burn compare` shows cost per turn only for fully priced cells.

@@ -5,8 +5,8 @@ use std::path::Path;
 use relayburn_sdk::{
     summary_fidelity_summary_to_value, summary_replacement_savings_to_value, CoverageField,
     FidelityClass, FidelitySummary, OutcomeLabel, QualityResult, RelationshipType,
-    StopReasonCounts, SubagentCounts, SubagentTreeNode, SubagentTypeStats, SummaryByToolReport,
-    SummaryGroupBy, SummaryGroupedReport, SummaryRelationshipReport, SummarySubagentTreeReport,
+    StopReasonCounts, SubagentTreeNode, SubagentTypeStats, SummaryByToolReport, SummaryGroupBy,
+    SummaryGroupedReport, SummaryRelationshipReport, SummarySubagentTreeReport,
     UsageCostAggregateRow,
 };
 use serde_json::{json, Map, Value};
@@ -518,6 +518,7 @@ pub(super) fn emit_human(
         "turns analyzed: {}",
         format_uint(report.turn_count)
     ));
+    lines.push(format_context_efficiency_line(&report.context_efficiency));
     lines.push(String::new());
 
     if report.rows.is_empty() {
@@ -575,6 +576,8 @@ pub(super) fn emit_human(
     }
     lines.push(render_table(&rendered));
     lines.push(String::new());
+
+    lines.extend(context_efficiency_session_lines(&report.context_efficiency));
     lines.push(format!(
         "{}: {}",
         if report.unpriced_turns > 0 {
@@ -722,19 +725,6 @@ pub(super) fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
         parts.push(format!("{} none", format_uint(s.none)));
     }
     format!("Turn outcomes: {}", parts.join(", "))
-}
-
-/// Human-readable subagent line for `burn summary`, e.g.
-/// `subagents: 2 paired, 1 orphan`. Both counts are rendered so the line
-/// is informative even when one bucket is zero — an orphan-only count
-/// flags slash-command synthetic dispatches as a non-trivial signal.
-/// See AgentWorkforce/burn#435.
-pub(super) fn format_subagents_line(s: &SubagentCounts) -> String {
-    format!(
-        "subagents: {} paired, {} orphan",
-        format_uint(s.paired),
-        format_uint(s.orphan),
-    )
 }
 
 pub(super) fn format_replacement_savings_line(
