@@ -541,31 +541,23 @@ fn run_hotspots_findings(
             threshold: None,
             min_occurrences: None,
         });
-        for b in bloats {
-            findings.push(tool_output_bloat_to_finding(&b));
-        }
+        findings.extend(bloats.iter().map(tool_output_bloat_to_finding));
     }
 
     if wanted_set.contains("ghost-surface") {
-        let inputs = build_ghost_surface_inputs(turns, pricing, None);
-        let ghosts = detect_ghost_surface(&inputs);
         let options = GhostSurfaceFindingOptions::default();
-        for g in ghosts {
-            findings.push(ghost_surface_to_finding(&g, &options));
-        }
+        let ghosts = detect_ghost_surface(&build_ghost_surface_inputs(turns, pricing, None));
+        findings.extend(ghosts.iter().map(|g| ghost_surface_to_finding(g, &options)));
     }
 
     if wanted_set.contains("tool-call-pattern") {
         let patterns = detect_tool_call_patterns(turns, &DetectToolCallPatternsOptions { pricing });
-        for p in patterns {
-            findings.push(tool_call_pattern_to_finding(&p));
-        }
+        findings.extend(patterns.iter().map(tool_call_pattern_to_finding));
     }
 
     if wanted_set.contains("cache-expiry") {
-        for expiry in detect_cache_expiry(turns, &user_turns_all, pricing) {
-            findings.push(cache_expiry_to_finding(&expiry));
-        }
+        let expiries = detect_cache_expiry(turns, &user_turns_all, pricing);
+        findings.extend(expiries.iter().map(cache_expiry_to_finding));
     }
 
     if wanted_set.contains("unpriced-usage") {
