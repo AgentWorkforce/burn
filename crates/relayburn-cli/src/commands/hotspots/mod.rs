@@ -142,6 +142,7 @@ const PATTERN_KINDS: &[&str] = &[
     "ghost-surface",
     "tool-output-bloat",
     "tool-call-pattern",
+    "cache-expiry",
     "unpriced-usage",
 ];
 

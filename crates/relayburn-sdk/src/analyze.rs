@@ -15,6 +15,7 @@
 //! the 1e-9 USD precision contract that `overhead` and `hotspots` gate
 //! against.
 
+mod cache_expiry;
 pub mod claude_md;
 pub mod compare;
 pub mod context_delta;
@@ -48,6 +49,9 @@ pub use claude_md::{MarkdownSection, SessionClaudeMdCost};
 // surface is the `LedgerHandle::compare` / `compare_timeseries` verbs in
 // `query_verbs::compare`, which wrap these. Only `DEFAULT_MIN_SAMPLE` stays
 // public (the CLI uses it as the default `--min-sample`).
+pub(crate) use cache_expiry::{
+    cache_expiry_to_finding, cache_state_turns, detect_cache_expiry, turn_id,
+};
 pub use compare::DEFAULT_MIN_SAMPLE;
 pub(crate) use compare::{build_compare_table, CompareOptions, CompareTable};
 pub(crate) use context_delta::deltas_for_session_since;
