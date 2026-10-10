@@ -55,6 +55,7 @@ fn turn(message_id: &str, minutes: i64, usage: Usage) -> TurnRecord {
         project_key: None,
         usage,
         tool_calls: Vec::new(),
+        request_count: 1,
         files_touched: None,
         subagent: None,
         stop_reason: None,

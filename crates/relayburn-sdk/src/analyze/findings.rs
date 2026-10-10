@@ -1180,6 +1180,7 @@ mod tests {
             project_key: None,
             usage: crate::reader::Usage::default(),
             tool_calls: Vec::new(),
+            request_count: 1,
             files_touched: None,
             subagent: None,
             stop_reason: None,
