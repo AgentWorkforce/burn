@@ -27,20 +27,18 @@ use serde_json::Value;
 use crate::ledger::{load_config, Ledger};
 use crate::reader::{
     parse_claude_session, parse_claude_session_incremental, parse_codex_session_incremental,
-    parse_copilot_otel_incremental, parse_opencode_session_incremental,
-    reconcile_claude_session_relationships, ClaudeParseIncrementalOptions,
-    ClaudeParseIncrementalResult, ClaudeParseOptions, ClaudeParseResult, CodexLastCompletedTurn,
-    CodexResumeState, CodexTurnContext, CompactionEvent, ContentRecord, ContentStoreMode,
-    CopilotResumeState, CumulativeUsage as ReaderCumulativeUsage, ParseCodexIncrementalOptions,
-    ParseCodexIncrementalResult, ParseCopilotIncrementalOptions, ParseCopilotIncrementalResult,
-    ParseOpencodeIncrementalOptions, ParseOpencodeIncrementalResult, PersistedUserTurnSlot,
-    ReconcileClaudeRelationshipsInput, SessionRelationshipRecord, ToolResultEventRecord,
-    TurnRecord, UserTurnRecord,
+    parse_opencode_session_incremental, reconcile_claude_session_relationships,
+    ClaudeParseIncrementalOptions, ClaudeParseIncrementalResult, ClaudeParseOptions,
+    ClaudeParseResult, CodexLastCompletedTurn, CodexResumeState, CodexTurnContext, CompactionEvent,
+    ContentRecord, ContentStoreMode, CumulativeUsage as ReaderCumulativeUsage,
+    ParseCodexIncrementalOptions, ParseCodexIncrementalResult, ParseOpencodeIncrementalOptions,
+    ParseOpencodeIncrementalResult, PersistedUserTurnSlot, ReconcileClaudeRelationshipsInput,
+    SessionRelationshipRecord, ToolResultEventRecord, TurnRecord, UserTurnRecord,
 };
 
 use crate::ingest::cursors::{
-    load_cursors, save_cursors_if_changed, ClaudeCursor, CodexCumulative, CodexCursor,
-    CopilotCursor, Cursors, FileCursor, OpencodeCursor,
+    load_cursors, save_cursors_if_changed, ClaudeCursor, CodexCumulative, CodexCursor, Cursors,
+    FileCursor, OpencodeCursor,
 };
 use crate::ingest::gap::{
     count_new_tool_calls, count_new_tool_results, emit_gap_warning, record_session_gap, AdapterName,
@@ -52,6 +50,9 @@ use crate::ingest::pending_stamps::{
 use crate::ingest::reingest::derive_codex_session_id;
 use crate::ingest::walk::{list_dirs, list_jsonl_files, walk_jsonl, walk_opencode_sessions};
 use crate::util::home_dir;
+
+mod copilot;
+pub use copilot::ingest_copilot_sessions;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,10 +119,8 @@ pub struct IngestRoots {
     pub claude_projects_dir: Option<PathBuf>,
     pub codex_sessions_dir: Option<PathBuf>,
     pub opencode_storage_dir: Option<PathBuf>,
-    /// Copilot CLI OTEL export files. `None` resolves the defaults: the
-    /// `COPILOT_OTEL_FILE_EXPORTER_PATH` env var (when set to an existing
-    /// file) plus `$COPILOT_HOME/otel/*.jsonl` (default `~/.copilot/otel`).
-    /// Tests inject explicit paths so they don't depend on process env.
+    /// Copilot CLI OTEL export files; `None` resolves the env-gated
+    /// defaults (see `copilot::copilot_otel_files`).
     pub copilot_otel_files: Option<Vec<PathBuf>>,
 }
 
@@ -153,45 +152,6 @@ pub(crate) fn opencode_session_root(roots: &IngestRoots) -> PathBuf {
     opencode_storage_dir(roots).join("session")
 }
 
-/// Default OTEL export directory Copilot CLI writes when the exporter is
-/// pointed at a directory: `$COPILOT_HOME/otel`, falling back to
-/// `~/.copilot/otel`.
-pub(crate) fn copilot_otel_dir() -> PathBuf {
-    std::env::var("COPILOT_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home_dir().join(".copilot"))
-        .join("otel")
-}
-
-/// Resolve the Copilot CLI OTEL JSONL files ingest scans. Unlike the other
-/// harnesses this source is env-gated: nothing is scanned until the user
-/// sets `COPILOT_OTEL_FILE_EXPORTER_PATH` (see #14), so an empty list is
-/// the normal steady state and never an error. An explicit
-/// [`IngestRoots::copilot_otel_files`] override bypasses the gate so tests
-/// can inject files directly.
-pub(crate) fn copilot_otel_files(roots: &IngestRoots) -> Vec<PathBuf> {
-    if let Some(files) = &roots.copilot_otel_files {
-        return files.clone();
-    }
-    let configured = std::env::var("COPILOT_OTEL_FILE_EXPORTER_PATH")
-        .map(|var| var.trim().to_owned())
-        .unwrap_or_default();
-    if configured.is_empty() {
-        return Vec::new();
-    }
-    let mut files: Vec<PathBuf> = Vec::new();
-    let p = PathBuf::from(&configured);
-    if p.is_file() {
-        files.push(p);
-    }
-    for file in list_jsonl_files(&copilot_otel_dir()) {
-        if !files.contains(&file) {
-            files.push(file);
-        }
-    }
-    files
-}
-
 /// Resolve the default session-store roots ingest scans, in the same
 /// order `ingest_all` walks them. Used by the watch loop to drive its
 /// `notify`-backed FS-event driver against the harness home dirs the
@@ -199,29 +159,16 @@ pub(crate) fn copilot_otel_files(roots: &IngestRoots) -> Vec<PathBuf> {
 /// [`IngestRoots`] to override individual paths; defaults still come
 /// from `$HOME` for fields left `None`.
 ///
-/// Returns the Claude / Codex / OpenCode roots, then the Copilot OTEL
-/// export directory, in that order — the caller doesn't have to filter
-/// for existence; the FS-event driver silently skips any path that
-/// doesn't yet exist.
+/// Returns the Claude / Codex / OpenCode / Copilot roots in that order —
+/// the caller doesn't have to filter for existence; the FS-event driver
+/// silently skips any path that doesn't yet exist.
 pub fn default_session_roots(roots: &IngestRoots) -> Vec<PathBuf> {
     let mut dirs = vec![
         claude_projects_dir(roots),
         codex_sessions_dir(roots),
         opencode_storage_dir(roots),
     ];
-    // Copilot: watch the injected files' parents in tests / overrides, the
-    // default otel dir otherwise (the env-var file's appends are also caught
-    // by the polling fingerprint even without an FS event).
-    match &roots.copilot_otel_files {
-        Some(files) => {
-            for parent in files.iter().filter_map(|f| f.parent()) {
-                if !dirs.iter().any(|d| d == parent) {
-                    dirs.push(parent.to_path_buf());
-                }
-            }
-        }
-        None => dirs.push(copilot_otel_dir()),
-    }
+    copilot::push_watch_dirs(roots, &mut dirs);
     dirs
 }
 
@@ -325,16 +272,7 @@ fn source_fingerprint(roots: &IngestRoots) -> String {
         }
     }
 
-    // Copilot CLI: the OTEL export files (env-var path plus otel dir glob).
-    // Env-gated, so normally empty — but when set, appends must move the
-    // fingerprint like any other source.
-    for file in copilot_otel_files(roots) {
-        if let Ok(meta) = fs::metadata(&file) {
-            count = count.wrapping_add(1);
-            total_bytes = total_bytes.wrapping_add(meta.len());
-            hash_sum = hash_sum.wrapping_add(fingerprint_entry_hash("copilot", &file, &meta));
-        }
-    }
+    copilot::fingerprint_exports(roots, &mut count, &mut total_bytes, &mut hash_sum);
 
     format!("{count}:{total_bytes}:{hash_sum:016x}")
 }
@@ -417,54 +355,25 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
     // Emit per-adapter, immediately after each scan, so a later adapter
     // returning Err does not swallow a gap the earlier adapter already
     // recorded against work that was already appended.
-    progress(opts, "scanning Claude Code sessions");
-    let r = ingest_claude_into(
-        ledger,
-        &mut after,
-        &opts.roots,
-        content_mode,
-        opts.ledger_home.as_deref(),
-        &mut had_skips,
-    )?;
-    report.merge(&r);
-    emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
-
-    progress(opts, "scanning Codex sessions");
-    let r = ingest_codex_into(
-        ledger,
-        &mut after,
-        &opts.roots,
-        content_mode,
-        opts.ledger_home.as_deref(),
-        &mut had_skips,
-    )?;
-    report.merge(&r);
-    emit_gap_warning(AdapterName::Codex, content_mode, on_warn);
-
-    progress(opts, "scanning OpenCode sessions");
-    let r = ingest_opencode_into(
-        ledger,
-        &mut after,
-        &opts.roots,
-        content_mode,
-        opts.ledger_home.as_deref(),
-        &mut had_skips,
-    )?;
-    report.merge(&r);
-    emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
-
-    progress(opts, "scanning Copilot CLI OTEL exports");
-    let r = ingest_copilot_into(
-        ledger,
-        &mut after,
-        &opts.roots,
-        content_mode,
-        opts.ledger_home.as_deref(),
-        &mut had_skips,
-    )?;
-    report.merge(&r);
-    // No content-mode gap warning for Copilot: OTEL spans carry metrics
-    // only, never content records, so there is nothing to heal.
+    let harnesses: [(AdapterName, HarnessIngest); 4] = [
+        (AdapterName::Claude, ingest_claude_into),
+        (AdapterName::Codex, ingest_codex_into),
+        (AdapterName::Opencode, ingest_opencode_into),
+        (AdapterName::Copilot, copilot::ingest_copilot_into),
+    ];
+    for (adapter, body) in harnesses {
+        progress(opts, adapter.scan_label());
+        let r = body(
+            ledger,
+            &mut after,
+            &opts.roots,
+            content_mode,
+            opts.ledger_home.as_deref(),
+            &mut had_skips,
+        )?;
+        report.merge(&r);
+        emit_gap_warning(adapter, content_mode, on_warn);
+    }
 
     progress(opts, "saving ingest cursors");
     save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
@@ -517,33 +426,27 @@ pub fn ingest_opencode_sessions(
     run_single_harness(ledger, opts, AdapterName::Opencode, ingest_opencode_into)
 }
 
-pub fn ingest_copilot_sessions(
-    ledger: &mut Ledger,
-    opts: &IngestOptions,
-) -> anyhow::Result<IngestReport> {
-    run_single_harness(ledger, opts, AdapterName::Copilot, ingest_copilot_into)
-}
+/// One harness's ingest body: scan its sources against the cursors and
+/// append what changed. Shared by `ingest_all` and the per-harness verbs.
+type HarnessIngest = fn(
+    &mut Ledger,
+    &mut Cursors,
+    &IngestRoots,
+    ContentStoreMode,
+    Option<&Path>,
+    &mut bool,
+) -> anyhow::Result<IngestReport>;
 
 /// Shared boilerplate for the per-harness verbs: clean stale stamps, snapshot
 /// cursors, resolve content mode, run the harness body, emit any pending gap
 /// warning for that adapter, then persist cursor mutations. The per-harness
 /// `ingest_*_into` functions plug straight in as `body`.
-fn run_single_harness<F>(
+fn run_single_harness(
     ledger: &mut Ledger,
     opts: &IngestOptions,
     adapter: AdapterName,
-    body: F,
-) -> anyhow::Result<IngestReport>
-where
-    F: FnOnce(
-        &mut Ledger,
-        &mut Cursors,
-        &IngestRoots,
-        ContentStoreMode,
-        Option<&Path>,
-        &mut bool,
-    ) -> anyhow::Result<IngestReport>,
-{
+    body: HarnessIngest,
+) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;
@@ -1070,112 +973,6 @@ fn ingest_opencode_into(
 
 // --- Codex cursor <-> reader resume-state conversions -------------------
 
-/// Iterate the Copilot CLI OTEL export files (`COPILOT_OTEL_FILE_EXPORTER_PATH`
-/// plus `$COPILOT_HOME/otel/*.jsonl`), driving
-/// [`parse_copilot_otel_incremental`] with the carried per-session turn
-/// counters and chat-trace set. Env-gated: without
-/// `COPILOT_OTEL_FILE_EXPORTER_PATH` (and without an explicit roots
-/// override) the file list is empty and this is a silent no-op (#14).
-///
-/// Rotation handling matches the Claude/Codex adapters: an inode change or
-/// a shrunken file restarts the byte offset at 0, but the per-session
-/// `turn_index` counters and `chat_trace_ids` survive — the exporter's new
-/// file continues the same Copilot sessions, and the ledger's
-/// `(source, session_id, message_id)` key dedups any span re-read at the
-/// rotation boundary.
-fn ingest_copilot_into(
-    ledger: &mut Ledger,
-    cursors: &mut Cursors,
-    roots: &IngestRoots,
-    _content_mode: ContentStoreMode,
-    _ledger_home: Option<&Path>,
-    had_skips: &mut bool,
-) -> anyhow::Result<IngestReport> {
-    let mut report = IngestReport::empty();
-    for file in copilot_otel_files(roots) {
-        report.scanned_sessions += 1;
-        let key = file.to_string_lossy().into_owned();
-        let meta = match fs::metadata(&file) {
-            Ok(m) => m,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                // The env var can point at a file the exporter has not
-                // created yet; that's the pre-first-session steady state,
-                // not a failure.
-                continue;
-            }
-            Err(err) => {
-                eprintln!("[burn] skipping {}: {}", file.display(), err);
-                *had_skips = true;
-                continue;
-            }
-        };
-        let prior = match cursors.get_typed(&key) {
-            Some(FileCursor::Copilot(c)) => Some(c),
-            _ => None,
-        };
-        let inode = file_inode(&meta);
-        let mtime = mtime_ms(&meta);
-        let size = meta.len();
-        let rotated = match &prior {
-            None => true,
-            Some(c) => c.inode != inode || mtime < c.mtime_ms || size < c.offset_bytes,
-        };
-        let start_offset = if rotated {
-            0
-        } else {
-            prior.as_ref().map(|c| c.offset_bytes).unwrap_or(0)
-        };
-
-        if !rotated && start_offset >= size {
-            if let Some(mut c) = prior.clone() {
-                c.mtime_ms = mtime;
-                cursors.insert(key, FileCursor::Copilot(c));
-            }
-            continue;
-        }
-
-        let resume = prior.map(|c| CopilotResumeState {
-            session_turn_counts: c.session_turn_counts,
-            chat_trace_ids: c.chat_trace_ids,
-        });
-        let parse_opts = ParseCopilotIncrementalOptions {
-            session_path: Some(file.to_string_lossy().into_owned()),
-            start_offset: Some(start_offset),
-            resume,
-            fallback_ts_ms: Some(mtime),
-        };
-        let parsed: ParseCopilotIncrementalResult =
-            match parse_copilot_otel_incremental(&file, &parse_opts) {
-                Ok(r) => r,
-                Err(err) => {
-                    eprintln!("[burn] skipping {}: {}", file.display(), err);
-                    *had_skips = true;
-                    continue;
-                }
-            };
-
-        if !parsed.turns.is_empty() {
-            report.appended_turns += parsed.turns.len();
-            report.ingested_sessions += 1;
-            ledger.append_turns(&parsed.turns)?;
-        }
-        // Keep the inference table in lockstep with the persisted turns,
-        // like every other harness path (issue #434) — otherwise
-        // `burn flow` and span-tree reads see no Copilot API calls.
-        apply_parsed_extras(ledger, &parsed)?;
-
-        let next = CopilotCursor {
-            inode,
-            offset_bytes: parsed.end_offset,
-            mtime_ms: mtime,
-            session_turn_counts: parsed.resume.session_turn_counts,
-            chat_trace_ids: parsed.resume.chat_trace_ids,
-        };
-        cursors.insert(key, FileCursor::Copilot(next));
-    }
-    Ok(report)
-}
-
 fn codex_cursor_to_resume_state(c: &CodexCursor) -> CodexResumeState {
     let mut turn_contexts: HashMap<String, CodexTurnContext> = HashMap::new();
     for (k, v) in &c.turn_contexts {
@@ -1412,33 +1209,6 @@ impl_derived_records_common!(ClaudeParseResult);
 impl_derived_records_common!(ClaudeParseIncrementalResult);
 impl_derived_records_common!(ParseCodexIncrementalResult);
 impl_derived_records_common!(ParseOpencodeIncrementalResult);
-
-/// The Copilot OTEL parser emits usage-only turns with no trailing content,
-/// compaction, relationship, tool-result, or user-turn buckets, so every
-/// bucket but `turns` is empty. The `turns` slice feeds the
-/// `apply_parsed_extras` inference materializer; the request-id lookup
-/// stays the trait default (empty) since Copilot spans carry no `requestId`
-/// equivalent, and the inference builder falls back to `message_id`.
-impl DerivedRecords for ParseCopilotIncrementalResult {
-    fn content(&self) -> &[ContentRecord] {
-        &[]
-    }
-    fn events(&self) -> &[CompactionEvent] {
-        &[]
-    }
-    fn relationships(&self) -> &[SessionRelationshipRecord] {
-        &[]
-    }
-    fn tool_result_events(&self) -> &[ToolResultEventRecord] {
-        &[]
-    }
-    fn user_turns(&self) -> &[UserTurnRecord] {
-        &[]
-    }
-    fn turns(&self) -> &[TurnRecord] {
-        &self.turns
-    }
-}
 
 /// Per-type adapter for the `request_id_lookup` override (issue #434).
 /// Specialized for Claude's two result types so they borrow the parser's

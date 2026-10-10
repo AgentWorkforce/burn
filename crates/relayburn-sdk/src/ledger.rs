@@ -309,6 +309,16 @@ impl Ledger {
         reader::list_user_turn_session_ids(&self.conns.burn)
     }
 
+    /// `(session_id, message_id)` keys of every turn recorded for
+    /// `source`; lets a harness reader skip spans it re-reads after a
+    /// rotation before they consume a `turn_index`.
+    pub(crate) fn turn_keys_for_source(
+        &self,
+        source: crate::reader::SourceKind,
+    ) -> Result<HashSet<(String, String)>> {
+        reader::turn_keys_for_source(&self.conns.burn, source.wire_str())
+    }
+
     // --- content + FTS5 ----------------------------------------------
 
     pub fn search_content(&self, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {

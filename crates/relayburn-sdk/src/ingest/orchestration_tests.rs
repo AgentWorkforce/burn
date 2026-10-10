@@ -371,6 +371,67 @@ fn ingest_copilot_sessions_round_trips_otel_spans() {
     assert_eq!(turns[2].turn.turn_index, 2);
 }
 
+#[test]
+fn ingest_copilot_rotation_replay_keeps_turn_indexes_contiguous() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+
+    let otel_dir = tmp.path().join("copilot").join("otel");
+    fs::create_dir_all(&otel_dir).unwrap();
+    let export_file = otel_dir.join("copilot.jsonl");
+    // Distinct token counts per span: the ledger also dedups turns whose
+    // content matches apart from the message id.
+    let span = |id: &str, input: u64| {
+        format!(
+            "{{\"type\":\"span\",\"traceId\":\"t-{id}\",\"spanId\":\"{id}\",\"name\":\"chat m\",\"startTime\":[1775934260,0],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-r\",\"gen_ai.usage.input_tokens\":{input},\"gen_ai.usage.output_tokens\":2}}}}\n"
+        )
+    };
+    fs::write(&export_file, [span("r-1", 10), span("r-2", 20)].concat()).unwrap();
+
+    let roots = IngestRoots {
+        copilot_otel_files: Some(vec![export_file.clone()]),
+        ..pinned_roots(&tmp)
+    };
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+    assert_eq!(
+        ingest_copilot_sessions(&mut ledger, &opts)
+            .unwrap()
+            .appended_turns,
+        2
+    );
+
+    // Rotation: a new file generation (new inode) replays both persisted
+    // spans before the new one. The replays must not consume indexes.
+    let staged = otel_dir.join("copilot.jsonl.next");
+    fs::write(
+        &staged,
+        [span("r-1", 10), span("r-2", 20), span("r-3", 30)].concat(),
+    )
+    .unwrap();
+    fs::rename(&staged, &export_file).unwrap();
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.appended_turns, 1);
+
+    let turns = ledger.query_turns(&Query::for_session("conv-r")).unwrap();
+    let mut indexes: Vec<(String, u64)> = turns
+        .iter()
+        .map(|t| (t.turn.message_id.clone(), t.turn.turn_index))
+        .collect();
+    indexes.sort();
+    assert_eq!(
+        indexes,
+        vec![
+            ("r-1".to_string(), 0),
+            ("r-2".to_string(), 1),
+            ("r-3".to_string(), 2)
+        ]
+    );
+}
+
 /// Restores one env var to its prior value on drop so env-mutating tests
 /// can't leak into other tests sharing the process.
 struct RestoreEnv {

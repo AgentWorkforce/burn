@@ -36,12 +36,13 @@
 //! content, so the emitted [`TurnRecord`]s are usage-only
 //! ([`UsageGranularity::PerMessage`] — one record per API call).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::reader::types::{
     Coverage, Fidelity, SourceKind, StopReason, TurnRecord, Usage, UsageGranularity,
@@ -62,6 +63,10 @@ pub struct ParseCopilotIncrementalOptions {
     /// Timestamp fallback (file mtime, ms) for spans that carry no usable
     /// `startTime`/`endTime`. tokscale uses the same fallback.
     pub fallback_ts_ms: Option<i64>,
+    /// `(session_id, message_id)` pairs already in the ledger. Spans
+    /// re-read after a rotation restarts the byte offset are skipped
+    /// before they consume a `turn_index`, so numbering stays contiguous.
+    pub persisted: HashSet<(String, String)>,
 }
 
 /// State carried across incremental passes over the same export file.
@@ -141,13 +146,7 @@ pub fn parse_copilot_otel_incremental(
     let mut trace_contexts: BTreeMap<String, TraceContext> = BTreeMap::new();
     let mut candidates: Vec<PendingCandidate> = Vec::new();
 
-    // `consumed` ends on a newline, so every piece (including blanks)
-    // occupies `len + 1` bytes of the file; track the absolute offset so
-    // the `message_id` fallback below stays stable across passes.
-    let mut line_offset = start_offset;
     for line in buf[..consumed].split(|b| *b == b'\n') {
-        let this_offset = line_offset;
-        line_offset += line.len() as u64 + 1;
         let trimmed = trim_ascii(line);
         if trimmed.is_empty() {
             continue;
@@ -157,7 +156,7 @@ pub fn parse_copilot_otel_incremental(
             Err(_) => continue, // lossy per line: one bad record never truncates the file
         };
         accumulate_trace_context(&mut trace_contexts, &record);
-        if let Some(candidate) = candidate_from_record(&record, this_offset, opts.fallback_ts_ms) {
+        if let Some(candidate) = candidate_from_record(&record, trimmed, opts.fallback_ts_ms) {
             candidates.push(candidate);
         }
     }
@@ -177,6 +176,7 @@ pub fn parse_copilot_otel_incremental(
         let Some(turn) = candidate.resolve(
             &trace_contexts,
             &chunk_chat_traces,
+            &opts.persisted,
             &mut resume,
             session_path.as_deref(),
         ) else {
@@ -288,12 +288,10 @@ const SESSION_ATTRS: &[&str] = &[
     "gen_ai.response.id",
 ];
 
+/// First non-blank session attribute in priority order: an empty
+/// higher-priority key must not hide a valid lower-priority one.
 fn best_session_attr(attributes: &Map<String, Value>) -> Option<&str> {
-    SESSION_ATTRS
-        .iter()
-        .find_map(|key| attr_str(attributes, key))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    first_non_empty_attr(attributes, SESSION_ATTRS)
 }
 
 fn trace_id(value: &Value) -> Option<&str> {
@@ -421,18 +419,26 @@ struct PendingCandidate {
     stop_reason: Option<StopReason>,
     ts_ms: i64,
     usage: Usage,
-    /// Absolute byte offset of this span's line in the export file;
-    /// fallback identity for spans with no `spanId`. Chunk-local indexes
-    /// would restart at zero on every incremental pass and collide in the
-    /// ledger's `(source, session_id, message_id)` key; the absolute
-    /// offset is stable for a given file generation, so a re-read span
-    /// dedups instead of dropping a later, distinct turn.
-    line_offset: u64,
+    /// Content digest of this span's line: fallback identity for spans
+    /// with neither `spanId` nor `gen_ai.response.id`. Derived from the
+    /// record bytes, so a span re-read on a later pass or from a rotated
+    /// file generation keeps its id and dedups, while distinct spans (which
+    /// differ at least in timestamps) never collide in the ledger's
+    /// `(source, session_id, message_id)` key.
+    line_digest: String,
+}
+
+fn line_digest(line: &[u8]) -> String {
+    Sha256::digest(line)
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn candidate_from_record(
     record: &Value,
-    line_offset: u64,
+    line: &[u8],
     fallback_ts_ms: Option<i64>,
 ) -> Option<PendingCandidate> {
     let attributes = record.get("attributes").and_then(Value::as_object)?;
@@ -512,7 +518,7 @@ fn candidate_from_record(
         stop_reason,
         ts_ms,
         usage,
-        line_offset,
+        line_digest: line_digest(line),
     })
 }
 
@@ -521,6 +527,7 @@ impl PendingCandidate {
         self,
         trace_contexts: &BTreeMap<String, TraceContext>,
         chunk_chat_traces: &BTreeSet<String>,
+        persisted: &HashSet<(String, String)>,
         resume: &mut CopilotResumeState,
         session_path: Option<&str>,
     ) -> Option<TurnRecord> {
@@ -565,7 +572,10 @@ impl PendingCandidate {
         let message_id = self
             .span_id
             .or(self.response_id)
-            .unwrap_or_else(|| format!("line-{}", self.line_offset));
+            .unwrap_or_else(|| format!("line-{}", self.line_digest));
+        if persisted.contains(&(session_id.clone(), message_id.clone())) {
+            return None;
+        }
 
         let turn_index = resume
             .session_turn_counts

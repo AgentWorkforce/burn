@@ -41,7 +41,7 @@ coverage_min_pct = 82.3
 "crates/relayburn-sdk/src/analyze/hotspots.rs" = 765
 "crates/relayburn-sdk/src/analyze/patterns.rs" = 555
 "crates/relayburn-sdk/src/analyze/subagent_tree.rs" = 566
-"crates/relayburn-sdk/src/ingest/ingest.rs" = 1016
+"crates/relayburn-sdk/src/ingest/ingest.rs" = 1006
 "crates/relayburn-sdk/src/query_verbs/hotspots.rs" = 538
 "crates/relayburn-sdk/src/query_verbs/summary/compute.rs" = 1021
 "crates/relayburn-sdk/src/query_verbs/summary/mod.rs" = 829
@@ -51,7 +51,7 @@ coverage_min_pct = 82.3
 "crates/relayburn-sdk/src/reader/codex/incremental.rs" = 959
 "crates/relayburn-sdk/src/reader/codex.rs" = 728
 "crates/relayburn-sdk/src/reader/opencode.rs" = 1154
-"crates/relayburn-sdk/src/reader/types.rs" = 552
+"crates/relayburn-sdk/src/reader/types.rs" = 527
 "crates/relayburn-sdk-node/src/lib.rs" = 1151
 
 [baseline.cyclomatic]

@@ -215,14 +215,15 @@ fn chat_span_name_provides_model_fallback() {
 }
 
 #[test]
-fn id_less_spans_get_offset_stable_message_ids() {
+fn id_less_spans_get_content_stable_message_ids() {
     let tmp = tempdir().unwrap();
     let path = tmp.path().join("copilot.jsonl");
 
     // Spans with neither spanId nor gen_ai.response.id fall back to a
-    // file-offset identity. A chunk-local index would restart at zero on
-    // the second pass and collide in the ledger key; the absolute offset
-    // keeps the two turns distinct.
+    // digest of the record bytes. A chunk-local index or a byte offset
+    // would restart at zero on the next pass or file generation and
+    // collide in the ledger key; the digest keeps distinct spans distinct
+    // and a re-read span identical.
     let line = |trace: &str| {
         format!(
             "{{\"type\":\"span\",\"traceId\":\"{trace}\",\"name\":\"chat m\",\"startTime\":[1775934260,0],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-off\",\"gen_ai.usage.input_tokens\":10,\"gen_ai.usage.output_tokens\":2}}}}"
@@ -234,7 +235,9 @@ fn id_less_spans_get_offset_stable_message_ids() {
     let first =
         parse_copilot_otel_incremental(&path, &ParseCopilotIncrementalOptions::default()).unwrap();
     assert_eq!(first.turns.len(), 1);
-    assert_eq!(first.turns[0].message_id, "line-0");
+    let id_a = first.turns[0].message_id.clone();
+    assert_eq!(id_a, format!("line-{}", line_digest(line_a.as_bytes())));
+    assert_eq!(id_a.len(), "line-".len() + 16);
 
     let mut f = std::fs::OpenOptions::new()
         .append(true)
@@ -253,11 +256,69 @@ fn id_less_spans_get_offset_stable_message_ids() {
     )
     .unwrap();
     assert_eq!(second.turns.len(), 1);
-    assert_eq!(
-        second.turns[0].message_id,
-        format!("line-{}", first.end_offset)
-    );
-    assert_ne!(first.turns[0].message_id, second.turns[0].message_id);
+    assert_ne!(id_a, second.turns[0].message_id);
+
+    // A rotated file generation starting with span B at offset 0 keeps
+    // B's id rather than reusing A's.
+    let rotated = tmp.path().join("rotated.jsonl");
+    std::fs::write(&rotated, format!("{line_b}\n")).unwrap();
+    let third =
+        parse_copilot_otel_incremental(&rotated, &ParseCopilotIncrementalOptions::default())
+            .unwrap();
+    assert_eq!(third.turns[0].message_id, second.turns[0].message_id);
+}
+
+#[test]
+fn empty_session_attr_falls_through_to_next_priority_key() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("copilot.jsonl");
+
+    // A blank gen_ai.conversation.id must not hide copilot_chat.session_id;
+    // otherwise the turn falls back to the trace id and splits the session.
+    let span = br#"{"type":"span","traceId":"t-es","spanId":"s-es","name":"chat m","startTime":[1775934260,0],"attributes":{"gen_ai.operation.name":"chat","gen_ai.conversation.id":"  ","copilot_chat.session_id":"conv-es","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":2}}"#;
+    std::fs::write(&path, [span.as_slice(), b"\n"].concat()).unwrap();
+    let parsed =
+        parse_copilot_otel_incremental(&path, &ParseCopilotIncrementalOptions::default()).unwrap();
+    assert_eq!(parsed.turns.len(), 1);
+    assert_eq!(parsed.turns[0].session_id, "conv-es");
+}
+
+#[test]
+fn persisted_spans_are_skipped_without_consuming_turn_indexes() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("copilot.jsonl");
+
+    // A rotation replays s-1 and s-2 (already in the ledger) ahead of the
+    // new s-3. The replays must not advance the session counter, so s-3
+    // takes index 2 rather than 4.
+    let span = |id: &str| {
+        format!(
+            "{{\"type\":\"span\",\"traceId\":\"t-{id}\",\"spanId\":\"{id}\",\"name\":\"chat m\",\"startTime\":[1775934260,0],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-p\",\"gen_ai.usage.input_tokens\":10,\"gen_ai.usage.output_tokens\":2}}}}\n"
+        )
+    };
+    std::fs::write(&path, [span("s-1"), span("s-2"), span("s-3")].concat()).unwrap();
+    let persisted: HashSet<(String, String)> = ["s-1", "s-2"]
+        .iter()
+        .map(|id| ("conv-p".to_string(), id.to_string()))
+        .collect();
+    let mut resume = CopilotResumeState::default();
+    resume.session_turn_counts.insert("conv-p".into(), 2);
+    let parsed = parse_copilot_otel_incremental(
+        &path,
+        &ParseCopilotIncrementalOptions {
+            resume: Some(resume),
+            persisted,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(parsed.turns.len(), 1);
+    assert_eq!(parsed.turns[0].message_id, "s-3");
+    assert_eq!(parsed.turns[0].turn_index, 2);
+    assert_eq!(parsed.resume.session_turn_counts.get("conv-p"), Some(&3));
+    // Replayed chat spans still register their traces for summary
+    // suppression.
+    assert!(parsed.resume.chat_trace_ids.contains(&"t-s-1".to_string()));
 }
 
 #[test]

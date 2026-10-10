@@ -13,6 +13,9 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+mod source_kind;
+pub use source_kind::SourceKind;
+
 /// Lenient deserializer for `TurnRecord.stop_reason`. Accepts the canonical
 /// kebab-case variant (`end-turn`, `max-tokens`, …) plus the legacy free-text
 /// shapes from upstream harnesses (`end_turn`, `tool_use`, opencode's
@@ -27,39 +30,6 @@ where
 {
     let opt: Option<String> = Option::deserialize(d)?;
     Ok(opt.map(|s| StopReason::from_wire(&s).unwrap_or(StopReason::Silent)))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourceKind {
-    ClaudeCode,
-    Codex,
-    Opencode,
-    CopilotCli,
-    AnthropicApi,
-    OpenaiApi,
-    GeminiApi,
-}
-
-impl SourceKind {
-    /// Kebab-case label as emitted on the wire (matches `#[serde(rename_all = "kebab-case")]`).
-    pub fn wire_str(&self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "claude-code",
-            Self::Codex => "codex",
-            Self::Opencode => "opencode",
-            Self::CopilotCli => "copilot-cli",
-            Self::AnthropicApi => "anthropic-api",
-            Self::OpenaiApi => "openai-api",
-            Self::GeminiApi => "gemini-api",
-        }
-    }
-}
-
-impl fmt::Display for SourceKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.wire_str())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
