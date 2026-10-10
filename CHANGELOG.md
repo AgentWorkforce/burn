@@ -27,6 +27,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - A failed OpenCode tool call sets `isError`, as Claude and Codex turns do.
 - A Claude assistant turn still being written (no `stop_reason` yet) is billed once it settles, not early.
 
+### Analysis and quality
+
 - `burn analyze <source> <session-id>` / `burn analyze --path <transcript>` diagnose one session without a ledger or ingest: metrics, activity, hotspots, instruction overhead, subagents, flow, context growth, quality, and stop reasons, plus findings that explain each cost, cite turns/tools/files, and suggest a fix. `--json` emits `burn.session-analysis.v1`; the same document comes from Rust `analyze_session`, Node `analyzeSession()`, and the MCP `burn__analyzeSession` tool.
 - `burn analyze` and `burn measure` now include Claude Code subagent spend: every turn of a subagent sidecar transcript (`<session>/subagents/agent-<id>.jsonl`), nested subagents included, is billed once as subagent work of the session that spawned it.
 - `burn analyze` shows the subagent tree with each subagent's own and cumulative turns, tokens and cost, nested under the subagent that spawned it, and adds a `subagent-spend` finding when one subagent type carries at least a quarter of the session's tokens. Subagent tree nodes (`SubagentTreeNode`) add `selfTokens` / `cumulativeTokens`; `selfCost` / `cumulativeCost` are `null` when a turn they cover is unpriced, never `0`.
