@@ -18,6 +18,7 @@
 pub mod claude_md;
 pub mod compare;
 pub mod context_delta;
+mod context_output_ratio;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
@@ -54,14 +55,16 @@ pub(crate) use context_delta::deltas_for_session;
 pub use context_delta::{
     ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail, ReminderSource,
 };
+pub(crate) use context_output_ratio::{
+    context_output_ratio_finding, ContextOutputRatioFindingInput,
+};
 pub(crate) use cost::reasoning_mode_for_source;
 pub(crate) use cost::sum_costs;
 pub use cost::{cost_for_turn, tally_unpriced, CostBreakdown};
 pub(crate) use fidelity::has_minimum_fidelity;
 pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary};
 pub(crate) use findings::{
-    context_output_ratio_finding, findings_from_patterns, mark_findings_with_unpriced_sessions,
-    unpriced_usage_findings, ContextOutputRatioFindingInput,
+    findings_from_patterns, mark_findings_with_unpriced_sessions, unpriced_usage_findings,
 };
 pub use findings::{sort_findings, FindingPricingStatus, WasteFinding, WasteSeverity};
 pub use flow_graph::{

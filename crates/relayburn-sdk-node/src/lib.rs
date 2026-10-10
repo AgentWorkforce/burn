@@ -107,6 +107,14 @@ use serde_json::Value as JsonValue;
 
 use relayburn_sdk as sdk;
 
+mod context_efficiency;
+mod hotspots;
+
+pub use context_efficiency::{
+    ContextEfficiencySummary, ContextSizeDistribution, SessionContextEfficiency,
+};
+pub use hotspots::{hotspots, HotspotsGroupBy, HotspotsOptions};
+
 // ---------------------------------------------------------------------------
 // Error mapping
 // ---------------------------------------------------------------------------
@@ -760,71 +768,6 @@ pub struct ReplacementSavingsSummary {
     pub by_tool: Vec<ReplacementSavingsToolRow>,
 }
 
-#[napi(object)]
-pub struct ContextSizeDistribution {
-    pub p50: BigInt,
-    pub p95: BigInt,
-    pub max: BigInt,
-}
-
-#[napi(object)]
-pub struct SessionContextEfficiency {
-    pub session_id: String,
-    pub turn_count: BigInt,
-    pub context_tokens: BigInt,
-    pub output_tokens: BigInt,
-    pub context_tokens_per_output_token: Option<f64>,
-    pub unbounded: bool,
-    pub zero_output_turns_with_context: BigInt,
-    pub context_size: ContextSizeDistribution,
-}
-
-#[napi(object)]
-pub struct ContextEfficiencySummary {
-    pub context_tokens: BigInt,
-    pub output_tokens: BigInt,
-    pub context_tokens_per_output_token: Option<f64>,
-    pub unbounded: bool,
-    pub zero_output_turns_with_context: BigInt,
-    pub total_sessions: BigInt,
-    pub eligible_sessions: BigInt,
-    pub sessions: Vec<SessionContextEfficiency>,
-}
-
-impl From<sdk::ContextEfficiencySummary> for ContextEfficiencySummary {
-    fn from(value: sdk::ContextEfficiencySummary) -> Self {
-        Self {
-            context_tokens: u64_to_bigint(value.context_tokens),
-            output_tokens: u64_to_bigint(value.output_tokens),
-            context_tokens_per_output_token: value.context_tokens_per_output_token,
-            unbounded: value.unbounded,
-            zero_output_turns_with_context: u64_to_bigint(value.zero_output_turns_with_context),
-            total_sessions: u64_to_bigint(value.total_sessions),
-            eligible_sessions: u64_to_bigint(value.eligible_sessions),
-            sessions: value
-                .sessions
-                .into_iter()
-                .map(|session| SessionContextEfficiency {
-                    session_id: session.session_id,
-                    turn_count: u64_to_bigint(session.turn_count),
-                    context_tokens: u64_to_bigint(session.context_tokens),
-                    output_tokens: u64_to_bigint(session.output_tokens),
-                    context_tokens_per_output_token: session.context_tokens_per_output_token,
-                    unbounded: session.unbounded,
-                    zero_output_turns_with_context: u64_to_bigint(
-                        session.zero_output_turns_with_context,
-                    ),
-                    context_size: ContextSizeDistribution {
-                        p50: u64_to_bigint(session.context_size.p50),
-                        p95: u64_to_bigint(session.context_size.p95),
-                        max: u64_to_bigint(session.context_size.max),
-                    },
-                })
-                .collect(),
-        }
-    }
-}
-
 impl From<sdk::ReplacementSavingsSummary> for ReplacementSavingsSummary {
     fn from(s: sdk::ReplacementSavingsSummary) -> Self {
         ReplacementSavingsSummary {
@@ -1323,94 +1266,6 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result)
         .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize overhead_trim: {e}")))?;
-    Ok(BigIntPromoting(value))
-}
-
-// ---------------------------------------------------------------------------
-// hotspots — discriminated union; serialized via serde_json so the
-// `kind` discriminant + per-variant rows survive the boundary. The TS
-// .d.ts already documents the shape (`HotspotsResult` union).
-// ---------------------------------------------------------------------------
-
-/// Mirror of `sdk::HotspotsGroupBy`. Wire values match
-/// The Node facade's
-/// `'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent' |
-/// 'findings'` literal union.
-#[napi(string_enum = "kebab-case")]
-pub enum HotspotsGroupBy {
-    Attribution,
-    Bash,
-    BashVerb,
-    File,
-    Subagent,
-    Findings,
-}
-
-impl From<HotspotsGroupBy> for sdk::HotspotsGroupBy {
-    fn from(g: HotspotsGroupBy) -> Self {
-        match g {
-            HotspotsGroupBy::Attribution => sdk::HotspotsGroupBy::Attribution,
-            HotspotsGroupBy::Bash => sdk::HotspotsGroupBy::Bash,
-            HotspotsGroupBy::BashVerb => sdk::HotspotsGroupBy::BashVerb,
-            HotspotsGroupBy::File => sdk::HotspotsGroupBy::File,
-            HotspotsGroupBy::Subagent => sdk::HotspotsGroupBy::Subagent,
-            HotspotsGroupBy::Findings => sdk::HotspotsGroupBy::Findings,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct HotspotsOptions {
-    pub session: Option<String>,
-    pub project: Option<String>,
-    pub since: Option<String>,
-    pub group_by: Option<HotspotsGroupBy>,
-    pub patterns: Option<Vec<String>>,
-    pub workflow: Option<String>,
-    pub provider: Option<Vec<String>>,
-    pub context_output_ratio_threshold: Option<f64>,
-    pub context_output_min_tokens: Option<BigInt>,
-    pub ledger_home: Option<String>,
-}
-
-/// Per-axis hotspot attribution + pattern-finding queries. Returns a
-/// JSON-shaped discriminated union — see `HotspotsResult` in
-/// `packages/sdk-node/src/index.d.ts`. u64 row counts (`callCount`,
-/// `distinctCommands`, `ridingTurns`, `firstEmitTurnIndex`,
-/// `toolCallCount`, `turnsAnalyzed`, `analyzed`, `excluded`) cross as
-/// `BigInt` per the file header rule.
-#[napi(ts_return_type = "import('./index').HotspotsResult")]
-pub fn hotspots(opts: Option<HotspotsOptions>) -> Result<BigIntPromoting, BurnError> {
-    let opts = opts.unwrap_or(HotspotsOptions {
-        session: None,
-        project: None,
-        since: None,
-        group_by: None,
-        patterns: None,
-        workflow: None,
-        provider: None,
-        context_output_ratio_threshold: None,
-        context_output_min_tokens: None,
-        ledger_home: None,
-    });
-    let raw = sdk::HotspotsOptions {
-        session: opts.session,
-        project: opts.project,
-        since: opts.since,
-        group_by: opts.group_by.map(Into::into),
-        patterns: opts.patterns,
-        workflow: opts.workflow,
-        provider: opts.provider,
-        context_output_ratio_threshold: opts.context_output_ratio_threshold,
-        context_output_min_tokens: opts
-            .context_output_min_tokens
-            .map(bigint_to_u64)
-            .transpose()?,
-        ledger_home: maybe_path(opts.ledger_home),
-    };
-    let result = sdk::hotspots(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result)
-        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize hotspots: {e}")))?;
     Ok(BigIntPromoting(value))
 }
 

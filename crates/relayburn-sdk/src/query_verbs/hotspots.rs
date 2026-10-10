@@ -1,5 +1,8 @@
 use super::*;
 
+mod finding_kinds;
+use finding_kinds::default_hotspots_finding_kinds;
+
 // ---------------------------------------------------------------------------
 // hotspots — discriminated union
 // ---------------------------------------------------------------------------
@@ -13,30 +16,6 @@ pub enum HotspotsGroupBy {
     File,
     Subagent,
     Findings,
-}
-
-const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
-    "context-output-ratio",
-    "retry-loop",
-    "failure-run",
-    "cancellation-run",
-    "compaction-loss",
-    "edit-revert",
-    "edit-heavy",
-    "skill-recall-dup",
-    "skill-pruning-protection",
-    "system-prompt-tax",
-    "ghost-surface",
-    "tool-output-bloat",
-    "tool-call-pattern",
-    "unpriced-usage",
-];
-
-fn default_hotspots_finding_kinds() -> Vec<String> {
-    DEFAULT_HOTSPOTS_FINDING_KINDS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect()
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -193,13 +172,7 @@ pub struct HotspotsAttributionResult {
 
 impl LedgerHandle {
     pub fn hotspots(&self, opts: HotspotsOptions) -> Result<HotspotsResult> {
-        let context_output_ratio_threshold = opts
-            .context_output_ratio_threshold
-            .unwrap_or(DEFAULT_CONTEXT_OUTPUT_RATIO_THRESHOLD);
-        validate_context_output_ratio_threshold(context_output_ratio_threshold)?;
-        let context_output_min_tokens = opts
-            .context_output_min_tokens
-            .unwrap_or(DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS);
+        let context_ratio = ContextOutputRatioConfig::from_hotspots_options(&opts)?;
         let using_patterns = opts
             .patterns
             .as_ref()
@@ -229,15 +202,7 @@ impl LedgerHandle {
                 Some(patterns) if !patterns.is_empty() => patterns,
                 _ => default_hotspots_finding_kinds(),
             };
-            return run_hotspots_findings(
-                self,
-                &turns,
-                &pricing,
-                patterns,
-                &q,
-                context_output_ratio_threshold,
-                context_output_min_tokens,
-            );
+            return run_hotspots_findings(self, &turns, &pricing, patterns, &q, context_ratio);
         }
         if using_patterns {
             return run_hotspots_findings(
@@ -246,8 +211,7 @@ impl LedgerHandle {
                 &pricing,
                 opts.patterns.unwrap_or_default(),
                 &q,
-                context_output_ratio_threshold,
-                context_output_min_tokens,
+                context_ratio,
             );
         }
         run_hotspots_attribution(self, &turns, &pricing, opts.group_by, &q)
@@ -505,18 +469,13 @@ fn run_hotspots_findings(
     pricing: &PricingTable,
     wanted: Vec<String>,
     q: &Query,
-    context_output_ratio_threshold: f64,
-    context_output_min_tokens: u64,
+    context_ratio: ContextOutputRatioConfig,
 ) -> Result<HotspotsResult> {
     let wanted_set: HashSet<String> = wanted.into_iter().collect();
     let mut findings: Vec<WasteFinding> = Vec::new();
 
     if wanted_set.contains("context-output-ratio") {
-        findings.extend(context_output_ratio_findings(
-            &compute_context_efficiency(turns),
-            context_output_ratio_threshold,
-            context_output_min_tokens,
-        ));
+        findings.extend(context_ratio.findings(turns));
     }
 
     // Propagate `enrichment` (e.g. workflowId folds) into side queries so a

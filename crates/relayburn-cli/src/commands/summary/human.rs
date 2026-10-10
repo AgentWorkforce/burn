@@ -5,8 +5,8 @@ use std::path::Path;
 use relayburn_sdk::{
     summary_fidelity_summary_to_value, summary_replacement_savings_to_value, CoverageField,
     FidelityClass, FidelitySummary, OutcomeLabel, QualityResult, RelationshipType,
-    StopReasonCounts, SubagentCounts, SubagentTreeNode, SubagentTypeStats, SummaryByToolReport,
-    SummaryGroupBy, SummaryGroupedReport, SummaryRelationshipReport, SummarySubagentTreeReport,
+    StopReasonCounts, SubagentTreeNode, SubagentTypeStats, SummaryByToolReport, SummaryGroupBy,
+    SummaryGroupedReport, SummaryRelationshipReport, SummarySubagentTreeReport,
     UsageCostAggregateRow,
 };
 use serde_json::{json, Map, Value};
@@ -577,35 +577,7 @@ pub(super) fn emit_human(
     lines.push(render_table(&rendered));
     lines.push(String::new());
 
-    if !report.context_efficiency.sessions.is_empty() {
-        lines.push(format!(
-            "highest context-efficiency sessions ({} of {} sessions):",
-            format_uint(report.context_efficiency.sessions.len() as u64),
-            format_uint(report.context_efficiency.total_sessions),
-        ));
-        let mut context_rows = vec![vec![
-            "session".into(),
-            "turns".into(),
-            "total context".into(),
-            "context:output".into(),
-            "p50 context".into(),
-            "p95 context".into(),
-            "max context".into(),
-        ]];
-        for session in &report.context_efficiency.sessions {
-            context_rows.push(vec![
-                session.session_id.clone(),
-                format_uint(session.turn_count),
-                format_uint(session.context_tokens),
-                format_context_ratio(session.context_tokens_per_output_token, session.unbounded),
-                format_uint(session.context_size.p50),
-                format_uint(session.context_size.p95),
-                format_uint(session.context_size.max),
-            ]);
-        }
-        lines.push(render_table(&context_rows));
-        lines.push(String::new());
-    }
+    lines.extend(context_efficiency_session_lines(&report.context_efficiency));
     lines.push(format!(
         "{}: {}",
         if report.unpriced_turns > 0 {
@@ -675,34 +647,6 @@ pub(super) fn emit_human(
         pricing_override,
     );
     Ok(())
-}
-
-fn format_context_efficiency_line(efficiency: &relayburn_sdk::ContextEfficiencySummary) -> String {
-    format!(
-        "context efficiency: {} ({} context / {} output; {} zero-output turn{})",
-        format_context_ratio(
-            efficiency.context_tokens_per_output_token,
-            efficiency.unbounded,
-        ),
-        format_uint(efficiency.context_tokens),
-        format_uint(efficiency.output_tokens),
-        format_uint(efficiency.zero_output_turns_with_context),
-        if efficiency.zero_output_turns_with_context == 1 {
-            ""
-        } else {
-            "s"
-        },
-    )
-}
-
-fn format_context_ratio(ratio: Option<f64>, unbounded: bool) -> String {
-    if unbounded {
-        "unbounded".to_string()
-    } else {
-        ratio
-            .map(|value| format!("{value:.1}:1"))
-            .unwrap_or_else(|| "—".to_string())
-    }
 }
 
 pub(super) fn render_quality(q: &QualityResult) -> String {
@@ -781,19 +725,6 @@ pub(super) fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
         parts.push(format!("{} none", format_uint(s.none)));
     }
     format!("Turn outcomes: {}", parts.join(", "))
-}
-
-/// Human-readable subagent line for `burn summary`, e.g.
-/// `subagents: 2 paired, 1 orphan`. Both counts are rendered so the line
-/// is informative even when one bucket is zero — an orphan-only count
-/// flags slash-command synthetic dispatches as a non-trivial signal.
-/// See AgentWorkforce/burn#435.
-pub(super) fn format_subagents_line(s: &SubagentCounts) -> String {
-    format!(
-        "subagents: {} paired, {} orphan",
-        format_uint(s.paired),
-        format_uint(s.orphan),
-    )
 }
 
 pub(super) fn format_replacement_savings_line(

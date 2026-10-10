@@ -39,9 +39,11 @@ use crate::render::progress::TaskProgress;
 
 mod human;
 mod json;
+mod sections;
 
 use human::*;
 use json::*;
+use sections::*;
 
 #[cfg(test)]
 use relayburn_sdk::{

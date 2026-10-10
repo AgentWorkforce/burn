@@ -541,8 +541,14 @@ fn normalize_provider_filter(provider: Option<Vec<String>>) -> Option<ProviderFi
 mod summary;
 pub use summary::*;
 
+mod stop_reasons;
+pub use stop_reasons::*;
+
 mod context_efficiency;
 pub use context_efficiency::*;
+
+mod percentile;
+use percentile::{nearest_rank_index, nearest_rank_percentile};
 
 mod sessions;
 pub use sessions::*;

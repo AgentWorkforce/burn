@@ -228,6 +228,40 @@ pub(crate) fn validate_context_output_ratio_threshold(threshold: f64) -> Result<
     Ok(())
 }
 
+/// Resolved `context-output-ratio` finding thresholds for one hotspots run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ContextOutputRatioConfig {
+    pub threshold: f64,
+    pub min_context_tokens: u64,
+}
+
+impl ContextOutputRatioConfig {
+    /// Apply the documented defaults to the hotspots ratio options and
+    /// reject thresholds that are negative or non-finite.
+    pub(crate) fn from_hotspots_options(opts: &HotspotsOptions) -> Result<Self> {
+        let threshold = opts
+            .context_output_ratio_threshold
+            .unwrap_or(DEFAULT_CONTEXT_OUTPUT_RATIO_THRESHOLD);
+        validate_context_output_ratio_threshold(threshold)?;
+        Ok(Self {
+            threshold,
+            min_context_tokens: opts
+                .context_output_min_tokens
+                .unwrap_or(DEFAULT_CONTEXT_OUTPUT_MIN_TOKENS),
+        })
+    }
+
+    /// Ratio findings for every session in `turns` that crosses the
+    /// configured threshold and volume floor.
+    pub(crate) fn findings(&self, turns: &[TurnRecord]) -> Vec<WasteFinding> {
+        context_output_ratio_findings(
+            &compute_context_efficiency(turns),
+            self.threshold,
+            self.min_context_tokens,
+        )
+    }
+}
+
 pub(crate) fn context_output_ratio_findings(
     efficiency: &ContextEfficiencySummary,
     threshold: f64,
@@ -272,7 +306,7 @@ fn ratio(context: u64, output: u64) -> Option<f64> {
 }
 
 fn context_percentile(sorted: &[u64], percentile: f64) -> u64 {
-    super::summary::summary_percentile_index(sorted.len(), percentile)
+    nearest_rank_index(sorted.len(), percentile)
         .map(|rank| sorted[rank])
         .unwrap_or(0)
 }
@@ -690,5 +724,83 @@ mod tests {
         assert!(validate_context_output_ratio_threshold(f64::NAN).is_err());
         assert!(validate_context_output_ratio_threshold(f64::INFINITY).is_err());
         assert!(validate_context_output_ratio_threshold(0.0).is_ok());
+    }
+
+    #[test]
+    fn ratio_config_applies_defaults_and_overrides() {
+        assert_eq!(
+            ContextOutputRatioConfig::from_hotspots_options(&HotspotsOptions::default()).unwrap(),
+            ContextOutputRatioConfig {
+                threshold: 382.0,
+                min_context_tokens: 1_000_000,
+            }
+        );
+        let overridden = HotspotsOptions {
+            context_output_ratio_threshold: Some(50.5),
+            context_output_min_tokens: Some(0),
+            ..HotspotsOptions::default()
+        };
+        assert_eq!(
+            ContextOutputRatioConfig::from_hotspots_options(&overridden).unwrap(),
+            ContextOutputRatioConfig {
+                threshold: 50.5,
+                min_context_tokens: 0,
+            }
+        );
+        let negative = HotspotsOptions {
+            context_output_ratio_threshold: Some(-1.0),
+            ..HotspotsOptions::default()
+        };
+        let err = ContextOutputRatioConfig::from_hotspots_options(&negative).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "context-output ratio threshold must be finite and non-negative"
+        );
+    }
+
+    #[test]
+    fn ratio_config_findings_apply_threshold_and_floor_to_turns() {
+        let turns = [
+            turn(
+                "flagged",
+                0,
+                Usage {
+                    input: 600_000,
+                    output: 1_000,
+                    ..Usage::default()
+                },
+            ),
+            turn(
+                "below-ratio",
+                0,
+                Usage {
+                    input: 590_000,
+                    output: 1_000,
+                    ..Usage::default()
+                },
+            ),
+            turn(
+                "below-floor",
+                0,
+                Usage {
+                    input: 9_000,
+                    output: 1,
+                    ..Usage::default()
+                },
+            ),
+        ];
+        let config = ContextOutputRatioConfig {
+            threshold: 600.0,
+            min_context_tokens: 10_000,
+        };
+        let findings = config.findings(&turns);
+        assert_eq!(
+            findings
+                .iter()
+                .map(|finding| finding.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["flagged"]
+        );
+        assert_eq!(findings[0].title, "600.0:1 context-to-output ratio");
     }
 }
