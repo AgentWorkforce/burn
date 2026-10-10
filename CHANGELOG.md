@@ -5,7 +5,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn overhead` discovers the default Claude Code, Codex, and OpenCode user/ancestor/project instruction chains with harness-accurate precedence, boundaries, deduplication, and scope labels.
+- Turns whose usage was measured as zero price at $0 regardless of model, so Claude Code's `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session; unmeasured usage stays unpriced. `burn compare` shows cost per turn only for fully priced cells.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+- Timestamps everywhere (ingest, `--since`, quality outcomes, pending stamps) go through one strict ISO-8601 parser: `±HH:MM` offsets are applied rather than ignored, and out-of-range components, leap seconds, or trailing text are rejected.
 
 ## [4.1.0] - 2026-09-20
 

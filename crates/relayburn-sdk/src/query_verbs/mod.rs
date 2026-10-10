@@ -125,148 +125,17 @@ fn system_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Parse an ISO 8601 / RFC 3339 timestamp and re-emit it as a fully
-/// canonical UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` string. Handles:
-///
-/// - `YYYY-MM-DD` (date-only — assumed midnight UTC).
-/// - `YYYY-MM-DDTHH:MM:SS` (offset-less — assumed UTC).
-/// - `YYYY-MM-DDTHH:MM:SS.fff` (fractional seconds, any width 1–9).
-/// - `Z` suffix (case-insensitive) or `+HH:MM` / `-HH:MM` offsets.
-///
-/// Returns `None` for inputs that don't look ISO-shaped, so the caller can
-/// surface a usage error. Sub-millisecond fractional digits are truncated,
-/// matching JS `Date.toISOString()` rounding closely enough for ledger
-/// `since` lex-ordering. Whole-second inputs widen to `.000Z`.
+/// Parse an ISO 8601 / RFC 3339 `since` value (date-only means midnight UTC)
+/// and re-emit it as a canonical UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` string, so
+/// it lex-orders against ledger `ts`. `None` for anything else.
 fn normalize_iso_to_utc_z(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 10 {
-        return None;
-    }
-    if !(bytes[0..4].iter().all(|c| c.is_ascii_digit())
-        && bytes[4] == b'-'
-        && bytes[5..7].iter().all(|c| c.is_ascii_digit())
-        && bytes[7] == b'-'
-        && bytes[8..10].iter().all(|c| c.is_ascii_digit()))
-    {
-        return None;
-    }
-    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
-    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
-    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-
-    let mut hour: u32 = 0;
-    let mut minute: u32 = 0;
-    let mut second: u32 = 0;
-    let mut millis: u32 = 0;
-    let mut offset_minutes: i32 = 0;
-
-    if bytes.len() > 10 {
-        if !(bytes[10] == b'T' || bytes[10] == b't' || bytes[10] == b' ') {
-            return None;
-        }
-        if bytes.len() < 19 {
-            return None;
-        }
-        if !(bytes[11..13].iter().all(|c| c.is_ascii_digit())
-            && bytes[13] == b':'
-            && bytes[14..16].iter().all(|c| c.is_ascii_digit())
-            && bytes[16] == b':'
-            && bytes[17..19].iter().all(|c| c.is_ascii_digit()))
-        {
-            return None;
-        }
-        hour = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
-        minute = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
-        second = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
-        if hour > 23 || minute > 59 || second > 60 {
-            return None;
-        }
-
-        let mut idx = 19;
-        if idx < bytes.len() && (bytes[idx] == b'.' || bytes[idx] == b',') {
-            idx += 1;
-            let frac_start = idx;
-            while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-                idx += 1;
-            }
-            if idx == frac_start {
-                return None;
-            }
-            let mut frac_str = String::from(std::str::from_utf8(&bytes[frac_start..idx]).ok()?);
-            if frac_str.len() > 3 {
-                frac_str.truncate(3);
-            }
-            while frac_str.len() < 3 {
-                frac_str.push('0');
-            }
-            millis = frac_str.parse().ok()?;
-        }
-
-        if idx < bytes.len() {
-            match bytes[idx] {
-                b'Z' | b'z' => {
-                    if idx + 1 != bytes.len() {
-                        return None;
-                    }
-                }
-                b'+' | b'-' => {
-                    let sign: i32 = if bytes[idx] == b'-' { -1 } else { 1 };
-                    idx += 1;
-                    if bytes.len() < idx + 5 {
-                        return None;
-                    }
-                    if !(bytes[idx..idx + 2].iter().all(|c| c.is_ascii_digit())
-                        && bytes[idx + 2] == b':'
-                        && bytes[idx + 3..idx + 5].iter().all(|c| c.is_ascii_digit()))
-                    {
-                        return None;
-                    }
-                    let oh: i32 = std::str::from_utf8(&bytes[idx..idx + 2])
-                        .ok()?
-                        .parse()
-                        .ok()?;
-                    let om: i32 = std::str::from_utf8(&bytes[idx + 3..idx + 5])
-                        .ok()?
-                        .parse()
-                        .ok()?;
-                    if oh > 23 || om > 59 {
-                        return None;
-                    }
-                    offset_minutes = sign * (oh * 60 + om);
-                    if idx + 5 != bytes.len() {
-                        return None;
-                    }
-                }
-                _ => return None,
-            }
-        }
-    }
-
-    let days = ymd_to_days(year, month, day)?;
-    let local_secs: i64 =
-        days * 86_400 + (hour as i64) * 3_600 + (minute as i64) * 60 + (second as i64);
-    // `local = utc + offset` → `utc = local - offset` (offset in minutes).
-    let utc_secs: i64 = local_secs - (offset_minutes as i64) * 60;
-    Some(format_iso_z_ms(utc_secs, millis))
+    crate::util::time::parse_iso_date_or_datetime_ms(s).map(crate::util::time::format_iso_ms)
 }
 
 /// Adapt the `(whole seconds, millis)` shape used by the since/bucket paths to
 /// the shared [`crate::util::time::format_iso_ms`] formatter.
 fn format_iso_z_ms(secs: i64, millis: u32) -> String {
     crate::util::time::format_iso_ms(secs * 1_000 + millis as i64)
-}
-
-/// Range-checking wrapper over [`crate::util::time::ymd_to_days`]: rejects
-/// out-of-range month/day (since this parses untrusted `since` strings),
-/// then defers to the shared Hinnant primitive.
-fn ymd_to_days(year: i64, month: u32, day: u32) -> Option<i64> {
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    Some(crate::util::time::ymd_to_days(year, month, day))
 }
 
 // ---------------------------------------------------------------------------
@@ -312,17 +181,7 @@ fn bucket_secs_from_str(s: &str) -> Option<u64> {
 /// seconds since the Unix epoch. Sub-second precision is dropped (fine for
 /// bucket assignment). Returns `None` for malformed input.
 pub(crate) fn iso_z_to_epoch_secs(ts: &str) -> Option<i64> {
-    if ts.len() < 19 {
-        return None;
-    }
-    let year: i64 = ts.get(0..4)?.parse().ok()?;
-    let month: u32 = ts.get(5..7)?.parse().ok()?;
-    let day: u32 = ts.get(8..10)?.parse().ok()?;
-    let hour: i64 = ts.get(11..13)?.parse().ok()?;
-    let minute: i64 = ts.get(14..16)?.parse().ok()?;
-    let second: i64 = ts.get(17..19)?.parse().ok()?;
-    let days = ymd_to_days(year, month, day)?;
-    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+    crate::util::time::parse_iso_ms(ts).map(|ms| ms.div_euclid(1_000))
 }
 
 /// Contiguous time buckets `[edges[i], edges[i+1])` covering `[anchor, end)`,
