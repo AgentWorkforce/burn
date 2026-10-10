@@ -62,7 +62,9 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 /// - `7`: adds `archive_state.last_write_at_ms INTEGER`, updated once per
 ///   successful derived-ledger write batch, so read surfaces can distinguish
 ///   a current ledger from one that has not received data recently. (#507)
-pub const SCHEMA_VERSION: u32 = 7;
+/// - `8`: `archive_state.upstream_cursors_json` holds only the relayhistory
+///   change-feed watermark; the 4.x readers' per-file cursors are dropped.
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.

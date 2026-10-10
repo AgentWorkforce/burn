@@ -778,8 +778,8 @@ fn invalid_session_id_in_content_rejected() {
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
 /// migration, and the stored version bumps forward to the current
-/// `SCHEMA_VERSION` (7 after #436 + #435 + #434 + #468 + #507 chained on top of
-/// #437).
+/// `SCHEMA_VERSION` (8 after #436 + #435 + #434 + #468 + #507 and the
+/// relayhistory cutover chained on top of #437).
 /// Existing rows stay `NULL` for every back-added column until rewritten.
 #[test]
 fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
@@ -826,7 +826,7 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     // Step 2: open through the SDK. The migration must:
     //   a) add `turns.stop_reason TEXT`,
     //   b) bump archive_state.schema_version forward to the current
-    //      `SCHEMA_VERSION` (chained v1 → v2 → v3 → v4 → v5 → v6 → v7),
+    //      `SCHEMA_VERSION` (chained v1 → v2 → … → v8),
     //   c) leave the legacy row's stop_reason as NULL.
     let l = Ledger::open(&layout.burn, &layout.content).unwrap();
     let version: i64 = l
@@ -838,11 +838,11 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    // Current `SCHEMA_VERSION` is 7 (chained #437 v2 + #436 v3 + #435
-    // v4 + #434 v5 + #468 v6 + #507 v7); the migration must walk every step in one
-    // open() call.
+    // The migration must walk every step to the current `SCHEMA_VERSION`
+    // in one open() call.
     assert_eq!(
-        version, 7,
+        version,
+        i64::from(schema::SCHEMA_VERSION),
         "open must bump v1 forward to the current schema version"
     );
 
@@ -1572,4 +1572,25 @@ fn inference_freshness_changes_only_on_insert_or_material_update() {
     );
     assert_eq!(ledger.count_table("inferences").unwrap(), 1);
     assert_eq!(ledger.append_inferences(&inferences).unwrap(), 0);
+}
+
+/// A 4.x ledger's per-file reader cursors are dropped on open: sessions come
+/// from relayhistory now, and the blob would ride along with every write
+/// clock update to the same row.
+#[test]
+fn legacy_reader_cursors_are_dropped_on_open() {
+    let tmp = TempDir::new().unwrap();
+    {
+        let mut ledger = open_in(&tmp);
+        ledger
+            .write_cursors(r#"{"files":{"/x.jsonl":{"kind":"claude","offsetBytes":1}}}"#)
+            .unwrap();
+        ledger
+            .conns
+            .burn
+            .execute("UPDATE archive_state SET schema_version = 7", [])
+            .unwrap();
+    }
+    let ledger = open_in(&tmp);
+    assert_eq!(ledger.read_cursors().unwrap(), "{}");
 }

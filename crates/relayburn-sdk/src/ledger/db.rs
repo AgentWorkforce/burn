@@ -242,22 +242,17 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
     }
 
     if current_version < 7 {
-        match conn.execute(
-            "ALTER TABLE archive_state ADD COLUMN last_write_at_ms INTEGER",
-            [],
-        ) {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
-                if msg.contains("duplicate column name") => {}
-            Err(e) => return Err(e.into()),
-        }
-        // Legacy ledgers have no write clock. Seed conservatively from the
-        // newest event timestamp so an old snapshot is warned about on its
-        // first post-upgrade read instead of being made artificially fresh by
-        // the schema migration itself.
-        seed_last_write_from_events(conn)?;
+        migrate_to_v7(conn)?;
+    }
+
+    if current_version < 8 {
+        // The 4.x readers' per-file cursors are meaningless once sessions
+        // come from relayhistory, and the blob rides along with every
+        // `last_write_at_ms` update to the same row: drop it. The next
+        // ingest reconciles against the store and writes its watermark.
         conn.execute(
-            "UPDATE archive_state SET schema_version = 7 WHERE id = 1",
+            "UPDATE archive_state SET upstream_cursors_json = '{}', schema_version = 8 \
+             WHERE id = 1",
             [],
         )?;
     }
@@ -286,6 +281,28 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    Ok(())
+}
+
+fn migrate_to_v7(conn: &Connection) -> Result<()> {
+    match conn.execute(
+        "ALTER TABLE archive_state ADD COLUMN last_write_at_ms INTEGER",
+        [],
+    ) {
+        Ok(_) => {}
+        Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+            if msg.contains("duplicate column name") => {}
+        Err(e) => return Err(e.into()),
+    }
+    // Legacy ledgers have no write clock. Seed conservatively from the
+    // newest event timestamp so an old snapshot is warned about on its
+    // first post-upgrade read instead of being made artificially fresh by
+    // the schema migration itself.
+    seed_last_write_from_events(conn)?;
+    conn.execute(
+        "UPDATE archive_state SET schema_version = 7 WHERE id = 1",
+        [],
+    )?;
     Ok(())
 }
 
