@@ -1181,12 +1181,14 @@ impl From<OverheadFileKind> for sdk::OverheadFileKind {
 }
 
 #[napi(object)]
+#[derive(Default)]
 pub struct OverheadOptions {
     /// Project path to inspect; defaults to process.cwd().
     pub project: Option<String>,
     pub since: Option<String>,
     pub kind: Option<OverheadFileKind>,
     pub ledger_home: Option<String>,
+    pub harness_home: Option<String>,
 }
 
 /// Per-file + per-section overhead cost attribution. Powers `burn overhead`.
@@ -1197,17 +1199,13 @@ pub struct OverheadOptions {
 /// boundary as `BigInt`; everything else is plain JS `number` / string.
 #[napi(ts_return_type = "import('./index').OverheadResult")]
 pub fn overhead(opts: Option<OverheadOptions>) -> Result<BigIntPromoting, BurnError> {
-    let opts = opts.unwrap_or(OverheadOptions {
-        project: None,
-        since: None,
-        kind: None,
-        ledger_home: None,
-    });
+    let opts = opts.unwrap_or_default();
     let raw = sdk::OverheadOptions {
         project: maybe_path(opts.project),
         since: opts.since,
         kind: opts.kind.map(Into::into),
         ledger_home: maybe_path(opts.ledger_home),
+        harness_home: maybe_path(opts.harness_home),
     };
     let result = sdk::overhead(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result)
@@ -1216,6 +1214,7 @@ pub fn overhead(opts: Option<OverheadOptions>) -> Result<BigIntPromoting, BurnEr
 }
 
 #[napi(object)]
+#[derive(Default)]
 pub struct OverheadTrimOptions {
     pub project: Option<String>,
     pub since: Option<String>,
@@ -1227,6 +1226,7 @@ pub struct OverheadTrimOptions {
     pub top: Option<u32>,
     /// Include the unified-diff text per recommendation. Default true.
     pub include_diff: Option<bool>,
+    pub harness_home: Option<String>,
 }
 
 /// Trim recommendations for high-cost overhead-file sections. Powers
@@ -1237,14 +1237,7 @@ pub struct OverheadTrimOptions {
     ts_return_type = "import('./index').OverheadTrimResult"
 )]
 pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromoting, BurnError> {
-    let opts = opts.unwrap_or(OverheadTrimOptions {
-        project: None,
-        since: None,
-        kind: None,
-        ledger_home: None,
-        top: None,
-        include_diff: None,
-    });
+    let opts = opts.unwrap_or_default();
     let raw = sdk::OverheadTrimOptions {
         project: maybe_path(opts.project),
         since: opts.since,
@@ -1252,6 +1245,7 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
         ledger_home: maybe_path(opts.ledger_home),
         top: opts.top.map(u64::from),
         include_diff: opts.include_diff,
+        harness_home: maybe_path(opts.harness_home),
     };
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result)

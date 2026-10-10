@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `overhead()` and `overheadTrim()` discover active instruction chains with configurable harness homes, label files by scope, and carry scope into trim recommendations.
+
 ## [4.1.0] - 2026-09-20
 
 - `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.

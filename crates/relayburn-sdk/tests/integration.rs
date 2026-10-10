@@ -194,14 +194,20 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     let oh = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..Default::default()
         })
         .expect("handle overhead");
     assert_eq!(oh.grand_total, 0.0);
-    assert_eq!(oh.files.len(), 0);
+    let project_root = std::fs::canonicalize(project.path()).expect("canonical project tmp");
+    assert!(!oh
+        .files
+        .iter()
+        .any(|file| Path::new(&file.path).starts_with(&project_root)));
     let _oh2 = overhead(OverheadOptions {
         project: Some(project.path().to_path_buf()),
         ledger_home: Some(home.path().to_path_buf()),
+        harness_home: Some(project.path().join("empty-home")),
         ..Default::default()
     })
     .expect("free overhead");
@@ -211,14 +217,18 @@ fn sdk_verbs_round_trip_against_a_fixture_ledger() {
     let trim = handle
         .overhead_trim(OverheadTrimOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..Default::default()
         })
         .expect("handle overhead_trim");
-    assert_eq!(trim.recommendations.len(), 0);
-    assert_eq!(trim.summary.total_recommendations, 0);
+    assert!(trim.recommendations.iter().all(|recommendation| {
+        let path = Path::new(&recommendation.file);
+        path.is_absolute() && !path.starts_with(&project_root)
+    }));
     let _trim2 = overhead_trim(OverheadTrimOptions {
         project: Some(project.path().to_path_buf()),
         ledger_home: Some(home.path().to_path_buf()),
+        harness_home: Some(project.path().join("empty-home")),
         ..Default::default()
     })
     .expect("free overhead_trim");

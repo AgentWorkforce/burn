@@ -46,6 +46,7 @@ fn run_report(
         since: since.clone(),
         kind: kind.map(Into::into),
         ledger_home: globals.ledger_path.clone(),
+        harness_home: None,
     };
     let progress = TaskProgress::new(globals, "overhead");
     progress.set_task("analyzing overhead files");
@@ -59,19 +60,7 @@ fn run_report(
     progress.finish_and_clear();
 
     if result.files.is_empty() {
-        let msg = match kind {
-            Some(k) => format!(
-                "no {} overhead files found at {}\n",
-                kind_to_str(k),
-                project_path.display()
-            ),
-            None => format!(
-                "no overhead files found at {} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n",
-                project_path.display()
-            ),
-        };
-        let _ = io::stderr().write_all(msg.as_bytes());
-        return 1;
+        return report_no_files(kind, &project_path);
     }
 
     if globals.json {
@@ -92,6 +81,23 @@ fn run_report(
     0
 }
 
+/// Stderr notice + exit code 1 when discovery found no instruction files.
+fn report_no_files(kind: Option<crate::cli::OverheadKind>, project_path: &Path) -> i32 {
+    let msg = match kind {
+        Some(k) => format!(
+            "no {} overhead files found at {}\n",
+            kind_to_str(k),
+            project_path.display()
+        ),
+        None => format!(
+            "no overhead files found at {} (looked for active CLAUDE.md, CLAUDE.local.md, and AGENTS.md instruction chains)\n",
+            project_path.display()
+        ),
+    };
+    let _ = io::stderr().write_all(msg.as_bytes());
+    1
+}
+
 fn run_trim(
     globals: &GlobalArgs,
     project: Option<PathBuf>,
@@ -107,6 +113,7 @@ fn run_trim(
         ledger_home: globals.ledger_path.clone(),
         top,
         include_diff: None,
+        harness_home: None,
     };
     let progress = TaskProgress::new(globals, "overhead");
     progress.set_task("finding trim candidates");
@@ -120,19 +127,7 @@ fn run_trim(
     progress.finish_and_clear();
 
     if result.summary.files_analyzed == 0 {
-        let msg = match kind {
-            Some(k) => format!(
-                "no {} overhead files found at {}\n",
-                kind_to_str(k),
-                project_path.display()
-            ),
-            None => format!(
-                "no overhead files found at {} (looked for CLAUDE.md, .claude/CLAUDE.md, AGENTS.md)\n",
-                project_path.display()
-            ),
-        };
-        let _ = io::stderr().write_all(msg.as_bytes());
-        return 1;
+        return report_no_files(kind, &project_path);
     }
 
     if globals.json {
@@ -196,12 +191,11 @@ fn render_human_report(result: &OverheadResult, since: Option<&str>) -> io::Resu
     lines.push(format!("Overhead files in {}:", result.project));
     lines.push(String::new());
 
-    for file_attr in &result.per_file {
-        let parsed_file = result.files.iter().find(|f| f.path == file_attr.path);
-        if let Some(pf) = parsed_file {
-            push_file_block(pf, file_attr, &since_label, &mut lines);
-            lines.push(String::new());
-        }
+    // `per_file[i]` attributes `files[i]`; a path can carry two rows when
+    // harnesses inject different prefixes, so pair by position, not path.
+    for (pf, file_attr) in result.files.iter().zip(&result.per_file) {
+        push_file_block(pf, file_attr, &since_label, &mut lines);
+        lines.push(String::new());
     }
 
     lines.push(format!(
@@ -225,9 +219,10 @@ fn push_file_block(
     let display = format_file_display(&parsed.path);
     let applies_to = describe_applies_to(&parsed.applies_to);
     lines.push(format!(
-        "{display} — {} lines, ~{} tokens — applies to: {applies_to}",
+        "{display} — {} lines, ~{} tokens — scope: {} — applies to: {applies_to}",
         format_uint(parsed.total_lines),
         format_tokens(parsed.tokens),
+        parsed.scope.wire_str(),
     ));
     if parsed.tokens == 0 {
         lines.push("  (empty file — no attribution)".to_string());
@@ -314,17 +309,20 @@ fn render_human_trim(result: &OverheadTrimResult) -> io::Result<()> {
             .map_err(stdout_error);
     }
 
-    // Group by `file` while preserving insertion order.
-    let mut order: Vec<String> = Vec::new();
+    // Group by file row — path plus the harnesses that inject it, since one
+    // path can carry separate Codex-prefix and full-file rows — preserving
+    // insertion order.
+    let mut order: Vec<(String, String)> = Vec::new();
     let mut groups: std::collections::HashMap<
-        String,
+        (String, String),
         Vec<&relayburn_sdk::OverheadTrimRecommendation>,
     > = std::collections::HashMap::new();
     for rec in &result.recommendations {
+        let key = (rec.file.clone(), describe_applies_to(&rec.applies_to));
         groups
-            .entry(rec.file.clone())
+            .entry(key.clone())
             .or_insert_with(|| {
-                order.push(rec.file.clone());
+                order.push(key);
                 Vec::new()
             })
             .push(rec);
@@ -336,14 +334,14 @@ fn render_human_trim(result: &OverheadTrimResult) -> io::Result<()> {
     lines.push("# burn overhead trim — projected savings if trimmed".to_string());
     lines.push("# (recommendations only; burn never modifies your overhead files)".to_string());
     lines.push(String::new());
-    for file in &order {
-        let recs = &groups[file];
+    for key in &order {
+        let recs = &groups[key];
         let first = recs[0];
         let basename = Path::new(&first.file)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| first.file.clone());
-        let applies_to = describe_applies_to(&first.applies_to);
+        let applies_to = &key.1;
         lines.push(format!("# === {basename} (applies to: {applies_to}) ==="));
         lines.push(String::new());
         for rec in recs {
