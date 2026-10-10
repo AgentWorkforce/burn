@@ -1165,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_token_turns_without_a_tariff_leave_session_priced() {
+    fn measured_zero_token_turns_without_a_tariff_leave_session_priced() {
         let turn = TurnRecord {
             v: 1,
             source: SourceKind::ClaudeCode,
@@ -1185,7 +1185,15 @@ mod tests {
             activity: None,
             retries: None,
             has_edits: None,
-            fidelity: None,
+            fidelity: Some(crate::reader::Fidelity {
+                granularity: crate::reader::UsageGranularity::PerTurn,
+                coverage: crate::reader::Coverage {
+                    has_input_tokens: true,
+                    has_output_tokens: true,
+                    ..crate::reader::Coverage::EMPTY
+                },
+                class: crate::reader::FidelityClass::UsageOnly,
+            }),
         };
         let mut findings = vec![finding_with("retry-loop", WasteSeverity::Warn, "s", 0.25)];
 

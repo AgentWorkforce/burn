@@ -60,19 +60,6 @@ pub(crate) fn cost_for_usage(
     pricing: &PricingTable,
     options: CostForUsageOptions,
 ) -> Option<CostBreakdown> {
-    if usage == &Usage::default() {
-        // No tokens cost $0 under any tariff, so the cost is known even for
-        // models without one (e.g. Claude Code's `<synthetic>` messages).
-        return Some(CostBreakdown {
-            model: Cow::Owned(model.to_string()),
-            total: 0.0,
-            input: 0.0,
-            output: 0.0,
-            reasoning: 0.0,
-            cache_read: 0.0,
-            cache_create: 0.0,
-        });
-    }
     let rate = lookup_model_rate(model, pricing)?;
     let effective = effective_model_rate(usage, rate);
     let mode = options.reasoning_mode.unwrap_or(rate.reasoning_mode);
@@ -95,10 +82,32 @@ pub(crate) fn cost_for_usage(
 }
 
 pub fn cost_for_turn(turn: &TurnRecord, pricing: &PricingTable) -> Option<CostBreakdown> {
+    if has_measured_zero_usage(turn) {
+        // Measured zero tokens cost $0 under any tariff, so the cost is known
+        // even for models without one (e.g. Claude Code's `<synthetic>`
+        // messages). Zero usage the reader did not measure stays unknown.
+        return Some(CostBreakdown {
+            model: Cow::Owned(turn.model.clone()),
+            total: 0.0,
+            input: 0.0,
+            output: 0.0,
+            reasoning: 0.0,
+            cache_read: 0.0,
+            cache_create: 0.0,
+        });
+    }
     let opts = CostForUsageOptions {
         reasoning_mode: reasoning_mode_for_source(turn.source),
     };
     cost_for_usage(&turn.usage, &turn.model, pricing, opts)
+}
+
+fn has_measured_zero_usage(turn: &TurnRecord) -> bool {
+    turn.usage == Usage::default()
+        && turn
+            .fidelity
+            .as_ref()
+            .is_some_and(|f| f.coverage.has_per_turn_usage())
 }
 
 /// Total USD cost of a single turn, treating an unpriced turn as `$0`.
@@ -261,7 +270,10 @@ where
 mod tests {
     use super::*;
     use crate::analyze::pricing::{load_builtin_pricing, ModelCost, ModelCostTier, ReasoningMode};
-    use crate::reader::{SourceKind, ToolCall, TurnRecord, Usage};
+    use crate::reader::{
+        Coverage, Fidelity, FidelityClass, SourceKind, ToolCall, TurnRecord, Usage,
+        UsageGranularity,
+    };
 
     fn turn(model: &str, usage: Usage, source: SourceKind) -> TurnRecord {
         TurnRecord {
@@ -784,14 +796,28 @@ mod tests {
         );
     }
 
+    fn with_coverage(mut t: TurnRecord, has_input: bool, has_output: bool) -> TurnRecord {
+        t.fidelity = Some(Fidelity {
+            granularity: UsageGranularity::PerTurn,
+            coverage: Coverage {
+                has_input_tokens: has_input,
+                has_output_tokens: has_output,
+                ..Coverage::EMPTY
+            },
+            class: FidelityClass::UsageOnly,
+        });
+        t
+    }
+
     #[test]
-    fn zero_token_turns_cost_nothing_even_without_a_tariff() {
+    fn measured_zero_token_turns_cost_nothing_even_without_a_tariff() {
         let p = load_builtin_pricing();
-        let c = cost_for_turn(
-            &turn("<synthetic>", Usage::default(), SourceKind::ClaudeCode),
-            &p,
-        )
-        .expect("zero tokens have a known cost");
+        let synthetic = with_coverage(
+            turn("<synthetic>", Usage::default(), SourceKind::ClaudeCode),
+            true,
+            true,
+        );
+        let c = cost_for_turn(&synthetic, &p).expect("measured zero tokens have a known cost");
         assert_eq!(c.model, "<synthetic>");
         assert_eq!(c.total, 0.0);
         assert_eq!(
@@ -800,7 +826,7 @@ mod tests {
         );
         let (count, models) = tally_unpriced(
             &[
-                turn("<synthetic>", Usage::default(), SourceKind::ClaudeCode),
+                synthetic,
                 turn(
                     "made-up-model-xyz",
                     usage_with(0, 1, 0),
@@ -811,6 +837,25 @@ mod tests {
         );
         assert_eq!(count, 1);
         assert_eq!(models, vec!["made-up-model-xyz"]);
+    }
+
+    #[test]
+    fn unmeasured_zero_usage_stays_unpriced_without_a_tariff() {
+        let p = load_builtin_pricing();
+        let zero = || turn("made-up-model-xyz", Usage::default(), SourceKind::Codex);
+        assert!(cost_for_turn(&zero(), &p).is_none(), "no fidelity record");
+        assert!(cost_for_turn(&with_coverage(zero(), true, false), &p).is_none());
+        assert!(cost_for_turn(&with_coverage(zero(), false, true), &p).is_none());
+        let some_tokens = with_coverage(
+            turn(
+                "made-up-model-xyz",
+                usage_with(0, 1, 0),
+                SourceKind::ClaudeCode,
+            ),
+            true,
+            true,
+        );
+        assert!(cost_for_turn(&some_tokens, &p).is_none());
     }
 
     #[test]
