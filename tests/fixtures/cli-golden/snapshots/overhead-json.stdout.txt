@@ -4,8 +4,10 @@
     {
       "kind": "claude-md",
       "path": "${PROJECT}/CLAUDE.md",
+      "scope": "project",
       "appliesTo": [
-        "claude-code"
+        "claude-code",
+        "opencode"
       ],
       "totalLines": 23,
       "bytes": 908,
@@ -51,8 +53,10 @@
     {
       "path": "${PROJECT}/CLAUDE.md",
       "kind": "claude-md",
+      "scope": "project",
       "appliesTo": [
-        "claude-code"
+        "claude-code",
+        "opencode"
       ],
       "attribution": {
         "totalTokens": 227,

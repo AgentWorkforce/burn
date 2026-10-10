@@ -447,7 +447,7 @@ impl Server {
                 project: optional_string(input, "project", "overhead")?.map(Into::into),
                 since: optional_string(input, "since", "overhead")?,
                 kind: optional_enum(input, "kind", "overhead", &["claude-md", "agents-md"])?,
-                ledger_home: None,
+                ..Default::default()
             })
         })() {
             Ok(opts) => opts,
@@ -478,9 +478,9 @@ impl Server {
                 project: optional_string(input, "project", "overhead trim")?.map(Into::into),
                 since: optional_string(input, "since", "overhead trim")?,
                 kind: optional_enum(input, "kind", "overhead trim", &["claude-md", "agents-md"])?,
-                ledger_home: None,
                 top: top.map(u64::from),
                 include_diff: optional_boolean(input, "includeDiff", "overhead trim")?,
+                ..Default::default()
             })
         })() {
             Ok(opts) => opts,

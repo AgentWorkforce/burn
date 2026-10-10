@@ -1181,6 +1181,7 @@ impl From<OverheadFileKind> for sdk::OverheadFileKind {
 }
 
 #[napi(object)]
+#[derive(Default)]
 pub struct OverheadOptions {
     /// Project path to inspect; defaults to process.cwd().
     pub project: Option<String>,
@@ -1198,13 +1199,7 @@ pub struct OverheadOptions {
 /// boundary as `BigInt`; everything else is plain JS `number` / string.
 #[napi(ts_return_type = "import('./index').OverheadResult")]
 pub fn overhead(opts: Option<OverheadOptions>) -> Result<BigIntPromoting, BurnError> {
-    let opts = opts.unwrap_or(OverheadOptions {
-        project: None,
-        since: None,
-        kind: None,
-        ledger_home: None,
-        harness_home: None,
-    });
+    let opts = opts.unwrap_or_default();
     let raw = sdk::OverheadOptions {
         project: maybe_path(opts.project),
         since: opts.since,
@@ -1219,6 +1214,7 @@ pub fn overhead(opts: Option<OverheadOptions>) -> Result<BigIntPromoting, BurnEr
 }
 
 #[napi(object)]
+#[derive(Default)]
 pub struct OverheadTrimOptions {
     pub project: Option<String>,
     pub since: Option<String>,
@@ -1241,15 +1237,7 @@ pub struct OverheadTrimOptions {
     ts_return_type = "import('./index').OverheadTrimResult"
 )]
 pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromoting, BurnError> {
-    let opts = opts.unwrap_or(OverheadTrimOptions {
-        project: None,
-        since: None,
-        kind: None,
-        ledger_home: None,
-        top: None,
-        include_diff: None,
-        harness_home: None,
-    });
+    let opts = opts.unwrap_or_default();
     let raw = sdk::OverheadTrimOptions {
         project: maybe_path(opts.project),
         since: opts.since,

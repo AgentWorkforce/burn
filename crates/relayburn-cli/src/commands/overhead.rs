@@ -60,19 +60,7 @@ fn run_report(
     progress.finish_and_clear();
 
     if result.files.is_empty() {
-        let msg = match kind {
-            Some(k) => format!(
-                "no {} overhead files found at {}\n",
-                kind_to_str(k),
-                project_path.display()
-            ),
-            None => format!(
-                "no overhead files found at {} (looked for active CLAUDE.md, CLAUDE.local.md, and AGENTS.md instruction chains)\n",
-                project_path.display()
-            ),
-        };
-        let _ = io::stderr().write_all(msg.as_bytes());
-        return 1;
+        return report_no_files(kind, &project_path);
     }
 
     if globals.json {
@@ -91,6 +79,23 @@ fn run_report(
         return report_error(&err, globals);
     }
     0
+}
+
+/// Stderr notice + exit code 1 when discovery found no instruction files.
+fn report_no_files(kind: Option<crate::cli::OverheadKind>, project_path: &Path) -> i32 {
+    let msg = match kind {
+        Some(k) => format!(
+            "no {} overhead files found at {}\n",
+            kind_to_str(k),
+            project_path.display()
+        ),
+        None => format!(
+            "no overhead files found at {} (looked for active CLAUDE.md, CLAUDE.local.md, and AGENTS.md instruction chains)\n",
+            project_path.display()
+        ),
+    };
+    let _ = io::stderr().write_all(msg.as_bytes());
+    1
 }
 
 fn run_trim(
@@ -122,19 +127,7 @@ fn run_trim(
     progress.finish_and_clear();
 
     if result.summary.files_analyzed == 0 {
-        let msg = match kind {
-            Some(k) => format!(
-                "no {} overhead files found at {}\n",
-                kind_to_str(k),
-                project_path.display()
-            ),
-            None => format!(
-                "no overhead files found at {} (looked for active CLAUDE.md, CLAUDE.local.md, and AGENTS.md instruction chains)\n",
-                project_path.display()
-            ),
-        };
-        let _ = io::stderr().write_all(msg.as_bytes());
-        return 1;
+        return report_no_files(kind, &project_path);
     }
 
     if globals.json {
