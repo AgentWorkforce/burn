@@ -4,6 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- Pricing bills Claude 1-hour cache writes at 2x the input tariff (5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Anthropic models keep a single cache-write tariff.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 
 ## [4.1.0] - 2026-09-20

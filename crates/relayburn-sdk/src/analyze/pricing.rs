@@ -39,7 +39,10 @@ pub struct ModelCost {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
+    /// Per-million tariff for cache writes with the default (5-minute) TTL.
     pub cache_write: f64,
+    /// Per-million tariff for cache writes with a 1-hour TTL.
+    pub cache_write_1h: f64,
     /// Per-million reasoning-token tariff. Set iff `reasoning_mode == Separate`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<f64>,
@@ -58,6 +61,7 @@ pub struct ModelCostTier {
     pub output: f64,
     pub cache_read: f64,
     pub cache_write: f64,
+    pub cache_write_1h: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<f64>,
 }
@@ -81,6 +85,8 @@ struct ModelsDevCost {
     #[serde(default)]
     cache_write: Option<f64>,
     #[serde(default)]
+    cache_write_1h: Option<f64>,
+    #[serde(default)]
     reasoning: Option<f64>,
     #[serde(default)]
     tiers: Vec<ModelsDevCostTier>,
@@ -96,6 +102,8 @@ struct ModelsDevCostTier {
     cache_read: Option<f64>,
     #[serde(default)]
     cache_write: Option<f64>,
+    #[serde(default)]
+    cache_write_1h: Option<f64>,
     #[serde(default)]
     reasoning: Option<f64>,
     #[serde(default)]
@@ -123,6 +131,30 @@ struct ModelsDevProvider {
 // deterministic last-wins behavior. Primary vendor entries are protected
 // from later reseller copies in `flatten`.
 type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
+
+/// models.dev publishes a single `cache_write` tariff, which for Anthropic is
+/// the 5-minute-TTL write (1.25x input). Anthropic bills 1-hour-TTL writes at
+/// 2x the base input tariff (long-context tiers included), so entries under
+/// the `anthropic` provider derive `cache_write_1h` from `input` unless the
+/// entry sets `cache_write_1h` explicitly. Every other provider has one
+/// cache-write tariff regardless of TTL.
+const ANTHROPIC_PROVIDER: &str = "anthropic";
+const ANTHROPIC_CACHE_WRITE_1H_INPUT_MULTIPLIER: f64 = 2.0;
+
+/// Resolve the 1-hour cache-write tariff: explicit field, then the
+/// provider's TTL rule, then the single cache-write tariff.
+fn cache_write_1h_rate(
+    provider_id: &str,
+    explicit: Option<f64>,
+    input: f64,
+    cache_write: f64,
+) -> f64 {
+    explicit.unwrap_or(if provider_id == ANTHROPIC_PROVIDER {
+        input * ANTHROPIC_CACHE_WRITE_1H_INPUT_MULTIPLIER
+    } else {
+        cache_write
+    })
+}
 
 /// Primary model vendors whose own tariff should win over reseller/router
 /// copies with the same bare model id. models.dev regularly adds new provider
@@ -217,21 +249,27 @@ fn flatten(root: &ModelsDevRoot, protected_models: &HashSet<String>) -> PricingT
                 continue;
             };
             let has_reasoning = cost.reasoning.is_some();
+            // Models that don't publish a cache-write rate get billed at the
+            // input rate for cache creation.
+            let cache_write = cost.cache_write.unwrap_or(input);
             let entry = ModelCost {
                 input,
                 output,
                 cache_read: cost.cache_read.unwrap_or(0.0),
-                // Mirrors the TS `cost.cache_write ?? cost.input` fallback so
-                // models that don't publish a cache-write rate get billed at
-                // the input rate for cache creation.
-                cache_write: cost.cache_write.unwrap_or(input),
+                cache_write,
+                cache_write_1h: cache_write_1h_rate(
+                    provider_id,
+                    cost.cache_write_1h,
+                    input,
+                    cache_write,
+                ),
                 reasoning: cost.reasoning,
                 reasoning_mode: if has_reasoning {
                     ReasoningMode::Separate
                 } else {
                     ReasoningMode::SameAsOutput
                 },
-                context_tiers: context_tiers(cost),
+                context_tiers: context_tiers(provider_id, cost),
             };
             out.insert(id.clone(), entry);
             if primary_provider {
@@ -242,7 +280,7 @@ fn flatten(root: &ModelsDevRoot, protected_models: &HashSet<String>) -> PricingT
     out
 }
 
-fn context_tiers(cost: &ModelsDevCost) -> Vec<ModelCostTier> {
+fn context_tiers(provider_id: &str, cost: &ModelsDevCost) -> Vec<ModelCostTier> {
     let mut tiers: Vec<ModelCostTier> = cost
         .tiers
         .iter()
@@ -253,12 +291,19 @@ fn context_tiers(cost: &ModelsDevCost) -> Vec<ModelCostTier> {
             let context_tokens = tier.tier.size?;
             let input = tier.input?;
             let output = tier.output?;
+            let cache_write = tier.cache_write.unwrap_or(input);
             Some(ModelCostTier {
                 context_tokens,
                 input,
                 output,
                 cache_read: tier.cache_read.unwrap_or(0.0),
-                cache_write: tier.cache_write.unwrap_or(input),
+                cache_write,
+                cache_write_1h: cache_write_1h_rate(
+                    provider_id,
+                    tier.cache_write_1h,
+                    input,
+                    cache_write,
+                ),
                 reasoning: tier.reasoning,
             })
         })
@@ -411,6 +456,116 @@ mod tests {
         assert_eq!(entry.reasoning, None);
         // cache_write falls back to input when omitted.
         assert_eq!(entry.cache_write, 1.0);
+    }
+
+    #[test]
+    fn flatten_derives_anthropic_1h_cache_write_from_input() {
+        let raw = r#"{
+            "anthropic": {
+                "models": {
+                    "claude-example": {
+                        "cost": {
+                            "input": 3,
+                            "output": 15,
+                            "cache_read": 0.3,
+                            "cache_write": 3.75,
+                            "tiers": [{
+                                "input": 6,
+                                "output": 22.5,
+                                "cache_read": 0.6,
+                                "cache_write": 7.5,
+                                "tier": { "type": "context", "size": 200000 }
+                            }]
+                        }
+                    }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("claude-example").unwrap();
+        assert_eq!(cost.cache_write, 3.75);
+        assert_eq!(cost.cache_write_1h, 6.0);
+        assert_eq!(cost.context_tiers[0].cache_write, 7.5);
+        assert_eq!(cost.context_tiers[0].cache_write_1h, 12.0);
+    }
+
+    #[test]
+    fn flatten_keeps_single_cache_write_tariff_for_other_providers() {
+        let raw = r#"{
+            "acme": {
+                "models": {
+                    "acme-v1": {
+                        "cost": {
+                            "input": 3,
+                            "output": 15,
+                            "cache_write": 3.75,
+                            "tiers": [{
+                                "input": 6,
+                                "output": 22.5,
+                                "cache_write": 7.5,
+                                "tier": { "type": "context", "size": 200000 }
+                            }]
+                        }
+                    },
+                    "acme-no-cache-write": { "cost": { "input": 2, "output": 8 } }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        let cost = table.get("acme-v1").unwrap();
+        assert_eq!(cost.cache_write_1h, 3.75);
+        assert_eq!(cost.context_tiers[0].cache_write_1h, 7.5);
+        assert_eq!(
+            table.get("acme-no-cache-write").unwrap().cache_write_1h,
+            2.0
+        );
+    }
+
+    #[test]
+    fn flatten_prefers_explicit_1h_cache_write_tariff() {
+        let raw = r#"{
+            "anthropic": {
+                "models": {
+                    "claude-explicit": {
+                        "cost": { "input": 3, "output": 15, "cache_write": 3.75, "cache_write_1h": 5 }
+                    }
+                }
+            },
+            "acme": {
+                "models": {
+                    "acme-explicit": {
+                        "cost": {
+                            "input": 3,
+                            "output": 15,
+                            "cache_write": 3.75,
+                            "cache_write_1h": 4.5,
+                            "tiers": [{
+                                "input": 6,
+                                "output": 22.5,
+                                "cache_write_1h": 9,
+                                "tier": { "type": "context", "size": 200000 }
+                            }]
+                        }
+                    }
+                }
+            }
+        }"#;
+        let table = parse_pricing(raw).unwrap();
+        assert_eq!(table.get("claude-explicit").unwrap().cache_write_1h, 5.0);
+        let acme = table.get("acme-explicit").unwrap();
+        assert_eq!(acme.cache_write_1h, 4.5);
+        assert_eq!(acme.context_tiers[0].cache_write_1h, 9.0);
+    }
+
+    #[test]
+    fn builtin_snapshot_prices_1h_cache_writes_per_provider() {
+        let table = load_builtin_pricing();
+        for model in ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"] {
+            let cost = table.get(model).unwrap();
+            assert_eq!(cost.cache_write_1h, cost.input * 2.0, "{model}");
+        }
+        let gpt = table.get("gpt-5.5").unwrap();
+        assert_eq!(gpt.cache_write_1h, gpt.cache_write);
     }
 
     #[test]
@@ -625,7 +780,8 @@ mod tests {
                             "input": 7,
                             "output": 11,
                             "cache_read": 0.7,
-                            "cache_write": 8
+                            "cache_write": 8,
+                            "cache_write_1h": 13
                         }
                     }
                 }
@@ -642,5 +798,6 @@ mod tests {
         assert_eq!(cost.output, 11.0);
         assert_eq!(cost.cache_read, 0.7);
         assert_eq!(cost.cache_write, 8.0);
+        assert_eq!(cost.cache_write_1h, 13.0);
     }
 }
