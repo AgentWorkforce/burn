@@ -89,6 +89,9 @@ impl Args {
 /// "not yet implemented" message and exits 1.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Measure one explicit session artifact without discovery or a ledger.
+    Measure(MeasureArgs),
+
     /// Aggregate session usage and cost.
     Summary(crate::commands::summary::SummaryArgs),
 
@@ -165,6 +168,40 @@ fn parse_search_limit(raw: &str) -> Result<std::num::NonZeroUsize, String> {
     let value =
         usize::try_from(parsed).map_err(|_| "limit is too large for this platform".to_string())?;
     std::num::NonZeroUsize::new(value).ok_or_else(|| "limit must be greater than zero".into())
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+pub struct MeasureArgs {
+    /// Exact session source to parse. OpenCode expects its session metadata
+    /// file inside a complete storage tree.
+    #[arg(long, value_name = "PATH")]
+    pub input: PathBuf,
+
+    /// Harness format of the input artifact.
+    #[arg(long, value_enum, value_name = "HARNESS")]
+    pub harness: MeasureHarness,
+
+    /// Optional models.dev-compatible pricing overlay.
+    #[arg(long, value_name = "PATH")]
+    pub pricing: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MeasureHarness {
+    #[value(name = "claude-code", alias = "claude")]
+    ClaudeCode,
+    Codex,
+    Opencode,
+}
+
+impl From<MeasureHarness> for relayburn_sdk::Harness {
+    fn from(value: MeasureHarness) -> Self {
+        match value {
+            MeasureHarness::ClaudeCode => relayburn_sdk::Harness::ClaudeCode,
+            MeasureHarness::Codex => relayburn_sdk::Harness::Codex,
+            MeasureHarness::Opencode => relayburn_sdk::Harness::Opencode,
+        }
+    }
 }
 
 /// Per-command flags for `burn update`.

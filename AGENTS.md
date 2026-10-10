@@ -68,6 +68,29 @@ When debugging CLI behavior locally, prefer the Rust binary:
 cargo run -p relayburn-cli -- summary --since 24h
 ```
 
+## Quality benchmark
+
+The Quality CI workflow runs [rust-oleum](https://github.com/AgentWorkforce/rust-oleum)
+(our own OSS code-quality ratchet, extracted from this repo) against
+`rust-oleum.toml` at the repo root: targets for complexity, Halstead
+difficulty, lines per file, coverage, CRAP, and dead/redundant code, plus a
+grandfathered `[baseline]` of existing violations. CI fails on new
+violations or regressions beyond a grandfathered ceiling; PRs additionally
+get `cargo-mutants` run over their diff (target: zero surviving mutants in
+changed lines).
+
+```bash
+cargo install --locked rust-oleum
+rust-oleum                              # report + gate
+rust-oleum --coverage lcov.info         # with coverage/CRAP
+rust-oleum --write-baseline             # regenerate [baseline]
+```
+
+When your PR trips the gate, prefer refactoring under the target over adding
+baseline entries. If you refactor a grandfathered offender, shrink or delete
+its baseline entry. Never raise a ceiling or add a new entry without calling
+it out in the PR description.
+
 ## Changelog
 
 Curate `[Unreleased]` in the relevant changelog as you land PRs:

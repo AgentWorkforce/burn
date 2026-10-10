@@ -19,6 +19,7 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 
 | Command | Use it to |
 |---|---|
+| [`burn measure`](#burn-measure) | Turn one explicit session source into Cloud-ready token and cost metrics. |
 | [`burn summary`](#burn-summary) | See total usage and cost by model or provider. |
 | [`burn search`](#burn-search) | Search ingested session content with SQLite FTS5. |
 | [`burn hotspots`](#burn-hotspots) | Find expensive files, commands, and subagents. |
@@ -32,9 +33,9 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
 | [`burn update`](#burn-update) | Check for releases, install an update, or configure automatic checks. |
 
-Every command accepts `--json` for machine-readable output,
-`--ledger-path <path>` to select a Burn home for that invocation, and
-`--no-color` to disable ANSI styling.
+Every command accepts `--json` for machine-readable output and `--no-color`
+to disable ANSI styling. Ledger-backed commands also accept `--ledger-path
+<path>`; `burn measure` intentionally ignores ledger configuration.
 
 ## `burn summary`
 
@@ -75,6 +76,30 @@ tokens they used, and what they cost.
 
 Synthetic-routed models are recognized from `hf:*`,
 `accounts/fireworks/models/*`, and `synthetic/*`.
+
+## `burn measure`
+
+Use `burn measure` in a sandbox or runner when the caller already knows the
+one session it wants to report. It does not scan for sessions, create a ledger,
+or run discovery. Claude Code and Codex inputs are transcript files. OpenCode
+inputs are the selected `storage/session/<scope>/<sessionId>.json` file inside
+a complete OpenCode storage tree; Burn reads only that session's
+`message/<sessionId>` and referenced `part/<messageId>` records. Missing or
+zero-turn inputs fail closed instead of reporting valid-looking zero usage.
+
+```bash
+burn --json measure --harness codex --input /run/session.jsonl
+```
+
+The versioned `burn.session-metrics.v1` document includes the session and
+harness, raw input/output/cache/reasoning token buckets, totals, and a
+per-provider/model breakdown. Costs are integer USD micros. A cost is `null`
+when any contributing turn is unpriced, so consumers such as Cloud never
+mistake unknown spend for free usage.
+
+Supported harness values are `claude-code` (or `claude`), `codex`, and
+`opencode`. Use `--pricing <models.dev.json>` to overlay custom rates.
+
 
 ## `burn search`
 
@@ -337,13 +362,14 @@ search content from the compact analytical rows.
 |---|---|
 | `~/.agentworkforce/burn/burn.sqlite` | Events, stamps, sessions, relationships, and archive metadata. |
 | `~/.agentworkforce/burn/content.sqlite` | Prompt/response content and the FTS5 search index. |
-| `~/.agentworkforce/burn/config.json` | Content-storage and retention configuration. |
+| `~/.agentworkforce/burn/config.json` | Content-storage, retention, and report-staleness configuration (`staleness.thresholdHours`; default `24`). |
 | `~/.agentworkforce/burn/pending-stamps/` | Temporary manifests used by launchers that do not expose a session ID before spawn. |
 | `RELAYBURN_HOME` | Override the whole Burn data directory. |
 | `RELAYBURN_SQLITE_PATH` | Override the events database path. |
 | `RELAYBURN_CONTENT_PATH` | Override the content database path. |
 | `RELAYBURN_CONTENT_STORE=full\|hash-only\|off` | Control content payload storage. Default: `full`. |
 | `RELAYBURN_CONTENT_TTL_DAYS=<days\|forever>` | Content retention. Default: `90`. |
+| `RELAYBURN_STALE_AFTER_HOURS=<n>` | Age after which reads warn that the ledger is stale. Default: `24`; set `-1` to disable. |
 
 `RELAYBURN_HOME` relocates the complete layout. The two per-database overrides
 can place event and content data on different volumes. SQLite may create
