@@ -1,0 +1,160 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_files_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 100,
+        "output": 50,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_r1",
+          "name": "Read",
+          "target": "/src/a.ts",
+          "argsHash": "8bdf173e0d60f93b"
+        },
+        {
+          "id": "tu_r2",
+          "name": "Read",
+          "target": "/src/b.ts",
+          "argsHash": "87821f43eb011067"
+        },
+        {
+          "id": "tu_g1",
+          "name": "Grep",
+          "target": "foo.*bar",
+          "argsHash": "80eed9deed092e1d"
+        }
+      ],
+      "filesTouched": [
+        "/src/a.ts",
+        "/src/b.ts"
+      ],
+      "stopReason": "tool-use",
+      "activity": "exploration",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "read some files"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_files_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_r1",
+        "name": "Read",
+        "input": {
+          "file_path": "/src/a.ts"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_files_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_r2",
+        "name": "Read",
+        "input": {
+          "file_path": "/src/b.ts"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "messageId": "msg_files_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_g1",
+        "name": "Grep",
+        "input": {
+          "pattern": "foo.*bar"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "33333333-3333-3333-3333-333333333333",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_files_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 15,
+          "approxTokens": 4
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "33333333-3333-3333-3333-333333333333",
+      "msg_files_1",
+      "req_files"
+    ]
+  ]
+}

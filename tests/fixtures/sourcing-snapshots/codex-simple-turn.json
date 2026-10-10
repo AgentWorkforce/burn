@@ -1,0 +1,56 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_simple_1",
+      "messageId": "turn_simple_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:00.200Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 600,
+        "output": 120,
+        "reasoning": 30,
+        "cacheRead": 400,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "reasoning",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_simple_1",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "sourceVersion": "0.121.0"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [],
+  "requestIdLookup": []
+}

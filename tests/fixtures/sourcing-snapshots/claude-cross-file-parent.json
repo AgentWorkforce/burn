@@ -1,0 +1,100 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_cross_1",
+      "turnIndex": 0,
+      "ts": "2026-04-22T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 7,
+        "output": 4,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "u-cross-1",
+      "ts": "2026-04-22T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "please pick up where we left off"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_cross_1",
+      "ts": "2026-04-22T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Sure, picking up."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "relationshipType": "root",
+      "ts": "2026-04-22T00:00:00.000Z",
+      "sourceVersion": "2.1.97"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "userUuid": "u-cross-1",
+      "ts": "2026-04-22T00:00:00.000Z",
+      "followingMessageId": "msg_cross_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 32,
+          "approxTokens": 8
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "msg_cross_1",
+      "req_c"
+    ]
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "msg_side_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-haiku-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 50,
+        "output": 10,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "subagent": {
+        "isSidechain": true
+      },
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "u-sidechain-user",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "subagent prompt"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "msg_side_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "working on it"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "userUuid": "u-sidechain-user",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_side_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 15,
+          "approxTokens": 4
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "44444444-4444-4444-4444-444444444444",
+      "msg_side_1",
+      "req_side"
+    ]
+  ]
+}

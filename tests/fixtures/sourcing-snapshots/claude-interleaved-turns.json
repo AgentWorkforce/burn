@@ -1,0 +1,179 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "msg_a",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1,
+        "output": 1,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "msg_b",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:03.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1,
+        "output": 1,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "first question"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "msg_a",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "first answer"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "second question"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "messageId": "msg_b",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "second answer"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "sourceVersion": "2.1.96"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_a",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 14,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "44444444-4444-4444-4444-444444444444",
+      "userUuid": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "precedingMessageId": "msg_a",
+      "followingMessageId": "msg_b",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 15,
+          "approxTokens": 4
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "44444444-4444-4444-4444-444444444444",
+      "msg_a",
+      "req_1"
+    ],
+    [
+      "44444444-4444-4444-4444-444444444444",
+      "msg_b",
+      "req_2"
+    ]
+  ]
+}

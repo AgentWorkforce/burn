@@ -1,0 +1,242 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "turnIndex": 0,
+      "ts": "2026-04-24T00:00:12.000Z",
+      "model": "anthropic/claude-opus-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 6,
+        "output": 100,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 20000,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_read_1",
+          "name": "read",
+          "target": "/src/a.ts",
+          "argsHash": "08454bcb7248c564"
+        },
+        {
+          "id": "toolu_edit_1",
+          "name": "edit",
+          "target": "/src/b.ts",
+          "argsHash": "85969e71ad4813bb"
+        },
+        {
+          "id": "toolu_bash_1",
+          "name": "bash",
+          "target": "ls -la",
+          "argsHash": "1df8bccaec747dc6"
+        }
+      ],
+      "filesTouched": [
+        "/src/a.ts",
+        "/src/b.ts"
+      ],
+      "stopReason": "tool-use",
+      "activity": "coding",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "ts": "2026-04-24T00:00:12.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_read_1",
+        "name": "read",
+        "input": {
+          "filePath": "/src/a.ts"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "ts": "2026-04-24T00:00:12.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "toolu_read_1",
+        "content": "..."
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "ts": "2026-04-24T00:00:12.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_edit_1",
+        "name": "edit",
+        "input": {
+          "filePath": "/src/b.ts",
+          "newString": "b",
+          "oldString": "a"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "ts": "2026-04-24T00:00:12.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "toolu_edit_1",
+        "content": "edited"
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "ts": "2026-04-24T00:00:12.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_bash_1",
+        "name": "bash",
+        "input": {
+          "command": "ls -la"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "ts": "2026-04-24T00:00:12.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "toolu_bash_1",
+        "content": "file listing"
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "relationshipType": "root",
+      "ts": "2026-04-24T00:00:12.000Z"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "toolUseId": "toolu_read_1",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-24T00:00:12.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 3,
+      "outputBytes": 3,
+      "contentHash": "ab5df625bc76dbd4",
+      "usage": {
+        "input": 2,
+        "output": 34,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 6667,
+        "cacheCreate1h": 0
+      },
+      "usageAttribution": "even-split-turn"
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "toolUseId": "toolu_edit_1",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-24T00:00:12.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 6,
+      "outputBytes": 6,
+      "contentHash": "1fb9f4097256db2d",
+      "usage": {
+        "input": 2,
+        "output": 33,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 6667,
+        "cacheCreate1h": 0
+      },
+      "usageAttribution": "even-split-turn"
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_tool",
+      "messageId": "msg_tool_asst",
+      "toolUseId": "toolu_bash_1",
+      "callIndex": 0,
+      "eventIndex": 2,
+      "ts": "2026-04-24T00:00:12.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 12,
+      "outputBytes": 12,
+      "contentHash": "28947f61c9e59b01",
+      "usage": {
+        "input": 2,
+        "output": 33,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 6666,
+        "cacheCreate1h": 0
+      },
+      "usageAttribution": "even-split-turn"
+    }
+  ],
+  "userTurns": [],
+  "requestIdLookup": []
+}

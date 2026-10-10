@@ -1,0 +1,292 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a1",
+      "turnIndex": 0,
+      "ts": "2026-04-24T00:20:01.000Z",
+      "model": "anthropic/claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 20,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 5,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_b1",
+          "name": "bash",
+          "target": "ls",
+          "argsHash": "4cf29611a6693486"
+        },
+        {
+          "id": "call_fail",
+          "name": "bash",
+          "target": "test",
+          "argsHash": "ed2d201bcdca6714"
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a2",
+      "turnIndex": 1,
+      "ts": "2026-04-24T00:20:03.000Z",
+      "model": "anthropic/claude-opus-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 8,
+        "output": 10,
+        "reasoning": 0,
+        "cacheRead": 12,
+        "cacheCreate5m": 21,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_u1",
+      "ts": "2026-04-24T00:20:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "fix the build"
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a1",
+      "ts": "2026-04-24T00:20:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_b1",
+        "name": "bash",
+        "input": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a1",
+      "ts": "2026-04-24T00:20:01.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_b1",
+        "content": "ok\n"
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a1",
+      "ts": "2026-04-24T00:20:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_fail",
+        "name": "bash",
+        "input": {
+          "command": "test"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a1",
+      "ts": "2026-04-24T00:20:01.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_fail",
+        "content": "ERROR: tests failed",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_u2",
+      "ts": "2026-04-24T00:20:02.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "now run tests"
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a2",
+      "ts": "2026-04-24T00:20:03.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "done."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "relationshipType": "root",
+      "ts": "2026-04-24T00:20:01.000Z"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a1",
+      "toolUseId": "call_b1",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-24T00:20:01.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 3,
+      "outputBytes": 3,
+      "contentHash": "dc51b8c96c2d745d",
+      "usage": {
+        "input": 5,
+        "output": 10,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 3,
+        "cacheCreate1h": 0
+      },
+      "usageAttribution": "even-split-turn"
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "messageId": "msg_utb_a1",
+      "toolUseId": "call_fail",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-24T00:20:01.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 19,
+      "outputBytes": 19,
+      "contentHash": "210263a05be132fa",
+      "isError": true,
+      "usage": {
+        "input": 5,
+        "output": 10,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 2,
+        "cacheCreate1h": 0
+      },
+      "usageAttribution": "even-split-turn"
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "userUuid": "msg_utb_u1",
+      "ts": "2026-04-24T00:20:00.000Z",
+      "followingMessageId": "msg_utb_a1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 13,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_utb",
+      "userUuid": "msg_utb_u2",
+      "ts": "2026-04-24T00:20:02.000Z",
+      "precedingMessageId": "msg_utb_a1",
+      "followingMessageId": "msg_utb_a2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "call_b1",
+          "byteLen": 3,
+          "approxTokens": 1
+        },
+        {
+          "kind": "tool_result",
+          "toolUseId": "call_fail",
+          "byteLen": 19,
+          "approxTokens": 5,
+          "isError": true
+        },
+        {
+          "kind": "text",
+          "byteLen": 13,
+          "approxTokens": 4
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

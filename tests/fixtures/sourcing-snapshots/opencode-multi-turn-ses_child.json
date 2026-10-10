@@ -1,0 +1,67 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_child",
+      "messageId": "msg_child_asst",
+      "turnIndex": 0,
+      "ts": "2026-04-24T00:00:23.500Z",
+      "model": "anthropic/claude-haiku-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 3,
+        "output": 50,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 2000,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "subagent": {
+        "isSidechain": true
+      },
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_child",
+      "relationshipType": "root",
+      "ts": "2026-04-24T00:00:23.500Z"
+    },
+    {
+      "v": 1,
+      "source": "native-opencode",
+      "sessionId": "ses_child",
+      "relatedSessionId": "ses_multi",
+      "relationshipType": "subagent",
+      "ts": "2026-04-24T00:00:23.500Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [],
+  "requestIdLookup": []
+}

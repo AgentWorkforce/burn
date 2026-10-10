@@ -1,0 +1,187 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "msg_tn_1",
+      "turnIndex": 0,
+      "ts": "2026-05-25T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "msg_tn_2",
+      "turnIndex": 1,
+      "ts": "2026-05-25T00:00:05.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 12,
+        "output": 2,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "feature",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "u-user-1",
+      "ts": "2026-05-25T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "please fix the build"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "msg_tn_1",
+      "ts": "2026-05-25T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "running tests"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "u-tn-1",
+      "ts": "2026-05-25T00:00:02.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "<task-notification>background task bash_1 completed</task-notification>"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "u-tn-2",
+      "ts": "2026-05-25T00:00:03.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "<task-notification>background task bash_2 completed</task-notification>"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "u-user-2",
+      "ts": "2026-05-25T00:00:04.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "thanks, also add a changelog entry"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "messageId": "msg_tn_2",
+      "ts": "2026-05-25T00:00:05.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "done"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "relationshipType": "root",
+      "ts": "2026-05-25T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "userUuid": "u-user-1",
+      "ts": "2026-05-25T00:00:00.000Z",
+      "followingMessageId": "msg_tn_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 20,
+          "approxTokens": 5
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "tn-session",
+      "userUuid": "u-user-2",
+      "ts": "2026-05-25T00:00:04.000Z",
+      "precedingMessageId": "msg_tn_1",
+      "followingMessageId": "msg_tn_2",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 34,
+          "approxTokens": 9
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

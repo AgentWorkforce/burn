@@ -1,0 +1,124 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "messageId": "msg_x",
+      "turnIndex": 0,
+      "ts": "2026-04-22T00:00:02.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 3,
+        "output": 1,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "messageId": "u-side-1",
+      "ts": "2026-04-22T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "sidechain prompt"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "messageId": "u-main-1",
+      "ts": "2026-04-22T00:00:01.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "continue from elsewhere"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "messageId": "msg_x",
+      "ts": "2026-04-22T00:00:02.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "ok"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "relationshipType": "root",
+      "ts": "2026-04-22T00:00:00.000Z",
+      "sourceVersion": "2.1.97"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "userUuid": "u-side-1",
+      "ts": "2026-04-22T00:00:00.000Z",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 16,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "userUuid": "u-main-1",
+      "ts": "2026-04-22T00:00:01.000Z",
+      "followingMessageId": "msg_x",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 23,
+          "approxTokens": 6
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      "msg_x",
+      "req_x"
+    ]
+  ]
+}
