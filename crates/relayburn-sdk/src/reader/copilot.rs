@@ -541,10 +541,11 @@ impl PendingCandidate {
                 if let Some(trace) = &self.trace_id {
                     if !resume.chat_trace_ids.contains(trace) {
                         resume.chat_trace_ids.push(trace.clone());
-                        if resume.chat_trace_ids.len() > CHAT_TRACE_ID_CAP {
-                            let overflow = resume.chat_trace_ids.len() - CHAT_TRACE_ID_CAP;
-                            resume.chat_trace_ids.drain(..overflow);
-                        }
+                        let overflow = resume
+                            .chat_trace_ids
+                            .len()
+                            .saturating_sub(CHAT_TRACE_ID_CAP);
+                        resume.chat_trace_ids.drain(..overflow);
                     }
                 }
             }

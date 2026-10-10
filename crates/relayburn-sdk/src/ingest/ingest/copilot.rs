@@ -245,3 +245,6 @@ impl DerivedRecords for ParseCopilotIncrementalResult {
         &self.turns
     }
 }
+
+#[cfg(test)]
+mod tests;

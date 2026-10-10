@@ -489,11 +489,27 @@ fn ingest_copilot_sessions_requires_exporter_env_var() {
     assert_eq!(report.scanned_sessions, 0);
     assert_eq!(report.appended_turns, 0);
 
-    // Opting in picks the same file up.
+    // Opting in picks the same file up, once: the exporter path and the
+    // otel-dir glob name the same file.
     std::env::set_var("COPILOT_OTEL_FILE_EXPORTER_PATH", &export_file);
     let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.scanned_sessions, 1);
     assert_eq!(report.appended_turns, 1);
     let turns = ledger.query_turns(&Query::for_session("conv-g")).unwrap();
+    assert_eq!(turns.len(), 1);
+
+    // An exporter file outside the otel dir is scanned alongside the dir.
+    let outside = tmp.path().join("elsewhere.jsonl");
+    fs::write(
+        &outside,
+        "{\"type\":\"span\",\"traceId\":\"t-o\",\"spanId\":\"s-o\",\"name\":\"chat m\",\"startTime\":[1775934261,0],\"attributes\":{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-o\",\"gen_ai.usage.input_tokens\":11,\"gen_ai.usage.output_tokens\":3}}\n",
+    )
+    .unwrap();
+    std::env::set_var("COPILOT_OTEL_FILE_EXPORTER_PATH", &outside);
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.scanned_sessions, 2);
+    assert_eq!(report.appended_turns, 1);
+    let turns = ledger.query_turns(&Query::for_session("conv-o")).unwrap();
     assert_eq!(turns.len(), 1);
 }
 
@@ -515,6 +531,40 @@ fn ingest_copilot_sessions_is_a_noop_without_exporter_files() {
     let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
     assert_eq!(report.scanned_sessions, 0);
     assert_eq!(report.appended_turns, 0);
+}
+
+#[test]
+fn ingest_all_reports_each_harness_scan_in_order() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = std::sync::Arc::clone(&seen);
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots: pinned_roots(&tmp),
+        force_scan: true,
+        on_progress: Some(Box::new(move |msg: &str| {
+            sink.lock().unwrap().push(msg.to_string())
+        })),
+        ..Default::default()
+    };
+    ingest_all(&mut ledger, &opts).unwrap();
+    let scans: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|m| m.starts_with("scanning "))
+        .cloned()
+        .collect();
+    assert_eq!(
+        scans,
+        [
+            "scanning Claude Code sessions",
+            "scanning Codex sessions",
+            "scanning OpenCode sessions",
+            "scanning Copilot CLI OTEL exports",
+        ]
+    );
 }
 
 #[test]

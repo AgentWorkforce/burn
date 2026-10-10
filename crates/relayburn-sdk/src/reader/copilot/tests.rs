@@ -337,3 +337,26 @@ fn empty_and_missing_files() {
             .is_err()
     );
 }
+
+#[test]
+fn chat_trace_ids_stay_bounded_and_evict_oldest() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("copilot.jsonl");
+    let mut body = String::new();
+    for i in 0..=CHAT_TRACE_ID_CAP {
+        body.push_str(&format!(
+            "{{\"type\":\"span\",\"traceId\":\"t-cap-{i}\",\"spanId\":\"s-cap-{i}\",\"name\":\"chat m\",\"startTime\":[1775934260,{i}],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-cap\",\"gen_ai.usage.input_tokens\":10,\"gen_ai.usage.output_tokens\":2}}}}\n"
+        ));
+    }
+    std::fs::write(&path, body).unwrap();
+    let parsed =
+        parse_copilot_otel_incremental(&path, &ParseCopilotIncrementalOptions::default()).unwrap();
+    assert_eq!(parsed.turns.len(), CHAT_TRACE_ID_CAP + 1);
+    let ids = &parsed.resume.chat_trace_ids;
+    assert_eq!(ids.len(), CHAT_TRACE_ID_CAP);
+    assert_eq!(ids.first().map(String::as_str), Some("t-cap-1"));
+    assert_eq!(
+        ids.last().map(String::as_str),
+        Some(format!("t-cap-{CHAT_TRACE_ID_CAP}").as_str())
+    );
+}
