@@ -253,8 +253,11 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
         priced_turns: acc.priced_turns,
         total_cost: acc.total_cost,
         // `cost_per_turn` is `None` unless every turn in this cell is
-        // priced — a partial average would misrepresent unknown cost.
-        cost_per_turn: (acc.priced_turns == acc.turns).then(|| acc.total_cost / acc.turns as f64),
+        // priced — a partial average would misrepresent unknown cost — and
+        // the cell made at least one model request (zero-request Codex
+        // records have no per-request average).
+        cost_per_turn: (acc.turns > 0 && acc.priced_turns == acc.turns)
+            .then(|| acc.total_cost / acc.turns as f64),
         one_shot_rate: if acc.edit_turns > 0 {
             Some(acc.one_shot_turns as f64 / acc.edit_turns as f64)
         } else {
