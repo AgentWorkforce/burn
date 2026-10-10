@@ -99,7 +99,7 @@ fn user_turn(following: &str, kind: UserTurnBlockKind) -> UserTurnRecord {
 }
 
 fn detect(turns: &[TurnRecord]) -> Vec<CacheExpiry> {
-    detect_cache_expiry(turns, &[], &pricing())
+    detect_cache_expiry(turns, &[], &pricing(), None)
 }
 
 fn single_event(turns: &[TurnRecord]) -> CacheExpiryEvent {
@@ -166,12 +166,22 @@ fn defaults_to_five_minute_ttl_before_any_cache_write() {
 }
 
 #[test]
-fn warm_cache_reads_are_not_expiry() {
-    // cache_read at exactly half the previous context counts as warm.
-    let turns = [warm_1h("a", 0), turn("b", 120, usage(50_000, 0, 51_000))];
+fn counts_only_the_previous_context_left_unread() {
+    // 100k previous context; reading all but 1,023 tokens is a warm cache.
+    let turns = [warm_1h("a", 0), turn("b", 120, usage(98_977, 0, 2_000))];
     assert!(detect(&turns).is_empty());
-    let event = single_event(&[warm_1h("a", 0), turn("b", 120, usage(49_999, 0, 51_000))]);
-    assert_eq!(event.recreated_tokens, 50_001);
+    let event = single_event(&[warm_1h("a", 0), turn("b", 120, usage(98_976, 0, 2_000))]);
+    assert_eq!(event.recreated_tokens, 1_024);
+}
+
+#[test]
+fn mixed_ttl_writes_expire_on_the_five_minute_portion() {
+    // 20k 1-hour prefix stays warm; the 80k 5-minute suffix expires.
+    let mixed = turn("a", 0, usage(0, 80_000, 20_000));
+    assert!(detect(&[mixed.clone(), turn("b", 5, usage(20_000, 80_000, 0))]).is_empty());
+    let event = single_event(&[mixed, turn("b", 10, usage(20_000, 80_000, 0))]);
+    assert_eq!(event.ttl, CacheTtl::FiveMinutes);
+    assert_eq!(event.recreated_tokens, 80_000);
 }
 
 #[test]
@@ -193,10 +203,21 @@ fn compacted_context_is_not_expiry() {
 }
 
 #[test]
-fn model_switch_is_not_expiry() {
-    let mut switched = turn("b", 120, usage(0, 0, 101_000));
-    switched.model = "other-model".into();
-    assert!(detect(&[warm_1h("a", 0), switched]).is_empty());
+fn each_model_keeps_its_own_cache() {
+    let mut other_model = turn("b", 5, usage(0, 0, 101_000));
+    other_model.model = "other-model".into();
+    let mut synthetic = turn("s", 6, Usage::default());
+    synthetic.model = "<synthetic>".into();
+    // The other model's cold write is not this model's expiry; returning to
+    // this model is measured against its own last turn.
+    let event = single_event(&[
+        warm_1h("a", 0),
+        other_model,
+        synthetic,
+        turn("c", 120, usage(0, 0, 101_000)),
+    ]);
+    assert_eq!(event.message_id, "c");
+    assert_eq!(event.gap_ms, 120 * 60_000);
 }
 
 #[test]
@@ -212,7 +233,7 @@ fn ignores_recreations_below_the_minimum_cacheable_prefix() {
 #[test]
 fn unpriced_models_are_skipped() {
     let turns = [warm_1h("a", 0), turn("b", 120, usage(0, 0, 101_000))];
-    assert!(detect_cache_expiry(&turns, &[], &PricingTable::new()).is_empty());
+    assert!(detect_cache_expiry(&turns, &[], &PricingTable::new(), None).is_empty());
 }
 
 #[test]
@@ -226,6 +247,80 @@ fn subagent_turns_do_not_share_the_main_thread_cache() {
     let event = single_event(&turns);
     assert_eq!(event.message_id, "main-2");
     assert_eq!(event.recreated_tokens, 100_000);
+}
+
+fn unidentified_sidechain_turn(message_id: &str, minutes: i64, usage: Usage) -> TurnRecord {
+    let mut t = subagent_turn(message_id, minutes, usage);
+    t.subagent.as_mut().unwrap().agent_id = None;
+    t
+}
+
+#[test]
+fn unidentified_sidechains_beside_a_main_thread_are_skipped() {
+    let turns = [
+        turn("main-1", 0, usage(90_000, 9_990, 0)),
+        unidentified_sidechain_turn("side-1", 3, usage(0, 2_000, 0)),
+        unidentified_sidechain_turn("side-2", 40, usage(0, 50_000, 0)),
+        turn("main-2", 20, usage(0, 100_000, 0)),
+    ];
+    let event = single_event(&turns);
+    assert_eq!(event.message_id, "main-2");
+    assert_eq!(event.recreated_tokens, 100_000);
+}
+
+#[test]
+fn an_unidentified_sidechain_session_is_its_own_cache() {
+    let mut turns = [
+        unidentified_sidechain_turn("child-1", 0, usage(90_000, 9_990, 0)),
+        unidentified_sidechain_turn("child-2", 20, usage(0, 100_000, 0)),
+    ];
+    for t in &mut turns {
+        t.session_id = "child".into();
+    }
+    assert_eq!(single_event(&turns).message_id, "child-2");
+}
+
+#[test]
+fn window_start_reports_only_resumes_inside_the_window() {
+    let turns = [
+        warm_1h("a", 0),
+        turn("b", 120, usage(0, 0, 101_000)),
+        turn("c", 300, usage(0, 0, 101_100)),
+    ];
+    let in_window = |start: &str| -> Vec<String> {
+        detect_cache_expiry(&turns, &[], &pricing(), Some(start))
+            .into_iter()
+            .flat_map(|e| e.events)
+            .map(|e| e.message_id)
+            .collect()
+    };
+    assert_eq!(in_window(&at(60)), ["b", "c"]);
+    assert_eq!(in_window(&at(120)), ["b", "c"]);
+    assert_eq!(in_window(&at(121)), ["c"]);
+}
+
+#[test]
+fn cache_state_turns_keep_the_latest_turn_and_latest_write_per_cache() {
+    let mut other_model = turn("x", 20, usage(0, 0, 5_000));
+    other_model.model = "other-model".into();
+    let history = [
+        turn("b", 10, usage(100_000, 0, 0)),
+        warm_1h("a", 0),
+        turn("old", 0, usage(0, 0, 0)),
+        other_model,
+    ];
+    let mut kept: Vec<String> = cache_state_turns(&history)
+        .into_iter()
+        .map(|t| t.message_id)
+        .collect();
+    kept.sort();
+    assert_eq!(kept, ["a", "b", "x"]);
+
+    // b only read the cache; a's 1-hour write still sets the TTL, so a
+    // resume 30 minutes after b is warm.
+    let mut window = cache_state_turns(&history);
+    window.push(turn("c", 40, usage(0, 0, 101_000)));
+    assert!(detect_cache_expiry(&window, &[], &pricing(), Some(&at(30))).is_empty());
 }
 
 #[test]
@@ -267,7 +362,7 @@ fn classifies_cause_from_the_preceding_user_turn() {
         user_turn("b", UserTurnBlockKind::Text),
         user_turn("c", UserTurnBlockKind::ToolResult),
     ];
-    let found = detect_cache_expiry(&turns, &user_turns, &pricing());
+    let found = detect_cache_expiry(&turns, &user_turns, &pricing(), None);
     let causes: Vec<ExpiryCause> = found[0].events.iter().map(|e| e.cause).collect();
     assert_eq!(causes, [ExpiryCause::UserIdle, ExpiryCause::ToolWait]);
 }

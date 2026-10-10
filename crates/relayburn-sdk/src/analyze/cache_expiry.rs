@@ -2,24 +2,25 @@
 //!
 //! A prompt cache entry lives for its TTL (5 minutes by default, 1 hour when
 //! written with the 1-hour TTL) and every read refreshes it. When the next
-//! turn of the same agent starts after the TTL has lapsed, the provider no
-//! longer has the prefix: the turn re-writes the whole context at the
-//! cache-write tariff instead of reading it at the cache-read tariff. This
-//! detector finds those turns and prices the difference.
+//! turn on the same cache starts after the TTL has lapsed, the provider no
+//! longer has the prefix: the turn re-writes the context at the cache-write
+//! tariff instead of reading it at the cache-read tariff. This detector finds
+//! those turns and prices the difference.
 //!
-//! Each agent (main thread or subagent) owns its own cache prefix, so turns
-//! are bucketed by `(session_id, subagent.agent_id)` and ordered by
-//! timestamp. A turn counts as a cache expiry when, relative to the previous
-//! turn of the same agent and model:
+//! A cache belongs to one owner (main thread or subagent) and one model, so
+//! turns are bucketed by `(session_id, owner, model)` and ordered by
+//! timestamp. A sidechain without a resolved agent id is its own cache only
+//! when it is the whole session (OpenCode child sessions); inside a session
+//! with main-thread turns its identity is unknown and it is skipped. A turn
+//! counts as a cache expiry when, relative to the previous turn on its cache:
 //!
-//! - the gap exceeds the TTL of the most recent cache write,
-//! - its cache read covers less than half of the previous context (the
-//!   prefix was not served from cache),
-//! - its own context is at least half of the previous context (the context
-//!   was re-created, not compacted), and
-//! - it wrote at least [`MIN_RECREATED_TOKENS`] tokens to the cache.
+//! - the gap exceeds the shortest TTL of the most recent cache write,
+//! - its context is at least half of the previous context (re-created, not
+//!   compacted), and
+//! - it re-wrote at least [`MIN_RECREATED_TOKENS`] of the previous context's
+//!   tokens that it did not read from the cache.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 
@@ -59,12 +60,14 @@ impl CacheTtl {
         }
     }
 
-    /// TTL of the cache entries a turn wrote, if it wrote any.
+    /// Shortest TTL among the cache entries a turn wrote, if it wrote any:
+    /// the 5-minute portion expires first and its loss is what an early
+    /// resume re-writes.
     fn written_by(usage: &Usage) -> Option<Self> {
-        if usage.cache_create_1h > 0 {
-            Some(CacheTtl::OneHour)
-        } else if usage.cache_create_5m > 0 {
+        if usage.cache_create_5m > 0 {
             Some(CacheTtl::FiveMinutes)
+        } else if usage.cache_create_1h > 0 {
+            Some(CacheTtl::OneHour)
         } else {
             None
         }
@@ -108,15 +111,20 @@ impl CacheExpiry {
     }
 }
 
+/// Detect cache expiries in `turns`. With `window_start`, turns before it
+/// (ISO timestamps, compared as strings like `Query::since`) only supply the
+/// previous cache state; expiries are reported for resumed turns at or after
+/// it.
 pub(crate) fn detect_cache_expiry(
     turns: &[TurnRecord],
     user_turns: &[UserTurnRecord],
     pricing: &PricingTable,
+    window_start: Option<&str>,
 ) -> Vec<CacheExpiry> {
     let causes = causes_by_following_message(user_turns);
     let mut by_session: IndexMap<&str, Vec<CacheExpiryEvent>> = IndexMap::new();
-    for ((session_id, _agent), agent_turns) in turns_by_agent(turns) {
-        let events = detect_for_agent(&agent_turns, &causes, pricing);
+    for ((session_id, _, _), cache_turns) in turns_by_cache(turns) {
+        let events = detect_for_cache(&cache_turns, &causes, pricing, window_start);
         if !events.is_empty() {
             by_session.entry(session_id).or_default().extend(events);
         }
@@ -148,35 +156,102 @@ fn causes_by_following_message(user_turns: &[UserTurnRecord]) -> HashMap<&str, E
         .collect()
 }
 
+/// Whose prompt cache a turn reads and writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum CacheOwner<'a> {
+    Main,
+    Agent(&'a str),
+    /// A sidechain whose agent id the reader could not resolve.
+    UnidentifiedSidechain,
+}
+
+impl<'a> CacheOwner<'a> {
+    fn of(turn: &'a TurnRecord) -> Self {
+        match &turn.subagent {
+            None => CacheOwner::Main,
+            Some(s) => s
+                .agent_id
+                .as_deref()
+                .map_or(CacheOwner::UnidentifiedSidechain, CacheOwner::Agent),
+        }
+    }
+}
+
+type CacheKey<'a> = (&'a str, CacheOwner<'a>, &'a str);
+
+fn cache_key(turn: &TurnRecord) -> CacheKey<'_> {
+    (&turn.session_id, CacheOwner::of(turn), &turn.model)
+}
+
+/// The turns of `history` that carry each cache's state into a later
+/// window: per cache, its latest turn and its latest cache-writing turn
+/// (which sets the TTL the latest turn's reads refresh).
+pub(crate) fn cache_state_turns(history: &[TurnRecord]) -> Vec<TurnRecord> {
+    let mut latest: HashMap<CacheKey<'_>, &TurnRecord> = HashMap::new();
+    let mut latest_write: HashMap<CacheKey<'_>, &TurnRecord> = HashMap::new();
+    for turn in history {
+        let key = cache_key(turn);
+        keep_later(&mut latest, key, turn);
+        if CacheTtl::written_by(&turn.usage).is_some() {
+            keep_later(&mut latest_write, key, turn);
+        }
+    }
+    let mut out: Vec<TurnRecord> = latest.into_values().cloned().collect();
+    for turn in latest_write.into_values() {
+        if !out.iter().any(|t| t.message_id == turn.message_id) {
+            out.push(turn.clone());
+        }
+    }
+    out
+}
+
+fn keep_later<'a>(
+    map: &mut HashMap<CacheKey<'a>, &'a TurnRecord>,
+    key: CacheKey<'a>,
+    turn: &'a TurnRecord,
+) {
+    let slot = map.entry(key).or_insert(turn);
+    if turn.ts > slot.ts {
+        *slot = turn;
+    }
+}
+
 struct TimedTurn<'a> {
     turn: &'a TurnRecord,
     ts_ms: i64,
 }
 
-/// Bucket turns per agent cache and order each bucket by timestamp. Turns
-/// without a parseable timestamp cannot be placed on the timeline and are
-/// dropped.
-fn turns_by_agent(turns: &[TurnRecord]) -> IndexMap<(&str, Option<&str>), Vec<TimedTurn<'_>>> {
-    let mut out: IndexMap<(&str, Option<&str>), Vec<TimedTurn<'_>>> = IndexMap::new();
+/// Bucket turns per cache and order each bucket by timestamp. Turns without
+/// a parseable timestamp cannot be placed on the timeline and are dropped.
+fn turns_by_cache(turns: &[TurnRecord]) -> IndexMap<CacheKey<'_>, Vec<TimedTurn<'_>>> {
+    let mut out: IndexMap<CacheKey<'_>, Vec<TimedTurn<'_>>> = IndexMap::new();
     for turn in turns {
         let Some(ts_ms) = parse_iso_ms(&turn.ts) else {
             continue;
         };
-        let agent = turn.subagent.as_ref().and_then(|s| s.agent_id.as_deref());
-        out.entry((turn.session_id.as_str(), agent))
+        out.entry(cache_key(turn))
             .or_default()
             .push(TimedTurn { turn, ts_ms });
     }
+    let sessions_with_main: HashSet<&str> = out
+        .keys()
+        .filter(|(_, owner, _)| *owner == CacheOwner::Main)
+        .map(|(session, _, _)| *session)
+        .collect();
+    out.retain(|(session, owner, _), _| {
+        *owner != CacheOwner::UnidentifiedSidechain || !sessions_with_main.contains(session)
+    });
     for bucket in out.values_mut() {
         bucket.sort_by_key(|t| (t.ts_ms, t.turn.turn_index));
     }
     out
 }
 
-fn detect_for_agent(
+fn detect_for_cache(
     turns: &[TimedTurn<'_>],
     causes: &HashMap<&str, ExpiryCause>,
     pricing: &PricingTable,
+    window_start: Option<&str>,
 ) -> Vec<CacheExpiryEvent> {
     let mut out = Vec::new();
     let mut ttl = CacheTtl::FiveMinutes;
@@ -184,7 +259,7 @@ fn detect_for_agent(
         let (prev, cur) = (pair[0].turn, pair[1].turn);
         ttl = CacheTtl::written_by(&prev.usage).unwrap_or(ttl);
         let gap_ms = pair[1].ts_ms - pair[0].ts_ms;
-        if cur.model != prev.model || gap_ms <= ttl.millis() {
+        if window_start.is_some_and(|start| cur.ts.as_str() < start) || gap_ms <= ttl.millis() {
             continue;
         }
         let Some(recreated_tokens) = recreated_prefix(&prev.usage, &cur.usage) else {
@@ -216,16 +291,16 @@ fn context_tokens(usage: &Usage) -> u64 {
         .saturating_add(usage.cache_create_1h)
 }
 
-/// Tokens of the previous context that `cur` re-wrote to the cache, or
-/// `None` when `cur` does not look like a cold re-creation of that context.
+/// Tokens of the previous context that `cur` did not read from the cache and
+/// re-wrote, or `None` when `cur` compacted the context or re-wrote too
+/// little to matter.
 fn recreated_prefix(prev: &Usage, cur: &Usage) -> Option<u64> {
     let prev_context = context_tokens(prev);
-    let half = prev_context / 2;
-    if cur.cache_read >= half || context_tokens(cur) < half {
+    if context_tokens(cur) < prev_context / 2 {
         return None;
     }
     let created = cur.cache_create_5m.saturating_add(cur.cache_create_1h);
-    let recreated = created.min(prev_context - cur.cache_read);
+    let recreated = created.min(prev_context.saturating_sub(cur.cache_read));
     (recreated >= MIN_RECREATED_TOKENS).then_some(recreated)
 }
 

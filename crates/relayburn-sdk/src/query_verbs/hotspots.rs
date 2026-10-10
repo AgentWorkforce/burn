@@ -556,8 +556,8 @@ fn run_hotspots_findings(
     }
 
     if wanted_set.contains("cache-expiry") {
-        let expiries = detect_cache_expiry(turns, &user_turns_all, pricing);
-        findings.extend(expiries.iter().map(cache_expiry_to_finding));
+        let expiries = cache_expiry_findings(handle, turns, &user_turns_all, pricing, q)?;
+        findings.extend(expiries);
     }
 
     if wanted_set.contains("unpriced-usage") {

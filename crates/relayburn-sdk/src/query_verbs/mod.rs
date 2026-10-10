@@ -20,11 +20,10 @@ use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
     aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
     attribute_hotspots, attribute_overhead, build_compare_table, build_ghost_surface_inputs,
-    build_subagent_tree, build_trim_recommendations, cache_expiry_to_finding, cost_for_turn,
-    deltas_for_session, detect_cache_expiry, detect_ghost_surface, detect_patterns,
-    detect_tool_call_patterns, detect_tool_output_bloat, find_overhead_files,
-    findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity, load_claude_settings,
-    load_overhead_file, load_pricing, mark_findings_with_unpriced_sessions,
+    build_subagent_tree, build_trim_recommendations, cost_for_turn, deltas_for_session,
+    detect_ghost_surface, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
+    find_overhead_files, findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity,
+    load_claude_settings, load_overhead_file, load_pricing, mark_findings_with_unpriced_sessions,
     project_claude_settings_path, render_unified_diff_for_recommendation, sort_findings, sum_costs,
     summarize_fidelity, summarize_fidelity_from_iter, summarize_replacement_savings,
     tally_unpriced, tool_call_pattern_to_finding, tool_output_bloat_to_finding,
@@ -406,6 +405,9 @@ pub use sessions::*;
 
 mod overhead;
 pub use overhead::*;
+
+mod cache_expiry;
+use cache_expiry::cache_expiry_findings;
 
 mod hotspots;
 pub use hotspots::*;
