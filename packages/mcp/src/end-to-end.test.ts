@@ -40,6 +40,11 @@ describe('end-to-end: spawn server, call burn__sessionCost, verify cost', () => 
     const output = new PassThrough();
     const responses = collectResponses(output);
     const sessionCost = createSessionCostTool({
+      ledgerFreshness: async () => ({
+        lastWriteAtMs: 1,
+        staleAfterMs: 86_400_000,
+        stale: false,
+      }),
       defaultSessionId: 'S',
       sessionCost: async (opts) => ({
         sessionId: opts.session ?? null,

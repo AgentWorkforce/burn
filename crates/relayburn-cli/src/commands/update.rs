@@ -71,12 +71,14 @@ fn run_update(globals: &GlobalArgs, check_only: bool, force: bool) -> i32 {
 
     if check_only {
         if globals.json {
-            let _ = print_json(&json!({
+            if let Err(err) = print_json(&json!({
                 "current": current.to_string(),
                 "latest": latest.to_string(),
                 "updateAvailable": available,
                 "channel": channel.label(),
-            }));
+            })) {
+                return report_error(&err, globals);
+            }
         } else if available {
             ux::print_info(
                 &format!("Update available: {current} → {latest} (install with `burn update`)."),
@@ -123,7 +125,9 @@ fn run_toggle(globals: &GlobalArgs, toggle: ToggleAutoUpdateArgs) -> i32 {
     }
 
     if globals.json {
-        let _ = print_json(&json!({ "autoUpdate": state.auto_update }));
+        if let Err(err) = print_json(&json!({ "autoUpdate": state.auto_update })) {
+            return report_error(&err, globals);
+        }
     } else if state.auto_update {
         ux::print_success(
             "Auto-update is ON. burn will offer to upgrade itself on launch.",
@@ -150,8 +154,12 @@ fn unknown_channel_error() -> anyhow::Error {
 fn print_json(value: &serde_json::Value) -> std::io::Result<()> {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
-    serde_json::to_writer(&mut out, value).map_err(crate::render::json::serde_error_to_io)?;
+    serde_json::to_writer(&mut out, value)
+        .map_err(crate::render::json::serde_error_to_io)
+        .map_err(crate::render::json::stdout_error)?;
     out.write_all(b"\n")
+        .map_err(crate::render::json::stdout_error)?;
+    out.flush().map_err(crate::render::json::stdout_error)
 }
 
 fn now_unix() -> i64 {
