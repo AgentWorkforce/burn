@@ -111,20 +111,25 @@ impl CacheExpiry {
     }
 }
 
-/// Detect cache expiries in `turns`. With `window_start`, turns before it
-/// (ISO timestamps, compared as strings like `Query::since`) only supply the
-/// previous cache state; expiries are reported for resumed turns at or after
-/// it.
+/// `(session_id, message_id)` of a turn.
+pub(crate) type TurnId<'a> = (&'a str, &'a str);
+
+pub(crate) fn turn_id(turn: &TurnRecord) -> TurnId<'_> {
+    (&turn.session_id, &turn.message_id)
+}
+
+/// Detect cache expiries in `turns`. With `report_only`, the other turns only
+/// supply earlier cache state; expiries are reported for the listed turns.
 pub(crate) fn detect_cache_expiry(
     turns: &[TurnRecord],
     user_turns: &[UserTurnRecord],
     pricing: &PricingTable,
-    window_start: Option<&str>,
+    report_only: Option<&HashSet<TurnId<'_>>>,
 ) -> Vec<CacheExpiry> {
     let causes = causes_by_following_message(user_turns);
     let mut by_session: IndexMap<&str, Vec<CacheExpiryEvent>> = IndexMap::new();
     for ((session_id, _, _), cache_turns) in turns_by_cache(turns) {
-        let events = detect_for_cache(&cache_turns, &causes, pricing, window_start);
+        let events = detect_for_cache(&cache_turns, &causes, pricing, report_only);
         if !events.is_empty() {
             by_session.entry(session_id).or_default().extend(events);
         }
@@ -187,13 +192,14 @@ fn cache_key(turn: &TurnRecord) -> CacheKey<'_> {
 /// window: per cache, its latest turn and its latest cache-writing turn
 /// (which sets the TTL the latest turn's reads refresh).
 pub(crate) fn cache_state_turns(history: &[TurnRecord]) -> Vec<TurnRecord> {
+    let mut chronological: Vec<&TurnRecord> = history.iter().collect();
+    chronological.sort_by_key(|t| (t.ts.as_str(), t.turn_index));
     let mut latest: HashMap<CacheKey<'_>, &TurnRecord> = HashMap::new();
     let mut latest_write: HashMap<CacheKey<'_>, &TurnRecord> = HashMap::new();
-    for turn in history {
-        let key = cache_key(turn);
-        keep_later(&mut latest, key, turn);
+    for turn in chronological {
+        latest.insert(cache_key(turn), turn);
         if CacheTtl::written_by(&turn.usage).is_some() {
-            keep_later(&mut latest_write, key, turn);
+            latest_write.insert(cache_key(turn), turn);
         }
     }
     let mut out: Vec<TurnRecord> = latest.into_values().cloned().collect();
@@ -203,17 +209,6 @@ pub(crate) fn cache_state_turns(history: &[TurnRecord]) -> Vec<TurnRecord> {
         }
     }
     out
-}
-
-fn keep_later<'a>(
-    map: &mut HashMap<CacheKey<'a>, &'a TurnRecord>,
-    key: CacheKey<'a>,
-    turn: &'a TurnRecord,
-) {
-    let slot = map.entry(key).or_insert(turn);
-    if turn.ts > slot.ts {
-        *slot = turn;
-    }
 }
 
 struct TimedTurn<'a> {
@@ -251,7 +246,7 @@ fn detect_for_cache(
     turns: &[TimedTurn<'_>],
     causes: &HashMap<&str, ExpiryCause>,
     pricing: &PricingTable,
-    window_start: Option<&str>,
+    report_only: Option<&HashSet<TurnId<'_>>>,
 ) -> Vec<CacheExpiryEvent> {
     let mut out = Vec::new();
     let mut ttl = CacheTtl::FiveMinutes;
@@ -259,7 +254,8 @@ fn detect_for_cache(
         let (prev, cur) = (pair[0].turn, pair[1].turn);
         ttl = CacheTtl::written_by(&prev.usage).unwrap_or(ttl);
         let gap_ms = pair[1].ts_ms - pair[0].ts_ms;
-        if window_start.is_some_and(|start| cur.ts.as_str() < start) || gap_ms <= ttl.millis() {
+        let reported = report_only.is_none_or(|ids| ids.contains(&turn_id(cur)));
+        if !reported || gap_ms <= ttl.millis() {
             continue;
         }
         let Some(recreated_tokens) = recreated_prefix(&prev.usage, &cur.usage) else {

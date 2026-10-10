@@ -281,22 +281,23 @@ fn an_unidentified_sidechain_session_is_its_own_cache() {
 }
 
 #[test]
-fn window_start_reports_only_resumes_inside_the_window() {
+fn report_only_limits_events_to_the_listed_turns() {
     let turns = [
         warm_1h("a", 0),
         turn("b", 120, usage(0, 0, 101_000)),
         turn("c", 300, usage(0, 0, 101_100)),
     ];
-    let in_window = |start: &str| -> Vec<String> {
-        detect_cache_expiry(&turns, &[], &pricing(), Some(start))
+    let reported = |ids: &[&str]| -> Vec<String> {
+        let ids: HashSet<TurnId<'_>> = ids.iter().map(|id| ("s", *id)).collect();
+        detect_cache_expiry(&turns, &[], &pricing(), Some(&ids))
             .into_iter()
             .flat_map(|e| e.events)
             .map(|e| e.message_id)
             .collect()
     };
-    assert_eq!(in_window(&at(60)), ["b", "c"]);
-    assert_eq!(in_window(&at(120)), ["b", "c"]);
-    assert_eq!(in_window(&at(121)), ["c"]);
+    assert_eq!(reported(&["b", "c"]), ["b", "c"]);
+    assert_eq!(reported(&["c"]), ["c"]);
+    assert!(reported(&["a"]).is_empty());
 }
 
 #[test]
@@ -320,7 +321,8 @@ fn cache_state_turns_keep_the_latest_turn_and_latest_write_per_cache() {
     // resume 30 minutes after b is warm.
     let mut window = cache_state_turns(&history);
     window.push(turn("c", 40, usage(0, 0, 101_000)));
-    assert!(detect_cache_expiry(&window, &[], &pricing(), Some(&at(30))).is_empty());
+    let report: HashSet<TurnId<'_>> = HashSet::from([("s", "c")]);
+    assert!(detect_cache_expiry(&window, &[], &pricing(), Some(&report)).is_empty());
 }
 
 #[test]
