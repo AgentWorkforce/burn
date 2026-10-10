@@ -51,6 +51,9 @@ use crate::ingest::reingest::derive_codex_session_id;
 use crate::ingest::walk::{list_dirs, list_jsonl_files, walk_jsonl, walk_opencode_sessions};
 use crate::util::home_dir;
 
+mod copilot;
+pub use copilot::ingest_copilot_sessions;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestReport {
@@ -116,6 +119,9 @@ pub struct IngestRoots {
     pub claude_projects_dir: Option<PathBuf>,
     pub codex_sessions_dir: Option<PathBuf>,
     pub opencode_storage_dir: Option<PathBuf>,
+    /// Copilot CLI OTEL export files; `None` resolves the env-gated
+    /// defaults (see `copilot::copilot_otel_files`).
+    pub copilot_otel_files: Option<Vec<PathBuf>>,
 }
 
 pub(crate) fn claude_projects_dir(roots: &IngestRoots) -> PathBuf {
@@ -153,15 +159,17 @@ pub(crate) fn opencode_session_root(roots: &IngestRoots) -> PathBuf {
 /// [`IngestRoots`] to override individual paths; defaults still come
 /// from `$HOME` for fields left `None`.
 ///
-/// Returns the Claude / Codex / OpenCode roots in that order — the
-/// caller doesn't have to filter for existence; the FS-event driver
+/// Returns the Claude / Codex / OpenCode / Copilot roots in that order —
+/// the caller doesn't have to filter for existence; the FS-event driver
 /// silently skips any path that doesn't yet exist.
 pub fn default_session_roots(roots: &IngestRoots) -> Vec<PathBuf> {
-    vec![
+    let mut dirs = vec![
         claude_projects_dir(roots),
         codex_sessions_dir(roots),
         opencode_storage_dir(roots),
-    ]
+    ];
+    copilot::push_watch_dirs(roots, &mut dirs);
+    dirs
 }
 
 pub(crate) fn opencode_message_root(roots: &IngestRoots) -> PathBuf {
@@ -264,6 +272,8 @@ fn source_fingerprint(roots: &IngestRoots) -> String {
         }
     }
 
+    copilot::fingerprint_exports(roots, &mut count, &mut total_bytes, &mut hash_sum);
+
     format!("{count}:{total_bytes}:{hash_sum:016x}")
 }
 
@@ -345,41 +355,25 @@ pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<I
     // Emit per-adapter, immediately after each scan, so a later adapter
     // returning Err does not swallow a gap the earlier adapter already
     // recorded against work that was already appended.
-    progress(opts, "scanning Claude Code sessions");
-    let r = ingest_claude_into(
-        ledger,
-        &mut after,
-        &opts.roots,
-        content_mode,
-        opts.ledger_home.as_deref(),
-        &mut had_skips,
-    )?;
-    report.merge(&r);
-    emit_gap_warning(AdapterName::Claude, content_mode, on_warn);
-
-    progress(opts, "scanning Codex sessions");
-    let r = ingest_codex_into(
-        ledger,
-        &mut after,
-        &opts.roots,
-        content_mode,
-        opts.ledger_home.as_deref(),
-        &mut had_skips,
-    )?;
-    report.merge(&r);
-    emit_gap_warning(AdapterName::Codex, content_mode, on_warn);
-
-    progress(opts, "scanning OpenCode sessions");
-    let r = ingest_opencode_into(
-        ledger,
-        &mut after,
-        &opts.roots,
-        content_mode,
-        opts.ledger_home.as_deref(),
-        &mut had_skips,
-    )?;
-    report.merge(&r);
-    emit_gap_warning(AdapterName::Opencode, content_mode, on_warn);
+    let harnesses: [(AdapterName, HarnessIngest); 4] = [
+        (AdapterName::Claude, ingest_claude_into),
+        (AdapterName::Codex, ingest_codex_into),
+        (AdapterName::Opencode, ingest_opencode_into),
+        (AdapterName::Copilot, copilot::ingest_copilot_into),
+    ];
+    for (adapter, body) in harnesses {
+        progress(opts, adapter.scan_label());
+        let r = body(
+            ledger,
+            &mut after,
+            &opts.roots,
+            content_mode,
+            opts.ledger_home.as_deref(),
+            &mut had_skips,
+        )?;
+        report.merge(&r);
+        emit_gap_warning(adapter, content_mode, on_warn);
+    }
 
     progress(opts, "saving ingest cursors");
     save_cursors_if_changed(ledger, &before, &after).map_err(|e| anyhow::anyhow!(e))?;
@@ -432,26 +426,27 @@ pub fn ingest_opencode_sessions(
     run_single_harness(ledger, opts, AdapterName::Opencode, ingest_opencode_into)
 }
 
+/// One harness's ingest body: scan its sources against the cursors and
+/// append what changed. Shared by `ingest_all` and the per-harness verbs.
+type HarnessIngest = fn(
+    &mut Ledger,
+    &mut Cursors,
+    &IngestRoots,
+    ContentStoreMode,
+    Option<&Path>,
+    &mut bool,
+) -> anyhow::Result<IngestReport>;
+
 /// Shared boilerplate for the per-harness verbs: clean stale stamps, snapshot
 /// cursors, resolve content mode, run the harness body, emit any pending gap
 /// warning for that adapter, then persist cursor mutations. The per-harness
 /// `ingest_*_into` functions plug straight in as `body`.
-fn run_single_harness<F>(
+fn run_single_harness(
     ledger: &mut Ledger,
     opts: &IngestOptions,
     adapter: AdapterName,
-    body: F,
-) -> anyhow::Result<IngestReport>
-where
-    F: FnOnce(
-        &mut Ledger,
-        &mut Cursors,
-        &IngestRoots,
-        ContentStoreMode,
-        Option<&Path>,
-        &mut bool,
-    ) -> anyhow::Result<IngestReport>,
-{
+    body: HarnessIngest,
+) -> anyhow::Result<IngestReport> {
     progress(opts, "cleaning pending spawn stamps");
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     let before = load_cursors(ledger).map_err(|e| anyhow::anyhow!(e))?;

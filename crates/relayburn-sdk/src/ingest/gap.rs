@@ -48,6 +48,7 @@ pub enum AdapterName {
     Claude,
     Codex,
     Opencode,
+    Copilot,
 }
 
 impl AdapterName {
@@ -56,6 +57,17 @@ impl AdapterName {
             AdapterName::Claude => "claude",
             AdapterName::Codex => "codex",
             AdapterName::Opencode => "opencode",
+            AdapterName::Copilot => "copilot",
+        }
+    }
+
+    /// Progress label `ingest_all` shows while this adapter scans.
+    pub(crate) fn scan_label(self) -> &'static str {
+        match self {
+            AdapterName::Claude => "scanning Claude Code sessions",
+            AdapterName::Codex => "scanning Codex sessions",
+            AdapterName::Opencode => "scanning OpenCode sessions",
+            AdapterName::Copilot => "scanning Copilot CLI OTEL exports",
         }
     }
 }

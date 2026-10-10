@@ -7,7 +7,8 @@
 //! ## Wire layout
 //!
 //! `{"files": {"<absolute path>": <cursor>}}`. The cursor variant is tagged
-//! by `kind`: `"claude" | "codex" | "opencode" | "opencode-stream"`. Field
+//! by `kind`: `"claude" | "codex" | "opencode" | "copilot" |
+//! "opencode-stream"`. Field
 //! names are camelCase to match the TS schema so a Rust ingest can pick up
 //! cursors a TS ingest wrote, and vice versa, during the migration.
 
@@ -68,6 +69,23 @@ pub struct OpencodeCursor {
     pub seen_message_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotCursor {
+    pub inode: u64,
+    pub offset_bytes: u64,
+    pub mtime_ms: i64,
+    /// Next `turn_index` per session id, so a continued session keeps
+    /// numbering across incremental passes and exporter rotations.
+    #[serde(default)]
+    pub session_turn_counts: BTreeMap<String, u64>,
+    /// Trace ids known to contain a `chat` span; suppresses the
+    /// double-counting `invoke_agent` aggregate for those traces. Bounded
+    /// by the parser at a few thousand entries.
+    #[serde(default)]
+    pub chat_trace_ids: Vec<String>,
+}
+
 /// Tagged-union cursor variants. The Codex variant is heap-boxed because it
 /// carries a per-turn map and dwarfs the others — keeping the enum payload
 /// size sane keeps `Cursors` cheap to clone in the orchestration hot path.
@@ -77,6 +95,8 @@ pub enum FileCursor {
     Claude(ClaudeCursor),
     Codex(Box<CodexCursor>),
     Opencode(OpencodeCursor),
+    #[serde(rename = "copilot")]
+    Copilot(CopilotCursor),
     #[serde(rename = "opencode-stream")]
     OpencodeStream(Value),
 }

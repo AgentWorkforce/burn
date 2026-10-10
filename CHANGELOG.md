@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn ingest` collects GitHub Copilot CLI usage from the OpenTelemetry file exporter while `COPILOT_OTEL_FILE_EXPORTER_PATH` is set (the exporter file plus `~/.copilot/otel/*.jsonl`), recording per-API-call token usage as `copilot-cli` turns with usage-only fidelity; the opt-in setup is printed by the new `burn init copilot` helper.
+- Pending spawn stamps attach to sessions whose transcript mtime trails the spawn by up to two seconds, covering coarse filesystem timestamp clocks that previously left freshly spawned sessions unstamped.
 - `burn hotspots --findings` adds a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL.
 - Pricing bills Claude 1-hour cache writes at 2x the input tariff on every host (Anthropic, Vertex AI, Bedrock; 5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Claude models keep a single cache-write tariff.
 - Turns whose usage was measured as zero price at $0 regardless of model, so Claude Code's `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session; unmeasured usage stays unpriced. `burn compare` shows cost per turn only for fully priced cells.

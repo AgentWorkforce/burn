@@ -38,6 +38,7 @@ fn roots_overrides_take_priority() {
         claude_projects_dir: Some(PathBuf::from("/x/claude")),
         codex_sessions_dir: Some(PathBuf::from("/x/codex")),
         opencode_storage_dir: Some(PathBuf::from("/x/oc")),
+        copilot_otel_files: Some(vec![]),
     };
     assert_eq!(claude_projects_dir(&roots), PathBuf::from("/x/claude"));
     assert_eq!(codex_sessions_dir(&roots), PathBuf::from("/x/codex"));
@@ -51,6 +52,7 @@ fn source_fingerprint_is_stable_and_moves_on_change() {
         claude_projects_dir: Some(tmp.path().join("claude")),
         codex_sessions_dir: Some(tmp.path().join("codex")),
         opencode_storage_dir: Some(tmp.path().join("opencode")),
+        copilot_otel_files: Some(vec![]),
     };
     // Empty roots: well-formed, stable, and identical across calls.
     let empty = source_fingerprint(&roots);
@@ -94,6 +96,7 @@ fn source_fingerprint_moves_on_new_opencode_message_file() {
         claude_projects_dir: Some(tmp.path().join("claude")),
         codex_sessions_dir: Some(tmp.path().join("codex")),
         opencode_storage_dir: Some(storage.clone()),
+        copilot_otel_files: Some(vec![]),
     };
 
     let session_dir = storage.join("session");

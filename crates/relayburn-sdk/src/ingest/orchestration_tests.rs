@@ -32,7 +32,8 @@ use std::path::{Path, PathBuf};
 use crate::ingest::cursors::{load_cursors, ClaudeCursor, FileCursor};
 use crate::ingest::ingest::{
     ingest_all, ingest_claude_projects, ingest_claude_session, ingest_claude_transcript_path,
-    ingest_codex_sessions, ingest_opencode_sessions, IngestOptions, IngestRoots,
+    ingest_codex_sessions, ingest_copilot_sessions, ingest_opencode_sessions, IngestOptions,
+    IngestRoots,
 };
 use crate::ingest::pending_stamps::{write_pending_stamp, PendingStampHarness, WriteOptions};
 use crate::ledger::{Enrichment, Ledger, LedgerLayout, Query};
@@ -123,6 +124,7 @@ fn pinned_roots(tmp: &TempDir) -> IngestRoots {
         claude_projects_dir: Some(tmp.path().join("claude").join("projects")),
         codex_sessions_dir: Some(tmp.path().join("codex").join("sessions")),
         opencode_storage_dir: Some(tmp.path().join("opencode").join("storage")),
+        copilot_otel_files: Some(vec![]),
     }
 }
 
@@ -288,6 +290,380 @@ fn ingest_opencode_sessions_round_trips_a_fixture_session() {
         Some(FileCursor::Opencode(_)) => {}
         other => panic!("expected OpencodeCursor for {key}, got {other:?}"),
     }
+}
+
+#[test]
+fn ingest_copilot_sessions_round_trips_otel_spans() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+
+    let otel_dir = tmp.path().join("copilot").join("otel");
+    fs::create_dir_all(&otel_dir).unwrap();
+    let export_file = otel_dir.join("copilot.jsonl");
+    let span = |trace: &str, span: &str, input: u64, output: u64| {
+        format!(
+            "{{\"type\":\"span\",\"traceId\":\"{trace}\",\"spanId\":\"{span}\",\"name\":\"chat claude-sonnet-4.6\",\"startTime\":[1775934260,0],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.response.model\":\"claude-sonnet-4.6\",\"gen_ai.conversation.id\":\"conv-1\",\"gen_ai.usage.input_tokens\":{input},\"gen_ai.usage.output_tokens\":{output}}}}}"
+        )
+    };
+    fs::write(
+        &export_file,
+        format!(
+            "{}\n{}\n",
+            span("t-1", "s-1", 100, 10),
+            span("t-1", "s-2", 200, 20)
+        ),
+    )
+    .unwrap();
+
+    let roots = IngestRoots {
+        copilot_otel_files: Some(vec![export_file.clone()]),
+        ..pinned_roots(&tmp)
+    };
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.appended_turns, 2);
+    assert_eq!(report.ingested_sessions, 1);
+
+    let turns = ledger.query_turns(&Query::for_session("conv-1")).unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].turn.source, crate::reader::SourceKind::CopilotCli);
+    assert_eq!(turns[0].turn.turn_index, 0);
+    assert_eq!(turns[1].turn.turn_index, 1);
+    assert_eq!(turns[0].turn.usage.input, 100);
+    assert_eq!(turns[1].turn.usage.output, 20);
+
+    // Inferences stay in lockstep with the persisted turns (issue #434):
+    // one per API call, carrying its usage.
+    let inferences = ledger
+        .query_inferences(&Query::for_session("conv-1"))
+        .unwrap();
+    assert_eq!(inferences.len(), 2);
+    assert_eq!(inferences[0].usage.input, 100);
+    assert_eq!(inferences[1].usage.output, 20);
+
+    let cursors = load_cursors(&ledger).unwrap();
+    let key = export_file.to_string_lossy().into_owned();
+    match cursors.get_typed(&key) {
+        Some(FileCursor::Copilot(_)) => {}
+        other => panic!("expected CopilotCursor for {key}, got {other:?}"),
+    }
+
+    // No-op sweep: unchanged file appends nothing.
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.appended_turns, 0);
+
+    // A new span picked up incrementally keeps the per-session numbering.
+    let mut f = fs::OpenOptions::new()
+        .append(true)
+        .open(&export_file)
+        .unwrap();
+    writeln!(f, "{}", span("t-2", "s-3", 300, 30)).unwrap();
+    drop(f);
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.appended_turns, 1);
+    let turns = ledger.query_turns(&Query::for_session("conv-1")).unwrap();
+    assert_eq!(turns.len(), 3);
+    assert_eq!(turns[2].turn.turn_index, 2);
+}
+
+#[test]
+fn ingest_copilot_rotation_replay_keeps_turn_indexes_contiguous() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+
+    let otel_dir = tmp.path().join("copilot").join("otel");
+    fs::create_dir_all(&otel_dir).unwrap();
+    let export_file = otel_dir.join("copilot.jsonl");
+    // Distinct token counts per span: the ledger also dedups turns whose
+    // content matches apart from the message id.
+    let span = |id: &str, input: u64| {
+        format!(
+            "{{\"type\":\"span\",\"traceId\":\"t-{id}\",\"spanId\":\"{id}\",\"name\":\"chat m\",\"startTime\":[1775934260,0],\"attributes\":{{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-r\",\"gen_ai.usage.input_tokens\":{input},\"gen_ai.usage.output_tokens\":2}}}}\n"
+        )
+    };
+    fs::write(&export_file, [span("r-1", 10), span("r-2", 20)].concat()).unwrap();
+
+    let roots = IngestRoots {
+        copilot_otel_files: Some(vec![export_file.clone()]),
+        ..pinned_roots(&tmp)
+    };
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+    assert_eq!(
+        ingest_copilot_sessions(&mut ledger, &opts)
+            .unwrap()
+            .appended_turns,
+        2
+    );
+
+    // Rotation: a new file generation (new inode) replays both persisted
+    // spans before the new one. The replays must not consume indexes.
+    let staged = otel_dir.join("copilot.jsonl.next");
+    fs::write(
+        &staged,
+        [span("r-1", 10), span("r-2", 20), span("r-3", 30)].concat(),
+    )
+    .unwrap();
+    fs::rename(&staged, &export_file).unwrap();
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.appended_turns, 1);
+
+    let turns = ledger.query_turns(&Query::for_session("conv-r")).unwrap();
+    let mut indexes: Vec<(String, u64)> = turns
+        .iter()
+        .map(|t| (t.turn.message_id.clone(), t.turn.turn_index))
+        .collect();
+    indexes.sort();
+    assert_eq!(
+        indexes,
+        vec![
+            ("r-1".to_string(), 0),
+            ("r-2".to_string(), 1),
+            ("r-3".to_string(), 2)
+        ]
+    );
+}
+
+/// Restores one env var to its prior value on drop so env-mutating tests
+/// can't leak into other tests sharing the process.
+struct RestoreEnv {
+    key: &'static str,
+    prior: Option<String>,
+}
+
+impl Drop for RestoreEnv {
+    fn drop(&mut self) {
+        match &self.prior {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+#[test]
+fn ingest_copilot_sessions_requires_exporter_env_var() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let _restore_exporter = RestoreEnv {
+        key: "COPILOT_OTEL_FILE_EXPORTER_PATH",
+        prior: std::env::var("COPILOT_OTEL_FILE_EXPORTER_PATH").ok(),
+    };
+    let _restore_home = RestoreEnv {
+        key: "COPILOT_HOME",
+        prior: std::env::var("COPILOT_HOME").ok(),
+    };
+
+    // A valid export file sits in the default OTEL dir, but the exporter
+    // variable is unset: the collector must stay a silent no-op (#14
+    // opt-in gate). No explicit roots override, so discovery reads env.
+    let otel_dir = tmp.path().join("copilot-home").join("otel");
+    fs::create_dir_all(&otel_dir).unwrap();
+    let export_file = otel_dir.join("copilot.jsonl");
+    fs::write(
+        &export_file,
+        "{\"type\":\"span\",\"traceId\":\"t-g\",\"spanId\":\"s-g\",\"name\":\"chat m\",\"startTime\":[1775934260,0],\"attributes\":{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-g\",\"gen_ai.usage.input_tokens\":10,\"gen_ai.usage.output_tokens\":2}}\n",
+    )
+    .unwrap();
+    std::env::remove_var("COPILOT_OTEL_FILE_EXPORTER_PATH");
+    std::env::set_var("COPILOT_HOME", tmp.path().join("copilot-home"));
+
+    let roots = IngestRoots {
+        copilot_otel_files: None,
+        ..pinned_roots(&tmp)
+    };
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.scanned_sessions, 0);
+    assert_eq!(report.appended_turns, 0);
+
+    // Opting in picks the same file up, once: the exporter path and the
+    // otel-dir glob name the same file.
+    std::env::set_var("COPILOT_OTEL_FILE_EXPORTER_PATH", &export_file);
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.scanned_sessions, 1);
+    assert_eq!(report.appended_turns, 1);
+    let turns = ledger.query_turns(&Query::for_session("conv-g")).unwrap();
+    assert_eq!(turns.len(), 1);
+
+    // An exporter file outside the otel dir is scanned alongside the dir.
+    let outside = tmp.path().join("elsewhere.jsonl");
+    fs::write(
+        &outside,
+        "{\"type\":\"span\",\"traceId\":\"t-o\",\"spanId\":\"s-o\",\"name\":\"chat m\",\"startTime\":[1775934261,0],\"attributes\":{\"gen_ai.operation.name\":\"chat\",\"gen_ai.conversation.id\":\"conv-o\",\"gen_ai.usage.input_tokens\":11,\"gen_ai.usage.output_tokens\":3}}\n",
+    )
+    .unwrap();
+    std::env::set_var("COPILOT_OTEL_FILE_EXPORTER_PATH", &outside);
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.scanned_sessions, 2);
+    assert_eq!(report.appended_turns, 1);
+    let turns = ledger.query_turns(&Query::for_session("conv-o")).unwrap();
+    assert_eq!(turns.len(), 1);
+}
+
+#[test]
+fn ingest_copilot_sessions_is_a_noop_without_exporter_files() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    // Explicitly empty: mirrors the env-gated steady state where the user
+    // has never set COPILOT_OTEL_FILE_EXPORTER_PATH.
+    let roots = IngestRoots {
+        copilot_otel_files: Some(vec![]),
+        ..pinned_roots(&tmp)
+    };
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots,
+        ..Default::default()
+    };
+    let report = ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+    assert_eq!(report.scanned_sessions, 0);
+    assert_eq!(report.appended_turns, 0);
+}
+
+#[test]
+fn copilot_cursor_loss_rederives_the_same_turn_indexes() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let otel_dir = tmp.path().join("otel");
+    fs::create_dir_all(&otel_dir).unwrap();
+    let export_file = otel_dir.join("copilot.jsonl");
+    let span = |id: &str, input: u64| {
+        format!(
+            "{{\"type\":\"span\",\"traceId\":\"t-{id}\",\"spanId\":\"{id}\",\"name\":\"chat m\",\"attributes\":{{\"gen_ai.conversation.id\":\"conv-l\",\"gen_ai.usage.input_tokens\":{input}}}}}\n"
+        )
+    };
+    fs::write(&export_file, [span("l-1", 10), span("l-2", 20)].concat()).unwrap();
+    let opts = IngestOptions {
+        roots: IngestRoots {
+            copilot_otel_files: Some(vec![export_file.clone()]),
+            ..pinned_roots(&tmp)
+        },
+        ..Default::default()
+    };
+    let mut ledger = open_ledger_in(&tmp);
+    ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+
+    // Without a cursor the file is read from byte 0 with fresh counters,
+    // so the persisted spans re-derive their own indexes and the new span
+    // follows them.
+    ledger.write_cursors(r#"{"files":{}}"#).unwrap();
+    let mut f = fs::OpenOptions::new()
+        .append(true)
+        .open(&export_file)
+        .unwrap();
+    write!(f, "{}", span("l-3", 30)).unwrap();
+    drop(f);
+    ingest_copilot_sessions(&mut ledger, &opts).unwrap();
+
+    let turns = ledger.query_turns(&Query::for_session("conv-l")).unwrap();
+    let mut indexes: Vec<(String, u64)> = turns
+        .iter()
+        .map(|t| (t.turn.message_id.clone(), t.turn.turn_index))
+        .collect();
+    indexes.sort();
+    assert_eq!(
+        indexes,
+        vec![
+            ("l-1".to_string(), 0),
+            ("l-2".to_string(), 1),
+            ("l-3".to_string(), 2)
+        ]
+    );
+}
+
+#[test]
+fn copilot_missing_export_is_steady_state_but_unreadable_export_retries() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+
+    // The exporter path can name a file Copilot has not created yet: not a
+    // skip, so the sweep caches its source fingerprint.
+    let mut ledger = open_ledger_in(&tmp);
+    let missing = IngestOptions {
+        roots: IngestRoots {
+            copilot_otel_files: Some(vec![tmp.path().join("not-yet.jsonl")]),
+            ..pinned_roots(&tmp)
+        },
+        ..Default::default()
+    };
+    ingest_all(&mut ledger, &missing).unwrap();
+    assert!(!ledger.read_source_fingerprint().unwrap().is_empty());
+
+    // A file that exists but cannot be statted is a skip: the fingerprint
+    // stays uncached so the next sweep retries it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let locked = tmp.path().join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        let export = locked.join("copilot.jsonl");
+        fs::write(&export, "").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = fs::metadata(&export).is_err();
+        let other_tmp = TempDir::new().unwrap();
+        let mut fresh = open_ledger_in(&other_tmp);
+        let opts = IngestOptions {
+            roots: IngestRoots {
+                copilot_otel_files: Some(vec![export]),
+                ..pinned_roots(&other_tmp)
+            },
+            ..Default::default()
+        };
+        ingest_all(&mut fresh, &opts).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        // Root ignores directory permissions; the check only applies when
+        // the stat really failed.
+        if denied {
+            assert!(fresh.read_source_fingerprint().unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn ingest_all_reports_each_harness_scan_in_order() {
+    let tmp = TempDir::new().unwrap();
+    let _env = isolated_relayburn_home(&tmp);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = std::sync::Arc::clone(&seen);
+    let mut ledger = open_ledger_in(&tmp);
+    let opts = IngestOptions {
+        roots: pinned_roots(&tmp),
+        force_scan: true,
+        on_progress: Some(Box::new(move |msg: &str| {
+            sink.lock().unwrap().push(msg.to_string())
+        })),
+        ..Default::default()
+    };
+    ingest_all(&mut ledger, &opts).unwrap();
+    let scans: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|m| m.starts_with("scanning "))
+        .cloned()
+        .collect();
+    assert_eq!(
+        scans,
+        [
+            "scanning Claude Code sessions",
+            "scanning Codex sessions",
+            "scanning OpenCode sessions",
+            "scanning Copilot CLI OTEL exports",
+        ]
+    );
 }
 
 #[test]

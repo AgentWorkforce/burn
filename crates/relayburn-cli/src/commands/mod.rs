@@ -23,6 +23,7 @@ pub mod flow;
 mod freshness;
 pub mod hotspots;
 pub mod ingest;
+pub mod init;
 pub mod mcp_server;
 pub mod measure;
 pub mod overhead;

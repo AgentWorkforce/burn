@@ -275,6 +275,17 @@ pub(crate) fn list_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
 /// caller's skip set. The `user_turns` table is STRICT, so a non-TEXT
 /// session_id should never reach us, but the extra guard keeps the
 /// surface symmetric.
+/// `(session_id, message_id)` keys of every turn recorded for `source`.
+pub(crate) fn turn_keys_for_source(
+    conn: &Connection,
+    source: &str,
+) -> Result<HashSet<(String, String)>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT session_id, message_id FROM turns WHERE source = ?")?;
+    let rows = stmt.query_map([source], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
+}
+
 pub(crate) fn list_user_turn_session_ids(conn: &Connection) -> Result<HashSet<String>> {
     let mut stmt = conn.prepare_cached("SELECT DISTINCT session_id FROM user_turns")?;
     let mut rows = stmt.query([])?;
