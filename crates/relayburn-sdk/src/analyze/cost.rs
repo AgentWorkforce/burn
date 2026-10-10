@@ -247,7 +247,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyze::pricing::{load_builtin_pricing, ModelCost, ReasoningMode};
+    use crate::analyze::pricing::{load_builtin_pricing, ModelCost, ModelCostTier, ReasoningMode};
     use crate::reader::{SourceKind, ToolCall, TurnRecord, Usage};
 
     fn turn(model: &str, usage: Usage, source: SourceKind) -> TurnRecord {
@@ -356,10 +356,31 @@ mod tests {
 
     #[test]
     fn applies_context_tier_to_long_context_turns() {
-        let p = load_builtin_pricing();
+        // Tier selection is logic, not upstream data: assert it against a
+        // synthetic table so third-party repricings can't break the test.
+        let mut p = PricingTable::new();
+        p.insert(
+            "tiered-model".into(),
+            ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+                reasoning: None,
+                reasoning_mode: ReasoningMode::SameAsOutput,
+                context_tiers: vec![ModelCostTier {
+                    context_tokens: 272_000,
+                    input: 10.0,
+                    output: 45.0,
+                    cache_read: 1.0,
+                    cache_write: 12.5,
+                    reasoning: None,
+                }],
+            },
+        );
         let below = cost_for_turn(
             &turn(
-                "gpt-5.6-sol",
+                "tiered-model",
                 Usage {
                     input: 272_000,
                     output: 1_000_000,
@@ -372,7 +393,7 @@ mod tests {
         .unwrap();
         let above = cost_for_turn(
             &turn(
-                "gpt-5.6-sol",
+                "tiered-model",
                 Usage {
                     input: 272_001,
                     output: 1_000_000,

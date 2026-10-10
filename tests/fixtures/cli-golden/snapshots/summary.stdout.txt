@@ -7,7 +7,7 @@ context efficiency: 22.8:1 (33,000 context / 1,450 output; 0 zero-output turns)
 model              turns  input  output  reasoning  cacheRead  cacheCreate  cost
 claude-sonnet-4-6  4      5,100  830     0          19,500     200          $0.034
 claude-haiku-4-5   2      1,700  220     0          4,500      0            $0.0033
-gpt-5-codex        1      2,000  400     350        —          —            $0.00
+gpt-5-codex        1      2,000  400     350        —          —            unpriced
 
 highest context-efficiency sessions (4 of 4 sessions):
 session                                turns  total context  context:output  p50 context  p95 context  max context
@@ -16,7 +16,8 @@ session                                turns  total context  context:output  p50
 ses_40000000000000000000000000000004   1      2,100          26.2:1          2,100        2,100        2,100
 sess_30000000000000000000000000000003  1      2,000          5.0:1           2,000        2,000        2,000
 
-total cost: $0.038
+total priced cost: $0.038
+1 turn unpriced: gpt-5-codex (total excludes their cost)
   input $0.017 / output $0.014 / reasoning $0.00 / cacheRead $0.0063 / cacheCreate $0.0008
 
 Turn outcomes: 0 end_turn, 0 max_tokens, 0 refusal, 0 pause, 7 none

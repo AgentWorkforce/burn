@@ -170,6 +170,12 @@ fn ingest_claude_projects_resolves_pending_stamp_tags() {
     let tmp = TempDir::new().unwrap();
     let _env = isolated_relayburn_home(&tmp);
     let roots = pinned_roots(&tmp);
+    // Pass the home explicitly instead of relying on `$RELAYBURN_HOME`:
+    // `std::env::var` can tear when another test thread calls `set_var`
+    // for an unrelated variable (libc environ reallocation), which
+    // intermittently routed the stamp write and the resolver to
+    // different directories under instrumented/parallel runs.
+    let home = tmp.path().join("relayburn");
 
     let mut enrichment = Enrichment::new();
     enrichment.insert("persona".to_string(), "code-reviewer".to_string());
@@ -178,6 +184,7 @@ fn ingest_claude_projects_resolves_pending_stamp_tags() {
     let cwd = cwd.to_string_lossy().into_owned();
     write_pending_stamp(WriteOptions {
         harness: PendingStampHarness::Claude,
+        ledger_home: Some(home.clone()),
         cwd: cwd.clone(),
         enrichment: enrichment.clone(),
         ..Default::default()
@@ -197,6 +204,7 @@ fn ingest_claude_projects_resolves_pending_stamp_tags() {
     let mut ledger = open_ledger_in(&tmp);
     let opts = IngestOptions {
         roots,
+        ledger_home: Some(home),
         ..Default::default()
     };
     let report = ingest_claude_projects(&mut ledger, &opts).unwrap();
