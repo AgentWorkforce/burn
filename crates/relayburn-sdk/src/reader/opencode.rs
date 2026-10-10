@@ -444,10 +444,7 @@ fn extract_tools_and_files(parts: &[ParsedPart]) -> Extracted {
     let mut errored = BTreeSet::new();
     for p in parts {
         let Some(tp) = as_tool_part(p) else { continue };
-        let tool = match tp.tool {
-            Some(t) => t,
-            None => continue,
-        };
+        let Some(tool) = tp.tool else { continue };
         if seen.contains(tp.call_id) {
             continue;
         }

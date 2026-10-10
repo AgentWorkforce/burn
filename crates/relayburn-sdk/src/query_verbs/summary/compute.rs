@@ -500,7 +500,7 @@ pub(crate) fn compute_summary_by_tool_report(
         })
         .collect();
     Ok(SummaryByToolReport {
-        turn_count: turns.iter().map(TurnRecord::effective_request_count).sum(),
+        turn_count: TurnRecord::total_requests(turns),
         rows,
         unattributed_cost,
         fidelity,
@@ -749,10 +749,7 @@ pub(crate) fn match_summary_relationships_to_turns(
             relationship_type: r.relationship_type,
             session_id: r.session_id.clone(),
             subagent_type: summary_relationship_subagent_type(r, &matched_turns),
-            turn_count: matched_turns
-                .iter()
-                .map(|t| t.effective_request_count())
-                .sum(),
+            turn_count: TurnRecord::total_requests(&matched_turns),
             cost,
         });
     }

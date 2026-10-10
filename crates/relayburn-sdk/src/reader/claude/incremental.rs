@@ -695,10 +695,7 @@ pub(super) fn run_incremental<C: TokenCounter + ?Sized>(
     let mut turns: Vec<TurnRecord> = Vec::new();
     let mut assistant_pending: Vec<(u64, usize, ContentRecord)> = Vec::new();
     for (i, id) in order.iter().enumerate() {
-        let w = match working.get(id) {
-            Some(w) => w,
-            None => continue,
-        };
+        let Some(w) = working.get(id) else { continue };
         if !emit_in_progress && w.stop_reason.is_none() {
             continue;
         }
