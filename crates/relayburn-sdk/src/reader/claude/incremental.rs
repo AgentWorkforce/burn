@@ -695,10 +695,7 @@ pub(super) fn run_incremental<C: TokenCounter + ?Sized>(
     let mut turns: Vec<TurnRecord> = Vec::new();
     let mut assistant_pending: Vec<(u64, usize, ContentRecord)> = Vec::new();
     for (i, id) in order.iter().enumerate() {
-        let w = match working.get(id) {
-            Some(w) => w,
-            None => continue,
-        };
+        let Some(w) = working.get(id) else { continue };
         if !emit_in_progress && w.stop_reason.is_none() {
             continue;
         }
@@ -717,6 +714,7 @@ pub(super) fn run_incremental<C: TokenCounter + ?Sized>(
             session_path: options.session_path.clone(),
             message_id: w.message_id.clone(),
             turn_index: i as u64,
+            request_count: 1,
             ts: w.first_ts.clone(),
             model: w.model.clone(),
             project: None,

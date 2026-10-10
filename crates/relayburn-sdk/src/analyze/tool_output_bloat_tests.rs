@@ -133,6 +133,7 @@ fn turn_with(
         session_path: None,
         message_id: message_id.to_string(),
         turn_index,
+        request_count: 1,
         ts: "2026-04-20T00:00:00.000Z".to_string(),
         model: "claude-sonnet-4-6".to_string(),
         project: None,

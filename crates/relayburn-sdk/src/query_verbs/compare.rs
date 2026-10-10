@@ -65,6 +65,9 @@ pub struct CompareFidelityBlock {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompareResult {
+    /// Model-request cardinality after provider and fidelity filtering but
+    /// before the model allow-list. This can exceed
+    /// `fidelity.summary.total`, which counts logical turn records.
     pub analyzed_turns: u64,
     pub min_sample: u64,
     pub models: Vec<String>,
@@ -102,9 +105,9 @@ impl LedgerHandle {
         //   - fidelity summary over the *post-provider*, *pre-fidelity-gate*
         //     slice (the TS path calls `summarizeFidelity(turns)` here)
         //   - fidelity-gate filter (a no-op when minimum is `partial`)
-        //   - `analyzedTurns = filteredTurns.length` — i.e. AFTER the
-        //     fidelity gate but BEFORE the model allow-list, which is
-        //     applied inside `build_compare_table`.
+        //   - `analyzedTurns` sums each surviving record's effective request
+        //     count AFTER the fidelity gate but BEFORE the model allow-list,
+        //     which is applied inside `build_compare_table`.
         //
         // Crucially: do NOT pre-filter `turns` by `opts.models`. The TS
         // contract is that `analyzedTurns` and `fidelity.summary` describe
@@ -137,7 +140,7 @@ impl LedgerHandle {
         );
         Ok(shape_compare_result(
             table,
-            turns.len() as u64,
+            turns.iter().map(|t| t.turn.effective_request_count()).sum(),
             min_fidelity,
             fidelity_summary,
         ))
@@ -213,7 +216,10 @@ impl LedgerHandle {
                 );
                 let result = shape_compare_result(
                     table,
-                    bturns.len() as u64,
+                    bturns
+                        .iter()
+                        .map(|t| t.turn.effective_request_count())
+                        .sum(),
                     min_fidelity,
                     fidelity_summary,
                 );

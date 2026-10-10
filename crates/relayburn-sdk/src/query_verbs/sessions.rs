@@ -71,7 +71,7 @@ impl LedgerHandle {
             session_id: Some(session_id),
             total_usd,
             total_tokens,
-            turn_count: turns.len() as u64,
+            turn_count: turns.iter().map(TurnRecord::effective_request_count).sum(),
             models: models.into_iter().collect(),
             note: None,
         })
@@ -261,7 +261,7 @@ struct SessionAccumulator {
 
 impl SessionAccumulator {
     fn add_turn(&mut self, turn: &TurnRecord, pricing: &PricingTable) {
-        self.turn_count += 1;
+        self.turn_count += turn.effective_request_count();
         match self.started_at.as_ref() {
             Some(cur) if cur.as_str() <= turn.ts.as_str() => {}
             _ => self.started_at = Some(turn.ts.clone()),

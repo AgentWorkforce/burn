@@ -525,6 +525,7 @@ mod tests {
             session_path: None,
             message_id: "msg-1".into(),
             turn_index: 7,
+            request_count: 1,
             ts: "2026-04-20T00:00:01.000Z".into(),
             model: "claude-sonnet-4-6".into(),
             project: None,

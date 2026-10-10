@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::reader::fidelity::classify_fidelity;
 use crate::reader::git::ProjectResolver;
 use crate::reader::hash::content_hash;
+use crate::reader::inference::Inference;
 use crate::reader::types::{
     CompactionEvent, ContentRecord, ContentStoreMode, Coverage, Fidelity, RelationshipSourceKind,
     RelationshipType, SessionRelationshipRecord, SourceKind, ToolCall, ToolResultEventRecord,
@@ -31,14 +32,6 @@ use crate::reader::user_turn::{resolve_token_counter, UserTurnTokenizer};
 // Public surface
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
-#[derive(Debug, Clone, Default)]
-pub struct ParseCodexOptions {
-    pub session_path: Option<String>,
-    pub content_mode: Option<ContentStoreMode>,
-    pub tokenizer: Option<UserTurnTokenizer>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ParseCodexIncrementalOptions {
     pub session_path: Option<String>,
@@ -48,7 +41,7 @@ pub struct ParseCodexIncrementalOptions {
     pub resume: Option<CodexResumeState>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CumulativeUsage {
     pub input: i64,
     pub output: i64,
@@ -90,20 +83,10 @@ pub struct CodexResumeState {
     pub last_completed_turn: Option<CodexLastCompletedTurn>,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Default)]
-pub struct ParseCodexResult {
-    pub turns: Vec<TurnRecord>,
-    pub content: Vec<ContentRecord>,
-    pub events: Vec<CompactionEvent>,
-    pub user_turns: Vec<UserTurnRecord>,
-    pub relationships: Vec<SessionRelationshipRecord>,
-    pub tool_result_events: Vec<ToolResultEventRecord>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ParseCodexIncrementalResult {
     pub turns: Vec<TurnRecord>,
+    pub inferences: Vec<Inference>,
     pub content: Vec<ContentRecord>,
     pub events: Vec<CompactionEvent>,
     pub user_turns: Vec<UserTurnRecord>,
@@ -140,35 +123,6 @@ pub fn read_codex_session_id_hint(file_path: impl AsRef<Path>) -> Option<String>
     session_meta_payload_id(payload)
 }
 
-#[cfg(test)]
-pub fn parse_codex_session(
-    file_path: impl AsRef<Path>,
-    options: &ParseCodexOptions,
-) -> std::io::Result<ParseCodexResult> {
-    let inc_opts = ParseCodexIncrementalOptions {
-        session_path: options.session_path.clone(),
-        content_mode: options.content_mode,
-        tokenizer: options.tokenizer,
-        start_offset: Some(0),
-        resume: None,
-    };
-    parse_codex_session_incremental(file_path, &inc_opts).map(ParseCodexResult::from)
-}
-
-#[cfg(test)]
-impl From<ParseCodexIncrementalResult> for ParseCodexResult {
-    fn from(r: ParseCodexIncrementalResult) -> Self {
-        Self {
-            turns: r.turns,
-            content: r.content,
-            events: r.events,
-            user_turns: r.user_turns,
-            relationships: r.relationships,
-            tool_result_events: r.tool_result_events,
-        }
-    }
-}
-
 pub fn parse_codex_session_incremental(
     file_path: impl AsRef<Path>,
     options: &ParseCodexIncrementalOptions,
@@ -184,6 +138,7 @@ pub fn parse_codex_session_incremental(
     if start_offset >= size {
         return Ok(ParseCodexIncrementalResult {
             turns: vec![],
+            inferences: vec![],
             content: vec![],
             events: vec![],
             user_turns: vec![],
@@ -250,6 +205,7 @@ pub(in crate::reader::codex) struct OpenTurn {
     pub(in crate::reader::codex) model: String,
     pub(in crate::reader::codex) project: Option<String>,
     pub(in crate::reader::codex) start_cumulative: CumulativeUsage,
+    pub(in crate::reader::codex) requests: RequestTally,
     pub(in crate::reader::codex) tool_calls: Vec<ToolCall>,
     pub(in crate::reader::codex) seen_call_ids: BTreeSet<String>,
     pub(in crate::reader::codex) files_touched: BTreeSet<String>,
@@ -268,6 +224,8 @@ pub(in crate::reader::codex) struct FinalizedTurn {
     pub(in crate::reader::codex) ts: String,
     pub(in crate::reader::codex) model: String,
     pub(in crate::reader::codex) project: Option<String>,
+    pub(in crate::reader::codex) request_count: u64,
+    pub(in crate::reader::codex) inferences: Vec<Inference>,
     pub(in crate::reader::codex) tool_calls: Vec<ToolCall>,
     pub(in crate::reader::codex) files_touched: Vec<String>,
     pub(in crate::reader::codex) user_text: String,
@@ -297,6 +255,8 @@ pub(in crate::reader::codex) fn finalize_turn(
         ts: open.ts,
         model: open.model,
         project: open.project,
+        request_count: open.requests.count,
+        inferences: open.requests.inferences,
         tool_calls: open.tool_calls,
         files_touched: files,
         user_text: open.user_text,
@@ -825,7 +785,18 @@ pub mod span_tree;
 // helpers/types above feed it per line.
 mod incremental;
 
+// Request-level accounting: one native inference row per advancing
+// `token_count` snapshot inside a logical Codex task.
+mod requests;
+
 use self::incremental::parse_codex_buffer;
+use self::requests::RequestTally;
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
+pub use self::test_support::{parse_codex_session, ParseCodexOptions, ParseCodexResult};
 
 #[cfg(test)]
 mod tests;

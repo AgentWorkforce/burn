@@ -22,6 +22,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         session_path: None,
         message_id: "m-1".into(),
         turn_index: 0,
+        request_count: 1,
         ts: "2026-04-23T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -61,6 +62,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         session_path: None,
         message_id: "m-2".into(),
         turn_index: 1,
+        request_count: 1,
         ts: "2026-04-23T00:01:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -228,6 +230,102 @@ fn summary_aggregates_two_turns() {
 }
 
 #[test]
+fn request_count_drives_summary_and_session_denominators() {
+    let (_dir, mut handle) = fixture_handle();
+    let mut codex = handle
+        .raw()
+        .query_turns(&Query::default())
+        .unwrap()
+        .remove(0)
+        .turn;
+    codex.source = SourceKind::Codex;
+    codex.session_id = "sess-codex-requests".into();
+    codex.message_id = "logical-task-1".into();
+    codex.ts = "2026-04-23T01:00:00.000Z".into();
+    codex.request_count = 4;
+    handle.raw_mut().append_turns(&[codex]).unwrap();
+
+    let summary = handle
+        .summary(SummaryOptions {
+            session: Some("sess-codex-requests".into()),
+            ..SummaryOptions::default()
+        })
+        .unwrap();
+    assert_eq!(summary.turn_count, 4);
+
+    let session = handle
+        .session_cost(SessionCostOptions {
+            session: Some("sess-codex-requests".into()),
+            ..SessionCostOptions::default()
+        })
+        .unwrap();
+    assert_eq!(session.turn_count, 4);
+}
+
+fn multi_request_turns() -> Vec<TurnRecord> {
+    let mut two = summary_test_turn(0, "task-two", Usage::default(), vec![]);
+    two.request_count = 2;
+    two.usage.input = 100;
+    let mut three = summary_test_turn(1, "task-three", Usage::default(), vec![]);
+    three.request_count = 3;
+    three.usage.input = 200;
+    vec![two, three]
+}
+
+#[test]
+fn summary_by_tag_counts_requests_per_tag_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).unwrap();
+    handle
+        .raw_mut()
+        .append_turns(&multi_request_turns())
+        .unwrap();
+
+    let summary = handle
+        .summary(SummaryOptions {
+            group_by_tag: Some("workflowId".into()),
+            ..SummaryOptions::default()
+        })
+        .unwrap();
+    assert!(summary.total_cost > 0.0);
+    let rows = summary.by_tag.expect("by_tag rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].value, None);
+    assert_eq!(rows[0].turn_count, 5);
+    assert_eq!(rows[0].tokens, 300);
+    assert!((rows[0].cost - summary.total_cost).abs() < 1e-12);
+}
+
+#[test]
+fn summary_aggregate_by_model_counts_requests() {
+    let pricing = load_pricing(None);
+    let rows = super::summary::summary_aggregate_by_model(&multi_request_turns(), &pricing);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "claude-sonnet-4-6");
+    assert_eq!(rows[0].turns, 5);
+    assert_eq!(rows[0].usage.input, 300);
+}
+
+#[test]
+fn relationship_matches_count_requests_of_matched_turns() {
+    let pricing = load_pricing(None);
+    let mut root = relationship("session", "parent", None);
+    root.relationship_type = RelationshipType::Root;
+    root.related_session_id = None;
+    let unmatched = relationship("no-turns-session", "session", Some("agent-x"));
+    let matches = super::summary::match_summary_relationships_to_turns(
+        &[root.clone(), root, unmatched],
+        &multi_request_turns(),
+        &pricing,
+    );
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].relationship_type, RelationshipType::Root);
+    assert_eq!(matches[0].session_id, "session");
+    assert_eq!(matches[0].turn_count, 5);
+    assert!(matches[0].cost > 0.0);
+}
+
+#[test]
 fn summary_session_filter_narrows_to_session() {
     let (_dir, handle) = fixture_handle();
     let s = handle
@@ -276,6 +374,7 @@ fn summary_report_aggregates_stop_reasons_per_outcome() {
             session_path: None,
             message_id: msg.into(),
             turn_index: idx,
+            request_count: 1,
             ts: format!("2026-05-25T00:0{idx}:00.000Z"),
             model: "claude-sonnet-4-6".into(),
             project: Some("/tmp/proj".into()),
@@ -341,6 +440,7 @@ fn compute_summary_tracks_unpriced_turns_and_models() {
         session_path: None,
         message_id: "m-priced".into(),
         turn_index: 0,
+        request_count: 1,
         ts: "2026-05-01T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: None,
@@ -396,6 +496,7 @@ fn summary_report_grouped_tracks_unpriced_turns_and_models() {
             session_path: None,
             message_id: msg.into(),
             turn_index: idx,
+            request_count: 1,
             ts: ts.into(),
             model: model.into(),
             project: None,
@@ -522,6 +623,7 @@ fn summary_legacy_surface_includes_stop_reason_counts_with_none_for_missing_fiel
         session_path: None,
         message_id: "m-legacy".into(),
         turn_index: 0,
+        request_count: 1,
         ts: "2026-05-25T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: None,
@@ -586,6 +688,7 @@ fn summary_subagent_session_filter_collects_session_ids_when_filtered() {
         session_path: None,
         message_id: format!("m-{session_id}"),
         turn_index: 0,
+        request_count: 1,
         ts: "2026-04-23T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: None,
@@ -1090,6 +1193,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
         .append_turns(&[
             TurnRecord {
                 v: 1,
+                request_count: 1,
                 source: SourceKind::ClaudeCode,
                 session_id: "sess-unpriced".into(),
                 session_path: None,
@@ -1118,6 +1222,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
             },
             TurnRecord {
                 v: 1,
+                request_count: 1,
                 source: SourceKind::ClaudeCode,
                 session_id: "sess-unpriced-small".into(),
                 session_path: None,
@@ -1342,9 +1447,8 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
     // by these top-level metadata counts. A `claude-opus-4-5` turn that
     // is not in the requested-models list still counts toward
     // `analyzedTurns` and `summary.total`, but does not appear in the
-    // `models` / `totals` rows. This mirrors `packages/sdk/index.js
-    // ::compare` where `analyzedTurns = filteredTurns.length` is taken
-    // before `buildCompareTable` applies the model filter.
+    // `models` / `totals` rows. Request cardinality is summed before
+    // `buildCompareTable` applies the model filter.
     let (_dir, mut handle) = fixture_handle();
     let extra = TurnRecord {
         v: 1,
@@ -1353,6 +1457,7 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
         session_path: None,
         message_id: "m-extra".into(),
         turn_index: 0,
+        request_count: 3,
         ts: "2026-04-23T00:02:00.000Z".into(),
         model: "claude-opus-4-5".into(),
         project: Some("/tmp/proj".into()),
@@ -1384,7 +1489,7 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
         })
         .unwrap();
 
-    assert_eq!(r.analyzed_turns, 3);
+    assert_eq!(r.analyzed_turns, 5);
     assert_eq!(r.fidelity.summary.total, 3);
     // The unrequested model is excluded from cells/totals/models, even
     // though it counts toward analyzed_turns + fidelity summary above.
@@ -1399,7 +1504,7 @@ fn compare_reports_full_fidelity_summary_when_no_requested_model_appears() {
     // ledger at all, `analyzedTurns` and `fidelity.summary` MUST still
     // describe the underlying slice — not zero. The TS contract from
     // `packages/sdk/index.js::compare` builds these counters from
-    // `filteredTurns.length` (post-fidelity-gate, pre-models-filter);
+    // the post-fidelity-gate, pre-models-filter request-count sum;
     // an earlier Rust implementation pre-filtered by `opts.models`,
     // collapsing the metadata to zeros and breaking the conformance
     // gate even though models extraction worked.
@@ -1613,6 +1718,7 @@ fn free_function_summary_round_trips_through_ledger_home() {
             session_path: None,
             message_id: "m".into(),
             turn_index: 0,
+            request_count: 1,
             ts: "2026-04-23T00:00:00.000Z".into(),
             model: "claude-sonnet-4-6".into(),
             project: None,
@@ -1814,6 +1920,7 @@ fn summary_test_turn(
         session_path: None,
         message_id: message_id.to_string(),
         turn_index,
+        request_count: 1,
         ts: format!("2026-04-20T00:00:0{turn_index}.000Z"),
         model: "claude-sonnet-4-6".to_string(),
         project: None,
@@ -1867,6 +1974,7 @@ fn make_turn_with_calls(calls: Vec<ToolCall>) -> TurnRecord {
         session_path: None,
         message_id: "m".to_string(),
         turn_index: 0,
+        request_count: 1,
         ts: "2026-04-20T00:00:00.000Z".to_string(),
         model: "claude-sonnet-4-6".to_string(),
         project: None,
@@ -1988,6 +2096,7 @@ fn multi_session_handle() -> (TempDir, LedgerHandle) {
             session_path: None,
             message_id: message_id.into(),
             turn_index: 0,
+            request_count: 1,
             ts: ts.into(),
             model: model.into(),
             project: project.map(|s| s.into()),
@@ -2198,6 +2307,7 @@ fn fingerprint_changes_when_a_new_turn_is_appended() {
         session_path: None,
         message_id: "m-3".into(),
         turn_index: 2,
+        request_count: 1,
         ts: "2026-04-23T00:02:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -2240,6 +2350,7 @@ fn fingerprint_per_session_differs_from_global() {
         session_path: None,
         message_id: "m-b1".into(),
         turn_index: 0,
+        request_count: 1,
         ts: "2026-04-23T01:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -2417,6 +2528,7 @@ fn bucket_turn(message_id: &str, ts: &str, tool_use_ids: &[&str]) -> TurnRecord 
         session_path: None,
         message_id: message_id.into(),
         turn_index: 0,
+        request_count: 1,
         ts: ts.into(),
         model: "claude".into(),
         project: None,
@@ -2603,6 +2715,7 @@ fn summary_report_by_tool_aggregates_across_multiple_sessions() {
             session_path: None,
             message_id: message_id.into(),
             turn_index: 0,
+            request_count: 1,
             ts: ts.into(),
             model: "claude-sonnet-4-6".into(),
             project: Some("/tmp/proj".into()),
@@ -2717,6 +2830,7 @@ mod fingerprint_bench {
                 session_path: None,
                 message_id: format!("m-{i}"),
                 turn_index: (i % 1000) as u64,
+                request_count: 1,
                 ts: format!("2026-04-{:02}T{:02}:00:00.000Z", 1 + (i / 24) % 28, i % 24),
                 model: "claude-sonnet-4-6".into(),
                 project: Some("/tmp/p".into()),
@@ -2796,6 +2910,7 @@ fn bucket_test_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnR
         session_path: None,
         message_id: message.into(),
         turn_index: 0,
+        request_count: 1,
         ts: ts.into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),

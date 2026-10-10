@@ -64,6 +64,7 @@ fn parse_result_from_incremental_result_copies_all_fields() {
         session_path: Some("/tmp/session.jsonl".to_string()),
         message_id: "msg-1".to_string(),
         turn_index: 7,
+        request_count: 1,
         ts: "2026-05-11T00:00:00.000Z".to_string(),
         model: "claude-sonnet-4-6".to_string(),
         project: Some("/tmp/project".to_string()),

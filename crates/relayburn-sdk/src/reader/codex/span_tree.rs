@@ -51,11 +51,9 @@ pub struct CodexSpanTreeInputs<'a> {
     pub turn: &'a TurnRecord,
     /// Tool-result events for the same `(session_id, message_id)`.
     pub tool_result_events: &'a [ToolResultEventRecord],
-    /// Inference aggregates the parser already built (the
-    /// [`crate::reader::build_inferences`] fallback path returns one
-    /// inference per turn keyed by `message_id` for Codex). Empty
-    /// triggers the synthetic-inference fallback identical to the
-    /// Claude builder's.
+    /// Request-level inference aggregates the Codex parser already built.
+    /// Empty triggers a compatibility fallback for historical turns, except
+    /// for an explicit zero-request turn.
     pub inferences: &'a [Inference],
 }
 
@@ -161,6 +159,9 @@ fn effective_inferences(turn: &TurnRecord, supplied: &[Inference]) -> Vec<Infere
     if !supplied.is_empty() {
         return supplied.to_vec();
     }
+    if turn.request_count == 0 {
+        return Vec::new();
+    }
     vec![synthesize_inference(turn)]
 }
 
@@ -170,8 +171,8 @@ fn synthesize_inference(turn: &TurnRecord) -> Inference {
         v: 1,
         source: turn.source,
         session_id: turn.session_id.clone(),
-        // Codex has no requestId — fall back to message_id, mirroring
-        // what `build_inferences` does for this harness.
+        // Compatibility fallback for ledgers built before Codex persisted
+        // one synthetic inference key per advancing usage snapshot.
         request_id: turn.message_id.clone(),
         request_id_source: InferenceKeySource::MessageId,
         turn_id: turn.message_id.clone(),
@@ -324,6 +325,7 @@ mod tests {
             session_path: None,
             message_id: "msg-codex-1".into(),
             turn_index: 3,
+            request_count: 1,
             ts: "2026-04-20T00:00:01.000Z".into(),
             model: "gpt-5".into(),
             project: None,
@@ -433,6 +435,22 @@ mod tests {
 
         // No stop_reason → root status stays Ok.
         assert_eq!(tree.root.status, SpanStatus::Ok);
+    }
+
+    #[test]
+    fn zero_request_turn_does_not_synthesize_an_inference() {
+        let mut turn = codex_turn(Usage::default(), vec![]);
+        turn.request_count = 0;
+        let tree = build_codex_span_tree(CodexSpanTreeInputs {
+            turn: &turn,
+            tool_result_events: &[],
+            inferences: &[],
+        });
+        assert!(tree
+            .root
+            .children
+            .iter()
+            .all(|child| child.kind != SpanKind::Inference));
     }
 
     /// A Codex turn with no tool_calls projects to a tree with just a

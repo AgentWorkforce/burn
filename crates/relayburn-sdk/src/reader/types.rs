@@ -200,7 +200,8 @@ impl fmt::Display for UsageGranularity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `Default` is [`Coverage::EMPTY`]: every flag starts `false`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Coverage {
     pub has_input_tokens: bool,
@@ -244,12 +245,6 @@ impl Coverage {
     /// `is_full` — usable for usage-only commands like `summary`.
     pub fn has_per_turn_usage(&self) -> bool {
         self.has_input_tokens && self.has_output_tokens
-    }
-}
-
-impl Default for Coverage {
-    fn default() -> Self {
-        Self::EMPTY
     }
 }
 
@@ -414,6 +409,14 @@ pub struct TurnRecord {
     pub session_path: Option<String>,
     pub message_id: String,
     pub turn_index: u64,
+    /// Number of model API requests represented by this record.
+    ///
+    /// Most harnesses emit one `TurnRecord` per request. Codex instead emits
+    /// one record per logical task, which may contain many requests separated
+    /// by advancing `token_count` snapshots. Historical rows predate this
+    /// field and therefore default to one request.
+    #[serde(default = "request_count::default_request_count")]
+    pub request_count: u64,
     pub ts: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -448,6 +451,9 @@ pub struct TurnRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fidelity: Option<Fidelity>,
 }
+
+// Request-count default and aggregation helpers for `TurnRecord`.
+mod request_count;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -733,6 +739,7 @@ mod tests {
             session_path: None,
             message_id: "m1".into(),
             turn_index: 0,
+            request_count: 1,
             ts: "2025-01-01T00:00:00Z".into(),
             model: "claude-sonnet-4-6".into(),
             project: None,

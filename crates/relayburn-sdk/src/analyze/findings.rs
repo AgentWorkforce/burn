@@ -1112,6 +1112,7 @@ mod tests {
     fn detector_finding_in_unpriced_session_drops_false_usd_estimate() {
         let turn = TurnRecord {
             v: 1,
+            request_count: 1,
             source: SourceKind::ClaudeCode,
             session_id: "unknown-session".to_string(),
             session_path: None,
@@ -1179,6 +1180,7 @@ mod tests {
             project_key: None,
             usage: crate::reader::Usage::default(),
             tool_calls: Vec::new(),
+            request_count: 1,
             files_touched: None,
             subagent: None,
             stop_reason: None,
@@ -1212,6 +1214,7 @@ mod tests {
     fn unpriced_codex_volume_does_not_double_count_reasoning_inside_output() {
         let turn = TurnRecord {
             v: 1,
+            request_count: 1,
             source: SourceKind::Codex,
             session_id: "codex-unknown".to_string(),
             session_path: None,

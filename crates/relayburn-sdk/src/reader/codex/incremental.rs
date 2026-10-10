@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::reader::classifier::{classify_activity, ClassificationInput};
 use crate::reader::git::ProjectResolver;
 use crate::reader::hash::args_hash;
+use crate::reader::inference::Inference;
 use crate::reader::types::{
     CompactionEvent, ContentKind, ContentRecord, ContentRole, ContentStoreMode, ContentToolResult,
     ContentToolUse, SessionRelationshipRecord, SourceKind, ToolCall, ToolResultEventRecord,
@@ -23,6 +24,7 @@ use crate::reader::types::{
 };
 use crate::reader::user_turn::{join_nonempty, HeuristicCounter};
 
+use super::requests::RequestTally;
 use super::{
     append_text, build_codex_compaction_event, build_codex_user_turn_record,
     build_root_relationship, build_session_meta_relationships, codex_relationship_key,
@@ -186,6 +188,25 @@ impl CodexParseState {
         }
     }
 
+    /// Advances the cumulative usage snapshot and, inside an open task,
+    /// records a request when the snapshot moved forward.
+    fn handle_token_count(&mut self, payload: &Value, rec_timestamp: &str) {
+        // `Value::get` yields `None` for a null or non-object `info`.
+        let Some(total) = payload
+            .get("info")
+            .and_then(|info| info.get("total_token_usage"))
+        else {
+            return;
+        };
+        let before = std::mem::replace(
+            &mut self.cumulative,
+            CumulativeUsage::from_total_token_usage(total),
+        );
+        if let Some(open) = self.open_turn.as_mut() {
+            open.observe_usage(&self.session_id, &before, &self.cumulative, rec_timestamp);
+        }
+    }
+
     fn handle_event_msg(
         &mut self,
         payload: &Value,
@@ -196,37 +217,7 @@ impl CodexParseState {
     ) {
         let pl_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
         match pl_type {
-            "token_count" => {
-                if let Some(total) = payload.get("info").and_then(|i| {
-                    if i.is_null() {
-                        None
-                    } else {
-                        i.get("total_token_usage")
-                    }
-                }) {
-                    let input_total = total
-                        .get("input_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    let cached = total
-                        .get("cached_input_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    self.cumulative.input = input_total - cached;
-                    self.cumulative.cache_read = cached;
-                    self.cumulative.output = total
-                        .get("output_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    self.cumulative.reasoning = total
-                        .get("reasoning_output_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    if let Some(open) = self.open_turn.as_mut() {
-                        open.usage_observed = true;
-                    }
-                }
-            }
+            "token_count" => self.handle_token_count(payload, rec_timestamp),
             "task_started" => {
                 let ts = rec_timestamp;
                 let turn_id = match payload.get("turn_id").and_then(|v| v.as_str()) {
@@ -259,6 +250,7 @@ impl CodexParseState {
                         .unwrap_or_default(),
                     project,
                     start_cumulative: self.cumulative.clone(),
+                    requests: RequestTally::default(),
                     tool_calls: vec![],
                     seen_call_ids: BTreeSet::new(),
                     files_touched: BTreeSet::new(),
@@ -916,8 +908,10 @@ pub(super) fn parse_codex_buffer<R: BufRead>(
     // Emit only committed turns.
     let committed_turns = &state.finalized[..committed.finalized_count];
     let mut turns: Vec<TurnRecord> = Vec::with_capacity(committed_turns.len());
+    let mut inferences: Vec<Inference> = Vec::new();
     let mut content_out: Vec<ContentRecord> = Vec::new();
     for (i, f) in committed_turns.iter().enumerate() {
+        inferences.extend(f.inferences.iter().cloned());
         let mut record = TurnRecord {
             v: 1,
             source: SourceKind::Codex,
@@ -925,6 +919,7 @@ pub(super) fn parse_codex_buffer<R: BufRead>(
             session_path: options.session_path.clone(),
             message_id: f.turn_id.clone(),
             turn_index: i as u64,
+            request_count: f.request_count,
             ts: f.ts.clone(),
             model: f.model.clone(),
             project: None,
@@ -1003,6 +998,7 @@ pub(super) fn parse_codex_buffer<R: BufRead>(
 
     Ok(ParseCodexIncrementalResult {
         turns,
+        inferences,
         content: content_out,
         events: events_out,
         user_turns: user_turns_out,

@@ -98,6 +98,7 @@ fn parses_simple_one_turn_session() {
     assert_eq!(t.session_id, "sess_simple_1");
     assert_eq!(t.message_id, "turn_simple_1");
     assert_eq!(t.turn_index, 0);
+    assert_eq!(t.request_count, 1);
     assert_eq!(t.model, "gpt-5.4");
     assert_eq!(t.ts, "2026-04-20T00:00:00.200Z");
     assert_eq!(t.usage.input, 600);
@@ -141,6 +142,7 @@ fn computes_per_turn_usage_as_delta_of_cumulative_totals() {
     let t1 = &r.turns[0];
     assert_eq!(t1.message_id, "turn_multi_1");
     assert_eq!(t1.turn_index, 0);
+    assert_eq!(t1.request_count, 1);
     assert_eq!(t1.model, "gpt-5.4");
     assert_eq!(t1.usage.input, 2000);
     assert_eq!(t1.usage.output, 200);
@@ -149,6 +151,7 @@ fn computes_per_turn_usage_as_delta_of_cumulative_totals() {
     let t2 = &r.turns[1];
     assert_eq!(t2.message_id, "turn_multi_2");
     assert_eq!(t2.turn_index, 1);
+    assert_eq!(t2.request_count, 1);
     assert_eq!(t2.model, "gpt-5.3-codex");
     assert_eq!(t2.usage.input, 2500);
     assert_eq!(t2.usage.output, 500);
@@ -157,6 +160,69 @@ fn computes_per_turn_usage_as_delta_of_cumulative_totals() {
     assert_eq!(t2.tool_calls.len(), 1);
     assert_eq!(t2.tool_calls[0].name, "exec_command");
     assert_eq!(t2.tool_calls[0].target.as_deref(), Some("ls"));
+}
+
+#[test]
+fn counts_advancing_usage_snapshots_as_requests_without_changing_token_totals() {
+    let r = parse("many-requests-one-turn.jsonl");
+    assert_eq!(r.turns.len(), 1, "the Codex task remains one logical turn");
+    let turn = &r.turns[0];
+    assert_eq!(turn.request_count, 4);
+    assert_eq!(turn.usage.input, 1_080);
+    assert_eq!(turn.usage.cache_read, 720);
+    assert_eq!(turn.usage.output, 180);
+    assert_eq!(turn.usage.reasoning, 45);
+    assert_eq!(r.inferences.len(), turn.request_count as usize);
+    let inference_usage = r.inferences.iter().fold(Usage::default(), |mut sum, inf| {
+        sum.input += inf.usage.input;
+        sum.output += inf.usage.output;
+        sum.reasoning += inf.usage.reasoning;
+        sum.cache_read += inf.usage.cache_read;
+        sum
+    });
+    assert_eq!(inference_usage, turn.usage);
+    assert!(r
+        .inferences
+        .iter()
+        .all(|inf| inf.turn_id == turn.message_id));
+}
+
+#[test]
+fn preserves_zero_requests_for_a_completed_task_without_usage() {
+    let tmp = tempdir().unwrap();
+    let path = write_jsonl(
+        tmp.path(),
+        "zero-requests.jsonl",
+        &[
+            json!({"timestamp":"2026-07-29T00:00:00Z","type":"session_meta","payload":{"id":"sess_zero"}}),
+            json!({"timestamp":"2026-07-29T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_zero"}}),
+            json!({"timestamp":"2026-07-29T00:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_zero"}}),
+        ],
+    );
+    let r = parse_codex_session(&path, &ParseCodexOptions::default()).unwrap();
+    assert_eq!(r.turns.len(), 1);
+    assert_eq!(r.turns[0].request_count, 0);
+    assert_eq!(r.turns[0].effective_request_count(), 0);
+    assert!(r.inferences.is_empty());
+}
+
+#[test]
+fn classifies_tool_only_request_without_reasoning_as_tool_use() {
+    let tmp = tempdir().unwrap();
+    let path = write_jsonl(
+        tmp.path(),
+        "tool-only.jsonl",
+        &[
+            json!({"timestamp":"2026-07-29T00:00:00Z","type":"session_meta","payload":{"id":"sess_tool_only"}}),
+            json!({"timestamp":"2026-07-29T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn_tool_only"}}),
+            json!({"timestamp":"2026-07-29T00:00:02Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}","call_id":"call_tool_only"}}),
+            json!({"timestamp":"2026-07-29T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":0}}}}),
+            json!({"timestamp":"2026-07-29T00:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_tool_only"}}),
+        ],
+    );
+    let r = parse_codex_session(&path, &ParseCodexOptions::default()).unwrap();
+    assert_eq!(r.inferences.len(), 1);
+    assert_eq!(r.inferences[0].kind, crate::reader::InferenceKind::ToolUse);
 }
 
 #[test]
@@ -289,6 +355,35 @@ fn incremental_full_parse_matches_full_parse() {
     assert_eq!(r.turns.len(), expected.turns.len());
     let raw = std::fs::read(&path).unwrap();
     assert_eq!(r.end_offset, raw.len() as u64);
+}
+
+#[test]
+fn incremental_mid_turn_resume_recounts_each_request_once() {
+    let path = fixture("many-requests-one-turn.jsonl");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let cutoff = raw.find("2026-07-29T15:29:03.000Z").unwrap();
+    let tmp = tempdir().unwrap();
+    let partial_path = tmp.path().join("partial-many.jsonl");
+    std::fs::write(&partial_path, &raw[..cutoff]).unwrap();
+
+    let partial =
+        parse_codex_session_incremental(&partial_path, &ParseCodexIncrementalOptions::default())
+            .unwrap();
+    assert!(partial.turns.is_empty());
+    assert!(partial.inferences.is_empty());
+    assert_eq!(partial.end_offset, 0);
+
+    let resumed = parse_codex_session_incremental(
+        &path,
+        &ParseCodexIncrementalOptions {
+            start_offset: Some(partial.end_offset),
+            resume: Some(partial.resume),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(resumed.turns[0].request_count, 4);
+    assert_eq!(resumed.inferences.len(), 4);
 }
 
 #[test]

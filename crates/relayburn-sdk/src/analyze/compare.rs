@@ -39,13 +39,15 @@ pub struct CompareCell {
     pub one_shot_rate: Option<f64>,
     pub cache_hit_rate: Option<f64>,
     pub median_retries: Option<f64>,
-    /// True when the cell has zero turns. Distinct from `insufficient_sample`
-    /// so JSON consumers can tell "we never saw this combination" apart
-    /// from "we have data but the sample is small." Only one of `no_data` /
-    /// `insufficient_sample` is ever true at a time.
+    /// True when the cell has zero matching logical turn records. Distinct
+    /// from `insufficient_sample` so JSON consumers can tell "we never saw
+    /// this combination" apart from "we have data but the sample is small."
+    /// Only one of `no_data` / `insufficient_sample` is ever true at a time.
     pub no_data: bool,
-    /// True when `0 < turns < min_sample`. A cell with `no_data == true`
-    /// always has `insufficient_sample == false`.
+    /// True when `0 < logical turn records < min_sample`. This sample gate is
+    /// independent of `turns`, which reports model requests and may be zero
+    /// for an observed Codex record. A cell with `no_data == true` always has
+    /// `insufficient_sample == false`.
     pub insufficient_sample: bool,
 }
 
@@ -88,6 +90,7 @@ impl<'a> CompareOptions<'a> {
 #[derive(Debug, Default)]
 struct Accum {
     turns: u64,
+    logical_turns: u64,
     edit_turns: u64,
     one_shot_turns: u64,
     priced_turns: u64,
@@ -150,11 +153,13 @@ pub fn build_compare_table(turns: &[EnrichedTurn], opts: &CompareOptions<'_>) ->
             .expect("model just inserted");
         let acc = by_cat.entry(cat).or_default();
 
-        acc.turns += 1;
+        let request_count = t.effective_request_count();
+        acc.turns += request_count;
+        acc.logical_turns += 1;
         let mt = model_totals.get_mut(model).expect("model just inserted");
-        mt.turns += 1;
+        mt.turns += request_count;
         if let Some(c) = cost_for_turn(t, opts.pricing) {
-            acc.priced_turns += 1;
+            acc.priced_turns += request_count;
             acc.total_cost += c.total;
             mt.total_cost += c.total;
         }
@@ -238,7 +243,7 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
     let Some(acc) = acc else {
         return empty_cell();
     };
-    if acc.turns == 0 {
+    if acc.logical_turns == 0 {
         return empty_cell();
     }
     CompareCell {
@@ -248,8 +253,11 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
         priced_turns: acc.priced_turns,
         total_cost: acc.total_cost,
         // `cost_per_turn` is `None` unless every turn in this cell is
-        // priced — a partial average would misrepresent unknown cost.
-        cost_per_turn: (acc.priced_turns == acc.turns).then(|| acc.total_cost / acc.turns as f64),
+        // priced — a partial average would misrepresent unknown cost — and
+        // the cell made at least one model request (zero-request Codex
+        // records have no per-request average).
+        cost_per_turn: (acc.turns > 0 && acc.priced_turns == acc.turns)
+            .then(|| acc.total_cost / acc.turns as f64),
         one_shot_rate: if acc.edit_turns > 0 {
             Some(acc.one_shot_turns as f64 / acc.edit_turns as f64)
         } else {
@@ -266,7 +274,7 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
             None
         },
         no_data: false,
-        insufficient_sample: acc.turns < min_sample,
+        insufficient_sample: acc.logical_turns < min_sample,
     }
 }
 
@@ -337,6 +345,7 @@ mod tests {
                 session_path: None,
                 message_id: id,
                 turn_index: 0,
+                request_count: 1,
                 ts: "2026-04-20T00:00:00.000Z".into(),
                 model: model.into(),
                 project: None,
@@ -477,6 +486,42 @@ mod tests {
         assert_eq!(cell.edit_turns, 0);
         assert_eq!(cell.one_shot_rate, None);
         assert_eq!(cell.median_retries, None);
+    }
+
+    #[test]
+    fn multi_request_turns_weight_totals_while_sample_gate_counts_records() {
+        let pricing = load_builtin_pricing();
+        let mut turns = vec![
+            turn(
+                "claude-sonnet-4-6",
+                Some(ActivityCategory::Coding),
+                default_usage(),
+                Some(true),
+                Some(0),
+            ),
+            turn(
+                "claude-sonnet-4-6",
+                Some(ActivityCategory::Coding),
+                default_usage(),
+                Some(true),
+                Some(0),
+            ),
+        ];
+        turns[0].turn.request_count = 2;
+        turns[1].turn.request_count = 3;
+        let opts = CompareOptions {
+            pricing: &pricing,
+            models: None,
+            min_sample: Some(2),
+        };
+        let t = build_compare_table(&turns, &opts);
+        assert_eq!(t.totals["claude-sonnet-4-6"].turns, 5);
+        let cell = &t.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 5);
+        assert!(
+            !cell.insufficient_sample,
+            "two records meet a min_sample of two"
+        );
     }
 
     #[test]
@@ -668,6 +713,51 @@ mod tests {
         assert_eq!(cell.turns, 2);
         let cpt = cell.cost_per_turn.expect("priced");
         assert!((cpt - cell.total_cost / 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn uses_request_count_as_codex_cost_per_turn_denominator() {
+        let pricing = load_builtin_pricing();
+        let mut turns = vec![turn(
+            "claude-sonnet-4-6",
+            Some(ActivityCategory::Coding),
+            default_usage(),
+            Some(false),
+            None,
+        )];
+        turns[0].turn.source = SourceKind::Codex;
+        turns[0].turn.request_count = 7;
+
+        let t = build_compare_table(&turns, &CompareOptions::new(&pricing));
+        let cell = &t.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 7);
+        assert_eq!(cell.priced_turns, 7);
+        assert_eq!(cell.cost_per_turn, Some(cell.total_cost / 7.0));
+        assert!(
+            cell.insufficient_sample,
+            "request cardinality must not satisfy the logical sample-size gate"
+        );
+    }
+
+    #[test]
+    fn zero_request_logical_turn_is_insufficient_not_no_data() {
+        let pricing = load_builtin_pricing();
+        let mut turns = vec![turn(
+            "claude-sonnet-4-6",
+            Some(ActivityCategory::Coding),
+            Usage::default(),
+            Some(false),
+            None,
+        )];
+        turns[0].turn.source = SourceKind::Codex;
+        turns[0].turn.request_count = 0;
+
+        let table = build_compare_table(&turns, &CompareOptions::new(&pricing));
+        let cell = &table.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 0);
+        assert!(!cell.no_data);
+        assert!(cell.insufficient_sample);
+        assert_eq!(cell.cost_per_turn, None);
     }
 
     #[test]

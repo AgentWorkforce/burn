@@ -30,6 +30,7 @@ fn make_turn(model: &str) -> TurnRecord {
         session_path: None,
         message_id: "msg_1".into(),
         turn_index: 0,
+        request_count: 1,
         ts: "2026-04-23T00:00:00.000Z".into(),
         model: model.into(),
         project: None,

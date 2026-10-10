@@ -142,6 +142,7 @@ mod tests {
             session_path: None,
             message_id: message.into(),
             turn_index: 0,
+            request_count: 1,
             ts: ts.into(),
             model: "m".into(),
             project: None,
