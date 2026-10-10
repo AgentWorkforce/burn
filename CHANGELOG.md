@@ -8,6 +8,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `burn overhead deltas` now honors `--project`, accepts relative or ISO `--since` values with explicit errors for invalid input, and rejects the unsupported `--kind` flag.
 - `--since` parsing now rejects overflowing relative ranges with an error instead of panicking.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+- Timestamps everywhere (ingest, `--since`, quality outcomes, pending stamps) go through one strict ISO-8601 parser: `±HH:MM` offsets are applied rather than ignored, and out-of-range components, leap seconds, or trailing text are rejected.
 
 ## [4.1.0] - 2026-09-20
 

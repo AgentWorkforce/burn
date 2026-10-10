@@ -514,3 +514,7 @@ fn normalize_binary(raw: &str) -> String {
         .unwrap_or(raw)
         .to_string()
 }
+
+#[cfg(test)]
+#[path = "bash_parse_tests.rs"]
+mod tests;
