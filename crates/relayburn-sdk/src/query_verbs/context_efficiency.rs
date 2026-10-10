@@ -145,7 +145,6 @@ pub fn compute_context_efficiency(turns: &[TurnRecord]) -> ContextEfficiencySumm
         let output = turn_efficiency.output_tokens;
         let zero_output_with_context = u64::from(turn_efficiency.unbounded);
 
-        total.turn_count += 1;
         total.context_tokens = total.context_tokens.saturating_add(context);
         total.output_tokens = total.output_tokens.saturating_add(output);
         total.zero_output_turns_with_context += zero_output_with_context;
@@ -400,6 +399,108 @@ mod tests {
         reasoning_only.source = SourceKind::Opencode;
         assert_eq!(generated_output_tokens(&reasoning_only), 10);
         assert!(!context_efficiency_for_turn(&reasoning_only).unbounded);
+    }
+
+    #[test]
+    fn turn_metric_marks_only_context_consuming_zero_output_turns_unbounded() {
+        let context_only = turn(
+            "s",
+            0,
+            Usage {
+                input: 50,
+                ..Usage::default()
+            },
+        );
+        let empty = turn("s", 1, Usage::default());
+        let productive = turn(
+            "s",
+            2,
+            Usage {
+                input: 30,
+                output: 10,
+                ..Usage::default()
+            },
+        );
+        assert_eq!(
+            context_efficiency_for_turn(&context_only),
+            TurnContextEfficiency {
+                context_tokens: 50,
+                output_tokens: 0,
+                context_tokens_per_output_token: None,
+                unbounded: true,
+            }
+        );
+        assert_eq!(
+            context_efficiency_for_turn(&empty),
+            TurnContextEfficiency::default()
+        );
+        assert_eq!(
+            context_efficiency_for_turn(&productive),
+            TurnContextEfficiency {
+                context_tokens: 30,
+                output_tokens: 10,
+                context_tokens_per_output_token: Some(3.0),
+                unbounded: false,
+            }
+        );
+
+        assert!(compute_context_efficiency(std::slice::from_ref(&context_only)).unbounded);
+        assert!(!compute_context_efficiency(std::slice::from_ref(&empty)).unbounded);
+
+        let summary = compute_context_efficiency(&[context_only, empty, productive]);
+        assert!(!summary.unbounded);
+        assert_eq!(summary.context_tokens_per_output_token, Some(8.0));
+        assert_eq!(summary.zero_output_turns_with_context, 1);
+        assert_eq!(summary.sessions[0].zero_output_turns_with_context, 1);
+        assert_eq!(summary.sessions[0].turn_count, 3);
+    }
+
+    #[test]
+    fn ratio_findings_are_high_when_unbounded_or_at_double_the_threshold() {
+        let summary = compute_context_efficiency(&[
+            turn(
+                "double",
+                0,
+                Usage {
+                    input: 200,
+                    output: 1,
+                    ..Usage::default()
+                },
+            ),
+            turn(
+                "above",
+                0,
+                Usage {
+                    input: 199,
+                    output: 1,
+                    ..Usage::default()
+                },
+            ),
+            turn(
+                "zero-output",
+                0,
+                Usage {
+                    input: 50,
+                    ..Usage::default()
+                },
+            ),
+        ]);
+        let severities: Vec<(String, crate::analyze::WasteSeverity)> =
+            context_output_ratio_findings(&summary, 100.0, 0)
+                .into_iter()
+                .map(|finding| (finding.session_id, finding.severity))
+                .collect();
+        assert_eq!(
+            severities,
+            vec![
+                (
+                    "zero-output".to_string(),
+                    crate::analyze::WasteSeverity::High
+                ),
+                ("double".to_string(), crate::analyze::WasteSeverity::High),
+                ("above".to_string(), crate::analyze::WasteSeverity::Warn),
+            ]
+        );
     }
 
     #[test]
