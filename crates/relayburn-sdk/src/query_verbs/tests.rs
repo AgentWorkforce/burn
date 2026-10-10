@@ -296,11 +296,13 @@ fn summary_by_tag_counts_requests_per_tag_row() {
             ..SummaryOptions::default()
         })
         .unwrap();
+    assert!(summary.total_cost > 0.0);
     let rows = summary.by_tag.expect("by_tag rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].value, None);
     assert_eq!(rows[0].turn_count, 5);
     assert_eq!(rows[0].tokens, 300);
+    assert!((rows[0].cost - summary.total_cost).abs() < 1e-12);
 }
 
 #[test]
