@@ -239,6 +239,28 @@ fn a_codex_child_thread_is_a_session_of_its_own() {
 }
 
 #[test]
+fn a_codex_child_thread_written_later_lands_from_the_change_feed() {
+    let sandbox = Sandbox::new();
+    let day = ".codex/sessions/2026/04/23";
+    sandbox.place(
+        "codex/with-spawn-agent.jsonl",
+        &format!("{day}/rollout-2026-04-23T00-00-00-parent.jsonl"),
+    );
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    assert!(turn_ids(&ledger, "agent_inv_42").is_empty());
+
+    sandbox.place(
+        "codex-delegated/subagent-child.jsonl",
+        &format!("{day}/rollout-2026-04-23T00-00-01-child.jsonl"),
+    );
+    let report = sandbox.ingest(&mut ledger);
+    assert_eq!(report.ingested_sessions, 1);
+    assert_eq!(turn_ids(&ledger, "agent_inv_42").len(), 1);
+    assert_eq!(turn_ids(&ledger, "sess_spawn_1").len(), 1);
+}
+
+#[test]
 fn opencode_sessions_land() {
     let sandbox = Sandbox::new();
     sandbox.place(

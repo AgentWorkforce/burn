@@ -123,6 +123,9 @@ fn import_one(
         Source::Claude => records_with_children(&evidence, &delegated_children(store, &evidence)?),
         _ => records_from_evidence(&evidence),
     };
+    // The evidence carries its text whatever the content mode: activity
+    // classification and user-turn blocks are derived from it. The mode
+    // decides only whether the text itself is kept.
     if ctx.content_mode != ContentStoreMode::Full {
         records.content.clear();
     }
