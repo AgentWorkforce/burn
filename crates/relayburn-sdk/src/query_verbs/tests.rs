@@ -358,7 +358,7 @@ fn summary_report_envelope_carries_schema_capabilities_and_window() {
     );
     assert_eq!(
         envelope.window.until.as_deref(),
-        Some("2026-04-23T00:00:30.000Z")
+        Some("2026-04-23T00:00:30.999Z")
     );
     assert!(envelope.window.bucket.is_none());
 
@@ -387,12 +387,91 @@ fn summary_timeseries_envelope_applies_until_and_declares_bucket() {
     assert_eq!(envelope.window.bucket.as_ref().map(|b| b.seconds), Some(60));
     assert_eq!(
         envelope.window.until.as_deref(),
-        Some("2026-04-23T00:00:30.000Z")
+        Some("2026-04-23T00:00:30.999Z")
     );
     assert_eq!(envelope.timeseries.bucket_secs, 60);
     assert_eq!(envelope.timeseries.buckets.len(), 1);
     assert_eq!(envelope.timeseries.buckets[0].turn_count, 1);
     assert_eq!(envelope.timeseries.buckets[0].total_tokens, 1_500);
+}
+
+#[test]
+fn summary_timeseries_envelope_rejects_zero_bucket_width() {
+    let (_dir, handle) = fixture_handle();
+    let err = handle
+        .summary_timeseries_envelope(
+            SummaryReportOptions {
+                mode: SummaryReportMode::Grouped { by_provider: false },
+                ..SummaryReportOptions::default()
+            },
+            0,
+        )
+        .expect_err("zero-width buckets must be rejected");
+    assert!(err.to_string().contains("positive"), "{err}");
+}
+
+#[test]
+fn normalize_until_widens_whole_seconds_to_end_of_second() {
+    assert_eq!(
+        normalize_until(Some("2026-04-23T00:00:30Z"))
+            .unwrap()
+            .as_deref(),
+        Some("2026-04-23T00:00:30.999Z")
+    );
+    assert_eq!(
+        normalize_until(Some("2026-04-23")).unwrap().as_deref(),
+        Some("2026-04-23T00:00:00.999Z")
+    );
+    assert!(normalize_until(Some("7d"))
+        .unwrap()
+        .unwrap()
+        .ends_with(".999Z"));
+    assert_eq!(
+        normalize_until(Some("2026-04-23T00:00:30.250Z"))
+            .unwrap()
+            .as_deref(),
+        Some("2026-04-23T00:00:30.250Z")
+    );
+    assert_eq!(
+        normalize_until(Some("2026-04-23T00:00:30,000Z"))
+            .unwrap()
+            .as_deref(),
+        Some("2026-04-23T00:00:30.000Z")
+    );
+    assert_eq!(normalize_until(None).unwrap(), None);
+    assert!(normalize_until(Some("tomorrow"))
+        .unwrap_err()
+        .to_string()
+        .contains("invalid until"));
+}
+
+#[test]
+fn summary_report_until_includes_rows_later_in_the_final_second() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).expect("open");
+    handle
+        .raw_mut()
+        .append_turns(&[bucket_test_turn(
+            "s1",
+            "m1",
+            "2026-04-23T00:00:30.500Z",
+            1_000,
+        )])
+        .expect("append");
+    let turn_count = |until: &str| {
+        let report = handle
+            .summary_report(SummaryReportOptions {
+                until: Some(until.into()),
+                ..SummaryReportOptions::default()
+            })
+            .expect("summary report");
+        let SummaryReport::Grouped(grouped) = report else {
+            panic!("expected grouped report");
+        };
+        grouped.turn_count
+    };
+    assert_eq!(turn_count("2026-04-23T00:00:30Z"), 1);
+    assert_eq!(turn_count("2026-04-23T00:00:30.250Z"), 0);
 }
 
 /// Acceptance test for issue #437: a turn carrying `stop_reason:
@@ -1245,12 +1324,8 @@ fn hotspots_ghost_surface_inputs_deghost_claude_command_from_user_text() {
         .unwrap();
 
     let pricing = load_pricing(None);
-    let mut inputs = super::hotspots::build_hotspots_ghost_surface_inputs(
-        &handle,
-        &[turn],
-        &pricing,
-        &Query::default(),
-    );
+    let mut inputs =
+        super::hotspots::build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("claude"));
     inputs.codex_home = Some(root.join("missing-codex"));
@@ -1294,12 +1369,8 @@ fn hotspots_ghost_surface_inputs_deghost_codex_command_from_user_text() {
         .unwrap();
 
     let pricing = load_pricing(None);
-    let mut inputs = super::hotspots::build_hotspots_ghost_surface_inputs(
-        &handle,
-        &[turn],
-        &pricing,
-        &Query::default(),
-    );
+    let mut inputs =
+        super::hotspots::build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("missing-claude"));
     inputs.codex_home = Some(root.join("codex"));
@@ -1324,17 +1395,110 @@ fn hotspots_ghost_surface_inputs_deghost_codex_command_from_user_text() {
     );
 }
 
+fn timed_ghost_turn(session_id: &str, message_id: &str, ts: &str) -> TurnRecord {
+    TurnRecord {
+        ts: ts.into(),
+        ..ghost_surface_turn(SourceKind::ClaudeCode, session_id, message_id)
+    }
+}
+
+fn timed_content(
+    session_id: &str,
+    message_id: &str,
+    ts: &str,
+    role: ContentRole,
+    text: &str,
+) -> ContentRecord {
+    ContentRecord {
+        ts: ts.into(),
+        role,
+        ..user_content(SourceKind::ClaudeCode, session_id, message_id, text)
+    }
+}
+
+fn ghost_user_texts(handle: &LedgerHandle, turns: &[TurnRecord]) -> Vec<String> {
+    let pricing = load_pricing(None);
+    let inputs = super::hotspots::build_hotspots_ghost_surface_inputs(handle, turns, &pricing);
+    inputs
+        .user_turn_text_by_session
+        .and_then(|by_source| by_source.get(&SourceKind::ClaudeCode).cloned())
+        .and_then(|by_session| by_session.get("ghost-window").cloned())
+        .unwrap_or_default()
+}
+
+#[test]
+fn hotspots_ghost_surface_user_text_follows_selected_turns() {
+    let (_dir, mut handle) = fixture_handle();
+    let selected = timed_ghost_turn("ghost-window", "turn-a", "2026-04-23T00:00:10.000Z");
+    let unselected = timed_ghost_turn("ghost-window", "turn-b", "2026-04-23T00:00:20.000Z");
+    handle
+        .raw_mut()
+        .append_turns(&[selected.clone(), unselected])
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[
+            // Prompt for turn-a, earlier than any selected turn's timestamp.
+            timed_content(
+                "ghost-window",
+                "u1",
+                "2026-04-23T00:00:01.000Z",
+                ContentRole::User,
+                "/openspec-apply",
+            ),
+            // Same-millisecond prompt still belongs to turn-a.
+            timed_content(
+                "ghost-window",
+                "u2",
+                "2026-04-23T00:00:10.000Z",
+                ContentRole::User,
+                "tie prompt",
+            ),
+            timed_content(
+                "ghost-window",
+                "u3",
+                "2026-04-23T00:00:02.000Z",
+                ContentRole::User,
+                "",
+            ),
+            timed_content(
+                "ghost-window",
+                "a1",
+                "2026-04-23T00:00:03.000Z",
+                ContentRole::Assistant,
+                "assistant text",
+            ),
+            // Prompts for the unselected turn-b and for no turn at all.
+            timed_content(
+                "ghost-window",
+                "u4",
+                "2026-04-23T00:00:15.000Z",
+                ContentRole::User,
+                "/openspec-archive",
+            ),
+            timed_content(
+                "ghost-window",
+                "u5",
+                "2026-04-23T00:00:30.000Z",
+                ContentRole::User,
+                "/trailing",
+            ),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        ghost_user_texts(&handle, std::slice::from_ref(&selected)),
+        vec!["/openspec-apply".to_string(), "tie prompt".to_string()],
+    );
+}
+
 #[test]
 fn hotspots_ghost_surface_inputs_fall_back_when_content_missing() {
     let (_dir, handle) = fixture_handle();
     let turn = ghost_surface_turn(SourceKind::Codex, "ghost-empty", "ghost-empty-turn");
     let pricing = load_pricing(None);
-    let mut inputs = super::hotspots::build_hotspots_ghost_surface_inputs(
-        &handle,
-        &[turn],
-        &pricing,
-        &Query::default(),
-    );
+    let mut inputs =
+        super::hotspots::build_hotspots_ghost_surface_inputs(&handle, &[turn], &pricing);
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("missing-claude"));
     inputs.codex_home = Some(root.join("codex"));

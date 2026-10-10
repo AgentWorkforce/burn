@@ -5,6 +5,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `relayburn-sdk` now exposes SDK-owned summary report/time-series envelopes with schema/version, capability, and normalized window metadata for app and presenter consumers.
+- Summary reports accept an inclusive `until` bound; a bound without sub-second digits covers its whole final second. Bucketed summaries and comparisons reject a zero bucket width.
 - `burn hotspots --findings` ghost-surface results now account for user-text slash-command invocations, so active Claude/Codex commands and prompts are no longer flagged as unused when they do not appear as tool calls.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 

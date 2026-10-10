@@ -19,8 +19,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { loadNapiSdk } from './helpers/napi.js';
+
+const require = createRequire(import.meta.url);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../../..');
@@ -373,8 +376,15 @@ test('2.x extension verbs return stable shapes against the fixture ledger', asyn
     assert.equal(summaryReport.schema.name, 'relayburn.report.summary.v1');
     assert.equal(summaryReport.schema.version, 1);
     assert.equal(summaryReport.window.since, '2026-04-23T00:00:00.000Z');
-    assert.equal(summaryReport.window.until, '2026-04-24T00:00:00.000Z');
+    assert.equal(summaryReport.window.until, '2026-04-24T00:00:00.999Z');
     assert.ok(summaryReport.report.grouped);
+
+    // The raw binding promotes every u64 counter under `fidelity`, including
+    // the data-keyed `byClass` map, before the facade downcasts safe values.
+    const rawReport = require(join(REPO_ROOT, 'packages', 'sdk-node', 'src', 'binding.cjs'))
+      .summaryReport({ ledgerHome });
+    assert.equal(typeof rawReport.report.grouped.fidelity.total, 'bigint');
+    assert.equal(typeof rawReport.report.grouped.fidelity.byClass.full, 'bigint');
 
     const summaryTimeseries = await sdk.summaryTimeseries({
       ledgerHome,

@@ -329,6 +329,12 @@ fn is_bigint_field(name: &str) -> bool {
     BIGINT_FIELDS.contains(&name)
 }
 
+/// Keys whose whole subtree carries only `u64` counters, including maps keyed
+/// by data values (fidelity `byClass`, `byGranularity`, `missingCoverage`)
+/// that a field-name list cannot enumerate. Every unsigned integer leaf under
+/// one of these keys is promoted.
+const BIGINT_SUBTREES: &[&str] = &["fidelity"];
+
 /// Wraps a `serde_json::Value` so that, when napi-rs converts it to a JS
 /// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
 /// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
@@ -340,19 +346,21 @@ pub struct BigIntPromoting(JsonValue);
 
 impl ToNapiValue for BigIntPromoting {
     unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> NapiResult<sys::napi_value> {
-        promote_value(env, val.0, /*key=*/ None)
+        promote_value(env, val.0, /*key=*/ None, /*in_subtree=*/ false)
     }
 }
 
+/// `in_subtree` is true below a [`BIGINT_SUBTREES`] key.
 unsafe fn promote_value(
     env: sys::napi_env,
     val: JsonValue,
     key: Option<&str>,
+    in_subtree: bool,
 ) -> NapiResult<sys::napi_value> {
     match val {
         JsonValue::Number(n) => {
-            if let (Some(k), Some(u)) = (key, n.as_u64()) {
-                if is_bigint_field(k) {
+            if let Some(u) = n.as_u64() {
+                if in_subtree || key.is_some_and(is_bigint_field) {
                     return BigInt::to_napi_value(env, u64_to_bigint(u));
                 }
             }
@@ -368,7 +376,8 @@ unsafe fn promote_value(
                 "promote_value: napi_create_object"
             )?;
             for (k, v) in map.into_iter() {
-                let child = promote_value(env, v, Some(&k))?;
+                let child_in_subtree = in_subtree || BIGINT_SUBTREES.contains(&k.as_str());
+                let child = promote_value(env, v, Some(&k), child_in_subtree)?;
                 let key_buf = std::ffi::CString::new(k.as_str()).map_err(|e| {
                     NapiError::new(
                         napi::Status::GenericFailure,
@@ -393,7 +402,7 @@ unsafe fn promote_value(
                 "promote_value: napi_create_array_with_length"
             )?;
             for (i, v) in arr.into_iter().enumerate() {
-                let child = promote_value(env, v, /*key=*/ None)?;
+                let child = promote_value(env, v, /*key=*/ None, in_subtree)?;
                 napi::check_status!(
                     sys::napi_set_element(env, js_arr, i as u32, child),
                     "promote_value: napi_set_element"

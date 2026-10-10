@@ -40,8 +40,9 @@ use crate::analyze::{
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
-    parse_bash_command, resolve_project, BashParse, ContentKind, ContentRole, FidelityClass,
-    RelationshipType, SourceKind, StopReason, TurnRecord, UsageGranularity, UserTurnRecord,
+    parse_bash_command, resolve_project, BashParse, ContentKind, ContentRecord, ContentRole,
+    FidelityClass, RelationshipType, SourceKind, StopReason, TurnRecord, UsageGranularity,
+    UserTurnRecord,
 };
 // Re-exported only for the `tests` submodule, which reaches these names
 // through `use super::*`. The non-test query-verb code no longer references
@@ -77,8 +78,24 @@ pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
     normalize_time_bound("since", since)
 }
 
+/// Canonicalize an inclusive `until` bound. Ledger rows carry millisecond
+/// precision, so an `until` without sub-second digits (a whole-second ISO
+/// timestamp, a date, or a relative range) widens to the last millisecond of
+/// that second (`.999Z`); otherwise the lexical `ts <= until` filter would drop
+/// rows later in the same second. Explicit fractional seconds stay exact.
 fn normalize_until(until: Option<&str>) -> Result<Option<String>> {
-    normalize_time_bound("until", until)
+    let bound = normalize_time_bound("until", until)?;
+    if until.is_some_and(has_fractional_seconds) {
+        return Ok(bound);
+    }
+    Ok(bound.map(|b| match b.strip_suffix(".000Z") {
+        Some(second) => format!("{second}.999Z"),
+        None => b,
+    }))
+}
+
+fn has_fractional_seconds(raw: &str) -> bool {
+    matches!(raw.as_bytes().get(19), Some(b'.' | b','))
 }
 
 fn normalize_time_bound(label: &str, value: Option<&str>) -> Result<Option<String>> {
@@ -415,6 +432,8 @@ pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Res
 /// return its own empty-timeseries shape. `ts_of` extracts the ISO timestamp
 /// from an item (`|t| &t.ts` for `TurnRecord`, `|t| &t.turn.ts` for
 /// `EnrichedTurn`). Shared by the `summary` and `compare` `--bucket` paths.
+/// A zero `bucket_secs` is rejected so a result never reports a bucket width
+/// different from the one its data was partitioned with.
 pub(crate) fn partition_into_buckets<T>(
     items: Vec<T>,
     since: Option<&str>,
@@ -422,6 +441,9 @@ pub(crate) fn partition_into_buckets<T>(
     bucket_secs: u64,
     ts_of: impl Fn(&T) -> &str,
 ) -> Result<Option<(Buckets, Vec<Vec<T>>)>> {
+    if bucket_secs == 0 {
+        anyhow::bail!("bucket width must be a positive number of seconds");
+    }
     let Some(anchor) = bucket_anchor_secs(
         since,
         items.iter().filter_map(|t| iso_z_to_epoch_secs(ts_of(t))),
