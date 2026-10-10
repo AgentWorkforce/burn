@@ -617,3 +617,7 @@ fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Value {
         "unknown": s.unknown,
     })
 }
+
+#[cfg(test)]
+#[path = "hotspots_tests.rs"]
+mod tests;
