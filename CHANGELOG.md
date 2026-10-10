@@ -5,6 +5,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn ingest` collects GitHub Copilot CLI usage from the OpenTelemetry file exporter while `COPILOT_OTEL_FILE_EXPORTER_PATH` is set (the exporter file plus `~/.copilot/otel/*.jsonl`), recording per-API-call token usage as `copilot-cli` turns with usage-only fidelity; the opt-in setup is printed by the new `burn init copilot` helper.
+- CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 
 ## [4.1.0] - 2026-09-20
 
