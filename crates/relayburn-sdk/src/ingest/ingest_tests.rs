@@ -624,3 +624,127 @@ fn a_subagent_that_grows_alone_is_billed_with_the_session_that_spawned_it() {
     assert_eq!(turns.len(), before + 1);
     assert!(turns.contains(&"msg_sub1_3".to_string()), "{turns:?}");
 }
+
+#[test]
+fn a_session_that_fails_to_land_is_read_again_next_time() {
+    let sandbox = Sandbox::new();
+    let project = sandbox.claude_project();
+    fs::write(
+        project.join(format!("{SIMPLE_SESSION}.jsonl")),
+        claude_transcript(SIMPLE_SESSION, "/tmp/project", &["hi"]),
+    )
+    .unwrap();
+    let mut ledger = sandbox.ledger();
+    let burn_db = LedgerLayout::under(sandbox.ledger_home()).burn;
+    let raw = rusqlite::Connection::open(&burn_db).unwrap();
+    raw.execute_batch(&format!(
+        "CREATE TRIGGER refuse BEFORE INSERT ON turns WHEN NEW.session_id = '{SIMPLE_SESSION}'
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;"
+    ))
+    .unwrap();
+    let failed = sandbox.ingest(&mut ledger);
+    assert_eq!(failed.appended_turns, 0);
+
+    raw.execute_batch("DROP TRIGGER refuse;").unwrap();
+    let retried = sandbox.ingest(&mut ledger);
+    assert_eq!(
+        retried.appended_turns, 1,
+        "the failed session is read again"
+    );
+    assert_eq!(turn_ids(&ledger, SIMPLE_SESSION).len(), 1);
+}
+
+fn stamp(sandbox: &Sandbox, harness: PendingStampHarness, cwd: &str, spawn: std::time::SystemTime) {
+    let mut enrichment = Enrichment::new();
+    enrichment.insert("persona".to_string(), "code-reviewer".to_string());
+    write_pending_stamp(WriteOptions {
+        harness,
+        ledger_home: Some(sandbox.ledger_home()),
+        cwd: cwd.to_string(),
+        enrichment,
+        spawn_start_ts: Some(spawn),
+        ..Default::default()
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_pending_codex_stamp_tags_the_codex_session_it_launched() {
+    let sandbox = Sandbox::new();
+    let cwd = sandbox.dir.path().join("project");
+    fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.to_string_lossy().into_owned();
+    stamp(
+        &sandbox,
+        PendingStampHarness::Codex,
+        &cwd,
+        std::time::SystemTime::now(),
+    );
+    let dir = sandbox.home().join(".codex/sessions/2026/04/20");
+    fs::create_dir_all(&dir).unwrap();
+    let rollout = [
+        rollout_line(
+            "2026-04-20T00:00:00.000Z",
+            "session_meta",
+            serde_json::json!({"id": "sess_stamped", "cwd": cwd,
+                               "timestamp": "2026-04-20T00:00:00.000Z", "cli_version": "0.121.0"}),
+        ),
+        rollout_line(
+            "2026-04-20T00:00:00.200Z",
+            "event_msg",
+            serde_json::json!({"type": "task_started", "turn_id": "turn_1"}),
+        ),
+        token_count("2026-04-20T00:00:05.000Z", 1000, 400, 120),
+        rollout_line(
+            "2026-04-20T00:00:05.100Z",
+            "event_msg",
+            serde_json::json!({"type": "task_complete", "turn_id": "turn_1"}),
+        ),
+    ]
+    .concat();
+    fs::write(
+        dir.join("rollout-2026-04-20T00-00-00-sess_stamped.jsonl"),
+        rollout,
+    )
+    .unwrap();
+    let mut ledger = sandbox.ledger();
+    let report = sandbox.ingest(&mut ledger);
+    assert_eq!(report.applied_pending_stamps, 1, "{report:?}");
+}
+
+#[test]
+fn a_stamp_written_after_the_session_was_last_written_is_not_its_launcher() {
+    let sandbox = Sandbox::new();
+    let cwd = sandbox.dir.path().join("project");
+    fs::create_dir_all(&cwd).unwrap();
+    let cwd = cwd.to_string_lossy().into_owned();
+    let file = sandbox
+        .claude_project()
+        .join(format!("{SIMPLE_SESSION}.jsonl"));
+    fs::write(&file, claude_transcript(SIMPLE_SESSION, &cwd, &["hi"])).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    stamp(&sandbox, PendingStampHarness::Claude, &cwd, later);
+    let mut ledger = sandbox.ledger();
+    let report = sandbox.ingest(&mut ledger);
+    assert_eq!(report.appended_turns, 1);
+    assert_eq!(report.applied_pending_stamps, 0);
+}
+
+#[test]
+fn ingest_reports_each_phase_to_its_progress_sink() {
+    let sandbox = Sandbox::new();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = seen.clone();
+    let opts = IngestOptions {
+        on_progress: Some(Box::new(move |phase: &str| {
+            sink.lock().unwrap().push(phase.to_string())
+        })),
+        ..sandbox.options()
+    };
+    let mut ledger = sandbox.ledger();
+    ingest_all(&mut ledger, &opts).unwrap();
+    let seen = seen.lock().unwrap();
+    for phase in ["syncing session history", "importing sessions"] {
+        assert!(seen.iter().any(|p| p == phase), "{phase}: {seen:?}");
+    }
+}

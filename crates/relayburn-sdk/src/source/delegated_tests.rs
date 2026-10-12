@@ -237,3 +237,86 @@ fn a_codex_child_thread_analyzes_by_id_from_a_fresh_store() {
     assert_eq!(analysis.session.session_id, "agent_inv_42");
     assert_eq!(analysis.metrics.data().unwrap().turn_count, 1);
 }
+
+#[test]
+fn a_child_hangs_off_the_delegation_edge_that_spawned_it() {
+    let (root, mut children) = sidecar_session();
+    let a1 = &mut children[0];
+    let spawn = a1
+        .relationships
+        .iter()
+        .find(|r| r.side == RelationshipSide::Child && r.relationship == "delegated")
+        .cloned()
+        .unwrap();
+    let mut local = spawn.clone();
+    local.relationship = "materialized_local".to_string();
+    local.child_agent_type = Some("Local".to_string());
+    let mut grandchild = spawn.clone();
+    grandchild.side = RelationshipSide::Parent;
+    grandchild.parent_session_id = "a1".to_string();
+    grandchild.child_session_id = Some("g1".to_string());
+    grandchild.child_agent_type = Some("Grand".to_string());
+    a1.relationships.insert(0, local);
+    a1.relationships.insert(0, grandchild);
+    let records = records_with_children(&root, &children, &Billing::settled());
+    let types: Vec<Option<&str>> = records
+        .turns
+        .iter()
+        .filter_map(|t| t.subagent.as_ref())
+        .filter(|s| s.agent_id.as_deref() == Some("a1"))
+        .map(|s| s.subagent_type.as_deref())
+        .collect();
+    assert!(!types.is_empty());
+    assert!(
+        types
+            .iter()
+            .all(|t| *t == spawn.child_agent_type.as_deref()),
+        "{types:?}"
+    );
+}
+
+#[test]
+fn a_child_spawned_from_outside_the_tree_hangs_under_the_root() {
+    let (root, mut children) = sidecar_session();
+    for edge in &mut children[1].relationships {
+        if edge.side == RelationshipSide::Child {
+            edge.parent_session_id = "not-loaded".to_string();
+        }
+    }
+    let records = records_with_children(&root, &children, &Billing::settled());
+    let parents: Vec<Option<&str>> = records
+        .turns
+        .iter()
+        .filter_map(|t| t.subagent.as_ref())
+        .filter(|s| s.agent_id.as_deref() == Some("a2"))
+        .map(|s| s.parent_agent_id.as_deref())
+        .collect();
+    assert!(!parents.is_empty());
+    assert!(
+        parents.iter().all(|p| *p == Some("sidecar-session")),
+        "{parents:?}"
+    );
+}
+
+#[test]
+fn a_childs_request_ids_are_keyed_under_the_root_session() {
+    let (root, children) = sidecar_session();
+    let records = records_with_children(&root, &children, &Billing::settled());
+    let child_turns: std::collections::HashSet<&str> = records
+        .turns
+        .iter()
+        .filter(|t| t.subagent.is_some())
+        .map(|t| t.message_id.as_str())
+        .collect();
+    let child_keys: Vec<&str> = records
+        .request_id_lookup
+        .keys()
+        .filter(|k| child_turns.contains(k.message_id.as_str()))
+        .map(|k| k.session_id.as_str())
+        .collect();
+    assert!(!child_keys.is_empty());
+    assert!(
+        child_keys.iter().all(|s| *s == "sidecar-session"),
+        "{child_keys:?}"
+    );
+}

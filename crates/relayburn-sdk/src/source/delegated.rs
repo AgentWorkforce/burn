@@ -98,12 +98,10 @@ pub(crate) fn records_with_children(
 
 /// The delegation edge that spawned `child`.
 fn spawn_edge(child: &SessionEvidence) -> Option<&Relationship> {
-    let id = child.session.session_id.as_str();
-    child.relationships.iter().find(|r| {
-        r.side == RelationshipSide::Child
-            && r.relationship == "delegated"
-            && r.child_session_id.as_deref() == Some(id)
-    })
+    child
+        .relationships
+        .iter()
+        .find(|r| r.side == RelationshipSide::Child && r.relationship == "delegated")
 }
 
 /// The [`Subagent`] every turn of `child` carries. A spawner outside the

@@ -172,3 +172,37 @@ fn a_sibling_tool_result_inside_a_sidechain_does_not_start_another_one() {
         .collect();
     assert_eq!(agents, [Some("u1".to_string()), Some("u1".to_string())]);
 }
+
+fn activity(records: &SessionRecords, message: &str) -> Option<crate::reader::ActivityCategory> {
+    records
+        .turns
+        .iter()
+        .find(|t| t.message_id.contains(message))
+        .and_then(|t| t.activity)
+}
+
+#[test]
+fn a_turn_is_classified_by_its_prompt_and_its_own_text() {
+    use crate::reader::ActivityCategory;
+    let transcript = [
+        record("u0", None, false, 0, json!({"type": "user", "message": {"role": "user", "content": "hello"}})),
+        record("a0", Some("u0"), false, 1, assistant("msg_plan", json!([
+            {"type": "text", "text": "Here is the roadmap I would follow."}
+        ]))),
+        record("u1", Some("a0"), false, 2, json!({"type": "user", "message": {"role": "user", "content": "please review the module"}})),
+        // A record whose parent chain is broken reads the prompt before it.
+        record("a1", Some("missing"), false, 3, assistant("msg_orphan", json!([
+            {"type": "text", "text": "ok"}
+        ]))),
+    ]
+    .concat();
+    let records = records_of(&transcript);
+    assert_eq!(
+        activity(&records, "msg_plan"),
+        Some(ActivityCategory::Planning)
+    );
+    assert_eq!(
+        activity(&records, "msg_orphan"),
+        Some(ActivityCategory::Review)
+    );
+}
