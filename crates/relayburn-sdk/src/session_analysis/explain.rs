@@ -81,6 +81,11 @@ const GUIDANCE: &[(&str, &str, &str)] = &[
         "Batch the steps into one call (one broader search, one multi-file edit, one combined git status/diff) or a project script.",
     ),
     (
+        "cache-expiry",
+        "Once the prompt cache's TTL lapses, the next turn re-writes the whole context at cache-write rates instead of reading it at the cache-read rate.",
+        "Run long jobs in the background so the cache stays warm, use 1-hour prompt caching for long-running work, or /compact before stepping away from a large session.",
+    ),
+    (
         "unpriced-usage",
         "burn has no price for this model, so its spend is reported as unknown, never as free.",
         "Add the model to a models.dev-format pricing file and pass it with --pricing.",

@@ -6,6 +6,7 @@ use crate::analyze::findings::PatternsResult;
 use crate::analyze::ghost_surface::{GhostSurfaceFinding, GhostSurfaceInputs};
 use crate::analyze::tool_call_patterns::ToolCallPatternFinding;
 use crate::analyze::tool_output_bloat::ToolOutputBloat;
+use crate::analyze::{cache_expiry_to_finding, detect_cache_expiry, turn_id, CacheExpiry};
 use crate::reader::{CompactionEvent, ContentRecord, ToolResultEventRecord};
 
 /// The non-turn records hotspot analyzers read.
@@ -32,6 +33,9 @@ pub(crate) struct HotspotEnvironment<'a> {
     /// Installed-surface inventory for the ghost-surface detector; `None`
     /// skips it.
     pub ghost_surface: Option<GhostSurfaceInputs>,
+    /// Turns outside `turns` that only supply earlier prompt-cache state to
+    /// the cache-expiry detector; their own expiries are not reported.
+    pub cache_history: &'a [TurnRecord],
     /// Finding kinds to detect (see `DEFAULT_HOTSPOTS_FINDING_KINDS`).
     pub wanted: &'a HashSet<String>,
 }
@@ -43,6 +47,7 @@ pub(crate) struct HotspotDetections {
     pub tool_output_bloat: Vec<ToolOutputBloat>,
     pub ghost_surface: Vec<GhostSurfaceFinding>,
     pub tool_call_patterns: Vec<ToolCallPatternFinding>,
+    pub cache_expiry: Vec<CacheExpiry>,
 }
 
 /// Run every wanted hotspot detector over `turns`.
@@ -97,7 +102,27 @@ pub(crate) fn detect_hotspots(
         } else {
             Vec::new()
         },
+        cache_expiry: if wants("cache-expiry") {
+            cache_expiry(turns, side.user_turns, pricing, env.cache_history)
+        } else {
+            Vec::new()
+        },
     }
+}
+
+/// Cache expiries in `turns`, with `history` supplying earlier cache state.
+fn cache_expiry(
+    turns: &[TurnRecord],
+    user_turns: &[UserTurnRecord],
+    pricing: &PricingTable,
+    history: &[TurnRecord],
+) -> Vec<CacheExpiry> {
+    if history.is_empty() {
+        return detect_cache_expiry(turns, user_turns, pricing, None);
+    }
+    let in_window: HashSet<_> = turns.iter().map(turn_id).collect();
+    let all: Vec<TurnRecord> = turns.iter().chain(history).cloned().collect();
+    detect_cache_expiry(&all, user_turns, pricing, Some(&in_window))
 }
 
 impl HotspotDetections {
@@ -129,6 +154,7 @@ impl HotspotDetections {
                 .iter()
                 .map(tool_call_pattern_to_finding),
         );
+        findings.extend(self.cache_expiry.iter().map(cache_expiry_to_finding));
         if wanted.contains("unpriced-usage") {
             findings.extend(unpriced_usage_findings(turns, pricing));
         }

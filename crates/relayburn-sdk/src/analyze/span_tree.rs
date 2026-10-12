@@ -413,6 +413,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn span_kind_wire_str_matches_serde_label() {
+        for (kind, label) in [
+            (SpanKind::Turn, "turn"),
+            (SpanKind::Inference, "inference"),
+            (SpanKind::ToolUse, "tool-use"),
+            (SpanKind::Subagent, "subagent"),
+            (SpanKind::Skill, "skill"),
+            (SpanKind::UserPrompt, "user-prompt"),
+            (SpanKind::ToolResult, "tool-result"),
+        ] {
+            assert_eq!(kind.wire_str(), label);
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{label}\"")
+            );
+        }
+    }
+
+    #[test]
     fn span_kind_serializes_kebab_case() {
         assert_eq!(serde_json::to_string(&SpanKind::Turn).unwrap(), "\"turn\"");
         assert_eq!(

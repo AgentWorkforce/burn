@@ -182,3 +182,7 @@ fn content_passes(r: &ContentRecord, q: &Query) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+#[path = "content_tests.rs"]
+mod tests;

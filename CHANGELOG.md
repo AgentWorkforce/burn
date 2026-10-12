@@ -27,6 +27,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - Codex turn usage comes from each response's raw token snapshot.
 - A failed OpenCode tool call sets `isError`, as Claude and Codex turns do.
 - A Claude assistant turn still being written (no `stop_reason` yet) is billed once it settles, not early.
+- Pricing bills Claude 1-hour cache writes at 2x the input tariff on every host (Anthropic, Vertex AI, Bedrock; 5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, `analyze`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Claude models keep a single cache-write tariff.
+- Turns whose usage was measured as zero price at $0 regardless of model, so Claude Code's `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session; unmeasured usage stays unpriced. `burn compare` shows cost per turn only for fully priced cells.
 
 ### Analysis and quality
 
@@ -41,7 +43,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - Session sourcing depends on a semver-compatible `ai-hist` release (`0.41`); adopting a new minor is a deliberate bump that re-runs the parity suite. A Codex turn's model, cwd and reasoning come from the `turn_context` naming it, else the latest earlier one; a forked Codex child's first turn is charged only its own spend, not the parent's inherited total; a Claude turn opened by a signature-only `thinking` record starts when that record was written.
 - Edit-heavy findings count file reads made through any harness's shell (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`, `less`, `more`), so sessions that read via Bash are no longer flagged as editing blind.
 - Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.
+- `burn hotspots --findings` and `burn analyze` add a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL. Under `--since`, a resume at the window start is measured against the session's earlier turns.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+- Timestamps everywhere (ingest, `--since`, quality outcomes, pending stamps) go through one strict ISO-8601 parser: `±HH:MM` offsets are applied rather than ignored, and out-of-range components, leap seconds, or trailing text are rejected.
 
 ## [4.1.0] - 2026-09-20
 

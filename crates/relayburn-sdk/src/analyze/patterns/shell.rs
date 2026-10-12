@@ -266,35 +266,5 @@ fn is_signed_integer(token: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::shell_command_has_file_read as reads;
-
-    #[test]
-    fn file_printing_commands_with_a_file_operand_are_reads() {
-        for command in [
-            "cat src/lib.rs",
-            "head -n 20 src/main.rs",
-            "sed -n '1,80p' src/main.rs",
-            "sed -ne 5p Cargo.toml",
-            "git status && nl -ba src/lib.rs | head",
-            "bat README.md",
-        ] {
-            assert!(reads(command), "{command}");
-        }
-    }
-
-    #[test]
-    fn edits_filters_and_searches_are_not_reads() {
-        for command in [
-            "sed -i 's/a/b/' src/main.rs",
-            "sed -n -i 1p src/main.rs",
-            "sed 's/a/b/' src/main.rs",
-            "sed -n 1p",
-            "git log | sed -n 1,5p",
-            "grep -n foo src/main.rs",
-            "cat <<EOF",
-        ] {
-            assert!(!reads(command), "{command}");
-        }
-    }
-}
+#[path = "shell_tests.rs"]
+mod tests;

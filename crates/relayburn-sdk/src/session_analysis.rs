@@ -192,6 +192,7 @@ fn analyze(inputs: &Inputs<'_>) -> SessionAnalysis {
         &HotspotEnvironment {
             settings: &environment_settings.settings,
             ghost_surface: environment_settings.ghost_surface,
+            cache_history: &[],
             wanted: &wanted,
         },
     );

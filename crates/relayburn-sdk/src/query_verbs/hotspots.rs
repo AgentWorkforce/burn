@@ -34,6 +34,7 @@ const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
     "ghost-surface",
     "tool-output-bloat",
     "tool-call-pattern",
+    "cache-expiry",
     "unpriced-usage",
 ];
 
@@ -244,6 +245,11 @@ impl LedgerHandle {
                 ghost_surface: wanted
                     .contains("ghost-surface")
                     .then(|| build_ghost_surface_inputs(&turns, &pricing, None)),
+                cache_history: &if wanted.contains("cache-expiry") {
+                    cache_state_before_window(self, &turns, &q)?
+                } else {
+                    Vec::new()
+                },
                 wanted: &wanted,
             },
         );
@@ -400,3 +406,7 @@ pub(crate) fn fidelity_summary_to_value(s: &FidelitySummary) -> serde_json::Valu
         "unknown": s.unknown,
     })
 }
+
+#[cfg(test)]
+#[path = "hotspots_tests.rs"]
+mod tests;

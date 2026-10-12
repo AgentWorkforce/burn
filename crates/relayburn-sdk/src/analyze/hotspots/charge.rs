@@ -21,14 +21,15 @@ pub(super) fn pay_initial(
     if new_content <= 0.0 {
         return;
     }
+    // USD this turn paid for new content, each cache-write TTL at its tariff.
+    let new_content_cost = rate.map_or(0.0, |rate| {
+        (turn.usage.input as f64 / PER_MILLION) * rate.input + rate.cache_create_cost(&turn.usage)
+    });
     if !sized {
         // Even-split: with no per-result sizes, divide this turn's
         // (input + cacheCreate) evenly across the prior emit's tool calls.
         let k = pending.len() as f64;
-        let cost = rate.map_or(0.0, |rate| {
-            (turn.usage.input as f64 / PER_MILLION) * rate.input
-                + (create / PER_MILLION) * rate.cache_write
-        }) / k;
+        let cost = new_content_cost / k;
         for &i in pending {
             attributions[i].initial_tokens = new_content / k;
             attributions[i].initial_cost = cost;
@@ -43,10 +44,8 @@ pub(super) fn pay_initial(
     if sibling_total <= 0.0 {
         return;
     }
-    let input_share = turn.usage.input as f64 / new_content;
-    let per_token_price = rate.map_or(0.0, |rate| {
-        input_share * rate.input + (1.0 - input_share) * rate.cache_write
-    });
+    // Blended per-million price of this turn's new content.
+    let per_token_price = new_content_cost / new_content * PER_MILLION;
     // Cap at what turn N+1 actually paid for new content — otherwise
     // multiple tool_results entering on the same turn could over-attribute
     // past the actual paid total.

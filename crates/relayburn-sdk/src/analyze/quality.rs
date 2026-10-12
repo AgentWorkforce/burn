@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 use crate::analyze::util::group_turns_by_session_sorted;
 use crate::reader::{ContentKind, ContentRecord, ContentRole, StopReason, TurnRecord};
+use crate::util::time::parse_iso_ms;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -159,7 +160,7 @@ fn infer_outcome_refs(
     }
 
     let last = turns.last().unwrap();
-    let last_ms = parse_iso8601_ms(&last.ts);
+    let last_ms = parse_iso_ms(&last.ts);
     let is_recent = match last_ms {
         Some(ms) => now_ms - ms < RECENT_WINDOW_MS,
         None => false,
@@ -359,135 +360,6 @@ fn now_ms_system() -> i64 {
         .unwrap_or(0)
 }
 
-/// Parse a subset of ISO 8601 sufficient for the timestamps produced by the
-/// readers and the test fixtures: `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
-/// Returns milliseconds since the Unix epoch, or `None` when the input fails
-/// to match — mirroring `Number.isFinite(Date.parse(...))` in TS.
-///
-/// Deliberately *not* folded into [`crate::util::time::parse_iso_ms`]: this
-/// variant is a strict superset — it applies `±HH:MM` timezone offsets,
-/// rejects out-of-range components (month/day/hour/minute/second) and trailing
-/// garbage, because outcome inference compares these timestamps against `now`
-/// and a lenient parse would misclassify `is_recent`. The shared parser is
-/// consumed by the readers/ledger on the hot ingest path and intentionally
-/// stays lean; unifying them would mean widening that shared parser's
-/// behavior for every caller, which is out of scope here.
-fn parse_iso8601_ms(s: &str) -> Option<i64> {
-    let bytes = s.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    let year: i32 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
-    if bytes[4] != b'-' {
-        return None;
-    }
-    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
-    if bytes[7] != b'-' {
-        return None;
-    }
-    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
-    if bytes[10] != b'T' && bytes[10] != b' ' {
-        return None;
-    }
-    let hour: u32 = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
-    if bytes[13] != b':' {
-        return None;
-    }
-    let minute: u32 = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
-    if bytes[16] != b':' {
-        return None;
-    }
-    let second: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
-
-    // Reject out-of-range components — `Date.parse` returns NaN for these in
-    // the TS reference implementation. Day-of-month bounds are validated
-    // loosely (1..=31) here; the proleptic-Gregorian conversion below would
-    // otherwise silently roll an invalid date forward.
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 59
-    {
-        return None;
-    }
-
-    let mut idx = 19;
-    let mut millis: u32 = 0;
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        idx += 1;
-        let frac_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        let frac = std::str::from_utf8(&bytes[frac_start..idx]).ok()?;
-        // Pad/truncate to 3 digits to get milliseconds.
-        let mut buf = String::with_capacity(3);
-        for c in frac.chars().take(3) {
-            buf.push(c);
-        }
-        while buf.len() < 3 {
-            buf.push('0');
-        }
-        millis = buf.parse().ok()?;
-    }
-
-    let mut tz_offset_minutes: i64 = 0;
-    if idx < bytes.len() {
-        match bytes[idx] {
-            b'Z' | b'z' => {
-                idx += 1;
-            }
-            b'+' | b'-' => {
-                let sign: i64 = if bytes[idx] == b'-' { -1 } else { 1 };
-                idx += 1;
-                if idx + 5 > bytes.len() || bytes[idx + 2] != b':' {
-                    return None;
-                }
-                let oh: i64 = std::str::from_utf8(&bytes[idx..idx + 2])
-                    .ok()?
-                    .parse()
-                    .ok()?;
-                let om: i64 = std::str::from_utf8(&bytes[idx + 3..idx + 5])
-                    .ok()?
-                    .parse()
-                    .ok()?;
-                tz_offset_minutes = sign * (oh * 60 + om);
-                idx += 5;
-            }
-            _ => return None,
-        }
-    }
-    if idx != bytes.len() {
-        return None;
-    }
-
-    let days = days_from_civil(year, month, day);
-    let utc_secs = days * 86400 + (hour as i64) * 3600 + (minute as i64) * 60 + second as i64;
-    let secs = utc_secs - tz_offset_minutes * 60;
-    secs.checked_mul(1000)?.checked_add(millis as i64)
-}
-
-/// Howard Hinnant's `days_from_civil`: signed days from 1970-01-01 to the
-/// given proleptic-Gregorian date.
-fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era: i64 = if y >= 0 {
-        (y / 400) as i64
-    } else {
-        ((y - 399) / 400) as i64
-    };
-    let yoe: i64 = (y as i64) - era * 400;
-    let m_adj: i64 = if m > 2 {
-        (m as i64) - 3
-    } else {
-        (m as i64) + 9
-    };
-    let doy: i64 = (153 * m_adj + 2) / 5 + (d as i64) - 1;
-    let doe: i64 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,7 +369,7 @@ mod tests {
 
     fn fixed_now() -> i64 {
         // `Date.parse('2026-04-21T00:00:00.000Z')`
-        parse_iso8601_ms("2026-04-21T00:00:00.000Z").expect("parse fixed_now")
+        parse_iso_ms("2026-04-21T00:00:00.000Z").expect("parse fixed_now")
     }
 
     fn tc(id: &str, name: &str, is_error: Option<bool>) -> ToolCall {
@@ -625,7 +497,7 @@ mod tests {
 
     #[test]
     fn recent_session_is_unknown_recent() {
-        let now = parse_iso8601_ms("2026-04-20T00:05:00.000Z").unwrap();
+        let now = parse_iso_ms("2026-04-20T00:05:00.000Z").unwrap();
         let turns = vec![
             turn(TurnOverrides {
                 message_id: "m1".into(),
@@ -1032,16 +904,16 @@ mod tests {
     #[test]
     fn parse_iso_round_trip_to_known_epoch_ms() {
         // 2026-04-20T00:00:00.000Z
-        let ms = parse_iso8601_ms("2026-04-20T00:00:00.000Z").unwrap();
+        let ms = parse_iso_ms("2026-04-20T00:00:00.000Z").unwrap();
         // (2026-1970)*365.25 days approximation; but we want exact equality
         // with chrono if available. Validate against another known anchor:
-        let later = parse_iso8601_ms("2026-04-20T00:00:01.000Z").unwrap();
+        let later = parse_iso_ms("2026-04-20T00:00:01.000Z").unwrap();
         assert_eq!(later - ms, 1000);
-        let plus_minute = parse_iso8601_ms("2026-04-20T00:01:00.000Z").unwrap();
+        let plus_minute = parse_iso_ms("2026-04-20T00:01:00.000Z").unwrap();
         assert_eq!(plus_minute - ms, 60_000);
-        let plus_hour = parse_iso8601_ms("2026-04-20T01:00:00.000Z").unwrap();
+        let plus_hour = parse_iso_ms("2026-04-20T01:00:00.000Z").unwrap();
         assert_eq!(plus_hour - ms, 3_600_000);
-        let plus_day = parse_iso8601_ms("2026-04-21T00:00:00.000Z").unwrap();
+        let plus_day = parse_iso_ms("2026-04-21T00:00:00.000Z").unwrap();
         assert_eq!(plus_day - ms, 86_400_000);
     }
 
@@ -1049,12 +921,12 @@ mod tests {
     fn parse_iso_rejects_out_of_range_components() {
         // Mirror `Date.parse` behavior: out-of-range minute / second / hour /
         // month / day all return NaN in JS, so the parser returns None here.
-        assert!(parse_iso8601_ms("2026-04-20T23:60:00Z").is_none());
-        assert!(parse_iso8601_ms("2026-04-20T23:59:60Z").is_none());
-        assert!(parse_iso8601_ms("2026-04-20T24:00:00Z").is_none());
-        assert!(parse_iso8601_ms("2026-13-20T00:00:00Z").is_none());
-        assert!(parse_iso8601_ms("2026-04-32T00:00:00Z").is_none());
-        assert!(parse_iso8601_ms("2026-00-20T00:00:00Z").is_none());
-        assert!(parse_iso8601_ms("2026-04-00T00:00:00Z").is_none());
+        assert!(parse_iso_ms("2026-04-20T23:60:00Z").is_none());
+        assert!(parse_iso_ms("2026-04-20T23:59:60Z").is_none());
+        assert!(parse_iso_ms("2026-04-20T24:00:00Z").is_none());
+        assert!(parse_iso_ms("2026-13-20T00:00:00Z").is_none());
+        assert!(parse_iso_ms("2026-04-32T00:00:00Z").is_none());
+        assert!(parse_iso_ms("2026-00-20T00:00:00Z").is_none());
+        assert!(parse_iso_ms("2026-04-00T00:00:00Z").is_none());
     }
 }

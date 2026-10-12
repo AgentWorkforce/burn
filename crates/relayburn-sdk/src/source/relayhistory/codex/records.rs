@@ -245,3 +245,7 @@ impl Spawn {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "records_tests.rs"]
+mod tests;
