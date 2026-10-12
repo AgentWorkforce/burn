@@ -27,14 +27,19 @@ pub(super) fn snapshot_dir() -> PathBuf {
     fixtures_root().join("sourcing-snapshots")
 }
 
-/// `records` as JSON with every occurrence of `root` (and its canonical
-/// form) replaced by `<fixtures>`, and `sessionPath` dropped: where a
-/// session file lives is not something burn derives.
-pub(super) fn render_value(records: &SessionRecords, root: &Path) -> serde_json::Value {
+/// `records` as JSON with each `(path, placeholder)` replacement applied in
+/// order (both the path and its canonical form), and `sessionPath` dropped:
+/// where a session file lives is not something burn derives.
+pub(super) fn render_value(
+    records: &SessionRecords,
+    replacements: &[(&Path, &str)],
+) -> serde_json::Value {
     let mut json = serde_json::to_string(records).unwrap();
-    let canonical = root.canonicalize().unwrap();
-    for prefix in [canonical.as_path(), root] {
-        json = json.replace(&*prefix.to_string_lossy(), "<fixtures>");
+    for (path, placeholder) in replacements {
+        let canonical = path.canonicalize().unwrap();
+        for form in [canonical.as_path(), path] {
+            json = json.replace(&*form.to_string_lossy(), placeholder);
+        }
     }
     let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
     if let Some(turns) = value.get_mut("turns").and_then(|t| t.as_array_mut()) {
