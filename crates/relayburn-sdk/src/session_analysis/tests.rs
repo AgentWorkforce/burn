@@ -563,3 +563,60 @@ fn refused_attribution_of_a_session_with_turns_is_a_finding() {
     assert!(empty.hotspots.reason().is_some());
     assert!(!codes(&empty).contains(&"attribution-unavailable"));
 }
+
+fn synthetic_turn(
+    index: u64,
+    model: &str,
+    activity: &str,
+    input: u64,
+    tool: &str,
+) -> crate::reader::TurnRecord {
+    serde_json::from_value(serde_json::json!({
+        "v": 1, "source": "claude-code", "sessionId": "s1", "messageId": format!("m{index}"),
+        "turnIndex": index, "ts": "2026-04-20T00:00:00.000Z", "model": model,
+        "usage": {"input": input, "output": 10, "reasoning": 0, "cacheRead": 0,
+                  "cacheCreate5m": 0, "cacheCreate1h": 0},
+        "toolCalls": [{"id": format!("call{index}"), "name": tool, "argsHash": "abcd"}],
+        "activity": activity
+    }))
+    .unwrap()
+}
+
+#[test]
+fn activity_rows_rank_unpriced_spend_first_then_by_cost() {
+    let analysis = analyze_adjusted("claude/retry-loop.jsonl", |records| {
+        records.turns = vec![
+            synthetic_turn(0, "claude-3-5-haiku", "coding", 100, "Read"),
+            synthetic_turn(1, "claude-3-5-haiku", "testing", 90_000, "Bash"),
+            synthetic_turn(2, "unpriced-house-model", "git", 10, "Grep"),
+        ];
+    });
+    let activity = analysis.activity.data().expect("activity section");
+    let categories: Vec<String> = activity
+        .categories
+        .iter()
+        .map(|row| {
+            serde_json::to_value(row.category)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(categories, ["git", "testing", "coding"]);
+    let tools: Vec<&str> = activity.tools.iter().map(|row| row.tool.as_str()).collect();
+    assert_eq!(tools, ["Grep", "Bash", "Read"]);
+}
+
+#[test]
+fn the_session_names_each_model_once_and_skips_unnamed_ones() {
+    let analysis = analyze_adjusted("claude/retry-loop.jsonl", |records| {
+        records.turns = vec![
+            synthetic_turn(0, "claude-3-5-haiku", "coding", 100, "Read"),
+            synthetic_turn(1, "", "coding", 100, "Read"),
+            synthetic_turn(2, "claude-3-5-haiku", "coding", 100, "Read"),
+            synthetic_turn(3, "gpt-5.4", "coding", 100, "Read"),
+        ];
+    });
+    assert_eq!(analysis.session.models, ["claude-3-5-haiku", "gpt-5.4"]);
+}

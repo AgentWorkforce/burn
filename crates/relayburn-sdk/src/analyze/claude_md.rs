@@ -746,6 +746,26 @@ mod tests {
     }
 
     #[test]
+    fn a_session_is_priced_at_the_model_most_of_its_turns_ran() {
+        let pricing = load_builtin_pricing();
+        let parsed = parse_claude_md("/p/CLAUDE.md", "## Rules\nBe brief.\n");
+        let mut turns: Vec<TurnRecord> = (0..3)
+            .map(|i| make_turn("s-cm-model", &format!("m{i}"), i, zero_usage()))
+            .collect();
+        for turn in &mut turns {
+            turn.model = "gpt-5.4".into();
+        }
+        turns[0].model = "claude-3-5-haiku".into();
+        let files = vec![parsed];
+        let result = attribute_claude_md(&AttributeClaudeMdInput {
+            files: &files,
+            turns: &turns,
+            pricing: &pricing,
+        });
+        assert_eq!(result.session_costs[0].model, "gpt-5.4");
+    }
+
+    #[test]
     fn skips_turns_where_cache_read_is_below_claude_md_size() {
         let pricing = load_builtin_pricing();
         let mut text = String::from("## Big\n");

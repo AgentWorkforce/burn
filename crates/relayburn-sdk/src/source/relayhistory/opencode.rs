@@ -48,10 +48,7 @@ fn parent_session(ctx: &Context<'_>) -> Option<String> {
     ctx.ev
         .relationships
         .iter()
-        .find(|r| {
-            r.side == RelationshipSide::Child
-                && r.child_session_id.as_deref() == Some(ctx.session_id())
-        })
+        .find(|r| r.side == RelationshipSide::Child)
         .map(|r| r.parent_session_id.clone())
 }
 
@@ -141,7 +138,6 @@ fn split_tool_usage(turns: &[TurnRecord], events: &mut [ToolResultEventRecord]) 
             .collect();
         let n = owned.len() as u64;
         let attribution = match n {
-            0 => continue,
             1 => UsageAttribution::SingleToolTurn,
             _ => UsageAttribution::EvenSplitTurn,
         };
@@ -228,3 +224,6 @@ mod tests {
         assert_eq!(usage_share(&total, 1, 0), total);
     }
 }
+
+#[cfg(test)]
+mod compaction_tests;

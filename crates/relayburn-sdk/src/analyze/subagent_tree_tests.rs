@@ -502,3 +502,73 @@ fn an_unpriced_subagent_makes_its_cost_and_every_ancestors_unknown() {
     assert_eq!(child("a-unpriced").self_tokens, 2000);
     assert!(child("a-priced").cumulative_cost.is_some_and(|c| c > 0.0));
 }
+
+#[test]
+fn children_rank_by_cost_when_priced_not_by_tokens() {
+    let pricing = load_builtin_pricing();
+    let child = |message: &str, model: &str, index: u64, agent: &str| {
+        make_turn(
+            "s",
+            message,
+            model,
+            index,
+            SourceKind::ClaudeCode,
+            Some(sub(Some(agent), Some("s"), Some("Explore"), None)),
+        )
+    };
+    let turns = vec![
+        make_turn(
+            "s",
+            "m0",
+            "claude-haiku-4-5",
+            0,
+            SourceKind::ClaudeCode,
+            None,
+        ),
+        // More tokens on a cheap model...
+        child("m1", "claude-haiku-4-5", 1, "a-cheap"),
+        child("m2", "claude-haiku-4-5", 2, "a-cheap"),
+        // ...than one turn on a dear one.
+        child("m3", "gpt-5.4", 3, "a-dear"),
+    ];
+    let trees = build_subagent_tree(&turns, &BuildSubagentTreeOptions::new(&pricing));
+    let root = trees.get("s").expect("root");
+    let order: Vec<&str> = root.children.iter().map(|c| c.node_id.as_str()).collect();
+    let cost = |id: &str| {
+        root.children
+            .iter()
+            .find(|c| c.node_id == id)
+            .and_then(|c| c.cumulative_cost)
+            .unwrap()
+    };
+    assert!(cost("a-dear") > cost("a-cheap"));
+    assert_eq!(order, ["a-dear", "a-cheap"]);
+}
+
+#[test]
+fn an_invocation_takes_the_first_subagent_type_its_turns_name() {
+    let pricing = load_builtin_pricing();
+    let turn = |message: &str, index: u64, agent: &str, kind: Option<&str>| {
+        make_turn(
+            "s",
+            message,
+            "claude-haiku-4-5",
+            index,
+            SourceKind::ClaudeCode,
+            Some(sub(Some(agent), None, kind, None)),
+        )
+    };
+    let turns = vec![
+        turn("m0", 0, "a-late", None),
+        turn("m1", 1, "a-late", Some("Explore")),
+        turn("m2", 2, "a-plan", Some("Plan")),
+        turn("m3", 3, "a-plan", Some("Explore")),
+    ];
+    let stats = aggregate_subagent_type_stats(&turns, &BuildSubagentTreeOptions::new(&pricing));
+    let mut by_type: Vec<(&str, u64)> = stats
+        .iter()
+        .map(|s| (s.subagent_type.as_str(), s.invocations))
+        .collect();
+    by_type.sort();
+    assert_eq!(by_type, [("Explore", 1), ("Plan", 1)]);
+}

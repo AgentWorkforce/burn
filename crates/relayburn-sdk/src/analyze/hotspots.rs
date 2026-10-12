@@ -482,10 +482,9 @@ fn attribute_session(
         }
 
         // 2) Persistence cost: each still-cached prior tool_result rides
-        //    along in this turn's cacheRead.
-        if have_any_sizes && !riding_active.is_empty() && turn.usage.cache_read > 0 {
-            pay_persistence(&mut attributions, &riding_active, turn, turn_rate.as_ref());
-        }
+        //    along in this turn's cacheRead. A result of unknown size (no
+        //    sizes at all) or one the cacheRead no longer covers pays none.
+        pay_persistence(&mut attributions, &riding_active, turn, turn_rate.as_ref());
 
         // 3) Promote yesterday's pendingInitial into the riding-active set,
         //    then emit attributions for this turn's own tool_uses (they'll
