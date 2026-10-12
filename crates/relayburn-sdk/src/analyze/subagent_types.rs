@@ -75,11 +75,8 @@ pub(crate) fn aggregate_subagent_type_stats(
             total_cost: total,
             median_cost: percentile(&costs, 0.5),
             p95_cost: percentile(&costs, 0.95),
-            mean_cost: if invocations > 0 {
-                total / invocations as f64
-            } else {
-                0.0
-            },
+            // Every type has at least the invocation that named it.
+            mean_cost: total / invocations as f64,
         });
     }
     out.sort_by(|a, b| {

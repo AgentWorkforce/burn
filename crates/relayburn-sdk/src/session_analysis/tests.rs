@@ -612,6 +612,10 @@ fn activity_rows_rank_unpriced_spend_first_then_by_cost() {
     assert_eq!(tools, ["Grep", "Bash", "Read"]);
     let bash = &activity.tools[1];
     assert_eq!((bash.calls, bash.turns), (2, 1));
+    assert!(
+        activity.replacement_savings.is_none(),
+        "no call replaced another"
+    );
 }
 
 #[test]
@@ -625,4 +629,19 @@ fn the_session_names_each_model_once_and_skips_unnamed_ones() {
         ];
     });
     assert_eq!(analysis.session.models, ["claude-3-5-haiku", "gpt-5.4"]);
+}
+
+#[test]
+fn a_call_that_replaced_others_reports_its_savings() {
+    let analysis = analyze_adjusted("claude/retry-loop.jsonl", |records| {
+        let mut turn = synthetic_turn(0, "claude-3-5-haiku", "coding", 100, "mcp__search");
+        turn.tool_calls[0].collapsed_calls = Some(3);
+        records.turns = vec![turn];
+    });
+    let savings = analysis
+        .activity
+        .data()
+        .and_then(|a| a.replacement_savings.as_ref())
+        .expect("one replacing call");
+    assert_eq!((savings.calls, savings.collapsed_calls), (1, 3));
 }
