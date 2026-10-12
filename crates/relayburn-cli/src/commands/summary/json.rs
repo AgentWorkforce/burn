@@ -198,6 +198,7 @@ pub(super) fn stop_reasons_to_json(s: &StopReasonCounts) -> Value {
         "stopSequence": s.stop_sequence,
         "toolUse": s.tool_use,
         "refusal": s.refusal,
+        "aborted": s.aborted,
         "silent": s.silent,
         "none": s.none,
     })

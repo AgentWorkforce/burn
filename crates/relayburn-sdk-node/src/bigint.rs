@@ -97,6 +97,7 @@ pub(crate) const BIGINT_FIELDS: &[&str] = &[
     "stopSequence",
     "toolUse",
     "refusal",
+    "aborted",
     "silent",
     // export_ledger / export_stamps record bodies — every camelCased
     // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /

@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use super::fixtures::{fixtures_root, render_value, snapshot_dir};
 use super::relayhistory::records_from_evidence;
+use super::Billing;
 
 /// The cwd every fixture records.
 const FIXTURE_CWD: &str = "/tmp/project";
@@ -146,7 +147,7 @@ fn mapped(staged: &Staged) -> BTreeMap<String, Value> {
         } else {
             staged.prefix.clone()
         };
-        let records = records_from_evidence(&evidence);
+        let records = records_from_evidence(&evidence, &Billing::settled());
         assert_session_paths(&name, &records, &evidence);
         out.insert(
             name,

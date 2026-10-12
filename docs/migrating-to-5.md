@@ -20,6 +20,13 @@ few numbers that were wrong before.
   `~/.codex/archived_sessions/` are ingested like live ones.
 - **Codex usage comes from each response's raw token snapshot**, and a Codex
   subagent thread is a session of its own.
+- **Every Codex task is billed.** A task commits at `task_complete`, at
+  `turn_aborted` (stop reason `aborted`), or when the next `task_started`
+  begins. A task still open at the end of a rollout is billed once nothing has
+  been written to the rollout for two minutes, as `<turn id>@<line>`; if the
+  session continues it after all, the rest is billed as a further turn of that
+  task. 4.x billed only tasks a later `task_complete` followed, so spend on
+  interrupted and unfinished tasks was missing.
 - Two deliberate record changes, also in the sourcing snapshots: a failed
   OpenCode tool call sets `isError`, and a Claude assistant turn still being
   written (no `stop_reason` yet) is not billed until it settles.

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::analyze::{cost_for_turn, load_pricing, provider_for, PricingTable};
 use crate::reader::TurnRecord;
 use crate::source::locate::{load_session, HistoryStoreOptions, SessionLocator};
-use crate::source::records_with_children;
+use crate::source::{records_with_children, Billing};
 use crate::Harness;
 
 pub const SESSION_METRICS_SCHEMA: &str = "burn.session-metrics.v1";
@@ -132,7 +132,7 @@ pub fn measure_session(options: MeasureSessionOptions) -> Result<SessionMetrics>
         },
         &HistoryStoreOptions::default(),
     )?;
-    let records = records_with_children(&loaded.evidence, &loaded.children);
+    let records = records_with_children(&loaded.evidence, &loaded.children, &Billing::now());
     let pricing = load_pricing(options.pricing_path.as_deref());
     session_metrics(options.harness, &records.turns, &pricing)
 }

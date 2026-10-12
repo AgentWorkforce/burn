@@ -14,6 +14,7 @@ use super::ingest::pull;
 use super::{IngestOptions, IngestReport};
 use crate::ledger::Ledger;
 use crate::source::locate::open_store;
+use crate::util::time::now_ms;
 
 /// How the watch loop wakes up.
 #[derive(Debug, Clone)]
@@ -53,7 +54,7 @@ pub fn watch_ingest(
     options.stop = Some(watch.stop);
     for tick in store.watch(options)? {
         match tick {
-            Ok(_) => on_tick(pull(ledger, &store, opts)),
+            Ok(_) => on_tick(pull(ledger, &store, opts, now_ms())),
             Err(error) => on_tick(Err(error.into())),
         }
     }

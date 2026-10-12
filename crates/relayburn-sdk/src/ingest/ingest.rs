@@ -17,6 +17,7 @@
 //! # Ok(()) }
 //! ```
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use ai_hist::{HydrateOptions, HydrateStatus, SessionIdentity, SessionRef, SessionStore, Source};
@@ -27,6 +28,7 @@ use super::pending_stamps::cleanup_stale_pending_stamps_in;
 use crate::ledger::{load_config, Ledger};
 use crate::reader::ContentStoreMode;
 use crate::source::locate::{open_store, HistoryStoreOptions};
+use crate::util::time::now_ms;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,10 +77,11 @@ impl IngestOptions {
         }
     }
 
-    pub(super) fn context(&self) -> ImportContext<'_> {
+    pub(super) fn context(&self, now_ms: i64) -> ImportContext<'_> {
         ImportContext {
             content_mode: resolve_content_mode(self.ledger_home.as_deref()),
             ledger_home: self.ledger_home.as_deref(),
+            now_ms,
         }
     }
 }
@@ -98,11 +101,20 @@ fn resolve_content_mode(ledger_home: Option<&Path>) -> ContentStoreMode {
 /// Sync the relayhistory store, then append every session it changed since
 /// the ledger's watermark.
 pub fn ingest_all(ledger: &mut Ledger, opts: &IngestOptions) -> anyhow::Result<IngestReport> {
+    ingest_all_at(ledger, opts, now_ms())
+}
+
+/// [`ingest_all`], reading sessions at `now_ms`.
+pub(super) fn ingest_all_at(
+    ledger: &mut Ledger,
+    opts: &IngestOptions,
+    now_ms: i64,
+) -> anyhow::Result<IngestReport> {
     opts.progress("opening session history");
     let store = open_store(&opts.store)?;
     opts.progress("syncing session history");
     sync(&store)?;
-    pull(ledger, &store, opts)
+    pull(ledger, &store, opts, now_ms)
 }
 
 /// One sweep of the store. A sweep another process holds is the same
@@ -119,23 +131,32 @@ fn sync(store: &SessionStore) -> anyhow::Result<()> {
 const SYNC_LOCK_WAIT_MS: u64 = 2_000;
 
 /// Append every session the store changed since the ledger's watermark,
-/// without syncing it first. The watch loop calls this after each sweep.
+/// and every session an earlier ingest left pending, without syncing the
+/// store first. The watch loop calls this after each sweep.
 pub(super) fn pull(
     ledger: &mut Ledger,
     store: &SessionStore,
     opts: &IngestOptions,
+    now_ms: i64,
 ) -> anyhow::Result<IngestReport> {
     opts.progress("cleaning pending spawn stamps");
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     opts.progress("reading changed sessions");
     let from = super::watermark::stored(ledger);
-    let (changed, head) = super::watermark::changed_since(store, from)?;
+    let (mut changed, head) = super::watermark::changed_since(store, from)?;
+    let waiting = super::watermark::pending(ledger);
+    changed.extend(waiting.iter().cloned());
     opts.progress("importing sessions");
-    let imported = import_sessions(ledger, store, &opts.context(), changed)?;
+    let imported = import_sessions(ledger, store, &opts.context(now_ms), changed)?;
+    let pending: BTreeSet<SessionIdentity> = waiting
+        .into_iter()
+        .chain(imported.pending)
+        .filter(|session| !imported.settled.contains(session))
+        .collect();
     if imported.complete && from != Some(head) {
-        super::watermark::store(ledger, head, store.db_path())?;
+        super::watermark::store(ledger, head, store.db_path(), &pending)?;
     } else {
-        super::watermark::remember_store(ledger, store.db_path())?;
+        super::watermark::remember(ledger, store.db_path(), &pending)?;
     }
     Ok(imported.report)
 }
@@ -169,8 +190,9 @@ pub fn ingest_claude_transcript_path(
     }
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     let identity = SessionIdentity::new(Source::Claude.as_str(), session_id);
-    let imported = import_sessions(ledger, &store, &opts.context(), [identity].into())?;
-    super::watermark::remember_store(ledger, store.db_path())?;
+    let imported = import_sessions(ledger, &store, &opts.context(now_ms()), [identity].into())?;
+    let pending = super::watermark::pending(ledger);
+    super::watermark::remember(ledger, store.db_path(), &pending)?;
     Ok(imported.report)
 }
 

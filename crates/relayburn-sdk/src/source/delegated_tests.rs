@@ -39,7 +39,7 @@ fn subagent_turns_are_billed_once_as_turns_of_the_root_session() {
         .map(|c| c.session.session_id.as_str())
         .collect();
     assert_eq!(ids, ["a1", "a2"]);
-    let records = records_with_children(&root, &children);
+    let records = records_with_children(&root, &children, &Billing::settled());
     let turns: Vec<(&str, u64, Option<&str>, Option<&str>)> = records
         .turns
         .iter()
@@ -85,7 +85,7 @@ fn subagent_turns_are_billed_once_as_turns_of_the_root_session() {
 #[test]
 fn a_grandchild_nests_under_the_subagent_that_spawned_it() {
     let (root, children) = sidecar_session();
-    let records = records_with_children(&root, &children);
+    let records = records_with_children(&root, &children, &Billing::settled());
     let edges: Vec<(&str, Option<&str>, Option<&str>)> = records
         .relationships
         .iter()
@@ -156,8 +156,12 @@ fn a_session_without_subagents_is_unchanged() {
     assert!(children.is_empty());
     let value = |r: &SessionRecords| serde_json::to_value(r).unwrap();
     assert_eq!(
-        value(&records_with_children(&root, &children)),
-        value(&records_from_evidence(&root))
+        value(&records_with_children(
+            &root,
+            &children,
+            &Billing::settled()
+        )),
+        value(&records_from_evidence(&root, &Billing::settled()))
     );
 }
 
@@ -201,7 +205,7 @@ fn a_codex_child_thread_is_not_folded_into_its_parent() {
     assert_eq!(reached, [SessionIdentity::new("codex", "agent_inv_42")]);
     let children = delegated_children(&store, &root).unwrap();
     assert!(children.is_empty());
-    let records = records_with_children(&root, &children);
+    let records = records_with_children(&root, &children, &Billing::settled());
     assert_eq!(records.turns.len(), 1);
     assert!(records.turns.iter().all(|t| t.session_id == "sess_spawn_1"));
 }

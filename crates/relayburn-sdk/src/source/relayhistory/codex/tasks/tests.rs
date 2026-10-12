@@ -5,6 +5,8 @@ use serde_json::{json, Value};
 
 use super::super::events::stream;
 use super::{Derived, Tasks};
+use crate::reader::types::StopReason;
+use crate::source::{Billing, TAIL_GRACE_MS};
 
 fn evidence(markers: Vec<Value>, messages: Vec<Value>) -> SessionEvidence {
     serde_json::from_value(json!({
@@ -58,8 +60,12 @@ fn derive(markers: Vec<Value>) -> Derived {
 }
 
 fn derive_with(markers: Vec<Value>, messages: Vec<Value>) -> Derived {
+    derive_at(markers, messages, &Billing::settled())
+}
+
+fn derive_at(markers: Vec<Value>, messages: Vec<Value>, billing: &Billing) -> Derived {
     let ev = evidence(markers, messages);
-    Tasks::new(&ev).run(&stream(&ev))
+    Tasks::new(&ev, billing).run(&stream(&ev))
 }
 
 /// `(input, cache_read, output, usage known)` per turn.
@@ -131,15 +137,24 @@ fn malformed_snapshot_leaves_usage_unknown() {
     assert_eq!(usage(&derive(vec![s1, bad, c1])), vec![(0, 0, 0, false)]);
 }
 
+/// Read while the rollout's last line (written at `line` seconds) is fresh.
+fn live(line: u64) -> Billing {
+    Billing::at(line as i64 * 1000)
+}
+
 #[test]
 fn nothing_is_emitted_before_a_task_commits() {
     let [s1, c1] = task(10, "t1");
     let [s2, _] = task(30, "t2");
-    let derived = derive(vec![s1, c1, s2]);
+    let derived = derive_at(vec![s1, c1, s2], Vec::new(), &live(30));
     assert!(derived.committed);
+    assert!(derived.pending);
     assert_eq!(derived.turns.len(), 1);
     let [open, _] = task(10, "t1");
-    assert!(!derive(vec![open]).committed);
+    let derived = derive_at(vec![open], Vec::new(), &live(10));
+    assert!(!derived.committed);
+    assert!(derived.pending);
+    assert!(derived.turns.is_empty());
 }
 
 fn turn_context(line: u64, turn: &str, model: &str, effort: &str) -> Value {
@@ -353,4 +368,240 @@ fn a_fork_child_starts_its_chain_and_its_spend_at_its_own_history() {
     ]);
     assert_eq!(configuration(&derived), vec![pair("gpt-5.5", "high")]);
     assert_eq!(usage(&derived), vec![(300, 300, 50, true)]);
+}
+
+/// relayhistory keeps `turn_aborted` as an unmodelled marker.
+fn aborted(line: u64, turn: &str) -> Value {
+    let mut marker = marker(line, "unknown", Some(turn), Value::Null);
+    marker["subkind"] = json!("turn_aborted");
+    marker
+}
+
+/// `(message id, stop reason)` per turn.
+fn outcomes(derived: &Derived) -> Vec<(String, Option<StopReason>)> {
+    derived
+        .turns
+        .iter()
+        .map(|t| (t.message_id.clone(), t.stop_reason))
+        .collect()
+}
+
+#[test]
+fn an_aborted_task_commits_its_spend_through_its_last_snapshot() {
+    let [s2, c2] = task(30, "t2");
+    let derived = derive_at(
+        vec![
+            marker(10, "task_started", Some("t1"), Value::Null),
+            snapshot(11, 1000, 400, 120),
+            aborted(12, "t1"),
+            s2,
+            snapshot(31, 1500, 400, 150),
+            c2,
+        ],
+        Vec::new(),
+        &live(39),
+    );
+    assert_eq!(
+        usage(&derived),
+        vec![(600, 400, 120, true), (500, 0, 30, true)]
+    );
+    assert_eq!(
+        outcomes(&derived),
+        vec![
+            ("t1".to_string(), Some(StopReason::Aborted)),
+            ("t2".to_string(), None)
+        ]
+    );
+    assert!(!derived.pending);
+}
+
+#[test]
+fn a_trailing_aborted_task_is_billed_without_waiting() {
+    let derived = derive_at(
+        vec![
+            marker(10, "task_started", Some("t1"), Value::Null),
+            snapshot(11, 1000, 400, 120),
+            aborted(12, "t1"),
+        ],
+        Vec::new(),
+        &live(12),
+    );
+    assert_eq!(usage(&derived), vec![(600, 400, 120, true)]);
+    assert_eq!(derived.turns[0].stop_reason, Some(StopReason::Aborted));
+    assert!(!derived.pending);
+}
+
+#[test]
+fn an_abort_naming_another_task_does_not_end_the_open_one() {
+    let derived = derive_at(
+        vec![
+            marker(10, "task_started", Some("t1"), Value::Null),
+            snapshot(11, 1000, 400, 120),
+            aborted(12, "t0"),
+        ],
+        Vec::new(),
+        &live(12),
+    );
+    assert!(derived.turns.is_empty());
+    assert!(derived.pending);
+}
+
+#[test]
+fn a_task_the_next_task_start_ends_commits_at_that_start() {
+    let derived = derive_at(
+        vec![
+            marker(10, "task_started", Some("t1"), Value::Null),
+            snapshot(11, 1000, 400, 120),
+            marker(30, "task_started", Some("t2"), Value::Null),
+        ],
+        Vec::new(),
+        &live(30),
+    );
+    assert_eq!(usage(&derived), vec![(600, 400, 120, true)]);
+    assert_eq!(outcomes(&derived), vec![("t1".to_string(), None)]);
+    assert!(derived.pending, "t2 is still open");
+}
+
+fn open_task() -> Vec<Value> {
+    vec![
+        marker(10, "task_started", Some("t1"), Value::Null),
+        snapshot(11, 1000, 400, 120),
+        snapshot(12, 1600, 400, 200),
+    ]
+}
+
+#[test]
+fn a_trailing_open_task_waits_for_the_rollout_to_settle() {
+    let last_write = 12_000;
+    let fresh = derive_at(
+        open_task(),
+        Vec::new(),
+        &Billing::at(last_write + TAIL_GRACE_MS - 1),
+    );
+    assert!(fresh.turns.is_empty());
+    assert!(fresh.pending);
+
+    let settled = derive_at(
+        open_task(),
+        Vec::new(),
+        &Billing::at(last_write + TAIL_GRACE_MS),
+    );
+    assert_eq!(usage(&settled), vec![(1200, 400, 200, true)]);
+    assert_eq!(outcomes(&settled), vec![("t1@12".to_string(), None)]);
+    assert!(!settled.pending);
+}
+
+/// The ledger after a pass billed `derived`'s turns.
+fn billed_after(derived: &Derived, now_ms: i64) -> Billing {
+    Billing {
+        now_ms,
+        billed: derived.turns.iter().map(|t| t.message_id.clone()).collect(),
+    }
+}
+
+/// The turns a pass adds to a ledger holding `billing.billed`.
+fn appended(derived: &Derived, billing: &Billing) -> Vec<(String, u64, u64, u64)> {
+    derived
+        .turns
+        .iter()
+        .filter(|t| !billing.billed.contains(&t.message_id))
+        .map(|t| {
+            (
+                t.message_id.clone(),
+                t.usage.input,
+                t.usage.cache_read,
+                t.usage.output,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_task_billed_open_that_continues_bills_only_the_rest() {
+    let first = derive_at(open_task(), Vec::new(), &Billing::settled());
+    let ledger = billed_after(&first, i64::MAX);
+    let mut grown = open_task();
+    grown.extend([
+        snapshot(40, 3000, 1400, 260),
+        marker(41, "task_complete", Some("t1"), Value::Null),
+    ]);
+    let second = derive_at(grown.clone(), Vec::new(), &ledger);
+    assert_eq!(
+        outcomes(&second),
+        vec![("t1@12".to_string(), None), ("t1".to_string(), None)]
+    );
+    assert_eq!(
+        usage(&second)[0],
+        usage(&first)[0],
+        "the billed part is unchanged"
+    );
+    assert_eq!(
+        appended(&second, &ledger),
+        vec![("t1".to_string(), 400, 1000, 60)]
+    );
+    // Billed whole by a ledger that never saw it open, the task spends
+    // exactly what the two parts do.
+    let whole = derive_at(grown.clone(), Vec::new(), &Billing::settled());
+    let parts = usage(&second);
+    let summed = (0..3).map(|i| {
+        let pick = |u: &(u64, u64, u64, bool)| [u.0, u.1, u.2][i];
+        pick(&parts[0]) + pick(&parts[1])
+    });
+    assert_eq!(summed.collect::<Vec<_>>(), vec![1600, 1400, 260]);
+    assert_eq!(usage(&whole), vec![(1600, 1400, 260, true)]);
+    // Read again, the ledger gains nothing.
+    let ledger = billed_after(&second, i64::MAX);
+    assert!(appended(&derive_at(grown, Vec::new(), &ledger), &ledger).is_empty());
+}
+
+#[test]
+fn a_continued_task_that_settles_open_again_bills_a_second_segment() {
+    let first = derive_at(open_task(), Vec::new(), &Billing::settled());
+    let mut grown = open_task();
+    grown.push(snapshot(40, 2000, 400, 300));
+    let ledger = billed_after(&first, 40_000);
+    let live_pass = derive_at(grown.clone(), Vec::new(), &ledger);
+    assert!(live_pass.pending);
+    assert!(appended(&live_pass, &ledger).is_empty());
+
+    let ledger = billed_after(&first, 40_000 + TAIL_GRACE_MS);
+    let settled = derive_at(grown, Vec::new(), &ledger);
+    assert!(!settled.pending);
+    assert_eq!(
+        appended(&settled, &ledger),
+        vec![("t1@40".to_string(), 400, 0, 100)]
+    );
+}
+
+#[test]
+fn a_resumed_session_bills_its_new_task_and_leaves_the_billed_one_alone() {
+    let first = derive_at(open_task(), Vec::new(), &Billing::settled());
+    let ledger = billed_after(&first, i64::MAX);
+    let [s2, c2] = task(60, "t2");
+    let mut resumed = open_task();
+    resumed.extend([s2, snapshot(61, 2000, 400, 250), c2]);
+    let second = derive_at(resumed, Vec::new(), &ledger);
+    assert_eq!(
+        outcomes(&second),
+        vec![("t1@12".to_string(), None), ("t2".to_string(), None)]
+    );
+    assert_eq!(
+        appended(&second, &ledger),
+        vec![("t2".to_string(), 400, 0, 50)]
+    );
+}
+
+#[test]
+fn a_billed_segment_the_rollout_has_not_passed_is_emitted_as_billed() {
+    // A ledger whose segment ends past what the store holds now: the task
+    // is not billed a second time under its own id.
+    let ledger = Billing {
+        now_ms: i64::MAX,
+        billed: ["t1@50".to_string()].into(),
+    };
+    let mut ended = open_task();
+    ended.push(marker(13, "task_complete", Some("t1"), Value::Null));
+    let derived = derive_at(ended, Vec::new(), &ledger);
+    assert_eq!(outcomes(&derived), vec![("t1@50".to_string(), None)]);
+    assert!(appended(&derived, &ledger).is_empty());
 }

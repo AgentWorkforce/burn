@@ -8,7 +8,9 @@
 //! holds; appends are idempotent, so that is a reconciliation, never a
 //! duplicate. Beside it the ledger names the store database it was
 //! ingested from, so reads that need the store's delegation edges consult
-//! the same store.
+//! the same store, and the sessions whose trailing task is still pending:
+//! the change feed reports a session when it is written, not when it
+//! settles, so those are read again on every ingest until they do.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ use crate::ledger::Ledger;
 
 const KEY: &str = "relayhistory";
 const STORE_KEY: &str = "relayhistoryStore";
+const PENDING_KEY: &str = "relayhistoryPending";
 
 /// Change kinds that move a session's records: its catalog row and its
 /// evidence. Prompt history, presences and connector observations do not.
@@ -45,25 +48,60 @@ pub(crate) fn ingested_store(ledger: &Ledger) -> Option<PathBuf> {
     cursors(ledger)?.get(STORE_KEY)?.as_str().map(PathBuf::from)
 }
 
+/// The sessions an earlier ingest left with a trailing task pending.
+pub(super) fn pending(ledger: &Ledger) -> BTreeSet<SessionIdentity> {
+    let Some(Value::Array(entries)) = cursors(ledger).and_then(|c| c.get(PENDING_KEY).cloned())
+    else {
+        return BTreeSet::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let [source, session] = entry.as_array()?.as_slice() else {
+                return None;
+            };
+            Some(SessionIdentity::new(source.as_str()?, session.as_str()?))
+        })
+        .collect()
+}
+
+fn pending_json(pending: &BTreeSet<SessionIdentity>) -> Value {
+    pending
+        .iter()
+        .map(|s| json!([s.source_name, s.session_id]))
+        .collect()
+}
+
+/// Where an ingest left the ledger: the change-feed position it read up
+/// to, the store it read, and the sessions still pending.
 pub(super) fn store(
     ledger: &mut Ledger,
     watermark: Watermark,
     store_db: &Path,
+    pending: &BTreeSet<SessionIdentity>,
 ) -> anyhow::Result<()> {
-    ledger.write_cursors(&json!({ KEY: watermark, STORE_KEY: store_db }).to_string())?;
+    let cursors =
+        json!({ KEY: watermark, STORE_KEY: store_db, PENDING_KEY: pending_json(pending) });
+    ledger.write_cursors(&cursors.to_string())?;
     Ok(())
 }
 
-/// Name `store_db` as the ledger's store, keeping its watermark.
-pub(super) fn remember_store(ledger: &mut Ledger, store_db: &Path) -> anyhow::Result<()> {
+/// Name `store_db` as the ledger's store and `pending` as its pending
+/// sessions, keeping its watermark.
+pub(super) fn remember(
+    ledger: &mut Ledger,
+    store_db: &Path,
+    pending: &BTreeSet<SessionIdentity>,
+) -> anyhow::Result<()> {
     let mut cursors = cursors(ledger)
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
-    if cursors.get(STORE_KEY).and_then(Value::as_str) == store_db.to_str() {
-        return Ok(());
-    }
+    let before = cursors.clone();
     cursors[STORE_KEY] = json!(store_db);
-    ledger.write_cursors(&cursors.to_string())?;
+    cursors[PENDING_KEY] = pending_json(pending);
+    if cursors != before {
+        ledger.write_cursors(&cursors.to_string())?;
+    }
     Ok(())
 }
 

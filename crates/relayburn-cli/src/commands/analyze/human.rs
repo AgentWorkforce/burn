@@ -380,6 +380,7 @@ fn stop_line(s: &StopReasonCounts) -> String {
         ("pause_turn", s.pause_turn),
         ("stop_sequence", s.stop_sequence),
         ("refusal", s.refusal),
+        ("aborted", s.aborted),
         ("silent", s.silent),
         ("none", s.none),
     ]

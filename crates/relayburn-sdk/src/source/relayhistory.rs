@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use self::tools::{apply_edit_hashes, extract_files_touched, pick_target};
 use super::usage::usage_from_raw;
-use super::SessionRecords;
+use super::{Billing, SessionRecords};
 use crate::reader::classifier::{classify_activity, ClassificationInput};
 use crate::reader::hash::args_hash;
 use crate::reader::types::{
@@ -39,14 +39,14 @@ pub(crate) fn source_kind(source: Source) -> Option<SourceKind> {
     }
 }
 
-/// Burn's record set for one session. Sources burn does not account for
-/// yield empty records.
-pub(crate) fn records_from_evidence(ev: &SessionEvidence) -> SessionRecords {
+/// Burn's record set for one session, read against `billing`. Sources burn
+/// does not account for yield empty records.
+pub(crate) fn records_from_evidence(ev: &SessionEvidence, billing: &Billing) -> SessionRecords {
     let Some(source) = source_kind(ev.session.source) else {
         return SessionRecords::default();
     };
     if source == SourceKind::Codex {
-        return codex::records(ev);
+        return codex::records(ev, billing);
     }
     let session_id = ev.session.session_id.clone();
     let ctx = Context::new(ev, source);

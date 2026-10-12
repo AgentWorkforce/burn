@@ -698,7 +698,7 @@ pub(super) fn render_quality(q: &QualityResult) -> String {
 ///
 /// Always renders `end_turn` / `max_tokens` / `refusal` / `pause` because
 /// users want to see the zero — "no refusals" is a meaningful signal.
-/// Other buckets (`tool_use`, `stop_sequence`, `silent`, `none`) appear
+/// Other buckets (`tool_use`, `stop_sequence`, `aborted`, `silent`, `none`) appear
 /// only when non-zero so the line stays scannable. Labels stay snake_case
 /// to match the historical Anthropic spelling the issue specified.
 pub(super) fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
@@ -713,6 +713,9 @@ pub(super) fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
     }
     if s.stop_sequence > 0 {
         parts.push(format!("{} stop_sequence", format_uint(s.stop_sequence)));
+    }
+    if s.aborted > 0 {
+        parts.push(format!("{} aborted", format_uint(s.aborted)));
     }
     if s.silent > 0 {
         parts.push(format!("{} silent", format_uint(s.silent)));

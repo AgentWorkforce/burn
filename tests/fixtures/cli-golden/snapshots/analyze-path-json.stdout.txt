@@ -485,6 +485,7 @@
       "stopSequence": 0,
       "toolUse": 4,
       "refusal": 0,
+      "aborted": 0,
       "silent": 0,
       "none": 0
     }

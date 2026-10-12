@@ -30,7 +30,7 @@ use crate::analyze::{load_claude_settings, project_claude_settings_path, LoadedC
 use crate::query_verbs::{default_hotspots_finding_kinds, detect_hotspots, HotspotEnvironment};
 use crate::reader::Harness;
 use crate::source::locate::{load_session, HistoryStoreOptions, SessionLocator};
-use crate::source::{records_with_children, SessionRecords};
+use crate::source::{records_with_children, Billing, SessionRecords};
 
 mod document;
 mod explain;
@@ -121,7 +121,7 @@ pub fn analyze_evidence(
         )
     })?;
     let children = &settings.delegated_children;
-    let records = records_with_children(evidence, children);
+    let records = records_with_children(evidence, children, &Billing::now());
     let pricing = load_pricing(settings.pricing_path.as_deref());
     let inputs = Inputs {
         harness,

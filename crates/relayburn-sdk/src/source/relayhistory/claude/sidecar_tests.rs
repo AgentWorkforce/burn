@@ -9,6 +9,7 @@ use crate::reader::Harness;
 use crate::source::fixtures::fixtures_root;
 use crate::source::locate::{load_session, SessionLocator};
 use crate::source::relayhistory::records_from_evidence;
+use crate::source::Billing;
 
 #[test]
 fn sidecars_the_main_session_spawned_are_its_subagent_relationships() {
@@ -21,7 +22,7 @@ fn sidecars_the_main_session_spawned_are_its_subagent_relationships() {
         &Default::default(),
     )
     .unwrap();
-    let records = records_from_evidence(&loaded.evidence);
+    let records = records_from_evidence(&loaded.evidence, &Billing::settled());
     let subagents: Vec<Value> = records
         .relationships
         .iter()

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use super::pending_stamps::{write_pending_stamp, PendingStampHarness, WriteOptions};
+use super::ingest::ingest_all_at;
 use super::*;
 use crate::ledger::{Enrichment, Ledger, LedgerLayout, Query};
 use crate::source::fixtures::fixtures_root;
@@ -473,4 +474,110 @@ fn summary_counts_subagents_from_the_store_the_ledger_was_ingested_from() {
         panic!("expected a grouped summary");
     };
     assert_eq!(report.subagents.paired + report.subagents.orphan, 2);
+}
+
+const ROLLOUT_SESSION: &str = "sess_tail_1";
+
+fn rollout_line(ts: &str, kind: &str, payload: serde_json::Value) -> String {
+    format!(
+        "{}\n",
+        serde_json::json!({"timestamp": ts, "type": kind, "payload": payload})
+    )
+}
+
+fn token_count(ts: &str, input: u64, cached: u64, output: u64) -> String {
+    rollout_line(
+        ts,
+        "event_msg",
+        serde_json::json!({"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": input, "cached_input_tokens": cached, "output_tokens": output
+        }}}),
+    )
+}
+
+/// `(message id, input + cache read + output)` per billed turn.
+fn billed(ledger: &Ledger, session_id: &str) -> Vec<(String, u64)> {
+    ledger
+        .query_turns(&Query::for_session(session_id))
+        .unwrap()
+        .into_iter()
+        .map(|t| {
+            let u = &t.turn.usage;
+            (t.turn.message_id, u.input + u.cache_read + u.output)
+        })
+        .collect()
+}
+
+#[test]
+fn an_open_codex_task_is_billed_once_settled_and_its_continuation_after() {
+    let sandbox = Sandbox::new();
+    let dir = sandbox.home().join(".codex/sessions/2026/04/20");
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!(
+        "rollout-2026-04-20T00-00-00-{ROLLOUT_SESSION}.jsonl"
+    ));
+    let open = [
+        rollout_line(
+            "2026-04-20T00:00:00.000Z",
+            "session_meta",
+            serde_json::json!({"id": ROLLOUT_SESSION, "cwd": "/tmp/project",
+                               "timestamp": "2026-04-20T00:00:00.000Z", "cli_version": "0.121.0"}),
+        ),
+        rollout_line(
+            "2026-04-20T00:00:00.100Z",
+            "turn_context",
+            serde_json::json!({"turn_id": "turn_1", "cwd": "/tmp/project", "model": "gpt-5.4"}),
+        ),
+        rollout_line(
+            "2026-04-20T00:00:00.200Z",
+            "event_msg",
+            serde_json::json!({"type": "task_started", "turn_id": "turn_1"}),
+        ),
+        token_count("2026-04-20T00:00:05.000Z", 1000, 400, 120),
+    ]
+    .concat();
+    fs::write(&file, &open).unwrap();
+    let last_write = crate::util::time::parse_iso_ms("2026-04-20T00:00:05.000Z").unwrap();
+    let grace = crate::source::TAIL_GRACE_MS;
+    let mut ledger = sandbox.ledger();
+
+    let fresh = ingest_all_at(&mut ledger, &sandbox.options(), last_write + 1_000).unwrap();
+    assert_eq!(
+        fresh.appended_turns, 0,
+        "the open task is still being written"
+    );
+    assert!(billed(&ledger, ROLLOUT_SESSION).is_empty());
+
+    // Nothing new in the store, yet the pending session is read again.
+    let settled = ingest_all_at(&mut ledger, &sandbox.options(), last_write + grace).unwrap();
+    assert_eq!(settled.appended_turns, 1);
+    let first = billed(&ledger, ROLLOUT_SESSION);
+    assert_eq!(first.len(), 1);
+    assert!(first[0].0.starts_with("turn_1@"), "{first:?}");
+    assert_eq!(first[0].1, 1120);
+    assert!(super::watermark::pending(&ledger).is_empty());
+
+    // The session resumes the task after all.
+    let grown = [
+        open,
+        token_count("2026-04-20T00:10:00.000Z", 3000, 1400, 260),
+        rollout_line(
+            "2026-04-20T00:10:00.100Z",
+            "event_msg",
+            serde_json::json!({"type": "task_complete", "turn_id": "turn_1"}),
+        ),
+    ]
+    .concat();
+    fs::write(&file, grown).unwrap();
+    let later = last_write + 3_600_000;
+    let resumed = ingest_all_at(&mut ledger, &sandbox.options(), later).unwrap();
+    assert_eq!(resumed.appended_turns, 1);
+    let turns = billed(&ledger, ROLLOUT_SESSION);
+    assert_eq!(turns[0], first[0], "the billed segment is untouched");
+    assert_eq!(turns[1], ("turn_1".to_string(), 2140));
+    let total: u64 = turns.iter().map(|(_, tokens)| tokens).sum();
+    assert_eq!(total, 3000 + 260, "the task is billed exactly once");
+
+    let again = ingest_all_at(&mut ledger, &sandbox.options(), later).unwrap();
+    assert_eq!(again.appended_turns, 0);
 }

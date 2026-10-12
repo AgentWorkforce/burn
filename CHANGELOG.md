@@ -25,6 +25,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ### Fixed
 
 - Codex turn usage comes from each response's raw token snapshot.
+- Codex tasks that end in `turn_aborted`, that the next task interrupts, or that are still open when the session stops are billed; they were missing from every total. An aborted task's turn has stop reason `aborted` (a new `StopReason::Aborted`, counted as `aborted` in `burn summary` and `burn analyze` stop reasons). A trailing open task is billed once its rollout has gone two minutes unwritten, as turn `<turn id>@<line>`; work the session adds to it later lands as a further turn, never re-billed.
 - A failed OpenCode tool call sets `isError`, as Claude and Codex turns do.
 - A Claude assistant turn still being written (no `stop_reason` yet) is billed once it settles, not early.
 - Pricing bills Claude 1-hour cache writes at 2x the input tariff on every host (Anthropic, Vertex AI, Bedrock; 5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, `analyze`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Claude models keep a single cache-write tariff.

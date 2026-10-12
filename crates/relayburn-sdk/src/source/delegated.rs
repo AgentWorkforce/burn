@@ -24,7 +24,7 @@ use ai_hist::{
 use anyhow::{Context, Result};
 
 use super::relayhistory::records_from_evidence;
-use super::SessionRecords;
+use super::{Billing, SessionRecords};
 use crate::ledger::Ledger;
 use crate::reader::{
     RelationshipType, SourceKind, Subagent, SubagentCounts, SubagentTranscript, ToolCall, TurnKey,
@@ -76,15 +76,21 @@ pub(crate) fn claude_children(
 pub(crate) fn records_with_children(
     root: &SessionEvidence,
     children: &[SessionEvidence],
+    billing: &Billing,
 ) -> SessionRecords {
-    let mut records = records_from_evidence(root);
+    let mut records = records_from_evidence(root, billing);
     let root_id = root.session.session_id.as_str();
     let known: HashSet<&str> = std::iter::once(root_id)
         .chain(children.iter().map(|c| c.session.session_id.as_str()))
         .collect();
     for child in children {
         if let Some(sub) = subagent_of(child, &known, root_id) {
-            fold_child(&mut records, root_id, sub, records_from_evidence(child));
+            fold_child(
+                &mut records,
+                root_id,
+                sub,
+                records_from_evidence(child, billing),
+            );
         }
     }
     records

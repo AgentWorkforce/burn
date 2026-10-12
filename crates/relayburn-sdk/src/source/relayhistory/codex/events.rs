@@ -21,6 +21,10 @@ pub(super) enum Event<'a> {
     TaskComplete {
         turn_id: &'a str,
     },
+    /// A `turn_aborted` record: the task was interrupted or cancelled.
+    TaskAborted {
+        turn_id: &'a str,
+    },
     /// A `compacted` record (not the `context_compacted` notice).
     Compacted {
         ts_ms: i64,
@@ -64,6 +68,23 @@ pub(super) enum Event<'a> {
     },
 }
 
+impl Event<'_> {
+    /// Whether the event bills or describes the task it falls in: spend,
+    /// text, tool traffic, file edits. Lifecycle and configuration records
+    /// do not.
+    pub(super) fn is_activity(&self) -> bool {
+        !matches!(
+            self,
+            Event::TaskStarted { .. }
+                | Event::TaskComplete { .. }
+                | Event::TaskAborted { .. }
+                | Event::Compacted { .. }
+                | Event::TurnContext { .. }
+                | Event::InheritedTotal { .. }
+        )
+    }
+}
+
 pub(super) struct ToolUse<'a> {
     pub call: &'a ToolCall,
     /// A `custom_tool_call` (freeform `input`) rather than a `function_call`.
@@ -74,6 +95,8 @@ pub(super) struct ToolUse<'a> {
 /// Where one event sits in the rollout.
 pub(super) struct Located<'a> {
     pub line: u64,
+    /// When the line was written, when it says.
+    pub ts_ms: Option<i64>,
     pub event: Event<'a>,
 }
 
@@ -99,6 +122,7 @@ pub(super) fn stream(ev: &SessionEvidence) -> Vec<Located<'_>> {
             .filter(|r| r.event_source.as_deref() == Some("function_call_output"))
             .map(|result| Located {
                 line: line_of(&result.event_uid),
+                ts_ms: Some(result.ts_ms),
                 event: Event::ToolOutput { result },
             }),
     );
@@ -116,6 +140,8 @@ fn marker_event(marker: &Marker) -> Option<Located<'_>> {
             ts_ms,
         },
         ("task_complete", _) => Event::TaskComplete { turn_id: turn_id? },
+        // relayhistory keeps `turn_aborted` as an unmodelled marker.
+        (_, Some("turn_aborted")) => Event::TaskAborted { turn_id: turn_id? },
         ("compaction_boundary", Some("compacted")) => Event::Compacted { ts_ms },
         ("turn_context", _) => Event::TurnContext {
             payload: marker.payload.as_ref()?,
@@ -133,6 +159,7 @@ fn marker_event(marker: &Marker) -> Option<Located<'_>> {
     };
     Some(Located {
         line: line_of(&marker.marker_uid),
+        ts_ms: marker.ts_ms,
         event,
     })
 }
@@ -170,6 +197,7 @@ fn message_events(ev: &SessionEvidence) -> Vec<Located<'_>> {
             };
             out.extend(event.map(|event| Located {
                 line: line_of(&block.event_uid),
+                ts_ms: Some(ts_ms),
                 event,
             }));
         }
@@ -209,6 +237,7 @@ fn file_edits(ev: &SessionEvidence) -> Vec<Located<'_>> {
         .filter_map(|edit| {
             Some(Located {
                 line: line_of(edit.message_id.as_deref()?),
+                ts_ms: edit.ts_ms,
                 event: Event::FileEdit {
                     path: &edit.file_path,
                 },

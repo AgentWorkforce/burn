@@ -20,18 +20,26 @@ use crate::ledger::Ledger;
 use crate::reader::{build_inferences, ContentStoreMode, TurnRecord};
 use crate::source::SessionRecords;
 use crate::source::{
-    delegated_children, records_from_evidence, records_query, records_with_children,
+    delegated_children, records_from_evidence, records_query, records_with_children, source_kind,
+    Billing,
 };
 
 pub(super) struct ImportContext<'a> {
     pub content_mode: ContentStoreMode,
     pub ledger_home: Option<&'a Path>,
+    /// The moment sessions are read at: an open trailing Codex task is
+    /// billed once its rollout has been quiet long enough before it.
+    pub now_ms: i64,
 }
 
 pub(super) struct Imported {
     pub report: IngestReport,
     /// Every session landed; the watermark may advance past them.
     pub complete: bool,
+    /// Sessions that landed with a trailing task still pending.
+    pub pending: BTreeSet<SessionIdentity>,
+    /// Sessions that landed with nothing pending.
+    pub settled: BTreeSet<SessionIdentity>,
 }
 
 pub(super) fn import_sessions(
@@ -43,10 +51,20 @@ pub(super) fn import_sessions(
     let mut imported = Imported {
         report: IngestReport::empty(),
         complete: true,
+        pending: BTreeSet::new(),
+        settled: BTreeSet::new(),
     };
     for session in billed_sessions(store, changed)? {
         match import_one(ledger, store, ctx, &session) {
-            Ok(report) => imported.report.merge(&report),
+            Ok((report, pending)) => {
+                imported.report.merge(&report);
+                let bucket = if pending {
+                    &mut imported.pending
+                } else {
+                    &mut imported.settled
+                };
+                bucket.insert(session);
+            }
             Err(error) => {
                 eprintln!(
                     "[burn] skipping {} session {}: {error:#}",
@@ -101,27 +119,37 @@ fn delegation_roots(
     Ok(roots)
 }
 
+/// Append one session's new records; also whether a trailing task of it
+/// is still pending.
 fn import_one(
     ledger: &mut Ledger,
     store: &SessionStore,
     ctx: &ImportContext<'_>,
     session: &SessionIdentity,
-) -> anyhow::Result<IngestReport> {
-    let Some(source) = session.source() else {
-        return Ok(IngestReport::empty());
+) -> anyhow::Result<(IngestReport, bool)> {
+    let unchanged = Ok((IngestReport::empty(), false));
+    let Some((source, kind)) = session.source().and_then(|s| Some((s, source_kind(s)?))) else {
+        return unchanged;
     };
     let reference = SessionRef::id(source, session.session_id.clone());
     let Some(evidence) = store.session(&reference, records_query())? else {
-        return Ok(IngestReport::empty());
+        return unchanged;
     };
     // A Claude subagent with no spawner on record has no session to be
     // billed with.
     if source == Source::Claude && evidence.session.discovery_state == DiscoveryState::Delegated {
-        return Ok(IngestReport::empty());
+        return unchanged;
     }
+    let billing = Billing {
+        now_ms: ctx.now_ms,
+        billed: ledger.turn_message_ids(kind, &evidence.session.session_id)?,
+    };
     let mut records = match source {
-        Source::Claude => records_with_children(&evidence, &delegated_children(store, &evidence)?),
-        _ => records_from_evidence(&evidence),
+        Source::Claude => {
+            let children = delegated_children(store, &evidence)?;
+            records_with_children(&evidence, &children, &billing)
+        }
+        _ => records_from_evidence(&evidence, &billing),
     };
     // The evidence carries its text whatever the content mode: activity
     // classification and user-turn blocks are derived from it. The mode
@@ -133,23 +161,23 @@ fn import_one(
         scanned_sessions: 1,
         ..IngestReport::empty()
     };
-    report.appended_turns = append_new_turns(ledger, &records)?;
+    report.appended_turns = append_new_turns(ledger, &records, &billing.billed)?;
     if report.appended_turns > 0 {
         report.ingested_sessions = 1;
         report.applied_pending_stamps = resolve_stamps(ledger, ctx, &evidence, &records);
     }
     append_derived(ledger, &records)?;
-    Ok(report)
+    Ok((report, records.pending))
 }
 
 /// Append the turns the ledger does not hold yet. A session is rebuilt
 /// whole on every change, so most of its turns are already there; they are
 /// set aside by key up front rather than each re-offered to the insert.
-fn append_new_turns(ledger: &mut Ledger, records: &SessionRecords) -> anyhow::Result<usize> {
-    let Some(first) = records.turns.first() else {
-        return Ok(0);
-    };
-    let held = ledger.turn_message_ids(first.source, &first.session_id)?;
+fn append_new_turns(
+    ledger: &mut Ledger,
+    records: &SessionRecords,
+    held: &HashSet<String>,
+) -> anyhow::Result<usize> {
     let fresh: Vec<TurnRecord> = records
         .turns
         .iter()

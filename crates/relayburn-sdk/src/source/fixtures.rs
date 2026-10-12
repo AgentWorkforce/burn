@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::locate::{load_session, SessionLocator};
-use super::{records_with_children, SessionRecords};
+use super::{records_with_children, Billing, SessionRecords};
 use crate::reader::Harness;
 
 /// The records burn derives from one session artifact, read through
@@ -16,7 +16,7 @@ pub(crate) fn fixture_records(harness: Harness, path: &Path) -> SessionRecords {
     };
     let loaded = load_session(&locator, &Default::default())
         .unwrap_or_else(|e| panic!("load {}: {e:#}", path.display()));
-    records_with_children(&loaded.evidence, &loaded.children)
+    records_with_children(&loaded.evidence, &loaded.children, &Billing::settled())
 }
 
 pub(crate) fn fixtures_root() -> PathBuf {

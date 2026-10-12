@@ -303,6 +303,9 @@ pub enum StopReason {
     StopSequence,
     ToolUse,
     Refusal,
+    /// The harness ended the turn on an interrupt or cancellation (Codex
+    /// `turn_aborted`). Its spend is billed like any other turn's.
+    Aborted,
     Silent,
 }
 
@@ -317,6 +320,7 @@ impl StopReason {
             Self::StopSequence => "stop-sequence",
             Self::ToolUse => "tool-use",
             Self::Refusal => "refusal",
+            Self::Aborted => "aborted",
             Self::Silent => "silent",
         }
     }
@@ -354,6 +358,7 @@ impl StopReason {
             // is the Anthropic one and our canonical kebab spelling.
             "tool-use" | "tool-calls" => Some(Self::ToolUse),
             "refusal" => Some(Self::Refusal),
+            "aborted" => Some(Self::Aborted),
             "silent" => Some(Self::Silent),
             _ => None,
         }
