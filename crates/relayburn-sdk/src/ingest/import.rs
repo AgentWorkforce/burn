@@ -78,7 +78,8 @@ pub(super) fn import_sessions(
 }
 
 /// The sessions burn bills the changed ones under: a Claude subagent's root
-/// session in place of the subagent, every other session as itself.
+/// session in place of the subagent, every other session as itself (one
+/// of a source burn does not account for imports nothing).
 fn billed_sessions(
     store: &SessionStore,
     changed: BTreeSet<SessionIdentity>,
@@ -87,10 +88,10 @@ fn billed_sessions(
     for session in changed {
         match session.source() {
             Some(Source::Claude) => billed.extend(delegation_roots(store, session)?),
-            Some(source) if crate::source::is_accounted(source) => {
+            Some(_) => {
                 billed.insert(session);
             }
-            _ => {}
+            None => {}
         }
     }
     Ok(billed)

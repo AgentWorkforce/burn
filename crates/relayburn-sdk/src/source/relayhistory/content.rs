@@ -65,8 +65,8 @@ impl Context<'_> {
                         text: block.text.clone(),
                         ..base
                     },
-                    (role, BlockKind::Thinking) => ContentRecord {
-                        role: content_role(role),
+                    // Reasoning is the model's own: assistant content.
+                    (_, BlockKind::Thinking) => ContentRecord {
                         kind: ContentKind::Thinking,
                         text: block.text.clone(),
                         ..base

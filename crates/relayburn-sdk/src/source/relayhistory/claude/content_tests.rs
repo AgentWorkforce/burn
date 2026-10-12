@@ -1,5 +1,4 @@
-//! A turn's content stays together where its first record sits, even when
-//! Claude wrote a tool result between two records of the same response.
+//! The content records of a Claude turn: its kinds, and its order.
 
 use serde_json::json;
 
@@ -27,6 +26,23 @@ fn assistant(uuid: &str, parent: &str, ts: &str, block: serde_json::Value) -> St
     }))
 }
 
+fn records_of(transcript: &str) -> crate::source::SessionRecords {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("{SESSION}.jsonl"));
+    std::fs::write(&path, transcript).unwrap();
+    let loaded = load_session(
+        &SessionLocator::Path {
+            harness: Harness::ClaudeCode,
+            path,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    records_from_evidence(&loaded.evidence, &Billing::settled())
+}
+
+/// A tool result Claude wrote between two records of one response does
+/// not split the turn's content.
 #[test]
 fn a_turn_split_by_a_tool_result_keeps_its_content_together() {
     let transcript = [
@@ -56,18 +72,7 @@ fn a_turn_split_by_a_tool_result_keeps_its_content_together() {
         ),
     ]
     .concat();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(format!("{SESSION}.jsonl"));
-    std::fs::write(&path, transcript).unwrap();
-    let loaded = load_session(
-        &SessionLocator::Path {
-            harness: Harness::ClaudeCode,
-            path,
-        },
-        &Default::default(),
-    )
-    .unwrap();
-    let records = records_from_evidence(&loaded.evidence, &Billing::settled());
+    let records = records_of(&transcript);
     let kinds: Vec<ContentKind> = records.content.iter().map(|c| c.kind).collect();
     assert_eq!(
         kinds,
@@ -79,5 +84,37 @@ fn a_turn_split_by_a_tool_result_keeps_its_content_together() {
         ],
         "{:#?}",
         records.content
+    );
+}
+
+#[test]
+fn a_thinking_block_with_text_is_assistant_thinking_content() {
+    let transcript = [
+        line(json!({
+            "parentUuid": null, "isSidechain": false, "type": "user", "uuid": "u1",
+            "timestamp": "2026-04-20T00:00:00.000Z", "cwd": "/tmp/project", "sessionId": SESSION,
+            "message": {"role": "user", "content": "think"}
+        })),
+        assistant(
+            "a1",
+            "u1",
+            "2026-04-20T00:00:01.000Z",
+            json!({"type": "thinking", "thinking": "weighing options", "signature": "sig"}),
+        ),
+    ]
+    .concat();
+    let records = records_of(&transcript);
+    let thinking: Vec<_> = records
+        .content
+        .iter()
+        .filter(|c| c.kind == ContentKind::Thinking)
+        .map(|c| (c.role, c.text.as_deref()))
+        .collect();
+    assert_eq!(
+        thinking,
+        [(
+            crate::reader::ContentRole::Assistant,
+            Some("weighing options")
+        )]
     );
 }

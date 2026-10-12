@@ -111,7 +111,24 @@ pub(crate) fn records_query() -> ai_hist::SessionQuery {
     query
 }
 
-/// Whether burn accounts for sessions of `source`.
-pub(crate) fn is_accounted(source: ai_hist::Source) -> bool {
-    relayhistory::source_kind(source).is_some()
+#[cfg(test)]
+mod tests {
+    use ai_hist::EvidenceKind;
+
+    #[test]
+    fn records_read_everything_but_the_prompt_log_and_commit_links() {
+        let kinds = super::records_query().kinds.expect("an explicit kind list");
+        for skipped in [EvidenceKind::History, EvidenceKind::CommitLink] {
+            assert!(!kinds.contains(&skipped), "{skipped:?}");
+        }
+        for read in [
+            EvidenceKind::SessionEvent,
+            EvidenceKind::ToolCall,
+            EvidenceKind::FileEdit,
+            EvidenceKind::Relationship,
+            EvidenceKind::SessionMarker,
+        ] {
+            assert!(kinds.contains(&read), "{read:?}");
+        }
+    }
 }

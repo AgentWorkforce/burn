@@ -508,3 +508,58 @@ fn sessions_without_recorded_effort_leave_the_reasoning_section_unavailable() {
         Some("no turn of this claude-code session records a reasoning effort")
     );
 }
+
+/// `analyze` over `fixture`'s records after `adjust` edits them.
+fn analyze_adjusted(
+    fixture_path: &str,
+    adjust: impl FnOnce(&mut SessionRecords),
+) -> SessionAnalysis {
+    let loaded = crate::source::locate::load_session(
+        &SessionLocator::Path {
+            harness: Harness::ClaudeCode,
+            path: fixture(fixture_path),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let mut records = crate::source::records_with_children(
+        &loaded.evidence,
+        &loaded.children,
+        &crate::source::Billing::settled(),
+    );
+    adjust(&mut records);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    analyze(&Inputs {
+        harness: Harness::ClaudeCode,
+        evidence: &loaded.evidence,
+        children: &loaded.children,
+        records: &records,
+        pricing: &pricing,
+        project_dir: None,
+        roots: None,
+    })
+}
+
+fn codes(analysis: &SessionAnalysis) -> Vec<&str> {
+    analysis.findings.iter().map(|f| f.code.as_str()).collect()
+}
+
+#[test]
+fn refused_attribution_of_a_session_with_turns_is_a_finding() {
+    let refused = analyze_adjusted("claude/retry-loop.jsonl", |records| {
+        for turn in &mut records.turns {
+            let fidelity = turn.fidelity.as_mut().unwrap();
+            fidelity.coverage.has_tool_calls = false;
+        }
+    });
+    assert!(refused.hotspots.reason().is_some());
+    assert!(
+        codes(&refused).contains(&"attribution-unavailable"),
+        "{:?}",
+        codes(&refused)
+    );
+
+    let empty = analyze_adjusted("claude/retry-loop.jsonl", |records| records.turns.clear());
+    assert!(empty.hotspots.reason().is_some());
+    assert!(!codes(&empty).contains(&"attribution-unavailable"));
+}
