@@ -423,6 +423,24 @@ fn the_hook_path_ignores_a_missing_transcript() {
 }
 
 #[test]
+fn the_hook_path_ignores_a_directory_and_reports_an_unreadable_path() {
+    let sandbox = Sandbox::new();
+    let mut ledger = sandbox.ledger();
+    let project = sandbox.claude_project();
+    let report = ingest_claude_transcript_path(&mut ledger, &project, &sandbox.options()).unwrap();
+    assert_eq!(report, IngestReport::empty());
+    assert!(
+        !sandbox.dir.path().join("ai-history.db").exists(),
+        "a directory is not a transcript: the store is not even opened"
+    );
+
+    let file = project.join("not-a-dir.txt");
+    fs::write(&file, "x").unwrap();
+    let below_a_file = file.join("transcript.jsonl");
+    assert!(ingest_claude_transcript_path(&mut ledger, &below_a_file, &sandbox.options()).is_err());
+}
+
+#[test]
 fn the_watch_loop_ingests_on_its_first_tick_and_stops() {
     let sandbox = Sandbox::new();
     let file = sandbox

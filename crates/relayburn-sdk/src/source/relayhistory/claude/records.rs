@@ -93,7 +93,8 @@ impl Replacement {
         let collapsed = payload
             .get("collapsedCalls")
             .and_then(Value::as_f64)
-            .filter(|c| c.is_finite() && *c >= 1.0)
+            // JSON numbers are finite.
+            .filter(|c| *c >= 1.0)
             .map(|c| c.floor() as u64);
         let meta = Self {
             replaced_tools: (!names.is_empty()).then_some(names),
@@ -227,4 +228,26 @@ pub(super) fn compactions(t: &Transcript<'_>, turns: &[TurnRecord]) -> Vec<Compa
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::Replacement;
+
+    fn collapsed(value: serde_json::Value) -> Option<u64> {
+        Replacement::from_payload(&json!({"collapsedCalls": value}))?.collapsed_calls
+    }
+
+    #[test]
+    fn collapsed_calls_count_whole_calls_from_one_up() {
+        assert_eq!(collapsed(json!(2.7)), Some(2));
+        assert_eq!(collapsed(json!(1)), Some(1));
+        assert_eq!(
+            collapsed(json!(0.5)),
+            None,
+            "less than one call collapsed nothing"
+        );
+    }
 }
