@@ -645,3 +645,34 @@ fn a_call_that_replaced_others_reports_its_savings() {
         .expect("one replacing call");
     assert_eq!((savings.calls, savings.collapsed_calls), (1, 3));
 }
+
+#[test]
+fn context_reports_the_peak_window_and_its_largest_growth_steps() {
+    let analysis = analyze_adjusted("claude/retry-loop.jsonl", |records| {
+        records.turns = (0..15)
+            .map(|i| {
+                let mut turn = synthetic_turn(i, "claude-3-5-haiku", "coding", 100, "Read");
+                turn.message_id = format!("msg_{i}");
+                turn.ts = format!("2026-04-20T00:00:{i:02}.000Z");
+                turn.usage.cache_read = 30_000 * i;
+                turn.usage.cache_create_5m = 7;
+                turn.usage.cache_create_1h = 3;
+                turn
+            })
+            .collect();
+        // The largest window is not the last turn's.
+        records.turns[9].usage.cache_read = 900_000;
+    });
+    let context = analysis.context.data().expect("context section");
+    assert_eq!(context.peak_context_tokens, 100 + 900_000 + 7 + 3);
+    assert_eq!(context.peak_turn_id.as_deref(), Some("msg_9"));
+    assert_eq!(context.largest_growth.len(), 10, "the ten largest steps");
+}
+
+#[test]
+fn flow_counts_the_edges_that_connect_its_nodes() {
+    let analysis = by_path(Harness::ClaudeCode, fixture("claude/retry-loop.jsonl"));
+    let flow = analysis.flow.data().expect("flow section");
+    assert!(flow.edges > 0);
+    assert_eq!(flow.edges, flow.inferences + flow.tool_uses - 1);
+}

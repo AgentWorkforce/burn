@@ -581,3 +581,46 @@ fn an_open_codex_task_is_billed_once_settled_and_its_continuation_after() {
     let again = ingest_all_at(&mut ledger, &sandbox.options(), later).unwrap();
     assert_eq!(again.appended_turns, 0);
 }
+
+#[test]
+fn a_subagent_that_grows_alone_is_billed_with_the_session_that_spawned_it() {
+    let sandbox = Sandbox::new();
+    let project = ".claude/projects/-tmp-project";
+    sandbox.place(
+        "claude-sidecars/sidecar-session.jsonl",
+        &format!("{project}/sidecar-session.jsonl"),
+    );
+    let sidecars = sandbox.place(
+        "claude-sidecars/sidecar-session",
+        &format!("{project}/sidecar-session"),
+    );
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    let before = turn_ids(&ledger, "sidecar-session").len();
+
+    // Only the subagent's transcript changes.
+    let sidecar = sidecars.join("subagents/agent-a1.jsonl");
+    let mut text = fs::read_to_string(&sidecar).unwrap();
+    text.push_str(&format!(
+        "{}\n",
+        serde_json::json!({
+            "parentUuid": "s1-a2", "isSidechain": true, "type": "assistant", "uuid": "s1-a3",
+            "timestamp": "2026-07-01T00:00:09.000Z", "cwd": "/tmp/project",
+            "sessionId": "sidecar-session", "version": "2.1.120", "agentId": "a1",
+            "requestId": "req_msg_sub1_3",
+            "message": {
+                "model": "claude-haiku-4-5", "id": "msg_sub1_3", "type": "message",
+                "role": "assistant", "content": [{"type": "text", "text": "one more"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 2,
+                          "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+            }
+        })
+    ));
+    fs::write(&sidecar, text).unwrap();
+    let report = sandbox.ingest(&mut ledger);
+    assert_eq!(report.appended_turns, 1, "{report:?}");
+    let turns = turn_ids(&ledger, "sidecar-session");
+    assert_eq!(turns.len(), before + 1);
+    assert!(turns.contains(&"msg_sub1_3".to_string()), "{turns:?}");
+}

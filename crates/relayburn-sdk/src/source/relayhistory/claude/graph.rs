@@ -11,9 +11,6 @@ use super::{is_user_record, prompt_text, Transcript};
 use crate::reader::classifier::{classify_activity, ClassificationInput};
 use crate::reader::types::{ActivityCategory, Subagent, TurnRecord};
 
-/// Recursion bound for nested sidechains.
-const MAX_DEPTH: u32 = 64;
-
 /// The Task/Agent call a sidechain hangs off.
 struct Invocation {
     /// The sidechain's first record: the prompt the parent handed it.
@@ -50,7 +47,7 @@ impl Transcript<'_> {
             description: None,
         };
         let start = messages.first().and_then(|m| m.message_id.as_deref());
-        let Some(info) = start.and_then(|s| self.invocation(s, 0)) else {
+        let Some(info) = start.and_then(|s| self.invocation(s)) else {
             return Some(sub);
         };
         sub.agent_id = Some(info.root);
@@ -63,12 +60,37 @@ impl Transcript<'_> {
         Some(sub)
     }
 
+    /// The invocation the record `start` runs under.
+    fn invocation(&self, start: &str) -> Option<Invocation> {
+        let (node, parent, call) = self.spawn_of(start)?;
+        let arg = |k: &str| {
+            call.args
+                .as_ref()
+                .and_then(|a| a.get(k))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        // A spawn from inside a sidechain hangs under that sidechain's own
+        // invocation.
+        let parent_agent_id = parent
+            .message_id
+            .as_deref()
+            .filter(|_| parent.is_sidechain == Some(true))
+            .and_then(|id| self.spawn_of(id))
+            .and_then(|(root, _, _)| root.message_id.clone());
+        Some(Invocation {
+            root: node.message_id.clone().unwrap_or_default(),
+            parent_tool_use_id: Some(call.tool_use_id.clone()).filter(|id| !id.is_empty()),
+            subagent_type: arg("subagent_type"),
+            description: arg("description"),
+            parent_agent_id,
+        })
+    }
+
     /// Walk up from `start` to the first user record whose parent is an
-    /// assistant that spawned a Task/Agent call the record does not answer.
-    fn invocation(&self, start: &str, depth: u32) -> Option<Invocation> {
-        if depth > MAX_DEPTH {
-            return None;
-        }
+    /// assistant that spawned a Task/Agent call the record does not answer:
+    /// that record, its parent, and the call.
+    fn spawn_of(&self, start: &str) -> Option<(&Message, &Message, &ai_hist::ToolCall)> {
         let mut seen = HashSet::new();
         let mut node = *self.by_id.get(start)?;
         loop {
@@ -77,38 +99,9 @@ impl Transcript<'_> {
             }
             let parent = *self.by_id.get(node.parent_id.as_deref()?)?;
             if let Some(call) = self.spawn_call(node, parent) {
-                return Some(self.invocation_at(node, parent, call, depth));
+                return Some((node, parent, call));
             }
             node = parent;
-        }
-    }
-
-    fn invocation_at(
-        &self,
-        node: &Message,
-        parent: &Message,
-        call: &ai_hist::ToolCall,
-        depth: u32,
-    ) -> Invocation {
-        let arg = |k: &str| {
-            call.args
-                .as_ref()
-                .and_then(|a| a.get(k))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        };
-        let parent_agent_id = parent
-            .message_id
-            .as_deref()
-            .filter(|_| parent.is_sidechain == Some(true))
-            .and_then(|id| self.invocation(id, depth + 1))
-            .map(|i| i.root);
-        Invocation {
-            root: node.message_id.clone().unwrap_or_default(),
-            parent_tool_use_id: Some(call.tool_use_id.clone()).filter(|id| !id.is_empty()),
-            subagent_type: arg("subagent_type"),
-            description: arg("description"),
-            parent_agent_id,
         }
     }
 
