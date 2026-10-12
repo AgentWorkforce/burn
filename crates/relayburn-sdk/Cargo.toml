@@ -24,8 +24,9 @@ phf = { version = "0.11", features = ["macros"] }
 rusqlite = { workspace = true }
 
 # Session sourcing: relayhistory captures harness evidence; burn owns what
-# the counters mean. The exact pin is the contract.
-ai-hist = "=0.37.0"
+# the counters mean. burn depends on a semver-compatible ai-hist release;
+# adopting a new minor is a deliberate bump that re-runs the parity suite.
+ai-hist = "0.41"
 # Path-mode session analysis stages one transcript into a throwaway
 # provider root and relayhistory store.
 tempfile = "3"
