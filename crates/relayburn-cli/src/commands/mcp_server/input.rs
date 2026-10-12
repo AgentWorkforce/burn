@@ -178,3 +178,36 @@ pub(super) fn tool_output(payload: &impl Serialize) -> Value {
         Err(err) => tool_error(format!("failed to encode tool result: {err}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(value: Value) -> Map<String, Value> {
+        value.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn booleans_are_read_as_given_and_rejected_otherwise() {
+        let read = |value: Value| optional_boolean(&input(value), "includeDiff", "trim");
+        assert_eq!(read(json!({})), Ok(None));
+        assert_eq!(read(json!({"includeDiff": true})), Ok(Some(true)));
+        assert_eq!(read(json!({"includeDiff": false})), Ok(Some(false)));
+        assert_eq!(
+            read(json!({"includeDiff": "yes"})),
+            Err("trim: includeDiff must be a boolean".to_string())
+        );
+    }
+
+    #[test]
+    fn a_required_array_needs_its_minimum_length() {
+        let read = |value: Value| required_string_array(&input(value), "models", "compare", 2);
+        assert_eq!(
+            read(json!({"models": ["a", "b"]})),
+            Ok(vec!["a".to_string(), "b".to_string()])
+        );
+        let short = Err("compare: models must contain at least 2 strings".to_string());
+        assert_eq!(read(json!({"models": ["a"]})), short);
+        assert_eq!(read(json!({})), short);
+    }
+}

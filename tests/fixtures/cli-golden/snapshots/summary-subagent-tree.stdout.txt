@@ -1,0 +1,7 @@
+
+ingested 0 new sessions (+0 turns)
+
+session: 11111111-1111-1111-1111-111111111111
+total: $0.031 across 3 turns
+
+main (claude-sonnet-4-6)  $0.031  [3 turns]
