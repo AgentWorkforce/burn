@@ -109,6 +109,7 @@ mod tests {
                 &["measure", "--input", "x.jsonl", "--harness", "codex"],
                 "measure",
             ),
+            (&["analyze", "--path", "x.jsonl"], "analyze"),
             (&["summary"], "summary"),
             (&["hotspots"], "hotspots"),
             (&["overhead"], "overhead"),
