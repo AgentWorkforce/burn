@@ -1419,3 +1419,142 @@ fn aggregations_track_output_bytes_so_byte_ranking_inverts_token_ranking() {
         "byte ranking should put Bash (1 MB) ahead of Read (1 KB)"
     );
 }
+
+fn paying_turns_with_cache_creation(
+    session_id: &str,
+    tool_calls: Vec<ToolCall>,
+) -> Vec<TurnRecord> {
+    vec![
+        turn(
+            session_id,
+            "msg-0",
+            0,
+            "2026-04-20T00:00:00.000Z",
+            "claude-sonnet-4-6",
+            empty_usage(),
+            tool_calls,
+            SourceKind::ClaudeCode,
+        ),
+        turn(
+            session_id,
+            "msg-1",
+            1,
+            "2026-04-20T00:00:00.000Z",
+            "claude-sonnet-4-6",
+            Usage {
+                input: 1000,
+                output: 5,
+                reasoning: 0,
+                cache_read: 0,
+                cache_create_5m: 2000,
+                cache_create_1h: 3000,
+            },
+            vec![],
+            SourceKind::ClaudeCode,
+        ),
+    ]
+}
+
+fn expected_new_content_cost(pricing: &PricingTable) -> f64 {
+    let rate = pricing.get("claude-sonnet-4-6").unwrap();
+    (1000.0 * rate.input + 2000.0 * rate.cache_write + 3000.0 * rate.cache_write_1h) / 1_000_000.0
+}
+
+#[test]
+fn even_split_initial_cost_bills_each_cache_creation_ttl_at_its_own_tariff() {
+    let pricing = load_builtin_pricing();
+    let turns = paying_turns_with_cache_creation(
+        "s-even-ttl",
+        vec![
+            tc("tu_x", "Read", Some("/a.ts")),
+            tc("tu_y", "Read", Some("/b.ts")),
+        ],
+    );
+    let result = attribute_hotspots(
+        &turns,
+        &HotspotsOptions {
+            pricing: &pricing,
+            content_by_session: None,
+            user_turns_by_session: None,
+            tool_result_events_by_session: None,
+        },
+    );
+    assert_eq!(result.attributions.len(), 2);
+    let expected = expected_new_content_cost(&pricing) / 2.0;
+    for a in &result.attributions {
+        assert_eq!(a.initial_tokens, 3000.0);
+        assert!(
+            (a.initial_cost - expected).abs() < 1e-12,
+            "initial_cost={} expected={expected}",
+            a.initial_cost
+        );
+    }
+}
+
+#[test]
+fn sized_initial_cost_bills_each_cache_creation_ttl_at_its_own_tariff() {
+    let pricing = load_builtin_pricing();
+    let session_id = "s-sized-ttl";
+    let turns =
+        paying_turns_with_cache_creation(session_id, vec![tc("tu_read", "Read", Some("/f.ts"))]);
+    let mut user_turns_by_session: HashMap<String, Vec<UserTurnRecord>> = HashMap::new();
+    user_turns_by_session.insert(
+        session_id.into(),
+        vec![user_turn(
+            session_id,
+            "u-1",
+            vec![tool_result_block("tu_read", 24_000, 6000)],
+        )],
+    );
+    let result = attribute_hotspots(
+        &turns,
+        &HotspotsOptions {
+            pricing: &pricing,
+            content_by_session: None,
+            user_turns_by_session: Some(&user_turns_by_session),
+            tool_result_events_by_session: None,
+        },
+    );
+    let a = &result.attributions[0];
+    assert!((a.initial_tokens - 6000.0).abs() < 1e-9);
+    let expected = expected_new_content_cost(&pricing);
+    assert!(
+        (a.initial_cost - expected).abs() < 1e-12,
+        "initial_cost={} expected={expected}",
+        a.initial_cost
+    );
+}
+
+#[test]
+fn sized_initial_cost_is_zero_when_paying_turn_has_no_new_content() {
+    let pricing = load_builtin_pricing();
+    let session_id = "s-sized-zero";
+    let mut turns =
+        paying_turns_with_cache_creation(session_id, vec![tc("tu_read", "Read", Some("/f.ts"))]);
+    turns[1].usage = Usage {
+        output: 5,
+        cache_read: 6000,
+        ..empty_usage()
+    };
+    let mut user_turns_by_session: HashMap<String, Vec<UserTurnRecord>> = HashMap::new();
+    user_turns_by_session.insert(
+        session_id.into(),
+        vec![user_turn(
+            session_id,
+            "u-1",
+            vec![tool_result_block("tu_read", 24_000, 6000)],
+        )],
+    );
+    let result = attribute_hotspots(
+        &turns,
+        &HotspotsOptions {
+            pricing: &pricing,
+            content_by_session: None,
+            user_turns_by_session: Some(&user_turns_by_session),
+            tool_result_events_by_session: None,
+        },
+    );
+    let a = &result.attributions[0];
+    assert_eq!(a.initial_cost, 0.0);
+    assert_eq!(a.initial_tokens, 0.0);
+}

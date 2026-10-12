@@ -208,3 +208,7 @@ pub(crate) fn list_session_ids(conn: &Connection) -> Result<HashSet<String>> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "content_tests.rs"]
+mod tests;

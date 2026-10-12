@@ -763,6 +763,23 @@ mod tests {
     use super::*;
     use crate::analyze::span_tree::{SpanKind, SpanNode, SpanStatus};
 
+    #[test]
+    fn flow_edge_kind_wire_str_matches_serde_label() {
+        for (kind, label) in [
+            (FlowEdgeKind::Default, "default"),
+            (FlowEdgeKind::Dispatch, "dispatch"),
+            (FlowEdgeKind::Return, "return"),
+            (FlowEdgeKind::Subagent, "subagent"),
+            (FlowEdgeKind::Unattached, "unattached"),
+        ] {
+            assert_eq!(kind.wire_str(), label);
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{label}\"")
+            );
+        }
+    }
+
     fn make_tree(turn_number: u32, root: SpanNode) -> TurnSpanTree {
         TurnSpanTree {
             session_id: "sess-1".into(),

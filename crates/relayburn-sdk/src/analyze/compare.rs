@@ -28,13 +28,12 @@ pub struct CompareCell {
     pub turns: u64,
     pub edit_turns: u64,
     pub one_shot_turns: u64,
-    /// Number of turns whose model had pricing in the active table. When
-    /// this is less than `turns`, `total_cost` / `cost_per_turn`
-    /// under-count what the cell actually consumed.
+    /// Number of turns with a known cost. When this is less than `turns`,
+    /// `total_cost` under-counts what the cell actually consumed.
     pub priced_turns: u64,
     pub total_cost: f64,
-    /// `None` when no priced turns; cells with unpriced models render as
-    /// "—", never as "$0.00".
+    /// `None` unless every turn is priced; cells with unpriced turns render
+    /// as "—", never as a partial or "$0.00" average.
     pub cost_per_turn: Option<f64>,
     /// `None` for categories with no edits and for empty cells.
     pub one_shot_rate: Option<f64>,
@@ -248,14 +247,9 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
         one_shot_turns: acc.one_shot_turns,
         priced_turns: acc.priced_turns,
         total_cost: acc.total_cost,
-        // `cost_per_turn` is `None` when none of the turns in this cell
-        // have pricing — emitting 0 would silently misrepresent unknown
-        // cost as free.
-        cost_per_turn: if acc.priced_turns > 0 {
-            Some(acc.total_cost / acc.priced_turns as f64)
-        } else {
-            None
-        },
+        // `cost_per_turn` is `None` unless every turn in this cell is
+        // priced — a partial average would misrepresent unknown cost.
+        cost_per_turn: (acc.priced_turns == acc.turns).then(|| acc.total_cost / acc.turns as f64),
         one_shot_rate: if acc.edit_turns > 0 {
             Some(acc.one_shot_turns as f64 / acc.edit_turns as f64)
         } else {
@@ -321,7 +315,10 @@ mod tests {
     use super::*;
     use crate::analyze::pricing::load_builtin_pricing;
     use crate::ledger::EnrichedTurn;
-    use crate::reader::{ActivityCategory, SourceKind, ToolCall, TurnRecord, Usage};
+    use crate::reader::{
+        ActivityCategory, Coverage, Fidelity, FidelityClass, SourceKind, ToolCall, TurnRecord,
+        Usage, UsageGranularity,
+    };
     use std::collections::BTreeMap;
 
     fn turn(
@@ -604,7 +601,42 @@ mod tests {
     }
 
     #[test]
-    fn uses_priced_turns_as_cost_per_turn_denominator() {
+    fn partially_priced_cell_has_no_cost_per_turn() {
+        let pricing = load_builtin_pricing();
+        let mut measured_zero = turn(
+            "definitely-not-a-model",
+            Some(ActivityCategory::Coding),
+            Usage::default(),
+            Some(true),
+            Some(0),
+        );
+        measured_zero.turn.fidelity = Some(Fidelity {
+            granularity: UsageGranularity::PerTurn,
+            coverage: Coverage {
+                has_input_tokens: true,
+                has_output_tokens: true,
+                ..Coverage::EMPTY
+            },
+            class: FidelityClass::UsageOnly,
+        });
+        let with_tokens = turn(
+            "definitely-not-a-model",
+            Some(ActivityCategory::Coding),
+            default_usage(),
+            Some(true),
+            Some(0),
+        );
+        let t = build_compare_table(
+            &[measured_zero, with_tokens],
+            &CompareOptions::new(&pricing),
+        );
+        let cell = &t.cells["definitely-not-a-model"]["coding"];
+        assert_eq!((cell.turns, cell.priced_turns), (2, 1));
+        assert_eq!(cell.cost_per_turn, None);
+    }
+
+    #[test]
+    fn averages_cost_per_turn_over_fully_priced_cells() {
         let pricing = load_builtin_pricing();
         let usage = Usage {
             input: 1_000_000,

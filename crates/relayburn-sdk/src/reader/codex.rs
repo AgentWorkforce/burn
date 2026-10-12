@@ -829,3 +829,6 @@ use self::incremental::parse_codex_buffer;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod helpers_tests;

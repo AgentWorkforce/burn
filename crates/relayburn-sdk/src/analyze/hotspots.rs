@@ -474,10 +474,10 @@ fn attribute_session(
                     + turn.usage.cache_create_5m
                     + turn.usage.cache_create_1h) as f64;
                 if new_content > 0.0 {
-                    let input_share = turn.usage.input as f64 / new_content;
-                    let create_share = 1.0 - input_share;
-                    let per_token_price =
-                        input_share * rate.input + create_share * rate.cache_write;
+                    let new_content_cost = (turn.usage.input as f64 / PER_MILLION) * rate.input
+                        + rate.cache_create_cost(&turn.usage);
+                    // Blended per-million price of this turn's new content.
+                    let per_token_price = new_content_cost / new_content * PER_MILLION;
                     if have_any_sizes {
                         let sibling_total: f64 = pending_initial
                             .iter()
@@ -504,11 +504,7 @@ fn attribute_session(
                         // prior emit's tool calls.
                         let k = pending_initial.len() as f64;
                         let tokens_per_call = new_content / k;
-                        let cost_per_call = ((turn.usage.input as f64 / PER_MILLION) * rate.input
-                            + ((turn.usage.cache_create_5m + turn.usage.cache_create_1h) as f64
-                                / PER_MILLION)
-                                * rate.cache_write)
-                            / k;
+                        let cost_per_call = new_content_cost / k;
                         for &i in &pending_initial {
                             attributions[i].initial_tokens = tokens_per_call;
                             attributions[i].initial_cost = cost_per_call;
