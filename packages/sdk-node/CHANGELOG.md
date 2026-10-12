@@ -8,6 +8,8 @@
 - `SessionAnalysis.reasoning` breaks a session's turns, tokens, reasoning tokens and cost down per recorded reasoning effort, with the turns where effort changed.
 - `measureSession()` reads sessions through relayhistory; an OpenCode input outside its `storage/session/<scope>/` tree is rejected with the expected layout.
 - `analyzeSession()` and `measureSession()` bill Claude Code subagent turns with the session that spawned them; `SubagentTreeNode` adds `selfTokens` / `cumulativeTokens`, and its costs are `null` when unpriced.
+- `analyzeSession()` and `measureSession()` return every counter their types declare `number | bigint` as `BigInt` when it crosses 2^53: subagent tree turns and tokens, flow `subagents`, stop-reason counts, and `unpricedTurns`.
+- `analyzeSession({ harness: 'codex', sessionId })` finds a Codex subagent thread in a store that has not synced it yet.
 ## [4.1.0] - 2026-09-20
 
 - `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.

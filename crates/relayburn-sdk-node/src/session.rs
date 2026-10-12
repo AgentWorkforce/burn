@@ -89,3 +89,86 @@ pub fn analyze_session(opts: AnalyzeSessionOptions) -> Result<BigIntPromoting, B
     let analysis = sdk::analyze_session(options).map_err(sdk_err)?;
     promoted("analyzeSession", &analysis)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    use serde_json::Value;
+
+    use crate::{is_bigint_field, sdk};
+
+    /// Integer fields the facade does not type as `number | bigint`: `depth`
+    /// is an `i32`, `turnIndexes` is declared `number[]`, and the rest live
+    /// in sections `index.d.ts` types as `Record<string, unknown>` (fidelity
+    /// summaries, quality outcomes).
+    const SMALL_INTEGER_FIELDS: &[&str] = &[
+        "depth",
+        "turnIndexes",
+        "full",
+        "usage-only",
+        "aggregate-only",
+        "cost-only",
+        "none",
+        "per-turn",
+        "per-message",
+        "per-session-aggregate",
+        "hasInputTokens",
+        "hasOutputTokens",
+        "hasReasoningTokens",
+        "hasCacheReadTokens",
+        "hasCacheCreateTokens",
+        "hasToolCalls",
+        "hasToolResultEvents",
+        "hasSessionRelationships",
+        "hasRawContent",
+        "maxOutputBytes",
+        "totalOutputBytes",
+        "totalRetries",
+        "truncatedCount",
+    ];
+
+    fn integer_keys(value: &Value, key: Option<&str>, out: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(map) => {
+                for (k, v) in map {
+                    integer_keys(v, Some(k), out);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    integer_keys(item, key, out);
+                }
+            }
+            Value::Number(n) if n.is_u64() || n.is_i64() => {
+                if let Some(key) = key {
+                    out.insert(key.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every integer field `analyzeSession` returns for a session with
+    /// nested subagents crosses to JS as `BigInt`.
+    #[test]
+    fn analyze_session_promotes_every_integer_field() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/claude-sidecars/sidecar-session.jsonl");
+        let analysis =
+            sdk::analyze_session(sdk::AnalyzeSessionOptions::new(sdk::SessionLocator::Path {
+                harness: sdk::Harness::ClaudeCode,
+                path: fixture,
+            }))
+            .unwrap();
+        let mut keys = BTreeSet::new();
+        integer_keys(&serde_json::to_value(&analysis).unwrap(), None, &mut keys);
+        assert!(keys.contains("cumulativeTokens"), "{keys:?}");
+        let missing: Vec<&String> = keys
+            .iter()
+            .filter(|k| !is_bigint_field(k) && !SMALL_INTEGER_FIELDS.contains(&k.as_str()))
+            .collect();
+        assert!(missing.is_empty(), "not promoted to BigInt: {missing:?}");
+    }
+}
