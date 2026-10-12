@@ -410,3 +410,6 @@ fn impact_rank(impact: &FindingImpact) -> (u8, f64) {
         (None, None) => (0, 0.0),
     }
 }
+
+#[cfg(test)]
+mod tests;
