@@ -2970,3 +2970,17 @@ fn summary_timeseries_rejects_oversized_window() {
         .expect_err("oversized bucket window must be rejected");
     assert!(err.to_string().contains("buckets"));
 }
+
+#[test]
+fn group_by_session_keeps_source_order_and_only_kept_sessions() {
+    let records = [("s1", 1), ("s2", 2), ("s1", 3), ("s3", 4)];
+    let all = group_by_session(&records, |r| r.0, None);
+    assert_eq!(all.len(), 3);
+    assert_eq!(all["s1"], [("s1", 1), ("s1", 3)]);
+    let keep: HashSet<String> = ["s1".to_string(), "s3".to_string()].into();
+    let kept = group_by_session(&records, |r| r.0, Some(&keep));
+    let mut sessions: Vec<&String> = kept.keys().collect();
+    sessions.sort();
+    assert_eq!(sessions, ["s1", "s3"]);
+    assert_eq!(kept["s3"], [("s3", 4)]);
+}
