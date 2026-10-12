@@ -21,3 +21,4 @@ pub use pending_stamps::{
     PendingStampWriteResult, WriteOptions,
 };
 pub use watch::{watch_ingest, WatchIngestOptions};
+pub(crate) use watermark::ingested_store;

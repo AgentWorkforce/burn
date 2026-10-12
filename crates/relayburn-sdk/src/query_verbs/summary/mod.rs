@@ -727,7 +727,13 @@ impl LedgerHandle {
                     None
                 };
                 let stop_reasons = StopReasonCounts::from_turns(&turns);
-                let subagents = crate::source::summary_subagent_counts(&turns);
+                let subagents = crate::source::summary_subagent_counts(
+                    &turns,
+                    &crate::HistoryStoreOptions {
+                        db_path: crate::ingest::ingested_store(&self.inner),
+                        home: None,
+                    },
+                );
                 let (unpriced_turns, unpriced_models) = tally_unpriced(&turns, &pricing);
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
                     group_by,

@@ -133,7 +133,9 @@ pub(super) fn pull(
     opts.progress("importing sessions");
     let imported = import_sessions(ledger, store, &opts.context(), changed)?;
     if imported.complete && from != Some(head) {
-        super::watermark::store(ledger, head)?;
+        super::watermark::store(ledger, head, store.db_path())?;
+    } else {
+        super::watermark::remember_store(ledger, store.db_path())?;
     }
     Ok(imported.report)
 }
@@ -168,6 +170,7 @@ pub fn ingest_claude_transcript_path(
     cleanup_stale_pending_stamps_in(opts.ledger_home.as_deref())?;
     let identity = SessionIdentity::new(Source::Claude.as_str(), session_id);
     let imported = import_sessions(ledger, &store, &opts.context(), [identity].into())?;
+    super::watermark::remember_store(ledger, store.db_path())?;
     Ok(imported.report)
 }
 

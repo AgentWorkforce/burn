@@ -6,9 +6,12 @@
 //! their own position. A ledger with no watermark, or one the store never
 //! issued (its database was replaced), resyncs every session the store
 //! holds; appends are idempotent, so that is a reconciliation, never a
-//! duplicate.
+//! duplicate. Beside it the ledger names the store database it was
+//! ingested from, so reads that need the store's delegation edges consult
+//! the same store.
 
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use ai_hist::{ChangeKind, ChangeQuery, IdentityQuery, SessionIdentity, SessionStore, Watermark};
 use serde_json::{json, Value};
@@ -16,6 +19,7 @@ use serde_json::{json, Value};
 use crate::ledger::Ledger;
 
 const KEY: &str = "relayhistory";
+const STORE_KEY: &str = "relayhistoryStore";
 
 /// Change kinds that move a session's records: its catalog row and its
 /// evidence. Prompt history, presences and connector observations do not.
@@ -28,13 +32,38 @@ const KINDS: [ChangeKind; 6] = [
     ChangeKind::Relationship,
 ];
 
-pub(super) fn stored(ledger: &Ledger) -> Option<Watermark> {
-    let cursors: Value = serde_json::from_str(&ledger.read_cursors().ok()?).ok()?;
-    serde_json::from_value(cursors.get(KEY)?.clone()).ok()
+fn cursors(ledger: &Ledger) -> Option<Value> {
+    serde_json::from_str(&ledger.read_cursors().ok()?).ok()
 }
 
-pub(super) fn store(ledger: &mut Ledger, watermark: Watermark) -> anyhow::Result<()> {
-    ledger.write_cursors(&json!({ KEY: watermark }).to_string())?;
+pub(super) fn stored(ledger: &Ledger) -> Option<Watermark> {
+    serde_json::from_value(cursors(ledger)?.get(KEY)?.clone()).ok()
+}
+
+/// The store database the ledger was last ingested from.
+pub(crate) fn ingested_store(ledger: &Ledger) -> Option<PathBuf> {
+    cursors(ledger)?.get(STORE_KEY)?.as_str().map(PathBuf::from)
+}
+
+pub(super) fn store(
+    ledger: &mut Ledger,
+    watermark: Watermark,
+    store_db: &Path,
+) -> anyhow::Result<()> {
+    ledger.write_cursors(&json!({ KEY: watermark, STORE_KEY: store_db }).to_string())?;
+    Ok(())
+}
+
+/// Name `store_db` as the ledger's store, keeping its watermark.
+pub(super) fn remember_store(ledger: &mut Ledger, store_db: &Path) -> anyhow::Result<()> {
+    let mut cursors = cursors(ledger)
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    if cursors.get(STORE_KEY).and_then(Value::as_str) == store_db.to_str() {
+        return Ok(());
+    }
+    cursors[STORE_KEY] = json!(store_db);
+    ledger.write_cursors(&cursors.to_string())?;
     Ok(())
 }
 

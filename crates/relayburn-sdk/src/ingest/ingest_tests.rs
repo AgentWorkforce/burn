@@ -447,3 +447,30 @@ fn the_watch_loop_ingests_on_its_first_tick_and_stops() {
     assert_eq!(reports[0].appended_turns, 1);
     assert_eq!(turn_ids(&ledger, SIMPLE_SESSION).len(), 1);
 }
+
+#[test]
+fn summary_counts_subagents_from_the_store_the_ledger_was_ingested_from() {
+    let sandbox = Sandbox::new();
+    let project = ".claude/projects/-tmp-project";
+    sandbox.place(
+        "claude-sidecars/sidecar-session.jsonl",
+        &format!("{project}/sidecar-session.jsonl"),
+    );
+    sandbox.place(
+        "claude-sidecars/sidecar-session",
+        &format!("{project}/sidecar-session"),
+    );
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    drop(ledger);
+
+    let handle =
+        crate::Ledger::open(crate::LedgerOpenOptions::with_home(sandbox.ledger_home())).unwrap();
+    let crate::SummaryReport::Grouped(report) = handle
+        .summary_report(crate::SummaryReportOptions::default())
+        .unwrap()
+    else {
+        panic!("expected a grouped summary");
+    };
+    assert_eq!(report.subagents.paired + report.subagents.orphan, 2);
+}

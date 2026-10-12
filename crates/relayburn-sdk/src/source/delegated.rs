@@ -251,12 +251,15 @@ fn child_ids(children: &[SessionEvidence]) -> HashSet<&str> {
 }
 
 /// Paired / orphan counts of the subagents the Claude sessions in `turns`
-/// delegated work to, from the default relayhistory store's delegation
-/// edges. A subagent pairs when the tool use that spawned it is among its
-/// session's own turns. Zero when there is no store.
-pub(crate) fn summary_subagent_counts(turns: &[TurnRecord]) -> SubagentCounts {
+/// delegated work to, from the delegation edges of `store` (the store the
+/// ledger was ingested from). A subagent pairs when the tool use that
+/// spawned it is among its session's own turns. Zero when there is no store.
+pub(crate) fn summary_subagent_counts(
+    turns: &[TurnRecord],
+    store: &super::locate::HistoryStoreOptions,
+) -> SubagentCounts {
     let mut counts = SubagentCounts::default();
-    let Ok(store) = super::locate::open_existing_store(&Default::default()) else {
+    let Ok(store) = super::locate::open_existing_store(store) else {
         return counts;
     };
     let mut sessions: BTreeMap<&str, Vec<TurnRecord>> = BTreeMap::new();
