@@ -159,8 +159,8 @@ fn instruction_overhead_is_priced_per_turn_that_carried_the_section() {
     assert_eq!(found.len(), report.trim.recommendations.len());
     for (finding, rec) in found.iter().zip(&report.trim.recommendations) {
         assert_eq!(finding.code, "instruction-overhead");
-        assert_eq!(finding.evidence.files, [rec.file.clone()]);
-        assert_eq!(finding.evidence.targets, [rec.section.heading.clone()]);
+        assert_eq!(finding.evidence.files, [rec.file.as_str()]);
+        assert_eq!(finding.evidence.targets, [rec.section.heading.as_str()]);
         assert_eq!(finding.impact.tokens, Some(rec.section.tokens * rides));
     }
 
