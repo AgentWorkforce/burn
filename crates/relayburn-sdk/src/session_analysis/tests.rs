@@ -590,6 +590,10 @@ fn activity_rows_rank_unpriced_spend_first_then_by_cost() {
             synthetic_turn(1, "claude-3-5-haiku", "testing", 90_000, "Bash"),
             synthetic_turn(2, "unpriced-house-model", "git", 10, "Grep"),
         ];
+        // A second Bash call in the same turn: one more call, not one more turn.
+        let mut repeat = records.turns[1].tool_calls[0].clone();
+        repeat.id = "call1b".to_string();
+        records.turns[1].tool_calls.push(repeat);
     });
     let activity = analysis.activity.data().expect("activity section");
     let categories: Vec<String> = activity
@@ -606,6 +610,8 @@ fn activity_rows_rank_unpriced_spend_first_then_by_cost() {
     assert_eq!(categories, ["git", "testing", "coding"]);
     let tools: Vec<&str> = activity.tools.iter().map(|row| row.tool.as_str()).collect();
     assert_eq!(tools, ["Grep", "Bash", "Read"]);
+    let bash = &activity.tools[1];
+    assert_eq!((bash.calls, bash.turns), (2, 1));
 }
 
 #[test]

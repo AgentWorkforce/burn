@@ -117,4 +117,14 @@ mod tests {
         ];
         assert_eq!(extract_files_touched(&calls), ["/a", "/b"]);
     }
+
+    #[test]
+    fn a_file_tool_targets_only_its_file_path() {
+        for name in ["Read", "Edit", "Write", "NotebookEdit"] {
+            let other_keys = json!({"path": "/elsewhere", "command": "ls"});
+            assert_eq!(pick_target(name, &other_keys), None, "{name}");
+            let named = json!({"file_path": "/src/lib.rs", "path": "/elsewhere"});
+            assert_eq!(pick_target(name, &named).as_deref(), Some("/src/lib.rs"));
+        }
+    }
 }
