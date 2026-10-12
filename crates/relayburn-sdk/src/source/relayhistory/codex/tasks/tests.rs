@@ -605,3 +605,12 @@ fn a_billed_segment_the_rollout_has_not_passed_is_emitted_as_billed() {
     assert_eq!(outcomes(&derived), vec![("t1@50".to_string(), None)]);
     assert!(appended(&derived, &ledger).is_empty());
 }
+
+#[test]
+fn a_settled_open_task_that_reported_no_spend_bills_nothing() {
+    let started = vec![marker(10, "task_started", Some("t1"), Value::Null)];
+    let derived = derive_at(started, Vec::new(), &Billing::settled());
+    assert!(derived.turns.is_empty());
+    assert!(!derived.pending);
+    assert!(!derived.committed, "nothing of the task is emitted");
+}

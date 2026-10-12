@@ -5,7 +5,8 @@
 //!
 //! A task still open at the end of the rollout commits once the rollout has
 //! settled: nothing has been written to it for [`TAIL_GRACE_MS`]. Until
-//! then it is pending and nothing it derives is emitted. A task billed open
+//! then it is pending and nothing it derives is emitted; one that never
+//! reported spend bills nothing. A task billed open
 //! is a segment `{turn_id}@{line}` that ends at the last line read then;
 //! the ledger holds that id, so when the task continues anyway its later
 //! spend is billed from that line on as a turn of its own, never re-billed
@@ -241,16 +242,21 @@ impl<'a> Tasks<'a> {
     }
 
     /// The open task at the end of the rollout: billed once the rollout
-    /// has settled, pending until then. What the ledger already bills of
-    /// it is emitted either way.
+    /// has settled, pending until then; one that settled without reporting
+    /// any spend bills nothing. What the ledger already bills of it is
+    /// emitted either way.
     fn settle_tail(&mut self) {
         let Some(open) = self.open.take() else {
             return;
         };
         let line = self.last_line;
+        let settled = self.now_ms.saturating_sub(self.last_activity_ms) >= TAIL_GRACE_MS;
         if !open.cuts.is_empty() || open.is_empty() {
             self.close(line, open, None);
-        } else if self.now_ms.saturating_sub(self.last_activity_ms) >= TAIL_GRACE_MS {
+        } else if settled && !open.usage_observed {
+            // A task that never reported spend has nothing to bill, and
+            // nothing it derived is emitted.
+        } else if settled {
             let id = segment_id(&open.turn_id, line);
             self.commit(line, open, id, None);
         } else {

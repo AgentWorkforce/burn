@@ -22,8 +22,8 @@ few numbers that were wrong before.
   subagent thread is a session of its own.
 - **Every Codex task is billed.** A task commits at `task_complete`, at
   `turn_aborted` (stop reason `aborted`), or when the next `task_started`
-  begins. A task still open at the end of a rollout is billed once nothing has
-  been written to the rollout for two minutes, as `<turn id>@<line>`; if the
+  begins. A task still open at the end of a rollout that reported spend is billed
+  once nothing has been written to the rollout for two minutes, as `<turn id>@<line>`; if the
   session continues it after all, the rest is billed as a further turn of that
   task. 4.x billed only tasks a later `task_complete` followed, so spend on
   interrupted and unfinished tasks was missing.
