@@ -3,8 +3,11 @@
 The `SessionRecords` burn derives from each session fixture under
 `tests/fixtures/{claude,codex,opencode}`, one JSON file per session. They are
 the frozen spec for mapping relayhistory evidence onto burn records:
-`source::parity_tests` stages each fixture, syncs it through `ai-hist`, maps
-it, and diffs the result against these files. Adopting a new `ai-hist`
+`source::parity_tests` stages each fixture in a throwaway HOME (its
+`/tmp/project` cwd fields pointed at an empty directory there, so nothing on
+the host changes project resolution), syncs it through `ai-hist`, maps it,
+and diffs the result against these files. A snapshot with no mapped session,
+or a mapped session with no snapshot, fails the suite. Adopting a new `ai-hist`
 version re-runs that suite.
 
 The snapshots record what burn's original session readers derived from each
