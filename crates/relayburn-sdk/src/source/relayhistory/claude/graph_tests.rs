@@ -102,3 +102,73 @@ fn consecutive_sidechain_responses_run_under_the_prompt_that_started_them() {
     assert_eq!(agent("msg_s1"), Some("u1".to_string()));
     assert_eq!(agent("msg_s2"), Some("u1".to_string()));
 }
+
+#[test]
+fn a_sibling_tool_result_inside_a_sidechain_does_not_start_another_one() {
+    let task_and_bash = json!([
+        {"type": "tool_use", "id": "toolu_nested", "name": "Task",
+         "input": {"subagent_type": "Explore", "description": "dig"}},
+        {"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": {"command": "ls"}}
+    ]);
+    let transcript = [
+        record(
+            "u0",
+            None,
+            false,
+            0,
+            json!({"type": "user", "message": {"role": "user", "content": "go"}}),
+        ),
+        record(
+            "a0",
+            Some("u0"),
+            false,
+            1,
+            assistant(
+                "msg_main",
+                json!([
+                    {"type": "tool_use", "id": "toolu_main", "name": "Task",
+                     "input": {"subagent_type": "Explore", "description": "map it"}}
+                ]),
+            ),
+        ),
+        record(
+            "u1",
+            Some("a0"),
+            true,
+            2,
+            json!({"type": "user", "message": {"role": "user", "content": "map it"}}),
+        ),
+        record(
+            "s1",
+            Some("u1"),
+            true,
+            3,
+            assistant("msg_s1", task_and_bash),
+        ),
+        record(
+            "r1",
+            Some("s1"),
+            true,
+            4,
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_bash", "content": "a.rs"}
+            ]}}),
+        ),
+        record(
+            "s2",
+            Some("r1"),
+            true,
+            5,
+            assistant("msg_s2", json!([{"type": "text", "text": "done"}])),
+        ),
+    ]
+    .concat();
+    let records = records_of(&transcript);
+    let agents: Vec<Option<String>> = records
+        .turns
+        .iter()
+        .filter(|t| t.subagent.is_some())
+        .map(|t| t.subagent.as_ref().unwrap().agent_id.clone())
+        .collect();
+    assert_eq!(agents, [Some("u1".to_string()), Some("u1".to_string())]);
+}

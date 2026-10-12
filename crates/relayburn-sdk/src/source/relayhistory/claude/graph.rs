@@ -106,7 +106,8 @@ impl Transcript<'_> {
     }
 
     /// The spawn call `node` was handed as a prompt: the parent assistant's
-    /// first Task/Agent call, unless `node` is that call's result.
+    /// first Task/Agent call, unless `node` carries tool results (that
+    /// call's, or a sibling call's) rather than a prompt.
     fn spawn_call(&self, node: &Message, parent: &Message) -> Option<&ai_hist::ToolCall> {
         if !is_user_record(node) || parent.role != Role::Assistant {
             return None;
@@ -116,9 +117,9 @@ impl Transcript<'_> {
             c.message_id.as_deref() == Some(parent_id)
                 && matches!(c.name.as_str(), "Agent" | "Task")
         })?;
-        let answers = node.blocks.iter().any(|b| {
-            b.kind == BlockKind::ToolResult && b.tool_use_id.as_deref() == Some(&call.tool_use_id)
-        });
+        // A record carrying tool results answers the parent's calls; only a
+        // prompt starts a sidechain.
+        let answers = node.blocks.iter().any(|b| b.kind == BlockKind::ToolResult);
         (!answers).then_some(call)
     }
 
