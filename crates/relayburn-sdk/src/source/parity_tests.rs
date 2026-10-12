@@ -111,9 +111,38 @@ fn mapped(staged: &Staged) -> BTreeMap<String, Value> {
             staged.prefix.clone()
         };
         let records = records_from_evidence(&evidence);
+        assert_session_paths(&name, &records, &evidence);
         out.insert(name, render_value(&records, home));
     }
     out
+}
+
+/// The snapshots leave `sessionPath` out (the builtin readers ran without
+/// one), so it is checked here: every turn names the transcript the
+/// session was read from, and that file exists.
+fn assert_session_paths(
+    name: &str,
+    records: &super::SessionRecords,
+    evidence: &ai_hist::SessionEvidence,
+) {
+    let source = evidence
+        .session
+        .raw_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned());
+    assert!(source.is_some(), "{name}: session has no transcript path");
+    for turn in &records.turns {
+        assert_eq!(
+            turn.session_path, source,
+            "{name}: {} sessionPath",
+            turn.message_id
+        );
+        let path = turn.session_path.as_deref().unwrap_or_default();
+        assert!(
+            Path::new(path).exists(),
+            "{name}: sessionPath {path} does not exist"
+        );
+    }
 }
 
 /// Every leaf path where `got` differs from `want`.
