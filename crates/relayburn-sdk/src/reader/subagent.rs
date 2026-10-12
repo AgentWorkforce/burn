@@ -53,3 +53,17 @@ impl SubagentCounts {
         self.paired + self.orphan
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SubagentCounts;
+
+    #[test]
+    fn counts_are_empty_only_with_no_subagent_at_all() {
+        let counts = |paired, orphan| SubagentCounts { paired, orphan };
+        assert!(counts(0, 0).is_empty());
+        assert!(!counts(2, 0).is_empty());
+        assert!(!counts(0, 3).is_empty());
+        assert_eq!(counts(2, 3).total(), 5);
+    }
+}

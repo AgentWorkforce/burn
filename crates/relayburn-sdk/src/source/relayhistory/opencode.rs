@@ -226,4 +226,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod compaction_tests;
+mod fixture_tests;

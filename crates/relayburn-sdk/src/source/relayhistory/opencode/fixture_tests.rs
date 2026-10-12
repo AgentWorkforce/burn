@@ -1,4 +1,4 @@
-//! What an OpenCode compaction says the context held before it.
+//! OpenCode fixture sessions edited to pin one mapping rule each.
 
 use std::path::Path;
 
@@ -42,4 +42,25 @@ fn an_assistant_turn_written_with_the_compaction_did_not_precede_it() {
         .map(|c| c.preceding_message_id.as_deref())
         .collect();
     assert_eq!(preceding, [Some("msg_compact_a1")]);
+}
+
+#[test]
+fn a_text_only_turn_is_classified_by_its_own_words() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_tree(&fixtures_root().join("opencode/simple"), dir.path());
+    let part = dir
+        .path()
+        .join("storage/part/msg_simple_asst/prt_simple_2.json");
+    let text = std::fs::read_to_string(&part)
+        .unwrap()
+        .replace("Hello.", "Here is the roadmap.");
+    std::fs::write(&part, text).unwrap();
+    let records = fixture_records(
+        Harness::Opencode,
+        &dir.path().join("storage/session/global/ses_simple.json"),
+    );
+    assert_eq!(
+        records.turns[0].activity,
+        Some(crate::reader::ActivityCategory::Planning)
+    );
 }

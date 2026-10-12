@@ -41,11 +41,10 @@ fn records_of(transcript: &str) -> crate::source::SessionRecords {
     records_from_evidence(&loaded.evidence, &Billing::settled())
 }
 
-/// A tool result Claude wrote between two records of one response does
-/// not split the turn's content.
-#[test]
-fn a_turn_split_by_a_tool_result_keeps_its_content_together() {
-    let transcript = [
+/// A prompt, then one response Claude wrote as two records with a tool
+/// result between them.
+fn split_turn() -> String {
+    [
         line(json!({
             "parentUuid": null, "isSidechain": false, "type": "user", "uuid": "u1",
             "timestamp": "2026-04-20T00:00:00.000Z", "cwd": "/tmp/project", "sessionId": SESSION,
@@ -71,7 +70,14 @@ fn a_turn_split_by_a_tool_result_keeps_its_content_together() {
             json!({"type": "text", "text": "one file"}),
         ),
     ]
-    .concat();
+    .concat()
+}
+
+/// A tool result Claude wrote between two records of one response does
+/// not split the turn's content.
+#[test]
+fn a_turn_split_by_a_tool_result_keeps_its_content_together() {
+    let transcript = split_turn();
     let records = records_of(&transcript);
     let kinds: Vec<ContentKind> = records.content.iter().map(|c| c.kind).collect();
     assert_eq!(
@@ -85,6 +91,28 @@ fn a_turn_split_by_a_tool_result_keeps_its_content_together() {
         "{:#?}",
         records.content
     );
+}
+
+/// The tool result a user record carries names the call it answers.
+#[test]
+fn a_tool_result_block_names_its_call() {
+    let records = records_of(&split_turn());
+    let results: Vec<Option<&str>> = records
+        .user_turns
+        .iter()
+        .flat_map(|u| &u.blocks)
+        .filter(|b| b.kind == crate::reader::UserTurnBlockKind::ToolResult)
+        .map(|b| b.tool_use_id.as_deref())
+        .collect();
+    assert_eq!(results, [Some("toolu_1")]);
+    let texts: Vec<Option<&str>> = records
+        .user_turns
+        .iter()
+        .flat_map(|u| &u.blocks)
+        .filter(|b| b.kind == crate::reader::UserTurnBlockKind::Text)
+        .map(|b| b.tool_use_id.as_deref())
+        .collect();
+    assert!(!texts.is_empty() && texts.iter().all(Option::is_none));
 }
 
 #[test]
