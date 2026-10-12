@@ -399,3 +399,6 @@ fn per_turn(effort: &str, row: &ReasoningEffortRow) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod routine_tests;
