@@ -1,7 +1,9 @@
 //! Resolve one harness session into relayhistory evidence.
 //!
 //! An id is looked up in a relayhistory store: hydrated when catalogued,
-//! otherwise discovered for that harness alone and then hydrated. A path is
+//! otherwise discovered for that harness alone and then hydrated (a Codex
+//! subagent thread, which discovery does not catalog, by a sweep of the
+//! Codex roots). A path is
 //! read through a throwaway store, so analyzing a transcript persists
 //! nothing; see [`super::stage`] for how each harness's artifact is laid out
 //! for relayhistory.
@@ -9,8 +11,8 @@
 use std::path::PathBuf;
 
 use ai_hist::{
-    DiscoveryOptions, HydrateOptions, HydrateStatus, ProviderRoots, SessionEvidence, SessionRef,
-    SessionStore, Source, StoreOptions,
+    DiscoveryOptions, HydrateOptions, HydrateStatus, ProviderRoots, SessionEvidence, SessionQuery,
+    SessionRef, SessionStore, Source, StoreOptions, SyncOptions,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -132,16 +134,37 @@ fn load_by_id(
 }
 
 /// Hydrate `reference`, discovering its harness first when the store has
-/// never catalogued it.
+/// never catalogued it. Discovery leaves Codex subagent threads out of the
+/// catalog, so a Codex id discovery does not find is captured by a sweep of
+/// the Codex roots, which reads every thread in full.
 fn hydrate_catalogued(store: &SessionStore, reference: &SessionRef) -> Result<()> {
-    let status = match store.hydrate(reference, HydrateOptions::default()) {
+    let hydrate = || store.hydrate(reference, HydrateOptions::default());
+    let status = match hydrate() {
         Err(ai_hist::Error::SessionNotFound(_)) => {
             discover(store, reference.source())?;
-            store.hydrate(reference, HydrateOptions::default())?.status
+            match hydrate() {
+                Err(ai_hist::Error::SessionNotFound(_)) if reference.source() == Source::Codex => {
+                    return sweep_codex(store, reference);
+                }
+                other => other?.status,
+            }
         }
         other => other?.status,
     };
     check_hydrated(status)
+}
+
+fn sweep_codex(store: &SessionStore, reference: &SessionRef) -> Result<()> {
+    let mut options = SyncOptions::default();
+    options.sources = Some(vec![Source::Codex]);
+    store.sync(options).context("capture codex threads")?;
+    let mut catalog_only = SessionQuery::default();
+    catalog_only.include_text = false;
+    catalog_only.kinds = Some(Vec::new());
+    match store.session(reference, catalog_only)? {
+        Some(_) => Ok(()),
+        None => bail!("no codex thread has that id"),
+    }
 }
 
 pub(super) fn discover(store: &SessionStore, source: Source) -> Result<()> {

@@ -10,7 +10,7 @@ use crate::query_verbs::subagent_tree_for_session;
 use crate::reader::Harness;
 use crate::session_metrics::turn_total_tokens;
 use crate::source::fixtures::fixtures_root;
-use crate::source::locate::{discover, read_evidence};
+use crate::source::locate::{discover, read_evidence, HistoryStoreOptions};
 use crate::source::stage::stage_path;
 use crate::{analyze_session, AnalyzeSessionOptions, SessionLocator};
 
@@ -213,6 +213,23 @@ fn a_codex_child_rollout_analyzes_by_path_as_its_own_session() {
         path: fixtures_root().join("codex-delegated/subagent-child.jsonl"),
     }))
     .unwrap();
+    assert_eq!(analysis.session.session_id, "agent_inv_42");
+    assert_eq!(analysis.metrics.data().unwrap().turn_count, 1);
+}
+
+#[test]
+fn a_codex_child_thread_analyzes_by_id_from_a_fresh_store() {
+    let home = tempfile::tempdir().unwrap();
+    drop(codex_install(home.path()));
+    let mut options = AnalyzeSessionOptions::new(SessionLocator::Id {
+        harness: Harness::Codex,
+        session_id: "agent_inv_42".into(),
+    });
+    options.store = HistoryStoreOptions {
+        db_path: Some(home.path().join("ai-history.db")),
+        home: Some(home.path().to_path_buf()),
+    };
+    let analysis = analyze_session(options).unwrap();
     assert_eq!(analysis.session.session_id, "agent_inv_42");
     assert_eq!(analysis.metrics.data().unwrap().turn_count, 1);
 }
