@@ -44,7 +44,7 @@ coverage_min_pct = 86.1
 "crates/relayburn-sdk/src/query_verbs/summary/compute.rs" = 990
 "crates/relayburn-sdk/src/query_verbs/summary/mod.rs" = 821
 "crates/relayburn-sdk/src/reader/types.rs" = 549
-"crates/relayburn-sdk-node/src/lib.rs" = 1130
+"crates/relayburn-sdk-node/src/lib.rs" = 986
 
 [baseline.cyclomatic]
 "crates/relayburn-cli/src/commands/compare.rs::run_inner" = 36
