@@ -129,9 +129,10 @@ each published target.
 
 burn never parses harness logs. Every session comes from the
 [`ai-hist`](https://github.com/AgentWorkforce/relayhistory) crate's
-`SessionStore`, pinned exactly in `crates/relayburn-sdk/Cargo.toml` (the crate
-version is the contract; adopting a new one is a deliberate PR that bumps the
-pin and re-runs the parity suite).
+`SessionStore`. `crates/relayburn-sdk/Cargo.toml` depends on a
+semver-compatible ai-hist release (`ai-hist = "0.41"` floats across 0.41.x
+patches); adopting a new minor is a deliberate bump that re-runs the parity
+suite.
 
 - `crates/relayburn-sdk/src/source/relayhistory/` maps `SessionEvidence` onto
   burn's records per harness; `source/usage.rs` owns what the raw provider

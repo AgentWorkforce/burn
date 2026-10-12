@@ -42,6 +42,25 @@ The first `burn ingest` (or any command run with `--ingest`):
    threads, OpenCode SQLite sessions) are added. The ledger then records the store's change-feed
    watermark, and later ingests read only sessions that changed.
 
+How long it takes, measured on one machine with about 10 GB of harness history
+(7.2 GB of Codex rollouts, 3.9 GB of OpenCode data, 0.6 GB of Claude
+transcripts):
+
+| Run | Time |
+|---|---|
+| First run, new store (sync + rebuild) | 16–17 minutes |
+| First run, store already synced by `ai-hist` | about 7 minutes |
+| `burn ingest`, nothing new | under 0.3 seconds |
+| `burn ingest`, one session gained a turn | about 5 seconds |
+
+The run after a new store's first sync takes longer (about 20 seconds here) and
+may still append a few Claude turns: relayhistory holds a transcript's last
+message back until a later sweep shows nothing follows it. An ingest after new
+activity spends its time in the store's sweep of every harness;
+`burn ingest --watch` reads only the files that changed between its periodic
+full sweeps, and `burn ingest --hook claude` reads only the transcript the hook
+names.
+
 ## Commands
 
 - `burn ingest` = sync relayhistory, then append what its change feed reports.

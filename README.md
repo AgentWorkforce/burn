@@ -179,7 +179,7 @@ burn --json analyze --path /runs/42/session.jsonl | jq '.findings[] | {code, sug
 ```
 
 Rust embedders that already hold relayhistory evidence (`relayburn_sdk::ai_hist`,
-the exact version burn pins) call `analyze_evidence` instead. MCP clients use
+re-exported so the types match the ai-hist release burn builds against) call `analyze_evidence` instead. MCP clients use
 the `burn__analyzeSession` tool of `burn mcp-server`.
 
 ## `burn measure`

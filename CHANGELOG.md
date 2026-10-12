@@ -4,11 +4,11 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-5.0.0: burn reads every session through relayhistory (`ai-hist` 0.37.0) and no longer parses harness logs. See `docs/migrating-to-5.md`.
+5.0.0: burn reads every session through relayhistory (`ai-hist` 0.41) and no longer parses harness logs. See `docs/migrating-to-5.md`.
 
 ### Breaking
 
-- `burn ingest` syncs the relayhistory store (`$AI_HIST_DB`, else `~/.local/share/ai-hist/ai-history.db`, created on first use; the `ai-hist` CLI is not required) and appends the sessions its change feed reports since the ledger's watermark. The first run on a 4.x ledger rebuilds every session once; matching turn identities keep it from duplicating any.
+- `burn ingest` syncs the relayhistory store (`$AI_HIST_DB`, else `~/.local/share/ai-hist/ai-history.db`, created on first use; the `ai-hist` CLI is not required) and appends the sessions its change feed reports since the ledger's watermark. The first run on a 4.x ledger rebuilds every session once (minutes on a large history); matching turn identities keep it from duplicating any. Later runs with nothing new finish in well under a second.
 - `BURN_CLAUDE_PROJECTS_DIR` is removed; harness locations follow relayhistory (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`).
 - `relayburn-sdk`: `IngestRoots` / `IngestOptions.roots` are replaced by `IngestOptions.store: HistoryStoreOptions`; `start_watch_loop` and its option/sink types by `watch_ingest` + `WatchIngestOptions`; `RawIngestOptions` is `IngestOptions`; `ingest_claude_session`, `ingest_codex_sessions`, `ingest_opencode_sessions`, `default_session_roots`, `count_subagents_under`, `discover_subagents` and `pair_subagents_to_main` are removed. `SubagentTranscript` drops `records`.
 - `@relayburn/sdk` `ingest()` takes `{ ledgerHome, storeDbPath, home }`; the ignored `sessionId` / `harness` fields are removed.
@@ -38,7 +38,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `burn analyze` adds a `reasoning` section (turns, tokens, reasoning tokens and cost per effort level, effort changes) and findings for high reasoning effort on routine work and for mid-session effort changes; unpriced spend reads unknown.
 - `burn summary` adds a reasoning-effort table (JSON `reasoningEfforts`) when any turn in scope recorded an effort.
 - `burn measure` / `measureSession()` read sessions through relayhistory, the same source path as `burn analyze`.
-- Session sourcing pins `ai-hist` 0.37.0: a Codex turn's model, cwd and reasoning come from the `turn_context` naming it, else the latest earlier one; a forked Codex child's first turn is charged only its own spend, not the parent's inherited total; a Claude turn opened by a signature-only `thinking` record starts when that record was written.
+- Session sourcing depends on a semver-compatible `ai-hist` release (`0.41`); adopting a new minor is a deliberate bump that re-runs the parity suite. A Codex turn's model, cwd and reasoning come from the `turn_context` naming it, else the latest earlier one; a forked Codex child's first turn is charged only its own spend, not the parent's inherited total; a Claude turn opened by a signature-only `thinking` record starts when that record was written.
 - Edit-heavy findings count file reads made through any harness's shell (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`, `less`, `more`), so sessions that read via Bash are no longer flagged as editing blind.
 - Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
