@@ -53,6 +53,8 @@ pub use claude_md::{MarkdownSection, SessionClaudeMdCost};
 pub(crate) use cache_expiry::{
     cache_expiry_to_finding, cache_state_turns, detect_cache_expiry, turn_id, CacheExpiry,
 };
+#[cfg(test)]
+pub(crate) use cache_expiry::{CacheExpiryEvent, CacheTtl, ExpiryCause};
 pub use compare::DEFAULT_MIN_SAMPLE;
 pub(crate) use compare::{build_compare_table, CompareOptions, CompareTable};
 pub(crate) use context_delta::deltas_for_session;

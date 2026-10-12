@@ -182,3 +182,6 @@ fn tool_call_suggestion(category: ToolCallPatternCategory) -> &'static str {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

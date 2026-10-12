@@ -292,3 +292,6 @@ fn attribution_result(
         refusal_reason: None,
     }
 }
+
+#[cfg(test)]
+mod tests;
