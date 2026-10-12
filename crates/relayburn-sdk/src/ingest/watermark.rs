@@ -131,7 +131,7 @@ fn drain(mut changes: ai_hist::Changes) -> anyhow::Result<(BTreeSet<SessionIdent
     let mut sessions = BTreeSet::new();
     for change in changes.by_ref() {
         let change = change?;
-        if change.source.is_some() && !change.session_id.is_empty() {
+        if !change.session_id.is_empty() {
             sessions.insert(SessionIdentity::new(change.source_name, change.session_id));
         }
     }

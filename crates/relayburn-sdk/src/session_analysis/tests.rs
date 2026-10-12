@@ -134,6 +134,25 @@ fn unknown_session_id_names_the_store_it_searched() {
 }
 
 #[test]
+fn an_unknown_claude_session_is_not_looked_for_among_codex_threads() {
+    let home = tempfile::tempdir().unwrap();
+    let mut options = AnalyzeSessionOptions::new(SessionLocator::Id {
+        harness: Harness::ClaudeCode,
+        session_id: "missing".into(),
+    });
+    options.store = HistoryStoreOptions {
+        db_path: Some(home.path().join("ai-history.db")),
+        home: Some(home.path().to_path_buf()),
+    };
+    let error = format!("{:#}", analyze_session(options).unwrap_err());
+    assert!(
+        error.contains("session missing is not in the relayhistory store"),
+        "{error}"
+    );
+    assert!(!error.contains("codex thread"), "{error}");
+}
+
+#[test]
 fn overhead_prices_the_project_instruction_files() {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(

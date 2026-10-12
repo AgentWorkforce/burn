@@ -406,6 +406,12 @@ fn the_hook_path_ingests_the_one_transcript() {
     assert_eq!(report.ingested_sessions, 1);
     assert_eq!(turn_ids(&ledger, SIMPLE_SESSION).len(), 1);
     assert!(turn_ids(&ledger, other).is_empty(), "no sweep ran");
+    let store_db = sandbox.dir.path().join("ai-history.db");
+    assert_eq!(
+        super::watermark::ingested_store(&ledger).map(|p| p.canonicalize().unwrap()),
+        Some(store_db.canonicalize().unwrap()),
+        "the hook names the store it read"
+    );
 
     // A later full ingest picks up the rest and bills nothing twice.
     let report = sandbox.ingest(&mut ledger);

@@ -220,3 +220,29 @@ pub(super) fn hydrate_path(store: &SessionStore, reference: &SessionRef) -> Resu
     check_hydrated(report.status)?;
     Ok(report.session)
 }
+
+#[cfg(test)]
+mod tests {
+    use ai_hist::HydrateStatus;
+
+    use super::check_hydrated;
+
+    #[test]
+    fn only_a_transcript_naming_its_session_hydrates() {
+        for ok in [
+            HydrateStatus::Hydrated,
+            HydrateStatus::Updated,
+            HydrateStatus::Unchanged,
+        ] {
+            assert!(check_hydrated(ok).is_ok());
+        }
+        let reason = |status| check_hydrated(status).unwrap_err().to_string();
+        assert_eq!(reason(HydrateStatus::Missing), "the transcript is missing");
+        assert!(reason(HydrateStatus::Unidentified)
+            .starts_with("the transcript carries no session identity"));
+        assert_eq!(
+            reason(HydrateStatus::Mismatched),
+            "the transcript names a different session"
+        );
+    }
+}
