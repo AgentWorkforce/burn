@@ -214,7 +214,7 @@ fn existing_snapshots(dir: &Path) -> BTreeSet<String> {
 
 #[test]
 fn sourcing_snapshots() {
-    let update = std::env::var_os("UPDATE_SOURCING_SNAPSHOTS").is_some();
+    let update = std::env::var("UPDATE_SOURCING_SNAPSHOTS").ok().as_deref() == Some("1");
     let dir = snapshot_dir();
     std::fs::create_dir_all(&dir).unwrap();
     let staged = stage();
