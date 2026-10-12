@@ -501,4 +501,99 @@ mod tests {
         assert!(report.contains("npm run build · 4 calls ·"));
         assert!(report.contains(" tokens\n"));
     }
+
+    fn retry_loop_analysis() -> relayburn_sdk::SessionAnalysis {
+        analyze_session(AnalyzeSessionOptions::new(SessionLocator::Path {
+            harness: Harness::ClaudeCode,
+            path: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/claude/retry-loop.jsonl"),
+        }))
+        .unwrap()
+    }
+
+    /// The turn part of a finding's evidence line, for the given evidence.
+    fn turn_part(turn_indexes: &[u64], turn_ids: &[&str]) -> String {
+        let mut finding = retry_loop_analysis().findings.remove(0);
+        finding.evidence = relayburn_sdk::FindingEvidence {
+            turn_indexes: turn_indexes.to_vec(),
+            turn_ids: turn_ids.iter().map(|id| id.to_string()).collect(),
+            ..Default::default()
+        };
+        let line = evidence_line(&finding);
+        line.split(" · ").next().unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn finding_evidence_names_its_turns() {
+        assert_eq!(turn_part(&[2, 5, 9], &["a"]), "turns 2-9");
+        assert_eq!(turn_part(&[4], &["a"]), "turn 4");
+        assert_eq!(turn_part(&[], &["msg_a", "msg_b"]), "turn msg_a, msg_b");
+        assert!(!turn_part(&[], &[]).starts_with("turn"));
+    }
+
+    fn bash_row(command: &str, initial_tokens: f64, persistence_tokens: f64) -> BashAggregation {
+        BashAggregation {
+            args_hash: command.to_string(),
+            command: Some(command.to_string()),
+            call_count: 1,
+            total_cost: 0.0,
+            initial_tokens,
+            persistence_tokens,
+            total_output_bytes: 0,
+            max_output_bytes: 0,
+            truncated_count: 0,
+        }
+    }
+
+    fn file_row(path: &str, initial_tokens: f64, persistence_tokens: f64) -> FileAggregation {
+        FileAggregation {
+            path: path.to_string(),
+            tool_call_count: 1,
+            initial_tokens,
+            persistence_tokens,
+            riding_turns: 0,
+            total_cost: 0.0,
+            first_emit_ts: String::new(),
+            first_emit_turn_index: 0,
+            total_output_bytes: 0,
+            max_output_bytes: 0,
+            truncated_count: 0,
+        }
+    }
+
+    #[test]
+    fn unpriced_hotspots_rank_by_tokens_carried() {
+        let Section::Available { data, .. } = retry_loop_analysis().hotspots else {
+            panic!("hotspots available");
+        };
+        let mut h = data;
+        // `small` carries 100 tokens, `large` 110: listed small first, ranked large first.
+        h.bash = vec![
+            bash_row("small", 50.0, 50.0),
+            bash_row("large", 10.0, 100.0),
+        ];
+        h.files = vec![
+            file_row("small.rs", 50.0, 50.0),
+            file_row("large.rs", 10.0, 100.0),
+        ];
+        let ranked = |priced: bool| {
+            let mut out = Vec::new();
+            hotspots(&h, priced, &mut out);
+            out.iter()
+                .filter_map(|line| {
+                    let row = line.trim_start();
+                    let name = row
+                        .strip_prefix("command     ")
+                        .or(row.strip_prefix("file        "))?;
+                    Some(name.split(" · ").next().unwrap().to_string())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ranked(false), ["large", "small", "large.rs", "small.rs"]);
+        assert_eq!(
+            ranked(true),
+            ["small", "large", "small.rs", "large.rs"],
+            "priced rows keep the cost order"
+        );
+    }
 }

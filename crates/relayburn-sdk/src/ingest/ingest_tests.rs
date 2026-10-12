@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
-use super::pending_stamps::{write_pending_stamp, PendingStampHarness, WriteOptions};
 use super::ingest::ingest_all_at;
+use super::pending_stamps::{write_pending_stamp, PendingStampHarness, WriteOptions};
 use super::*;
 use crate::ledger::{Enrichment, Ledger, LedgerLayout, Query};
 use crate::source::fixtures::fixtures_root;

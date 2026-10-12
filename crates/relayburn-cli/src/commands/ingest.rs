@@ -126,10 +126,11 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
         }
     };
 
-    let watch_message = if args.no_fsevents {
-        format!("watching (polling every {interval_ms}ms); Ctrl-C to stop")
-    } else {
+    let use_fs_events = !args.no_fsevents;
+    let watch_message = if use_fs_events {
         "watching (FS events with polling fallback); Ctrl-C to stop".to_string()
+    } else {
+        format!("watching (polling every {interval_ms}ms); Ctrl-C to stop")
     };
     if let Some(p) = &progress {
         if p.is_visible() {
@@ -141,18 +142,20 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
 
     let watch = WatchIngestOptions {
         poll_interval: Duration::from_millis(interval_ms),
-        use_fs_events: !args.no_fsevents,
+        use_fs_events,
         stop: StopToken::new(),
     };
     stop_on_signal(watch.stop.clone());
     // Progress updates would overwrite the watch banner on every tick, so
     // the loop runs without them.
-    let opts = IngestOptions {
-        ledger_home: globals.ledger_path.clone(),
-        ..IngestOptions::default()
-    };
+    let opts = ingest_options(globals, None);
     let result = watch_ingest(handle.raw_mut(), &opts, watch, |tick| {
-        report_tick(progress.as_ref(), tick);
+        if let Some(line) = tick_line(progress.is_some(), tick) {
+            match &progress {
+                Some(p) => p.suspend(|| eprint!("{line}")),
+                None => eprint!("{line}"),
+            }
+        }
     });
     if let Some(p) = &progress {
         p.finish_and_clear();
@@ -163,16 +166,14 @@ fn run_watch(globals: &GlobalArgs, args: &IngestArgs) -> i32 {
     }
 }
 
-/// Log a tick that appended turns (unless quiet), or the error that stopped
-/// it. Empty ticks stay silent so a quiet machine is a quiet terminal.
-fn report_tick(progress: Option<&TaskProgress>, tick: anyhow::Result<IngestReport>) {
-    match (tick, progress) {
-        (Ok(report), Some(p)) if report.appended_turns > 0 => {
-            p.suspend(|| eprint!("{}", render_ingest_line(&report)));
-        }
-        (Ok(_), _) => {}
-        (Err(err), Some(p)) => p.suspend(|| eprintln!("[burn] ingest: {err:#}")),
-        (Err(err), None) => eprintln!("[burn] ingest: {err:#}"),
+/// The stderr line for one watch tick: the summary of a tick that appended
+/// turns (unless quiet), or the error that stopped it. Empty ticks stay
+/// silent so a quiet machine is a quiet terminal.
+fn tick_line(verbose: bool, tick: anyhow::Result<IngestReport>) -> Option<String> {
+    match tick {
+        Ok(report) if verbose && report.appended_turns > 0 => Some(render_ingest_line(&report)),
+        Ok(_) => None,
+        Err(err) => Some(format!("[burn] ingest: {err:#}\n")),
     }
 }
 
@@ -397,5 +398,40 @@ mod tests {
 
         let zero = render_ingest_line(&IngestReport::default());
         assert_eq!(zero, "[burn] ingest: ingested 0 sessions (+0 turns)\n");
+    }
+
+    fn appended(turns: usize) -> anyhow::Result<IngestReport> {
+        Ok(IngestReport {
+            scanned_sessions: 1,
+            ingested_sessions: usize::from(turns > 0),
+            appended_turns: turns,
+            applied_pending_stamps: 0,
+        })
+    }
+
+    #[test]
+    fn a_watch_tick_reports_appended_turns_unless_quiet() {
+        assert_eq!(
+            tick_line(true, appended(1)).as_deref(),
+            Some("[burn] ingest: ingested 1 session (+1 turn)\n")
+        );
+        assert_eq!(
+            tick_line(true, appended(0)),
+            None,
+            "an empty tick is silent"
+        );
+        assert_eq!(
+            tick_line(false, appended(3)),
+            None,
+            "quiet keeps ticks silent"
+        );
+    }
+
+    #[test]
+    fn a_failed_watch_tick_is_reported_even_when_quiet() {
+        for verbose in [true, false] {
+            let line = tick_line(verbose, Err(anyhow::anyhow!("store locked")));
+            assert_eq!(line.as_deref(), Some("[burn] ingest: store locked\n"));
+        }
     }
 }

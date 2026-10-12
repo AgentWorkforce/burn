@@ -126,4 +126,20 @@ mod tests {
             assert_eq!(command_name(&parsed_command(argv)), *expected);
         }
     }
+
+    #[test]
+    fn the_update_offer_skips_machine_and_ledger_less_commands() {
+        let offered = |argv: &[&str]| offer_update_for(&parsed_command(argv));
+        for argv in [
+            &["update"][..],
+            &["mcp-server"],
+            &["measure", "--input", "x.jsonl", "--harness", "codex"],
+            &["analyze", "--path", "x.jsonl"],
+        ] {
+            assert!(!offered(argv), "{argv:?}");
+        }
+        for argv in [&["summary"][..], &["ingest"], &["state"]] {
+            assert!(offered(argv), "{argv:?}");
+        }
+    }
 }

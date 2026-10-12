@@ -98,3 +98,36 @@ fn spinner(label: String, color: bool) -> ProgressBar {
     bar.enable_steady_tick(Duration::from_millis(80));
     bar
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn visible() -> TaskProgress {
+        TaskProgress {
+            inner: Arc::new(Inner {
+                bar: Some(ProgressBar::hidden()),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_visible_spinner_shows_each_ingest_phase() {
+        let progress = visible();
+        let opts = progress.ingest_options(Some(PathBuf::from("/ledger")));
+        assert_eq!(opts.ledger_home, Some(PathBuf::from("/ledger")));
+        (opts.on_progress.expect("a visible spinner takes progress"))("syncing session history");
+        let bar = progress.inner.bar.as_ref().unwrap();
+        assert_eq!(bar.message(), "syncing session history");
+    }
+
+    #[test]
+    fn a_hidden_spinner_takes_no_progress() {
+        let progress = TaskProgress {
+            inner: Arc::new(Inner { bar: None }),
+        };
+        let opts = progress.ingest_options(Some(PathBuf::from("/ledger")));
+        assert!(opts.on_progress.is_none());
+        assert_eq!(opts.ledger_home, Some(PathBuf::from("/ledger")));
+    }
+}
