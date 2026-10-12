@@ -64,3 +64,28 @@ fn a_text_only_turn_is_classified_by_its_own_words() {
         Some(crate::reader::ActivityCategory::Planning)
     );
 }
+
+#[test]
+fn a_turn_is_classified_by_the_prompt_that_asked_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_tree(&fixtures_root().join("opencode/simple"), dir.path());
+    let parts = dir.path().join("storage/part/msg_simple_user");
+    std::fs::create_dir_all(&parts).unwrap();
+    std::fs::write(
+        parts.join("prt_user_text.json"),
+        serde_json::json!({
+            "id": "prt_user_text", "sessionID": "ses_simple", "messageID": "msg_simple_user",
+            "type": "text", "text": "please review the parser"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let records = fixture_records(
+        Harness::Opencode,
+        &dir.path().join("storage/session/global/ses_simple.json"),
+    );
+    assert_eq!(
+        records.turns[0].activity,
+        Some(crate::reader::ActivityCategory::Review)
+    );
+}

@@ -300,18 +300,8 @@ impl<'a> Context<'a> {
                 call_index: r.call_index.map(|i| i as u64),
                 event_index: r.event_index.unwrap_or_default() as u64,
                 ts: Some(format_iso_ms(r.ts_ms)),
-                status: match r.result_status.as_deref() {
-                    Some("errored") => ToolResultStatus::Errored,
-                    Some("completed") => ToolResultStatus::Completed,
-                    Some("running") => ToolResultStatus::Running,
-                    Some("cancelled") => ToolResultStatus::Cancelled,
-                    _ => ToolResultStatus::Unknown,
-                },
-                event_source: match r.event_source.as_deref() {
-                    Some("subagent_notification") => ToolResultEventSource::SubagentNotification,
-                    Some("function_call_output") => ToolResultEventSource::FunctionCallOutput,
-                    _ => ToolResultEventSource::ToolResult,
-                },
+                status: result_status(r.result_status.as_deref()),
+                event_source: result_source(r.event_source.as_deref()),
                 content_length: r.text_bytes.map(|b| b as u64),
                 output_bytes: r.payload_bytes.map(|b| b as u64),
                 output_truncated: r.payload_truncated,
@@ -447,4 +437,59 @@ fn text_of<'m>(messages: impl Iterator<Item = &'m Message>, kind: BlockKind) -> 
         }
     }
     parts.join("\n")
+}
+
+/// A tool result's status as relayhistory recorded it.
+fn result_status(raw: Option<&str>) -> ToolResultStatus {
+    match raw {
+        Some("errored") => ToolResultStatus::Errored,
+        Some("completed") => ToolResultStatus::Completed,
+        Some("running") => ToolResultStatus::Running,
+        Some("cancelled") => ToolResultStatus::Cancelled,
+        _ => ToolResultStatus::Unknown,
+    }
+}
+
+/// The record a tool result event came from.
+fn result_source(raw: Option<&str>) -> ToolResultEventSource {
+    match raw {
+        Some("subagent_notification") => ToolResultEventSource::SubagentNotification,
+        Some("function_call_output") => ToolResultEventSource::FunctionCallOutput,
+        _ => ToolResultEventSource::ToolResult,
+    }
+}
+
+#[cfg(test)]
+mod result_tests {
+    use super::*;
+
+    #[test]
+    fn result_statuses_and_sources_read_as_recorded() {
+        let statuses = [
+            (Some("errored"), ToolResultStatus::Errored),
+            (Some("completed"), ToolResultStatus::Completed),
+            (Some("running"), ToolResultStatus::Running),
+            (Some("cancelled"), ToolResultStatus::Cancelled),
+            (Some("weird"), ToolResultStatus::Unknown),
+            (None, ToolResultStatus::Unknown),
+        ];
+        for (raw, status) in statuses {
+            assert_eq!(result_status(raw), status, "{raw:?}");
+        }
+        let sources = [
+            (
+                Some("subagent_notification"),
+                ToolResultEventSource::SubagentNotification,
+            ),
+            (
+                Some("function_call_output"),
+                ToolResultEventSource::FunctionCallOutput,
+            ),
+            (Some("tool_result"), ToolResultEventSource::ToolResult),
+            (None, ToolResultEventSource::ToolResult),
+        ];
+        for (raw, source) in sources {
+            assert_eq!(result_source(raw), source, "{raw:?}");
+        }
+    }
 }
