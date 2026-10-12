@@ -140,4 +140,23 @@ mod tests {
         assert_eq!(found[0].impact.cost_usd, None);
         assert_eq!(found[0].severity, WasteSeverity::Info);
     }
+
+    #[test]
+    fn a_subagent_running_several_turns_counts_once() {
+        let mut turns = vec![
+            turn(0, None, 100),
+            turn(1, Some("Explore"), 500),
+            turn(2, Some("Explore"), 400),
+        ];
+        turns[2].subagent.as_mut().unwrap().agent_id = Some("agent-1".to_string());
+        let cx = FindingContext::new(&turns);
+        let found = subagent_findings(&turns, &cx, &load_builtin_pricing());
+        assert!(
+            found[0]
+                .explanation
+                .starts_with("1 Explore subagent(s) ran 2 turn(s)"),
+            "{}",
+            found[0].explanation
+        );
+    }
 }
