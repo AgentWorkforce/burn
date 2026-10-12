@@ -1594,3 +1594,21 @@ fn legacy_reader_cursors_are_dropped_on_open() {
     let ledger = open_in(&tmp);
     assert_eq!(ledger.read_cursors().unwrap(), "{}");
 }
+
+/// A current ledger keeps its ingest cursors across opens.
+#[test]
+fn current_cursors_survive_reopening() {
+    let tmp = TempDir::new().unwrap();
+    let cursors = r#"{"relayhistory":{"revision":3,"epoch":1}}"#;
+    open_in(&tmp).write_cursors(cursors).unwrap();
+    assert_eq!(open_in(&tmp).read_cursors().unwrap(), cursors);
+}
+
+#[test]
+fn adding_an_existing_column_is_a_no_op_and_other_failures_propagate() {
+    let tmp = TempDir::new().unwrap();
+    let ledger = open_in(&tmp);
+    let conn = &ledger.conns.burn;
+    db::add_column(conn, "ALTER TABLE turns ADD COLUMN stop_reason TEXT").unwrap();
+    assert!(db::add_column(conn, "ALTER TABLE no_such_table ADD COLUMN x TEXT").is_err());
+}
