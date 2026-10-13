@@ -1,0 +1,67 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_simple",
+      "messageId": "msg_simple_asst",
+      "turnIndex": 0,
+      "ts": "2026-04-24T00:00:02.000Z",
+      "model": "anthropic/claude-sonnet-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 500,
+        "cacheCreate5m": 80,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_simple",
+      "messageId": "msg_simple_asst",
+      "ts": "2026-04-24T00:00:02.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Hello."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_simple",
+      "relationshipType": "root",
+      "ts": "2026-04-24T00:00:02.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [],
+  "requestIdLookup": []
+}

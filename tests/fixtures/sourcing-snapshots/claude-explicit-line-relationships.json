@@ -1,0 +1,118 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_explicit_1",
+      "turnIndex": 0,
+      "ts": "2026-04-24T02:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 6,
+        "output": 2,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "u-explicit-user",
+      "ts": "2026-04-24T02:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "continue this branch"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_explicit_1",
+      "ts": "2026-04-24T02:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Continuing."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "relationshipType": "root",
+      "ts": "2026-04-24T02:00:00.000Z",
+      "sourceVersion": "2.1.98"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "relatedSessionId": "original-session",
+      "relationshipType": "continuation",
+      "ts": "2026-04-24T02:00:00.000Z",
+      "sourceVersion": "2.1.98"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "relatedSessionId": "fork-source-session",
+      "relationshipType": "fork",
+      "ts": "2026-04-24T02:00:01.000Z",
+      "sourceVersion": "2.1.98"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "userUuid": "u-explicit-user",
+      "ts": "2026-04-24T02:00:00.000Z",
+      "followingMessageId": "msg_explicit_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 20,
+          "approxTokens": 5
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "msg_explicit_1",
+      "req_explicit"
+    ]
+  ]
+}
