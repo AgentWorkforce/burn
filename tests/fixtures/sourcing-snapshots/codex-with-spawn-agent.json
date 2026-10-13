@@ -1,0 +1,213 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "turnIndex": 0,
+      "ts": "2026-04-23T00:00:00.200Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1500,
+        "output": 300,
+        "reasoning": 50,
+        "cacheRead": 500,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_spawn_1",
+          "name": "spawn_agent",
+          "argsHash": "34544a813d177bff"
+        },
+        {
+          "id": "call_exec_a",
+          "name": "exec_command",
+          "target": "echo done",
+          "argsHash": "2f7d29b1850faf28"
+        }
+      ],
+      "activity": "delegation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "ts": "2026-04-23T00:00:00.150Z",
+      "role": "user",
+      "kind": "text",
+      "text": "investigate the failing test"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "ts": "2026-04-23T00:00:00.500Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_spawn_1",
+        "name": "spawn_agent",
+        "input": {
+          "description": "find why test_x fails",
+          "subagent_type": "investigator"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "ts": "2026-04-23T00:00:01.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_spawn_1",
+        "content": "{\"agent_id\":\"agent_inv_42\",\"status\":\"started\"}"
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "ts": "2026-04-23T00:00:02.500Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_exec_a",
+        "name": "exec_command",
+        "input": {
+          "cmd": "echo done"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "ts": "2026-04-23T00:00:02.800Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_exec_a",
+        "content": "done\n"
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "relationshipType": "root",
+      "ts": "2026-04-23T00:00:00.000Z",
+      "sourceVersion": "0.121.0"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "agent_inv_42",
+      "relatedSessionId": "sess_spawn_1",
+      "relationshipType": "subagent",
+      "ts": "2026-04-23T00:00:01.000Z",
+      "parentToolUseId": "call_spawn_1",
+      "agentId": "agent_inv_42",
+      "subagentType": "investigator",
+      "description": "find why test_x fails"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "toolUseId": "call_spawn_1",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-23T00:00:01.000Z",
+      "status": "completed",
+      "eventSource": "function_call_output",
+      "contentLength": 46,
+      "outputBytes": 46,
+      "contentHash": "36bb53f39f6dcb36",
+      "subagentSessionId": "agent_inv_42",
+      "agentId": "agent_inv_42"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "toolUseId": "call_spawn_1",
+      "callIndex": 1,
+      "eventIndex": 1,
+      "ts": "2026-04-23T00:00:02.000Z",
+      "status": "completed",
+      "eventSource": "subagent_notification",
+      "subagentSessionId": "agent_inv_42",
+      "agentId": "agent_inv_42"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "messageId": "turn_spawn_1",
+      "toolUseId": "call_exec_a",
+      "callIndex": 0,
+      "eventIndex": 2,
+      "ts": "2026-04-23T00:00:02.800Z",
+      "status": "completed",
+      "eventSource": "function_call_output",
+      "contentLength": 5,
+      "outputBytes": 5,
+      "contentHash": "d117fa006ba92085"
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "userUuid": "sess_spawn_1:start->turn_spawn_1",
+      "ts": "2026-04-23T00:00:00.150Z",
+      "followingMessageId": "turn_spawn_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 28,
+          "approxTokens": 7
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

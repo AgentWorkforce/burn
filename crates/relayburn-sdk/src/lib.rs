@@ -55,6 +55,8 @@ mod export_verbs;
 mod ingest_verb;
 mod query_verbs;
 mod session_metrics;
+#[cfg(test)]
+mod source;
 mod stamp_verb;
 mod util;
 

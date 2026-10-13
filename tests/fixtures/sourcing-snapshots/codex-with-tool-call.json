@@ -1,0 +1,128 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_tools_1",
+      "messageId": "turn_tools_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T01:00:00.200Z",
+      "model": "gpt-5.3-codex",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 3000,
+        "output": 800,
+        "reasoning": 200,
+        "cacheRead": 2000,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_exec_1",
+          "name": "exec_command",
+          "target": "git status",
+          "argsHash": "f358a830b359499c"
+        },
+        {
+          "id": "call_patch_1",
+          "name": "apply_patch",
+          "target": "/tmp/project/README.md",
+          "argsHash": "738880b0b8352b54"
+        },
+        {
+          "id": "call_patch_2",
+          "name": "apply_patch",
+          "target": "/tmp/project/NEW.md",
+          "argsHash": "29747c1cb41d9943"
+        }
+      ],
+      "filesTouched": [
+        "/tmp/project/NEW.md",
+        "/tmp/project/README.md"
+      ],
+      "activity": "docs",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_tools_1",
+      "messageId": "turn_tools_1",
+      "ts": "2026-04-20T01:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_exec_1",
+        "name": "exec_command",
+        "input": {
+          "cmd": "git status",
+          "workdir": "/tmp/project"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_tools_1",
+      "messageId": "turn_tools_1",
+      "ts": "2026-04-20T01:00:02.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_patch_1",
+        "name": "apply_patch",
+        "input": {
+          "input": "*** Begin Patch\n*** Update File: /tmp/project/README.md\n@@\n+banner\n*** End Patch\n"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_tools_1",
+      "messageId": "turn_tools_1",
+      "ts": "2026-04-20T01:00:03.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_patch_2",
+        "name": "apply_patch",
+        "input": {
+          "input": "*** Begin Patch\n*** Add File: /tmp/project/NEW.md\n+hello\n*** End Patch\n"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_tools_1",
+      "relationshipType": "root",
+      "ts": "2026-04-20T01:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [],
+  "requestIdLookup": []
+}
