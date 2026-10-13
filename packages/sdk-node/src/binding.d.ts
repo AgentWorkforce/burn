@@ -14,6 +14,9 @@ export declare class Ledger {
 
 export declare function ingest(opts?: unknown): Promise<unknown>;
 export declare function summary(opts?: unknown): Promise<unknown>;
+export declare function summaryReport(opts?: unknown): unknown;
+export declare function summaryTimeseries(opts: unknown): unknown;
+export declare function capabilities(): unknown;
 export declare function ledgerFreshness(opts?: unknown): Promise<unknown>;
 export declare function sessionCost(opts?: unknown): Promise<unknown>;
 export declare function measureSession(opts: unknown): Promise<unknown>;

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - `contextDelta()` accepts `project` and ISO-timestamp or relative `since` values; invalid `since` values reject with an error.
+- Added `summaryReport()`, `summaryTimeseries()`, and `capabilities()` APIs for the SDK-owned versioned summary report contract.
 
 ## [4.1.0] - 2026-09-20
 
