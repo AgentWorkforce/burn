@@ -4,6 +4,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `relayburn-sdk` now exposes SDK-owned summary report/time-series envelopes with schema/version, capability, and normalized window metadata for app and presenter consumers.
+- Summary reports accept an inclusive `until` bound; a bound without sub-second digits covers its whole final second. Bucketed summaries and comparisons reject a zero bucket width.
+- `burn hotspots --findings` ghost-surface results now account for user-text slash-command invocations, so active Claude/Codex commands and prompts are no longer flagged as unused when they do not appear as tool calls.
 - `burn hotspots --findings` adds a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL.
 - Pricing bills Claude 1-hour cache writes at 2x the input tariff on every host (Anthropic, Vertex AI, Bedrock; 5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Claude models keep a single cache-write tariff.
 - Turns whose usage was measured as zero price at $0 regardless of model, so Claude Code's `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session; unmeasured usage stays unpriced. `burn compare` shows cost per turn only for fully priced cells.
