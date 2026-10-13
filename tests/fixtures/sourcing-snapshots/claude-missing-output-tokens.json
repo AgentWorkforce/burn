@@ -1,0 +1,100 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_partial_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 0,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": false,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "hello"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_partial_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Hello!"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "sourceVersion": "2.1.96"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_partial_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 5,
+          "approxTokens": 2
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "22222222-2222-2222-2222-222222222222",
+      "msg_partial_1",
+      "req_1"
+    ]
+  ]
+}

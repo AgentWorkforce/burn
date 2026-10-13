@@ -1,0 +1,204 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "messageId": "msg_compact_a1",
+      "turnIndex": 0,
+      "ts": "2026-04-24T02:50:02.000Z",
+      "model": "anthropic/claude-sonnet-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 200,
+        "reasoning": 0,
+        "cacheRead": 12000,
+        "cacheCreate5m": 5000,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "messageId": "msg_compact_summary",
+      "turnIndex": 1,
+      "ts": "2026-04-24T02:50:04.000Z",
+      "model": "anthropic/claude-sonnet-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 8,
+        "output": 150,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 800,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "messageId": "msg_compact_a2",
+      "turnIndex": 2,
+      "ts": "2026-04-24T02:50:06.000Z",
+      "model": "anthropic/claude-sonnet-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 12,
+        "output": 80,
+        "reasoning": 0,
+        "cacheRead": 950,
+        "cacheCreate5m": 400,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "messageId": "msg_compact_u1",
+      "ts": "2026-04-24T02:50:01.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "do some long work that fills the cache"
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "messageId": "msg_compact_summary",
+      "ts": "2026-04-24T02:50:04.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "## Goal\n- summarized prior work"
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "messageId": "msg_compact_u2",
+      "ts": "2026-04-24T02:50:05.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "continue working"
+    }
+  ],
+  "compactions": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "ts": "2026-04-24T02:50:03.000Z",
+      "precedingMessageId": "msg_compact_a1",
+      "tokensBeforeCompact": 12000
+    }
+  ],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "relationshipType": "root",
+      "ts": "2026-04-24T02:50:02.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "userUuid": "msg_compact_u1",
+      "ts": "2026-04-24T02:50:01.000Z",
+      "followingMessageId": "msg_compact_a1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 38,
+          "approxTokens": 10
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "opencode",
+      "sessionId": "ses_compact",
+      "userUuid": "msg_compact_u2",
+      "ts": "2026-04-24T02:50:05.000Z",
+      "precedingMessageId": "msg_compact_summary",
+      "followingMessageId": "msg_compact_a2",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 16,
+          "approxTokens": 4
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

@@ -20,7 +20,7 @@ use crate::analyze::{
     aggregate_by_bash, aggregate_by_bash_verb, aggregate_by_file, aggregate_by_mcp_server,
     aggregate_by_provider, aggregate_by_subagent, aggregate_subagent_type_stats,
     attribute_hotspots, attribute_overhead, build_compare_table, build_ghost_surface_inputs,
-    build_subagent_tree, build_trim_recommendations, cost_for_turn, deltas_for_session,
+    build_subagent_tree, build_trim_recommendations, cost_for_turn, deltas_for_session_since,
     detect_ghost_surface, detect_patterns, detect_tool_call_patterns, detect_tool_output_bloat,
     find_overhead_files, findings_from_patterns, ghost_surface_to_finding, has_minimum_fidelity,
     load_claude_settings, load_overhead_file, load_pricing, mark_findings_with_unpriced_sessions,
@@ -40,8 +40,9 @@ use crate::analyze::{
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
-    parse_bash_command, resolve_project, BashParse, FidelityClass, RelationshipType, SourceKind,
-    StopReason, TurnRecord, UsageGranularity, UserTurnRecord,
+    parse_bash_command, resolve_project, BashParse, ContentKind, ContentRecord, ContentRole,
+    FidelityClass, RelationshipType, SourceKind, StopReason, TurnRecord, UsageGranularity,
+    UserTurnRecord,
 };
 // Re-exported only for the `tests` submodule, which reaches these names
 // through `use super::*`. The non-test query-verb code no longer references
@@ -74,7 +75,31 @@ use crate::{Ledger, LedgerHandle, LedgerOpenOptions};
 ///
 /// Garbage inputs error out; `None` / empty inputs return `Ok(None)`.
 pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
-    let Some(raw) = since else {
+    normalize_time_bound("since", since)
+}
+
+/// Canonicalize an inclusive `until` bound. Ledger rows carry millisecond
+/// precision, so an `until` without sub-second digits (a whole-second ISO
+/// timestamp, a date, or a relative range) widens to the last millisecond of
+/// that second (`.999Z`); otherwise the lexical `ts <= until` filter would drop
+/// rows later in the same second. Explicit fractional seconds stay exact.
+fn normalize_until(until: Option<&str>) -> Result<Option<String>> {
+    let bound = normalize_time_bound("until", until)?;
+    if until.is_some_and(has_fractional_seconds) {
+        return Ok(bound);
+    }
+    Ok(bound.map(|b| match b.strip_suffix(".000Z") {
+        Some(second) => format!("{second}.999Z"),
+        None => b,
+    }))
+}
+
+fn has_fractional_seconds(raw: &str) -> bool {
+    matches!(raw.as_bytes().get(19), Some(b'.' | b','))
+}
+
+fn normalize_time_bound(label: &str, value: Option<&str>) -> Result<Option<String>> {
+    let Some(raw) = value else {
         return Ok(None);
     };
     if raw.is_empty() {
@@ -83,12 +108,13 @@ pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
 
     if let Some((n, unit)) = parse_relative(raw) {
         let secs_back = match unit {
-            'h' => n * 3_600,
-            'd' => n * 86_400,
-            'w' => n * 7 * 86_400,
-            'm' => n * 30 * 86_400,
+            'h' => n.checked_mul(3_600),
+            'd' => n.checked_mul(86_400),
+            'w' => n.checked_mul(7 * 86_400),
+            'm' => n.checked_mul(30 * 86_400),
             _ => unreachable!(),
-        };
+        }
+        .ok_or_else(|| anyhow::anyhow!("invalid since: {raw} (relative range is too large)"))?;
         let now = system_now_secs();
         let when = now.saturating_sub(secs_back) as i64;
         return Ok(Some(format_iso_z_ms(when, 0)));
@@ -97,7 +123,7 @@ pub fn normalize_since(since: Option<&str>) -> Result<Option<String>> {
     if let Some(canonical) = normalize_iso_to_utc_z(raw) {
         return Ok(Some(canonical));
     }
-    anyhow::bail!("invalid since: {raw} (expected ISO timestamp or relative range like 7d)");
+    anyhow::bail!("invalid {label}: {raw} (expected ISO timestamp or relative range like 7d)");
 }
 
 fn parse_relative(s: &str) -> Option<(u64, char)> {
@@ -263,24 +289,38 @@ pub(crate) fn ensure_bucket_span(anchor: i64, end: i64, bucket_secs: u64) -> Res
 /// Partition `items` into time buckets by their timestamp string. Returns the
 /// `Buckets` window plus a per-bucket vector of items, or `Ok(None)` when there
 /// is no anchor (no `--since` and no parseable timestamps) so each caller can
-/// return its own empty-timeseries shape. `ts_of` extracts the ISO timestamp
+/// return its own empty-timeseries shape. `window` supplies the normalized
+/// `since` anchor and inclusive `until` end of the query that fetched
+/// `items`. `ts_of` extracts the ISO timestamp
 /// from an item (`|t| &t.ts` for `TurnRecord`, `|t| &t.turn.ts` for
 /// `EnrichedTurn`). Shared by the `summary` and `compare` `--bucket` paths.
+/// A zero `bucket_secs` is rejected so a result never reports a bucket width
+/// different from the one its data was partitioned with.
 pub(crate) fn partition_into_buckets<T>(
     items: Vec<T>,
-    since: Option<&str>,
+    window: &Query,
     bucket_secs: u64,
     ts_of: impl Fn(&T) -> &str,
 ) -> Result<Option<(Buckets, Vec<Vec<T>>)>> {
+    if bucket_secs == 0 {
+        anyhow::bail!("bucket width must be a positive number of seconds");
+    }
     let Some(anchor) = bucket_anchor_secs(
-        since,
+        window.since.as_deref(),
         items.iter().filter_map(|t| iso_z_to_epoch_secs(ts_of(t))),
     ) else {
         return Ok(None);
     };
-    let now = system_now_secs() as i64;
-    ensure_bucket_span(anchor, now, bucket_secs)?;
-    let buckets = Buckets::new(anchor, now, bucket_secs);
+    let end = window
+        .until
+        .as_deref()
+        .and_then(iso_z_to_epoch_secs)
+        // `Query::until` is inclusive. Buckets are `[start, end)`, so include
+        // the final until second by making the partition end exclusive.
+        .map(|secs| secs.saturating_add(1))
+        .unwrap_or_else(|| system_now_secs() as i64);
+    ensure_bucket_span(anchor, end, bucket_secs)?;
+    let buckets = Buckets::new(anchor, end, bucket_secs);
     let mut per_bucket: Vec<Vec<T>> = (0..buckets.len()).map(|_| Vec::new()).collect();
     for t in items {
         let Some(ep) = iso_z_to_epoch_secs(ts_of(&t)) else {
@@ -409,6 +449,9 @@ pub use context_efficiency::*;
 mod percentile;
 use percentile::{nearest_rank_index, nearest_rank_percentile};
 
+mod summary_envelope;
+pub use summary_envelope::*;
+
 mod sessions;
 pub use sessions::*;
 
@@ -420,6 +463,9 @@ use cache_expiry::cache_expiry_findings;
 
 mod hotspots;
 pub use hotspots::*;
+
+mod ghost_surface_text;
+use ghost_surface_text::prompted_ghost_surface_inputs;
 
 mod compare;
 pub use compare::*;

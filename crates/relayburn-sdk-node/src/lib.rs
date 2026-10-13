@@ -23,7 +23,7 @@
 //!   serde_json and emit the result via the [`BigIntPromoting`] wrapper,
 //!   which walks the JSON tree and substitutes `BigInt` for any numeric
 //!   value sitting under one of the well-known u64 field names listed in
-//!   [`BIGINT_FIELDS`]. The lighter walker keeps shapes like
+//!   `BIGINT_FIELDS` (in `bigint_promoting`). The lighter walker keeps shapes like
 //!   `HotspotsResult` and `CompareResult` intact (both are awkward to
 //!   express as single typed napi objects) and lets the export verbs surface
 //!   every nested u64 (`turnIndex`, `eventIndex`, `contentLength`,
@@ -95,13 +95,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::ptr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use napi::bindgen_prelude::{
-    BigInt, Either, Error as NapiError, Null, Result as NapiResult, ToNapiValue,
-};
-use napi::sys;
+use napi::bindgen_prelude::{BigInt, Either, Error as NapiError, Null};
 use napi_derive::napi;
 use serde_json::Value as JsonValue;
 
@@ -114,6 +110,11 @@ pub use context_efficiency::{
     ContextEfficiencySummary, ContextSizeDistribution, SessionContextEfficiency,
 };
 pub use hotspots::{hotspots, HotspotsGroupBy, HotspotsOptions};
+
+mod bigint_promoting;
+pub mod summary_report;
+
+use bigint_promoting::BigIntPromoting;
 
 // ---------------------------------------------------------------------------
 // Error mapping
@@ -205,196 +206,6 @@ fn bigint_to_u64(v: BigInt) -> std::result::Result<u64, BurnError> {
 
 fn maybe_path(s: Option<String>) -> Option<PathBuf> {
     s.map(PathBuf::from)
-}
-
-// ---------------------------------------------------------------------------
-// BigIntPromoting — JsonValue → JS value walker that emits BigInt for the
-// well-known u64 field names below.
-//
-// `overhead`, `overheadTrim`, `hotspots`, `compare`, span trees, flow
-// graphs, and context deltas return shapes that
-// are too recursive (or, in `hotspots`'s case, a discriminated union) to mirror
-// cleanly as a single `#[napi(object)]` struct. We keep them on the
-// `serde_json::Value` boundary but wrap the result so the standard
-// number→JsNumber conversion in napi-rs's serde-json bridge gets
-// overridden for the named fields. Anything not in this list rides
-// through as a plain JS number, matching the existing TS contract.
-// ---------------------------------------------------------------------------
-
-/// Field names that carry `u64` values in the SDK and therefore must be
-/// surfaced as JS `BigInt`. Names are camelCased (matching `serde(rename_all
-/// = "camelCase")` on the SDK structs); the walker matches these literally
-/// against the JSON object's key list.
-///
-/// Audit checklist when adding a new u64 field to the SDK: drop its
-/// camelCase name here so the napi-rs bindings keep the BigInt contract.
-const BIGINT_FIELDS: &[&str] = &[
-    // overhead + overhead_trim
-    "tokens",
-    "bytes",
-    "totalLines",
-    "sessionCount",
-    "startLine",
-    "endLine",
-    "filesAnalyzed",
-    "filesWithRecommendations",
-    "totalRecommendations",
-    "tokensPerSession",
-    // hotspots aggregations
-    "callCount",
-    "distinctCommands",
-    "ridingTurns",
-    "firstEmitTurnIndex",
-    "toolCallCount",
-    "turnsAnalyzed",
-    "analyzed",
-    "excluded",
-    // compare
-    "analyzedTurns",
-    "minSample",
-    "turns",
-    "editTurns",
-    "oneShotTurns",
-    "pricedTurns",
-    "total",
-    "aggregateOnly",
-    "costOnly",
-    "partial",
-    "usageOnly",
-    "unknown",
-    // measureSession
-    "turnCount",
-    "inputTokens",
-    "outputTokens",
-    "cacheReadTokens",
-    "cacheWriteTokens",
-    "reasoningTokens",
-    "totalTokens",
-    "costUsdMicros",
-    // export_ledger / export_stamps record bodies — every camelCased
-    // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /
-    // CompactionEvent / nested Usage and ToolCall payloads. These values
-    // already round-trip as u64 inside the SDK; without explicit
-    // promotion the serde-json bridge emits them as JS `number` (f64)
-    // and silently truncates anything above 2^53 when crossing the
-    // napi boundary.
-    "turnIndex",
-    "eventIndex",
-    "callIndex",
-    "contentLength",
-    "tokensBeforeCompact",
-    "byteLen",
-    "approxTokens",
-    "retries",
-    "collapsedCalls",
-    // nested `usage` shape on TurnRecord / ToolResultEventRecord —
-    // every field is u64, all six need promotion.
-    "input",
-    "output",
-    "reasoning",
-    "cacheRead",
-    "cacheCreate5m",
-    "cacheCreate1h",
-    // span-tree attribute keys: untagged `AttrValue::Int` serializes as a
-    // JSON number under the raw attribute name (dots included).
-    "tokens.input",
-    "tokens.output",
-    "tokens.cache_read",
-    "tokens.cache_write",
-    "tokens.reasoning",
-    // flow-graph `TurnTokens` + context-delta counters
-    "cacheWrite",
-    "priorContextTokens",
-    "currentContextTokens",
-    "deltaTokens",
-    "approxBytes",
-    "tokensFreed",
-];
-
-fn is_bigint_field(name: &str) -> bool {
-    BIGINT_FIELDS.contains(&name)
-}
-
-/// Wraps a `serde_json::Value` so that, when napi-rs converts it to a JS
-/// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
-/// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
-/// `hotspots`, `compare`, `exportLedger`, and `exportStamps` verbs whose
-/// result shapes are documented in `packages/sdk-node/src/index.d.ts`.
-/// Also used by `turnSpanTree`, `sessionSpanTrees`, `flowGraph`, and
-/// `contextDelta`.
-pub struct BigIntPromoting(JsonValue);
-
-impl ToNapiValue for BigIntPromoting {
-    unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> NapiResult<sys::napi_value> {
-        promote_value(env, val.0, /*key=*/ None)
-    }
-}
-
-unsafe fn promote_value(
-    env: sys::napi_env,
-    val: JsonValue,
-    key: Option<&str>,
-) -> NapiResult<sys::napi_value> {
-    match val {
-        JsonValue::Number(n) => {
-            if let (Some(k), Some(u)) = (key, n.as_u64()) {
-                if is_bigint_field(k) {
-                    return BigInt::to_napi_value(env, u64_to_bigint(u));
-                }
-            }
-            // Fall back to napi-rs's default serde number conversion.
-            serde_json::Number::to_napi_value(env, n)
-        }
-        JsonValue::Object(map) => {
-            // Build a JS object, recursing per-value with the field name
-            // so `is_bigint_field` can match.
-            let mut obj: sys::napi_value = ptr::null_mut();
-            napi::check_status!(
-                sys::napi_create_object(env, &mut obj),
-                "promote_value: napi_create_object"
-            )?;
-            for (k, v) in map.into_iter() {
-                let child = promote_value(env, v, Some(&k))?;
-                let key_buf = std::ffi::CString::new(k.as_str()).map_err(|e| {
-                    NapiError::new(
-                        napi::Status::GenericFailure,
-                        format!("invalid object key (contains NUL): {e}"),
-                    )
-                })?;
-                napi::check_status!(
-                    sys::napi_set_named_property(env, obj, key_buf.as_ptr(), child),
-                    "promote_value: napi_set_named_property"
-                )?;
-            }
-            Ok(obj)
-        }
-        JsonValue::Array(arr) => {
-            // Arrays don't carry a key context for their elements — the
-            // outer object's key (e.g. `sections`) doesn't apply to each
-            // element's leaf scalars; pass `None` so per-element
-            // promotion is decided by the inner object's keys.
-            let mut js_arr: sys::napi_value = ptr::null_mut();
-            napi::check_status!(
-                sys::napi_create_array_with_length(env, arr.len(), &mut js_arr),
-                "promote_value: napi_create_array_with_length"
-            )?;
-            for (i, v) in arr.into_iter().enumerate() {
-                let child = promote_value(env, v, /*key=*/ None)?;
-                napi::check_status!(
-                    sys::napi_set_element(env, js_arr, i as u32, child),
-                    "promote_value: napi_set_element"
-                )?;
-            }
-            Ok(js_arr)
-        }
-        // Booleans / strings / nulls — defer to napi-rs's standard
-        // serde_json::Value conversion via the leaf wrappers.
-        JsonValue::Bool(b) => bool::to_napi_value(env, b),
-        JsonValue::String(s) => String::to_napi_value(env, s),
-        JsonValue::Null => {
-            napi::bindgen_prelude::Null::to_napi_value(env, napi::bindgen_prelude::Null)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,8 +890,10 @@ pub fn flow_graph(opts: FlowGraphOptions) -> Result<BigIntPromoting, BurnError> 
 #[napi(object)]
 pub struct ContextDeltaOptions {
     pub session: Option<String>,
-    /// Relative range (`24h`, `7d`, `4w`, `2m`). ISO timestamps are not
-    /// accepted — the SDK's context-delta window is a `Duration`.
+    /// Project path or project key; matches the ledger's `project` or
+    /// `project_key`.
+    pub project: Option<String>,
+    /// Relative range (`24h`, `7d`, `4w`, `2m`) or ISO timestamp.
     pub since: Option<String>,
     pub top: Option<u32>,
     pub min_delta: Option<u32>,
@@ -1097,6 +910,7 @@ pub struct ContextDeltaOptions {
 pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(ContextDeltaOptions {
         session: None,
+        project: None,
         since: None,
         top: None,
         min_delta: None,
@@ -1105,7 +919,8 @@ pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromotin
     });
     let raw = sdk::ContextDeltaOpts {
         session: opts.session,
-        since: parse_relative_duration(opts.since.as_deref())?,
+        project: opts.project,
+        since: opts.since,
         top: opts.top,
         min_delta: opts.min_delta.map(u64::from),
         owner: parse_owner_filter(opts.owner.as_deref())?,
@@ -1114,46 +929,6 @@ pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromotin
     let value = serde_json::to_value(&result)
         .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize context_delta: {e}")))?;
     Ok(BigIntPromoting(value))
-}
-
-fn parse_relative_duration(raw: Option<&str>) -> Result<Option<Duration>, BurnError> {
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    let bytes = raw.as_bytes();
-    let hint = "expected a relative range like 24h, 7d, 4w, or 2m";
-    if bytes.len() < 2 {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let unit = bytes[bytes.len() - 1] as char;
-    if !matches!(unit, 'h' | 'd' | 'w' | 'm') {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let num = &raw[..raw.len() - 1];
-    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let n: u64 = num
-        .parse()
-        .map_err(|_| invalid_arg(format!("contextDelta: invalid since: {raw} ({hint})")))?;
-    let secs = match unit {
-        'h' => n.checked_mul(3_600),
-        'd' => n.checked_mul(86_400),
-        'w' => n.checked_mul(7 * 86_400),
-        'm' => n.checked_mul(30 * 86_400),
-        _ => None,
-    }
-    .ok_or_else(|| invalid_arg(format!("contextDelta: since overflow: {raw}")))?;
-    Ok(Some(Duration::from_secs(secs)))
 }
 
 fn parse_owner_filter(raw: Option<&str>) -> Result<sdk::ContextDeltaOwnerFilter, BurnError> {
@@ -1599,6 +1374,7 @@ pub fn ledger_open(opts: Option<LedgerOpenOptions>) -> Result<String, BurnError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bigint_promoting::is_bigint_field;
 
     #[test]
     fn u64_to_bigint_round_trip_small() {
@@ -1668,22 +1444,6 @@ mod tests {
         );
         assert_eq!(parse_fidelity_class(None).unwrap(), None);
         assert!(parse_fidelity_class(Some("usage_only")).is_err());
-    }
-
-    #[test]
-    fn parse_relative_duration_accepts_cli_ranges() {
-        assert_eq!(parse_relative_duration(None).unwrap(), None);
-        assert_eq!(parse_relative_duration(Some("")).unwrap(), None);
-        assert_eq!(
-            parse_relative_duration(Some("24h")).unwrap(),
-            Some(Duration::from_secs(24 * 3_600))
-        );
-        assert_eq!(
-            parse_relative_duration(Some("7d")).unwrap(),
-            Some(Duration::from_secs(7 * 86_400))
-        );
-        assert!(parse_relative_duration(Some("yesterday")).is_err());
-        assert!(parse_relative_duration(Some("2026-01-01T00:00:00Z")).is_err());
     }
 
     #[test]

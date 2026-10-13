@@ -1,4 +1,4 @@
-use super::flow::bucket_subagents_per_turn;
+use super::flow::{bucket_subagents_per_turn, schema_missing_as_empty};
 use super::summary::{
     aggregate_summary_relationship_stats, aggregate_summary_relationship_subagent_stats,
     attribute_summary_cost_to_tools, collect_summary_agent_session_tree,
@@ -7,7 +7,11 @@ use super::summary::{
 };
 use super::*;
 use crate::analyze::FindingPricingStatus;
-use crate::reader::{RelationshipSourceKind, ToolCall, Usage, UserTurnBlock, UserTurnBlockKind};
+use crate::reader::{
+    ContentKind, ContentRecord, ContentRole, RelationshipSourceKind, ToolCall, Usage,
+    UserTurnBlock, UserTurnBlockKind,
+};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn fixture_handle() -> (TempDir, LedgerHandle) {
@@ -100,6 +104,69 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
     (dir, handle)
 }
 
+fn ghost_surface_fixture_root() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests")
+        .join("fixtures")
+        .join("ghost-surface")
+}
+
+fn ghost_surface_turn(source: SourceKind, session_id: &str, message_id: &str) -> TurnRecord {
+    TurnRecord {
+        v: 1,
+        source,
+        session_id: session_id.into(),
+        session_path: None,
+        message_id: message_id.into(),
+        turn_index: 0,
+        ts: "2026-04-23T00:00:00.000Z".into(),
+        model: "claude-sonnet-4-6".into(),
+        project: Some("/tmp/proj".into()),
+        project_key: None,
+        usage: Usage {
+            input: 1000,
+            output: 100,
+            reasoning: 0,
+            cache_read: 1000,
+            cache_create_5m: 0,
+            cache_create_1h: 0,
+        },
+        tool_calls: Vec::new(),
+        files_touched: None,
+        subagent: None,
+        stop_reason: None,
+        activity: None,
+        retries: None,
+        has_edits: None,
+        fidelity: None,
+    }
+}
+
+fn user_content(
+    source: SourceKind,
+    session_id: &str,
+    message_id: &str,
+    text: &str,
+) -> ContentRecord {
+    ContentRecord {
+        v: 1,
+        source,
+        session_id: session_id.into(),
+        message_id: message_id.into(),
+        ts: "2026-04-23T00:00:00.000Z".into(),
+        role: ContentRole::User,
+        kind: ContentKind::Text,
+        text: Some(text.into()),
+        tool_use: None,
+        tool_result: None,
+    }
+}
+
 #[test]
 fn normalize_since_relative_emits_canonical_mmm_z() {
     // Relative ranges must carry the `.000Z` suffix so the cutoff lex-sorts
@@ -107,6 +174,36 @@ fn normalize_since_relative_emits_canonical_mmm_z() {
     let v = normalize_since(Some("7d")).unwrap().unwrap();
     assert_eq!(v.len(), 24, "expected 24-char canonical shape: {v}");
     assert!(v.ends_with(".000Z"), "expected .000Z suffix in {v}");
+}
+
+#[test]
+fn normalize_since_relative_units_subtract_exact_seconds() {
+    for (raw, secs_back) in [
+        ("3h", 3 * 3_600),
+        ("2d", 2 * 86_400),
+        ("2w", 2 * 7 * 86_400),
+        ("2m", 2 * 30 * 86_400),
+    ] {
+        let before = system_now_secs() as i64;
+        let v = normalize_since(Some(raw)).unwrap().unwrap();
+        let after = system_now_secs() as i64;
+        let cutoff = crate::util::time::parse_iso_ms(&v).expect("iso cutoff") / 1_000;
+        assert!(
+            (before - secs_back..=after - secs_back).contains(&cutoff),
+            "{raw}: cutoff {cutoff} outside [{}, {}]",
+            before - secs_back,
+            after - secs_back
+        );
+    }
+}
+
+#[test]
+fn normalize_since_rejects_overflowing_relative_range() {
+    let err = normalize_since(Some("18446744073709551615h")).expect_err("overflow must error");
+    assert!(
+        err.to_string().contains("relative range is too large"),
+        "got {err}"
+    );
 }
 
 #[test]
@@ -284,6 +381,146 @@ fn summary_report_grouped_owns_rows_and_stable_fidelity_shape() {
     assert_eq!(grouped.context_efficiency.sessions[0].context_tokens, 2_000);
     assert_eq!(grouped.per_cell_fidelity["groupBy"], "model");
     assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
+}
+
+#[test]
+fn summary_report_envelope_carries_schema_capabilities_and_window() {
+    let (_dir, handle) = fixture_handle();
+    let envelope = handle
+        .summary_report_envelope(SummaryReportOptions {
+            since: Some("2026-04-23T00:00:00Z".into()),
+            until: Some("2026-04-23T00:00:30Z".into()),
+            ..SummaryReportOptions::default()
+        })
+        .expect("summary report envelope");
+
+    assert_eq!(envelope.schema.name, SUMMARY_REPORT_SCHEMA_NAME);
+    assert_eq!(envelope.schema.version, REPORT_SCHEMA_VERSION);
+    assert_eq!(envelope.capabilities.package_name, "relayburn-sdk");
+    assert!(envelope
+        .capabilities
+        .features
+        .contains(&"summaryReportEnvelope".to_string()));
+    assert_eq!(
+        envelope.window.since.as_deref(),
+        Some("2026-04-23T00:00:00.000Z")
+    );
+    assert_eq!(
+        envelope.window.until.as_deref(),
+        Some("2026-04-23T00:00:30.999Z")
+    );
+    assert!(envelope.window.bucket.is_none());
+
+    let SummaryReport::Grouped(grouped) = envelope.report else {
+        panic!("expected grouped report");
+    };
+    assert_eq!(grouped.turn_count, 1);
+}
+
+#[test]
+fn summary_timeseries_envelope_applies_until_and_declares_bucket() {
+    let (_dir, handle) = fixture_handle();
+    let envelope = handle
+        .summary_timeseries_envelope(
+            SummaryReportOptions {
+                since: Some("2026-04-23T00:00:00Z".into()),
+                until: Some("2026-04-23T00:00:30Z".into()),
+                mode: SummaryReportMode::Grouped { by_provider: false },
+                ..SummaryReportOptions::default()
+            },
+            60,
+        )
+        .expect("summary timeseries envelope");
+
+    assert_eq!(envelope.schema.name, SUMMARY_TIMESERIES_SCHEMA_NAME);
+    assert_eq!(envelope.window.bucket.as_ref().map(|b| b.seconds), Some(60));
+    assert_eq!(
+        envelope.window.until.as_deref(),
+        Some("2026-04-23T00:00:30.999Z")
+    );
+    assert_eq!(envelope.timeseries.bucket_secs, 60);
+    assert_eq!(envelope.timeseries.buckets.len(), 1);
+    assert_eq!(envelope.timeseries.buckets[0].turn_count, 1);
+    assert_eq!(envelope.timeseries.buckets[0].total_tokens, 1_500);
+}
+
+#[test]
+fn summary_timeseries_envelope_rejects_zero_bucket_width() {
+    let (_dir, handle) = fixture_handle();
+    let err = handle
+        .summary_timeseries_envelope(
+            SummaryReportOptions {
+                mode: SummaryReportMode::Grouped { by_provider: false },
+                ..SummaryReportOptions::default()
+            },
+            0,
+        )
+        .expect_err("zero-width buckets must be rejected");
+    assert!(err.to_string().contains("positive"), "{err}");
+}
+
+#[test]
+fn normalize_until_widens_whole_seconds_to_end_of_second() {
+    assert_eq!(
+        normalize_until(Some("2026-04-23T00:00:30Z"))
+            .unwrap()
+            .as_deref(),
+        Some("2026-04-23T00:00:30.999Z")
+    );
+    assert_eq!(
+        normalize_until(Some("2026-04-23")).unwrap().as_deref(),
+        Some("2026-04-23T00:00:00.999Z")
+    );
+    assert!(normalize_until(Some("7d"))
+        .unwrap()
+        .unwrap()
+        .ends_with(".999Z"));
+    assert_eq!(
+        normalize_until(Some("2026-04-23T00:00:30.250Z"))
+            .unwrap()
+            .as_deref(),
+        Some("2026-04-23T00:00:30.250Z")
+    );
+    assert_eq!(
+        normalize_until(Some("2026-04-23T00:00:30,000Z"))
+            .unwrap()
+            .as_deref(),
+        Some("2026-04-23T00:00:30.000Z")
+    );
+    assert_eq!(normalize_until(None).unwrap(), None);
+    assert!(normalize_until(Some("tomorrow"))
+        .unwrap_err()
+        .to_string()
+        .contains("invalid until"));
+}
+
+#[test]
+fn summary_report_until_includes_rows_later_in_the_final_second() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).expect("open");
+    handle
+        .raw_mut()
+        .append_turns(&[bucket_test_turn(
+            "s1",
+            "m1",
+            "2026-04-23T00:00:30.500Z",
+            1_000,
+        )])
+        .expect("append");
+    let turn_count = |until: &str| {
+        let report = handle
+            .summary_report(SummaryReportOptions {
+                until: Some(until.into()),
+                ..SummaryReportOptions::default()
+            })
+            .expect("summary report");
+        let SummaryReport::Grouped(grouped) = report else {
+            panic!("expected grouped report");
+        };
+        grouped.turn_count
+    };
+    assert_eq!(turn_count("2026-04-23T00:00:30Z"), 1);
+    assert_eq!(turn_count("2026-04-23T00:00:30.250Z"), 0);
 }
 
 /// Acceptance test for issue #437: a turn carrying `stop_reason:
@@ -653,6 +890,13 @@ fn summary_subagent_session_filter_treats_every_filter_as_scoping() {
             "since",
             SummaryReportOptions {
                 since: Some("24h".into()),
+                ..SummaryReportOptions::default()
+            },
+        ),
+        (
+            "until",
+            SummaryReportOptions {
+                until: Some("2026-04-23T00:00:30.000Z".into()),
                 ..SummaryReportOptions::default()
             },
         ),
@@ -1237,6 +1481,276 @@ fn hotspots_default_context_rule_flags_382_to_one_high_volume_session() {
         }
         other => panic!("expected findings, got {other:?}"),
     }
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_deghost_claude_command_from_user_text() {
+    let (_dir, mut handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::ClaudeCode, "ghost-claude", "ghost-claude-turn");
+    handle
+        .raw_mut()
+        .append_turns(std::slice::from_ref(&turn))
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[user_content(
+            SourceKind::ClaudeCode,
+            "ghost-claude",
+            "ghost-claude-user",
+            "<command-name>/openspec-apply</command-name>\nApply the latest proposal.",
+        )])
+        .unwrap();
+
+    let pricing = load_pricing(None);
+    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing).unwrap();
+    let root = ghost_surface_fixture_root();
+    inputs.claude_home = Some(root.join("claude"));
+    inputs.codex_home = Some(root.join("missing-codex"));
+    inputs.opencode_projects = Some(vec![root.join("missing-opencode")]);
+
+    let ghosts = crate::analyze::ghost_surface::detect_ghost_surface(&inputs);
+    let claude_ghosts: Vec<_> = ghosts
+        .iter()
+        .filter(|g| g.source == SourceKind::ClaudeCode)
+        .collect();
+    assert!(
+        !claude_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-apply.md")),
+        "Claude openspec-apply should be de-ghosted by user text"
+    );
+    assert!(
+        claude_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-archive.md")),
+        "unused Claude command should remain ghost"
+    );
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_deghost_codex_command_from_user_text() {
+    let (_dir, mut handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::Codex, "ghost-codex", "ghost-codex-turn");
+    handle
+        .raw_mut()
+        .append_turns(std::slice::from_ref(&turn))
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[user_content(
+            SourceKind::Codex,
+            "ghost-codex",
+            "ghost-codex-user",
+            "/openspec-apply\nApply the latest proposal please.",
+        )])
+        .unwrap();
+
+    let pricing = load_pricing(None);
+    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing).unwrap();
+    let root = ghost_surface_fixture_root();
+    inputs.claude_home = Some(root.join("missing-claude"));
+    inputs.codex_home = Some(root.join("codex"));
+    inputs.opencode_projects = Some(vec![root.join("missing-opencode")]);
+
+    let ghosts = crate::analyze::ghost_surface::detect_ghost_surface(&inputs);
+    let codex_ghosts: Vec<_> = ghosts
+        .iter()
+        .filter(|g| g.source == SourceKind::Codex)
+        .collect();
+    assert!(
+        !codex_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-apply.md")),
+        "Codex openspec-apply should be de-ghosted by user text"
+    );
+    assert!(
+        codex_ghosts
+            .iter()
+            .any(|g| g.path.ends_with("openspec-archive.md")),
+        "unused Codex command should remain ghost"
+    );
+}
+
+fn timed_ghost_turn(session_id: &str, message_id: &str, ts: &str) -> TurnRecord {
+    TurnRecord {
+        ts: ts.into(),
+        ..ghost_surface_turn(SourceKind::ClaudeCode, session_id, message_id)
+    }
+}
+
+fn timed_content(
+    session_id: &str,
+    message_id: &str,
+    ts: &str,
+    role: ContentRole,
+    text: &str,
+) -> ContentRecord {
+    ContentRecord {
+        ts: ts.into(),
+        role,
+        ..user_content(SourceKind::ClaudeCode, session_id, message_id, text)
+    }
+}
+
+fn ghost_user_texts(handle: &LedgerHandle, turns: &[TurnRecord]) -> Vec<String> {
+    let pricing = load_pricing(None);
+    let inputs = prompted_ghost_surface_inputs(handle, turns, &pricing).unwrap();
+    inputs
+        .user_turn_text_by_session
+        .and_then(|by_source| by_source.get(&SourceKind::ClaudeCode).cloned())
+        .and_then(|by_session| by_session.get("ghost-window").cloned())
+        .unwrap_or_default()
+}
+
+#[test]
+fn hotspots_ghost_surface_user_text_follows_selected_turns() {
+    let (_dir, mut handle) = fixture_handle();
+    let selected = timed_ghost_turn("ghost-window", "turn-a", "2026-04-23T00:00:10.000Z");
+    let unselected = timed_ghost_turn("ghost-window", "turn-b", "2026-04-23T00:00:20.000Z");
+    handle
+        .raw_mut()
+        .append_turns(&[selected.clone(), unselected])
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[
+            // Prompt for turn-a, earlier than any selected turn's timestamp.
+            timed_content(
+                "ghost-window",
+                "u1",
+                "2026-04-23T00:00:01.000Z",
+                ContentRole::User,
+                "/openspec-apply",
+            ),
+            // Same-millisecond prompt still belongs to turn-a.
+            timed_content(
+                "ghost-window",
+                "u2",
+                "2026-04-23T00:00:10.000Z",
+                ContentRole::User,
+                "tie prompt",
+            ),
+            timed_content(
+                "ghost-window",
+                "u3",
+                "2026-04-23T00:00:02.000Z",
+                ContentRole::User,
+                "",
+            ),
+            timed_content(
+                "ghost-window",
+                "a1",
+                "2026-04-23T00:00:03.000Z",
+                ContentRole::Assistant,
+                "assistant text",
+            ),
+            // Prompts for the unselected turn-b and for no turn at all.
+            timed_content(
+                "ghost-window",
+                "u4",
+                "2026-04-23T00:00:15.000Z",
+                ContentRole::User,
+                "/openspec-archive",
+            ),
+            timed_content(
+                "ghost-window",
+                "u5",
+                "2026-04-23T00:00:30.000Z",
+                ContentRole::User,
+                "/trailing",
+            ),
+        ])
+        .unwrap();
+
+    // Prompts from another session, and from another source sharing the
+    // session id, never attach to the selected turn.
+    let mut foreign_source = timed_content(
+        "ghost-window",
+        "codex-u1",
+        "2026-04-23T00:00:04.000Z",
+        ContentRole::User,
+        "/codex-only",
+    );
+    foreign_source.source = SourceKind::Codex;
+    handle
+        .raw_mut()
+        .append_content(&[
+            timed_content(
+                "ghost-other",
+                "o1",
+                "2026-04-23T00:00:05.000Z",
+                ContentRole::User,
+                "/other-session",
+            ),
+            foreign_source,
+        ])
+        .unwrap();
+
+    assert_eq!(
+        ghost_user_texts(&handle, std::slice::from_ref(&selected)),
+        vec!["/openspec-apply".to_string(), "tie prompt".to_string()],
+    );
+}
+
+#[test]
+fn hotspots_ghost_surface_user_text_matches_turns_as_instants() {
+    let (_dir, mut handle) = fixture_handle();
+    // The turn's timestamp carries milliseconds; the prompt's does not. As
+    // strings `…:10.000Z` sorts before `…:10Z`, which would hand the prompt
+    // to the next turn.
+    let selected = timed_ghost_turn("ghost-window", "turn-a", "2026-04-23T00:00:10.000Z");
+    let later = timed_ghost_turn("ghost-window", "turn-b", "2026-04-23T00:00:20.000Z");
+    handle
+        .raw_mut()
+        .append_turns(&[selected.clone(), later])
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[timed_content(
+            "ghost-window",
+            "u1",
+            "2026-04-23T00:00:10Z",
+            ContentRole::User,
+            "/openspec-apply",
+        )])
+        .unwrap();
+
+    assert_eq!(
+        ghost_user_texts(&handle, std::slice::from_ref(&selected)),
+        vec!["/openspec-apply".to_string()],
+    );
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_propagate_content_read_errors() {
+    let (dir, handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::Codex, "ghost-broken", "ghost-broken-turn");
+    let content_db = rusqlite::Connection::open(dir.path().join("content.sqlite")).unwrap();
+    content_db.execute_batch("DROP TABLE content;").unwrap();
+    let pricing = load_pricing(None);
+
+    assert!(prompted_ghost_surface_inputs(&handle, &[turn], &pricing).is_err());
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_fall_back_when_content_missing() {
+    let (_dir, handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::Codex, "ghost-empty", "ghost-empty-turn");
+    let pricing = load_pricing(None);
+    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing).unwrap();
+    let root = ghost_surface_fixture_root();
+    inputs.claude_home = Some(root.join("missing-claude"));
+    inputs.codex_home = Some(root.join("codex"));
+    inputs.opencode_projects = Some(vec![root.join("missing-opencode")]);
+
+    assert!(inputs.user_turn_text_by_session.is_none());
+    let ghosts = crate::analyze::ghost_surface::detect_ghost_surface(&inputs);
+    assert!(
+        ghosts
+            .iter()
+            .any(|g| g.source == SourceKind::Codex && g.path.ends_with("openspec-apply.md")),
+        "missing content should preserve tool-call-only ghost behavior"
+    );
 }
 
 #[test]
@@ -2093,17 +2607,6 @@ fn compute_summary_replacement_savings_none_when_no_replacement_tools() {
     assert!(result.replacement_savings.is_none());
 }
 
-#[test]
-fn duration_to_since_iso_emits_canonical_zulu_ms() {
-    let iso = super::duration_to_since_iso(std::time::Duration::from_secs(60));
-    // Shape only — actual value depends on system clock. We assert
-    // the canonical lower-bound shape `YYYY-MM-DDTHH:MM:SS.mmmZ`
-    // that `Query::since` lex-compares against ledger rows.
-    assert_eq!(iso.len(), 24, "{iso}");
-    assert!(iso.ends_with(".000Z"));
-    assert!(iso.contains('T'));
-}
-
 /// Regression for the `since`-is-ignored bug: when `opts.since` is
 /// `Some`, sessions whose latest turn is older than the window must
 /// not appear in the deltas output. With a 1-second window and
@@ -2116,7 +2619,7 @@ fn context_delta_since_filter_excludes_old_sessions() {
     use crate::analyze::ContextDeltaOpts;
     let (_dir, handle) = multi_session_handle();
     let opts = ContextDeltaOpts {
-        since: Some(std::time::Duration::from_secs(1)),
+        since: Some("1h".into()),
         ..ContextDeltaOpts::default()
     };
     let deltas = handle.context_delta(opts).expect("context_delta");
@@ -2125,6 +2628,248 @@ fn context_delta_since_filter_excludes_old_sessions() {
         "since=1s must drop fixture sessions whose latest turn is weeks old; got {} deltas",
         deltas.len(),
     );
+}
+
+fn context_delta_filter_handle(alpha_project: &str) -> (TempDir, LedgerHandle) {
+    context_delta_filter_handle_with_key(alpha_project, None)
+}
+
+fn context_delta_filter_handle_with_key(
+    alpha_project: &str,
+    alpha_project_key: Option<&str>,
+) -> (TempDir, LedgerHandle) {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = LedgerOpenOptions::with_home(dir.path());
+    let mut handle = Ledger::open(opts).expect("open ledger");
+    let turn = |session: &str,
+                project: &str,
+                project_key: Option<&str>,
+                index: u64,
+                ts: &str,
+                message_id: &str,
+                input: u64| {
+        TurnRecord {
+            v: 1,
+            source: SourceKind::ClaudeCode,
+            session_id: session.into(),
+            session_path: None,
+            message_id: message_id.into(),
+            turn_index: index,
+            ts: ts.into(),
+            model: "claude-sonnet-4-6".into(),
+            project: Some(project.into()),
+            project_key: project_key.map(str::to_owned),
+            usage: Usage {
+                input,
+                output: 0,
+                reasoning: 0,
+                cache_read: 0,
+                cache_create_5m: 0,
+                cache_create_1h: 0,
+            },
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+        }
+    };
+    handle
+        .raw_mut()
+        .append_turns(&[
+            turn(
+                "sess-alpha",
+                alpha_project,
+                alpha_project_key,
+                0,
+                "2026-04-20T10:00:00.000Z",
+                "alpha-1",
+                1_000,
+            ),
+            turn(
+                "sess-alpha",
+                alpha_project,
+                alpha_project_key,
+                1,
+                "2026-04-21T10:00:00.000Z",
+                "alpha-2",
+                3_000,
+            ),
+            turn(
+                "sess-alpha",
+                alpha_project,
+                alpha_project_key,
+                2,
+                "2026-07-20T10:00:00.000Z",
+                "alpha-3",
+                6_000,
+            ),
+            turn(
+                "sess-beta",
+                "/tmp/proj-beta",
+                None,
+                0,
+                "2026-07-19T10:00:00.000Z",
+                "beta-1",
+                2_000,
+            ),
+            turn(
+                "sess-beta",
+                "/tmp/proj-beta",
+                None,
+                1,
+                "2026-07-20T11:00:00.000Z",
+                "beta-2",
+                7_000,
+            ),
+        ])
+        .expect("append turns");
+    (dir, handle)
+}
+
+#[test]
+fn context_delta_project_filter_actually_filters_sessions() {
+    let (_dir, handle) = context_delta_filter_handle("/tmp/proj-alpha");
+    let deltas = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some("/tmp/proj-alpha".into()),
+            min_delta: Some(0),
+            top: Some(20),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("context_delta");
+    assert!(!deltas.is_empty());
+    assert!(deltas.iter().all(|delta| delta.session_id == "sess-alpha"));
+}
+
+#[test]
+fn context_delta_project_path_matches_resolved_git_project_key() {
+    let project = tempfile::tempdir().expect("project root");
+    let git_dir = project.path().join(".git");
+    std::fs::create_dir_all(&git_dir).expect("create git dir");
+    std::fs::write(
+        git_dir.join("config"),
+        "[remote \"origin\"]\n\turl = git@github.com:example/context-deltas.git\n",
+    )
+    .expect("write git config");
+    let nested = project.path().join("crates").join("sdk");
+    std::fs::create_dir_all(&nested).expect("create nested project path");
+
+    let (_dir, handle) = context_delta_filter_handle_with_key(
+        "/different/checkout/subdirectory",
+        Some("github.com/example/context-deltas"),
+    );
+    let deltas = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(nested.to_string_lossy().into_owned()),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("project-key context_delta");
+
+    assert!(!deltas.is_empty());
+    assert!(deltas.iter().all(|delta| delta.session_id == "sess-alpha"));
+
+    let nonexistent = nested.join("does-not-exist");
+    let deltas = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(nonexistent.to_string_lossy().into_owned()),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("nonexistent project context_delta");
+    assert!(
+        deltas.is_empty(),
+        "a nonexistent path must not widen to its parent repository key"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn context_delta_project_filter_matches_literal_and_canonical_symlink_paths() {
+    use std::os::unix::fs::symlink;
+
+    let target = tempfile::tempdir().expect("project target");
+    let links = tempfile::tempdir().expect("symlink parent");
+    let link = links.path().join("project-link");
+    symlink(target.path(), &link).expect("project symlink");
+    let raw = link.to_string_lossy().into_owned();
+    let canonical = std::fs::canonicalize(&link)
+        .expect("canonical project")
+        .to_string_lossy()
+        .into_owned();
+    assert_ne!(raw, canonical, "fixture must exercise distinct spellings");
+
+    let (_raw_dir, raw_handle) = context_delta_filter_handle(&raw);
+    let raw_match = raw_handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(raw.clone()),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("literal project match");
+    assert!(!raw_match.is_empty());
+    assert!(raw_match
+        .iter()
+        .all(|delta| delta.session_id == "sess-alpha"));
+
+    let (_canonical_dir, canonical_handle) = context_delta_filter_handle(&canonical);
+    let canonical_match = canonical_handle
+        .context_delta(ContextDeltaOpts {
+            project: Some(raw),
+            min_delta: Some(0),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("canonical project alias match");
+    assert!(!canonical_match.is_empty());
+    assert!(canonical_match
+        .iter()
+        .all(|delta| delta.session_id == "sess-alpha"));
+}
+
+#[test]
+fn context_delta_iso_since_filters_rows_and_matches_session_mode() {
+    let (_dir, handle) = context_delta_filter_handle("/tmp/proj-alpha");
+    let since = Some("2026-07-01T00:00:00Z".into());
+    let all = handle
+        .context_delta(ContextDeltaOpts {
+            project: Some("/tmp/proj-alpha".into()),
+            since: since.clone(),
+            min_delta: Some(0),
+            top: Some(20),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("all-session context_delta");
+    let one = handle
+        .context_delta(ContextDeltaOpts {
+            session: Some("sess-alpha".into()),
+            since,
+            min_delta: Some(0),
+            top: Some(20),
+            ..ContextDeltaOpts::default()
+        })
+        .expect("session context_delta");
+
+    assert_eq!(all, one);
+    assert_eq!(all.len(), 1, "the April delta must be filtered out");
+    assert_eq!(all[0].turn_id, "alpha-3");
+    assert_eq!(all[0].prior_context_tokens, 3_000);
+    assert_eq!(all[0].current_context_tokens, 6_000);
+}
+
+#[test]
+fn context_delta_invalid_since_returns_error() {
+    let (_dir, handle) = context_delta_filter_handle("/tmp/proj-alpha");
+    let err = handle
+        .context_delta(ContextDeltaOpts {
+            since: Some("last-tuesday-ish".into()),
+            ..ContextDeltaOpts::default()
+        })
+        .expect_err("invalid since must not widen to all time");
+    assert!(err.to_string().contains("invalid since"), "{err:#}");
 }
 
 fn multi_session_handle() -> (TempDir, LedgerHandle) {
@@ -3143,4 +3888,28 @@ fn summary_timeseries_rejects_oversized_window() {
         )
         .expect_err("oversized bucket window must be rejected");
     assert!(err.to_string().contains("buckets"));
+}
+
+#[test]
+fn schema_missing_as_empty_tolerates_only_missing_schema() {
+    use crate::ledger::LedgerError;
+
+    let sqlite_failure = |msg: &str| {
+        LedgerError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            Some(msg.to_string()),
+        ))
+    };
+    assert_eq!(schema_missing_as_empty(Ok(vec![1, 2])).unwrap(), vec![1, 2]);
+    assert_eq!(
+        schema_missing_as_empty::<u8>(Err(sqlite_failure("no such table: inferences"))).unwrap(),
+        Vec::<u8>::new()
+    );
+    assert_eq!(
+        schema_missing_as_empty::<u8>(Err(sqlite_failure("no such column: start_ms"))).unwrap(),
+        Vec::<u8>::new()
+    );
+    let err = schema_missing_as_empty::<u8>(Err(sqlite_failure("disk I/O error")))
+        .expect_err("non-schema failures propagate");
+    assert!(err.to_string().contains("disk I/O error"), "got {err}");
 }

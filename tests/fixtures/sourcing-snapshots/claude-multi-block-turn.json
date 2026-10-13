@@ -1,0 +1,147 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_multi_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-opus-4-7",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 3,
+        "output": 43,
+        "reasoning": 0,
+        "cacheRead": 11496,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 4773
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_bash_1",
+          "name": "Bash",
+          "target": "ls -la /tmp/project",
+          "argsHash": "8b24888bab614808"
+        },
+        {
+          "id": "toolu_agent_1",
+          "name": "Agent",
+          "target": "general-purpose",
+          "argsHash": "dc298b2d2f3b1825"
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "delegation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "check the repo"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_multi_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Let me check."
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_multi_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_bash_1",
+        "name": "Bash",
+        "input": {
+          "command": "ls -la /tmp/project"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "messageId": "msg_multi_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_agent_1",
+        "name": "Agent",
+        "input": {
+          "description": "Research task",
+          "prompt": "do something",
+          "subagent_type": "general-purpose"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "sourceVersion": "2.1.96"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "22222222-2222-2222-2222-222222222222",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_multi_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 14,
+          "approxTokens": 4
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "22222222-2222-2222-2222-222222222222",
+      "msg_multi_1",
+      "req_1"
+    ]
+  ]
+}

@@ -1,0 +1,510 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_main_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 20,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_outer",
+          "name": "Agent",
+          "target": "Explore",
+          "argsHash": "df7179572a372f57"
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "delegation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_sub1_1",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:03.000Z",
+      "model": "claude-haiku-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 30,
+        "output": 8,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_inner",
+          "name": "Agent",
+          "target": "code-reviewer",
+          "argsHash": "b90de5356ac6aad8"
+        }
+      ],
+      "subagent": {
+        "isSidechain": true,
+        "parentToolUseId": "toolu_outer",
+        "agentId": "u-sub1-user",
+        "parentAgentId": "55555555-5555-5555-5555-555555555555",
+        "subagentType": "Explore",
+        "description": "Research the codebase"
+      },
+      "stopReason": "tool-use",
+      "activity": "delegation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_sub2_1",
+      "turnIndex": 2,
+      "ts": "2026-04-20T00:00:05.000Z",
+      "model": "claude-haiku-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 40,
+        "output": 12,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "subagent": {
+        "isSidechain": true,
+        "parentToolUseId": "toolu_inner",
+        "agentId": "u-sub2-user",
+        "parentAgentId": "u-sub1-user",
+        "subagentType": "code-reviewer",
+        "description": "Review"
+      },
+      "stopReason": "end-turn",
+      "activity": "review",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_sub1_2",
+      "turnIndex": 3,
+      "ts": "2026-04-20T00:00:07.000Z",
+      "model": "claude-haiku-4-5",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 50,
+        "output": 4,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "subagent": {
+        "isSidechain": true,
+        "parentToolUseId": "toolu_outer",
+        "agentId": "u-sub1-user",
+        "parentAgentId": "55555555-5555-5555-5555-555555555555",
+        "subagentType": "Explore",
+        "description": "Research the codebase"
+      },
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_main_2",
+      "turnIndex": 4,
+      "ts": "2026-04-20T00:00:09.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 25,
+        "output": 3,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "brainstorming",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "u-main-user",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "explore"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_main_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_outer",
+        "name": "Agent",
+        "input": {
+          "description": "Research the codebase",
+          "prompt": "Research",
+          "subagent_type": "Explore"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "u-sub1-user",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "Research"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_sub1_1",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_inner",
+        "name": "Agent",
+        "input": {
+          "description": "Review",
+          "prompt": "Review the code",
+          "subagent_type": "code-reviewer"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "u-sub2-user",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "Review the code"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_sub2_1",
+      "ts": "2026-04-20T00:00:05.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "looks good"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "u-sub1-toolresult",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "toolu_inner",
+        "content": "looks good"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_sub1_2",
+      "ts": "2026-04-20T00:00:07.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "done"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "u-main-toolresult",
+      "ts": "2026-04-20T00:00:08.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "toolu_outer",
+        "content": "done"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "msg_main_2",
+      "ts": "2026-04-20T00:00:09.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "all set"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    },
+    {
+      "v": 1,
+      "source": "native-claude",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "relatedSessionId": "55555555-5555-5555-5555-555555555555",
+      "relationshipType": "subagent",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "parentToolUseId": "toolu_outer",
+      "agentId": "u-sub1-user",
+      "subagentType": "Explore",
+      "description": "Research the codebase"
+    },
+    {
+      "v": 1,
+      "source": "native-claude",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "relatedSessionId": "u-sub1-user",
+      "relationshipType": "subagent",
+      "ts": "2026-04-20T00:00:05.000Z",
+      "parentToolUseId": "toolu_inner",
+      "agentId": "u-sub2-user",
+      "subagentType": "code-reviewer",
+      "description": "Review"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "u-sub1-toolresult",
+      "toolUseId": "toolu_inner",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-20T00:00:06.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 10,
+      "outputBytes": 10,
+      "outputTruncated": false,
+      "contentHash": "cada083c27dc6cd8",
+      "agentId": "u-sub2-user"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "messageId": "u-main-toolresult",
+      "toolUseId": "toolu_outer",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-20T00:00:08.000Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 4,
+      "outputBytes": 4,
+      "outputTruncated": false,
+      "contentHash": "a4c3ed04a95a3da1",
+      "agentId": "u-sub1-user"
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "userUuid": "u-main-user",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_main_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 7,
+          "approxTokens": 2
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "userUuid": "u-sub1-user",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "precedingMessageId": "msg_main_1",
+      "followingMessageId": "msg_sub1_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 8,
+          "approxTokens": 2
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "userUuid": "u-sub2-user",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "precedingMessageId": "msg_sub1_1",
+      "followingMessageId": "msg_sub2_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 15,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "userUuid": "u-sub1-toolresult",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "precedingMessageId": "msg_sub2_1",
+      "followingMessageId": "msg_sub1_2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "toolu_inner",
+          "byteLen": 10,
+          "approxTokens": 3
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "55555555-5555-5555-5555-555555555555",
+      "userUuid": "u-main-toolresult",
+      "ts": "2026-04-20T00:00:08.000Z",
+      "precedingMessageId": "msg_sub1_2",
+      "followingMessageId": "msg_main_2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "toolu_outer",
+          "byteLen": 4,
+          "approxTokens": 1
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}
