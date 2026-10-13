@@ -1,0 +1,217 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_bugfix_assistant",
+      "turnIndex": 0,
+      "ts": "2026-05-01T00:31:00.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1,
+        "output": 1,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_edit_bugfix",
+          "name": "Edit",
+          "target": "/tmp/project/src/auth.ts",
+          "argsHash": "7bc0a0bdf1453524",
+          "editPreHash": "a0d94ca2b396bad0",
+          "editPostHash": "45bcc67d340a204b"
+        }
+      ],
+      "filesTouched": [
+        "/tmp/project/src/auth.ts"
+      ],
+      "stopReason": "end-turn",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_refactor_assistant",
+      "turnIndex": 1,
+      "ts": "2026-05-01T01:00:00.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1,
+        "output": 1,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_edit_refactor",
+          "name": "Edit",
+          "target": "/tmp/project/src/auth.ts",
+          "argsHash": "4a5d6c15221f0e31",
+          "editPreHash": "cd0b3bff8c68d4d8",
+          "editPostHash": "67c427cea874288f"
+        }
+      ],
+      "filesTouched": [
+        "/tmp/project/src/auth.ts"
+      ],
+      "stopReason": "end-turn",
+      "activity": "refactoring",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "u-user-refactor",
+      "ts": "2026-05-01T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "refactor the auth module"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "u-user-bugfix",
+      "ts": "2026-05-01T00:30:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "fix the bug in auth.ts"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_bugfix_assistant",
+      "ts": "2026-05-01T00:31:00.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_edit_bugfix",
+        "name": "Edit",
+        "input": {
+          "file_path": "/tmp/project/src/auth.ts",
+          "new_string": "const x = 2",
+          "old_string": "const x = 1"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "messageId": "msg_refactor_assistant",
+      "ts": "2026-05-01T01:00:00.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_edit_refactor",
+        "name": "Edit",
+        "input": {
+          "file_path": "/tmp/project/src/auth.ts",
+          "new_string": "function bar",
+          "old_string": "function foo"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "relationshipType": "root",
+      "ts": "2026-05-01T00:00:00.000Z",
+      "sourceVersion": "2.1.96"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "userUuid": "u-user-refactor",
+      "ts": "2026-05-01T00:00:00.000Z",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 24,
+          "approxTokens": 6
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "userUuid": "u-user-bugfix",
+      "ts": "2026-05-01T00:30:00.000Z",
+      "followingMessageId": "msg_bugfix_assistant",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 22,
+          "approxTokens": 6
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "msg_bugfix_assistant",
+      "req_bugfix"
+    ],
+    [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "msg_refactor_assistant",
+      "req_refactor"
+    ]
+  ]
+}

@@ -1,0 +1,489 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 100,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_bash_1",
+          "name": "Bash",
+          "target": "npm run build",
+          "argsHash": "5c263ac899cef39b",
+          "isError": true
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_2",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:03.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 15,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 100,
+        "cacheCreate5m": 50,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_bash_2",
+          "name": "Bash",
+          "target": "npm run build",
+          "argsHash": "5c263ac899cef39b",
+          "isError": true
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_3",
+      "turnIndex": 2,
+      "ts": "2026-04-20T00:00:05.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 20,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 150,
+        "cacheCreate5m": 50,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_bash_3",
+          "name": "Bash",
+          "target": "npm run build",
+          "argsHash": "5c263ac899cef39b",
+          "isError": true
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_4",
+      "turnIndex": 3,
+      "ts": "2026-04-20T00:00:07.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 25,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 200,
+        "cacheCreate5m": 50,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_bash_4",
+          "name": "Bash",
+          "target": "npm run build",
+          "argsHash": "5c263ac899cef39b",
+          "isError": true
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "run the build"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_bash_1",
+        "name": "Bash",
+        "input": {
+          "command": "npm run build"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_bash_1",
+        "content": "npm ERR! code ENOENT",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_2",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_bash_2",
+        "name": "Bash",
+        "input": {
+          "command": "npm run build"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_bash_2",
+        "content": "npm ERR! code ENOENT",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_3",
+      "ts": "2026-04-20T00:00:05.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_bash_3",
+        "name": "Bash",
+        "input": {
+          "command": "npm run build"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-4",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_bash_3",
+        "content": "npm ERR! code ENOENT",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "msg_retry_4",
+      "ts": "2026-04-20T00:00:07.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_bash_4",
+        "name": "Bash",
+        "input": {
+          "command": "npm run build"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-5",
+      "ts": "2026-04-20T00:00:08.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_bash_4",
+        "content": "npm ERR! code ENOENT",
+        "isError": true
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-2",
+      "toolUseId": "tu_bash_1",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-20T00:00:02.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 20,
+      "outputBytes": 20,
+      "outputTruncated": false,
+      "contentHash": "e3570dc7ac5878f0",
+      "isError": true
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-3",
+      "toolUseId": "tu_bash_2",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-20T00:00:04.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 20,
+      "outputBytes": 20,
+      "outputTruncated": false,
+      "contentHash": "e3570dc7ac5878f0",
+      "isError": true
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-4",
+      "toolUseId": "tu_bash_3",
+      "callIndex": 0,
+      "eventIndex": 2,
+      "ts": "2026-04-20T00:00:06.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 20,
+      "outputBytes": 20,
+      "outputTruncated": false,
+      "contentHash": "e3570dc7ac5878f0",
+      "isError": true
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "messageId": "u-user-5",
+      "toolUseId": "tu_bash_4",
+      "callIndex": 0,
+      "eventIndex": 3,
+      "ts": "2026-04-20T00:00:08.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 20,
+      "outputBytes": 20,
+      "outputTruncated": false,
+      "contentHash": "e3570dc7ac5878f0",
+      "isError": true
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_retry_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 13,
+          "approxTokens": 4
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "userUuid": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "precedingMessageId": "msg_retry_1",
+      "followingMessageId": "msg_retry_2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_bash_1",
+          "byteLen": 20,
+          "approxTokens": 5,
+          "isError": true
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "userUuid": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "precedingMessageId": "msg_retry_2",
+      "followingMessageId": "msg_retry_3",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_bash_2",
+          "byteLen": 20,
+          "approxTokens": 5,
+          "isError": true
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "userUuid": "u-user-4",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "precedingMessageId": "msg_retry_3",
+      "followingMessageId": "msg_retry_4",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_bash_3",
+          "byteLen": 20,
+          "approxTokens": 5,
+          "isError": true
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "retry-session",
+      "userUuid": "u-user-5",
+      "ts": "2026-04-20T00:00:08.000Z",
+      "precedingMessageId": "msg_retry_4",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_bash_4",
+          "byteLen": 20,
+          "approxTokens": 5,
+          "isError": true
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}

@@ -1,0 +1,100 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "00000000-0000-0000-0000-000000000fff",
+      "messageId": "msg_fork_a_1",
+      "turnIndex": 0,
+      "ts": "2026-04-23T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 3,
+        "output": 2,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "00000000-0000-0000-0000-000000000fff",
+      "messageId": "u-fork-a-1",
+      "ts": "2026-04-23T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "branch A continues"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "00000000-0000-0000-0000-000000000fff",
+      "messageId": "msg_fork_a_1",
+      "ts": "2026-04-23T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "branch A reply"
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "00000000-0000-0000-0000-000000000fff",
+      "relationshipType": "root",
+      "ts": "2026-04-23T00:00:00.000Z",
+      "sourceVersion": "2.1.97"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "00000000-0000-0000-0000-000000000fff",
+      "userUuid": "u-fork-a-1",
+      "ts": "2026-04-23T00:00:00.000Z",
+      "followingMessageId": "msg_fork_a_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 18,
+          "approxTokens": 5
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "00000000-0000-0000-0000-000000000fff",
+      "msg_fork_a_1",
+      "req_fa"
+    ]
+  ]
+}

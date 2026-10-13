@@ -1,0 +1,382 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "msg_f_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 5,
+        "output": 3,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 100,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_bash",
+          "name": "Bash",
+          "target": "ls /no/such/dir",
+          "argsHash": "0a9579522502ec83",
+          "isError": true
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "msg_f_2",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:03.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 5,
+        "output": 3,
+        "reasoning": 0,
+        "cacheRead": 100,
+        "cacheCreate5m": 50,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_read",
+          "name": "Read",
+          "target": "/tmp/no/such/file.txt",
+          "argsHash": "67e85609c8741d46",
+          "isError": true
+        }
+      ],
+      "filesTouched": [
+        "/tmp/no/such/file.txt"
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "msg_f_3",
+      "turnIndex": 2,
+      "ts": "2026-04-20T00:00:05.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 5,
+        "output": 3,
+        "reasoning": 0,
+        "cacheRead": 150,
+        "cacheCreate5m": 50,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "tu_grep",
+          "name": "Grep",
+          "target": "broken[",
+          "argsHash": "9333ba1a743540e7",
+          "isError": true
+        }
+      ],
+      "stopReason": "tool-use",
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "look around"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "msg_f_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_bash",
+        "name": "Bash",
+        "input": {
+          "command": "ls /no/such/dir"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_bash",
+        "content": "No such file",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "msg_f_2",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_read",
+        "name": "Read",
+        "input": {
+          "file_path": "/tmp/no/such/file.txt"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_read",
+        "content": "file not found",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "msg_f_3",
+      "ts": "2026-04-20T00:00:05.000Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "tu_grep",
+        "name": "Grep",
+        "input": {
+          "path": "/tmp",
+          "pattern": "broken["
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "u-user-4",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "tu_grep",
+        "content": "regex parse error",
+        "isError": true
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "u-user-2",
+      "toolUseId": "tu_bash",
+      "callIndex": 0,
+      "eventIndex": 0,
+      "ts": "2026-04-20T00:00:02.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 12,
+      "outputBytes": 12,
+      "outputTruncated": false,
+      "contentHash": "25b402ba8cf15254",
+      "isError": true
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "u-user-3",
+      "toolUseId": "tu_read",
+      "callIndex": 0,
+      "eventIndex": 1,
+      "ts": "2026-04-20T00:00:04.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 14,
+      "outputBytes": 14,
+      "outputTruncated": false,
+      "contentHash": "affcf4c8d293c17f",
+      "isError": true
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "messageId": "u-user-4",
+      "toolUseId": "tu_grep",
+      "callIndex": 0,
+      "eventIndex": 2,
+      "ts": "2026-04-20T00:00:06.000Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 17,
+      "outputBytes": 17,
+      "outputTruncated": false,
+      "contentHash": "267f4129ad1d32b9",
+      "isError": true
+    }
+  ],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_f_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 11,
+          "approxTokens": 3
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "userUuid": "u-user-2",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "precedingMessageId": "msg_f_1",
+      "followingMessageId": "msg_f_2",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_bash",
+          "byteLen": 12,
+          "approxTokens": 3,
+          "isError": true
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "userUuid": "u-user-3",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "precedingMessageId": "msg_f_2",
+      "followingMessageId": "msg_f_3",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_read",
+          "byteLen": 14,
+          "approxTokens": 4,
+          "isError": true
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "fail-session",
+      "userUuid": "u-user-4",
+      "ts": "2026-04-20T00:00:06.000Z",
+      "precedingMessageId": "msg_f_3",
+      "blocks": [
+        {
+          "kind": "tool_result",
+          "toolUseId": "tu_grep",
+          "byteLen": 17,
+          "approxTokens": 5,
+          "isError": true
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}
