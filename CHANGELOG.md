@@ -4,6 +4,9 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- **BREAKING (`relayburn-sdk`):** `ContextDeltaOpts::since` is now a relative-range or ISO-timestamp string instead of `Duration`; context-delta queries also accept `project` and apply the cutoff to returned deltas in both all-session and session-specific modes.
+- `burn overhead deltas` now honors `--project`, accepts relative or ISO `--since` values with explicit errors for invalid input, and rejects the unsupported `--kind` flag.
+- `--since` parsing now rejects overflowing relative ranges with an error instead of panicking.
 - `relayburn-sdk` now exposes SDK-owned summary report/time-series envelopes with schema/version, capability, and normalized window metadata for app and presenter consumers.
 - Summary reports accept an inclusive `until` bound; a bound without sub-second digits covers its whole final second. Bucketed summaries and comparisons reject a zero bucket width.
 - `burn hotspots --findings` ghost-surface results now account for user-text slash-command invocations, so active Claude/Codex commands and prompts are no longer flagged as unused when they do not appear as tool calls.

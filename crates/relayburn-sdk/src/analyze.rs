@@ -54,7 +54,7 @@ pub(crate) use cache_expiry::{
 };
 pub use compare::DEFAULT_MIN_SAMPLE;
 pub(crate) use compare::{build_compare_table, CompareOptions, CompareTable};
-pub(crate) use context_delta::deltas_for_session;
+pub(crate) use context_delta::deltas_for_session_since;
 pub use context_delta::{
     ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail, ReminderSource,
 };
