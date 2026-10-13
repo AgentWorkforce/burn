@@ -1,0 +1,100 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "99999999-9999-9999-9999-999999999999",
+      "messageId": "msg_resume_1",
+      "turnIndex": 0,
+      "ts": "2026-04-21T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 5,
+        "output": 3,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "99999999-9999-9999-9999-999999999999",
+      "messageId": "u-resume-1",
+      "ts": "2026-04-21T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "/resume 11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "99999999-9999-9999-9999-999999999999",
+      "messageId": "msg_resume_1",
+      "ts": "2026-04-21T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Continuing the prior session."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "99999999-9999-9999-9999-999999999999",
+      "relationshipType": "root",
+      "ts": "2026-04-21T00:00:00.000Z",
+      "sourceVersion": "2.1.97"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "99999999-9999-9999-9999-999999999999",
+      "userUuid": "u-resume-1",
+      "ts": "2026-04-21T00:00:00.000Z",
+      "followingMessageId": "msg_resume_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 44,
+          "approxTokens": 11
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [
+    [
+      "99999999-9999-9999-9999-999999999999",
+      "msg_resume_1",
+      "req_r"
+    ]
+  ]
+}

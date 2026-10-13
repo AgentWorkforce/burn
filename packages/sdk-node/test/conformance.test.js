@@ -19,8 +19,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { loadNapiSdk } from './helpers/napi.js';
+
+const require = createRequire(import.meta.url);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '../../..');
@@ -62,6 +65,9 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'Ledger',
     'ingest',
     'summary',
+    'summaryReport',
+    'summaryTimeseries',
+    'capabilities',
     'ledgerFreshness',
     'sessionCost',
     'measureSession',
@@ -357,6 +363,39 @@ test('2.x extension verbs return stable shapes against the fixture ledger', asyn
 
     const stampRows = await sdk.exportStamps({ ledgerHome });
     assert.ok(Array.isArray(stampRows));
+
+    const capabilities = sdk.capabilities();
+    assert.equal(capabilities.packageName, 'relayburn-sdk');
+    assert.ok(capabilities.features.includes('summaryReportEnvelope'));
+
+    const summaryReport = await sdk.summaryReport({
+      ledgerHome,
+      since: '2026-04-23T00:00:00Z',
+      until: '2026-04-24T00:00:00Z',
+    });
+    assert.equal(summaryReport.schema.name, 'relayburn.report.summary.v1');
+    assert.equal(summaryReport.schema.version, 1);
+    assert.equal(summaryReport.window.since, '2026-04-23T00:00:00.000Z');
+    assert.equal(summaryReport.window.until, '2026-04-24T00:00:00.999Z');
+    assert.ok(summaryReport.report.grouped);
+
+    // The raw binding promotes every u64 counter under `fidelity`, including
+    // the data-keyed `byClass` map, before the facade downcasts safe values.
+    const rawReport = require(join(REPO_ROOT, 'packages', 'sdk-node', 'src', 'binding.cjs'))
+      .summaryReport({ ledgerHome });
+    assert.equal(typeof rawReport.report.grouped.fidelity.total, 'bigint');
+    assert.equal(typeof rawReport.report.grouped.fidelity.byClass.full, 'bigint');
+
+    const summaryTimeseries = await sdk.summaryTimeseries({
+      ledgerHome,
+      since: '2026-04-23T00:00:00Z',
+      until: '2026-04-24T00:00:00Z',
+      bucketSeconds: 3600,
+    });
+    assert.equal(summaryTimeseries.schema.name, 'relayburn.report.summaryTimeseries.v1');
+    assert.equal(summaryTimeseries.window.bucket.seconds, 3600);
+    assert.equal(summaryTimeseries.timeseries.bucketSeconds, 3600);
+    assert.ok(Array.isArray(summaryTimeseries.timeseries.buckets));
 
     const excluded = sdk.computeCompareExcluded(
       {
