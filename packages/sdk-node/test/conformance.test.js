@@ -208,6 +208,19 @@ test('read verbs return stable shapes against the fixture ledger', async (t) => 
     assert.equal(hotspotFindings.kind, 'findings');
     assert.ok(Array.isArray(hotspotFindings.findings));
 
+    // The CommonJS facade accepts the same numeric token floor.
+    const cjs = require(join(REPO_ROOT, 'packages', 'sdk-node', 'src', 'index.cjs'));
+    const cjsFindings = await cjs.hotspots({
+      ledgerHome,
+      groupBy: 'findings',
+      contextOutputMinTokens: 1_000_000,
+    });
+    assert.equal(cjsFindings.kind, 'findings');
+    await assert.rejects(
+      cjs.hotspots({ ledgerHome, contextOutputMinTokens: -1 }),
+      RangeError,
+    );
+
     const compare = await sdk.compare({
       ledgerHome,
       models: ['claude-sonnet-4-5', 'claude-opus-4-7'],
