@@ -1345,7 +1345,7 @@ fn hotspots_ghost_surface_inputs_deghost_claude_command_from_user_text() {
         .unwrap();
 
     let pricing = load_pricing(None);
-    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing);
+    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing).unwrap();
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("claude"));
     inputs.codex_home = Some(root.join("missing-codex"));
@@ -1389,7 +1389,7 @@ fn hotspots_ghost_surface_inputs_deghost_codex_command_from_user_text() {
         .unwrap();
 
     let pricing = load_pricing(None);
-    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing);
+    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing).unwrap();
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("missing-claude"));
     inputs.codex_home = Some(root.join("codex"));
@@ -1437,7 +1437,7 @@ fn timed_content(
 
 fn ghost_user_texts(handle: &LedgerHandle, turns: &[TurnRecord]) -> Vec<String> {
     let pricing = load_pricing(None);
-    let inputs = prompted_ghost_surface_inputs(handle, turns, &pricing);
+    let inputs = prompted_ghost_surface_inputs(handle, turns, &pricing).unwrap();
     inputs
         .user_turn_text_by_session
         .and_then(|by_source| by_source.get(&SourceKind::ClaudeCode).cloned())
@@ -1536,11 +1536,51 @@ fn hotspots_ghost_surface_user_text_follows_selected_turns() {
 }
 
 #[test]
+fn hotspots_ghost_surface_user_text_matches_turns_as_instants() {
+    let (_dir, mut handle) = fixture_handle();
+    // The turn's timestamp carries milliseconds; the prompt's does not. As
+    // strings `…:10.000Z` sorts before `…:10Z`, which would hand the prompt
+    // to the next turn.
+    let selected = timed_ghost_turn("ghost-window", "turn-a", "2026-04-23T00:00:10.000Z");
+    let later = timed_ghost_turn("ghost-window", "turn-b", "2026-04-23T00:00:20.000Z");
+    handle
+        .raw_mut()
+        .append_turns(&[selected.clone(), later])
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_content(&[timed_content(
+            "ghost-window",
+            "u1",
+            "2026-04-23T00:00:10Z",
+            ContentRole::User,
+            "/openspec-apply",
+        )])
+        .unwrap();
+
+    assert_eq!(
+        ghost_user_texts(&handle, std::slice::from_ref(&selected)),
+        vec!["/openspec-apply".to_string()],
+    );
+}
+
+#[test]
+fn hotspots_ghost_surface_inputs_propagate_content_read_errors() {
+    let (dir, handle) = fixture_handle();
+    let turn = ghost_surface_turn(SourceKind::Codex, "ghost-broken", "ghost-broken-turn");
+    let content_db = rusqlite::Connection::open(dir.path().join("content.sqlite")).unwrap();
+    content_db.execute_batch("DROP TABLE content;").unwrap();
+    let pricing = load_pricing(None);
+
+    assert!(prompted_ghost_surface_inputs(&handle, &[turn], &pricing).is_err());
+}
+
+#[test]
 fn hotspots_ghost_surface_inputs_fall_back_when_content_missing() {
     let (_dir, handle) = fixture_handle();
     let turn = ghost_surface_turn(SourceKind::Codex, "ghost-empty", "ghost-empty-turn");
     let pricing = load_pricing(None);
-    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing);
+    let mut inputs = prompted_ghost_surface_inputs(&handle, &[turn], &pricing).unwrap();
     let root = ghost_surface_fixture_root();
     inputs.claude_home = Some(root.join("missing-claude"));
     inputs.codex_home = Some(root.join("codex"));
