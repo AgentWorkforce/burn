@@ -1,0 +1,176 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "messageId": "msg_c_1",
+      "turnIndex": 0,
+      "ts": "2026-04-20T00:00:01.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 10,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 9000,
+        "cacheCreate5m": 200,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "messageId": "msg_c_2",
+      "turnIndex": 1,
+      "ts": "2026-04-20T00:00:04.000Z",
+      "model": "claude-sonnet-4-6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 20,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 300,
+        "cacheCreate5m": 100,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "stopReason": "end-turn",
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "messageId": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "hello"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "messageId": "msg_c_1",
+      "ts": "2026-04-20T00:00:01.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "hi"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "messageId": "u-user-2",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "role": "user",
+      "kind": "text",
+      "text": "continue"
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "messageId": "msg_c_2",
+      "ts": "2026-04-20T00:00:04.000Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "ok"
+    }
+  ],
+  "compactions": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "ts": "2026-04-20T00:00:02.000Z",
+      "precedingMessageId": "msg_c_1",
+      "tokensBeforeCompact": 9000
+    }
+  ],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "relationshipType": "root",
+      "ts": "2026-04-20T00:00:00.000Z"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "userUuid": "u-user-1",
+      "ts": "2026-04-20T00:00:00.000Z",
+      "followingMessageId": "msg_c_1",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 5,
+          "approxTokens": 2
+        }
+      ]
+    },
+    {
+      "v": 1,
+      "source": "claude-code",
+      "sessionId": "compact-session",
+      "userUuid": "u-user-2",
+      "ts": "2026-04-20T00:00:03.000Z",
+      "precedingMessageId": "msg_c_1",
+      "followingMessageId": "msg_c_2",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 8,
+          "approxTokens": 2
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": []
+}
