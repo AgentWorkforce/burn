@@ -218,8 +218,10 @@
           {
             "kind": "claude-md",
             "path": "tests/fixtures/cli-golden/project/CLAUDE.md",
+            "scope": "project",
             "appliesTo": [
-              "claude-code"
+              "claude-code",
+              "opencode"
             ],
             "totalLines": 23,
             "bytes": 908,
@@ -265,8 +267,10 @@
           {
             "path": "tests/fixtures/cli-golden/project/CLAUDE.md",
             "kind": "claude-md",
+            "scope": "project",
             "appliesTo": [
-              "claude-code"
+              "claude-code",
+              "opencode"
             ],
             "attribution": {
               "totalTokens": 227,
@@ -353,8 +357,10 @@
           {
             "file": "CLAUDE.md",
             "kind": "claude-md",
+            "scope": "project",
             "appliesTo": [
-              "claude-code"
+              "claude-code",
+              "opencode"
             ],
             "section": {
               "heading": "## Conventions",
@@ -372,8 +378,10 @@
           {
             "file": "CLAUDE.md",
             "kind": "claude-md",
+            "scope": "project",
             "appliesTo": [
-              "claude-code"
+              "claude-code",
+              "opencode"
             ],
             "section": {
               "heading": "## Frequently asked",
@@ -391,8 +399,10 @@
           {
             "file": "CLAUDE.md",
             "kind": "claude-md",
+            "scope": "project",
             "appliesTo": [
-              "claude-code"
+              "claude-code",
+              "opencode"
             ],
             "section": {
               "heading": "## Long-tail trivia",

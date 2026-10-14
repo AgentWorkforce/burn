@@ -2,12 +2,16 @@
 //! tree, inference flow, and context growth.
 
 use std::collections::BTreeSet;
+use std::path::Path;
+
+use ai_hist::ProviderRoots;
 
 use super::document::{ContextReport, FlowSummary, OverheadReport, Section};
 use super::Inputs;
 use crate::analyze::{
-    deltas_for_session_since, flow_graph_from_trees, ContextDeltaOpts, FlowEdgeKind, FlowNodeKind,
-    FlowOpts, SubagentTreeNode, TurnSpanTree,
+    deltas_for_session_since, find_overhead_files, find_overhead_files_in_install,
+    flow_graph_from_trees, ContextDeltaOpts, FlowEdgeKind, FlowNodeKind, FlowOpts,
+    OverheadFileScope, ParsedOverheadFile, SubagentTreeNode, TurnSpanTree,
 };
 use crate::query_verbs::{
     build_session_span_trees, hotspots_attribution, load_overhead_files, overhead_report,
@@ -51,21 +55,38 @@ pub(super) fn hotspots(inputs: &Inputs<'_>) -> Section<HotspotsAttributionResult
     }
 }
 
+/// The instruction files a session in `dir` started with: its install's
+/// user-level files plus the ancestor and project chains. A session read
+/// outside a harness install has no known user-level files, so only the
+/// ancestor and project chains count.
+fn instruction_files(dir: &Path, roots: Option<&ProviderRoots>) -> Vec<ParsedOverheadFile> {
+    let found = match roots {
+        Some(roots) => find_overhead_files_in_install(
+            dir,
+            &roots.claude,
+            &roots.codex,
+            &roots.home.join(".config").join("opencode"),
+        ),
+        None => find_overhead_files(dir)
+            .into_iter()
+            .filter(|f| f.scope != OverheadFileScope::User)
+            .collect(),
+    };
+    load_overhead_files(found, None)
+}
+
 pub(super) fn overhead(inputs: &Inputs<'_>) -> Section<OverheadReport> {
     let dir = match inputs.project_dir() {
         Ok(dir) => dir,
         Err(reason) => return Section::unavailable(reason),
     };
-    let files = match load_overhead_files(dir, None) {
-        Ok(files) if files.is_empty() => {
-            return Section::unavailable(format!(
-                "no project instruction files (CLAUDE.md, AGENTS.md, …) under {}",
-                dir.display()
-            ))
-        }
-        Ok(files) => files,
-        Err(error) => return Section::unavailable(format!("read instruction files: {error:#}")),
-    };
+    let files = instruction_files(dir, inputs.roots);
+    if files.is_empty() {
+        return Section::unavailable(format!(
+            "no active instruction files (CLAUDE.md, AGENTS.md, …) for {}",
+            dir.display()
+        ));
+    }
     let turns = &inputs.records.turns;
     let trim = overhead_trim_report(
         dir,

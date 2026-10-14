@@ -99,7 +99,7 @@ pub use crate::ledger::{
     EnrichedTurn, Enrichment, Ledger as RawLedger, LedgerError, LedgerFingerprintScope,
     MessageRange, PruneStats, Query, RebuildSummary, ResetSummary, Retention, SearchHit,
     SearchOptions, StalenessConfig, Stamp, StampError, StampSelector, DEFAULT_RETENTION_DAYS,
-    DEFAULT_STALE_AFTER_HOURS,
+    DEFAULT_SEARCH_LIMIT, DEFAULT_STALE_AFTER_HOURS,
 };
 
 pub use crate::analyze::{
@@ -118,10 +118,10 @@ pub use crate::analyze::{
     cost_for_turn, describe_applies_to, summarize_fidelity, AttributionMethod, BashAggregation,
     BashVerbAggregation, CostBreakdown, CoverageField, FidelitySummary, FieldCoverage,
     FileAggregation, FindingPricingStatus, MarkdownSection, McpServerAggregation, ModelCost,
-    ModelCostTier, OneShotMetrics, OutcomeLabel, OverheadFileKind, QualityResult, ReasoningMode,
-    ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost, SessionOutcome,
-    SubagentAggregation, SubagentTreeNode, SubagentTypeStats, UsageCostAggregateRow, WasteFinding,
-    WasteSeverity, DEFAULT_MIN_SAMPLE,
+    ModelCostTier, OneShotMetrics, OutcomeLabel, OverheadFileKind, OverheadFileScope,
+    QualityResult, ReasoningMode, ReplacementSavingsSummary, RowCoverage, SessionClaudeMdCost,
+    SessionOutcome, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
+    UsageCostAggregateRow, WasteFinding, WasteSeverity, DEFAULT_MIN_SAMPLE,
 };
 
 // Span tree primitives (issue #430). Re-exported at the SDK root so

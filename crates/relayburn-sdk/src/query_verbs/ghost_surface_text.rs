@@ -39,7 +39,7 @@ pub(crate) fn session_prompt_text(
             .collect();
         let records = content
             .iter()
-            .filter(|record| record.session_id == session_id)
+            .filter(|record| record.source == source && record.session_id == session_id)
             .cloned()
             .collect();
         let texts = prompts_for_selected_turns(&session_turns, &selected, records);

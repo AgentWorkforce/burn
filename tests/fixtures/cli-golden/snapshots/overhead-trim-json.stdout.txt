@@ -5,8 +5,10 @@
     {
       "file": "CLAUDE.md",
       "kind": "claude-md",
+      "scope": "project",
       "appliesTo": [
-        "claude-code"
+        "claude-code",
+        "opencode"
       ],
       "section": {
         "heading": "## Conventions",
@@ -25,8 +27,10 @@
     {
       "file": "CLAUDE.md",
       "kind": "claude-md",
+      "scope": "project",
       "appliesTo": [
-        "claude-code"
+        "claude-code",
+        "opencode"
       ],
       "section": {
         "heading": "## Frequently asked",
@@ -45,8 +49,10 @@
     {
       "file": "CLAUDE.md",
       "kind": "claude-md",
+      "scope": "project",
       "appliesTo": [
-        "claude-code"
+        "claude-code",
+        "opencode"
       ],
       "section": {
         "heading": "## Long-tail trivia",

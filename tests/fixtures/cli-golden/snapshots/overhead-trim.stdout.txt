@@ -1,7 +1,7 @@
 # burn overhead trim — projected savings if trimmed
 # (recommendations only; burn never modifies your overhead files)
 
-# === CLAUDE.md (applies to: claude-code) ===
+# === CLAUDE.md (applies to: claude-code, opencode) ===
 
 # TRIM: ## Conventions
 # projected savings per session: $0.0000

@@ -10,6 +10,8 @@ All notable changes to `relayburn`.
 - `burn analyze` reports spend per reasoning effort and flags high effort on routine work and mid-session effort changes; `burn summary` adds a reasoning-effort table when turns recorded one.
 - `burn mcp-server` serves `burn__analyzeSession`.
 - `burn hotspots` edit-heavy findings count Bash file reads (`cat`, `sed -n`, …); on unpriced models attribution still reports tokens and finding text reads "unknown" rather than `$0.0000`.
+- `burn overhead` discovers active user, ancestor, and project instruction chains and labels each file with its scope.
+
 ## [4.1.0] - 2026-09-20
 
 - `burn measure --harness <name> --input <path> --json` emits Cloud-ready per-model token and cost metrics for one explicit session without discovery or ledger state.

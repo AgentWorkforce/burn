@@ -1224,11 +1224,19 @@ fn overhead_returns_empty_when_no_files_present() {
     let r = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadOptions::default()
         })
         .unwrap();
-    assert!(r.files.is_empty());
-    assert!(r.per_file.is_empty());
+    let project_root = std::fs::canonicalize(project.path()).unwrap();
+    assert!(!r
+        .files
+        .iter()
+        .any(|file| Path::new(&file.path).starts_with(&project_root)));
+    assert!(!r
+        .per_file
+        .iter()
+        .any(|file| Path::new(&file.path).starts_with(&project_root)));
     assert_eq!(r.grand_total, 0.0);
 }
 
@@ -1241,12 +1249,21 @@ fn overhead_attributes_when_claude_md_present() {
     let r = handle
         .overhead(OverheadOptions {
             project: Some(project.path().to_path_buf()),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadOptions::default()
         })
         .unwrap();
-    assert_eq!(r.files.len(), 1);
-    assert_eq!(r.per_file.len(), 1);
-    assert_eq!(r.files[0].kind, OverheadFileKind::ClaudeMd);
+    let fixture_path = std::fs::canonicalize(project.path().join("CLAUDE.md"))
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let file = r
+        .files
+        .iter()
+        .find(|file| file.path == fixture_path)
+        .unwrap();
+    assert_eq!(file.kind, OverheadFileKind::ClaudeMd);
+    assert!(r.per_file.iter().any(|file| file.path == fixture_path));
 }
 
 #[test]
@@ -1262,7 +1279,8 @@ fn overhead_trim_emits_summary_when_claude_md_present() {
     let r = handle
         .overhead_trim(OverheadTrimOptions {
             project: Some(project.path().to_path_buf()),
-            top: Some(1),
+            top: Some(100),
+            harness_home: Some(project.path().join("empty-home")),
             ..OverheadTrimOptions::default()
         })
         .unwrap();
@@ -1270,12 +1288,19 @@ fn overhead_trim_emits_summary_when_claude_md_present() {
     // CLAUDE.md's token count — so attribution sees no rides and total
     // cost is 0. `build_trim_recommendations` still emits a top-N row
     // per non-preamble section, with projected savings = 0; that's the
-    // contract. With `top=1` and two H2 sections in the file, we get
-    // a single recommendation.
-    assert_eq!(r.summary.files_analyzed, 1);
-    assert_eq!(r.recommendations.len(), 1);
-    assert_eq!(r.recommendations[0].projected_savings.per_session_usd, 0.0);
-    assert!(r.recommendations[0].diff.is_some());
+    // contract. Both fixture sections remain discoverable even if the host
+    // filesystem contributes unrelated ancestor instructions.
+    let fixture_recommendations: Vec<_> = r
+        .recommendations
+        .iter()
+        .filter(|recommendation| recommendation.file == "CLAUDE.md")
+        .collect();
+    assert_eq!(fixture_recommendations.len(), 2);
+    assert_eq!(
+        fixture_recommendations[0].projected_savings.per_session_usd,
+        0.0
+    );
+    assert!(fixture_recommendations[0].diff.is_some());
     assert_eq!(r.since, "all time");
 }
 
@@ -1658,6 +1683,83 @@ fn hotspots_ghost_surface_user_text_follows_selected_turns() {
         ghost_user_texts(&handle, std::slice::from_ref(&selected)),
         vec!["/openspec-apply".to_string(), "tie prompt".to_string()],
     );
+}
+
+#[test]
+fn session_prompt_text_keys_each_sessions_prompts_by_source() {
+    let turns = [
+        timed_ghost_turn("ghost-window", "turn-a", "2026-04-23T00:00:10.000Z"),
+        timed_ghost_turn("ghost-window", "turn-b", "2026-04-23T00:00:20.000Z"),
+        timed_ghost_turn("ghost-other", "turn-c", "2026-04-23T00:00:10.000Z"),
+    ];
+    let mut foreign_source = timed_content(
+        "ghost-window",
+        "codex-u1",
+        "2026-04-23T00:00:04.000Z",
+        ContentRole::User,
+        "/codex-only",
+    );
+    foreign_source.source = SourceKind::Codex;
+    let content = [
+        timed_content(
+            "ghost-window",
+            "u1",
+            "2026-04-23T00:00:01.000Z",
+            ContentRole::User,
+            "/openspec-apply",
+        ),
+        timed_content(
+            "ghost-window",
+            "u2",
+            "2026-04-23T00:00:15.000Z",
+            ContentRole::User,
+            "/openspec-archive",
+        ),
+        timed_content(
+            "ghost-window",
+            "u3",
+            "2026-04-23T00:00:12.000Z",
+            ContentRole::User,
+            "",
+        ),
+        timed_content(
+            "ghost-window",
+            "a1",
+            "2026-04-23T00:00:13.000Z",
+            ContentRole::Assistant,
+            "/assistant-text",
+        ),
+        // After the session's last turn: it prompted nothing.
+        timed_content(
+            "ghost-window",
+            "u4",
+            "2026-04-23T00:00:30.000Z",
+            ContentRole::User,
+            "/trailing",
+        ),
+        timed_content(
+            "ghost-other",
+            "o1",
+            "2026-04-23T00:00:05.000Z",
+            ContentRole::User,
+            "/other-session",
+        ),
+        foreign_source,
+    ];
+
+    let by_source = crate::query_verbs::session_prompt_text(&turns, &content);
+    assert_eq!(by_source.len(), 1, "{by_source:?}");
+    let claude = &by_source[&SourceKind::ClaudeCode];
+    assert_eq!(claude.len(), 2);
+    assert_eq!(
+        claude["ghost-window"],
+        [
+            "/openspec-apply".to_string(),
+            "/openspec-archive".to_string()
+        ]
+    );
+    assert_eq!(claude["ghost-other"], ["/other-session".to_string()]);
+    assert!(crate::query_verbs::session_prompt_text(&turns[..1], &content[5..]).is_empty());
 }
 
 #[test]

@@ -91,10 +91,11 @@ pub use hotspots::{
     McpServerAggregation, SubagentAggregation,
 };
 pub(crate) use overhead::{
-    attribute_overhead, find_overhead_files, load_overhead_file, AttributeOverheadInput,
+    attribute_overhead, find_overhead_files, find_overhead_files_in_home,
+    find_overhead_files_in_install, load_overhead_file, AttributeOverheadInput, OverheadFile,
     OverheadFileAttribution, ParsedOverheadFile,
 };
-pub use overhead::{describe_applies_to, OverheadFileKind};
+pub use overhead::{describe_applies_to, OverheadFileKind, OverheadFileScope};
 pub(crate) use patterns::detect_patterns;
 pub use patterns::DetectPatternsOptions;
 pub(crate) use pricing::{load_pricing, PricingTable};

@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::WasteSeverity;
+use crate::{OverheadFileScope, WasteSeverity};
 
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -183,6 +183,48 @@ fn overhead_prices_the_project_instruction_files() {
 }
 
 #[test]
+fn overhead_reads_the_installs_user_instruction_file() {
+    let (home, transcript) = claude_home("claude/retry-loop.jsonl");
+    std::fs::write(
+        home.path().join(".claude/CLAUDE.md"),
+        format!("# Global\n\n{}\n", "Answer briefly. ".repeat(6)),
+    )
+    .unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir(project.path().join(".git")).unwrap();
+    std::fs::write(
+        project.path().join("CLAUDE.md"),
+        format!("# Build\n\n{}\n", "Run the full build. ".repeat(6)),
+    )
+    .unwrap();
+    let mut options = AnalyzeSessionOptions::new(SessionLocator::Path {
+        harness: Harness::ClaudeCode,
+        path: transcript,
+    });
+    options.project_dir = Some(project.path().to_path_buf());
+    let analysis = analyze_session(options).unwrap();
+
+    let files = &analysis
+        .overhead
+        .data()
+        .expect("overhead section")
+        .attribution
+        .files;
+    let scopes: Vec<(OverheadFileScope, bool)> = files
+        .iter()
+        .map(|f| (f.scope, f.path.starts_with(&*home.path().to_string_lossy())))
+        .collect();
+    assert!(
+        scopes.contains(&(OverheadFileScope::User, true)),
+        "{scopes:?}"
+    );
+    assert!(
+        scopes.contains(&(OverheadFileScope::Project, false)),
+        "{scopes:?}"
+    );
+}
+
+#[test]
 fn unavailable_sections_say_why() {
     let analysis = by_path(Harness::Codex, fixture("codex/with-tool-call.jsonl"));
     assert_eq!(analysis.session.session_id, "sess_tools_1");
@@ -207,7 +249,7 @@ fn unavailable_sections_say_why() {
         .reason()
         .expect("no instruction files to price");
     assert!(
-        reason.starts_with("no project instruction files"),
+        reason.starts_with("no active instruction files"),
         "{reason}"
     );
 }

@@ -11,6 +11,9 @@ pub struct OverheadOptions {
     pub since: Option<String>,
     pub kind: Option<OverheadFileKind>,
     pub ledger_home: Option<PathBuf>,
+    /// Override the harness configuration home (`~/.claude`, `~/.codex`,
+    /// `~/.config/opencode`). This does not bound Claude's ancestor walk.
+    pub harness_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +43,7 @@ pub struct OverheadAttributionDetail {
 pub struct OverheadFileSummary {
     pub kind: OverheadFileKind,
     pub path: String,
+    pub scope: OverheadFileScope,
     pub applies_to: Vec<SourceKind>,
     pub total_lines: u64,
     pub bytes: u64,
@@ -53,6 +57,7 @@ pub struct OverheadFileSummary {
 pub struct OverheadPerFileEntry {
     pub path: String,
     pub kind: OverheadFileKind,
+    pub scope: OverheadFileScope,
     pub applies_to: Vec<SourceKind>,
     pub attribution: OverheadAttributionDetail,
 }
@@ -62,6 +67,9 @@ pub struct OverheadPerFileEntry {
 pub struct OverheadResult {
     pub project: String,
     pub files: Vec<OverheadFileSummary>,
+    /// Attribution for each discovered file: `per_file[i]` attributes
+    /// `files[i]`. One path can appear twice when harnesses inject different
+    /// prefixes of it (Codex's 32 KiB budget vs OpenCode's full file).
     pub per_file: Vec<OverheadPerFileEntry>,
     pub grand_total: f64,
 }
@@ -75,6 +83,8 @@ pub struct OverheadTrimOptions {
     pub ledger_home: Option<PathBuf>,
     pub top: Option<u64>,
     pub include_diff: Option<bool>,
+    /// See [`OverheadOptions::harness_home`].
+    pub harness_home: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +110,7 @@ pub struct OverheadTrimProjectedSavings {
 pub struct OverheadTrimRecommendation {
     pub file: String,
     pub kind: OverheadFileKind,
+    pub scope: OverheadFileScope,
     pub applies_to: Vec<SourceKind>,
     pub section: OverheadTrimSection,
     pub projected_savings: OverheadTrimProjectedSavings,
@@ -133,16 +144,18 @@ pub(crate) struct TrimShape<'a> {
     pub since_label: &'a str,
 }
 
-/// Every instruction file of `kind` (all kinds when `None`) under
-/// `project_path`, parsed into sections.
+/// The instruction files of `kind` (all kinds when `None`) among `found`,
+/// parsed into sections. A file that disappears or becomes unreadable
+/// between discovery and loading is skipped, so one raced file never
+/// suppresses the rest of the report.
 pub(crate) fn load_overhead_files(
-    project_path: &Path,
+    found: Vec<OverheadFile>,
     kind: Option<OverheadFileKind>,
-) -> Result<Vec<ParsedOverheadFile>> {
-    find_overhead_files(project_path)
+) -> Vec<ParsedOverheadFile> {
+    found
         .into_iter()
         .filter(|f| kind.is_none_or(|want| f.kind == want))
-        .map(|f| Ok(load_overhead_file(f)?))
+        .filter_map(|f| load_overhead_file(f).ok())
         .collect()
 }
 
@@ -158,12 +171,17 @@ fn gather_overhead(
     project: Option<&Path>,
     since: Option<&str>,
     kind: Option<OverheadFileKind>,
+    harness_home: Option<&Path>,
 ) -> Result<GatheredOverhead> {
     let project_path: PathBuf = match project {
         Some(p) => fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()),
         None => std::env::current_dir()?,
     };
-    let files = load_overhead_files(&project_path, kind)?;
+    let found = match harness_home {
+        Some(home) => find_overhead_files_in_home(&project_path, home),
+        None => find_overhead_files(&project_path),
+    };
+    let files = load_overhead_files(found, kind);
     let turns = if files.is_empty() {
         Vec::new()
     } else {
@@ -216,6 +234,7 @@ fn file_summary(pf: &ParsedOverheadFile) -> OverheadFileSummary {
     OverheadFileSummary {
         kind: pf.file.kind,
         path: pf.file.path.clone(),
+        scope: pf.file.scope,
         applies_to: pf.file.applies_to.clone(),
         total_lines: pf.parsed.total_lines,
         bytes: pf.parsed.bytes,
@@ -229,6 +248,7 @@ fn per_file_entry(p: &crate::analyze::OverheadFileAttribution) -> OverheadPerFil
     OverheadPerFileEntry {
         path: p.file.path.clone(),
         kind: p.file.kind,
+        scope: p.file.scope,
         applies_to: p.file.applies_to.clone(),
         attribution: OverheadAttributionDetail {
             total_tokens: p.attribution.total_tokens,
@@ -288,6 +308,7 @@ pub(crate) fn overhead_trim_report(
             recommendations.push(OverheadTrimRecommendation {
                 file: to_project_relative(&fa.file.path, project_path),
                 kind: fa.file.kind,
+                scope: fa.file.scope,
                 applies_to: fa.file.applies_to.clone(),
                 section: OverheadTrimSection {
                     heading: rec.section.heading.clone(),
@@ -332,6 +353,7 @@ impl LedgerHandle {
             opts.project.as_deref(),
             opts.since.as_deref(),
             opts.kind,
+            opts.harness_home.as_deref(),
         )?;
         Ok(overhead_report(
             &data.project_path,
@@ -348,6 +370,7 @@ impl LedgerHandle {
             opts.project.as_deref(),
             opts.since.as_deref(),
             opts.kind,
+            opts.harness_home.as_deref(),
         )?;
         overhead_trim_report(
             &data.project_path,
