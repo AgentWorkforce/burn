@@ -310,10 +310,15 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { measureSession, analyzeSession, BurnErrorCode, ledgerFreshness, PendingStampHarness, writePendingStamp, writeStamp, summary, sessionCost, fingerprint, turnSpanTree, sessionSpanTrees, flowGraph, contextDelta, OverheadFileKind, overhead, overheadTrim, HotspotsGroupBy, hotspots, compare, search, exportLedger, exportStamps, ingest, ledgerOpen } = nativeBinding
+const { HotspotsGroupBy, hotspots, measureSession, analyzeSession, capabilities, summaryReport, summaryTimeseries, BurnErrorCode, ledgerFreshness, PendingStampHarness, writePendingStamp, writeStamp, summary, sessionCost, fingerprint, turnSpanTree, sessionSpanTrees, flowGraph, contextDelta, OverheadFileKind, overhead, overheadTrim, compare, search, exportLedger, exportStamps, ingest, ledgerOpen } = nativeBinding
 
+module.exports.HotspotsGroupBy = HotspotsGroupBy
+module.exports.hotspots = hotspots
 module.exports.measureSession = measureSession
 module.exports.analyzeSession = analyzeSession
+module.exports.capabilities = capabilities
+module.exports.summaryReport = summaryReport
+module.exports.summaryTimeseries = summaryTimeseries
 module.exports.BurnErrorCode = BurnErrorCode
 module.exports.ledgerFreshness = ledgerFreshness
 module.exports.PendingStampHarness = PendingStampHarness
@@ -329,8 +334,6 @@ module.exports.contextDelta = contextDelta
 module.exports.OverheadFileKind = OverheadFileKind
 module.exports.overhead = overhead
 module.exports.overheadTrim = overheadTrim
-module.exports.HotspotsGroupBy = HotspotsGroupBy
-module.exports.hotspots = hotspots
 module.exports.compare = compare
 module.exports.search = search
 module.exports.exportLedger = exportLedger
