@@ -1,10 +1,10 @@
 //! Per-file overhead attribution (`CLAUDE.md` for Claude Code, `AGENTS.md`
 //! for Codex/OpenCode). Rust port of `packages/analyze/src/overhead.ts`.
 //!
-//! Composes the `claude_md` parser/attributor over a small set of
-//! source-filtered file inputs: each file declares which `SourceKind`s read
-//! it into their cached prompt prefix, and only matching turns contribute to
-//! that file's cost. The math is `f64` and matches the TS reduce order so the
+//! Composes the `claude_md` parser/attributor over harness-accurate startup
+//! instruction chains: each file declares which `SourceKind`s read it into
+//! their cached prompt prefix, and only matching turns contribute to that
+//! file's cost. The math is `f64` and matches the TS reduce order so the
 //! per-file / per-section USD totals stay within the 1e-9 USD precision
 //! contract called out in AgentWorkforce/burn#244 and #276.
 
@@ -26,13 +26,36 @@ pub enum OverheadFileKind {
     AgentsMd,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OverheadFileScope {
+    User,
+    Ancestor,
+    Project,
+}
+
+impl OverheadFileScope {
+    pub fn wire_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Ancestor => "ancestor",
+            Self::Project => "project",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OverheadFile {
     pub kind: OverheadFileKind,
     pub path: String,
+    pub scope: OverheadFileScope,
     /// Which agent sources read this file into their cached context. A turn's
     /// `source` must be in this list for the file to count toward that turn.
     pub applies_to: Vec<SourceKind>,
+    /// Number of leading bytes the harness injects. This is normally the
+    /// complete file, but Codex caps the combined project instruction chain
+    /// at 32 KiB and can therefore inject only a prefix of the final file.
+    content_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,53 +88,24 @@ pub(crate) struct AttributeOverheadInput<'a> {
     pub pricing: &'a PricingTable,
 }
 
-struct Candidate {
-    kind: OverheadFileKind,
-    parts: &'static [&'static str],
-    applies_to: &'static [SourceKind],
-}
+mod discovery;
 
-const CANDIDATES: &[Candidate] = &[
-    Candidate {
-        kind: OverheadFileKind::ClaudeMd,
-        parts: &["CLAUDE.md"],
-        applies_to: &[SourceKind::ClaudeCode],
-    },
-    Candidate {
-        kind: OverheadFileKind::ClaudeMd,
-        parts: &[".claude", "CLAUDE.md"],
-        applies_to: &[SourceKind::ClaudeCode],
-    },
-    Candidate {
-        kind: OverheadFileKind::AgentsMd,
-        parts: &["AGENTS.md"],
-        applies_to: &[SourceKind::Codex, SourceKind::Opencode],
-    },
-];
-
-pub(crate) fn find_overhead_files(project_path: &Path) -> Vec<OverheadFile> {
-    let mut out = Vec::new();
-    for c in CANDIDATES {
-        let mut abs = project_path.to_path_buf();
-        for p in c.parts {
-            abs = abs.join(p);
-        }
-        match fs::metadata(&abs) {
-            Ok(meta) if meta.is_file() => {
-                out.push(OverheadFile {
-                    kind: c.kind,
-                    path: abs.to_string_lossy().into_owned(),
-                    applies_to: c.applies_to.to_vec(),
-                });
-            }
-            _ => {}
-        }
-    }
-    out
-}
+pub(crate) use discovery::{find_overhead_files, find_overhead_files_in_home};
+#[cfg(test)]
+use discovery::{
+    find_overhead_files_with_roots, DiscoveryRoots, DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES,
+};
 
 pub(crate) fn load_overhead_file(file: OverheadFile) -> std::io::Result<ParsedOverheadFile> {
-    let parsed = load_claude_md_file(Path::new(&file.path))?;
+    let path = Path::new(&file.path);
+    if fs::metadata(path)?.len() as usize <= file.content_bytes {
+        let parsed = load_claude_md_file(path)?;
+        return Ok(ParsedOverheadFile { file, parsed });
+    }
+    let mut bytes = fs::read(path)?;
+    bytes.truncate(file.content_bytes);
+    let text = String::from_utf8_lossy(&bytes);
+    let parsed = crate::analyze::claude_md::parse_claude_md(&file.path, &text);
     Ok(ParsedOverheadFile { file, parsed })
 }
 
@@ -224,35 +218,340 @@ mod tests {
         }
     }
 
-    #[test]
-    fn find_overhead_files_discovers_all_three_with_correct_applies_to() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        fs::write(root.join("CLAUDE.md"), "# root").unwrap();
-        fs::create_dir_all(root.join(".claude")).unwrap();
-        fs::write(root.join(".claude").join("CLAUDE.md"), "# nested").unwrap();
-        fs::write(root.join("AGENTS.md"), "# agents").unwrap();
+    fn write_fixture(path: &Path, content: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
 
-        let files = find_overhead_files(root);
-        assert_eq!(files.len(), 3);
-        let agents = files
-            .iter()
-            .find(|f| f.kind == OverheadFileKind::AgentsMd)
-            .unwrap();
+    fn mark_git_root(path: &Path) {
+        fs::create_dir_all(path.join(".git")).unwrap();
+    }
+
+    fn discover_fixture(home: &Path, project: &Path) -> Vec<OverheadFile> {
+        find_overhead_files_with_roots(project, &DiscoveryRoots::for_home(home))
+    }
+
+    #[test]
+    fn discovery_matches_harness_startup_chains_scopes_and_stable_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("workspace").join("repo");
+        let cwd = root.join("packages").join("api");
+        fs::create_dir_all(&cwd).unwrap();
+        mark_git_root(&root);
+
+        write_fixture(&home.join(".claude/CLAUDE.md"), "global claude");
+        write_fixture(&home.join(".codex/AGENTS.md"), "global codex");
+        write_fixture(&home.join(".config/opencode/AGENTS.md"), "global opencode");
+        write_fixture(&home.join("CLAUDE.md"), "workspace ancestor");
+        write_fixture(&root.join("CLAUDE.md"), "root claude");
+        write_fixture(&root.join(".claude/CLAUDE.md"), "dot claude");
+        write_fixture(&root.join("CLAUDE.local.md"), "root local");
+        write_fixture(&cwd.join("CLAUDE.md"), "cwd claude");
+        write_fixture(&cwd.join("CLAUDE.local.md"), "cwd local");
+        write_fixture(&root.join("AGENTS.md"), "root agents");
+        write_fixture(&cwd.join("AGENTS.md"), "cwd agents");
+
+        let files = discover_fixture(home, &cwd);
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(
-            agents.applies_to,
+            paths,
+            vec![
+                home.join(".claude/CLAUDE.md").to_str().unwrap(),
+                home.join(".codex/AGENTS.md").to_str().unwrap(),
+                home.join(".config/opencode/AGENTS.md").to_str().unwrap(),
+                home.join("CLAUDE.md").to_str().unwrap(),
+                root.join("CLAUDE.md").to_str().unwrap(),
+                root.join(".claude/CLAUDE.md").to_str().unwrap(),
+                root.join("CLAUDE.local.md").to_str().unwrap(),
+                cwd.join("CLAUDE.md").to_str().unwrap(),
+                cwd.join("CLAUDE.local.md").to_str().unwrap(),
+                root.join("AGENTS.md").to_str().unwrap(),
+                cwd.join("AGENTS.md").to_str().unwrap(),
+            ]
+        );
+
+        assert_eq!(files[0].scope, OverheadFileScope::User);
+        assert_eq!(files[0].applies_to, vec![SourceKind::ClaudeCode]);
+        assert_eq!(files[1].applies_to, vec![SourceKind::Codex]);
+        assert_eq!(files[2].applies_to, vec![SourceKind::Opencode]);
+        assert_eq!(files[3].scope, OverheadFileScope::Ancestor);
+        assert!(files[4..]
+            .iter()
+            .all(|f| f.scope == OverheadFileScope::Project));
+        for file in &files[9..] {
+            assert_eq!(
+                file.applies_to,
+                vec![SourceKind::Codex, SourceKind::Opencode]
+            );
+        }
+    }
+
+    #[test]
+    fn codex_and_opencode_stop_at_git_root_but_claude_walks_above_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("outer/repo");
+        let cwd = root.join("sub");
+        fs::create_dir_all(&cwd).unwrap();
+        mark_git_root(&root);
+        write_fixture(&home.join("outer/AGENTS.md"), "outside agents");
+        write_fixture(&home.join("outer/CLAUDE.md"), "outside claude");
+        write_fixture(&root.join("AGENTS.md"), "inside agents");
+
+        let files = discover_fixture(home, &cwd);
+        let outside_agents = home.join("outer/AGENTS.md").to_string_lossy().into_owned();
+        assert!(!files.iter().any(|f| f.path == outside_agents));
+        let outside_claude = home.join("outer/CLAUDE.md").to_string_lossy().into_owned();
+        let file = files.iter().find(|f| f.path == outside_claude).unwrap();
+        assert_eq!(file.scope, OverheadFileScope::Ancestor);
+        assert_eq!(file.applies_to, vec![SourceKind::ClaudeCode]);
+    }
+
+    #[test]
+    fn no_git_root_limits_codex_and_opencode_to_requested_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let parent = home.join("plain");
+        let cwd = parent.join("child");
+        fs::create_dir_all(&cwd).unwrap();
+        write_fixture(&parent.join("AGENTS.md"), "parent agents");
+        write_fixture(&cwd.join("AGENTS.md"), "cwd agents");
+
+        let files = discover_fixture(home, &cwd);
+        let parent_path = parent.join("AGENTS.md").to_string_lossy().into_owned();
+        assert!(!files.iter().any(|f| f.path == parent_path));
+        let cwd_path = cwd.join("AGENTS.md").to_string_lossy().into_owned();
+        let file = files.iter().find(|f| f.path == cwd_path).unwrap();
+        assert_eq!(
+            file.applies_to,
             vec![SourceKind::Codex, SourceKind::Opencode]
         );
-        let claude_count = files
+    }
+
+    #[test]
+    fn codex_override_and_opencode_filename_class_precedence_stay_distinct() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("repo");
+        fs::create_dir_all(&root).unwrap();
+        mark_git_root(&root);
+        write_fixture(&root.join("AGENTS.override.md"), "codex override");
+        write_fixture(&root.join("AGENTS.md"), "shared agents");
+        write_fixture(&root.join("CLAUDE.md"), "claude fallback");
+
+        let files = discover_fixture(home, &root);
+        let override_path = root
+            .join("AGENTS.override.md")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            files
+                .iter()
+                .find(|f| f.path == override_path)
+                .unwrap()
+                .applies_to,
+            vec![SourceKind::Codex]
+        );
+        let agents_path = root.join("AGENTS.md").to_string_lossy().into_owned();
+        assert_eq!(
+            files
+                .iter()
+                .find(|f| f.path == agents_path)
+                .unwrap()
+                .applies_to,
+            vec![SourceKind::Opencode]
+        );
+        let claude_path = root.join("CLAUDE.md").to_string_lossy().into_owned();
+        assert_eq!(
+            files
+                .iter()
+                .find(|f| f.path == claude_path)
+                .unwrap()
+                .applies_to,
+            vec![SourceKind::ClaudeCode]
+        );
+    }
+
+    #[test]
+    fn empty_opencode_global_blocks_claude_fallback_without_adding_a_row() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("repo");
+        fs::create_dir_all(&root).unwrap();
+        write_fixture(&home.join(".claude/CLAUDE.md"), "claude global");
+        write_fixture(&home.join(".config/opencode/AGENTS.md"), "   \n");
+
+        let files = discover_fixture(home, &root);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].applies_to, vec![SourceKind::ClaudeCode]);
+        assert_eq!(files[0].scope, OverheadFileScope::User);
+    }
+
+    #[test]
+    fn empty_codex_project_override_blocks_same_directory_agents_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("repo");
+        fs::create_dir_all(&root).unwrap();
+        mark_git_root(&root);
+        write_fixture(&root.join("AGENTS.override.md"), "  \n");
+        write_fixture(&root.join("AGENTS.md"), "opencode still loads this");
+
+        let files = discover_fixture(home, &root);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].applies_to, vec![SourceKind::Opencode]);
+    }
+
+    #[test]
+    fn inactive_descendants_are_excluded_but_become_active_when_used_as_cwd() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("repo");
+        let nested = root.join("services/payments");
+        fs::create_dir_all(&nested).unwrap();
+        mark_git_root(&root);
+        write_fixture(&root.join("CLAUDE.md"), "root");
+        write_fixture(&nested.join("CLAUDE.md"), "nested");
+
+        let from_root = discover_fixture(home, &root);
+        let nested_path = nested.join("CLAUDE.md").to_string_lossy().into_owned();
+        assert!(!from_root.iter().any(|f| f.path == nested_path));
+
+        let from_nested = discover_fixture(home, &nested);
+        assert!(from_nested.iter().any(|f| f.path == nested_path));
+    }
+
+    #[test]
+    fn codex_project_chain_obeys_aggregate_32k_byte_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("repo");
+        let cwd = root.join("sub");
+        fs::create_dir_all(&cwd).unwrap();
+        mark_git_root(&root);
+        write_fixture(
+            &root.join("AGENTS.md"),
+            &"a".repeat(DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES - 8),
+        );
+        write_fixture(&cwd.join("AGENTS.md"), "12345678ignored-tail");
+
+        let files = discover_fixture(home, &cwd);
+        let cwd_path = cwd.join("AGENTS.md").to_string_lossy().into_owned();
+        let cwd_files: Vec<_> = files.iter().filter(|f| f.path == cwd_path).collect();
+        assert_eq!(cwd_files.len(), 2);
+
+        let codex = cwd_files
+            .iter()
+            .find(|f| f.applies_to == vec![SourceKind::Codex])
+            .unwrap();
+        assert_eq!(codex.content_bytes, 8);
+        let parsed = load_overhead_file((*codex).clone()).unwrap();
+        assert_eq!(parsed.parsed.bytes, 8);
+
+        let opencode = cwd_files
+            .iter()
+            .find(|f| f.applies_to == vec![SourceKind::Opencode])
+            .unwrap();
+        assert_eq!(opencode.content_bytes, "12345678ignored-tail".len());
+        let parsed = load_overhead_file((*opencode).clone()).unwrap();
+        assert_eq!(parsed.parsed.bytes, "12345678ignored-tail".len() as u64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scope_wire_strings_match_the_json_contract() {
+        assert_eq!(OverheadFileScope::User.wire_str(), "user");
+        assert_eq!(OverheadFileScope::Ancestor.wire_str(), "ancestor");
+        assert_eq!(OverheadFileScope::Project.wire_str(), "project");
+    }
+
+    #[test]
+    fn codex_project_budget_is_the_32_kib_default() {
+        assert_eq!(DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES, 32_768);
+    }
+
+    #[test]
+    fn process_roots_discover_project_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        mark_git_root(&root);
+        write_fixture(&root.join("CLAUDE.md"), "project instructions");
+        let root = fs::canonicalize(&root).unwrap();
+        let files = find_overhead_files(&root);
+        let project = root.join("CLAUDE.md").to_string_lossy().into_owned();
+        assert!(
+            files
+                .iter()
+                .any(|f| f.path == project && f.scope == OverheadFileScope::Project),
+            "{files:?}"
+        );
+    }
+
+    #[test]
+    fn same_harness_aliases_merge_only_within_one_filename_kind() {
+        use std::os::unix::fs::symlink;
+
+        // OpenCode reads one physical file twice: as its user-global
+        // CLAUDE.md fallback and as a project AGENTS.md symlinked to it.
+        // Codex's exhausted budget gives its AGENTS.md row a shorter prefix,
+        // so OpenCode's full-length AGENTS.md read gets its own row instead
+        // of folding into the CLAUDE.md-kind row.
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let shared = home.join(".claude/CLAUDE.md");
+        write_fixture(&shared, "shared physical instructions");
+        let root = home.join("repo");
+        mark_git_root(&root);
+        write_fixture(
+            &root.join("AGENTS.md"),
+            &"a".repeat(DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES - 8),
+        );
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        symlink(&shared, sub.join("AGENTS.md")).unwrap();
+
+        let files = discover_fixture(home, &sub);
+        let sub_agents: Vec<&OverheadFile> = files
+            .iter()
+            .filter(|f| f.kind == OverheadFileKind::AgentsMd && f.path.ends_with("sub/AGENTS.md"))
+            .collect();
+        assert_eq!(sub_agents.len(), 2, "{files:?}");
+        assert_eq!(sub_agents[0].applies_to, vec![SourceKind::Codex]);
+        assert_eq!(sub_agents[1].applies_to, vec![SourceKind::Opencode]);
+        let user = files
+            .iter()
+            .find(|f| f.path == shared.to_string_lossy())
+            .expect("user CLAUDE.md row");
+        assert_eq!(
+            user.applies_to,
+            vec![SourceKind::ClaudeCode, SourceKind::Opencode]
+        );
+    }
+
+    #[test]
+    fn physical_identity_deduplicates_claude_symlink_and_hardlink_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let root = home.join("repo");
+        fs::create_dir_all(root.join(".claude")).unwrap();
+        mark_git_root(&root);
+        write_fixture(&root.join("CLAUDE.md"), "same physical file");
+        symlink("../CLAUDE.md", root.join(".claude/CLAUDE.md")).unwrap();
+        fs::hard_link(root.join("CLAUDE.md"), root.join("CLAUDE.local.md")).unwrap();
+
+        let files = discover_fixture(home, &root);
+        let claude_files: Vec<&OverheadFile> = files
             .iter()
             .filter(|f| f.kind == OverheadFileKind::ClaudeMd)
-            .count();
-        assert_eq!(claude_count, 2);
-        for f in &files {
-            if f.kind == OverheadFileKind::ClaudeMd {
-                assert_eq!(f.applies_to, vec![SourceKind::ClaudeCode]);
-            }
-        }
+            .collect();
+        assert_eq!(claude_files.len(), 1);
+        assert_eq!(
+            claude_files[0].applies_to,
+            vec![SourceKind::ClaudeCode, SourceKind::Opencode]
+        );
     }
 
     #[test]
@@ -268,7 +567,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::ClaudeMd,
                     path: "/p/CLAUDE.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::ClaudeCode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: claude_md.clone(),
             },
@@ -276,7 +577,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::AgentsMd,
                     path: "/p/AGENTS.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::Codex, SourceKind::Opencode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: agents_md.clone(),
             },
@@ -346,7 +649,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::ClaudeMd,
                     path: "/p/CLAUDE.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::ClaudeCode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: small.clone(),
             },
@@ -354,7 +659,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::ClaudeMd,
                     path: "/p/.claude/CLAUDE.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::ClaudeCode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: big.clone(),
             },
@@ -407,7 +714,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::ClaudeMd,
                     path: "/p/CLAUDE.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::ClaudeCode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: claude_md,
             },
@@ -415,7 +724,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::AgentsMd,
                     path: "/p/AGENTS.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::Codex, SourceKind::Opencode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: agents_md,
             },
@@ -438,8 +749,10 @@ mod tests {
     #[test]
     fn load_overhead_file_round_trips_via_find() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("AGENTS.md"), "## Section\nbody").unwrap();
-        let files = find_overhead_files(dir.path());
+        let root = dir.path().join("repo");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("AGENTS.md"), "## Section\nbody").unwrap();
+        let files = discover_fixture(dir.path(), &root);
         assert_eq!(files.len(), 1);
         let f = files.into_iter().next().unwrap();
         let parsed = load_overhead_file(f).unwrap();
@@ -476,7 +789,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::ClaudeMd,
                     path: "/p/CLAUDE.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::ClaudeCode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: claude_md.clone(),
             },
@@ -484,7 +799,9 @@ mod tests {
                 file: OverheadFile {
                     kind: OverheadFileKind::AgentsMd,
                     path: "/p/AGENTS.md".to_string(),
+                    scope: OverheadFileScope::Project,
                     applies_to: vec![SourceKind::Codex, SourceKind::Opencode],
+                    content_bytes: usize::MAX,
                 },
                 parsed: agents_md.clone(),
             },

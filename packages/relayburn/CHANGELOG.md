@@ -4,6 +4,8 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+- `burn overhead` discovers active user, ancestor, and project instruction chains and labels each file with its scope.
+
 ## [4.1.0] - 2026-09-20
 
 - `burn measure --harness <name> --input <path> --json` emits Cloud-ready per-model token and cost metrics for one explicit session without discovery or ledger state.

@@ -117,7 +117,14 @@ fn golden_diff_against_cli_snapshots() {
 
     let snapshots_dir = fixture_dir.join("snapshots");
     let ledger_home = fixture_dir.join("ledger");
-    let project_dir = fixture_dir.join("project");
+    // Overhead discovery walks Claude ancestors to the filesystem root and
+    // the Codex/OpenCode chain to the git root, so the fixture project runs
+    // from a sealed tree outside the repo: its `.git` marker bounds the
+    // project chain and the repo's own CLAUDE.md / AGENTS.md stay out of the
+    // snapshots. The tree mirrors the repo-relative project path so
+    // invocation args and cwd-relative display paths are unchanged.
+    let sealed_root = sealed_project_root(&fixture_dir.join("project"));
+    let project_dir = sealed_root.join(FIXTURE_PROJECT_REL);
 
     // The in-tree fixture is JSONL-only (the sqlite binaries are
     // gitignored). Wipe any prior sqlite so the SDK's bootstrap-on-open
@@ -157,7 +164,7 @@ fn golden_diff_against_cli_snapshots() {
 
         let mut cmd = Command::new(&burn);
         cmd.args(&inv.args)
-            .current_dir(repo_root())
+            .current_dir(&sealed_root)
             .env_clear()
             // Keep PATH so the binary can find shared libraries; everything
             // else gets a sealed value.
@@ -219,6 +226,7 @@ fn golden_diff_against_cli_snapshots() {
     }
 
     let _ = fs::remove_dir_all(&sealed_home);
+    let _ = fs::remove_dir_all(&sealed_root);
 
     if !failures.is_empty() {
         panic!(
@@ -390,6 +398,26 @@ fn indent(text: &str, prefix: &str) -> String {
         .map(|l| format!("{prefix}{l}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Repo-relative path of the fixture project, as the invocations name it.
+const FIXTURE_PROJECT_REL: &str = "tests/fixtures/cli-golden/project";
+
+/// Copy the fixture project into `<os tmp>/.golden-project-*/` +
+/// [`FIXTURE_PROJECT_REL`], with a `.git` directory at the root, and return
+/// the canonical root (the binary canonicalizes `--project`, so placeholders
+/// must match the canonical spelling).
+fn sealed_project_root(fixture_project: &Path) -> PathBuf {
+    let root = fs::canonicalize(tempdir_under(&std::env::temp_dir()))
+        .expect("canonicalize sealed project root");
+    fs::create_dir_all(root.join(".git")).expect("create sealed git marker");
+    let project = root.join(FIXTURE_PROJECT_REL);
+    fs::create_dir_all(&project).expect("create sealed fixture project");
+    for entry in fs::read_dir(fixture_project).expect("read fixture project") {
+        let entry = entry.expect("fixture project entry");
+        fs::copy(entry.path(), project.join(entry.file_name())).expect("copy fixture file");
+    }
+    root
 }
 
 fn tempdir_under(parent: &Path) -> PathBuf {

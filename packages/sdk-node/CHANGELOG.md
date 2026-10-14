@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- `overhead()` and `overheadTrim()` discover active instruction chains with configurable harness homes, label files by scope, and carry scope into trim recommendations.
 - `summary()` now returns context tokens per normalized generated-output token (including reasoning) plus p50/p95/max context sizes for the ten highest-ratio sessions. Context is input + cache-read + cache-creation tokens.
 - `hotspots()` accepts `contextOutputRatioThreshold` and `contextOutputMinTokens` for the new cost-independent finding (defaults: 382:1 inclusive and 1M context tokens).
 - `contextDelta()` accepts `project` and ISO-timestamp or relative `since` values; invalid `since` values reject with an error.

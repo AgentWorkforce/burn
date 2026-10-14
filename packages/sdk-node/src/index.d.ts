@@ -534,6 +534,7 @@ export interface ContextDeltaOptions {
 export declare function contextDelta(opts?: ContextDeltaOptions): Promise<ContextDelta[]>
 
 export type OverheadFileKind = 'claude-md' | 'agents-md';
+export type OverheadFileScope = 'user' | 'ancestor' | 'project';
 export type OverheadHarness = 'claude-code' | 'codex' | 'opencode';
 
 export interface OverheadOptions {
@@ -541,6 +542,7 @@ export interface OverheadOptions {
   since?: string;
   kind?: OverheadFileKind;
   ledgerHome?: string;
+  harnessHome?: string;
 }
 
 export interface OverheadSection {
@@ -569,6 +571,7 @@ export interface OverheadAttributionDetail {
 export interface OverheadFileSummary {
   kind: OverheadFileKind;
   path: string;
+  scope: OverheadFileScope;
   appliesTo: OverheadHarness[];
   totalLines: number;
   bytes: number | bigint;
@@ -580,6 +583,7 @@ export interface OverheadFileSummary {
 export interface OverheadPerFileEntry {
   path: string;
   kind: OverheadFileKind;
+  scope: OverheadFileScope;
   appliesTo: OverheadHarness[];
   attribution: OverheadAttributionDetail;
 }
@@ -602,6 +606,7 @@ export interface OverheadTrimOptions extends OverheadOptions {
 export interface OverheadTrimRecommendation {
   file: string;
   kind: OverheadFileKind;
+  scope: OverheadFileScope;
   appliesTo: OverheadHarness[];
   section: { heading: string; startLine: number; endLine: number; tokens: number | bigint };
   projectedSavings: {
