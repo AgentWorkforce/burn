@@ -26,6 +26,7 @@ pub mod ingest;
 pub mod mcp_server;
 pub mod measure;
 pub mod overhead;
+pub mod search;
 pub mod sessions;
 pub mod stamps;
 pub mod state;
