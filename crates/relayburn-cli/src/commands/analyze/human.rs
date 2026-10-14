@@ -280,6 +280,12 @@ fn one_line(text: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
+/// Tokens an attribution row carries: its first emission plus every turn
+/// that re-read it.
+fn carried(initial_tokens: f64, persistence_tokens: f64) -> f64 {
+    initial_tokens + persistence_tokens
+}
+
 fn hotspots(h: &HotspotsAttributionResult, priced: bool, out: &mut Vec<String>) {
     let method = h
         .sessions
@@ -302,12 +308,12 @@ fn hotspots(h: &HotspotsAttributionResult, priced: bool, out: &mut Vec<String>) 
     let mut files: Vec<&FileAggregation> = h.files.iter().collect();
     if !priced {
         bash.sort_by(|x, y| {
-            (y.initial_tokens + y.persistence_tokens)
-                .total_cmp(&(x.initial_tokens + x.persistence_tokens))
+            carried(y.initial_tokens, y.persistence_tokens)
+                .total_cmp(&carried(x.initial_tokens, x.persistence_tokens))
         });
         files.sort_by(|x, y| {
-            (y.initial_tokens + y.persistence_tokens)
-                .total_cmp(&(x.initial_tokens + x.persistence_tokens))
+            carried(y.initial_tokens, y.persistence_tokens)
+                .total_cmp(&carried(x.initial_tokens, x.persistence_tokens))
         });
     }
     for row in bash.into_iter().take(TOP) {
@@ -317,7 +323,7 @@ fn hotspots(h: &HotspotsAttributionResult, priced: bool, out: &mut Vec<String>) 
             row.call_count,
             spend(
                 row.total_cost,
-                row.initial_tokens + row.persistence_tokens,
+                carried(row.initial_tokens, row.persistence_tokens),
                 priced
             )
         ));
@@ -328,7 +334,7 @@ fn hotspots(h: &HotspotsAttributionResult, priced: bool, out: &mut Vec<String>) 
             row.path,
             spend(
                 row.total_cost,
-                row.initial_tokens + row.persistence_tokens,
+                carried(row.initial_tokens, row.persistence_tokens),
                 priced
             )
         ));
