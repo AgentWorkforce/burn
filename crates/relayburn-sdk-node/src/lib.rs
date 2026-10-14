@@ -103,6 +103,14 @@ use serde_json::Value as JsonValue;
 
 use relayburn_sdk as sdk;
 
+mod context_efficiency;
+mod hotspots;
+
+pub use context_efficiency::{
+    ContextEfficiencySummary, ContextSizeDistribution, SessionContextEfficiency,
+};
+pub use hotspots::{hotspots, HotspotsGroupBy, HotspotsOptions};
+
 mod bigint_promoting;
 pub mod summary_report;
 
@@ -596,6 +604,7 @@ pub struct Summary {
     pub total_tokens: BigInt,
     pub total_cost: f64,
     pub turn_count: BigInt,
+    pub context_efficiency: ContextEfficiencySummary,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
     pub by_tag: Option<Vec<SummaryTagRow>>,
@@ -608,6 +617,7 @@ impl From<sdk::Summary> for Summary {
             total_tokens: u64_to_bigint(s.total_tokens),
             total_cost: s.total_cost,
             turn_count: u64_to_bigint(s.turn_count),
+            context_efficiency: s.context_efficiency.into(),
             by_tool: s
                 .by_tool
                 .into_iter()
@@ -880,8 +890,10 @@ pub fn flow_graph(opts: FlowGraphOptions) -> Result<BigIntPromoting, BurnError> 
 #[napi(object)]
 pub struct ContextDeltaOptions {
     pub session: Option<String>,
-    /// Relative range (`24h`, `7d`, `4w`, `2m`). ISO timestamps are not
-    /// accepted — the SDK's context-delta window is a `Duration`.
+    /// Project path or project key; matches the ledger's `project` or
+    /// `project_key`.
+    pub project: Option<String>,
+    /// Relative range (`24h`, `7d`, `4w`, `2m`) or ISO timestamp.
     pub since: Option<String>,
     pub top: Option<u32>,
     pub min_delta: Option<u32>,
@@ -898,6 +910,7 @@ pub struct ContextDeltaOptions {
 pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromoting, BurnError> {
     let opts = opts.unwrap_or(ContextDeltaOptions {
         session: None,
+        project: None,
         since: None,
         top: None,
         min_delta: None,
@@ -906,7 +919,8 @@ pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromotin
     });
     let raw = sdk::ContextDeltaOpts {
         session: opts.session,
-        since: parse_relative_duration(opts.since.as_deref())?,
+        project: opts.project,
+        since: opts.since,
         top: opts.top,
         min_delta: opts.min_delta.map(u64::from),
         owner: parse_owner_filter(opts.owner.as_deref())?,
@@ -915,46 +929,6 @@ pub fn context_delta(opts: Option<ContextDeltaOptions>) -> Result<BigIntPromotin
     let value = serde_json::to_value(&result)
         .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize context_delta: {e}")))?;
     Ok(BigIntPromoting(value))
-}
-
-fn parse_relative_duration(raw: Option<&str>) -> Result<Option<Duration>, BurnError> {
-    let Some(raw) = raw else {
-        return Ok(None);
-    };
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    let bytes = raw.as_bytes();
-    let hint = "expected a relative range like 24h, 7d, 4w, or 2m";
-    if bytes.len() < 2 {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let unit = bytes[bytes.len() - 1] as char;
-    if !matches!(unit, 'h' | 'd' | 'w' | 'm') {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let num = &raw[..raw.len() - 1];
-    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(invalid_arg(format!(
-            "contextDelta: invalid since: {raw} ({hint})"
-        )));
-    }
-    let n: u64 = num
-        .parse()
-        .map_err(|_| invalid_arg(format!("contextDelta: invalid since: {raw} ({hint})")))?;
-    let secs = match unit {
-        'h' => n.checked_mul(3_600),
-        'd' => n.checked_mul(86_400),
-        'w' => n.checked_mul(7 * 86_400),
-        'm' => n.checked_mul(30 * 86_400),
-        _ => None,
-    }
-    .ok_or_else(|| invalid_arg(format!("contextDelta: since overflow: {raw}")))?;
-    Ok(Some(Duration::from_secs(secs)))
 }
 
 fn parse_owner_filter(raw: Option<&str>) -> Result<sdk::ContextDeltaOwnerFilter, BurnError> {
@@ -1061,85 +1035,6 @@ pub fn overhead_trim(opts: Option<OverheadTrimOptions>) -> Result<BigIntPromotin
     let result = sdk::overhead_trim(raw).map_err(sdk_err)?;
     let value = serde_json::to_value(&result)
         .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize overhead_trim: {e}")))?;
-    Ok(BigIntPromoting(value))
-}
-
-// ---------------------------------------------------------------------------
-// hotspots — discriminated union; serialized via serde_json so the
-// `kind` discriminant + per-variant rows survive the boundary. The TS
-// .d.ts already documents the shape (`HotspotsResult` union).
-// ---------------------------------------------------------------------------
-
-/// Mirror of `sdk::HotspotsGroupBy`. Wire values match
-/// The Node facade's
-/// `'attribution' | 'bash' | 'bash-verb' | 'file' | 'subagent' |
-/// 'findings'` literal union.
-#[napi(string_enum = "kebab-case")]
-pub enum HotspotsGroupBy {
-    Attribution,
-    Bash,
-    BashVerb,
-    File,
-    Subagent,
-    Findings,
-}
-
-impl From<HotspotsGroupBy> for sdk::HotspotsGroupBy {
-    fn from(g: HotspotsGroupBy) -> Self {
-        match g {
-            HotspotsGroupBy::Attribution => sdk::HotspotsGroupBy::Attribution,
-            HotspotsGroupBy::Bash => sdk::HotspotsGroupBy::Bash,
-            HotspotsGroupBy::BashVerb => sdk::HotspotsGroupBy::BashVerb,
-            HotspotsGroupBy::File => sdk::HotspotsGroupBy::File,
-            HotspotsGroupBy::Subagent => sdk::HotspotsGroupBy::Subagent,
-            HotspotsGroupBy::Findings => sdk::HotspotsGroupBy::Findings,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct HotspotsOptions {
-    pub session: Option<String>,
-    pub project: Option<String>,
-    pub since: Option<String>,
-    pub group_by: Option<HotspotsGroupBy>,
-    pub patterns: Option<Vec<String>>,
-    pub workflow: Option<String>,
-    pub provider: Option<Vec<String>>,
-    pub ledger_home: Option<String>,
-}
-
-/// Per-axis hotspot attribution + pattern-finding queries. Returns a
-/// JSON-shaped discriminated union — see `HotspotsResult` in
-/// `packages/sdk-node/src/index.d.ts`. u64 row counts (`callCount`,
-/// `distinctCommands`, `ridingTurns`, `firstEmitTurnIndex`,
-/// `toolCallCount`, `turnsAnalyzed`, `analyzed`, `excluded`) cross as
-/// `BigInt` per the file header rule.
-#[napi(ts_return_type = "import('./index').HotspotsResult")]
-pub fn hotspots(opts: Option<HotspotsOptions>) -> Result<BigIntPromoting, BurnError> {
-    let opts = opts.unwrap_or(HotspotsOptions {
-        session: None,
-        project: None,
-        since: None,
-        group_by: None,
-        patterns: None,
-        workflow: None,
-        provider: None,
-        ledger_home: None,
-    });
-    let raw = sdk::HotspotsOptions {
-        session: opts.session,
-        project: opts.project,
-        since: opts.since,
-        group_by: opts.group_by.map(Into::into),
-        patterns: opts.patterns,
-        workflow: opts.workflow,
-        provider: opts.provider,
-        ledger_home: maybe_path(opts.ledger_home),
-    };
-    let result = sdk::hotspots(raw).map_err(sdk_err)?;
-    let value = serde_json::to_value(&result)
-        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize hotspots: {e}")))?;
     Ok(BigIntPromoting(value))
 }
 
@@ -1543,22 +1438,6 @@ mod tests {
         );
         assert_eq!(parse_fidelity_class(None).unwrap(), None);
         assert!(parse_fidelity_class(Some("usage_only")).is_err());
-    }
-
-    #[test]
-    fn parse_relative_duration_accepts_cli_ranges() {
-        assert_eq!(parse_relative_duration(None).unwrap(), None);
-        assert_eq!(parse_relative_duration(Some("")).unwrap(), None);
-        assert_eq!(
-            parse_relative_duration(Some("24h")).unwrap(),
-            Some(Duration::from_secs(24 * 3_600))
-        );
-        assert_eq!(
-            parse_relative_duration(Some("7d")).unwrap(),
-            Some(Duration::from_secs(7 * 86_400))
-        );
-        assert!(parse_relative_duration(Some("yesterday")).is_err());
-        assert!(parse_relative_duration(Some("2026-01-01T00:00:00Z")).is_err());
     }
 
     #[test]
