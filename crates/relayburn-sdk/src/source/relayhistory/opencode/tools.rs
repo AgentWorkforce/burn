@@ -76,6 +76,20 @@ mod tests {
     }
 
     #[test]
+    fn each_tool_reads_only_its_own_field() {
+        // Fields the fallback order would pick first are ignored.
+        assert_eq!(pick_target("read", &json!({"url": "u"})), None);
+        assert_eq!(
+            pick_target("bash", &json!({"path": "/p", "command": "ls"})).as_deref(),
+            Some("ls")
+        );
+        assert_eq!(
+            pick_target("webfetch", &json!({"path": "/p", "url": "u"})).as_deref(),
+            Some("u")
+        );
+    }
+
+    #[test]
     fn a_skill_call_names_its_skill() {
         assert_eq!(
             skill_name("skill", &json!({"name": "ship-pr"})).as_deref(),

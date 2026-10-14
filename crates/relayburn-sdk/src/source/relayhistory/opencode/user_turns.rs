@@ -73,11 +73,16 @@ fn user_messages<'a>(ctx: &Context<'a>) -> Vec<UserMessage<'a>> {
             })
         })
         .collect();
-    for marker in &ctx.ev.markers {
+    let boundaries = ctx
+        .ev
+        .markers
+        .iter()
+        .filter(|m| m.kind == "compaction_boundary");
+    for marker in boundaries {
         let (Some(id), Some(ts_ms)) = (marker.message_id.as_deref(), marker.ts_ms) else {
             continue;
         };
-        if marker.kind == "compaction_boundary" && !users.iter().any(|u| u.id == id) {
+        if !users.iter().any(|u| u.id == id) {
             users.push(UserMessage {
                 id,
                 ts_ms,

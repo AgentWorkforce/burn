@@ -89,3 +89,63 @@ fn a_turn_is_classified_by_the_prompt_that_asked_for_it() {
         Some(crate::reader::ActivityCategory::Review)
     );
 }
+
+/// A prompt sent before a compaction did not prompt the summary turn the
+/// compaction produced: the compaction is the user message that did.
+#[test]
+fn a_compaction_hides_the_prompts_before_it_from_the_summary_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_tree(
+        &fixtures_root().join("opencode/with-compaction"),
+        dir.path(),
+    );
+    // `continue working` now lands between the first reply and the
+    // compaction.
+    let prompt = dir
+        .path()
+        .join("storage/message/ses_compact/msg_compact_u2.json");
+    let text = std::fs::read_to_string(&prompt)
+        .unwrap()
+        .replace("1776999005000", "1776999002500");
+    std::fs::write(&prompt, text).unwrap();
+    let records = fixture_records(
+        Harness::Opencode,
+        &dir.path().join("storage/session/global/ses_compact.json"),
+    );
+    let prompts: Vec<(&str, Option<&str>)> = records
+        .user_turns
+        .iter()
+        .map(|u| (u.user_uuid.as_str(), u.following_message_id.as_deref()))
+        .collect();
+    assert_eq!(prompts, [("msg_compact_u1", Some("msg_compact_a1"))]);
+}
+
+/// A prompt written in the same millisecond as an assistant turn was not
+/// sent after it, so it does not bridge to the next turn.
+#[test]
+fn a_prompt_in_the_previous_turns_millisecond_does_not_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_tree(
+        &fixtures_root().join("opencode/user-turn-blocks"),
+        dir.path(),
+    );
+    let prompt = dir.path().join("storage/message/ses_utb/msg_utb_u2.json");
+    let text = std::fs::read_to_string(&prompt)
+        .unwrap()
+        .replace("1776990002000", "1776990001000");
+    std::fs::write(&prompt, text).unwrap();
+    let records = fixture_records(
+        Harness::Opencode,
+        &dir.path().join("storage/session/global/ses_utb.json"),
+    );
+    let bridge = records
+        .user_turns
+        .iter()
+        .find(|u| u.following_message_id.as_deref() == Some("msg_utb_a2"))
+        .expect("the bridge into the second turn");
+    assert_eq!(bridge.user_uuid, "ses_utb:msg_utb_a1->msg_utb_a2");
+    assert!(bridge
+        .blocks
+        .iter()
+        .all(|b| b.kind == crate::reader::UserTurnBlockKind::ToolResult));
+}

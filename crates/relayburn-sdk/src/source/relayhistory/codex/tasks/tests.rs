@@ -634,3 +634,44 @@ fn an_open_task_the_ledger_billed_closes_at_the_tail_without_waiting() {
     assert!(!derived.pending);
     assert_eq!(outcomes(&derived), vec![("t1@50".to_string(), None)]);
 }
+
+fn assistant_block(line: u64, kind: &str, text: &str) -> Value {
+    json!({
+        "message_id": format!("{line}:message"), "role": "assistant", "ts_ms": line * 1000,
+        "turn_id": "t1",
+        "blocks": [{"event_uid": format!("{line}:message"), "role": "assistant",
+                    "kind": kind, "text": text, "ts_ms": line * 1000}]
+    })
+}
+
+/// A task's replies are its assistant content and, one per line, the text
+/// its activity is classified by; its reasoning is thinking content.
+#[test]
+fn replies_and_reasoning_are_the_tasks_assistant_content() {
+    let [s1, c1] = task(10, "t1");
+    let derived = derive_with(
+        vec![s1, snapshot(11, 100, 0, 10), c1],
+        vec![
+            assistant_block(12, "thinking", "weighing it"),
+            assistant_block(13, "text", "Here is the"),
+            assistant_block(14, "text", "roadmap"),
+        ],
+    );
+    let content: Vec<(crate::reader::ContentKind, Option<&str>)> = derived
+        .content
+        .iter()
+        .map(|c| (c.kind, c.text.as_deref()))
+        .collect();
+    assert_eq!(
+        content,
+        [
+            (crate::reader::ContentKind::Thinking, Some("weighing it")),
+            (crate::reader::ContentKind::Text, Some("Here is the")),
+            (crate::reader::ContentKind::Text, Some("roadmap")),
+        ]
+    );
+    assert_eq!(
+        derived.turns[0].activity,
+        Some(crate::reader::ActivityCategory::Planning)
+    );
+}
