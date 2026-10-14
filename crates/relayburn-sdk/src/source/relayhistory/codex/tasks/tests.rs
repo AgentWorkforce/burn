@@ -675,3 +675,36 @@ fn replies_and_reasoning_are_the_tasks_assistant_content() {
         Some(crate::reader::ActivityCategory::Planning)
     );
 }
+
+/// Only a `spawn_agent` function call spawns a subagent; another call that
+/// happens to name an agent id does not.
+#[test]
+fn only_a_spawn_agent_call_records_a_subagent() {
+    let call = |line: u64, id: &str, name: &str| {
+        (
+            json!({
+                "message_id": format!("{line}:message"), "role": "assistant",
+                "ts_ms": line * 1000, "turn_id": "t1",
+                "blocks": [{"event_uid": format!("{line}:function_call"), "role": "assistant",
+                            "kind": "tool_use", "tool_use_id": id, "ts_ms": line * 1000}]
+            }),
+            json!({"tool_use_id": id, "message_id": format!("{line}:message"), "name": name,
+                   "args": {"agent_id": format!("agent-{id}"), "cmd": "ls"}}),
+        )
+    };
+    let (spawn_message, spawn_call) = call(12, "call_spawn", "spawn_agent");
+    let (exec_message, exec_call) = call(13, "call_exec", "exec_command");
+    let [s1, c1] = task(10, "t1");
+    let mut ev = evidence(
+        vec![s1, snapshot(11, 100, 0, 10), c1],
+        vec![spawn_message, exec_message],
+    );
+    ev.tool_calls = serde_json::from_value(json!([spawn_call, exec_call])).unwrap();
+    let derived = Tasks::new(&ev, &Billing::settled()).run(&stream(&ev));
+    let spawned: Vec<&str> = derived
+        .subagents
+        .iter()
+        .map(|r| r.session_id.as_str())
+        .collect();
+    assert_eq!(spawned, ["agent-call_spawn"]);
+}
