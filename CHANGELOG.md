@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `burn search <query>` searches ingested session content with FTS5, with session scoping, result limits, optional highlighted snippets, and JSON output.
+- **BREAKING (`relayburn-sdk`):** search-hit JSON fields are now `sessionId` and `messageId` instead of `session_id` and `message_id`, consistently with the SDK's camelCase JSON contract; `search` limits above SQLite's signed 64-bit maximum are rejected with an error instead of silently disabling the limit.
 - `summary` now reports context tokens per generated output token and p50/p95/max context size for the ten highest-ratio sessions; context is input + cache-read + cache-creation tokens, while the denominator includes reasoning whether a harness folds it into output (Codex) or reports it separately.
 - `hotspots --findings` now flags high-volume sessions at or above a configurable context-to-output ratio (default 382:1 inclusive, with a configurable 1M-context-token floor), independently of dollar cost. The default is an inspection signal, not a length-normalized anomaly score.
 - **BREAKING (`relayburn-sdk`):** `ContextDeltaOpts::since` is now a relative-range or ISO-timestamp string instead of `Duration`; context-delta queries also accept `project` and apply the cutoff to returned deltas in both all-session and session-specific modes.

@@ -1,0 +1,7 @@
+{
+  "query": "burnsearchneedle",
+  "limit": 25,
+  "truncated": false,
+  "session": null,
+  "hits": []
+}
