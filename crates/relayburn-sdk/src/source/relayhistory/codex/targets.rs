@@ -62,6 +62,12 @@ mod tests {
             function_call_target("shell", Some(&args)).as_deref(),
             Some("ls")
         );
+        // A command tool names its command even when it also names a path.
+        let args = json!({"path": "/tmp/project", "cmd": "make"});
+        assert_eq!(
+            function_call_target("exec_command", Some(&args)).as_deref(),
+            Some("make")
+        );
     }
 
     #[test]
@@ -80,6 +86,11 @@ mod tests {
         assert_eq!(
             function_call_target("write_file", Some(&json!({"path": "/b"}))).as_deref(),
             Some("/b")
+        );
+        // A file tool without a path has no target, whatever else it names.
+        assert_eq!(
+            function_call_target("read_file", Some(&json!({"command": "cat"}))),
+            None
         );
     }
 

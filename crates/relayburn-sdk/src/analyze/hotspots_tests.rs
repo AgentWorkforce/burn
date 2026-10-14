@@ -687,6 +687,7 @@ fn falls_back_to_even_split_when_no_content_is_provided() {
     for a in &result.attributions {
         assert!((a.initial_cost - expected).abs() < 1e-9);
         assert_eq!(a.persistence_cost, 0.0);
+        assert!((a.total_cost - expected).abs() < 1e-9);
     }
     assert_eq!(
         result.session_totals[0].attribution_method,
