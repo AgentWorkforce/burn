@@ -4189,6 +4189,17 @@ fn overhead_scope_fixture() -> (TempDir, TempDir, LedgerHandle, PathBuf) {
     (project_dir, ledger_dir, handle, project)
 }
 
+/// The attribution of the fixture project's own `name` file. Claude's walk
+/// also reads any instruction file above the temp dir, so assertions look
+/// the project file up by path.
+fn project_file<'a>(r: &'a OverheadResult, project: &Path, name: &str) -> &'a OverheadPerFileEntry {
+    let path = project.join(name).to_string_lossy().into_owned();
+    r.per_file
+        .iter()
+        .find(|f| f.path == path)
+        .unwrap_or_else(|| panic!("{name} attributed: {:#?}", r.files))
+}
+
 #[test]
 fn overhead_reads_the_requested_kind_project_and_window() {
     let (_project_dir, _ledger_dir, handle, project) = overhead_scope_fixture();
@@ -4202,9 +4213,13 @@ fn overhead_reads_the_requested_kind_project_and_window() {
     let claude = handle
         .overhead(options(OverheadFileKind::ClaudeMd, None))
         .unwrap();
-    let kinds: Vec<_> = claude.files.iter().map(|f| f.kind).collect();
-    assert_eq!(kinds, [OverheadFileKind::ClaudeMd]);
-    assert_eq!(claude.per_file[0].attribution.session_count, 2);
+    assert!(claude
+        .files
+        .iter()
+        .all(|f| f.kind == OverheadFileKind::ClaudeMd));
+    let claude_md = project_file(&claude, &project, "CLAUDE.md");
+    assert_eq!(claude_md.attribution.session_count, 2);
+    // The AGENTS.md chain stops at the project's git root.
     let agents = handle
         .overhead(options(OverheadFileKind::AgentsMd, None))
         .unwrap();
@@ -4216,7 +4231,8 @@ fn overhead_reads_the_requested_kind_project_and_window() {
             Some("2026-04-01T00:00:00Z"),
         ))
         .unwrap();
-    assert_eq!(recent.per_file[0].attribution.session_count, 1);
+    let claude_md = project_file(&recent, &project, "CLAUDE.md");
+    assert_eq!(claude_md.attribution.session_count, 1);
 }
 
 #[test]
@@ -4229,7 +4245,20 @@ fn overhead_trim_counts_each_file_with_recommendations_once() {
             ..OverheadTrimOptions::default()
         })
         .unwrap();
-    // CLAUDE.md for Claude Code; AGENTS.md once for Codex and OpenCode.
-    assert_eq!(r.summary.files_analyzed, 2, "{:#?}", r.summary);
-    assert_eq!(r.summary.files_with_recommendations, 2, "{:#?}", r.summary);
+    let files: std::collections::BTreeSet<&str> = r
+        .recommendations
+        .iter()
+        .map(|rec| rec.file.as_str())
+        .collect();
+    // The project's CLAUDE.md and AGENTS.md, plus any host ancestor file.
+    assert!(
+        files.contains("CLAUDE.md") && files.contains("AGENTS.md"),
+        "{files:?}"
+    );
+    assert_eq!(
+        r.summary.files_with_recommendations,
+        files.len() as u64,
+        "{:#?}",
+        r.summary
+    );
 }
