@@ -94,3 +94,31 @@ fn opencode(obj: &Map<String, Value>) -> (Usage, Coverage) {
     };
     (usage, coverage)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claude(raw: &str) -> (Usage, Coverage) {
+        usage_from_raw(SourceKind::ClaudeCode, Some(raw))
+    }
+
+    #[test]
+    fn claude_cache_writes_are_covered_by_either_tier_or_the_flat_counter() {
+        let (usage, coverage) = claude(r#"{"cache_creation": {"ephemeral_1h_input_tokens": 7}}"#);
+        assert_eq!((usage.cache_create_5m, usage.cache_create_1h), (0, 7));
+        assert!(coverage.has_cache_create_tokens);
+
+        let (usage, coverage) = claude(r#"{"cache_creation": {"ephemeral_5m_input_tokens": 3}}"#);
+        assert_eq!((usage.cache_create_5m, usage.cache_create_1h), (3, 0));
+        assert!(coverage.has_cache_create_tokens);
+
+        let (usage, coverage) = claude(r#"{"cache_creation_input_tokens": 9}"#);
+        assert_eq!((usage.cache_create_5m, usage.cache_create_1h), (9, 0));
+        assert!(coverage.has_cache_create_tokens);
+
+        let (_, coverage) = claude(r#"{"input_tokens": 1, "cache_creation": {}}"#);
+        assert!(!coverage.has_cache_create_tokens);
+        assert!(coverage.has_input_tokens);
+    }
+}
