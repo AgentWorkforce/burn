@@ -4154,3 +4154,82 @@ fn an_empty_pattern_list_selects_no_patterns() {
         "{result:?}"
     );
 }
+
+/// A git-bounded project holding a CLAUDE.md and an AGENTS.md, and a ledger
+/// with one recent and one old session in it plus a session elsewhere.
+fn overhead_scope_fixture() -> (TempDir, TempDir, LedgerHandle, PathBuf) {
+    let project_dir = tempfile::tempdir().unwrap();
+    let project = std::fs::canonicalize(project_dir.path()).unwrap();
+    std::fs::create_dir(project.join(".git")).unwrap();
+    let body = format!(
+        "## Big\n{}\n\n## Small\n{}\n",
+        "y".repeat(800),
+        "z".repeat(200)
+    );
+    std::fs::write(project.join("CLAUDE.md"), &body).unwrap();
+    std::fs::write(project.join("AGENTS.md"), &body).unwrap();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(ledger_dir.path())).unwrap();
+    let in_project = |session: &str, ts: &str, project: &Path| TurnRecord {
+        project: Some(project.to_string_lossy().into_owned()),
+        ..bucket_test_turn(session, &format!("m-{session}"), ts, 1_000)
+    };
+    handle
+        .raw_mut()
+        .append_turns(&[
+            in_project("recent", "2026-04-23T00:00:00.000Z", &project),
+            in_project("old", "2026-01-01T00:00:00.000Z", &project),
+            in_project(
+                "elsewhere",
+                "2026-04-23T00:05:00.000Z",
+                Path::new("/tmp/other"),
+            ),
+        ])
+        .unwrap();
+    (project_dir, ledger_dir, handle, project)
+}
+
+#[test]
+fn overhead_reads_the_requested_kind_project_and_window() {
+    let (_project_dir, _ledger_dir, handle, project) = overhead_scope_fixture();
+    let options = |kind, since: Option<&str>| OverheadOptions {
+        project: Some(project.clone()),
+        kind: Some(kind),
+        since: since.map(str::to_string),
+        harness_home: Some(project.join("empty-home")),
+        ..OverheadOptions::default()
+    };
+    let claude = handle
+        .overhead(options(OverheadFileKind::ClaudeMd, None))
+        .unwrap();
+    let kinds: Vec<_> = claude.files.iter().map(|f| f.kind).collect();
+    assert_eq!(kinds, [OverheadFileKind::ClaudeMd]);
+    assert_eq!(claude.per_file[0].attribution.session_count, 2);
+    let agents = handle
+        .overhead(options(OverheadFileKind::AgentsMd, None))
+        .unwrap();
+    let kinds: Vec<_> = agents.files.iter().map(|f| f.kind).collect();
+    assert_eq!(kinds, [OverheadFileKind::AgentsMd]);
+    let recent = handle
+        .overhead(options(
+            OverheadFileKind::ClaudeMd,
+            Some("2026-04-01T00:00:00Z"),
+        ))
+        .unwrap();
+    assert_eq!(recent.per_file[0].attribution.session_count, 1);
+}
+
+#[test]
+fn overhead_trim_counts_each_file_with_recommendations_once() {
+    let (_project_dir, _ledger_dir, handle, project) = overhead_scope_fixture();
+    let r = handle
+        .overhead_trim(OverheadTrimOptions {
+            project: Some(project.clone()),
+            harness_home: Some(project.join("empty-home")),
+            ..OverheadTrimOptions::default()
+        })
+        .unwrap();
+    // CLAUDE.md for Claude Code; AGENTS.md once for Codex and OpenCode.
+    assert_eq!(r.summary.files_analyzed, 2, "{:#?}", r.summary);
+    assert_eq!(r.summary.files_with_recommendations, 2, "{:#?}", r.summary);
+}
