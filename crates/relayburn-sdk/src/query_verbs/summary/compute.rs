@@ -22,7 +22,7 @@ use crate::reader::{
     UserTurnBlockKind, UserTurnRecord,
 };
 
-use super::super::build_query;
+use super::super::{build_query, normalize_until};
 use super::*;
 
 pub(crate) fn build_summary_report_query(opts: &SummaryReportOptions) -> Result<Query> {
@@ -31,6 +31,7 @@ pub(crate) fn build_summary_report_query(opts: &SummaryReportOptions) -> Result<
         opts.project.as_deref(),
         opts.since.as_deref(),
     )?;
+    q.until = normalize_until(opts.until.as_deref())?;
     if let Some(tag) = opts.group_by_tag.as_deref() {
         validate_tag_key(tag, "groupByTag")?;
     }
@@ -826,8 +827,8 @@ pub(crate) fn aggregate_summary_relationship_stats(
             session_count,
             turn_count: by_session.values().map(|rollup| rollup.turn_count).sum(),
             total_cost,
-            median_cost: summary_percentile(&costs, 0.5),
-            p95_cost: summary_percentile(&costs, 0.95),
+            median_cost: nearest_rank_percentile(&costs, 0.5),
+            p95_cost: nearest_rank_percentile(&costs, 0.95),
             mean_cost: if session_count > 0 {
                 total_cost / session_count as f64
             } else {
@@ -875,8 +876,8 @@ pub(crate) fn aggregate_summary_relationship_subagent_stats(
             invocations,
             turns: agg.turns,
             total_cost: agg.total,
-            median_cost: summary_percentile(&agg.costs, 0.5),
-            p95_cost: summary_percentile(&agg.costs, 0.95),
+            median_cost: nearest_rank_percentile(&agg.costs, 0.5),
+            p95_cost: nearest_rank_percentile(&agg.costs, 0.95),
             mean_cost: if invocations > 0 {
                 agg.total / invocations as f64
             } else {
@@ -928,15 +929,6 @@ pub(crate) fn summary_is_main_thread_turn(turn: &TurnRecord) -> bool {
         None => true,
         Some(sub) => !sub.is_sidechain || sub.agent_id.as_deref() == Some(&turn.session_id),
     }
-}
-
-pub(crate) fn summary_percentile(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let rank =
-        ((p * sorted.len() as f64).ceil() as i64 - 1).clamp(0, sorted.len() as i64 - 1) as usize;
-    sorted[rank]
 }
 
 pub(crate) fn collect_summary_subagent_tree_relationships(

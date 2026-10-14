@@ -69,6 +69,7 @@ fn detected() -> (Vec<WasteFinding>, Vec<Detail>) {
                 penalty_usd: 0.02,
             }],
         }],
+        context_output_ratio: Vec::new(),
     };
     let turns: Vec<TurnRecord> = (0..8).map(turn).collect();
     detections(&found, &FindingContext::new(&turns))

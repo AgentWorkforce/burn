@@ -10,6 +10,11 @@
 - `analyzeSession()` and `measureSession()` bill Claude Code subagent turns with the session that spawned them; `SubagentTreeNode` adds `selfTokens` / `cumulativeTokens`, and its costs are `null` when unpriced.
 - `analyzeSession()` and `measureSession()` return every counter their types declare `number | bigint` as `BigInt` when it crosses 2^53: subagent tree turns and tokens, flow `subagents`, stop-reason counts, and `unpricedTurns`.
 - `analyzeSession({ harness: 'codex', sessionId })` finds a Codex subagent thread in a store that has not synced it yet.
+- `summary()` now returns context tokens per normalized generated-output token (including reasoning) plus p50/p95/max context sizes for the ten highest-ratio sessions. Context is input + cache-read + cache-creation tokens.
+- `hotspots()` accepts `contextOutputRatioThreshold` and `contextOutputMinTokens` for the new cost-independent finding (defaults: 382:1 inclusive and 1M context tokens).
+- `contextDelta()` accepts `project` and ISO-timestamp or relative `since` values; invalid `since` values reject with an error.
+- Added `summaryReport()`, `summaryTimeseries()`, and `capabilities()` APIs for the SDK-owned versioned summary report contract.
+
 ## [4.1.0] - 2026-09-20
 
 - `measureSession({ harness, inputPath })` returns `burn.session-metrics.v1` for one exact session without discovery or a ledger; OpenCode accepts its selected metadata file within the complete per-session storage tree and incomplete inputs fail closed.

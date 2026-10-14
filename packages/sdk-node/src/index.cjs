@@ -83,10 +83,29 @@ function computeCompareExcluded(summary, minimum) {
   return out;
 }
 
+function normalizeHotspotsOptions(opts) {
+  if (
+    !opts ||
+    typeof opts !== 'object' ||
+    typeof opts.contextOutputMinTokens !== 'number'
+  ) {
+    return opts;
+  }
+  if (!Number.isSafeInteger(opts.contextOutputMinTokens) || opts.contextOutputMinTokens < 0) {
+    throw new RangeError(
+      'hotspots contextOutputMinTokens must be a non-negative safe integer',
+    );
+  }
+  return { ...opts, contextOutputMinTokens: BigInt(opts.contextOutputMinTokens) };
+}
+
 module.exports = {
   Ledger,
   ingest: async (opts) => coerceBigInts(await binding.ingest(opts)),
   summary: async (opts) => coerceBigInts(await binding.summary(opts)),
+  summaryReport: async (opts) => coerceBigInts(await binding.summaryReport(opts)),
+  summaryTimeseries: async (opts) => coerceBigInts(await binding.summaryTimeseries(opts)),
+  capabilities: () => coerceBigInts(binding.capabilities()),
   ledgerFreshness: async (opts) => binding.ledgerFreshness(opts),
   sessionCost: async (opts) => coerceBigInts(await binding.sessionCost(opts)),
   measureSession: async (opts) => coerceBigInts(await binding.measureSession(opts)),
@@ -98,7 +117,8 @@ module.exports = {
   contextDelta: async (opts) => coerceBigInts(await binding.contextDelta(opts)),
   overhead: async (opts) => coerceBigInts(await binding.overhead(opts)),
   overheadTrim: async (opts) => coerceBigInts(await binding.overheadTrim(opts)),
-  hotspots: async (opts) => coerceBigInts(await binding.hotspots(opts)),
+  hotspots: async (opts) =>
+    coerceBigInts(await binding.hotspots(normalizeHotspotsOptions(opts))),
   compare: async (opts) => coerceBigInts(await binding.compare(opts)),
   writePendingStamp: async (opts) => coerceBigInts(await binding.writePendingStamp(opts)),
   computeCompareExcluded,

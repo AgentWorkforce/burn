@@ -69,6 +69,22 @@ function normalizeSearchOptions(opts) {
   return { ...opts, limit: BigInt(opts.limit) };
 }
 
+function normalizeHotspotsOptions(opts) {
+  if (
+    !opts ||
+    typeof opts !== 'object' ||
+    typeof opts.contextOutputMinTokens !== 'number'
+  ) {
+    return opts;
+  }
+  if (!Number.isSafeInteger(opts.contextOutputMinTokens) || opts.contextOutputMinTokens < 0) {
+    throw new RangeError(
+      'hotspots contextOutputMinTokens must be a non-negative safe integer',
+    );
+  }
+  return { ...opts, contextOutputMinTokens: BigInt(opts.contextOutputMinTokens) };
+}
+
 /**
  * Stateful ledger handle. The 1.x SDK only exposed the static `open(opts)`
  * constructor; instance methods are reserved for a future PR. Keep that shape
@@ -99,6 +115,18 @@ export async function ingest(opts) {
 
 export async function summary(opts) {
   return coerceBigInts(await binding.summary(opts));
+}
+
+export async function summaryReport(opts) {
+  return coerceBigInts(await binding.summaryReport(opts));
+}
+
+export async function summaryTimeseries(opts) {
+  return coerceBigInts(await binding.summaryTimeseries(opts));
+}
+
+export function capabilities() {
+  return coerceBigInts(binding.capabilities());
 }
 
 export async function ledgerFreshness(opts) {
@@ -146,7 +174,7 @@ export async function overheadTrim(opts) {
 }
 
 export async function hotspots(opts) {
-  return coerceBigInts(await binding.hotspots(opts));
+  return coerceBigInts(await binding.hotspots(normalizeHotspotsOptions(opts)));
 }
 
 export async function compare(opts) {

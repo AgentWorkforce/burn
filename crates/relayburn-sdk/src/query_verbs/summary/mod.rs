@@ -45,86 +45,16 @@ pub struct SummaryTagRow {
     pub turn_count: u64,
 }
 
-/// Per-outcome turn counts, surfaced by `burn summary` for the one-line
-/// outcome breakdown (`142 end_turn, 3 max_tokens, 1 refusal, 0 pause`).
-///
-/// Counts mirror the [`StopReason`] enum variants plus a `none` slot for
-/// turns whose row carried no `stop_reason` field at all — that's a Codex
-/// task that was not aborted (the rollout reports no stop reason) and any
-/// pre-3.0 ledger row that was ingested before the reader started
-/// populating the enum.
-///
-/// `Silent` is reserved for "row exists, carries a stop_reason that we
-/// don't recognize" — distinct from `none` so we can spot a future harness
-/// regression rather than silently lumping it with Codex.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StopReasonCounts {
-    pub end_turn: u64,
-    pub max_tokens: u64,
-    pub pause_turn: u64,
-    pub stop_sequence: u64,
-    pub tool_use: u64,
-    pub refusal: u64,
-    /// Turns the harness aborted (Codex `turn_aborted`).
-    #[serde(default)]
-    pub aborted: u64,
-    pub silent: u64,
-    /// Turns whose record carried no `stop_reason` field — e.g. Codex
-    /// rollouts (the harness doesn't report one) or pre-3.0 ledger rows
-    /// from before the reader started parsing the field.
-    pub none: u64,
-}
-
-impl StopReasonCounts {
-    /// Accumulate one turn's outcome into the bucket counts. `None` lands
-    /// in [`Self::none`]; unrecognized variants would already be normalized
-    /// to [`StopReason::Silent`] upstream by the lenient deserializer.
-    pub fn bump(&mut self, reason: Option<StopReason>) {
-        match reason {
-            None => self.none += 1,
-            Some(StopReason::EndTurn) => self.end_turn += 1,
-            Some(StopReason::MaxTokens) => self.max_tokens += 1,
-            Some(StopReason::PauseTurn) => self.pause_turn += 1,
-            Some(StopReason::StopSequence) => self.stop_sequence += 1,
-            Some(StopReason::ToolUse) => self.tool_use += 1,
-            Some(StopReason::Refusal) => self.refusal += 1,
-            Some(StopReason::Aborted) => self.aborted += 1,
-            Some(StopReason::Silent) => self.silent += 1,
-        }
-    }
-
-    /// Fold every turn's `stop_reason` into a fresh counts struct.
-    pub fn from_turns(turns: &[TurnRecord]) -> Self {
-        let mut out = Self::default();
-        for t in turns {
-            out.bump(t.stop_reason);
-        }
-        out
-    }
-
-    /// True iff every counter is zero — useful for "skip the outcome line
-    /// entirely" presentation logic in summary.
-    pub fn is_empty(&self) -> bool {
-        self.end_turn
-            | self.max_tokens
-            | self.pause_turn
-            | self.stop_sequence
-            | self.tool_use
-            | self.refusal
-            | self.aborted
-            | self.silent
-            | self.none
-            == 0
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub total_tokens: u64,
     pub total_cost: f64,
     pub turn_count: u64,
+    /// Context-window work per completion token, including cache reads and
+    /// cache creation, plus per-session context-size distributions.
+    #[serde(default)]
+    pub context_efficiency: ContextEfficiencySummary,
     pub by_tool: Vec<SummaryToolRow>,
     pub by_model: Vec<SummaryModelRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,6 +183,7 @@ pub(crate) fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> S
         total_tokens,
         total_cost,
         turn_count: turns.len() as u64,
+        context_efficiency: compute_context_efficiency_for_summary(turns),
         by_tool: by_tool_order
             .into_iter()
             .map(|k| by_tool.remove(&k).unwrap())
@@ -329,6 +260,7 @@ pub struct SummaryReportOptions {
     pub session: Option<String>,
     pub project: Option<String>,
     pub since: Option<String>,
+    pub until: Option<String>,
     pub workflow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Enrichment>,
@@ -417,6 +349,9 @@ pub struct SummaryGroupedReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tag_values: Vec<Option<String>>,
     pub turn_count: u64,
+    /// Headline context-to-output ratio and per-session p50/p95/max context
+    /// sizes. Computed in the SDK so all presenters share the definition.
+    pub context_efficiency: ContextEfficiencySummary,
     pub rows: Vec<UsageCostAggregateRow>,
     pub total_cost: CostBreakdown,
     pub fidelity: FidelitySummary,
@@ -607,9 +542,8 @@ impl LedgerHandle {
         );
         let turns = summary_turns_from_enriched(&enriched);
 
-        let Some((buckets, per_bucket)) =
-            super::partition_into_buckets(turns, q.since.as_deref(), bucket_secs, |t| &t.ts)?
-        else {
+        let partitioned = super::partition_into_buckets(turns, &q, bucket_secs, |t| &t.ts)?;
+        let Some((buckets, per_bucket)) = partitioned else {
             return Ok(SummaryTimeseries {
                 bucket_secs,
                 buckets: Vec::new(),
@@ -740,6 +674,7 @@ impl LedgerHandle {
                     tag_key,
                     tag_values,
                     turn_count: turns.len() as u64,
+                    context_efficiency: compute_context_efficiency_for_summary(&turns),
                     rows,
                     total_cost,
                     fidelity,

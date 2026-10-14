@@ -40,10 +40,12 @@ use crate::render::progress::TaskProgress;
 mod human;
 mod json;
 mod reasoning;
+mod sections;
 
 use human::*;
 use json::*;
 use reasoning::reasoning_effort_lines;
+use sections::*;
 
 #[cfg(test)]
 use relayburn_sdk::{
@@ -315,6 +317,7 @@ fn run_inner(globals: &GlobalArgs, args: SummaryArgs) -> anyhow::Result<i32> {
         session: args.session,
         project: args.project,
         since: args.since,
+        until: None,
         workflow: args.workflow,
         tags: if tag_filter.is_empty() {
             None
@@ -488,6 +491,7 @@ mod tests {
             tag_key: None,
             tag_values: Vec::new(),
             turn_count: 0,
+            context_efficiency: relayburn_sdk::ContextEfficiencySummary::default(),
             rows: Vec::new(),
             total_cost: CostBreakdown {
                 model: String::new().into(),
@@ -518,6 +522,19 @@ mod tests {
         let value = grouped_json_value(&report, &relayburn_sdk::IngestReport::empty());
 
         assert_eq!(value["quality"], json!({"outcomes": [], "oneShot": []}));
+        assert_eq!(
+            value["contextEfficiency"],
+            json!({
+                "contextTokens": 0,
+                "outputTokens": 0,
+                "contextTokensPerOutputToken": null,
+                "unbounded": false,
+                "zeroOutputTurnsWithContext": 0,
+                "totalSessions": 0,
+                "eligibleSessions": 0,
+                "sessions": [],
+            })
+        );
     }
 
     #[test]

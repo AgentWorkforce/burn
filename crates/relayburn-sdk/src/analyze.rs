@@ -19,6 +19,7 @@ mod cache_expiry;
 pub mod claude_md;
 pub mod compare;
 pub mod context_delta;
+mod context_output_ratio;
 pub mod cost;
 pub mod fidelity;
 pub mod findings;
@@ -57,10 +58,14 @@ pub(crate) use cache_expiry::{
 pub(crate) use cache_expiry::{CacheExpiryEvent, CacheTtl, ExpiryCause};
 pub use compare::DEFAULT_MIN_SAMPLE;
 pub(crate) use compare::{build_compare_table, CompareOptions, CompareTable};
-pub(crate) use context_delta::deltas_for_session;
+pub(crate) use context_delta::deltas_for_session_since;
 pub use context_delta::{
     ContextDelta, ContextDeltaOpts, InterveningStep, OwnerFilter, OwnerRail, ReminderSource,
 };
+pub(crate) use context_output_ratio::{
+    context_output_ratio_finding, ContextOutputRatioFindingInput,
+};
+pub(crate) use cost::reasoning_mode_for_source;
 pub(crate) use cost::sum_costs;
 pub use cost::{cost_for_turn, tally_unpriced, CostBreakdown};
 pub(crate) use fidelity::has_minimum_fidelity;

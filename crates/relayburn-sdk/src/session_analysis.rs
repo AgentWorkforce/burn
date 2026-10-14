@@ -27,7 +27,9 @@ use serde::Deserialize;
 
 use crate::analyze::{build_ghost_surface_inputs, load_pricing, PricingTable};
 use crate::analyze::{load_claude_settings, project_claude_settings_path, LoadedClaudeSettings};
-use crate::query_verbs::{default_hotspots_finding_kinds, detect_hotspots, HotspotEnvironment};
+use crate::query_verbs::{
+    default_hotspots_finding_kinds, detect_hotspots, session_prompt_text, HotspotEnvironment,
+};
 use crate::reader::Harness;
 use crate::source::locate::{load_session, HistoryStoreOptions, SessionLocator};
 use crate::source::{records_with_children, Billing, SessionRecords};
@@ -193,6 +195,7 @@ fn analyze(inputs: &Inputs<'_>) -> SessionAnalysis {
             settings: &environment_settings.settings,
             ghost_surface: environment_settings.ghost_surface,
             cache_history: &[],
+            context_ratio: None,
             wanted: &wanted,
         },
     );
@@ -256,7 +259,9 @@ fn environment(inputs: &Inputs<'_>) -> (EnvironmentInputs, Vec<SkippedCheck>) {
     let mut skipped = Vec::new();
     let ghost_surface = match inputs.roots {
         Some(roots) => {
-            let mut ghost = build_ghost_surface_inputs(&inputs.records.turns, inputs.pricing, None);
+            let prompts = session_prompt_text(&inputs.records.turns, &inputs.records.content);
+            let mut ghost =
+                build_ghost_surface_inputs(&inputs.records.turns, inputs.pricing, Some(prompts));
             ghost.claude_home = Some(roots.claude.clone());
             ghost.codex_home = Some(roots.codex.clone());
             ghost.opencode_projects = Some(vec![project

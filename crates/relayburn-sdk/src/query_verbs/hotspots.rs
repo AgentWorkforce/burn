@@ -1,10 +1,12 @@
 use super::*;
 
 mod compute;
+mod finding_kinds;
 pub(crate) use compute::{
     detect_hotspots, hotspots_attribution, HotspotDetections, HotspotEnvironment,
     HotspotSideRecords, SessionDetail,
 };
+pub(crate) use finding_kinds::default_hotspots_finding_kinds;
 
 // ---------------------------------------------------------------------------
 // hotspots — discriminated union
@@ -21,30 +23,6 @@ pub enum HotspotsGroupBy {
     Findings,
 }
 
-const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
-    "retry-loop",
-    "failure-run",
-    "cancellation-run",
-    "compaction-loss",
-    "edit-revert",
-    "edit-heavy",
-    "skill-recall-dup",
-    "skill-pruning-protection",
-    "system-prompt-tax",
-    "ghost-surface",
-    "tool-output-bloat",
-    "tool-call-pattern",
-    "cache-expiry",
-    "unpriced-usage",
-];
-
-pub(crate) fn default_hotspots_finding_kinds() -> Vec<String> {
-    DEFAULT_HOTSPOTS_FINDING_KINDS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect()
-}
-
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotspotsOptions {
@@ -58,6 +36,12 @@ pub struct HotspotsOptions {
     /// Restrict to turns whose derived provider is in the given set
     /// (case-insensitive). `None` / empty = no provider filter.
     pub provider: Option<Vec<String>>,
+    /// Session context-to-output ratio that triggers the independent
+    /// `context-output-ratio` finding. Defaults to 382:1 (inclusive).
+    pub context_output_ratio_threshold: Option<f64>,
+    /// Minimum context tokens a session must consume before ratio findings
+    /// apply. Defaults to 1,000,000; zero disables the volume floor.
+    pub context_output_min_tokens: Option<u64>,
     pub ledger_home: Option<PathBuf>,
 }
 
@@ -193,6 +177,7 @@ pub struct HotspotsAttributionResult {
 
 impl LedgerHandle {
     pub fn hotspots(&self, opts: HotspotsOptions) -> Result<HotspotsResult> {
+        let context_ratio = ContextOutputRatioConfig::from_hotspots_options(&opts)?;
         let mut q = build_query(
             opts.session.as_deref(),
             opts.project.as_deref(),
@@ -236,20 +221,24 @@ impl LedgerHandle {
             _ => return Ok(hotspots_attribution(&turns, &side, &pricing, opts.group_by)),
         };
         let wanted: HashSet<String> = wanted.into_iter().collect();
+        let ghost_surface = if wanted.contains("ghost-surface") {
+            Some(prompted_ghost_surface_inputs(self, &turns, &pricing)?)
+        } else {
+            None
+        };
         let detections = detect_hotspots(
             &turns,
             &side,
             &pricing,
             &HotspotEnvironment {
                 settings: &ledger_claude_settings(),
-                ghost_surface: wanted
-                    .contains("ghost-surface")
-                    .then(|| build_ghost_surface_inputs(&turns, &pricing, None)),
+                ghost_surface,
                 cache_history: &if wanted.contains("cache-expiry") {
                     cache_state_before_window(self, &turns, &q)?
                 } else {
                     Vec::new()
                 },
+                context_ratio: Some(context_ratio),
                 wanted: &wanted,
             },
         );

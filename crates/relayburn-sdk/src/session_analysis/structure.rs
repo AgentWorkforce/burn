@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use super::document::{ContextReport, FlowSummary, OverheadReport, Section};
 use super::Inputs;
 use crate::analyze::{
-    deltas_for_session, flow_graph_from_trees, ContextDeltaOpts, FlowEdgeKind, FlowNodeKind,
+    deltas_for_session_since, flow_graph_from_trees, ContextDeltaOpts, FlowEdgeKind, FlowNodeKind,
     FlowOpts, SubagentTreeNode, TurnSpanTree,
 };
 use crate::query_verbs::{
@@ -144,7 +144,7 @@ pub(super) fn context(inputs: &Inputs<'_>, trees: &[TurnSpanTree]) -> Section<Co
     let Some(peak) = peak else {
         return Section::unavailable("the session has no assistant turns");
     };
-    let largest_growth = deltas_for_session(
+    let largest_growth = deltas_for_session_since(
         trees,
         &inputs.records.compactions,
         inputs.pricing,
@@ -152,6 +152,7 @@ pub(super) fn context(inputs: &Inputs<'_>, trees: &[TurnSpanTree]) -> Section<Co
             top: Some(CONTEXT_GROWTH_ROWS),
             ..Default::default()
         },
+        None,
     );
     Section::available(ContextReport {
         peak_context_tokens: context_tokens(peak),

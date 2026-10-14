@@ -1,4 +1,5 @@
-//! JSON results that cross to JS with their `u64` counters as `BigInt`.
+//! `BigIntPromoting`: the JSON → JS walker that carries `u64` counters
+//! across the napi boundary as `BigInt` (see the crate docs).
 
 use std::ptr;
 
@@ -29,7 +30,7 @@ use crate::u64_to_bigint;
 ///
 /// Audit checklist when adding a new u64 field to the SDK: drop its
 /// camelCase name here so the napi-rs bindings keep the BigInt contract.
-pub(crate) const BIGINT_FIELDS: &[&str] = &[
+const BIGINT_FIELDS: &[&str] = &[
     // overhead + overhead_trim
     "tokens",
     "bytes",
@@ -143,6 +144,23 @@ pub(crate) fn is_bigint_field(name: &str) -> bool {
     BIGINT_FIELDS.contains(&name)
 }
 
+/// Whether a numeric leaf under `key` crosses as `BigInt`.
+fn promotes_to_bigint(key: Option<&str>, in_subtree: bool) -> bool {
+    in_subtree || key.is_some_and(is_bigint_field)
+}
+
+/// Whether the children of `key` sit inside a [`BIGINT_SUBTREES`] subtree.
+fn enters_bigint_subtree(in_subtree: bool, key: &str) -> bool {
+    in_subtree || BIGINT_SUBTREES.contains(&key)
+}
+
+/// Keys whose subtrees carry integers only as `u64` counters, including maps
+/// keyed by data values (fidelity `byClass`, `byGranularity`,
+/// `missingCoverage`) that a field-name list cannot enumerate. Every unsigned
+/// integer leaf under one of these keys is promoted; floats and strings pass
+/// through. `report` / `timeseries` / `bucket` are the summary envelope bodies.
+const BIGINT_SUBTREES: &[&str] = &["fidelity", "report", "timeseries", "bucket"];
+
 /// Wraps a `serde_json::Value` so that, when napi-rs converts it to a JS
 /// value, leaf u64 numbers under the [`BIGINT_FIELDS`] keys come out as
 /// `BigInt` instead of `number`. Used for the `overhead`, `overheadTrim`,
@@ -154,19 +172,21 @@ pub struct BigIntPromoting(pub(crate) JsonValue);
 
 impl ToNapiValue for BigIntPromoting {
     unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> NapiResult<sys::napi_value> {
-        promote_value(env, val.0, /*key=*/ None)
+        promote_value(env, val.0, /*key=*/ None, /*in_subtree=*/ false)
     }
 }
 
+/// `in_subtree` is true below a [`BIGINT_SUBTREES`] key.
 unsafe fn promote_value(
     env: sys::napi_env,
     val: JsonValue,
     key: Option<&str>,
+    in_subtree: bool,
 ) -> NapiResult<sys::napi_value> {
     match val {
         JsonValue::Number(n) => {
-            if let (Some(k), Some(u)) = (key, n.as_u64()) {
-                if is_bigint_field(k) {
+            if let Some(u) = n.as_u64() {
+                if promotes_to_bigint(key, in_subtree) {
                     return BigInt::to_napi_value(env, u64_to_bigint(u));
                 }
             }
@@ -182,7 +202,7 @@ unsafe fn promote_value(
                 "promote_value: napi_create_object"
             )?;
             for (k, v) in map.into_iter() {
-                let child = promote_value(env, v, Some(&k))?;
+                let child = promote_value(env, v, Some(&k), enters_bigint_subtree(in_subtree, &k))?;
                 let key_buf = std::ffi::CString::new(k.as_str()).map_err(|e| {
                     NapiError::new(
                         napi::Status::GenericFailure,
@@ -207,7 +227,7 @@ unsafe fn promote_value(
                 "promote_value: napi_create_array_with_length"
             )?;
             for (i, v) in arr.into_iter().enumerate() {
-                let child = promote_value(env, v, /*key=*/ None)?;
+                let child = promote_value(env, v, /*key=*/ None, in_subtree)?;
                 napi::check_status!(
                     sys::napi_set_element(env, js_arr, i as u32, child),
                     "promote_value: napi_set_element"
@@ -222,5 +242,32 @@ unsafe fn promote_value(
         JsonValue::Null => {
             napi::bindgen_prelude::Null::to_napi_value(env, napi::bindgen_prelude::Null)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_u64_fields_promote_outside_subtrees() {
+        assert!(promotes_to_bigint(Some("tokens"), false));
+        assert!(!promotes_to_bigint(Some("label"), false));
+        assert!(!promotes_to_bigint(None, false));
+    }
+
+    #[test]
+    fn every_leaf_promotes_inside_a_subtree() {
+        assert!(promotes_to_bigint(Some("usage-only"), true));
+        assert!(promotes_to_bigint(None, true));
+    }
+
+    #[test]
+    fn subtree_keys_open_and_nested_keys_stay_inside() {
+        for key in ["fidelity", "report", "timeseries", "bucket"] {
+            assert!(enters_bigint_subtree(false, key), "{key}");
+        }
+        assert!(!enters_bigint_subtree(false, "byClass"));
+        assert!(enters_bigint_subtree(true, "byClass"));
     }
 }

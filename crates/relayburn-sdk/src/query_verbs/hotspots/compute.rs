@@ -36,6 +36,8 @@ pub(crate) struct HotspotEnvironment<'a> {
     /// Turns outside `turns` that only supply earlier prompt-cache state to
     /// the cache-expiry detector; their own expiries are not reported.
     pub cache_history: &'a [TurnRecord],
+    /// Thresholds for the `context-output-ratio` finding; `None` skips it.
+    pub context_ratio: Option<ContextOutputRatioConfig>,
     /// Finding kinds to detect (see `DEFAULT_HOTSPOTS_FINDING_KINDS`).
     pub wanted: &'a HashSet<String>,
 }
@@ -48,6 +50,7 @@ pub(crate) struct HotspotDetections {
     pub ghost_surface: Vec<GhostSurfaceFinding>,
     pub tool_call_patterns: Vec<ToolCallPatternFinding>,
     pub cache_expiry: Vec<CacheExpiry>,
+    pub context_output_ratio: Vec<WasteFinding>,
 }
 
 /// Run every wanted hotspot detector over `turns`.
@@ -107,6 +110,11 @@ pub(crate) fn detect_hotspots(
         } else {
             Vec::new()
         },
+        context_output_ratio: env
+            .context_ratio
+            .filter(|_| wants("context-output-ratio"))
+            .map(|config| config.findings(turns))
+            .unwrap_or_default(),
     }
 }
 
@@ -134,10 +142,12 @@ impl HotspotDetections {
         pricing: &PricingTable,
         wanted: &HashSet<String>,
     ) -> Vec<WasteFinding> {
-        let mut findings: Vec<WasteFinding> = findings_from_patterns(&self.patterns)
-            .into_iter()
-            .filter(|f| wanted.contains(&f.kind))
-            .collect();
+        let mut findings: Vec<WasteFinding> = self.context_output_ratio.clone();
+        findings.extend(
+            findings_from_patterns(&self.patterns)
+                .into_iter()
+                .filter(|f| wanted.contains(&f.kind)),
+        );
         findings.extend(
             self.tool_output_bloat
                 .iter()
