@@ -50,6 +50,23 @@ describe('end-to-end: read tool catalog over stdio', () => {
     const output = new PassThrough();
     const responses = collectResponses(output);
     const ledgerFreshness = { lastWriteAtMs: 1, staleAfterMs: 86_400_000, stale: false };
+    const summaryFixture = {
+      totalTokens: 100,
+      totalCost: 3,
+      turnCount: 1,
+      contextEfficiency: {
+        contextTokens: 0,
+        outputTokens: 0,
+        contextTokensPerOutputToken: null,
+        unbounded: false,
+        zeroOutputTurnsWithContext: 0,
+        totalSessions: 0,
+        eligibleSessions: 0,
+        sessions: [],
+      },
+      byTool: [],
+      byModel: [],
+    };
     const tools = [
       createSessionCostTool({
         ledgerFreshness: async () => ledgerFreshness,
@@ -63,7 +80,7 @@ describe('end-to-end: read tool catalog over stdio', () => {
       createSummaryTool({
         ledgerFreshness: async () => ledgerFreshness,
         defaultSessionId: 'S',
-        summary: async () => ({ totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [] }),
+        summary: async () => summaryFixture,
       }),
       createHotspotsTool({
         ledgerFreshness: async () => ledgerFreshness,
@@ -120,7 +137,7 @@ describe('end-to-end: read tool catalog over stdio', () => {
     const expectedStructuredContent = new Map<number, unknown>([
       [3, { sessionId: 'S', totalUSD: 3, totalTokens: 100, turnCount: 1, models: ['a'], ledgerFreshness }],
       [4, { fingerprint: '1:2:3', ledgerFreshness }],
-      [5, { totalTokens: 100, totalCost: 3, turnCount: 1, byTool: [], byModel: [], ledgerFreshness }],
+      [5, { ...summaryFixture, ledgerFreshness }],
       [6, { kind: 'findings', findings: [], summary: { fixture: true }, ledgerFreshness }],
       [7, { project: '/fixture', files: [], perFile: [], grandTotal: 0, ledgerFreshness }],
       [8, {

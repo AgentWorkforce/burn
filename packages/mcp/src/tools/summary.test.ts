@@ -10,6 +10,16 @@ describe('createSummaryTool', () => {
       totalTokens: 12,
       totalCost: 0.5,
       turnCount: 2,
+      contextEfficiency: {
+        contextTokens: 0,
+        outputTokens: 0,
+        contextTokensPerOutputToken: null,
+        unbounded: false,
+        zeroOutputTurnsWithContext: 0,
+        totalSessions: 0,
+        eligibleSessions: 0,
+        sessions: [],
+      },
       byTool: [],
       byModel: [],
     };
