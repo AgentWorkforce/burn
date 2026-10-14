@@ -80,3 +80,20 @@ fn render_quality_without_edit_turns() {
          one-shot rate: n/a (no edit turns)"
     );
 }
+
+#[test]
+fn stop_reasons_line_lists_aborted_turns_only_when_present() {
+    let base = StopReasonCounts {
+        end_turn: 3,
+        ..StopReasonCounts::default()
+    };
+    assert_eq!(
+        format_stop_reasons_line(&base),
+        "Turn outcomes: 3 end_turn, 0 max_tokens, 0 refusal, 0 pause"
+    );
+    let aborted = StopReasonCounts { aborted: 2, ..base };
+    assert_eq!(
+        format_stop_reasons_line(&aborted),
+        "Turn outcomes: 3 end_turn, 0 max_tokens, 0 refusal, 0 pause, 2 aborted"
+    );
+}

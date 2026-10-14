@@ -264,6 +264,39 @@ mod tests {
         assert_eq!(report.models[0].provider, "openai");
     }
 
+    /// A rollout whose last task never completed, last written long ago, is
+    /// read now: its tail has settled, so the open task is billed.
+    #[test]
+    fn bills_a_settled_open_codex_task_when_read_now() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("open-task.jsonl");
+        let rollout: String = std::fs::read_to_string(fixture("codex/simple-turn.jsonl"))
+            .expect("read fixture")
+            .lines()
+            .filter(|line| !line.contains("\"task_complete\""))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        std::fs::write(&path, rollout).expect("write rollout");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|f| {
+                f.set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_776_643_205),
+                )
+            })
+            .expect("backdate rollout");
+
+        let report = measure_session(MeasureSessionOptions {
+            input_path: path,
+            harness: Harness::Codex,
+            pricing_path: None,
+        })
+        .expect("measure open rollout");
+        assert_eq!(report.turn_count, 1);
+        assert_eq!(report.usage.output_tokens, 120);
+    }
+
     #[test]
     fn opencode_counts_separate_reasoning_and_reconciles_model_costs() {
         let report = measure_session(MeasureSessionOptions {
