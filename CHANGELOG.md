@@ -5,6 +5,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ## [Unreleased]
 
 - `burn overhead` discovers the default Claude Code, Codex, and OpenCode user/ancestor/project instruction chains with harness-accurate precedence, boundaries, deduplication, and scope labels.
+- `@relayburn/mcp` now exposes summary, hotspots, overhead attribution,
+  overhead trimming, and model comparison as read-only MCP tool factories.
 - `burn search <query>` searches ingested session content with FTS5, with session scoping, result limits, optional highlighted snippets, and JSON output.
 - **BREAKING (`relayburn-sdk`):** search-hit JSON fields are now `sessionId` and `messageId` instead of `session_id` and `message_id`, consistently with the SDK's camelCase JSON contract; `search` limits above SQLite's signed 64-bit maximum are rejected with an error instead of silently disabling the limit.
 - `summary` now reports context tokens per generated output token and p50/p95/max context size for the ten highest-ratio sessions; context is input + cache-read + cache-creation tokens, while the denominator includes reasoning whether a harness folds it into output (Codex) or reports it separately.
