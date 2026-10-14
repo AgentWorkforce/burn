@@ -260,13 +260,12 @@ fn slice_side_records(
     Vec<UserTurnRecord>,
     Vec<crate::reader::ToolResultEventRecord>,
 )> {
-    let mut sessions: Vec<(SourceKind, &str)> = Vec::new();
-    for t in turns {
-        let key = (t.source, t.session_id.as_str());
-        if !sessions.contains(&key) {
-            sessions.push(key);
-        }
-    }
+    let mut seen: HashSet<(SourceKind, &str)> = HashSet::new();
+    let sessions: Vec<(SourceKind, &str)> = turns
+        .iter()
+        .map(|t| (t.source, t.session_id.as_str()))
+        .filter(|key| seen.insert(*key))
+        .collect();
     let mut user_turns = Vec::new();
     let mut tool_result_events = Vec::new();
     for (source, session_id) in sessions {
