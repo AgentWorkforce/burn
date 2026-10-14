@@ -1560,3 +1560,40 @@ fn sized_initial_cost_is_zero_when_paying_turn_has_no_new_content() {
     assert_eq!(a.initial_cost, 0.0);
     assert_eq!(a.initial_tokens, 0.0);
 }
+
+fn sized_attribution(result_tokens: u64) -> ToolAttribution {
+    serde_json::from_value(json!({
+        "toolUseId": format!("tu-{result_tokens}"), "toolName": "Read", "argsHash": "h",
+        "sessionId": "s", "emitTurnIndex": 0, "emitTs": "2026-04-20T00:00:00.000Z",
+        "model": "claude-sonnet-4-6", "resultTokens": result_tokens,
+        "resultBytesEstimated": false, "initialCost": 0.0, "initialTokens": 0.0,
+        "persistenceCost": 0.0, "persistenceTokens": 0.0, "ridingTurns": 0, "totalCost": 0.0
+    }))
+    .unwrap()
+}
+
+/// A turn's cache read carries only the non-empty results it still covers.
+#[test]
+fn persistence_rides_only_non_empty_results_the_cache_read_covers() {
+    let mut attributions: Vec<ToolAttribution> =
+        [0, 100, 1_000].into_iter().map(sized_attribution).collect();
+    let reader = turn(
+        "s",
+        "m-1",
+        1,
+        "2026-04-20T00:00:01.000Z",
+        "claude-sonnet-4-6",
+        Usage {
+            cache_read: 500,
+            ..empty_usage()
+        },
+        vec![],
+        SourceKind::ClaudeCode,
+    );
+    charge::pay_persistence(&mut attributions, &[0, 1, 2], &reader, None);
+    let rides: Vec<(u64, f64)> = attributions
+        .iter()
+        .map(|a| (a.riding_turns, a.persistence_tokens))
+        .collect();
+    assert_eq!(rides, [(0, 0.0), (1, 100.0), (0, 0.0)]);
+}

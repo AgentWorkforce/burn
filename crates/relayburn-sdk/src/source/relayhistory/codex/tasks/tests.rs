@@ -614,3 +614,23 @@ fn a_settled_open_task_that_reported_no_spend_bills_nothing() {
     assert!(!derived.pending);
     assert!(!derived.committed, "nothing of the task is emitted");
 }
+
+/// At the end of the rollout, an open task the ledger already billed closes
+/// without waiting to settle: nothing new after its billed segment, or a
+/// billed segment the rollout has not reached yet.
+#[test]
+fn an_open_task_the_ledger_billed_closes_at_the_tail_without_waiting() {
+    let first = derive_at(open_task(), Vec::new(), &Billing::settled());
+    let ledger = billed_after(&first, 12_001);
+    let unchanged = derive_at(open_task(), Vec::new(), &ledger);
+    assert!(!unchanged.pending);
+    assert!(appended(&unchanged, &ledger).is_empty());
+
+    let ahead = Billing {
+        now_ms: 12_001,
+        billed: ["t1@50".to_string()].into(),
+    };
+    let derived = derive_at(open_task(), Vec::new(), &ahead);
+    assert!(!derived.pending);
+    assert_eq!(outcomes(&derived), vec![("t1@50".to_string(), None)]);
+}
