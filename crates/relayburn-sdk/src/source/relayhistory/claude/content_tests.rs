@@ -146,3 +146,50 @@ fn a_thinking_block_with_text_is_assistant_thinking_content() {
         )]
     );
 }
+
+/// An empty tool result is still a block of its user turn; empty text is
+/// not.
+#[test]
+fn an_empty_tool_result_is_a_block_and_empty_text_is_not() {
+    let transcript = [
+        line(json!({
+            "parentUuid": null, "isSidechain": false, "type": "user", "uuid": "u1",
+            "timestamp": "2026-04-20T00:00:00.000Z", "cwd": "/tmp/project", "sessionId": SESSION,
+            "message": {"role": "user", "content": "run it"}
+        })),
+        assistant(
+            "a1",
+            "u1",
+            "2026-04-20T00:00:01.000Z",
+            json!({"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "true"}}),
+        ),
+        line(json!({
+            "parentUuid": "a1", "isSidechain": false, "type": "user", "uuid": "r1",
+            "timestamp": "2026-04-20T00:00:02.000Z", "cwd": "/tmp/project", "sessionId": SESSION,
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": ""},
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": ""}
+            ]}
+        })),
+    ]
+    .concat();
+    let records = records_of(&transcript);
+    let result_turn = records
+        .user_turns
+        .iter()
+        .find(|u| u.user_uuid == "r1")
+        .expect("the tool result's user turn");
+    let blocks: Vec<_> = result_turn
+        .blocks
+        .iter()
+        .map(|b| (b.kind, b.byte_len, b.tool_use_id.as_deref()))
+        .collect();
+    assert_eq!(
+        blocks,
+        [(
+            crate::reader::UserTurnBlockKind::ToolResult,
+            0,
+            Some("toolu_1")
+        )]
+    );
+}

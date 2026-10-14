@@ -15,12 +15,10 @@ use super::{Billing, SessionRecords};
 use crate::reader::classifier::{classify_activity, ClassificationInput};
 use crate::reader::hash::args_hash;
 use crate::reader::types::{
-    CompactionEvent, Coverage, Fidelity, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, StopReason, ToolCall, ToolResultEventRecord,
-    ToolResultEventSource, ToolResultStatus, TurnRecord, UsageGranularity, UserTurnBlock,
-    UserTurnBlockKind, UserTurnRecord,
+    Coverage, Fidelity, RelationshipSourceKind, RelationshipType, SessionRelationshipRecord,
+    SourceKind, StopReason, ToolCall, ToolResultEventRecord, ToolResultEventSource,
+    ToolResultStatus, TurnRecord, UsageGranularity,
 };
-use crate::reader::user_turn::bytes_to_approx_tokens;
 use crate::reader::{resolve_project, RequestIdLookup, TurnKey};
 use crate::util::time::format_iso_ms;
 
@@ -57,8 +55,6 @@ pub(crate) fn records_from_evidence(ev: &SessionEvidence, billing: &Billing) -> 
     };
     records.content = ctx.content(&records.turns);
     records.tool_result_events = ctx.tool_result_events();
-    records.user_turns = ctx.user_turns();
-    records.compactions = ctx.compactions();
     records.relationships = vec![SessionRelationshipRecord {
         v: 1,
         source: relationship_source(source),
@@ -313,67 +309,6 @@ impl<'a> Context<'a> {
                 agent_id: r.agent_id.clone(),
                 replaced_tools: None,
                 collapsed_calls: None,
-            })
-            .collect()
-    }
-
-    fn user_turns(&self) -> Vec<UserTurnRecord> {
-        self.ev
-            .user_turns
-            .iter()
-            .map(|t| UserTurnRecord {
-                v: 1,
-                source: self.source,
-                session_id: self.session_id().to_string(),
-                user_uuid: t.message_id.clone().unwrap_or_default(),
-                ts: format_iso_ms(t.ts_ms),
-                preceding_message_id: t.preceding_message_id.as_deref().map(|id| self.turn_id(id)),
-                following_message_id: t.following_message_id.as_deref().map(|id| self.turn_id(id)),
-                blocks: t
-                    .blocks
-                    .iter()
-                    .map(|b| {
-                        let byte_len = b.byte_len.max(0) as u64;
-                        UserTurnBlock {
-                            kind: if b.kind == "tool_result" {
-                                UserTurnBlockKind::ToolResult
-                            } else {
-                                UserTurnBlockKind::Text
-                            },
-                            tool_use_id: b.tool_use_id.clone(),
-                            byte_len,
-                            approx_tokens: bytes_to_approx_tokens(byte_len),
-                            is_error: b.is_error.filter(|e| *e != 0).map(|_| true),
-                        }
-                    })
-                    .collect(),
-            })
-            .collect()
-    }
-
-    fn turn_id(&self, message_id: &str) -> String {
-        self.turn_id_of
-            .get(message_id)
-            .cloned()
-            .unwrap_or_else(|| message_id.to_string())
-    }
-
-    fn compactions(&self) -> Vec<CompactionEvent> {
-        self.ev
-            .markers
-            .iter()
-            .filter(|m| m.kind == "compaction_boundary")
-            .map(|m| CompactionEvent {
-                v: 1,
-                source: self.source,
-                session_id: self.session_id().to_string(),
-                ts: m.ts_ms.map(format_iso_ms).unwrap_or_default(),
-                preceding_message_id: m.parent_id.as_deref().map(|id| self.turn_id(id)),
-                tokens_before_compact: m
-                    .payload
-                    .as_ref()
-                    .and_then(|p| p.get("preTokens").or_else(|| p.get("pre_tokens")))
-                    .and_then(Value::as_u64),
             })
             .collect()
     }
