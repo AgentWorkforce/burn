@@ -1595,6 +1595,29 @@ fn legacy_reader_cursors_are_dropped_on_open() {
     assert_eq!(ledger.read_cursors().unwrap(), "{}");
 }
 
+/// The write clock is seeded from event time only when a ledger first gains
+/// it (v6 → v7); a v7 ledger's own clock survives the v8 step even when an
+/// event is newer.
+#[test]
+fn v7_write_clock_survives_the_v8_migration() {
+    let tmp = TempDir::new().unwrap();
+    {
+        let mut ledger = open_in(&tmp);
+        ledger
+            .append_turns(&[make_turn("s1", "m1", "2025-01-01T00:00:00.000Z", 1)])
+            .unwrap();
+        ledger
+            .conns
+            .burn
+            .execute(
+                "UPDATE archive_state SET schema_version = 7, last_write_at_ms = 1000",
+                [],
+            )
+            .unwrap();
+    }
+    assert_eq!(open_in(&tmp).last_write_at_ms().unwrap(), Some(1000));
+}
+
 /// A current ledger keeps its ingest cursors across opens.
 #[test]
 fn current_cursors_survive_reopening() {
