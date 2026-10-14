@@ -500,6 +500,37 @@ fn summary_counts_subagents_from_the_store_the_ledger_was_ingested_from() {
     assert_eq!(report.subagents.paired + report.subagents.orphan, 2);
 }
 
+#[test]
+fn span_trees_hang_subagents_from_the_store_the_ledger_was_ingested_from() {
+    let sandbox = Sandbox::new();
+    let project = ".claude/projects/-tmp-project";
+    sandbox.place(
+        "claude-sidecars/sidecar-session.jsonl",
+        &format!("{project}/sidecar-session.jsonl"),
+    );
+    sandbox.place(
+        "claude-sidecars/sidecar-session",
+        &format!("{project}/sidecar-session"),
+    );
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    let session_id = ledger
+        .query_turns(&crate::ledger::Query::default())
+        .unwrap()
+        .first()
+        .unwrap()
+        .turn
+        .session_id
+        .clone();
+    drop(ledger);
+
+    let handle =
+        crate::Ledger::open(crate::LedgerOpenOptions::with_home(sandbox.ledger_home())).unwrap();
+    let trees = handle.session_span_trees(&session_id).unwrap();
+    let json = serde_json::to_string(&trees).unwrap();
+    assert!(json.contains("\"subagent\""), "{json}");
+}
+
 const ROLLOUT_SESSION: &str = "sess_tail_1";
 
 fn rollout_line(ts: &str, kind: &str, payload: serde_json::Value) -> String {

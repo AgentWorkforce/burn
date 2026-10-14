@@ -86,7 +86,7 @@ impl LedgerHandle {
         // session; the span trees are the session's own conversation, with
         // each subagent hung off the tool use that spawned it.
         let (turns, subagents) = if turns[0].source == crate::reader::SourceKind::ClaudeCode {
-            match claude_subagents(session_id) {
+            match claude_subagents(&self.inner, session_id) {
                 Ok(children) => crate::source::split_delegated(&turns, &children),
                 Err(_) => (turns, Vec::new()),
             }
@@ -250,9 +250,17 @@ pub(crate) fn bucket_subagents_per_turn(
 }
 
 /// The delegated subagents of the Claude session `session_id`, read from
-/// the default relayhistory store. An error when there is no store.
-fn claude_subagents(session_id: &str) -> Result<Vec<ai_hist::SessionEvidence>> {
-    let store = crate::source::locate::open_existing_store(&Default::default())?;
+/// the relayhistory store `ledger` was ingested from. An error when there is
+/// no store.
+fn claude_subagents(
+    ledger: &crate::ledger::Ledger,
+    session_id: &str,
+) -> Result<Vec<ai_hist::SessionEvidence>> {
+    let store =
+        crate::source::locate::open_existing_store(&crate::source::locate::HistoryStoreOptions {
+            db_path: crate::ingest::ingested_store(ledger),
+            home: None,
+        })?;
     crate::source::claude_children(&store, session_id, Default::default())
 }
 
