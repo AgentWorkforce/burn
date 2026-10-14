@@ -221,7 +221,10 @@ impl LedgerHandle {
             &side,
             &pricing,
             &HotspotEnvironment {
-                settings: &ledger_claude_settings(),
+                settings: &claude_settings(
+                    &crate::util::home_dir(),
+                    &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                ),
                 ghost_surface,
                 cache_history: &if wanted.contains("cache-expiry") {
                     cache_state_before_window(self, &turns, &q)?
@@ -281,11 +284,12 @@ fn slice_side_records(
     Ok((user_turns, tool_result_events))
 }
 
-fn ledger_claude_settings() -> Vec<LoadedClaudeSettings> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+/// The Claude settings a session run from `cwd` reads: the user's
+/// (`<home>/.claude/settings.json`), then the project's, which wins.
+pub(super) fn claude_settings(home: &Path, cwd: &Path) -> Vec<LoadedClaudeSettings> {
     [
-        load_claude_settings(user_claude_settings_path()),
-        load_claude_settings(project_claude_settings_path(&cwd)),
+        load_claude_settings(home.join(".claude").join("settings.json")),
+        load_claude_settings(project_claude_settings_path(cwd)),
     ]
     .into_iter()
     .flatten()

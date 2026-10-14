@@ -4262,3 +4262,27 @@ fn overhead_trim_counts_each_file_with_recommendations_once() {
         r.summary
     );
 }
+
+#[test]
+fn hotspots_reads_the_user_then_the_project_claude_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let project = dir.path().join("project");
+    let paths = super::hotspots::claude_settings(&home, &project);
+    assert!(paths.is_empty());
+    for root in [&home, &project] {
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join(".claude/settings.json"), r#"{"env": {}}"#).unwrap();
+    }
+    let paths: Vec<PathBuf> = super::hotspots::claude_settings(&home, &project)
+        .into_iter()
+        .map(|s| s.path)
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            home.join(".claude/settings.json"),
+            project.join(".claude/settings.json")
+        ]
+    );
+}

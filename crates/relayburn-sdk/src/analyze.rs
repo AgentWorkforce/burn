@@ -119,5 +119,5 @@ pub use tool_call_patterns::{tool_call_pattern_to_finding, DetectToolCallPattern
 pub(crate) use tool_output_bloat::detect_tool_output_bloat;
 pub use tool_output_bloat::{
     load_claude_settings, project_claude_settings_path, tool_output_bloat_to_finding,
-    user_claude_settings_path, DetectToolOutputBloatOptions, LoadedClaudeSettings,
+    DetectToolOutputBloatOptions, LoadedClaudeSettings,
 };
