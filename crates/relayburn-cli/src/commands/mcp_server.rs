@@ -424,7 +424,7 @@ impl Server {
                 patterns: optional_string_array(input, "patterns", "hotspots")?,
                 workflow: optional_string(input, "workflow", "hotspots")?,
                 provider: optional_string_array(input, "provider", "hotspots")?,
-                ledger_home: None,
+                ..HotspotsOptions::default()
             })
         })() {
             Ok(opts) => opts,
@@ -1065,6 +1065,14 @@ mod tests {
         assert_eq!(
             assert_tool_success(&scoped_hotspots)["turnsAnalyzed"],
             json!(2)
+        );
+        let provider_hotspots = server
+            .call_tool("burn__hotspots", &json!({ "provider": ["openai"] }))
+            .await
+            .expect("known hotspots tool");
+        assert_eq!(
+            assert_tool_success(&provider_hotspots)["turnsAnalyzed"],
+            json!(0)
         );
 
         let hotspots = server
