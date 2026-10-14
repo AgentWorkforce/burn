@@ -4,6 +4,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
+- `summary` now reports context tokens per generated output token and p50/p95/max context size for the ten highest-ratio sessions; context is input + cache-read + cache-creation tokens, while the denominator includes reasoning whether a harness folds it into output (Codex) or reports it separately.
+- `hotspots --findings` now flags high-volume sessions at or above a configurable context-to-output ratio (default 382:1 inclusive, with a configurable 1M-context-token floor), independently of dollar cost. The default is an inspection signal, not a length-normalized anomaly score.
 - **BREAKING (`relayburn-sdk`):** `ContextDeltaOpts::since` is now a relative-range or ISO-timestamp string instead of `Duration`; context-delta queries also accept `project` and apply the cutoff to returned deltas in both all-session and session-specific modes.
 - `burn overhead deltas` now honors `--project`, accepts relative or ISO `--since` values with explicit errors for invalid input, and rejects the unsupported `--kind` flag.
 - `--since` parsing now rejects overflowing relative ranges with an error instead of panicking.
