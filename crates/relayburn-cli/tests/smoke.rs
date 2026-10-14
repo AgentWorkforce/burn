@@ -1194,3 +1194,52 @@ fn summary_renders_when_freshness_metadata_is_unavailable() {
         }
     }
 }
+
+/// `hotspots --findings` checks the user's and the working directory's
+/// Claude settings for an oversized Bash output limit; project settings win.
+#[test]
+fn hotspots_findings_read_user_and_project_claude_settings() {
+    let tmp = tempfile::TempDir::new().expect("temp dir");
+    let home = tmp.path().join("home");
+    let project = tmp.path().join("project");
+    let settings = |dir: &std::path::Path, chars: &str| {
+        std::fs::create_dir_all(dir.join(".claude")).expect("create .claude");
+        std::fs::write(
+            dir.join(".claude/settings.json"),
+            format!(r#"{{"env": {{"BASH_MAX_OUTPUT_LENGTH": "{chars}"}}}}"#),
+        )
+        .expect("write settings");
+    };
+    settings(&home, "80000");
+    std::fs::create_dir_all(&project).expect("create project");
+    let static_bloat_title = || -> String {
+        let output = burn()
+            .current_dir(&project)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .args([
+                "--ledger-path",
+                tmp.path().join("ledger").to_str().unwrap(),
+                "hotspots",
+                "--findings",
+                "--json",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
+        value["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .filter(|f| f["kind"] == "tool-output-bloat")
+            .map(|f| f["title"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(static_bloat_title().contains("80,000 chars"));
+    settings(&project, "120000");
+    assert!(static_bloat_title().contains("120,000 chars"));
+}

@@ -196,18 +196,8 @@ impl LedgerHandle {
             });
         }
         let pricing = load_pricing_for_ledger(self);
-        // Propagate `enrichment` (e.g. workflowId folds) into side queries so a
-        // partial-session workflow stamp doesn't pull unrelated user-turns /
-        // tool-result events into the per-session buckets and skew attribution
-        // outside the requested slice.
-        let side_q = Query {
-            session_id: q.session_id.clone(),
-            since: q.since.clone(),
-            enrichment: q.enrichment.clone(),
-            ..Default::default()
-        };
-        let user_turns = self.inner.query_user_turns(&side_q)?;
-        let tool_result_events = self.inner.query_tool_result_events(&side_q)?;
+        let (user_turns, tool_result_events) =
+            slice_side_records(self, &turns, q.since.as_deref())?;
         let side = HotspotSideRecords {
             user_turns: &user_turns,
             tool_result_events: &tool_result_events,
@@ -259,6 +249,39 @@ pub fn hotspots(opts: HotspotsOptions) -> Result<HotspotsResult> {
 
 /// The user-level and working-directory Claude settings the cross-session
 /// tool-output-bloat check reads.
+/// The user turns and tool-result events of the sessions `turns` belong to,
+/// within `since`. Side records carry no stamp enrichment and no provider, so
+/// the selected turns' sessions are what scope them to the requested slice.
+fn slice_side_records(
+    handle: &LedgerHandle,
+    turns: &[TurnRecord],
+    since: Option<&str>,
+) -> Result<(
+    Vec<UserTurnRecord>,
+    Vec<crate::reader::ToolResultEventRecord>,
+)> {
+    let mut sessions: Vec<(SourceKind, &str)> = Vec::new();
+    for t in turns {
+        let key = (t.source, t.session_id.as_str());
+        if !sessions.contains(&key) {
+            sessions.push(key);
+        }
+    }
+    let mut user_turns = Vec::new();
+    let mut tool_result_events = Vec::new();
+    for (source, session_id) in sessions {
+        let q = Query {
+            session_id: Some(session_id.to_string()),
+            source: Some(source),
+            since: since.map(str::to_string),
+            ..Default::default()
+        };
+        user_turns.extend(handle.inner.query_user_turns(&q)?);
+        tool_result_events.extend(handle.inner.query_tool_result_events(&q)?);
+    }
+    Ok((user_turns, tool_result_events))
+}
+
 fn ledger_claude_settings() -> Vec<LoadedClaudeSettings> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     [

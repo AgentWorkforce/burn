@@ -4008,3 +4008,149 @@ fn schema_missing_as_empty_tolerates_only_missing_schema() {
         .expect_err("non-schema failures propagate");
     assert!(err.to_string().contains("disk I/O error"), "got {err}");
 }
+
+/// A tool result whose output is far above the bloat threshold.
+fn bloated_result(
+    session_id: &str,
+    tool_use_id: &str,
+    ts: &str,
+    bytes: u64,
+) -> crate::ToolResultEventRecord {
+    crate::ToolResultEventRecord {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: session_id.into(),
+        message_id: None,
+        tool_use_id: tool_use_id.into(),
+        call_index: None,
+        event_index: 0,
+        ts: Some(ts.into()),
+        status: crate::reader::ToolResultStatus::Completed,
+        event_source: crate::reader::ToolResultEventSource::ToolResult,
+        content_length: Some(bytes),
+        output_bytes: None,
+        output_truncated: None,
+        content_hash: None,
+        is_error: None,
+        usage: None,
+        usage_attribution: None,
+        subagent_session_id: None,
+        agent_id: None,
+        replaced_tools: None,
+        collapsed_calls: None,
+    }
+}
+
+/// `sess-a` (the fixture, 2026-04-23) stamped `wf-1`, plus `sess-b` from the
+/// day before. Each session carries one bloated tool result from 2026-04-22:
+/// 100,000 tokens in `sess-a`, 200,000 in `sess-b`. A Codex tool result under
+/// `sess-a`'s id belongs to no selected turn.
+fn bloat_slices_handle() -> (TempDir, LedgerHandle) {
+    let (dir, mut handle) = fixture_handle();
+    let mut enrichment = crate::Enrichment::new();
+    enrichment.insert("workflowId".into(), "wf-1".into());
+    let stamp = crate::Stamp::new(
+        "2026-04-23T00:00:30.000Z",
+        crate::StampSelector {
+            session_id: Some("sess-a".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+    handle.raw_mut().append_stamp(&stamp).unwrap();
+    handle
+        .raw_mut()
+        .append_turns(&[bucket_test_turn(
+            "sess-b",
+            "m-b",
+            "2026-04-22T00:00:00.000Z",
+            1_000,
+        )])
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_tool_result_events(&[
+            bloated_result("sess-a", "tu-old", "2026-04-22T12:00:00.000Z", 400_000),
+            bloated_result("sess-b", "tu-b", "2026-04-22T00:00:01.000Z", 800_000),
+        ])
+        .unwrap();
+    // A Codex session that shares `sess-a`'s id but has no turns.
+    let codex = crate::ToolResultEventRecord {
+        source: SourceKind::Codex,
+        ..bloated_result("sess-a", "tu-codex", "2026-04-23T00:00:10.000Z", 300_000)
+    };
+    handle
+        .raw_mut()
+        .append_tool_result_events(&[codex])
+        .unwrap();
+    (dir, handle)
+}
+
+/// The largest output the observed tool-output-bloat finding of `opts`
+/// reports, `None` when there is no such finding.
+fn bloat_max(handle: &LedgerHandle, opts: HotspotsOptions) -> Option<&'static str> {
+    let HotspotsResult::Findings { findings, .. } = handle.hotspots(opts).unwrap() else {
+        panic!("expected findings");
+    };
+    let titles: Vec<String> = findings
+        .into_iter()
+        .filter(|f| f.kind == "tool-output-bloat" && f.session_id.starts_with("sess-"))
+        .map(|f| f.title)
+        .collect();
+    assert!(titles.len() <= 1, "{titles:?}");
+    titles.first().map(|title| {
+        ["200,000", "100,000"]
+            .into_iter()
+            .find(|max| title.contains(max))
+            .unwrap_or_else(|| panic!("unexpected bloat title: {title}"))
+    })
+}
+
+#[test]
+fn hotspots_findings_read_side_records_of_the_selected_slice_only() {
+    let (_dir, handle) = bloat_slices_handle();
+    let bloat = || HotspotsOptions {
+        patterns: Some(vec!["tool-output-bloat".into()]),
+        ..HotspotsOptions::default()
+    };
+    assert_eq!(bloat_max(&handle, bloat()), Some("200,000"));
+    let session_a = HotspotsOptions {
+        session: Some("sess-a".into()),
+        ..bloat()
+    };
+    assert_eq!(bloat_max(&handle, session_a), Some("100,000"));
+    let recent = HotspotsOptions {
+        since: Some("2026-04-23T00:00:00Z".into()),
+        ..bloat()
+    };
+    assert_eq!(bloat_max(&handle, recent), None);
+    let workflow = HotspotsOptions {
+        workflow: Some("wf-1".into()),
+        ..bloat()
+    };
+    assert_eq!(bloat_max(&handle, workflow), Some("100,000"));
+}
+
+#[test]
+fn an_empty_pattern_list_selects_no_patterns() {
+    let (_dir, handle) = bloat_slices_handle();
+    // Findings mode with an empty list runs every default detector.
+    let findings = HotspotsOptions {
+        group_by: Some(HotspotsGroupBy::Findings),
+        patterns: Some(Vec::new()),
+        ..HotspotsOptions::default()
+    };
+    assert_eq!(bloat_max(&handle, findings), Some("200,000"));
+    // Without findings mode an empty list leaves the attribution view.
+    let result = handle
+        .hotspots(HotspotsOptions {
+            patterns: Some(Vec::new()),
+            ..HotspotsOptions::default()
+        })
+        .unwrap();
+    assert!(
+        matches!(result, HotspotsResult::Attribution(_)),
+        "{result:?}"
+    );
+}
