@@ -8,9 +8,13 @@ pub(super) fn prompted_ghost_surface_inputs(
     handle: &LedgerHandle,
     turns: &[TurnRecord],
     pricing: &PricingTable,
-) -> crate::analyze::ghost_surface::GhostSurfaceInputs {
-    let user_turn_text_by_session = load_ghost_surface_user_text_by_session(handle, turns);
-    build_ghost_surface_inputs(turns, pricing, Some(user_turn_text_by_session))
+) -> Result<crate::analyze::ghost_surface::GhostSurfaceInputs> {
+    let user_turn_text_by_session = load_ghost_surface_user_text_by_session(handle, turns)?;
+    Ok(build_ghost_surface_inputs(
+        turns,
+        pricing,
+        Some(user_turn_text_by_session),
+    ))
 }
 
 /// User text that prompted the selected turns, keyed by source and session.
@@ -23,7 +27,7 @@ pub(super) fn prompted_ghost_surface_inputs(
 fn load_ghost_surface_user_text_by_session(
     handle: &LedgerHandle,
     turns: &[TurnRecord],
-) -> HashMap<SourceKind, HashMap<String, Vec<String>>> {
+) -> Result<HashMap<SourceKind, HashMap<String, Vec<String>>>> {
     let mut selected: HashMap<(SourceKind, &str), HashSet<&str>> = HashMap::new();
     for turn in turns {
         selected
@@ -38,13 +42,10 @@ fn load_ghost_surface_user_text_by_session(
             source: Some(source),
             ..Default::default()
         };
-        let (Ok(session_turns), Ok(records)) = (
-            handle.inner.query_turns(&session_q),
-            handle.inner.query_content(&session_q),
-        ) else {
-            continue;
-        };
-        let session_turns: Vec<TurnRecord> = session_turns
+        let records = handle.inner.query_content(&session_q)?;
+        let session_turns: Vec<TurnRecord> = handle
+            .inner
+            .query_turns(&session_q)?
             .into_iter()
             .map(|enriched| enriched.turn)
             .filter(|turn| turn.session_id == session_id)
@@ -56,26 +57,30 @@ fn load_ghost_surface_user_text_by_session(
                 .insert(session_id.to_string(), texts);
         }
     }
-    out
+    Ok(out)
 }
 
-/// Non-empty user text records whose next turn (first turn with
-/// `ts >= record.ts`) is one of `selected` message ids.
+/// Non-empty user text records whose next turn (first turn at or after the
+/// record's instant) is one of `selected` message ids. Timestamps compare
+/// as instants, so `…:10Z` and `…:10.000Z` are the same moment; one that
+/// does not parse sorts before every instant.
 fn prompts_for_selected_turns(
     session_turns: &[TurnRecord],
     selected: &HashSet<&str>,
     records: Vec<ContentRecord>,
 ) -> Vec<String> {
-    let mut timeline: Vec<(&str, &str)> = session_turns
+    let instant = |ts: &str| crate::util::time::parse_iso_ms(ts).unwrap_or(i64::MIN);
+    let mut timeline: Vec<(i64, &str)> = session_turns
         .iter()
-        .map(|turn| (turn.ts.as_str(), turn.message_id.as_str()))
+        .map(|turn| (instant(&turn.ts), turn.message_id.as_str()))
         .collect();
     timeline.sort_unstable();
     records
         .into_iter()
         .filter(|record| record.role == ContentRole::User && record.kind == ContentKind::Text)
         .filter(|record| {
-            let next = timeline.partition_point(|(ts, _)| *ts < record.ts.as_str());
+            let at = instant(&record.ts);
+            let next = timeline.partition_point(|(ts, _)| *ts < at);
             timeline
                 .get(next)
                 .is_some_and(|(_, message_id)| selected.contains(message_id))

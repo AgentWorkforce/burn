@@ -9,14 +9,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use relayburn_sdk::{
-    context_delta as sdk_context_delta, describe_applies_to, overhead as sdk_overhead,
-    overhead_trim as sdk_overhead_trim, ContextDelta, ContextDeltaOpts,
-    ContextDeltaOwnerRail as OwnerRail, InterveningStep, OverheadFileSummary, OverheadOptions,
-    OverheadPerFileEntry, OverheadResult, OverheadSectionCost, OverheadTrimOptions,
-    OverheadTrimResult,
+    describe_applies_to, overhead as sdk_overhead, overhead_trim as sdk_overhead_trim,
+    OverheadFileSummary, OverheadOptions, OverheadPerFileEntry, OverheadResult,
+    OverheadSectionCost, OverheadTrimOptions, OverheadTrimResult,
 };
 
-use crate::cli::{GlobalArgs, OverheadAction, OverheadArgs, OverheadDeltasArgs};
+use crate::cli::{GlobalArgs, OverheadAction, OverheadArgs};
 use crate::render::error::report_error;
 use crate::render::format::{
     coerce_whole_f64_to_int, format_tokens, format_uint, format_usd, render_table,
@@ -24,13 +22,55 @@ use crate::render::format::{
 use crate::render::json::{render_json, stdout_error};
 use crate::render::progress::TaskProgress;
 
+mod deltas;
+
 pub fn run(globals: &GlobalArgs, args: OverheadArgs) -> i32 {
-    match args.action {
+    match dispatch(globals, args) {
+        Ok(code) => code,
+        Err(err) => report_error(&err, globals),
+    }
+}
+
+/// Route to the subcommand after merging parent-scoped flags into it.
+/// Flag conflicts surface as `Err`; subcommand failures are already
+/// reported and come back as their exit code.
+fn dispatch(globals: &GlobalArgs, args: OverheadArgs) -> io::Result<i32> {
+    let OverheadArgs {
+        project,
+        since,
+        kind,
+        action,
+    } = args;
+    match action {
         Some(OverheadAction::Trim(trim)) => {
-            run_trim(globals, args.project, args.since, args.kind, trim.top)
+            let project = merge_scoped_flag("--project", project, trim.project)?;
+            let since = merge_scoped_flag("--since", since, trim.since)?;
+            let kind = merge_scoped_flag("--kind", kind, trim.kind)?;
+            Ok(run_trim(globals, project, since, kind, trim.top))
         }
-        Some(OverheadAction::Deltas(deltas)) => run_deltas(globals, args.since, deltas),
-        None => run_report(globals, args.project, args.since, args.kind),
+        Some(OverheadAction::Deltas(mut args)) => {
+            if kind.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--kind is not supported by `burn overhead deltas`",
+                ));
+            }
+            let project = merge_scoped_flag("--project", project, args.project.take())?;
+            let since = merge_scoped_flag("--since", since, args.since.take())?;
+            Ok(deltas::run(globals, project, since, args))
+        }
+        None => Ok(run_report(globals, project, since, kind)),
+    }
+}
+
+fn merge_scoped_flag<T>(name: &str, parent: Option<T>, child: Option<T>) -> io::Result<Option<T>> {
+    match (parent, child) {
+        (Some(_), Some(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} was provided both before and after the overhead subcommand"),
+        )),
+        (Some(value), None) | (None, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
     }
 }
 
@@ -362,243 +402,6 @@ fn format_line_range(start: u64, end: u64) -> String {
     let s = format!("{start:>4}");
     let e = format!("{end:>4}");
     format!("{s}-{e}")
-}
-
-// ---------------------------------------------------------------------------
-// `burn overhead deltas` (#432)
-// ---------------------------------------------------------------------------
-
-fn run_deltas(globals: &GlobalArgs, since: Option<String>, args: OverheadDeltasArgs) -> i32 {
-    let opts = ContextDeltaOpts {
-        session: args.session.clone(),
-        since: since.as_deref().and_then(parse_since_duration),
-        top: args.top,
-        min_delta: args.min_delta,
-        owner: args.owner.into(),
-    };
-    let progress = TaskProgress::new(globals, "overhead deltas");
-    progress.set_task("computing context deltas");
-    let deltas = match sdk_context_delta(opts, globals.ledger_path.clone()) {
-        Ok(d) => d,
-        Err(err) => {
-            progress.finish_and_clear();
-            return report_error(&err, globals);
-        }
-    };
-    progress.finish_and_clear();
-
-    if globals.json {
-        let mut value = match serde_json::to_value(&deltas) {
-            Ok(v) => v,
-            Err(err) => return report_error(&io::Error::other(err), globals),
-        };
-        coerce_whole_f64_to_int(&mut value);
-        if let Err(err) = render_json(&value) {
-            return report_error(&err, globals);
-        }
-        return 0;
-    }
-
-    if let Err(err) = render_human_deltas(&deltas, args.explain) {
-        return report_error(&err, globals);
-    }
-    0
-}
-
-fn render_human_deltas(deltas: &[ContextDelta], explain: bool) -> io::Result<()> {
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
-
-    if deltas.is_empty() {
-        return handle
-            .write_all(b"# no context deltas above threshold\n")
-            .map_err(stdout_error);
-    }
-
-    let mut table: Vec<Vec<String>> = Vec::with_capacity(deltas.len() + 1);
-    table.push(vec![
-        "Inference".to_string(),
-        "Owner".to_string(),
-        "Delta".to_string(),
-        "Cost".to_string(),
-        "Driver".to_string(),
-    ]);
-    for d in deltas {
-        let inf_label = format!("{}/inf{}", short_turn_label(&d.turn_id), d.inference_idx);
-        let owner_label = match &d.owner_rail {
-            OwnerRail::Main => "main".to_string(),
-            OwnerRail::Subagent { agent_id } => format!("sub:{}", short_agent_label(agent_id)),
-        };
-        let delta_label = format_signed_tokens(d.delta_tokens);
-        let cost_label = format_usd(d.attributed_cost_usd);
-        let driver_label = driver_summary(&d.intervening);
-        table.push(vec![
-            inf_label,
-            owner_label,
-            delta_label,
-            cost_label,
-            driver_label,
-        ]);
-    }
-    handle
-        .write_all(render_table(&table).as_bytes())
-        .map_err(stdout_error)?;
-    handle.write_all(b"\n").map_err(stdout_error)?;
-
-    if explain {
-        handle.write_all(b"\n").map_err(stdout_error)?;
-        for d in deltas {
-            let inf_label = format!("{}/inf{}", short_turn_label(&d.turn_id), d.inference_idx);
-            let header = format!(
-                "{inf_label} — {} steps, prior {} -> current {} tok\n",
-                d.intervening.len(),
-                format_tokens(d.prior_context_tokens),
-                format_tokens(d.current_context_tokens),
-            );
-            handle.write_all(header.as_bytes()).map_err(stdout_error)?;
-            for step in &d.intervening {
-                let line = format!("    - {}\n", explain_step(step));
-                handle.write_all(line.as_bytes()).map_err(stdout_error)?;
-            }
-        }
-    }
-
-    handle
-        .write_all(
-            b"\n# token / cost figures are approximate (bytes/4 for tool results,\n\
-              # cache-read rate for cost). Compaction rows surface separately and\n\
-              # never appear as negative deltas.\n",
-        )
-        .map_err(stdout_error)?;
-    handle.flush().map_err(stdout_error)?;
-    Ok(())
-}
-
-/// Parse the CLI's relative-range `--since` form (`24h`, `7d`, `4w`, `2m`)
-/// into a [`std::time::Duration`]. ISO-timestamp forms are accepted by the
-/// SDK's `normalize_since` elsewhere, but the deltas verb only takes a
-/// relative window today (`ContextDeltaOpts::since: Option<Duration>`).
-/// Unrecognized inputs fall through to `None` — the SDK then applies the
-/// 24h default.
-fn parse_since_duration(s: &str) -> Option<std::time::Duration> {
-    if s.is_empty() {
-        return None;
-    }
-    let bytes = s.as_bytes();
-    let unit = *bytes.last()? as char;
-    if !matches!(unit, 'h' | 'd' | 'w' | 'm') {
-        return None;
-    }
-    let num = &s[..s.len() - 1];
-    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n: u64 = num.parse().ok()?;
-    let secs = match unit {
-        'h' => n.checked_mul(3_600)?,
-        'd' => n.checked_mul(86_400)?,
-        'w' => n.checked_mul(7 * 86_400)?,
-        'm' => n.checked_mul(30 * 86_400)?,
-        _ => unreachable!(),
-    };
-    Some(std::time::Duration::from_secs(secs))
-}
-
-fn short_turn_label(turn_id: &str) -> String {
-    // Turn ids on Claude are `msg-...` UUIDs; trim to a short prefix
-    // for the table. Keep the original for JSON output. Use
-    // `chars().take(8)` rather than byte slicing so non-ASCII ids
-    // (defensive — Claude ids are ASCII, but the helper is generic)
-    // don't panic on a mid-byte cut.
-    let trimmed = turn_id.trim_start_matches("msg_");
-    let trimmed = trimmed.trim_start_matches("msg-");
-    let short: String = trimmed.chars().take(8).collect();
-    format!("T{short}")
-}
-
-fn short_agent_label(agent_id: &str) -> String {
-    let trimmed = agent_id.trim_start_matches("agent-");
-    trimmed.chars().take(8).collect()
-}
-
-fn format_signed_tokens(n: i64) -> String {
-    let sign = if n > 0 {
-        "+"
-    } else if n < 0 {
-        "-"
-    } else {
-        ""
-    };
-    format!("{sign}{}", format_tokens(n.unsigned_abs()))
-}
-
-fn driver_summary(steps: &[InterveningStep]) -> String {
-    if steps.is_empty() {
-        return "(no intervening leaves)".to_string();
-    }
-    // Largest step by approx_tokens, with a "N steps" suffix when more
-    // than one. Compaction rows always win their summary because
-    // freeing tokens is the most explanatory signal.
-    if let Some(comp) = steps
-        .iter()
-        .find(|s| matches!(s, InterveningStep::Compaction { .. }))
-    {
-        return comp.driver_label();
-    }
-    let largest = steps
-        .iter()
-        .max_by_key(|s| s.approx_tokens())
-        .expect("non-empty");
-    let extra = steps.len().saturating_sub(1);
-    if extra == 0 {
-        largest.driver_label()
-    } else {
-        format!(
-            "{} (+{extra} more step{})",
-            largest.driver_label(),
-            if extra == 1 { "" } else { "s" }
-        )
-    }
-}
-
-fn explain_step(step: &InterveningStep) -> String {
-    match step {
-        InterveningStep::ToolResult {
-            tool_use_id,
-            tool_name,
-            approx_tokens,
-            approx_bytes,
-            truncated,
-        } => format!(
-            "tool_result {tool_name} (id={tool_use_id}): ~{} tok / {} bytes{}",
-            format_tokens(*approx_tokens),
-            format_uint(*approx_bytes),
-            if *truncated { " [truncated]" } else { "" },
-        ),
-        InterveningStep::UserPrompt {
-            approx_tokens,
-            has_system_reminder,
-        } => format!(
-            "user prompt: ~{} tok{}",
-            format_tokens(*approx_tokens),
-            if *has_system_reminder {
-                " (with system-reminder)"
-            } else {
-                ""
-            },
-        ),
-        InterveningStep::SystemReminder {
-            source,
-            approx_tokens,
-        } => format!(
-            "system-reminder ({source:?}): ~{} tok",
-            format_tokens(*approx_tokens),
-        ),
-        InterveningStep::Compaction { tokens_freed } => {
-            format!("compaction: -{} tok freed", format_tokens(*tokens_freed))
-        }
-        InterveningStep::Other => "other".to_string(),
-    }
 }
 
 #[cfg(test)]
