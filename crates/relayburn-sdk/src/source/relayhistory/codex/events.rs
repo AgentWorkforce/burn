@@ -256,6 +256,137 @@ fn call_of(edit: &FileEdit) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn evidence(
+        messages: Value,
+        markers: Value,
+        tool_calls: Value,
+        edits: Value,
+    ) -> SessionEvidence {
+        serde_json::from_value(json!({
+            "session": {
+                "source": "codex", "session_id": "sess", "cwd": "/tmp/project",
+                "git_branch": null, "first_activity_ms": 0, "last_activity_ms": 0,
+                "first_prompt": null, "last_assistant_text": null, "models": [],
+                "originator": null, "agent_version": null, "repo_url": null,
+                "initial_commit": null, "workspace_roots": [], "project_key": null,
+                "project_key_method": null, "raw_path": null, "source_stamp": null,
+                "discovery_state": "full", "locations": ["local"]
+            },
+            "prompts": [], "messages": messages, "tool_calls": tool_calls, "tool_results": [],
+            "file_edits": edits, "markers": markers, "relationships": [], "requests": [],
+            "usage": null, "user_turns": [], "coverage": [], "loaded": [],
+            "include_text": true, "diagnostics": []
+        }))
+        .unwrap()
+    }
+
+    fn block(line: u64, role: &str, kind: &str, text: &str, control: Option<&str>) -> Value {
+        json!({
+            "event_uid": format!("{line}:message"), "role": role, "kind": kind,
+            "text": text, "control": control, "ts_ms": line * 1000
+        })
+    }
+
+    fn message(line: u64, role: &str, blocks: Vec<Value>) -> Value {
+        json!({"message_id": format!("{line}:message"), "role": role, "ts_ms": line * 1000,
+               "turn_id": "t1", "blocks": blocks})
+    }
+
+    /// Each derived event, as one comparable label.
+    fn labels(ev: &SessionEvidence) -> Vec<String> {
+        stream(ev)
+            .iter()
+            .map(|located| match &located.event {
+                Event::UserText { text, .. } => format!("user {text}"),
+                Event::AssistantText { text, .. } => format!("assistant {text}"),
+                Event::Reasoning { text, .. } => format!("reasoning {text}"),
+                Event::SubagentDone { marker } => {
+                    format!("subagent-done {}", marker.subkind.as_deref().unwrap_or(""))
+                }
+                Event::FileEdit { path } => format!("edit {path}"),
+                _ => "other".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn messages_yield_prompts_replies_and_reasoning_but_not_context_wrappers() {
+        let ev = evidence(
+            json!([
+                message(
+                    1,
+                    "user",
+                    vec![block(
+                        1,
+                        "user",
+                        "text",
+                        "<environment_context>",
+                        Some("codex_context_wrapper")
+                    ),]
+                ),
+                message(2, "user", vec![block(2, "user", "text", "fix it", None)]),
+                message(
+                    3,
+                    "assistant",
+                    vec![block(3, "assistant", "thinking", "plan", None)]
+                ),
+                message(
+                    4,
+                    "assistant",
+                    vec![block(4, "assistant", "text", "done", None)]
+                ),
+            ]),
+            json!([]),
+            json!([]),
+            json!([]),
+        );
+        assert_eq!(
+            labels(&ev),
+            ["user fix it", "reasoning plan", "assistant done"]
+        );
+    }
+
+    #[test]
+    fn only_terminal_subagent_notifications_end_a_subagent() {
+        let notification = |line: u64, subkind: &str| {
+            json!({
+                "marker_uid": format!("{line}:marker"), "ts_ms": line * 1000,
+                "message_id": null, "parent_id": null, "turn_id": null,
+                "kind": "subagent_notification", "subkind": subkind, "text": null,
+                "payload": null, "usage_snapshot": null
+            })
+        };
+        let ev = evidence(
+            json!([]),
+            json!([
+                notification(1, "subagent_started"),
+                notification(2, "subagent_done"),
+            ]),
+            json!([]),
+            json!([]),
+        );
+        assert_eq!(labels(&ev), ["subagent-done subagent_done"]);
+    }
+
+    #[test]
+    fn a_failed_patch_edits_no_file() {
+        let edit = |call: &str, path: &str, line: u64| {
+            json!({"tool_use_id": format!("{call}#{path}"), "message_id": format!("{line}:patch_apply_end"),
+                   "file_path": path, "ts_ms": line * 1000})
+        };
+        let ev = evidence(
+            json!([]),
+            json!([]),
+            json!([
+                {"tool_use_id": "call_ok", "name": "apply_patch", "is_error": false},
+                {"tool_use_id": "call_bad", "name": "apply_patch", "is_error": true},
+            ]),
+            json!([edit("call_ok", "a.rs", 1), edit("call_bad", "b.rs", 2)]),
+        );
+        assert_eq!(labels(&ev), ["edit a.rs"]);
+    }
 
     #[test]
     fn line_index_orders_record_ids() {
