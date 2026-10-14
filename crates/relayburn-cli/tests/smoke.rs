@@ -330,25 +330,31 @@ fn overhead_deltas_help_only_advertises_supported_shared_flags() {
 
 #[test]
 fn overhead_trim_keeps_post_subcommand_shared_flags() {
-    let ledger = tempfile::TempDir::new().expect("temp ledger");
-    let project = tempfile::TempDir::new().expect("temp project");
+    // Sealed HOME and a git-bounded project: the AGENTS.md chain is empty
+    // regardless of the host's instruction files.
+    let tmp = tempfile::TempDir::new().expect("temp dir");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(project.join(".git")).expect("create project");
     burn()
+        .env("HOME", tmp.path().join("home"))
+        .env_remove("CODEX_HOME")
+        .env_remove("XDG_CONFIG_HOME")
         .args([
             "--ledger-path",
-            ledger.path().to_str().unwrap(),
+            tmp.path().join("ledger").to_str().unwrap(),
             "overhead",
             "trim",
             "--project",
-            project.path().to_str().unwrap(),
+            project.to_str().unwrap(),
             "--since",
             "7d",
             "--kind",
-            "claude-md",
+            "agents-md",
         ])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "no claude-md overhead files found",
+            "no agents-md overhead files found",
         ));
 }
 
