@@ -708,3 +708,31 @@ fn only_a_spawn_agent_call_records_a_subagent() {
         .collect();
     assert_eq!(spawned, ["agent-call_spawn"]);
 }
+
+/// A subagent notification without a `call_id` answers the call its
+/// parent id names; one with neither answers nothing.
+#[test]
+fn a_subagent_notification_falls_back_to_its_parent_call() {
+    let done = |line: u64, parent: &str| {
+        json!({
+            "marker_uid": format!("{line}:marker"), "ts_ms": line * 1000,
+            "message_id": null, "parent_id": parent, "turn_id": null,
+            "kind": "subagent_notification", "subkind": "subagent_done", "text": null,
+            "payload": {"agent_id": "agent-1"}, "usage_snapshot": null
+        })
+    };
+    let [s1, c1] = task(10, "t1");
+    let derived = derive(vec![
+        s1,
+        snapshot(11, 100, 0, 10),
+        done(12, "call_1"),
+        done(13, ""),
+        c1,
+    ]);
+    let answered: Vec<&str> = derived
+        .tool_result_events
+        .iter()
+        .map(|e| e.tool_use_id.as_str())
+        .collect();
+    assert_eq!(answered, ["call_1"]);
+}

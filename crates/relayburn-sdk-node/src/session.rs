@@ -64,21 +64,7 @@ pub struct AnalyzeSessionOptions {
 #[napi(js_name = "analyzeSession")]
 pub fn analyze_session(opts: AnalyzeSessionOptions) -> Result<BigIntPromoting, BurnError> {
     let harness = parse_harness("analyzeSession", &opts.harness)?;
-    let session = match (opts.session_id, opts.path) {
-        (Some(session_id), None) => sdk::SessionLocator::Id {
-            harness,
-            session_id,
-        },
-        (None, Some(path)) => sdk::SessionLocator::Path {
-            harness,
-            path: PathBuf::from(path),
-        },
-        _ => {
-            return Err(invalid_arg(
-                "analyzeSession: pass exactly one of sessionId or path",
-            ))
-        }
-    };
+    let session = locator(harness, opts.session_id, opts.path)?;
     let mut options = sdk::AnalyzeSessionOptions::new(session);
     options.store = sdk::HistoryStoreOptions {
         db_path: maybe_path(opts.store_db_path),
@@ -90,6 +76,27 @@ pub fn analyze_session(opts: AnalyzeSessionOptions) -> Result<BigIntPromoting, B
     promoted("analyzeSession", &analysis)
 }
 
+/// The session `analyzeSession` names: exactly one of an id or a path.
+fn locator(
+    harness: sdk::Harness,
+    session_id: Option<String>,
+    path: Option<String>,
+) -> Result<sdk::SessionLocator, BurnError> {
+    match (session_id, path) {
+        (Some(session_id), None) => Ok(sdk::SessionLocator::Id {
+            harness,
+            session_id,
+        }),
+        (None, Some(path)) => Ok(sdk::SessionLocator::Path {
+            harness,
+            path: PathBuf::from(path),
+        }),
+        _ => Err(invalid_arg(
+            "analyzeSession: pass exactly one of sessionId or path",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -97,7 +104,23 @@ mod tests {
 
     use serde_json::Value;
 
+    use super::locator;
     use crate::{is_bigint_field, sdk};
+
+    #[test]
+    fn a_session_is_named_by_exactly_one_of_id_or_path() {
+        let harness = sdk::Harness::Codex;
+        assert!(matches!(
+            locator(harness, Some("s1".into()), None),
+            Ok(sdk::SessionLocator::Id { session_id, .. }) if session_id == "s1"
+        ));
+        assert!(matches!(
+            locator(harness, None, Some("/x.jsonl".into())),
+            Ok(sdk::SessionLocator::Path { path, .. }) if path == Path::new("/x.jsonl")
+        ));
+        assert!(locator(harness, None, None).is_err());
+        assert!(locator(harness, Some("s1".into()), Some("/x.jsonl".into())).is_err());
+    }
 
     /// Integer fields the facade does not type as `number | bigint`: `depth`
     /// is an `i32`, `turnIndexes` is declared `number[]`, and the rest live
