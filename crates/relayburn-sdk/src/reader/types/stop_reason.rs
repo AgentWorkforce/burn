@@ -106,3 +106,29 @@ where
     let opt: Option<String> = Option::deserialize(d)?;
     Ok(opt.map(|s| StopReason::from_wire(&s).unwrap_or(StopReason::Silent)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL: [StopReason; 8] = [
+        StopReason::EndTurn,
+        StopReason::MaxTokens,
+        StopReason::PauseTurn,
+        StopReason::StopSequence,
+        StopReason::ToolUse,
+        StopReason::Refusal,
+        StopReason::Aborted,
+        StopReason::Silent,
+    ];
+
+    #[test]
+    fn the_wire_spelling_round_trips_and_matches_serde_and_display() {
+        for reason in ALL {
+            let wire = reason.wire_str();
+            assert_eq!(StopReason::from_wire(wire), Some(reason), "{wire}");
+            assert_eq!(reason.to_string(), wire);
+            assert_eq!(serde_json::to_value(reason).unwrap(), wire);
+        }
+    }
+}
