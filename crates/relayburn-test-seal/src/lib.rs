@@ -84,8 +84,12 @@ pub fn original_home() -> Option<&'static Path> {
     ORIGINAL_HOME.get().and_then(|home| home.as_deref())
 }
 
+/// Compared ASCII-case-insensitively: Windows resolves environment names
+/// that way, so `Relayburn_Home` relocates the ledger there just as
+/// `RELAYBURN_HOME` does.
 fn relocates_a_store(key: &str) -> bool {
-    RELOCATING_VARS.contains(&key)
+    let key = key.to_ascii_uppercase();
+    RELOCATING_VARS.contains(&key.as_str())
         || RELOCATING_PREFIXES
             .iter()
             .any(|prefix| key.starts_with(prefix))
@@ -152,6 +156,10 @@ mod tests {
             "CODEX_HOME",
             "CLAUDE_CONFIG_DIR",
             "OPENCODE_DB",
+            "Relayburn_Home",
+            "ai_hist_db",
+            "Codex_Home",
+            "xdg_data_home",
         ] {
             assert!(relocates_a_store(key), "{key}");
         }

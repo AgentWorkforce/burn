@@ -35,8 +35,15 @@ if (!statSync(TRIPWIRE).isFile()) {
   throw new Error(`${TRIPWIRE} must be a regular file so nothing can be created beneath it`);
 }
 
+// Compared case-insensitively: Windows resolves environment names that way,
+// so `Relayburn_Home` relocates the ledger there just as `RELAYBURN_HOME` does.
+export function relocatesAStore(key) {
+  const upper = key.toUpperCase();
+  return RELOCATING_VARS.has(upper) || RELOCATING_PREFIXES.some((p) => upper.startsWith(p));
+}
+
 for (const key of Object.keys(process.env)) {
-  if (RELOCATING_VARS.has(key) || RELOCATING_PREFIXES.some((p) => key.startsWith(p))) {
+  if (relocatesAStore(key)) {
     delete process.env[key];
   }
 }
