@@ -19,7 +19,7 @@
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
-    "test": "pnpm run build && node --test 'dist/**/*.test.js'"
+    "test": "pnpm run build && node --import ../../scripts/test-seal.mjs --test 'dist/**/*.test.js'"
   },
   "engines": {
     "node": ">=22"

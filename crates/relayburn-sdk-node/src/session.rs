@@ -105,7 +105,8 @@ mod tests {
     use serde_json::Value;
 
     use super::locator;
-    use crate::{is_bigint_field, sdk};
+    use crate::bigint_promoting::is_bigint_field;
+    use crate::sdk;
 
     #[test]
     fn a_session_is_named_by_exactly_one_of_id_or_path() {

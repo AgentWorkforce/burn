@@ -16,6 +16,9 @@
 //! 4. `burn --version` exits 0 (clap derives this from the workspace
 //!    `package.version`).
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 

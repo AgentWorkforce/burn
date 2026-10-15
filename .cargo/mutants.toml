@@ -1,0 +1,3 @@
+# The test seal is the guard that keeps every mutant's test run away from
+# the user's real stores; mutating it would disarm that guard.
+exclude_globs = ["crates/relayburn-test-seal/**"]

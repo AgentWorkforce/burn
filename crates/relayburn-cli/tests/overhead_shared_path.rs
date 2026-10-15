@@ -2,6 +2,9 @@
 //! harnesses (Codex's 32 KiB project budget vs OpenCode's full file) is two
 //! overhead rows; the human report and trim output keep them apart.
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 

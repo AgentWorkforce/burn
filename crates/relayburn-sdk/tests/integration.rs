@@ -6,6 +6,9 @@
 //! function). Assertions are structural — the goal is "the wrappers plumb
 //! through correctly," not full parity with the TS sibling on real data.
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use std::path::Path;
 
 use tempfile::TempDir;

@@ -10,6 +10,10 @@
 //! exit-code mapping for typed SDK errors. Anything else surfaces as a
 //! generic `anyhow` error and lands in the same reporter.
 
+// Seal the test process away from the user's real stores before any test runs.
+#[cfg(test)]
+use relayburn_test_seal as _;
+
 mod cli;
 mod commands;
 mod render;
