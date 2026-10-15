@@ -70,6 +70,11 @@ static TOOL_ALIASES: phf::Map<&'static str, &'static str> = phf_map! {
     "glob"     => "Glob",
     "webfetch" => "WebFetch",
     "task"     => "Task",
+    // Copilot CLI (shares OpenCode's bash/edit/grep/glob/task names)
+    "view"       => "Read",
+    "create"     => "Write",
+    "web_fetch"  => "WebFetch",
+    "read_agent" => "Task",
 };
 
 pub fn normalize_tool_name(name: &str) -> &str {

@@ -198,7 +198,9 @@ fn resolve_stamps(
     let harness = match evidence.session.source {
         Source::Claude => PendingStampHarness::Claude,
         Source::Codex => PendingStampHarness::Codex,
-        _ => PendingStampHarness::Opencode,
+        Source::OpenCode => PendingStampHarness::Opencode,
+        // No launcher stamps a session it cannot name before spawn.
+        _ => return 0,
     };
     let candidate = PendingStampSessionCandidate {
         harness,

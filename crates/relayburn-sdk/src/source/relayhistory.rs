@@ -25,6 +25,7 @@ use crate::util::time::format_iso_ms;
 mod claude;
 mod codex;
 mod content;
+mod copilot;
 mod opencode;
 mod tools;
 
@@ -33,6 +34,7 @@ pub(crate) fn source_kind(source: Source) -> Option<SourceKind> {
         Source::Claude => Some(SourceKind::ClaudeCode),
         Source::Codex => Some(SourceKind::Codex),
         Source::OpenCode => Some(SourceKind::Opencode),
+        Source::Copilot => Some(SourceKind::CopilotCli),
         _ => None,
     }
 }
@@ -76,6 +78,7 @@ pub(crate) fn records_from_evidence(ev: &SessionEvidence, billing: &Billing) -> 
     records.request_id_lookup = ctx.request_ids(&records.turns);
     match source {
         SourceKind::Opencode => opencode::refine(&ctx, &mut records),
+        SourceKind::CopilotCli => copilot::refine(&ctx, &mut records),
         _ => claude::refine(&ctx, &mut records),
     }
     records
@@ -84,6 +87,7 @@ pub(crate) fn records_from_evidence(ev: &SessionEvidence, billing: &Billing) -> 
 fn relationship_source(source: SourceKind) -> RelationshipSourceKind {
     match source {
         SourceKind::Opencode => RelationshipSourceKind::Opencode,
+        SourceKind::CopilotCli => RelationshipSourceKind::CopilotCli,
         _ => RelationshipSourceKind::ClaudeCode,
     }
 }

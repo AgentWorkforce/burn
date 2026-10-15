@@ -26,7 +26,7 @@ rusqlite = { workspace = true }
 # Session sourcing: relayhistory captures harness evidence; burn owns what
 # the counters mean. burn depends on a semver-compatible ai-hist release;
 # adopting a new minor is a deliberate bump that re-runs the parity suite.
-ai-hist = "0.41"
+ai-hist = "0.45"
 # Path-mode session analysis stages one transcript into a throwaway
 # provider root and relayhistory store.
 tempfile = "3"

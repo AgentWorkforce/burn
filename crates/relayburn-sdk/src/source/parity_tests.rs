@@ -121,6 +121,16 @@ fn stage_corpus() -> Vec<Staged> {
         );
         staged.push(fixture);
     }
+    for path in sorted(&root.join("copilot")) {
+        let fixture = Staged::new(format!("copilot-{}", name_of(&path)));
+        let journal = std::fs::read_to_string(&path).unwrap();
+        let header: Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+        let sid = header["data"]["sessionId"].as_str().unwrap();
+        let dir = fixture.home.path().join(".copilot/session-state").join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        fixture.copy(&path, &dir.join("events.jsonl"));
+        staged.push(fixture);
+    }
     staged
 }
 

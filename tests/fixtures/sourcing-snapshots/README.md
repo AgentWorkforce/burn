@@ -1,7 +1,7 @@
 # Sourcing snapshots
 
 The `SessionRecords` burn derives from each session fixture under
-`tests/fixtures/{claude,codex,opencode}`, one JSON file per session. They are
+`tests/fixtures/{claude,codex,opencode,copilot}`, one JSON file per session. They are
 the frozen spec for mapping relayhistory evidence onto burn records:
 `source::parity_tests` stages each fixture in a throwaway HOME (its
 `/tmp/project` cwd fields pointed at an empty directory there, so nothing on
@@ -19,5 +19,11 @@ differ:
 - `claude-incomplete-then-complete.json` — a Claude assistant turn still in
   progress (no `stop_reason` yet) is not emitted; it becomes a turn once its
   response settles.
+
+The `copilot-*` snapshots have no original reader behind them: they are burn's
+mapping of the Copilot CLI journals relayhistory captures, reviewed when the
+source was added. `copilot-cli-usage.json` bills each `session.shutdown`'s
+growth in Copilot's per-model running totals as `per-session-aggregate` turns,
+so its turns sum to the final `modelMetrics`.
 
 The files change only by hand, alongside the mapping change they describe.

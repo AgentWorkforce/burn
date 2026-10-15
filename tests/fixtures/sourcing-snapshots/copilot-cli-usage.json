@@ -1,0 +1,727 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "b14d26db-ba18-5214-8347-f994214c56f7",
+      "turnIndex": 0,
+      "ts": "2026-09-18T21:30:05.185Z",
+      "model": "claude-sonnet-4.6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 42,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "toolu_fixture_view",
+          "name": "view",
+          "target": "/tmp/project/tests/fixture.rs",
+          "argsHash": "657d3e56bf6bee66"
+        }
+      ],
+      "filesTouched": [
+        "/tmp/project/tests/fixture.rs"
+      ],
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "47852f90-5c76-5d70-b1c0-e3afa4e1ab4e",
+      "turnIndex": 1,
+      "ts": "2026-09-18T21:30:10.370Z",
+      "model": "claude-sonnet-4.6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 17,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "bash_1",
+          "name": "bash",
+          "target": "cargo test fixture",
+          "argsHash": "03d9abe8e9377c39",
+          "isError": true
+        }
+      ],
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "12c7b239-8581-501f-947a-60d2a17ec0ea",
+      "turnIndex": 2,
+      "ts": "2026-09-18T21:30:15.555Z",
+      "model": "claude-sonnet-4.6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 23,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "debugging",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": false,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "00183503-c6e5-5f9c-82fe-60c1190b312f",
+      "turnIndex": 3,
+      "ts": "2026-09-18T21:30:20.740Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_fixture_task",
+          "name": "task",
+          "target": "explore",
+          "argsHash": "4ae367a468ed01af"
+        }
+      ],
+      "activity": "delegation",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "ad48d783-9ce7-5135-915d-7155250c45a3",
+      "turnIndex": 4,
+      "ts": "2026-09-18T21:30:23.851Z",
+      "model": "gpt-5.4-mini",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 11,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_fixture_task/bash_1",
+          "name": "bash",
+          "target": "grep -n assert_eq tests",
+          "argsHash": "ddc5bcdefb280246"
+        }
+      ],
+      "subagent": {
+        "isSidechain": true
+      },
+      "activity": "exploration",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "665ba8d7-b0c0-5087-9e8d-499f0a97d65c",
+      "turnIndex": 5,
+      "ts": "2026-09-18T21:30:28.036Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 31,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "brainstorming",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-session-aggregate",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": false,
+          "hasToolResultEvents": false,
+          "hasSessionRelationships": false,
+          "hasRawContent": false
+        },
+        "class": "aggregate-only"
+      },
+      "messageId": "fc9ac928-bb14-5990-9d7f-43fe18ed7ae6:claude-sonnet-4.6",
+      "turnIndex": 6,
+      "ts": "2026-09-18T21:30:31.147Z",
+      "model": "claude-sonnet-4.6",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1000,
+        "output": 0,
+        "reasoning": 0,
+        "cacheRead": 20000,
+        "cacheCreate5m": 9000,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": []
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-session-aggregate",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": false,
+          "hasToolResultEvents": false,
+          "hasSessionRelationships": false,
+          "hasRawContent": false
+        },
+        "class": "aggregate-only"
+      },
+      "messageId": "fc9ac928-bb14-5990-9d7f-43fe18ed7ae6:gpt-5.4",
+      "turnIndex": 7,
+      "ts": "2026-09-18T21:30:31.147Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 8000,
+        "output": 29,
+        "reasoning": 20,
+        "cacheRead": 4000,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": []
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-session-aggregate",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": false,
+          "hasToolResultEvents": false,
+          "hasSessionRelationships": false,
+          "hasRawContent": false
+        },
+        "class": "aggregate-only"
+      },
+      "messageId": "fc9ac928-bb14-5990-9d7f-43fe18ed7ae6:gpt-5.4-mini",
+      "turnIndex": 8,
+      "ts": "2026-09-18T21:30:31.147Z",
+      "model": "gpt-5.4-mini",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 4000,
+        "output": 0,
+        "reasoning": 5,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": []
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "04ec1c7f-9108-5f20-aa61-5a10cda9de23",
+      "turnIndex": 9,
+      "ts": "2026-09-18T21:30:35.295Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 5,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "conversation",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "fidelity": {
+        "granularity": "per-session-aggregate",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": true,
+          "hasToolCalls": false,
+          "hasToolResultEvents": false,
+          "hasSessionRelationships": false,
+          "hasRawContent": false
+        },
+        "class": "aggregate-only"
+      },
+      "messageId": "3bd66697-92d9-568d-b7c4-dede0a476f3c:gpt-5.4",
+      "turnIndex": 10,
+      "ts": "2026-09-18T21:30:37.369Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 3000,
+        "output": 0,
+        "reasoning": 2,
+        "cacheRead": 10000,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": []
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "875652b8-0f90-5d2a-84b2-6d9cf1b64b6a",
+      "ts": "2026-09-18T21:30:03.111Z",
+      "role": "user",
+      "kind": "text",
+      "text": "Fix the failing fixture test."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "b14d26db-ba18-5214-8347-f994214c56f7",
+      "ts": "2026-09-18T21:30:05.185Z",
+      "role": "assistant",
+      "kind": "thinking",
+      "text": "Inspect the test before changing it."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "b14d26db-ba18-5214-8347-f994214c56f7",
+      "ts": "2026-09-18T21:30:05.185Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "I will read the test first."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "b14d26db-ba18-5214-8347-f994214c56f7",
+      "ts": "2026-09-18T21:30:05.185Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "toolu_fixture_view",
+        "name": "view",
+        "input": {
+          "path": "/tmp/project/tests/fixture.rs"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "f8f362fe-d064-5088-9721-f6e741fc2013",
+      "ts": "2026-09-18T21:30:07.259Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "toolu_fixture_view",
+        "content": "fn fixture() { assert_eq!(1, 2); }"
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "47852f90-5c76-5d70-b1c0-e3afa4e1ab4e",
+      "ts": "2026-09-18T21:30:10.370Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "bash_1",
+        "name": "bash",
+        "input": {
+          "command": "cargo test fixture",
+          "description": "Run the fixture test"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "7815bb27-eb11-56cb-9543-6f89ba4aa4da",
+      "ts": "2026-09-18T21:30:12.444Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "bash_1",
+        "content": "test fixture ... FAILED; exit status 101",
+        "isError": true
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "12c7b239-8581-501f-947a-60d2a17ec0ea",
+      "ts": "2026-09-18T21:30:15.555Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "The fixture test fails with exit status 101."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "003d05ab-bbfd-5192-831b-43918e74da61",
+      "ts": "2026-09-18T21:30:18.666Z",
+      "role": "user",
+      "kind": "text",
+      "text": "Explore why it fails, then summarize."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "00183503-c6e5-5f9c-82fe-60c1190b312f",
+      "ts": "2026-09-18T21:30:20.740Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Delegating exploration."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "00183503-c6e5-5f9c-82fe-60c1190b312f",
+      "ts": "2026-09-18T21:30:20.740Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_fixture_task",
+        "name": "task",
+        "input": {
+          "agent_type": "explore",
+          "prompt": "Find the failing assertion."
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "ad48d783-9ce7-5135-915d-7155250c45a3",
+      "ts": "2026-09-18T21:30:23.851Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_fixture_task/bash_1",
+        "name": "bash",
+        "input": {
+          "command": "grep -n assert_eq tests"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "fbbc0152-f87c-5712-816d-395156bff3bd",
+      "ts": "2026-09-18T21:30:25.925Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_fixture_task/bash_1",
+        "content": "tests/fixture.rs:1: assert_eq!(1, 2)"
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "f994f3d2-7c9d-5fc9-896c-68c91719664c",
+      "ts": "2026-09-18T21:30:27.999Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "call_fixture_task",
+        "content": "The assertion compares 1 with 2."
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "665ba8d7-b0c0-5087-9e8d-499f0a97d65c",
+      "ts": "2026-09-18T21:30:28.036Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "Summary: the assertion compares 1 with 2."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "171c4789-018a-5061-8ce1-e3e407ebe8fb",
+      "ts": "2026-09-18T21:30:33.221Z",
+      "role": "user",
+      "kind": "text",
+      "text": "Thanks, that is enough."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "04ec1c7f-9108-5f20-aa61-5a10cda9de23",
+      "ts": "2026-09-18T21:30:35.295Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "You're welcome."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "relationshipType": "root",
+      "ts": "2026-09-18T21:30:01.037Z",
+      "sourceVersion": "1.0.86"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "f8f362fe-d064-5088-9721-f6e741fc2013",
+      "toolUseId": "toolu_fixture_view",
+      "eventIndex": 0,
+      "ts": "2026-09-18T21:30:07.259Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 34,
+      "outputBytes": 34,
+      "outputTruncated": false,
+      "contentHash": "d23d0b2f38196865"
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "7815bb27-eb11-56cb-9543-6f89ba4aa4da",
+      "toolUseId": "bash_1",
+      "eventIndex": 0,
+      "ts": "2026-09-18T21:30:12.444Z",
+      "status": "errored",
+      "eventSource": "tool_result",
+      "contentLength": 40,
+      "outputBytes": 40,
+      "outputTruncated": false,
+      "contentHash": "afee4e556d283629",
+      "isError": true
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "fbbc0152-f87c-5712-816d-395156bff3bd",
+      "toolUseId": "call_fixture_task/bash_1",
+      "eventIndex": 0,
+      "ts": "2026-09-18T21:30:25.925Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 36,
+      "outputBytes": 36,
+      "outputTruncated": false,
+      "contentHash": "63b76b0dd332dd0a"
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "messageId": "f994f3d2-7c9d-5fc9-896c-68c91719664c",
+      "toolUseId": "call_fixture_task",
+      "eventIndex": 0,
+      "ts": "2026-09-18T21:30:27.999Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 32,
+      "outputBytes": 32,
+      "outputTruncated": false,
+      "contentHash": "226a25c9587ad927"
+    }
+  ],
+  "userTurns": [],
+  "requestIdLookup": [
+    [
+      "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81",
+      "b14d26db-ba18-5214-8347-f994214c56f7",
+      "req-fixture-1"
+    ]
+  ]
+}

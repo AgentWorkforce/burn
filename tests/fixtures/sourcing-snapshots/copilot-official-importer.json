@@ -1,0 +1,176 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": false,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "28e4dc43-6d27-415f-9889-7a018434e36c",
+      "turnIndex": 0,
+      "ts": "2026-10-11T19:18:38.672Z",
+      "model": "",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "2bd062f7-b79a-4158-a23f-7b9a076aa23c",
+          "name": "read",
+          "target": "greeting.txt",
+          "argsHash": "6b3640bd99e591a8"
+        }
+      ],
+      "activity": "review",
+      "retries": 0,
+      "hasEdits": false
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": false,
+          "hasOutputTokens": false,
+          "hasReasoningTokens": false,
+          "hasCacheReadTokens": false,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "partial"
+      },
+      "messageId": "5fd0999e-2bb7-4296-bddd-3b3fd418526d",
+      "turnIndex": 1,
+      "ts": "2026-10-11T19:18:38.672Z",
+      "model": "",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [],
+      "activity": "review",
+      "retries": 0,
+      "hasEdits": false
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "messageId": "23a7f17a-cf80-4bf0-84ce-b943957f3439",
+      "ts": "2026-10-11T19:18:38.672Z",
+      "role": "user",
+      "kind": "text",
+      "text": "Inspect the synthetic greeting."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "messageId": "28e4dc43-6d27-415f-9889-7a018434e36c",
+      "ts": "2026-10-11T19:18:38.672Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "I will read the synthetic greeting."
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "messageId": "28e4dc43-6d27-415f-9889-7a018434e36c",
+      "ts": "2026-10-11T19:18:38.672Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "2bd062f7-b79a-4158-a23f-7b9a076aa23c",
+        "name": "read",
+        "input": {
+          "path": "greeting.txt"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "messageId": "63f4f99c-6c46-4a58-b8a8-5c0f3becfdec",
+      "ts": "2026-10-11T19:18:38.672Z",
+      "role": "tool_result",
+      "kind": "tool_result",
+      "toolResult": {
+        "toolUseId": "2bd062f7-b79a-4158-a23f-7b9a076aa23c",
+        "content": "Hello synthetic fixture"
+      }
+    },
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "messageId": "5fd0999e-2bb7-4296-bddd-3b3fd418526d",
+      "ts": "2026-10-11T19:18:38.672Z",
+      "role": "assistant",
+      "kind": "text",
+      "text": "The greeting says Hello synthetic fixture."
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "relationshipType": "root",
+      "ts": "2026-10-11T19:18:38.671Z",
+      "sourceVersion": "1.0.95"
+    }
+  ],
+  "toolResultEvents": [
+    {
+      "v": 1,
+      "source": "copilot-cli",
+      "sessionId": "b3576354-cf9a-4912-8bd8-e969c9b94323",
+      "messageId": "63f4f99c-6c46-4a58-b8a8-5c0f3becfdec",
+      "toolUseId": "2bd062f7-b79a-4158-a23f-7b9a076aa23c",
+      "eventIndex": 0,
+      "ts": "2026-10-11T19:18:38.672Z",
+      "status": "completed",
+      "eventSource": "tool_result",
+      "contentLength": 23,
+      "outputBytes": 23,
+      "outputTruncated": false,
+      "contentHash": "d48af42aafa94f3c"
+    }
+  ],
+  "userTurns": [],
+  "requestIdLookup": []
+}

@@ -184,11 +184,12 @@ fn reasoning_cost(
 /// Per-source reasoning-billing semantics override. Returning `None` means
 /// "defer to the model's `reasoning_mode`".
 ///
-/// - Codex: `output_tokens` already includes reasoning; never bill it on top.
+/// - Codex and Copilot CLI: `output_tokens` / `outputTokens` already include
+///   reasoning; never bill it on top.
 /// - Everyone else: defer to the model.
 pub(crate) fn reasoning_mode_for_source(source: SourceKind) -> Option<ReasoningMode> {
     match source {
-        SourceKind::Codex => Some(ReasoningMode::IncludedInOutput),
+        SourceKind::Codex | SourceKind::CopilotCli => Some(ReasoningMode::IncludedInOutput),
         _ => None,
     }
 }

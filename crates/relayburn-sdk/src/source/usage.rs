@@ -15,6 +15,7 @@ pub(crate) fn usage_from_raw(source: SourceKind, raw: Option<&str>) -> (Usage, C
     };
     match source {
         SourceKind::Opencode => opencode(obj),
+        SourceKind::CopilotCli => copilot_message(obj),
         _ => anthropic(obj),
     }
 }
@@ -95,6 +96,38 @@ fn opencode(obj: &Map<String, Value>) -> (Usage, Coverage) {
     (usage, coverage)
 }
 
+/// Copilot CLI's per-message counter: `assistant.message.outputTokens`, the
+/// only usage it persists per request. Input and cache stay unmeasured.
+fn copilot_message(obj: &Map<String, Value>) -> (Usage, Coverage) {
+    let usage = Usage {
+        output: n(obj, "outputTokens"),
+        ..Usage::default()
+    };
+    let coverage = Coverage {
+        has_output_tokens: obj.get("outputTokens").is_some_and(Value::is_u64),
+        ..Coverage::default()
+    };
+    (usage, coverage)
+}
+
+/// One model's running totals from a Copilot `session.shutdown`
+/// `modelMetrics[model].usage`: `inputTokens` includes cache reads and
+/// writes, `outputTokens` includes reasoning. Cache writes carry no TTL and
+/// bill at the 5-minute rate. `None` when a counter is missing or not a
+/// non-negative integer.
+pub(crate) fn copilot_totals(usage: &Value) -> Option<Usage> {
+    let counter = |key: &str| usage.get(key)?.as_u64();
+    let (read, write) = (counter("cacheReadTokens")?, counter("cacheWriteTokens")?);
+    Some(Usage {
+        input: counter("inputTokens")?.checked_sub(read + write)?,
+        output: counter("outputTokens")?,
+        reasoning: counter("reasoningTokens").unwrap_or(0),
+        cache_read: read,
+        cache_create_5m: write,
+        cache_create_1h: 0,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +153,38 @@ mod tests {
         let (_, coverage) = claude(r#"{"input_tokens": 1, "cache_creation": {}}"#);
         assert!(!coverage.has_cache_create_tokens);
         assert!(coverage.has_input_tokens);
+    }
+
+    #[test]
+    fn copilot_messages_measure_output_only() {
+        let (usage, coverage) =
+            usage_from_raw(SourceKind::CopilotCli, Some(r#"{"outputTokens": 42}"#));
+        assert_eq!(usage.output, 42);
+        assert!(coverage.has_output_tokens && !coverage.has_input_tokens);
+        let (_, coverage) = usage_from_raw(SourceKind::CopilotCli, Some(r#"{"outputTokens": -1}"#));
+        assert!(!coverage.has_output_tokens);
+    }
+
+    #[test]
+    fn copilot_totals_split_cache_out_of_input() {
+        let usage = serde_json::json!({"inputTokens": 30000, "outputTokens": 82,
+            "cacheReadTokens": 20000, "cacheWriteTokens": 9000, "reasoningTokens": 4});
+        let totals = copilot_totals(&usage).unwrap();
+        assert_eq!(
+            (
+                totals.input,
+                totals.cache_read,
+                totals.cache_create_5m,
+                totals.output,
+                totals.reasoning
+            ),
+            (1000, 20000, 9000, 82, 4)
+        );
+        assert!(
+            copilot_totals(&serde_json::json!({"inputTokens": 1, "outputTokens": 1,
+            "cacheReadTokens": 2, "cacheWriteTokens": 0}))
+            .is_none()
+        );
+        assert!(copilot_totals(&serde_json::json!({"inputTokens": 1})).is_none());
     }
 }
