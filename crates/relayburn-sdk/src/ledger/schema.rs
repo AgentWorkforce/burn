@@ -64,7 +64,14 @@ pub const DERIVABLE_TABLES: &[&str] = &[
 ///   a current ledger from one that has not received data recently. (#507)
 /// - `8`: `archive_state.upstream_cursors_json` holds only the relayhistory
 ///   change-feed watermark; the 4.x readers' per-file cursors are dropped.
-pub const SCHEMA_VERSION: u32 = 8;
+/// - `9`: `turns` gains nullable `request_count`, denormalized from
+///   `TurnRecord.request_count`: the model requests a Codex task made, NULL
+///   for harnesses whose turn is one request. A Codex row with NULL predates
+///   request accounting; ingest re-accounts its session from the store
+///   (same turn identities and spend, the count filled in, one inference
+///   per request in place of one per task). Found through
+///   `idx_turns_unaccounted_codex`.
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// DDL for `burn.sqlite`. Idempotent (`IF NOT EXISTS`) so re-applying on
 /// startup is a no-op once the tables exist.
@@ -97,6 +104,10 @@ CREATE TABLE IF NOT EXISTS turns (
     -- `TurnRecord.subagent.agent_id`; pre-v4 rows stay NULL and are
     -- backfilled by `burn state rebuild`. See issue #435.
     subagent_id         TEXT,
+    -- v9: model requests the turn represents (`TurnRecord.request_count`).
+    -- Set for Codex tasks; NULL for one-request turns of other harnesses
+    -- and for Codex rows that predate request accounting.
+    request_count       INTEGER,
     PRIMARY KEY (source, session_id, message_id)
 ) STRICT;
 

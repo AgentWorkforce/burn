@@ -8,6 +8,7 @@ fn turn(session: &str, index: u64, usage: Usage) -> TurnRecord {
         session_id: session.to_string(),
         message_id: format!("m-{index}"),
         turn_index: index,
+        request_count: None,
         ts: format!("2026-07-30T00:00:{index:02}.000Z"),
         model: "test-model".to_string(),
         session_path: None,

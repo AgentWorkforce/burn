@@ -37,6 +37,7 @@ fn turn(
         session_path: None,
         message_id: message_id.into(),
         turn_index,
+        request_count: None,
         ts: ts.into(),
         model: model.into(),
         project: None,

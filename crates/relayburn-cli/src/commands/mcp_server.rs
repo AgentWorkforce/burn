@@ -739,6 +739,7 @@ mod tests {
             session_path: None,
             message_id: format!("message-{index}"),
             turn_index: index,
+            request_count: None,
             ts: format!("2026-08-03T12:00:0{index}.000Z"),
             model: model.to_string(),
             project: Some(project.to_string()),

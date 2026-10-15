@@ -12,6 +12,7 @@ fn turn(index: u64, model: &str, effort: Option<&str>, activity: ActivityCategor
         session_path: None,
         message_id: format!("t{index}"),
         turn_index: index,
+        request_count: None,
         ts: format!("2026-10-01T00:00:{index:02}.000Z"),
         model: model.to_string(),
         project: None,

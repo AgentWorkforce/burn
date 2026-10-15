@@ -302,6 +302,30 @@ impl Ledger {
         reader::turn_message_ids(&self.conns.burn, source.wire_str(), session_id)
     }
 
+    /// Codex sessions holding turns that predate request accounting:
+    /// ingest re-accounts each from the store.
+    pub(crate) fn sessions_awaiting_request_accounting(&self) -> Result<Vec<String>> {
+        reader::sessions_awaiting_request_accounting(&self.conns.burn)
+    }
+
+    /// Whether Codex session `session_id` holds turns that predate request
+    /// accounting.
+    pub(crate) fn awaits_request_accounting(&self, session_id: &str) -> Result<bool> {
+        reader::awaits_request_accounting(&self.conns.burn, session_id)
+    }
+
+    /// Rewrite the held turns among `turns` that predate request
+    /// accounting, in place, and replace each rewritten turn's inferences
+    /// with its rows in `inferences`. Returns the turns rewritten; every
+    /// other turn is untouched.
+    pub(crate) fn rewrite_turns(
+        &mut self,
+        turns: &[crate::reader::TurnRecord],
+        inferences: &[crate::reader::Inference],
+    ) -> Result<usize> {
+        writer::rewrite_turns(&mut self.conns.burn, turns, inferences)
+    }
+
     // --- content + FTS5 ----------------------------------------------
 
     pub fn search_content(&self, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {
@@ -636,5 +660,7 @@ impl LedgerLayout {
     }
 }
 
+#[cfg(test)]
+mod request_accounting_tests;
 #[cfg(test)]
 mod tests;

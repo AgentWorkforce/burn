@@ -14,6 +14,7 @@ fn turn(message_id: &str, ts: &str, cache_read: u64, create_1h: u64) -> TurnReco
         session_path: None,
         message_id: message_id.into(),
         turn_index: 0,
+        request_count: None,
         ts: ts.into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),

@@ -6,6 +6,7 @@
       "sessionId": "sess_meta_child",
       "messageId": "turn_meta_1",
       "turnIndex": 0,
+      "requestCount": 1,
       "ts": "2026-04-24T00:00:00.100Z",
       "model": "gpt-5.4",
       "project": "/tmp/project",
@@ -73,5 +74,30 @@
   ],
   "toolResultEvents": [],
   "userTurns": [],
-  "requestIdLookup": []
+  "requestIdLookup": [],
+  "inferences": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_meta_child",
+      "requestId": "turn_meta_1:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_meta_1",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 80,
+        "output": 10,
+        "reasoning": 2,
+        "cacheRead": 20,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "message",
+      "toolUses": [],
+      "startTs": "2026-04-24T00:00:00.200Z",
+      "endTs": "2026-04-24T00:00:00.200Z",
+      "startMs": 1776988800200,
+      "endMs": 1776988800200
+    }
+  ]
 }

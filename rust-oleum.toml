@@ -49,7 +49,6 @@ coverage_min_pct = 86.1
 "crates/relayburn-cli/src/commands/hotspots/mod.rs::run_inner" = 26
 "crates/relayburn-cli/src/commands/summary/mod.rs::run_inner" = 63
 "crates/relayburn-sdk/src/ledger/bootstrap.rs::rebuild_from_jsonl" = 30
-"crates/relayburn-sdk/src/ledger/db.rs::migrate_burn_schema" = 25
 "crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::parse_bash_command_inner" = 31
 "crates/relayburn-sdk/src/reader/classifier.rs::pick_category" = 25
 
@@ -115,7 +114,6 @@ coverage_min_pct = 86.1
 "crates/relayburn-cli/src/commands/state.rs::run_status" = 42.1
 "crates/relayburn-sdk/src/query_verbs/summary/compute.rs::build_summary_relationship_turn_index" = 42.1
 "crates/relayburn-cli/src/commands/mcp_server.rs::Server::handle_frame" = 39.5
-"crates/relayburn-sdk/src/ledger/db.rs::migrate_burn_schema" = 35.8
 "crates/relayburn-cli/src/commands/state.rs::print_reset_report" = 31.3
 "crates/relayburn-cli/src/commands/ingest.rs::run_hook" = 31.2
 "crates/relayburn-cli/src/commands/flow.rs::write_atomic" = 30.1

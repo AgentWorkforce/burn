@@ -27,6 +27,12 @@ few numbers that were wrong before.
   session continues it after all, the rest is billed as a further turn of that
   task. 4.x billed only tasks a later `task_complete` followed, so spend on
   interrupted and unfinished tasks was missing.
+- **Codex turns count model requests.** A Codex turn is still one task, but
+  counts the API calls it made: each `token_count` snapshot that moves the
+  running total ends one request. The turn records `requestCount`, each
+  request is an inference row carrying its own spend and tool calls, and
+  `summary`, `sessions` and `compare` count requests, so per-turn cost is per
+  API call. 4.x counted a task of hundreds of calls as one turn.
 - Two deliberate record changes, also in the sourcing snapshots: a failed
   OpenCode tool call sets `isError`, and a Claude assistant turn still being
   written (no `stop_reason` yet) is not billed until it settles.
@@ -48,6 +54,12 @@ The first `burn ingest` (or any command run with `--ingest`):
    duplicated; only turns 4.x never counted (subagent turns, archived Codex
    threads, OpenCode SQLite sessions) are added. The ledger then records the store's change-feed
    watermark, and later ingests read only sessions that changed.
+4. Re-accounts Codex turns the ledger holds without a request count (ledger
+   schema 9 adds `turns.request_count`): each such session is read again and
+   its turns are rewritten in place, keeping their ids and spend, with their
+   request counts and one inference per request in place of one per task.
+   Nothing is billed twice, and a session the store no longer holds keeps its
+   turns as they were.
 
 How long it takes, measured on one machine with about 10 GB of harness history
 (7.2 GB of Codex rollouts, 3.9 GB of OpenCode data, 0.6 GB of Claude

@@ -462,4 +462,6 @@ pub use flow::*;
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+mod request_count_tests;
+#[cfg(test)]
 mod tests;

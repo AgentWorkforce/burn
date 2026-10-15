@@ -6,6 +6,7 @@
       "sessionId": "sess_spawn_1",
       "messageId": "turn_spawn_1",
       "turnIndex": 0,
+      "requestCount": 1,
       "ts": "2026-04-23T00:00:00.200Z",
       "model": "gpt-5.4",
       "project": "/tmp/project",
@@ -209,5 +210,39 @@
       ]
     }
   ],
-  "requestIdLookup": []
+  "requestIdLookup": [],
+  "inferences": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_spawn_1",
+      "requestId": "turn_spawn_1:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_spawn_1",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 1500,
+        "output": 300,
+        "reasoning": 50,
+        "cacheRead": 500,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "mixed",
+      "toolUses": [
+        {
+          "id": "call_spawn_1",
+          "name": "spawn_agent"
+        },
+        {
+          "id": "call_exec_a",
+          "name": "exec_command"
+        }
+      ],
+      "startTs": "2026-04-23T00:00:00.500Z",
+      "endTs": "2026-04-23T00:00:03.000Z",
+      "startMs": 1776902400500,
+      "endMs": 1776902403000
+    }
+  ]
 }

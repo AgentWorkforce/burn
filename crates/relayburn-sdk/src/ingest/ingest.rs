@@ -146,6 +146,7 @@ pub(super) fn pull(
     let (mut changed, head) = super::watermark::changed_since(store, from)?;
     let waiting = super::watermark::pending(ledger);
     changed.extend(waiting.iter().cloned());
+    changed.extend(awaiting_request_accounting(ledger)?);
     opts.progress("importing sessions");
     let imported = import_sessions(ledger, store, &opts.context(now_ms), changed)?;
     let pending: BTreeSet<SessionIdentity> = waiting
@@ -159,6 +160,17 @@ pub(super) fn pull(
         super::watermark::remember(ledger, store.db_path(), &pending)?;
     }
     Ok(imported.report)
+}
+
+/// Codex sessions whose turns predate request accounting. Each is read
+/// again until its turns are re-accounted: same turn identities and spend,
+/// with their request counts and one inference per request.
+fn awaiting_request_accounting(ledger: &Ledger) -> anyhow::Result<Vec<SessionIdentity>> {
+    Ok(ledger
+        .sessions_awaiting_request_accounting()?
+        .into_iter()
+        .map(|session_id| SessionIdentity::new(Source::Codex.as_str(), session_id))
+        .collect())
 }
 
 /// The hook fast path: index the one Claude transcript the hook names and

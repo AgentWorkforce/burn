@@ -17,7 +17,6 @@ use crate::query_verbs::{
     build_session_span_trees, hotspots_attribution, load_overhead_files, overhead_report,
     overhead_trim_report, subagent_tree_for_session, HotspotSideRecords, SessionDetail, TrimShape,
 };
-use crate::reader::build_inferences;
 use crate::source::split_delegated;
 use crate::{HotspotsAttributionResult, HotspotsGroupBy, HotspotsResult};
 
@@ -127,7 +126,7 @@ pub(super) fn span_trees(inputs: &Inputs<'_>) -> Vec<TurnSpanTree> {
     let (turns, subagents) = split_delegated(&inputs.records.turns, inputs.children);
     build_session_span_trees(
         &turns,
-        build_inferences(&turns, &inputs.records.request_id_lookup),
+        inputs.records.inferences(),
         inputs.records.tool_result_events.clone(),
         &subagents,
     )

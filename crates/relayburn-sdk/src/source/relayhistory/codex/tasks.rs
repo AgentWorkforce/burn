@@ -18,9 +18,12 @@ use std::mem::take;
 use ai_hist::SessionEvidence;
 
 mod finish;
+mod requests;
 #[cfg(test)]
 mod tests;
 mod tools;
+
+use self::requests::Requests;
 
 use super::context::{Chain, TurnContext};
 use super::events::{Event, Located};
@@ -31,6 +34,7 @@ use crate::reader::types::{
     SourceKind, StopReason, ToolCall, ToolResultEventRecord, ToolResultStatus, TurnRecord,
     UserTurnBlock, UserTurnBlockKind, UserTurnRecord,
 };
+use crate::reader::Inference;
 use crate::source::{Billing, TAIL_GRACE_MS};
 use crate::util::time::format_iso_ms;
 
@@ -64,6 +68,8 @@ pub(super) struct Derived {
     pub tool_result_events: Vec<ToolResultEventRecord>,
     pub compactions: Vec<CompactionEvent>,
     pub subagents: Vec<SessionRelationshipRecord>,
+    /// One row per model request of the committed turns.
+    pub inferences: Vec<Inference>,
     /// Whether any task committed.
     pub committed: bool,
     /// Whether an open trailing task waits for the rollout to settle.
@@ -87,6 +93,8 @@ struct Open<'a> {
     start: Counters,
     usage_observed: bool,
     counter_error: Option<CounterError>,
+    /// The model requests this part made.
+    requests: Requests,
     tool_calls: Vec<ToolCall>,
     seen_calls: HashSet<String>,
     files: BTreeSet<String>,
@@ -117,7 +125,7 @@ pub(super) struct Tasks<'a> {
     open: Option<Open<'a>>,
     pending_user_text: String,
     pending_content: Vec<ContentRecord>,
-    finished: Vec<(TurnRecord, Vec<ContentRecord>)>,
+    finished: Vec<Finished>,
     committed_turns: usize,
     slot: Slot,
     user_turns: Vec<UserTurnRecord>,
@@ -180,7 +188,7 @@ impl<'a> Tasks<'a> {
     pub(super) fn run(mut self, stream: &[Located<'a>]) -> Derived {
         for located in stream {
             self.observe(located);
-            self.apply(located.line, &located.event);
+            self.apply(located.line, located.ts_ms, &located.event);
         }
         self.settle_tail();
         self.into_derived()
@@ -199,7 +207,12 @@ impl<'a> Tasks<'a> {
             self.cut(cut, located.ts_ms);
         }
         if let Some(open) = self.open.as_mut() {
-            open.activity += usize::from(located.event.is_activity());
+            if located.event.is_activity() {
+                open.activity += 1;
+                if !matches!(located.event, Event::UsageSnapshot { .. }) {
+                    open.request_activity(located.ts_ms.unwrap_or(open.ts_ms));
+                }
+            }
         }
     }
 
@@ -223,6 +236,7 @@ impl<'a> Tasks<'a> {
             start: self.cumulative,
             usage_observed: open.usage_observed,
             counter_error: None,
+            requests: Requests::from(self.cumulative),
             tool_calls: Vec::new(),
             seen_calls: take(&mut open.seen_calls),
             files: BTreeSet::new(),
@@ -261,7 +275,7 @@ impl<'a> Tasks<'a> {
         }
     }
 
-    fn apply(&mut self, line: u64, event: &Event<'a>) {
+    fn apply(&mut self, line: u64, ts_ms: Option<i64>, event: &Event<'a>) {
         match event {
             Event::TaskStarted { turn_id, ts_ms } => self.task_started(line, turn_id, *ts_ms),
             Event::TaskComplete { turn_id } => self.task_ended(line, turn_id, None),
@@ -270,7 +284,7 @@ impl<'a> Tasks<'a> {
             }
             Event::Compacted { ts_ms } => self.compacted(line, *ts_ms),
             Event::TurnContext { payload } => self.chain.observe(payload),
-            Event::UsageSnapshot { snapshot } => self.usage_snapshot(snapshot),
+            Event::UsageSnapshot { snapshot } => self.usage_snapshot(snapshot, ts_ms),
             Event::InheritedTotal { counters } => self.cumulative = *counters,
             Event::UserText { text, ts_ms } => self.user_text(text, *ts_ms),
             Event::AssistantText { text, ts_ms } => self.assistant_output(text, *ts_ms, false),
@@ -309,6 +323,7 @@ impl<'a> Tasks<'a> {
             start: self.cumulative,
             usage_observed: false,
             counter_error: None,
+            requests: Requests::from(self.cumulative),
             tool_calls: Vec::new(),
             seen_calls: HashSet::new(),
             files: BTreeSet::new(),
@@ -378,9 +393,10 @@ impl<'a> Tasks<'a> {
             self.user_turns[index].following_message_id = Some(message_id.clone());
         }
         self.slot.preceding_message_id = Some(message_id.clone());
-        let (turn, content) = self.finish(open, message_id, stop);
+        let finished = self.finish(open, message_id, stop);
+        let turn = &finished.turn;
         self.last_completed = Some((turn.message_id.clone(), turn.usage.cache_read));
-        self.finished.push((turn, content));
+        self.finished.push(finished);
         self.mark_committed(line);
     }
 
@@ -405,18 +421,20 @@ impl<'a> Tasks<'a> {
         ));
     }
 
-    /// Advance the running total. A snapshot that cannot be read, or that
-    /// runs backwards, leaves the open task's usage unknown; a regressed
-    /// total is still the baseline the next task spends from.
-    fn usage_snapshot(&mut self, snapshot: &ai_hist::UsageSnapshot) {
+    /// Advance the running total; inside a task, a total that moved ends
+    /// one of its requests. A snapshot that cannot be read, or that runs
+    /// backwards, leaves the open task's usage unknown; a regressed total
+    /// is still the baseline the next task spends from.
+    fn usage_snapshot(&mut self, snapshot: &ai_hist::UsageSnapshot, ts_ms: Option<i64>) {
         let Some(read) = read_snapshot(snapshot) else {
             return;
         };
+        let prior = self.cumulative;
+        let readable = read.is_ok();
         let problem = match read {
             Ok(next) => {
-                let problem = spend(&self.cumulative, &next).err();
                 self.cumulative = next;
-                problem
+                spend(&prior, &next).err()
             }
             Err(error) => Some(error),
         };
@@ -424,6 +442,12 @@ impl<'a> Tasks<'a> {
             open.usage_observed = true;
             if let Some(error) = problem {
                 open.counter_error.get_or_insert(error);
+            }
+            let ts_ms = ts_ms.unwrap_or(open.ts_ms);
+            if readable {
+                open.snapshot(&prior, &self.cumulative, ts_ms);
+            } else {
+                open.unreadable_snapshot(ts_ms);
             }
         }
     }
@@ -486,16 +510,24 @@ impl<'a> Tasks<'a> {
             pending: self.pending,
             ..Derived::default()
         };
-        for (index, (mut turn, content)) in self.finished.into_iter().enumerate() {
-            turn.turn_index = index as u64;
-            derived.turns.push(turn);
-            derived.content.extend(content);
+        for (index, mut finished) in self.finished.into_iter().enumerate() {
+            finished.turn.turn_index = index as u64;
+            derived.turns.push(finished.turn);
+            derived.content.extend(finished.content);
+            derived.inferences.extend(finished.inferences);
         }
         derived.tool_result_events = committed(self.events, committed_line);
         derived.subagents = committed(self.relationships, committed_line);
         derived.compactions = committed(self.compactions, committed_line);
         derived
     }
+}
+
+/// A committed task part: its turn and what belongs to it.
+pub(super) struct Finished {
+    pub turn: TurnRecord,
+    pub content: Vec<ContentRecord>,
+    pub inferences: Vec<Inference>,
 }
 
 impl Open<'_> {

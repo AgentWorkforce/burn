@@ -276,6 +276,27 @@ pub(crate) fn turn_message_ids(
     Ok(ids.collect::<rusqlite::Result<HashSet<String>>>()?)
 }
 
+/// Codex sessions holding a turn that predates request accounting (NULL
+/// `request_count`), in session id order.
+pub(crate) fn sessions_awaiting_request_accounting(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT session_id FROM turns INDEXED BY idx_turns_unaccounted_codex
+         WHERE source = 'codex' AND request_count IS NULL ORDER BY session_id",
+    )?;
+    let ids = stmt.query_map([], |row| row.get(0))?;
+    Ok(ids.collect::<rusqlite::Result<Vec<String>>>()?)
+}
+
+/// Whether Codex session `session_id` holds a turn that predates request
+/// accounting.
+pub(crate) fn awaits_request_accounting(conn: &Connection, session_id: &str) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM turns INDEXED BY idx_turns_unaccounted_codex
+         WHERE source = 'codex' AND request_count IS NULL AND session_id = ?)",
+    )?;
+    Ok(stmt.query_row([session_id], |row| row.get(0))?)
+}
+
 /// Per-table column shape used to build the SQL `WHERE` clause from a
 /// [`Query`]. Each table has the same logical filters, but their column
 /// shapes differ:
