@@ -26,6 +26,9 @@
 //!
 //! See `tests/fixtures/cli-golden/README.md` for fixture maintenance notes.
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

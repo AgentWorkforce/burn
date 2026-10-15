@@ -38,6 +38,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+// Seal the test process away from the user's real stores before any test runs.
+#[cfg(test)]
+use relayburn_test_seal as _;
+
 // Internal lower-stack modules. Order matches the dependency graph
 // (reader -> ledger -> analyze -> ingest); the verb modules below pull from
 // them. These stay private so the published SDK owns one coherent public
@@ -280,6 +284,31 @@ impl Ledger {
         let inner = RawLedger::open(&burn, &content)?;
         Ok(LedgerHandle { inner, config_home })
     }
+}
+
+/// A test that forgets its ledger home resolves `~/.agentworkforce/burn`
+/// under the sealed `HOME` and fails there instead of opening the user's
+/// real ledger.
+#[cfg(test)]
+#[test]
+fn a_forgotten_ledger_home_fails_loudly_instead_of_opening_the_real_ledger() {
+    let _env = crate::ledger::CONFIG_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Err(error) = Ledger::open(LedgerOpenOptions::default()) else {
+        panic!("the default ledger opened inside a test");
+    };
+    let tripwire = relayburn_test_seal::tripwire();
+    assert!(
+        ledger_home().starts_with(tripwire),
+        "{}",
+        ledger_home().display()
+    );
+    let chain = format!("{error:#}");
+    assert!(
+        chain.contains(&tripwire.display().to_string()) || chain.contains("Not a directory"),
+        "{chain}"
+    );
 }
 
 #[cfg(test)]

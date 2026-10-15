@@ -405,12 +405,8 @@ jobs:
 
       - name: Run tests
         env:
-          HOME: ${{ runner.temp }}/relayburn-node-tests/home
-          RELAYBURN_HOME: ${{ runner.temp }}/relayburn-node-tests/ledger
           RELAYBURN_SDK_NAPI_BUILT: '1'
-        run: |
-          mkdir -p "$HOME" "$RELAYBURN_HOME"
-          pnpm run test
+        run: pnpm run test
 
       # Rust port build + test gates the whole publish job. If the Rust
       # tree is red at this commit, abort before npm ships anything so the

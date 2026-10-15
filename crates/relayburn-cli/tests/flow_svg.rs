@@ -13,6 +13,9 @@
 //! Set `BURN_FLOW_SVG_REGEN=1` to overwrite the snapshot on the fly
 //! when an intentional renderer change lands.
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;

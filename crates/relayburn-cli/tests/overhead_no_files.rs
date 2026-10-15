@@ -1,6 +1,9 @@
 //! `burn overhead` / `burn overhead trim` on a project with no active
 //! instruction files: exit 1 with a scoped notice on stderr.
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
