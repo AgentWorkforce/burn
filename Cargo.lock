@@ -1234,6 +1234,7 @@ dependencies = [
  "indicatif",
  "predicates",
  "relayburn-sdk",
+ "relayburn-test-seal",
  "rusqlite",
  "semver",
  "serde",
@@ -1258,6 +1259,7 @@ dependencies = [
  "libc",
  "phf",
  "regex",
+ "relayburn-test-seal",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1277,9 +1279,17 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "relayburn-sdk",
+ "relayburn-test-seal",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "relayburn-test-seal"
+version = "5.0.0"
+dependencies = [
+ "ctor",
 ]
 
 [[package]]

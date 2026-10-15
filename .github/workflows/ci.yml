@@ -62,12 +62,8 @@ jobs:
 
       - name: Run npm tests
         env:
-          HOME: ${{ runner.temp }}/relayburn-node-tests/home
-          RELAYBURN_HOME: ${{ runner.temp }}/relayburn-node-tests/ledger
           RELAYBURN_SDK_NAPI_BUILT: '1'
-        run: |
-          mkdir -p "$HOME" "$RELAYBURN_HOME"
-          pnpm run test
+        run: pnpm run test
 
   cargo-build-and-test:
     runs-on: ubuntu-latest

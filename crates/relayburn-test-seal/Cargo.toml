@@ -1,0 +1,12 @@
+[package]
+name = "relayburn-test-seal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Seals every burn test process away from the user's real session stores and ledger."
+publish = false
+
+[dependencies]
+ctor = "0.2"

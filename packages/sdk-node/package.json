@@ -27,8 +27,8 @@
     "build": "node -e \"process.exit(0)\"",
     "build:napi": "napi build --platform --release --cargo-cwd ../../crates/relayburn-sdk-node --js binding.cjs --dts binding.d.ts src",
     "build:napi:debug": "napi build --platform --cargo-cwd ../../crates/relayburn-sdk-node --js binding.cjs --dts binding.d.ts src",
-    "test": "node --test 'test/**/*.test.js'",
-    "test:bundle": "node test/esbuild-smoke.test.js"
+    "test": "node --import ../../scripts/test-seal.mjs --test 'test/**/*.test.js'",
+    "test:bundle": "node --import ../../scripts/test-seal.mjs test/esbuild-smoke.test.js"
   },
   "engines": {
     "node": ">=22"

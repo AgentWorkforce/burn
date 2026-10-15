@@ -223,9 +223,11 @@ pub(super) fn hydrate_path(store: &SessionStore, reference: &SessionRef) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use ai_hist::HydrateStatus;
+    use ai_hist::{HydrateStatus, SessionStore, StoreOptions};
 
-    use super::check_hydrated;
+    use super::{check_hydrated, load_session, open_existing_store, open_store};
+    use super::{HistoryStoreOptions, SessionLocator};
+    use crate::reader::Harness;
 
     #[test]
     fn only_a_transcript_naming_its_session_hydrates() {
@@ -244,5 +246,62 @@ mod tests {
             reason(HydrateStatus::Mismatched),
             "the transcript names a different session"
         );
+    }
+
+    /// The user's real ai-hist files, fingerprinted read-only.
+    fn real_store_fingerprint() -> Vec<(std::path::PathBuf, Option<(u64, std::time::SystemTime)>)> {
+        let Some(home) = relayburn_test_seal::original_home() else {
+            return Vec::new();
+        };
+        ["ai-history.db", "ai-history.db-wal", ".sync-state.json"]
+            .iter()
+            .map(|name| {
+                let path = home.join(".local/share/ai-hist").join(name);
+                let meta = std::fs::metadata(&path).ok();
+                let print = meta.map(|m| (m.len(), m.modified().unwrap()));
+                (path, print)
+            })
+            .collect()
+    }
+
+    /// The error `opened` must be: anything but a store opened from a
+    /// default path, and failing at the sealed `HOME`.
+    fn assert_fails_at_the_tripwire<T>(what: &str, opened: anyhow::Result<T>) {
+        let Err(error) = opened else {
+            panic!("{what} opened a default store inside a test");
+        };
+        let chain = format!("{error:#}");
+        let tripwire = relayburn_test_seal::tripwire().display().to_string();
+        assert!(
+            chain.contains(&tripwire) || chain.contains("Not a directory"),
+            "{what} failed for some other reason: {chain}"
+        );
+    }
+
+    /// A test that forgets its store paths — or a mutant that drops them,
+    /// as `store_options -> Default::default()` does — resolves every
+    /// default under the sealed `HOME` and fails there, leaving the user's
+    /// real ai-hist store untouched.
+    #[test]
+    fn forgotten_store_paths_fail_loudly_instead_of_opening_the_real_store() {
+        let _env = crate::ledger::CONFIG_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = real_store_fingerprint();
+
+        assert_fails_at_the_tripwire(
+            "StoreOptions::default()",
+            SessionStore::open(StoreOptions::default()).map_err(anyhow::Error::from),
+        );
+        let forgotten = HistoryStoreOptions::default();
+        assert_fails_at_the_tripwire("open_store", open_store(&forgotten));
+        assert_fails_at_the_tripwire("open_existing_store", open_existing_store(&forgotten));
+        let by_id = SessionLocator::Id {
+            harness: Harness::ClaudeCode,
+            session_id: "forgotten-store".into(),
+        };
+        assert_fails_at_the_tripwire("load_session", load_session(&by_id, &forgotten));
+
+        assert_eq!(real_store_fingerprint(), before);
     }
 }
