@@ -316,16 +316,10 @@ pub struct TurnRecord {
     pub session_path: Option<String>,
     pub message_id: String,
     pub turn_index: u64,
-    /// Model API requests this record represents, when it is not one.
-    /// Codex records one turn per task and each task makes as many requests
-    /// as its usage snapshots advance (`Some(0)` for a task that made none);
-    /// every other harness records one turn per request and leaves it
-    /// `None`. Read it through [`TurnRecord::request_count`].
-    #[serde(
-        default,
-        rename = "requestCount",
-        skip_serializing_if = "Option::is_none"
-    )]
+    /// Model API requests this record represents: set for a Codex task
+    /// (`Some(0)` when it made none), `None` for a one-request turn. Read it
+    /// through [`TurnRecord::request_count`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_count: Option<u64>,
     pub ts: String,
     pub model: String,
