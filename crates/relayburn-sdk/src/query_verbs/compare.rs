@@ -65,6 +65,9 @@ pub struct CompareFidelityBlock {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompareResult {
+    /// Model requests after provider and fidelity filtering, before the
+    /// model allow-list. Can exceed `fidelity.summary.total`, which counts
+    /// turn records.
     pub analyzed_turns: u64,
     pub min_sample: u64,
     pub models: Vec<String>,
@@ -137,7 +140,7 @@ impl LedgerHandle {
         );
         Ok(shape_compare_result(
             table,
-            turns.len() as u64,
+            turns.iter().map(|t| t.turn.request_count()).sum(),
             min_fidelity,
             fidelity_summary,
         ))
@@ -212,7 +215,7 @@ impl LedgerHandle {
                 );
                 let result = shape_compare_result(
                     table,
-                    bturns.len() as u64,
+                    bturns.iter().map(|t| t.turn.request_count()).sum(),
                     min_fidelity,
                     fidelity_summary,
                 );

@@ -14,6 +14,7 @@ fn uncovered_turn(message_id: &str) -> TurnRecord {
         session_path: None,
         message_id: message_id.into(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-04-20T00:00:00.000Z".into(),
         model: "gpt-5.4".into(),
         project: None,

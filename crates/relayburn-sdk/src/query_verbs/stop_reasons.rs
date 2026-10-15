@@ -149,6 +149,7 @@ mod tests {
                 session_id: "s".to_string(),
                 message_id: format!("m-{index}"),
                 turn_index: index as u64,
+                request_count: None,
                 ts: "2026-07-30T00:00:00.000Z".to_string(),
                 model: "test-model".to_string(),
                 session_path: None,

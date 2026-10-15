@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::reader::{
-    CompactionEvent, ContentRecord, RequestIdLookup, SessionRelationshipRecord,
-    ToolResultEventRecord, TurnRecord, UserTurnRecord,
+    build_inferences, CompactionEvent, ContentRecord, Inference, RequestIdLookup,
+    SessionRelationshipRecord, ToolResultEventRecord, TurnRecord, UserTurnRecord,
 };
 
 /// Everything burn derives from one session.
@@ -23,10 +23,25 @@ pub(crate) struct SessionRecords {
     pub user_turns: Vec<UserTurnRecord>,
     #[serde(serialize_with = "serialize_request_ids")]
     pub request_id_lookup: RequestIdLookup,
+    /// One row per model request, for a source whose turns are not one
+    /// request each (Codex). `None` derives them from the turns and
+    /// [`Self::request_id_lookup`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inferences: Option<Vec<Inference>>,
     /// A trailing task is still being written: its turn waits for the
     /// rollout to settle, so the session is read again on a later ingest.
     #[serde(skip)]
     pub pending: bool,
+}
+
+impl SessionRecords {
+    /// One row per model request of the session's turns.
+    pub(crate) fn inferences(&self) -> Vec<Inference> {
+        match &self.inferences {
+            Some(requests) => requests.clone(),
+            None => build_inferences(&self.turns, &self.request_id_lookup),
+        }
+    }
 }
 
 /// How long a rollout must go unwritten before its open trailing task is

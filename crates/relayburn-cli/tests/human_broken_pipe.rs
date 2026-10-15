@@ -20,6 +20,7 @@ fn turn(index: usize) -> TurnRecord {
         session_path: None,
         message_id: format!("message_{index:04}"),
         turn_index: 0,
+        request_count: None,
         ts: format!("2026-08-03T00:00:00.{index:09}Z"),
         model: "claude-sonnet-4-6".into(),
         project: Some(format!("/tmp/project/{index:04}")),

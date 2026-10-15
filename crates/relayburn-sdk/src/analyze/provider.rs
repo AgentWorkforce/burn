@@ -258,7 +258,7 @@ pub(crate) fn aggregate_by_provider(
         let row = by_provider
             .entry(provider.clone())
             .or_insert_with(|| empty_provider_row(&provider));
-        row.turns += 1;
+        row.turns += t.request_count();
         row.usage.input += t.usage.input;
         row.usage.output += t.usage.output;
         row.usage.reasoning += t.usage.reasoning;
@@ -387,6 +387,7 @@ mod tests {
             session_path: None,
             message_id: "m-provider".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2026-04-20T00:00:00.000Z".into(),
             model: model.into(),
             project: None,
@@ -617,6 +618,7 @@ mod cost_lookup_via_reattribution_tests {
             session_path: None,
             message_id: "m".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2026-04-20T00:00:00.000Z".into(),
             model: model.into(),
             project: None,

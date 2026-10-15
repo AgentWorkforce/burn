@@ -25,6 +25,7 @@ const UNCLASSIFIED: &str = "unclassified";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompareCell {
+    /// Model requests ([`crate::reader::TurnRecord::request_count`] summed).
     pub turns: u64,
     pub edit_turns: u64,
     pub one_shot_turns: u64,
@@ -39,18 +40,21 @@ pub struct CompareCell {
     pub one_shot_rate: Option<f64>,
     pub cache_hit_rate: Option<f64>,
     pub median_retries: Option<f64>,
-    /// True when the cell has zero turns. Distinct from `insufficient_sample`
-    /// so JSON consumers can tell "we never saw this combination" apart
-    /// from "we have data but the sample is small." Only one of `no_data` /
-    /// `insufficient_sample` is ever true at a time.
+    /// True when the cell has no turn records. Distinct from
+    /// `insufficient_sample` so JSON consumers can tell "we never saw this
+    /// combination" apart from "we have data but the sample is small." Only
+    /// one of `no_data` / `insufficient_sample` is ever true at a time.
     pub no_data: bool,
-    /// True when `0 < turns < min_sample`. A cell with `no_data == true`
+    /// True when `0 < turn records < min_sample`. The sample counts turn
+    /// records, not `turns`: `turns` counts model requests, of which one
+    /// Codex task record holds many (or none). A cell with `no_data == true`
     /// always has `insufficient_sample == false`.
     pub insufficient_sample: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CompareTotals {
+    /// Model requests.
     pub turns: u64,
     pub total_cost: f64,
 }
@@ -87,7 +91,10 @@ impl<'a> CompareOptions<'a> {
 
 #[derive(Debug, Default)]
 struct Accum {
+    /// Model requests.
     turns: u64,
+    /// Turn records, the sample unit.
+    records: u64,
     edit_turns: u64,
     one_shot_turns: u64,
     priced_turns: u64,
@@ -150,11 +157,13 @@ pub fn build_compare_table(turns: &[EnrichedTurn], opts: &CompareOptions<'_>) ->
             .expect("model just inserted");
         let acc = by_cat.entry(cat).or_default();
 
-        acc.turns += 1;
+        let requests = t.request_count();
+        acc.turns += requests;
+        acc.records += 1;
         let mt = model_totals.get_mut(model).expect("model just inserted");
-        mt.turns += 1;
+        mt.turns += requests;
         if let Some(c) = cost_for_turn(t, opts.pricing) {
-            acc.priced_turns += 1;
+            acc.priced_turns += requests;
             acc.total_cost += c.total;
             mt.total_cost += c.total;
         }
@@ -238,7 +247,7 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
     let Some(acc) = acc else {
         return empty_cell();
     };
-    if acc.turns == 0 {
+    if acc.records == 0 {
         return empty_cell();
     }
     CompareCell {
@@ -247,9 +256,11 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
         one_shot_turns: acc.one_shot_turns,
         priced_turns: acc.priced_turns,
         total_cost: acc.total_cost,
-        // `cost_per_turn` is `None` unless every turn in this cell is
-        // priced — a partial average would misrepresent unknown cost.
-        cost_per_turn: (acc.priced_turns == acc.turns).then(|| acc.total_cost / acc.turns as f64),
+        // `cost_per_turn` is `None` unless every request in this cell is
+        // priced — a partial average would misrepresent unknown cost — and
+        // there is at least one request to average over.
+        cost_per_turn: (acc.turns > 0 && acc.priced_turns == acc.turns)
+            .then(|| acc.total_cost / acc.turns as f64),
         one_shot_rate: if acc.edit_turns > 0 {
             Some(acc.one_shot_turns as f64 / acc.edit_turns as f64)
         } else {
@@ -266,7 +277,7 @@ fn to_cell(acc: Option<&Accum>, min_sample: u64) -> CompareCell {
             None
         },
         no_data: false,
-        insufficient_sample: acc.turns < min_sample,
+        insufficient_sample: acc.records < min_sample,
     }
 }
 
@@ -337,6 +348,7 @@ mod tests {
                 session_path: None,
                 message_id: id,
                 turn_index: 0,
+                request_count: None,
                 ts: "2026-04-20T00:00:00.000Z".into(),
                 model: model.into(),
                 project: None,

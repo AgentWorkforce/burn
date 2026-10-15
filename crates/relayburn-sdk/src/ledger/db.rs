@@ -222,6 +222,27 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current_version < 9 {
+        // v8 → v9: Codex rows written before request accounting keep a
+        // NULL `request_count`, which is how ingest finds the sessions to
+        // re-account.
+        add_column(conn, "ALTER TABLE turns ADD COLUMN request_count INTEGER")?;
+        conn.execute(
+            "UPDATE archive_state SET schema_version = 9 WHERE id = 1",
+            [],
+        )?;
+    }
+
+    // `idx_turns_unaccounted_codex` indexes only Codex rows still awaiting
+    // request accounting, so finding them stays cheap on every ingest and
+    // the index empties as they are re-accounted. Created here for the same
+    // reason as `idx_turns_stop_reason` below.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_turns_unaccounted_codex \
+         ON turns(session_id) WHERE source = 'codex' AND request_count IS NULL",
+        [],
+    )?;
+
     // The `idx_turns_stop_reason` index is created here rather than in
     // the static DDL so a legacy v1 table (no `stop_reason` column yet)
     // doesn't fail the DDL pre-pass. By this point the column either

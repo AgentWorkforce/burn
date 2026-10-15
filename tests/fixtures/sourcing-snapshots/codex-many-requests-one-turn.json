@@ -1,0 +1,287 @@
+{
+  "turns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "messageId": "turn_many_requests",
+      "turnIndex": 0,
+      "requestCount": 4,
+      "ts": "2026-07-29T15:28:59.200Z",
+      "model": "gpt-5.4",
+      "project": "/tmp/project",
+      "usage": {
+        "input": 1080,
+        "output": 180,
+        "reasoning": 45,
+        "cacheRead": 720,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "exec_command",
+          "target": "rg TODO",
+          "argsHash": "57460d86f46bddcb"
+        },
+        {
+          "id": "call_2",
+          "name": "exec_command",
+          "target": "sed -n '1,80p' src/lib.rs",
+          "argsHash": "f4281957cd9a1665"
+        },
+        {
+          "id": "call_3",
+          "name": "apply_patch",
+          "target": "/tmp/project/src/lib.rs",
+          "argsHash": "1a79578733719ed0"
+        },
+        {
+          "id": "call_4",
+          "name": "exec_command",
+          "target": "cargo test",
+          "argsHash": "8cd002fe93c75b9e"
+        }
+      ],
+      "activity": "coding",
+      "retries": 0,
+      "hasEdits": true,
+      "fidelity": {
+        "granularity": "per-turn",
+        "coverage": {
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
+          "hasReasoningTokens": true,
+          "hasCacheReadTokens": true,
+          "hasCacheCreateTokens": false,
+          "hasToolCalls": true,
+          "hasToolResultEvents": true,
+          "hasSessionRelationships": true,
+          "hasRawContent": true
+        },
+        "class": "full"
+      }
+    }
+  ],
+  "content": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "messageId": "turn_many_requests",
+      "ts": "2026-07-29T15:28:59.100Z",
+      "role": "user",
+      "kind": "text",
+      "text": "inspect, edit, and verify the project"
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "messageId": "turn_many_requests",
+      "ts": "2026-07-29T15:29:01.100Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_1",
+        "name": "exec_command",
+        "input": {
+          "cmd": "rg TODO"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "messageId": "turn_many_requests",
+      "ts": "2026-07-29T15:29:02.100Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_2",
+        "name": "exec_command",
+        "input": {
+          "cmd": "sed -n '1,80p' src/lib.rs"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "messageId": "turn_many_requests",
+      "ts": "2026-07-29T15:29:03.100Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_3",
+        "name": "apply_patch",
+        "input": {
+          "input": "*** Begin Patch\n*** Update File: /tmp/project/src/lib.rs\n@@\n+// fixed\n*** End Patch\n"
+        }
+      }
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "messageId": "turn_many_requests",
+      "ts": "2026-07-29T15:29:04.100Z",
+      "role": "assistant",
+      "kind": "tool_use",
+      "toolUse": {
+        "id": "call_4",
+        "name": "exec_command",
+        "input": {
+          "cmd": "cargo test"
+        }
+      }
+    }
+  ],
+  "compactions": [],
+  "relationships": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "relationshipType": "root",
+      "ts": "2026-07-29T15:28:59.000Z",
+      "sourceVersion": "0.150.0"
+    }
+  ],
+  "toolResultEvents": [],
+  "userTurns": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "userUuid": "sess_many_requests:start->turn_many_requests",
+      "ts": "2026-07-29T15:28:59.100Z",
+      "followingMessageId": "turn_many_requests",
+      "blocks": [
+        {
+          "kind": "text",
+          "byteLen": 37,
+          "approxTokens": 10
+        }
+      ]
+    }
+  ],
+  "requestIdLookup": [],
+  "inferences": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "requestId": "turn_many_requests:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_many_requests",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 200,
+        "output": 40,
+        "reasoning": 10,
+        "cacheRead": 100,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "mixed",
+      "toolUses": [
+        {
+          "id": "call_1",
+          "name": "exec_command"
+        }
+      ],
+      "startTs": "2026-07-29T15:29:01.100Z",
+      "endTs": "2026-07-29T15:29:01.200Z",
+      "startMs": 1785338941100,
+      "endMs": 1785338941200
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "requestId": "turn_many_requests:request:000002",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_many_requests",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 200,
+        "output": 50,
+        "reasoning": 12,
+        "cacheRead": 200,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "mixed",
+      "toolUses": [
+        {
+          "id": "call_2",
+          "name": "exec_command"
+        }
+      ],
+      "startTs": "2026-07-29T15:29:02.100Z",
+      "endTs": "2026-07-29T15:29:02.200Z",
+      "startMs": 1785338942100,
+      "endMs": 1785338942200
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "requestId": "turn_many_requests:request:000003",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_many_requests",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 200,
+        "output": 60,
+        "reasoning": 15,
+        "cacheRead": 300,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "mixed",
+      "toolUses": [
+        {
+          "id": "call_3",
+          "name": "apply_patch"
+        }
+      ],
+      "startTs": "2026-07-29T15:29:03.100Z",
+      "endTs": "2026-07-29T15:29:03.200Z",
+      "startMs": 1785338943100,
+      "endMs": 1785338943200
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_many_requests",
+      "requestId": "turn_many_requests:request:000004",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_many_requests",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 480,
+        "output": 30,
+        "reasoning": 8,
+        "cacheRead": 120,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "mixed",
+      "toolUses": [
+        {
+          "id": "call_4",
+          "name": "exec_command"
+        }
+      ],
+      "startTs": "2026-07-29T15:29:04.100Z",
+      "endTs": "2026-07-29T15:29:04.200Z",
+      "startMs": 1785338944100,
+      "endMs": 1785338944200
+    }
+  ]
+}

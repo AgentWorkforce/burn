@@ -26,6 +26,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         session_path: None,
         message_id: "m-1".into(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-04-23T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -66,6 +67,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         session_path: None,
         message_id: "m-2".into(),
         turn_index: 1,
+        request_count: None,
         ts: "2026-04-23T00:01:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -126,6 +128,7 @@ fn ghost_surface_turn(source: SourceKind, session_id: &str, message_id: &str) ->
         session_path: None,
         message_id: message_id.into(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-04-23T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -400,6 +403,7 @@ fn summary_report_breaks_spend_down_per_reasoning_effort() {
             session_path: None,
             message_id: format!("t{idx}"),
             turn_index: idx,
+            request_count: None,
             ts: format!("2026-05-25T00:0{idx}:00.000Z"),
             model: "gpt-5.4".into(),
             project: Some("/tmp/proj".into()),
@@ -625,6 +629,7 @@ fn summary_report_aggregates_stop_reasons_per_outcome() {
             session_path: None,
             message_id: msg.into(),
             turn_index: idx,
+            request_count: None,
             ts: format!("2026-05-25T00:0{idx}:00.000Z"),
             model: "claude-sonnet-4-6".into(),
             project: Some("/tmp/proj".into()),
@@ -691,6 +696,7 @@ fn compute_summary_tracks_unpriced_turns_and_models() {
         session_path: None,
         message_id: "m-priced".into(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-05-01T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: None,
@@ -716,6 +722,7 @@ fn compute_summary_tracks_unpriced_turns_and_models() {
     let unpriced_turn = TurnRecord {
         message_id: "m-unpriced".into(),
         turn_index: 1,
+        request_count: None,
         ts: "2026-05-01T00:01:00.000Z".into(),
         model: unknown_model.into(),
         ..priced_turn.clone()
@@ -747,6 +754,7 @@ fn summary_report_grouped_tracks_unpriced_turns_and_models() {
             session_path: None,
             message_id: msg.into(),
             turn_index: idx,
+            request_count: None,
             ts: ts.into(),
             model: model.into(),
             project: None,
@@ -874,6 +882,7 @@ fn summary_legacy_surface_includes_stop_reason_counts_with_none_for_missing_fiel
         session_path: None,
         message_id: "m-legacy".into(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-05-25T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: None,
@@ -1836,6 +1845,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
                 session_path: None,
                 message_id: "m-unpriced".into(),
                 turn_index: 0,
+                request_count: None,
                 ts: "2026-04-23T00:02:00.000Z".into(),
                 model: "future-model-without-a-price".into(),
                 project: Some("/tmp/proj".into()),
@@ -1865,6 +1875,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
                 session_path: None,
                 message_id: "m-unpriced-small".into(),
                 turn_index: 0,
+                request_count: None,
                 ts: "2026-04-23T00:03:00.000Z".into(),
                 model: "another-future-model".into(),
                 project: Some("/tmp/proj".into()),
@@ -2096,6 +2107,7 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
         session_path: None,
         message_id: "m-extra".into(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-04-23T00:02:00.000Z".into(),
         model: "claude-opus-4-5".into(),
         project: Some("/tmp/proj".into()),
@@ -2357,6 +2369,7 @@ fn free_function_summary_round_trips_through_ledger_home() {
             session_path: None,
             message_id: "m".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2026-04-23T00:00:00.000Z".into(),
             model: "claude-sonnet-4-6".into(),
             project: None,
@@ -2407,11 +2420,11 @@ fn state_status_reports_zero_rows_on_fresh_ledger() {
     assert_eq!(s.burn.rows.stamps, 0);
     assert_eq!(s.burn.tracked_rows, 0);
     assert_eq!(s.content.rows, 0);
-    // v6 (#468 `archive_state.source_fingerprint`) chained onto v5
-    // (#434 `inferences`), v4 (#435 `turns.subagent_id`), v3 (#436
-    // `tool_result_events.output_bytes` / `output_truncated`) and v2
-    // (#437 `turns.stop_reason`).
-    assert_eq!(s.archive.schema_version, 8);
+    // v9 (Codex `turns.request_count`) chained onto v6 (#468
+    // `archive_state.source_fingerprint`), v5 (#434 `inferences`), v4 (#435
+    // `turns.subagent_id`), v3 (#436 `tool_result_events.output_bytes` /
+    // `output_truncated`) and v2 (#437 `turns.stop_reason`).
+    assert_eq!(s.archive.schema_version, 9);
     assert!(s.archive.last_write_at_ms.is_none());
     assert!(s.archive.last_built_at.is_none());
     assert!(s.archive.last_rebuild_at.is_none());
@@ -2559,6 +2572,7 @@ fn summary_test_turn(
         session_path: None,
         message_id: message_id.to_string(),
         turn_index,
+        request_count: None,
         ts: format!("2026-04-20T00:00:0{turn_index}.000Z"),
         model: "claude-sonnet-4-6".to_string(),
         project: None,
@@ -2613,6 +2627,7 @@ fn make_turn_with_calls(calls: Vec<ToolCall>) -> TurnRecord {
         session_path: None,
         message_id: "m".to_string(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-04-20T00:00:00.000Z".to_string(),
         model: "claude-sonnet-4-6".to_string(),
         project: None,
@@ -2731,6 +2746,7 @@ fn context_delta_filter_handle_with_key(
             session_path: None,
             message_id: message_id.into(),
             turn_index: index,
+            request_count: None,
             ts: ts.into(),
             model: "claude-sonnet-4-6".into(),
             project: Some(project.into()),
@@ -2967,6 +2983,7 @@ fn multi_session_handle() -> (TempDir, LedgerHandle) {
             session_path: None,
             message_id: message_id.into(),
             turn_index: 0,
+            request_count: None,
             ts: ts.into(),
             model: model.into(),
             project: project.map(|s| s.into()),
@@ -3178,6 +3195,7 @@ fn fingerprint_changes_when_a_new_turn_is_appended() {
         session_path: None,
         message_id: "m-3".into(),
         turn_index: 2,
+        request_count: None,
         ts: "2026-04-23T00:02:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -3221,6 +3239,7 @@ fn fingerprint_per_session_differs_from_global() {
         session_path: None,
         message_id: "m-b1".into(),
         turn_index: 0,
+        request_count: None,
         ts: "2026-04-23T01:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),
@@ -3399,6 +3418,7 @@ fn bucket_turn(message_id: &str, ts: &str, tool_use_ids: &[&str]) -> TurnRecord 
         session_path: None,
         message_id: message_id.into(),
         turn_index: 0,
+        request_count: None,
         ts: ts.into(),
         model: "claude".into(),
         project: None,
@@ -3583,6 +3603,7 @@ fn summary_report_by_tool_aggregates_across_multiple_sessions() {
             session_path: None,
             message_id: message_id.into(),
             turn_index: 0,
+            request_count: None,
             ts: ts.into(),
             model: "claude-sonnet-4-6".into(),
             project: Some("/tmp/proj".into()),
@@ -3698,6 +3719,7 @@ mod fingerprint_bench {
                 session_path: None,
                 message_id: format!("m-{i}"),
                 turn_index: (i % 1000) as u64,
+                request_count: None,
                 ts: format!("2026-04-{:02}T{:02}:00:00.000Z", 1 + (i / 24) % 28, i % 24),
                 model: "claude-sonnet-4-6".into(),
                 project: Some("/tmp/p".into()),
@@ -3778,6 +3800,7 @@ fn bucket_test_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnR
         session_path: None,
         message_id: message.into(),
         turn_index: 0,
+        request_count: None,
         ts: ts.into(),
         model: "claude-sonnet-4-6".into(),
         project: Some("/tmp/proj".into()),

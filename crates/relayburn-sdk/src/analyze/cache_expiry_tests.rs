@@ -49,6 +49,7 @@ fn turn(message_id: &str, minutes: i64, usage: Usage) -> TurnRecord {
         session_path: None,
         message_id: message_id.into(),
         turn_index: 0,
+        request_count: None,
         ts: at(minutes),
         model: MODEL.into(),
         project: None,

@@ -17,7 +17,7 @@ use super::pending_stamps::{
 };
 use super::IngestReport;
 use crate::ledger::Ledger;
-use crate::reader::{build_inferences, ContentStoreMode, TurnRecord};
+use crate::reader::{ContentStoreMode, SourceKind, TurnRecord};
 use crate::source::SessionRecords;
 use crate::source::{
     delegated_children, records_from_evidence, records_query, records_with_children, source_kind,
@@ -158,6 +158,9 @@ fn import_one(
     if ctx.content_mode != ContentStoreMode::Full {
         records.content.clear();
     }
+    if kind == SourceKind::Codex && ledger.awaits_request_accounting(&session.session_id)? {
+        ledger.rewrite_turns(&records.turns, &records.inferences())?;
+    }
     let mut report = IngestReport {
         scanned_sessions: 1,
         ..IngestReport::empty()
@@ -236,16 +239,14 @@ fn written_at_ms(evidence: &SessionEvidence) -> Option<i64> {
     modified.or(evidence.session.last_activity_ms)
 }
 
-/// Append every record bucket beside the turns, plus the per-request
-/// inferences rebuilt from the same turns. Each append skips what the
-/// ledger already holds.
+/// Append every record bucket beside the turns, plus one inference per
+/// model request of them. Each append skips what the ledger already holds.
 fn append_derived(ledger: &mut Ledger, records: &SessionRecords) -> anyhow::Result<()> {
     ledger.append_content(&records.content)?;
     ledger.append_compactions(&records.compactions)?;
     ledger.append_relationships(&records.relationships)?;
     ledger.append_tool_result_events(&records.tool_result_events)?;
     ledger.append_user_turns(&records.user_turns)?;
-    let inferences = build_inferences(&records.turns, &records.request_id_lookup);
-    ledger.append_inferences(&inferences)?;
+    ledger.append_inferences(&records.inferences())?;
     Ok(())
 }

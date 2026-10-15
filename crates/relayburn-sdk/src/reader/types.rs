@@ -13,6 +13,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod request_count;
 mod stop_reason;
 
 use stop_reason::deserialize_optional_stop_reason;
@@ -315,6 +316,17 @@ pub struct TurnRecord {
     pub session_path: Option<String>,
     pub message_id: String,
     pub turn_index: u64,
+    /// Model API requests this record represents, when it is not one.
+    /// Codex records one turn per task and each task makes as many requests
+    /// as its usage snapshots advance (`Some(0)` for a task that made none);
+    /// every other harness records one turn per request and leaves it
+    /// `None`. Read it through [`TurnRecord::request_count`].
+    #[serde(
+        default,
+        rename = "requestCount",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub request_count: Option<u64>,
     pub ts: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -638,6 +650,7 @@ mod tests {
             session_path: None,
             message_id: "m1".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2025-01-01T00:00:00Z".into(),
             model: "claude-sonnet-4-6".into(),
             project: None,

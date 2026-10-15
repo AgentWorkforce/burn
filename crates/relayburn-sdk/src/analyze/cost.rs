@@ -231,15 +231,17 @@ fn pricing_model_alias(model: &str) -> Option<&'static str> {
     }
 }
 
-/// Count turns whose cost is unknown because their model has no pricing
-/// entry, and collect the distinct model names, first-seen order. Used by summary surfaces to make pricing
-/// gaps visible instead of silently folding them in at $0.
+/// Count model requests ([`TurnRecord::request_count`], the unit of summary
+/// `turnCount`) whose cost is unknown because their model has no pricing
+/// entry, and collect the distinct model names, first-seen order. Used by
+/// summary surfaces to make pricing gaps visible instead of silently folding
+/// them in at $0.
 pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec<String>) {
     let mut count = 0u64;
     let mut models: Vec<String> = Vec::new();
     for t in turns {
         if cost_for_turn(t, pricing).is_none() {
-            count += 1;
+            count += t.request_count();
             if !models.iter().any(|m| m == &t.model) {
                 models.push(t.model.clone());
             }
@@ -291,6 +293,7 @@ mod tests {
             session_path: None,
             message_id: "m".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2026-04-20T00:00:00.000Z".into(),
             model: model.into(),
             project: None,
