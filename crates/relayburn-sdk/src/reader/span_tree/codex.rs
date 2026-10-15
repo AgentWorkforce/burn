@@ -157,8 +157,10 @@ fn index_tool_results(
     out
 }
 
+/// The supplied inferences; one synthesized from the turn when none are,
+/// unless the turn records that it made no request.
 fn effective_inferences(turn: &TurnRecord, supplied: &[Inference]) -> Vec<Inference> {
-    if !supplied.is_empty() {
+    if !supplied.is_empty() || turn.request_count == Some(0) {
         return supplied.to_vec();
     }
     vec![synthesize_inference(turn)]
@@ -381,6 +383,34 @@ mod tests {
             replaced_tools: None,
             collapsed_calls: None,
         }
+    }
+
+    /// A turn that records it made no request gets no inference.
+    #[test]
+    fn a_zero_request_turn_has_no_inference() {
+        let mut turn = codex_turn(Usage::default(), vec![]);
+        turn.request_count = Some(0);
+        let tree = build_codex_span_tree(CodexSpanTreeInputs {
+            turn: &turn,
+            tool_result_events: &[],
+            inferences: &[],
+        });
+        assert!(tree
+            .root
+            .children
+            .iter()
+            .all(|c| c.kind != SpanKind::Inference));
+        turn.request_count = Some(1);
+        let tree = build_codex_span_tree(CodexSpanTreeInputs {
+            turn: &turn,
+            tool_result_events: &[],
+            inferences: &[],
+        });
+        assert!(tree
+            .root
+            .children
+            .iter()
+            .any(|c| c.kind == SpanKind::Inference));
     }
 
     /// Empty-inferences (the default for Codex — no #434 lookup) →

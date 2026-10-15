@@ -340,3 +340,39 @@ fn a_fork_childs_requests_spend_from_its_inherited_total() {
         ]
     );
 }
+
+/// A snapshot with an unreadable counter still ends a request; the task's
+/// usage is unknown, so no request is billed, and what each request
+/// produced still reads from its own spend.
+#[test]
+fn an_unreadable_snapshot_still_ends_a_request() {
+    let [s1, c1] = task(10, "t1");
+    let bad = marker(
+        12,
+        "usage_snapshot",
+        None,
+        json!({"total_token_usage": {"input_tokens": -1}}),
+    );
+    let derived = derive(vec![
+        s1,
+        snapshot(11, 100, 0, 30, 30),
+        bad,
+        snapshot(13, 300, 0, 50, 30),
+        c1,
+    ]);
+    assert_eq!(usage(&derived), vec![(0, 0, 0, false)]);
+    assert_eq!(request_counts(&derived), vec![Some(3)]);
+    let kinds: Vec<InferenceKind> = derived.inferences.iter().map(|i| i.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            InferenceKind::Reasoning,
+            InferenceKind::Message,
+            InferenceKind::Message
+        ]
+    );
+    assert!(derived
+        .inferences
+        .iter()
+        .all(|i| i.usage == crate::reader::types::Usage::default()));
+}

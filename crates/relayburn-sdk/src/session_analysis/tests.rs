@@ -737,3 +737,14 @@ fn flow_counts_the_edges_that_connect_its_nodes() {
     assert!(flow.edges > 0);
     assert_eq!(flow.edges, flow.inferences + flow.tool_uses - 1);
 }
+
+/// A Codex task's flow has one inference per model request it made.
+#[test]
+fn a_codex_flow_has_an_inference_per_request() {
+    let analysis = by_path(
+        Harness::Codex,
+        fixture("codex/many-requests-one-turn.jsonl"),
+    );
+    let flow = analysis.flow.data().expect("flow");
+    assert_eq!((flow.turns, flow.inferences, flow.tool_uses), (1, 4, 4));
+}

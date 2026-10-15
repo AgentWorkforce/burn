@@ -443,8 +443,11 @@ impl<'a> Tasks<'a> {
             if let Some(error) = problem {
                 open.counter_error.get_or_insert(error);
             }
+            let ts_ms = ts_ms.unwrap_or(open.ts_ms);
             if readable {
-                open.snapshot(&prior, &self.cumulative, ts_ms.unwrap_or(open.ts_ms));
+                open.snapshot(&prior, &self.cumulative, ts_ms);
+            } else {
+                open.unreadable_snapshot(ts_ms);
             }
         }
     }

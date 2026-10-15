@@ -125,9 +125,13 @@ pub(super) fn subagents(inputs: &Inputs<'_>) -> Section<SubagentTreeNode> {
 /// delegated subagents paired to the tool uses that spawned them.
 pub(super) fn span_trees(inputs: &Inputs<'_>) -> Vec<TurnSpanTree> {
     let (turns, subagents) = split_delegated(&inputs.records.turns, inputs.children);
+    let inferences = match &inputs.records.inferences {
+        Some(requests) => requests.clone(),
+        None => build_inferences(&turns, &inputs.records.request_id_lookup),
+    };
     build_session_span_trees(
         &turns,
-        build_inferences(&turns, &inputs.records.request_id_lookup),
+        inferences,
         inputs.records.tool_result_events.clone(),
         &subagents,
     )

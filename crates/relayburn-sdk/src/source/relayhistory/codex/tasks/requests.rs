@@ -4,7 +4,8 @@
 //! each snapshot that moves the running total ends one request: the
 //! request spent the difference from the previous one, and issued every
 //! tool call written since. A snapshot that repeats the running total is
-//! a re-report, not a request. The task stays burn's turn; its requests
+//! a re-report, not a request; one whose counters cannot be read ends a
+//! request of unknown spend. The task stays burn's turn; its requests
 //! become one inference row each, and their count is the turn's
 //! `request_count`.
 
@@ -62,6 +63,18 @@ impl Open<'_> {
         if next == prior {
             return;
         }
+        let usage = spend(&self.requests.base, next).ok();
+        self.end_request(usage, ts_ms);
+        self.requests.base = *next;
+    }
+
+    /// A snapshot whose counters cannot be read still ends a request, one
+    /// whose spend is unknown.
+    pub(super) fn unreadable_snapshot(&mut self, ts_ms: i64) {
+        self.end_request(None, ts_ms);
+    }
+
+    fn end_request(&mut self, usage: Option<Usage>, ts_ms: i64) {
         let requests = &mut self.requests;
         let tool_uses = self.tool_calls[requests.claimed_calls..]
             .iter()
@@ -72,12 +85,11 @@ impl Open<'_> {
             .collect();
         requests.claimed_calls = self.tool_calls.len();
         requests.done.push(Request {
-            usage: spend(&requests.base, next).ok(),
+            usage,
             tool_uses,
             start_ms: requests.from_ms.take().unwrap_or(ts_ms),
             end_ms: ts_ms,
         });
-        requests.base = *next;
     }
 }
 
@@ -99,9 +111,14 @@ impl RequestTurn<'_> {
             .into_iter()
             .enumerate()
             .map(|(index, request)| {
-                let usage = match request.usage {
-                    Some(usage) if self.usage_known => usage,
-                    _ => Usage::default(),
+                // What the request produced is read from its own spend, even
+                // when the turn bills none of it.
+                let spent = request.usage.unwrap_or_default();
+                let kind = request_kind(&spent, !request.tool_uses.is_empty());
+                let usage = if self.usage_known {
+                    spent
+                } else {
+                    Usage::default()
                 };
                 Inference {
                     v: 1,
@@ -111,7 +128,7 @@ impl RequestTurn<'_> {
                     request_id_source: InferenceKeySource::RowSynthetic,
                     turn_id: self.message_id.to_string(),
                     model: self.model.to_string(),
-                    kind: request_kind(&usage, !request.tool_uses.is_empty()),
+                    kind,
                     usage,
                     tool_uses: request.tool_uses,
                     start_ts: format_iso_ms(request.start_ms),
@@ -129,12 +146,14 @@ fn request_id(message_id: &str, index: usize) -> String {
     format!("{message_id}:request:{:06}", index + 1)
 }
 
-/// What a request produced: tool calls, reasoning, or a message.
+/// What a request produced: tool calls, reasoning, or a message. Codex's
+/// output count includes its reasoning, so a request whose output is all
+/// reasoning wrote no message.
 fn request_kind(usage: &Usage, has_tool_uses: bool) -> InferenceKind {
     match (has_tool_uses, usage.reasoning > 0) {
         (true, true) => InferenceKind::Mixed,
         (true, false) => InferenceKind::ToolUse,
-        (false, true) if usage.output == 0 => InferenceKind::Reasoning,
+        (false, true) if usage.output <= usage.reasoning => InferenceKind::Reasoning,
         (false, _) => InferenceKind::Message,
     }
 }
@@ -153,8 +172,9 @@ mod tests {
 
     #[test]
     fn request_kind_covers_each_shape() {
+        assert_eq!(request_kind(&usage(2, 2), false), InferenceKind::Reasoning);
         assert_eq!(request_kind(&usage(0, 2), false), InferenceKind::Reasoning);
-        assert_eq!(request_kind(&usage(1, 2), false), InferenceKind::Message);
+        assert_eq!(request_kind(&usage(3, 2), false), InferenceKind::Message);
         assert_eq!(request_kind(&usage(0, 0), false), InferenceKind::Message);
         assert_eq!(request_kind(&usage(1, 2), true), InferenceKind::Mixed);
         assert_eq!(request_kind(&usage(0, 2), true), InferenceKind::Mixed);
