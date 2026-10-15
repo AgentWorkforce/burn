@@ -74,6 +74,9 @@ fn summary_counts_requests() {
         .by_tag
         .unwrap();
     assert_eq!(by_tag.iter().map(|r| r.turn_count).sum::<u64>(), 6);
+    let tagged_cost: f64 = by_tag.iter().map(|r| r.cost).sum();
+    assert!(s.total_cost > 0.0);
+    assert!((tagged_cost - s.total_cost).abs() < 1e-9);
 }
 
 #[test]
