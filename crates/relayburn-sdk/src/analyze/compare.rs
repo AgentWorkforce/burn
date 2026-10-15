@@ -350,6 +350,7 @@ mod tests {
                 retries,
                 has_edits,
                 fidelity: None,
+                reasoning: None,
             },
             enrichment: BTreeMap::new(),
         }

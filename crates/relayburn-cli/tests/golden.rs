@@ -403,8 +403,13 @@ fn indent(text: &str, prefix: &str) -> String {
 /// Repo-relative path of the fixture project, as the invocations name it.
 const FIXTURE_PROJECT_REL: &str = "tests/fixtures/cli-golden/project";
 
+/// Repo-relative session transcripts the invocations read by path; the
+/// sealed tree mirrors them so those arguments resolve from its root.
+const FIXTURE_INPUTS_REL: &[&str] = &["tests/fixtures/claude/retry-loop.jsonl"];
+
 /// Copy the fixture project into `<os tmp>/.golden-project-*/` +
-/// [`FIXTURE_PROJECT_REL`], with a `.git` directory at the root, and return
+/// [`FIXTURE_PROJECT_REL`] and each [`FIXTURE_INPUTS_REL`] transcript to its
+/// repo-relative path, with a `.git` directory at the root, and return
 /// the canonical root (the binary canonicalizes `--project`, so placeholders
 /// must match the canonical spelling).
 fn sealed_project_root(fixture_project: &Path) -> PathBuf {
@@ -416,6 +421,12 @@ fn sealed_project_root(fixture_project: &Path) -> PathBuf {
     for entry in fs::read_dir(fixture_project).expect("read fixture project") {
         let entry = entry.expect("fixture project entry");
         fs::copy(entry.path(), project.join(entry.file_name())).expect("copy fixture file");
+    }
+    for input in FIXTURE_INPUTS_REL {
+        let target = root.join(input);
+        fs::create_dir_all(target.parent().expect("input has a parent"))
+            .expect("create sealed input dir");
+        fs::copy(repo_root().join(input), &target).expect("copy fixture input");
     }
     root
 }

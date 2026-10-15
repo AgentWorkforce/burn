@@ -17,7 +17,6 @@ use crate::reader::{
 };
 
 use crate::ledger::error::Result;
-use crate::ledger::paths::is_valid_session_id;
 use crate::ledger::query::Query;
 use crate::ledger::stamp::{stamp_matches, Enrichment, Stamp, StampSelector};
 
@@ -264,30 +263,17 @@ pub(crate) fn list_stamps(conn: &Connection) -> Result<Vec<Stamp>> {
     collect_stamps(conn)
 }
 
-/// Distinct `session_id` values present in the `user_turns` table. Powers
-/// the "skip sessions whose user-turn rows I already have" filter in
-/// `relayburn-ingest::reingest_missing_content` (#278). Mirrors the TS
-/// `(await queryUserTurns()).map((u) => u.sessionId)` extraction without
-/// having to materialize every row.
-///
-/// Filters out malformed ids defensively (mirrors
-/// `content::list_session_ids`); a corrupted row should not poison the
-/// caller's skip set. The `user_turns` table is STRICT, so a non-TEXT
-/// session_id should never reach us, but the extra guard keeps the
-/// surface symmetric.
-pub(crate) fn list_user_turn_session_ids(conn: &Connection) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare_cached("SELECT DISTINCT session_id FROM user_turns")?;
-    let mut rows = stmt.query([])?;
-    let mut out = HashSet::new();
-    while let Some(row) = rows.next()? {
-        let Ok(session_id) = row.get::<_, String>(0) else {
-            continue;
-        };
-        if is_valid_session_id(&session_id) {
-            out.insert(session_id);
-        }
-    }
-    Ok(out)
+/// Message ids of the turns the ledger holds for one session, read from
+/// the primary key alone.
+pub(crate) fn turn_message_ids(
+    conn: &Connection,
+    source: &str,
+    session_id: &str,
+) -> Result<HashSet<String>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT message_id FROM turns WHERE source = ? AND session_id = ?")?;
+    let ids = stmt.query_map(rusqlite::params![source, session_id], |row| row.get(0))?;
+    Ok(ids.collect::<rusqlite::Result<HashSet<String>>>()?)
 }
 
 /// Per-table column shape used to build the SQL `WHERE` clause from a

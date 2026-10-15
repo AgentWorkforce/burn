@@ -36,6 +36,7 @@ pub mod quality;
 pub mod replacement_savings;
 pub mod span_tree;
 pub mod subagent_tree;
+pub mod subagent_types;
 pub mod tool_call_patterns;
 pub mod tool_output_bloat;
 mod util;
@@ -51,8 +52,10 @@ pub use claude_md::{MarkdownSection, SessionClaudeMdCost};
 // `query_verbs::compare`, which wrap these. Only `DEFAULT_MIN_SAMPLE` stays
 // public (the CLI uses it as the default `--min-sample`).
 pub(crate) use cache_expiry::{
-    cache_expiry_to_finding, cache_state_turns, detect_cache_expiry, turn_id,
+    cache_expiry_to_finding, cache_state_turns, detect_cache_expiry, turn_id, CacheExpiry,
 };
+#[cfg(test)]
+pub(crate) use cache_expiry::{CacheExpiryEvent, CacheTtl, ExpiryCause};
 pub use compare::DEFAULT_MIN_SAMPLE;
 pub(crate) use compare::{build_compare_table, CompareOptions, CompareTable};
 pub(crate) use context_delta::deltas_for_session_since;
@@ -70,7 +73,7 @@ pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySum
 pub(crate) use findings::{
     findings_from_patterns, mark_findings_with_unpriced_sessions, unpriced_usage_findings,
 };
-pub use findings::{sort_findings, FindingPricingStatus, WasteFinding, WasteSeverity};
+pub use findings::{sort_findings, FindingPricingStatus, WasteAction, WasteFinding, WasteSeverity};
 pub use flow_graph::{
     flow_graph_from_trees, FlowEdge, FlowEdgeKind, FlowGraph, FlowNode, FlowNodeKind, FlowOpts,
     TurnTokens, INTER_TURN_GAP, RAIL_GAP,
@@ -88,8 +91,9 @@ pub use hotspots::{
     McpServerAggregation, SubagentAggregation,
 };
 pub(crate) use overhead::{
-    attribute_overhead, find_overhead_files, find_overhead_files_in_home, load_overhead_file,
-    AttributeOverheadInput, OverheadAttribution, OverheadFile, ParsedOverheadFile,
+    attribute_overhead, find_overhead_files, find_overhead_files_in_home,
+    find_overhead_files_in_install, load_overhead_file, AttributeOverheadInput, OverheadFile,
+    OverheadFileAttribution, ParsedOverheadFile,
 };
 pub use overhead::{describe_applies_to, OverheadFileKind, OverheadFileScope};
 pub(crate) use patterns::detect_patterns;
@@ -106,14 +110,14 @@ pub use quality::{OneShotMetrics, OutcomeLabel, QualityResult, SessionOutcome};
 pub(crate) use replacement_savings::summarize_replacement_savings;
 pub use replacement_savings::{ReplacementSavingsSummary, ToolSavingsAggregate};
 pub use span_tree::{AttrValue, SpanEvent, SpanKind, SpanNode, SpanStatus, TurnSpanTree};
-pub(crate) use subagent_tree::{
-    aggregate_subagent_type_stats, build_subagent_tree, BuildSubagentTreeOptions,
-};
-pub use subagent_tree::{SubagentTreeNode, SubagentTypeStats};
+pub use subagent_tree::SubagentTreeNode;
+pub(crate) use subagent_tree::{build_subagent_tree, BuildSubagentTreeOptions};
+pub(crate) use subagent_types::aggregate_subagent_type_stats;
+pub use subagent_types::SubagentTypeStats;
 pub(crate) use tool_call_patterns::detect_tool_call_patterns;
 pub use tool_call_patterns::{tool_call_pattern_to_finding, DetectToolCallPatternsOptions};
 pub(crate) use tool_output_bloat::detect_tool_output_bloat;
 pub use tool_output_bloat::{
     load_claude_settings, project_claude_settings_path, tool_output_bloat_to_finding,
-    user_claude_settings_path, DetectToolOutputBloatOptions, LoadedClaudeSettings,
+    DetectToolOutputBloatOptions, LoadedClaudeSettings,
 };

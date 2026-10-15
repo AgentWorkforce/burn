@@ -334,15 +334,17 @@ pub(crate) fn attribute_claude_md_refs(
         let mut riding_turns: u64 = 0;
         let mut model_counts: IndexMap<String, u64> = IndexMap::new();
         for t in &turns {
+            // A turn whose cache read covers the files carried them, priced
+            // or not; only priced turns add cost.
+            let rides = t.usage.cache_read >= total_tokens;
+            riding_turns += u64::from(rides);
             let Some(rate) = lookup_model_rate(&t.model, pricing) else {
                 continue;
             };
             *model_counts.entry(t.model.clone()).or_insert(0) += 1;
-            if t.usage.cache_read < total_tokens {
-                continue;
+            if rides {
+                cost += (total_tokens as f64 / PER_MILLION) * rate.cache_read;
             }
-            cost += (total_tokens as f64 / PER_MILLION) * rate.cache_read;
-            riding_turns += 1;
         }
         let dominant = pick_dominant_model(&model_counts);
         session_costs.push(SessionClaudeMdCost {
@@ -531,6 +533,7 @@ mod tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     }
 
@@ -740,6 +743,26 @@ mod tests {
         let ratio = big.total_cost / small.total_cost;
         let token_ratio = big.section.tokens as f64 / small.section.tokens as f64;
         assert!((ratio - token_ratio).abs() / token_ratio < 0.05);
+    }
+
+    #[test]
+    fn a_session_is_priced_at_the_model_most_of_its_turns_ran() {
+        let pricing = load_builtin_pricing();
+        let parsed = parse_claude_md("/p/CLAUDE.md", "## Rules\nBe brief.\n");
+        let mut turns: Vec<TurnRecord> = (0..3)
+            .map(|i| make_turn("s-cm-model", &format!("m{i}"), i, zero_usage()))
+            .collect();
+        for turn in &mut turns {
+            turn.model = "gpt-5.4".into();
+        }
+        turns[0].model = "claude-3-5-haiku".into();
+        let files = vec![parsed];
+        let result = attribute_claude_md(&AttributeClaudeMdInput {
+            files: &files,
+            turns: &turns,
+            pricing: &pricing,
+        });
+        assert_eq!(result.session_costs[0].model, "gpt-5.4");
     }
 
     #[test]

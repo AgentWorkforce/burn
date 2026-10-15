@@ -1,8 +1,11 @@
 ![relayburn](./burn-readme-banner.png)
 
-Understand how you're spending tokens in agent CLIs. Burn ingests Claude Code,
-Codex, and OpenCode session logs into a local ledger, then shows cost by model,
-provider, tool, file, workflow, agent, session, and overhead file.
+Understand how you're spending tokens in agent CLIs. Burn reads Claude Code,
+Codex, and OpenCode sessions through
+[relayhistory](https://github.com/AgentWorkforce/relayhistory) into a local
+ledger, then shows cost by model, provider, tool, file, workflow, agent,
+session, and overhead file. Subagent spend is billed to the session that
+spawned it.
 
 ## Quick Start
 
@@ -11,14 +14,19 @@ npm i -g relayburn
 burn summary
 ```
 
-Burn stores data under `~/.agentworkforce/burn/` by default. Set
-`RELAYBURN_HOME` to use a different location.
+The first run creates the relayhistory session store
+(`~/.local/share/ai-hist/ai-history.db`, or `$AI_HIST_DB`) and syncs every
+session on the machine into it; later runs pick up only what changed. The
+`ai-hist` CLI is not required. Burn's own ledger lives under
+`~/.agentworkforce/burn/`; set `RELAYBURN_HOME` to use a different location.
+Upgrading from 4.x: see [docs/migrating-to-5.md](docs/migrating-to-5.md).
 
 
 ## Commands
 
 | Command | Use it to |
 |---|---|
+| [`burn analyze`](#burn-analyze) | Diagnose one session's token spend, with explained findings, without a ledger. |
 | [`burn measure`](#burn-measure) | Turn one explicit session source into Cloud-ready token and cost metrics. |
 | [`burn summary`](#burn-summary) | See total usage and cost by model or provider. |
 | [`burn search`](#burn-search) | Search ingested session content with SQLite FTS5. |
@@ -29,13 +37,14 @@ Burn stores data under `~/.agentworkforce/burn/` by default. Set
 | [`burn sessions`](#burn-sessions) | Find recent session IDs for drill-down queries. |
 | [`burn flow`](#burn-flow) | Render a session's inference and subagent flow as Mermaid, SVG, or JSON. |
 | [`burn stamps`](#burn-stamps) | Export enrichment stamps as JSONL. |
-| [`burn ingest`](#burn-ingest) | Import existing or live session logs without wrapping the harness. |
+| [`burn ingest`](#burn-ingest) | Sync session history and append new turns, once, live, or from a hook. |
 | [`burn mcp-server`](#burn-mcp-server) | Expose read-only cost queries to an agent through stdio MCP. |
 | [`burn update`](#burn-update) | Check for releases, install an update, or configure automatic checks. |
 
 Every command accepts `--json` for machine-readable output and `--no-color`
 to disable ANSI styling. Ledger-backed commands also accept `--ledger-path
-<path>`; `burn measure` intentionally ignores ledger configuration.
+<path>`; `burn analyze` and `burn measure` intentionally ignore ledger
+configuration.
 
 ## `burn summary`
 
@@ -74,8 +83,105 @@ tokens they used, and what they cost.
 | `burn summary --tag persona=code-reviewer` | Cost for sessions stamped with that persona tag. |
 | `burn summary --group-by-tag persona` | Cost grouped by persona value. |
 
+When turns in scope recorded a reasoning effort, the grouped summary adds a
+`reasoning effort` table (turns, tokens, reasoning tokens, cost per level;
+JSON `reasoningEfforts`).
+
 Synthetic-routed models are recognized from `hf:*`,
 `accounts/fireworks/models/*`, and `synthetic/*`.
+
+## `burn analyze`
+
+Use `burn analyze` to run every burn analyzer over one session and get back a
+diagnosis: where the tokens went and why. It needs no ledger and no ingest —
+the session is read through relayhistory, either looked up by id or read
+straight from a transcript file.
+
+| Option | What it does |
+|---|---|
+| `<source> <session-id>` | Look the session up by id (`claude`, `codex`, or `opencode`), discovering that harness's sessions on demand. |
+| `--path <file>` | Analyze a session artifact instead: a Claude Code or Codex transcript, or an OpenCode `storage/session/<scope>/<id>.json`. Nothing is persisted. |
+| `--harness <harness>` | Format of `--path`; inferred from the file name when omitted (`rollout-*` is Codex, `.json` is OpenCode, else Claude Code). |
+| `--store-db <path>` | relayhistory (ai-hist) database that resolves ids. |
+| `--home <dir>` | Provider home searched for the session, instead of `$HOME`. |
+| `--project <dir>` | Project whose instruction files to price; defaults to the session's working directory. |
+| `--pricing <models.dev.json>` | Overlay custom rates. |
+
+| Example | Result |
+|---|---|
+| `burn analyze claude <session-id>` | Report for one Claude Code session from the local relayhistory store. |
+| `burn analyze --path ./transcript.jsonl` | Report for a transcript file, e.g. one copied out of a sandbox. |
+| `burn --json analyze --path rollout-….jsonl` | The `burn.session-analysis.v1` document. |
+
+The `burn.session-analysis.v1` document has one section per analysis —
+`metrics` (the `burn.session-metrics.v1` totals), `activity`, `reasoning`,
+`hotspots`, `overhead`, `subagents`, `flow`, `context`, `quality`,
+`stopReasons` — each
+either `{"status":"available","data":…}` or
+`{"status":"unavailable","reason":…}`, plus `session` identity, `fidelity`,
+and `findings`. Every finding carries a stable `code`, `severity`, an
+`explanation` of what happened and why it costs tokens, `evidence` (turn ids,
+tools, files), `impact` (tokens and USD), and a concrete `suggestion`.
+Unpriced models report `costUsd: null`, never `$0`.
+
+```text
+findings (1)
+  [info] Retry loop: Bash npm run build failed 4× in a row: 'npm ERR! code ENOENT'
+         turns 0-3 · tools Bash · 790 tokens · $0.0016
+         why  Turns 0-3 are 4 consecutive errored Bash calls with the same arguments. …
+         fix  Stop after the first identical failure: read the error and change the arguments or approach. …
+```
+
+`reasoning` groups the turns by the reasoning effort the harness recorded:
+per level, `turns`, `tokens`, `reasoningTokens`, `costUsd`,
+`reasoningCostUsd` (what the reasoning tokens alone cost) and the same spend
+per `activities` category, plus `changes` — the turns whose effort differs
+from the previous turn's. Codex records effort in its `turn_context`; a turn
+runs under the latest one in rollout order. Sessions whose turns record no
+effort report the section unavailable. Two findings read it:
+`high-effort-routine-work` (three or more `high`/`xhigh` turns on git, build,
+dependency, formatting, exploration, conversation or delegation work carrying
+at least a quarter of the session's spend; impact is their reasoning tokens,
+the most a lower effort could save) and `reasoning-effort-change` (where
+effort changed, with per-turn tokens and cost at each level).
+
+```text
+effort  turns  tokens  reasoning  cost
+low     2      2,400   200        $0.011
+high    1      1,500   250        $0.010
+```
+
+### Analyzing sessions from another project
+
+The same analysis is a function call from Rust, Node, an MCP client, or a
+shell:
+
+```rust
+use relayburn_sdk::{analyze_session, AnalyzeSessionOptions, Harness, SessionLocator};
+
+let analysis = analyze_session(AnalyzeSessionOptions::new(SessionLocator::Path {
+    harness: Harness::ClaudeCode,
+    path: "/runs/42/session.jsonl".into(),
+}))?;
+for finding in &analysis.findings {
+    println!("{} {:?}: {}", finding.code, finding.impact.cost_usd, finding.suggestion);
+}
+```
+
+```js
+import { analyzeSession } from '@relayburn/sdk';
+
+const analysis = await analyzeSession({ harness: 'codex', sessionId: 'sess_123' });
+const worst = analysis.findings[0];
+```
+
+```bash
+burn --json analyze --path /runs/42/session.jsonl | jq '.findings[] | {code, suggestion}'
+```
+
+Rust embedders that already hold relayhistory evidence (`relayburn_sdk::ai_hist`,
+re-exported so the types match the ai-hist release burn builds against) call `analyze_evidence` instead. MCP clients use
+the `burn__analyzeSession` tool of `burn mcp-server`.
 
 ## `burn measure`
 
@@ -230,22 +336,23 @@ Run `burn summary --by-provider` to discover model IDs present in your ledger.
 
 ## `burn ingest`
 
-Use `burn ingest` when sessions already exist, or when another process owns the
-harness spawn. Default mode scans Claude Code, Codex, and OpenCode stores once.
+`burn ingest` syncs the relayhistory store (Claude Code, Codex, and OpenCode
+sessions) and appends every session it changed since the ledger's last ingest.
+Reporting commands that refresh the ledger run the same step.
 
 | Option | What it does |
 |---|---|
-| `--watch` | Keep polling session stores in the foreground. |
-| `--interval <ms>` | Poll interval in milliseconds. Default: `1000`. |
+| `--watch` | Keep ingesting in the foreground as sessions change. |
+| `--interval <ms>` | Poll interval when filesystem events are off or unavailable. Default: `1000`. |
 | `--quiet` | Suppress stderr progress spinner / breadcrumbs. One-shot mode still writes the final summary on stdout. |
 | `--hook claude` | Read one Claude Code hook payload from stdin and ingest its single transcript via the SDK fast-path. |
 | `--no-fsevents` | In watch mode, use polling instead of filesystem events. |
 
 | Example | Result |
 |---|---|
-| `burn ingest` | Scan all known session stores once. |
+| `burn ingest` | Sync session history once and append what changed. |
 | `burn ingest --watch` | Keep the ingest loop running. |
-| `burn ingest --watch --no-fsevents` | Poll session stores when filesystem events are unreliable. |
+| `burn ingest --watch --no-fsevents` | Poll when filesystem events are unreliable. |
 | `burn ingest --hook claude --quiet` | Claude Code hook path for orchestrators. |
 
 ## `burn mcp-server`
@@ -267,6 +374,7 @@ MCP. The server is stdio-only and read-only.
 | `burn__overhead` | Instruction-file token overhead and cost by file and section. |
 | `burn__overheadTrim` | Ranked instruction-file trimming recommendations and projected savings. |
 | `burn__compare` | Per-model, per-activity cost and outcome comparison. |
+| `burn__analyzeSession` | The ledger-less `burn.session-analysis.v1` diagnosis of one session (defaults to the registered session). |
 
 | Example | Result |
 |---|---|
@@ -297,7 +405,7 @@ content/search data in `content.sqlite`.
 | `burn state prune --days 30` | Prune content older than 30 days. |
 
 Follow any `state rebuild` command with `burn ingest` to repopulate derived
-tables from the harness session stores. Before a forced reset, back up
+tables from the relayhistory store. Before a forced reset, back up
 enrichment with `burn stamps export`; ingest cannot reconstruct stamps from
 harness logs.
 
@@ -375,11 +483,17 @@ can place event and content data on different volumes. SQLite may create
 `-wal` and `-shm` files beside each open database; they are part of normal WAL
 operation.
 
-Harness transcripts remain the upstream input for ingest. `burn state status`
-shows database paths, row counts, schema metadata, and resolved retention.
-`burn state rebuild ...` clears derivable tables for re-ingest, `burn state
-prune` applies content retention, and `burn state reset` previews or performs a
-full derived-state wipe.
+The relayhistory store is the upstream input for ingest; the ledger records
+how far it has read the store's change feed. `burn state status` shows
+database paths, row counts, schema metadata, and resolved retention. `burn
+state rebuild ...` clears derivable tables so the next ingest rebuilds every
+session from the store, `burn state prune` applies content retention, and
+`burn state reset` previews or performs a full derived-state wipe.
+
+| Session history setting | Purpose |
+|---|---|
+| `AI_HIST_DB` | relayhistory database burn reads sessions from. Default: `~/.local/share/ai-hist/ai-history.db`. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` | Harness store locations, as relayhistory resolves them. |
 
 ## Packages
 
@@ -389,7 +503,7 @@ full derived-state wipe.
 | `@relayburn/sdk` | Node facade over the Rust SDK, resolved through `@relayburn/sdk-<platform>` optional dependencies. |
 | `@relayburn/cli-<platform>` | Prebuilt `burn` binary packages for supported OS/CPU targets. |
 | `@relayburn/sdk-<platform>` | Prebuilt napi-rs packages for supported OS/CPU targets. |
-| `relayburn-sdk` | Rust crate with the embedding API and internal reader/ledger/analyze/ingest modules. |
+| `relayburn-sdk` | Rust crate with the embedding API and internal reader/ledger/analyze/ingest modules; sessions come from the `ai-hist` crate. |
 | `relayburn-cli` | Rust crate that produces the `burn` binary. |
 
 ## Development
@@ -504,8 +618,8 @@ await writePendingStamp({
 });
 ```
 
-Then spawn the harness normally and let `burn ingest` or `ingest()` scan the
-session stores. Claude launchers can either preallocate `--session-id` and
+Then spawn the harness normally and let `burn ingest` or `ingest()` pick the
+session up. Claude launchers can either preallocate `--session-id` and
 write an exact session stamp from Rust, or use `writePendingStamp({ harness:
 "claude", ... })` when the final session ID is not available before spawn.
 
@@ -523,9 +637,9 @@ burn ingest
 burn ingest --watch --interval 1000
 ```
 
-`burn ingest` scans Claude, Codex, and OpenCode stores once and uses the same
-cursor and dedup path as the reporting commands. `burn ingest --watch` keeps
-that scan loop running in the foreground.
+`burn ingest` syncs session history once and uses the same watermark and dedup
+path as the reporting commands. `burn ingest --watch` keeps that loop running
+in the foreground.
 
 ### Hook-based ingest for orchestrators
 
@@ -537,22 +651,23 @@ hooks per invocation via Claude's `--settings` flag without mutating global
 burn ingest --hook claude --quiet
 ```
 
-Hook payloads land on stdin and get forwarded to `burn ingest`. The command is
-safe to re-fire on every hook; the ledger cursor and dedup path keep ingestion
-idempotent, so the hook path and normal session-store path reconcile against
-the same session.
+Hook payloads land on stdin and get forwarded to `burn ingest`, which indexes
+just that transcript. The command is safe to re-fire on every hook; appends are
+idempotent, so the hook path and a full ingest reconcile against the same
+session.
 
 ## FAQ
 
 ### What does `burn ingest` do?
 
 Each harness (Claude Code, Codex, OpenCode) writes its own session transcripts
-to disk in its own format. `burn ingest` reads those transcripts, normalizes
-them, and writes them into burn's local SQLite ledger so the query commands
-(`summary`, `hotspots`, `overhead`, `compare`) have something to read against.
-Three modes:
+to disk in its own format. relayhistory reads those into one session store;
+`burn ingest` syncs that store, derives burn's turns, costs, and activity from
+what changed, and writes them into burn's local SQLite ledger so the query
+commands (`summary`, `hotspots`, `overhead`, `compare`) have something to read
+against. Three modes:
 
-- **One-shot** — `burn ingest` scans every known session store once and exits.
+- **One-shot** — `burn ingest` syncs session history once and exits.
   Good for backfilling or catching up before a query.
 - **Watch** — `burn ingest --watch` keeps a loop running in the foreground and
   picks up new turns as harnesses write them.
@@ -576,7 +691,7 @@ FS-watching contortions.
 - **Hook** is the preferred path when the harness supports it: push-based,
   exact, no polling.
 - **Watch** is the fallback for harnesses without hooks, or when the user
-  hasn't wired one up. It polls the session store directories on an interval.
+  hasn't wired one up. It follows filesystem events, polling as a backstop.
 - **One-shot** is for backfill, cron, or "just give me numbers now."
 
 For most solo users, `burn ingest --watch` in a background terminal is

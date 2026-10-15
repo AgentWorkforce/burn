@@ -17,6 +17,41 @@ pub(super) fn prompted_ghost_surface_inputs(
     ))
 }
 
+/// User text that prompted `turns`, from the content records of a complete
+/// session read, keyed by source and session as the ghost-surface detector
+/// reads it. Every turn counts as selected.
+pub(crate) fn session_prompt_text(
+    turns: &[TurnRecord],
+    content: &[ContentRecord],
+) -> HashMap<SourceKind, HashMap<String, Vec<String>>> {
+    let mut sessions: HashMap<(SourceKind, &str), Vec<TurnRecord>> = HashMap::new();
+    for turn in turns {
+        sessions
+            .entry((turn.source, turn.session_id.as_str()))
+            .or_default()
+            .push(turn.clone());
+    }
+    let mut out: HashMap<SourceKind, HashMap<String, Vec<String>>> = HashMap::new();
+    for ((source, session_id), session_turns) in sessions {
+        let selected: HashSet<&str> = session_turns
+            .iter()
+            .map(|t| t.message_id.as_str())
+            .collect();
+        let records = content
+            .iter()
+            .filter(|record| record.source == source && record.session_id == session_id)
+            .cloned()
+            .collect();
+        let texts = prompts_for_selected_turns(&session_turns, &selected, records);
+        if !texts.is_empty() {
+            out.entry(source)
+                .or_default()
+                .insert(session_id.to_string(), texts);
+        }
+    }
+    out
+}
+
 /// User text that prompted the selected turns, keyed by source and session.
 ///
 /// A prompt belongs to the first turn in its session at or after the

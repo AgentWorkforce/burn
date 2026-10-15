@@ -28,7 +28,8 @@
           "id": "call_fail",
           "name": "bash",
           "target": "test",
-          "argsHash": "ed2d201bcdca6714"
+          "argsHash": "ed2d201bcdca6714",
+          "isError": true
         }
       ],
       "stopReason": "tool-use",

@@ -64,8 +64,20 @@ const BIGINT_FIELDS: &[&str] = &[
     "partial",
     "usageOnly",
     "unknown",
-    // measureSession
+    // measureSession + analyzeSession
     "turnCount",
+    "userTurnCount",
+    "toolCallCount",
+    "compactionCount",
+    "attributableTurns",
+    "calls",
+    "errors",
+    "inferences",
+    "toolUses",
+    "skills",
+    "rails",
+    "edges",
+    "peakContextTokens",
     "inputTokens",
     "outputTokens",
     "cacheReadTokens",
@@ -73,6 +85,21 @@ const BIGINT_FIELDS: &[&str] = &[
     "reasoningTokens",
     "totalTokens",
     "costUsdMicros",
+    "unpricedTurns",
+    // analyzeSession subagent tree, flow summary, stop-reason counts
+    "selfTurns",
+    "selfTokens",
+    "cumulativeTurns",
+    "cumulativeTokens",
+    "subagents",
+    "endTurn",
+    "maxTokens",
+    "pauseTurn",
+    "stopSequence",
+    "toolUse",
+    "refusal",
+    "aborted",
+    "silent",
     // export_ledger / export_stamps record bodies — every camelCased
     // u64 field on TurnRecord / UserTurnRecord / ToolResultEventRecord /
     // CompactionEvent / nested Usage and ToolCall payloads. These values

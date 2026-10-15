@@ -2,8 +2,8 @@ use super::flow::{bucket_subagents_per_turn, schema_missing_as_empty};
 use super::summary::{
     aggregate_summary_relationship_stats, aggregate_summary_relationship_subagent_stats,
     attribute_summary_cost_to_tools, collect_summary_agent_session_tree,
-    collect_summary_connected_relationships, compute_summary, summary_subagent_session_filter,
-    summary_tool_attribution_method, summary_turn_identity_key, SummaryRelationshipMatch,
+    collect_summary_connected_relationships, compute_summary, summary_tool_attribution_method,
+    summary_turn_identity_key, SummaryRelationshipMatch,
 };
 use super::*;
 use crate::analyze::FindingPricingStatus;
@@ -57,6 +57,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     let turn2 = TurnRecord {
         v: 1,
@@ -96,6 +97,7 @@ fn fixture_handle() -> (TempDir, LedgerHandle) {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle
         .raw_mut()
@@ -144,6 +146,7 @@ fn ghost_surface_turn(source: SourceKind, session_id: &str, message_id: &str) ->
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -383,6 +386,87 @@ fn summary_report_grouped_owns_rows_and_stable_fidelity_shape() {
     assert!(summary_fidelity_summary_to_value(&grouped.fidelity)["byClass"].is_object());
 }
 
+/// Reasoning settings ride in the turn's `record_json`, so the grouped
+/// summary breaks spend down per effort without a schema change.
+#[test]
+fn summary_report_breaks_spend_down_per_reasoning_effort() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(dir.path())).expect("open ledger");
+    let make_turn = |idx: u64, effort: Option<&str>| -> TurnRecord {
+        TurnRecord {
+            v: 1,
+            source: SourceKind::Codex,
+            session_id: "sess-effort".into(),
+            session_path: None,
+            message_id: format!("t{idx}"),
+            turn_index: idx,
+            ts: format!("2026-05-25T00:0{idx}:00.000Z"),
+            model: "gpt-5.4".into(),
+            project: Some("/tmp/proj".into()),
+            project_key: None,
+            usage: Usage {
+                input: 1000 + idx,
+                output: 400,
+                reasoning: 300,
+                ..Usage::default()
+            },
+            tool_calls: vec![],
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+            reasoning: effort.map(|effort| crate::ReasoningConfig {
+                effort: Some(effort.into()),
+                summary: Some("detailed".into()),
+            }),
+        }
+    };
+    handle
+        .raw_mut()
+        .append_turns(&[
+            make_turn(0, Some("high")),
+            make_turn(1, Some("low")),
+            make_turn(2, Some("high")),
+            make_turn(3, None),
+        ])
+        .expect("append turns");
+    let SummaryReport::Grouped(grouped) = handle
+        .summary_report(SummaryReportOptions::default())
+        .expect("summary report")
+    else {
+        panic!("expected grouped report");
+    };
+    let rows: Vec<(Option<&str>, u64, u64)> = grouped
+        .reasoning_efforts
+        .iter()
+        .map(|row| (row.effort.as_deref(), row.turns, row.reasoning_tokens))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (Some("low"), 1, 300),
+            (Some("high"), 2, 600),
+            (None, 1, 300)
+        ]
+    );
+    assert!(grouped
+        .reasoning_efforts
+        .iter()
+        .all(|r| r.cost_usd.is_some()));
+
+    let (_dir, plain) = fixture_handle();
+    let SummaryReport::Grouped(plain) = plain
+        .summary_report(SummaryReportOptions::default())
+        .expect("summary report")
+    else {
+        panic!("expected grouped report");
+    };
+    assert!(plain.reasoning_efforts.is_empty());
+}
+
 #[test]
 fn summary_report_envelope_carries_schema_capabilities_and_window() {
     let (_dir, handle) = fixture_handle();
@@ -561,6 +645,7 @@ fn summary_report_aggregates_stop_reasons_per_outcome() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     };
 
@@ -626,6 +711,7 @@ fn compute_summary_tracks_unpriced_turns_and_models() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     let unpriced_turn = TurnRecord {
         message_id: "m-unpriced".into(),
@@ -681,6 +767,7 @@ fn summary_report_grouped_tracks_unpriced_turns_and_models() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     };
 
@@ -800,6 +887,7 @@ fn summary_legacy_surface_includes_stop_reason_counts_with_none_for_missing_fiel
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle
         .raw_mut()
@@ -819,126 +907,6 @@ fn summary_legacy_surface_includes_stop_reason_counts_with_none_for_missing_fiel
     assert_eq!(s.stop_reasons.none, 1);
     assert_eq!(s.stop_reasons.pause_turn, 1);
     assert_eq!(s.stop_reasons.end_turn, 0);
-}
-
-/// Issue #449 review follow-up: when no filters are set, the
-/// subagent count helper must return `None` so the underlying
-/// walker preserves its original "count every reachable session"
-/// behavior (the global-summary path).
-#[test]
-fn summary_subagent_session_filter_returns_none_for_unfiltered_summary() {
-    let opts = SummaryReportOptions::default();
-    let turns: Vec<TurnRecord> = Vec::new();
-    assert!(summary_subagent_session_filter(&opts, &turns).is_none());
-}
-
-/// Issue #449 review follow-up: when `--session` (or any other
-/// scoping filter) is active, the subagent count helper must
-/// return `Some(set)` containing exactly the session ids that
-/// survived filtering. This is the linkage that stops the
-/// `subagents: X paired, Y orphan` line from including sidecars
-/// from sessions the user excluded.
-#[test]
-fn summary_subagent_session_filter_collects_session_ids_when_filtered() {
-    let opts = SummaryReportOptions {
-        session: Some("sess-a".into()),
-        ..SummaryReportOptions::default()
-    };
-    let mk = |session_id: &str| TurnRecord {
-        v: 1,
-        source: SourceKind::ClaudeCode,
-        session_id: session_id.into(),
-        session_path: None,
-        message_id: format!("m-{session_id}"),
-        turn_index: 0,
-        ts: "2026-04-23T00:00:00.000Z".into(),
-        model: "claude-sonnet-4-6".into(),
-        project: None,
-        project_key: None,
-        usage: Usage::default(),
-        tool_calls: vec![],
-        files_touched: None,
-        subagent: None,
-        stop_reason: None,
-        activity: None,
-        retries: None,
-        has_edits: None,
-        fidelity: None,
-    };
-    let turns = vec![mk("sess-a"), mk("sess-a")];
-    let filter = summary_subagent_session_filter(&opts, &turns)
-        .expect("expected Some(set) when --session is active");
-    assert!(filter.contains("sess-a"));
-    assert_eq!(filter.len(), 1, "duplicates collapse into the set");
-}
-
-/// Each non-default filter on `SummaryReportOptions` must flip the
-/// helper into "filtered" mode. Iterating over the surface keeps
-/// us from quietly losing scoping when a new filter is added.
-#[test]
-fn summary_subagent_session_filter_treats_every_filter_as_scoping() {
-    let turns: Vec<TurnRecord> = Vec::new();
-    let cases: Vec<(&str, SummaryReportOptions)> = vec![
-        (
-            "project",
-            SummaryReportOptions {
-                project: Some("/tmp/proj".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "since",
-            SummaryReportOptions {
-                since: Some("24h".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "until",
-            SummaryReportOptions {
-                until: Some("2026-04-23T00:00:30.000Z".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "workflow",
-            SummaryReportOptions {
-                workflow: Some("wf-1".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "agent",
-            SummaryReportOptions {
-                agent: Some("agent-x".into()),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "providers",
-            SummaryReportOptions {
-                providers: Some(vec!["anthropic".into()]),
-                ..SummaryReportOptions::default()
-            },
-        ),
-        (
-            "tags",
-            SummaryReportOptions {
-                tags: Some({
-                    let mut m = BTreeMap::new();
-                    m.insert("k".into(), "v".into());
-                    m
-                }),
-                ..SummaryReportOptions::default()
-            },
-        ),
-    ];
-    for (label, opts) in cases {
-        assert!(
-            summary_subagent_session_filter(&opts, &turns).is_some(),
-            "expected filter to engage for {label}"
-        );
-    }
 }
 
 #[test]
@@ -1718,6 +1686,83 @@ fn hotspots_ghost_surface_user_text_follows_selected_turns() {
 }
 
 #[test]
+fn session_prompt_text_keys_each_sessions_prompts_by_source() {
+    let turns = [
+        timed_ghost_turn("ghost-window", "turn-a", "2026-04-23T00:00:10.000Z"),
+        timed_ghost_turn("ghost-window", "turn-b", "2026-04-23T00:00:20.000Z"),
+        timed_ghost_turn("ghost-other", "turn-c", "2026-04-23T00:00:10.000Z"),
+    ];
+    let mut foreign_source = timed_content(
+        "ghost-window",
+        "codex-u1",
+        "2026-04-23T00:00:04.000Z",
+        ContentRole::User,
+        "/codex-only",
+    );
+    foreign_source.source = SourceKind::Codex;
+    let content = [
+        timed_content(
+            "ghost-window",
+            "u1",
+            "2026-04-23T00:00:01.000Z",
+            ContentRole::User,
+            "/openspec-apply",
+        ),
+        timed_content(
+            "ghost-window",
+            "u2",
+            "2026-04-23T00:00:15.000Z",
+            ContentRole::User,
+            "/openspec-archive",
+        ),
+        timed_content(
+            "ghost-window",
+            "u3",
+            "2026-04-23T00:00:12.000Z",
+            ContentRole::User,
+            "",
+        ),
+        timed_content(
+            "ghost-window",
+            "a1",
+            "2026-04-23T00:00:13.000Z",
+            ContentRole::Assistant,
+            "/assistant-text",
+        ),
+        // After the session's last turn: it prompted nothing.
+        timed_content(
+            "ghost-window",
+            "u4",
+            "2026-04-23T00:00:30.000Z",
+            ContentRole::User,
+            "/trailing",
+        ),
+        timed_content(
+            "ghost-other",
+            "o1",
+            "2026-04-23T00:00:05.000Z",
+            ContentRole::User,
+            "/other-session",
+        ),
+        foreign_source,
+    ];
+
+    let by_source = crate::query_verbs::session_prompt_text(&turns, &content);
+    assert_eq!(by_source.len(), 1, "{by_source:?}");
+    let claude = &by_source[&SourceKind::ClaudeCode];
+    assert_eq!(claude.len(), 2);
+    assert_eq!(
+        claude["ghost-window"],
+        [
+            "/openspec-apply".to_string(),
+            "/openspec-archive".to_string()
+        ]
+    );
+    assert_eq!(claude["ghost-other"], ["/other-session".to_string()]);
+    assert!(crate::query_verbs::session_prompt_text(&turns[..1], &content[5..]).is_empty());
+}
+
+#[test]
 fn hotspots_ghost_surface_user_text_matches_turns_as_instants() {
     let (_dir, mut handle) = fixture_handle();
     // The turn's timestamp carries milliseconds; the prompt's does not. As
@@ -1811,6 +1856,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
                 retries: None,
                 has_edits: None,
                 fidelity: None,
+                reasoning: None,
             },
             TurnRecord {
                 v: 1,
@@ -1839,6 +1885,7 @@ fn hotspots_findings_surface_unpriced_usage_with_token_rank() {
                 retries: None,
                 has_edits: None,
                 fidelity: None,
+                reasoning: None,
             },
         ])
         .expect("append unpriced turn");
@@ -2069,6 +2116,7 @@ fn compare_metadata_counts_all_matched_turns_pre_models_filter() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle.raw_mut().append_turns(&[extra]).unwrap();
 
@@ -2329,6 +2377,7 @@ fn free_function_summary_round_trips_through_ledger_home() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
         handle.raw_mut().append_turns(&[t]).unwrap();
     }
@@ -2362,7 +2411,7 @@ fn state_status_reports_zero_rows_on_fresh_ledger() {
     // (#434 `inferences`), v4 (#435 `turns.subagent_id`), v3 (#436
     // `tool_result_events.output_bytes` / `output_truncated`) and v2
     // (#437 `turns.stop_reason`).
-    assert_eq!(s.archive.schema_version, 7);
+    assert_eq!(s.archive.schema_version, 8);
     assert!(s.archive.last_write_at_ms.is_none());
     assert!(s.archive.last_built_at.is_none());
     assert!(s.archive.last_rebuild_at.is_none());
@@ -2523,6 +2572,7 @@ fn summary_test_turn(
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -2583,6 +2633,7 @@ fn make_turn_with_calls(calls: Vec<ToolCall>) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -2700,6 +2751,7 @@ fn context_delta_filter_handle_with_key(
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     };
     handle
@@ -2935,6 +2987,7 @@ fn multi_session_handle() -> (TempDir, LedgerHandle) {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     };
 
@@ -3138,6 +3191,7 @@ fn fingerprint_changes_when_a_new_turn_is_appended() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle.raw_mut().append_turns(&[extra]).unwrap();
 
@@ -3180,6 +3234,7 @@ fn fingerprint_per_session_differs_from_global() {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     };
     handle.raw_mut().append_turns(&[other]).unwrap();
 
@@ -3371,6 +3426,7 @@ fn bucket_turn(message_id: &str, ts: &str, tool_use_ids: &[&str]) -> TurnRecord 
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -3379,15 +3435,12 @@ fn bucket_subagent(
     paired_tool_use_id: Option<&str>,
     first_record_ts: Option<&str>,
 ) -> crate::reader::SubagentTranscript {
-    let records: Vec<serde_json::Value> = first_record_ts
-        .map(|ts| vec![serde_json::json!({ "timestamp": ts })])
-        .unwrap_or_default();
     crate::reader::SubagentTranscript {
         agent_id: agent_id.into(),
         agent_type: None,
         description: None,
         meta_tool_use_id: None,
-        records,
+        started_at_ms: first_record_ts.and_then(crate::util::time::parse_iso_ms),
         paired_tool_use_id: paired_tool_use_id.map(str::to_string),
         source_path: std::path::PathBuf::from(format!("/tmp/agent-{agent_id}.jsonl")),
     }
@@ -3561,6 +3614,7 @@ fn summary_report_by_tool_aggregates_across_multiple_sessions() {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
 
     // Attribution works by attributing turn[i]'s input cost to the tool
@@ -3668,6 +3722,7 @@ mod fingerprint_bench {
                 retries: None,
                 has_edits: None,
                 fidelity: None,
+                reasoning: None,
             });
         }
         handle.raw_mut().append_turns(&turns).unwrap();
@@ -3743,6 +3798,7 @@ fn bucket_test_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnR
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -3916,6 +3972,20 @@ fn summary_timeseries_rejects_oversized_window() {
 }
 
 #[test]
+fn group_by_session_keeps_source_order_and_only_kept_sessions() {
+    let records = [("s1", 1), ("s2", 2), ("s1", 3), ("s3", 4)];
+    let all = group_by_session(&records, |r| r.0, None);
+    assert_eq!(all.len(), 3);
+    assert_eq!(all["s1"], [("s1", 1), ("s1", 3)]);
+    let keep: HashSet<String> = ["s1".to_string(), "s3".to_string()].into();
+    let kept = group_by_session(&records, |r| r.0, Some(&keep));
+    let mut sessions: Vec<&String> = kept.keys().collect();
+    sessions.sort();
+    assert_eq!(sessions, ["s1", "s3"]);
+    assert_eq!(kept["s3"], [("s3", 4)]);
+}
+
+#[test]
 fn schema_missing_as_empty_tolerates_only_missing_schema() {
     use crate::ledger::LedgerError;
 
@@ -3937,4 +4007,282 @@ fn schema_missing_as_empty_tolerates_only_missing_schema() {
     let err = schema_missing_as_empty::<u8>(Err(sqlite_failure("disk I/O error")))
         .expect_err("non-schema failures propagate");
     assert!(err.to_string().contains("disk I/O error"), "got {err}");
+}
+
+/// A tool result whose output is far above the bloat threshold.
+fn bloated_result(
+    session_id: &str,
+    tool_use_id: &str,
+    ts: &str,
+    bytes: u64,
+) -> crate::ToolResultEventRecord {
+    crate::ToolResultEventRecord {
+        v: 1,
+        source: SourceKind::ClaudeCode,
+        session_id: session_id.into(),
+        message_id: None,
+        tool_use_id: tool_use_id.into(),
+        call_index: None,
+        event_index: 0,
+        ts: Some(ts.into()),
+        status: crate::reader::ToolResultStatus::Completed,
+        event_source: crate::reader::ToolResultEventSource::ToolResult,
+        content_length: Some(bytes),
+        output_bytes: None,
+        output_truncated: None,
+        content_hash: None,
+        is_error: None,
+        usage: None,
+        usage_attribution: None,
+        subagent_session_id: None,
+        agent_id: None,
+        replaced_tools: None,
+        collapsed_calls: None,
+    }
+}
+
+/// `sess-a` (the fixture, 2026-04-23) stamped `wf-1`, plus `sess-b` from the
+/// day before. Each session carries one bloated tool result from 2026-04-22:
+/// 100,000 tokens in `sess-a`, 200,000 in `sess-b`. A Codex tool result under
+/// `sess-a`'s id belongs to no selected turn.
+fn bloat_slices_handle() -> (TempDir, LedgerHandle) {
+    let (dir, mut handle) = fixture_handle();
+    let mut enrichment = crate::Enrichment::new();
+    enrichment.insert("workflowId".into(), "wf-1".into());
+    let stamp = crate::Stamp::new(
+        "2026-04-23T00:00:30.000Z",
+        crate::StampSelector {
+            session_id: Some("sess-a".into()),
+            ..Default::default()
+        },
+        enrichment,
+    )
+    .unwrap();
+    handle.raw_mut().append_stamp(&stamp).unwrap();
+    handle
+        .raw_mut()
+        .append_turns(&[bucket_test_turn(
+            "sess-b",
+            "m-b",
+            "2026-04-22T00:00:00.000Z",
+            1_000,
+        )])
+        .unwrap();
+    handle
+        .raw_mut()
+        .append_tool_result_events(&[
+            bloated_result("sess-a", "tu-old", "2026-04-22T12:00:00.000Z", 400_000),
+            bloated_result("sess-b", "tu-b", "2026-04-22T00:00:01.000Z", 800_000),
+        ])
+        .unwrap();
+    // A Codex session that shares `sess-a`'s id but has no turns.
+    let codex = crate::ToolResultEventRecord {
+        source: SourceKind::Codex,
+        ..bloated_result("sess-a", "tu-codex", "2026-04-23T00:00:10.000Z", 300_000)
+    };
+    handle
+        .raw_mut()
+        .append_tool_result_events(&[codex])
+        .unwrap();
+    (dir, handle)
+}
+
+/// The largest output the observed tool-output-bloat finding of `opts`
+/// reports, `None` when there is no such finding.
+fn bloat_max(handle: &LedgerHandle, opts: HotspotsOptions) -> Option<&'static str> {
+    let HotspotsResult::Findings { findings, .. } = handle.hotspots(opts).unwrap() else {
+        panic!("expected findings");
+    };
+    let titles: Vec<String> = findings
+        .into_iter()
+        .filter(|f| f.kind == "tool-output-bloat" && f.session_id.starts_with("sess-"))
+        .map(|f| f.title)
+        .collect();
+    assert!(titles.len() <= 1, "{titles:?}");
+    titles.first().map(|title| {
+        ["200,000", "100,000"]
+            .into_iter()
+            .find(|max| title.contains(max))
+            .unwrap_or_else(|| panic!("unexpected bloat title: {title}"))
+    })
+}
+
+#[test]
+fn hotspots_findings_read_side_records_of_the_selected_slice_only() {
+    let (_dir, handle) = bloat_slices_handle();
+    let bloat = || HotspotsOptions {
+        patterns: Some(vec!["tool-output-bloat".into()]),
+        ..HotspotsOptions::default()
+    };
+    assert_eq!(bloat_max(&handle, bloat()), Some("200,000"));
+    let session_a = HotspotsOptions {
+        session: Some("sess-a".into()),
+        ..bloat()
+    };
+    assert_eq!(bloat_max(&handle, session_a), Some("100,000"));
+    let recent = HotspotsOptions {
+        since: Some("2026-04-23T00:00:00Z".into()),
+        ..bloat()
+    };
+    assert_eq!(bloat_max(&handle, recent), None);
+    let workflow = HotspotsOptions {
+        workflow: Some("wf-1".into()),
+        ..bloat()
+    };
+    assert_eq!(bloat_max(&handle, workflow), Some("100,000"));
+}
+
+#[test]
+fn an_empty_pattern_list_selects_no_patterns() {
+    let (_dir, handle) = bloat_slices_handle();
+    // Findings mode with an empty list runs every default detector.
+    let findings = HotspotsOptions {
+        group_by: Some(HotspotsGroupBy::Findings),
+        patterns: Some(Vec::new()),
+        ..HotspotsOptions::default()
+    };
+    assert_eq!(bloat_max(&handle, findings), Some("200,000"));
+    // Without findings mode an empty list leaves the attribution view.
+    let result = handle
+        .hotspots(HotspotsOptions {
+            patterns: Some(Vec::new()),
+            ..HotspotsOptions::default()
+        })
+        .unwrap();
+    assert!(
+        matches!(result, HotspotsResult::Attribution(_)),
+        "{result:?}"
+    );
+}
+
+/// A git-bounded project holding a CLAUDE.md and an AGENTS.md, and a ledger
+/// with one recent and one old session in it plus a session elsewhere.
+fn overhead_scope_fixture() -> (TempDir, TempDir, LedgerHandle, PathBuf) {
+    let project_dir = tempfile::tempdir().unwrap();
+    let project = std::fs::canonicalize(project_dir.path()).unwrap();
+    std::fs::create_dir(project.join(".git")).unwrap();
+    let body = format!(
+        "## Big\n{}\n\n## Small\n{}\n",
+        "y".repeat(800),
+        "z".repeat(200)
+    );
+    std::fs::write(project.join("CLAUDE.md"), &body).unwrap();
+    std::fs::write(project.join("AGENTS.md"), &body).unwrap();
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let mut handle = Ledger::open(LedgerOpenOptions::with_home(ledger_dir.path())).unwrap();
+    let in_project = |session: &str, ts: &str, project: &Path| TurnRecord {
+        project: Some(project.to_string_lossy().into_owned()),
+        ..bucket_test_turn(session, &format!("m-{session}"), ts, 1_000)
+    };
+    handle
+        .raw_mut()
+        .append_turns(&[
+            in_project("recent", "2026-04-23T00:00:00.000Z", &project),
+            in_project("old", "2026-01-01T00:00:00.000Z", &project),
+            in_project(
+                "elsewhere",
+                "2026-04-23T00:05:00.000Z",
+                Path::new("/tmp/other"),
+            ),
+        ])
+        .unwrap();
+    (project_dir, ledger_dir, handle, project)
+}
+
+/// The attribution of the fixture project's own `name` file. Claude's walk
+/// also reads any instruction file above the temp dir, so assertions look
+/// the project file up by path.
+fn project_file<'a>(r: &'a OverheadResult, project: &Path, name: &str) -> &'a OverheadPerFileEntry {
+    let path = project.join(name).to_string_lossy().into_owned();
+    r.per_file
+        .iter()
+        .find(|f| f.path == path)
+        .unwrap_or_else(|| panic!("{name} attributed: {:#?}", r.files))
+}
+
+#[test]
+fn overhead_reads_the_requested_kind_project_and_window() {
+    let (_project_dir, _ledger_dir, handle, project) = overhead_scope_fixture();
+    let options = |kind, since: Option<&str>| OverheadOptions {
+        project: Some(project.clone()),
+        kind: Some(kind),
+        since: since.map(str::to_string),
+        harness_home: Some(project.join("empty-home")),
+        ..OverheadOptions::default()
+    };
+    let claude = handle
+        .overhead(options(OverheadFileKind::ClaudeMd, None))
+        .unwrap();
+    assert!(claude
+        .files
+        .iter()
+        .all(|f| f.kind == OverheadFileKind::ClaudeMd));
+    let claude_md = project_file(&claude, &project, "CLAUDE.md");
+    assert_eq!(claude_md.attribution.session_count, 2);
+    // The AGENTS.md chain stops at the project's git root.
+    let agents = handle
+        .overhead(options(OverheadFileKind::AgentsMd, None))
+        .unwrap();
+    let kinds: Vec<_> = agents.files.iter().map(|f| f.kind).collect();
+    assert_eq!(kinds, [OverheadFileKind::AgentsMd]);
+    let recent = handle
+        .overhead(options(
+            OverheadFileKind::ClaudeMd,
+            Some("2026-04-01T00:00:00Z"),
+        ))
+        .unwrap();
+    let claude_md = project_file(&recent, &project, "CLAUDE.md");
+    assert_eq!(claude_md.attribution.session_count, 1);
+}
+
+#[test]
+fn overhead_trim_counts_each_file_with_recommendations_once() {
+    let (_project_dir, _ledger_dir, handle, project) = overhead_scope_fixture();
+    let r = handle
+        .overhead_trim(OverheadTrimOptions {
+            project: Some(project.clone()),
+            harness_home: Some(project.join("empty-home")),
+            ..OverheadTrimOptions::default()
+        })
+        .unwrap();
+    let files: std::collections::BTreeSet<&str> = r
+        .recommendations
+        .iter()
+        .map(|rec| rec.file.as_str())
+        .collect();
+    // The project's CLAUDE.md and AGENTS.md, plus any host ancestor file.
+    assert!(
+        files.contains("CLAUDE.md") && files.contains("AGENTS.md"),
+        "{files:?}"
+    );
+    assert_eq!(
+        r.summary.files_with_recommendations,
+        files.len() as u64,
+        "{:#?}",
+        r.summary
+    );
+}
+
+#[test]
+fn hotspots_reads_the_user_then_the_project_claude_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let project = dir.path().join("project");
+    let paths = super::hotspots::claude_settings(&home, &project);
+    assert!(paths.is_empty());
+    for root in [&home, &project] {
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(root.join(".claude/settings.json"), r#"{"env": {}}"#).unwrap();
+    }
+    let paths: Vec<PathBuf> = super::hotspots::claude_settings(&home, &project)
+        .into_iter()
+        .map(|s| s.path)
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            home.join(".claude/settings.json"),
+            project.join(".claude/settings.json")
+        ]
+    );
 }

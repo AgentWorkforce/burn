@@ -49,6 +49,7 @@ fn dispatch(args: Args) -> i32 {
     }
     match args.command {
         Command::Measure(args) => commands::measure::run(&globals, args),
+        Command::Analyze(args) => commands::analyze::run(&globals, args),
         Command::Summary(sub) => commands::summary::run(&globals, sub),
         Command::Hotspots(sub) => commands::hotspots::run(&globals, sub),
         Command::Overhead(args) => commands::overhead::run(&globals, args),
@@ -70,13 +71,14 @@ fn dispatch(args: Args) -> i32 {
 fn offer_update_for(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Update(_) | Command::McpServer(_) | Command::Measure(_)
+        Command::Update(_) | Command::McpServer(_) | Command::Measure(_) | Command::Analyze(_)
     )
 }
 
 fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Measure(_) => "measure",
+        Command::Analyze(_) => "analyze",
         Command::Summary(_) => "summary",
         Command::Hotspots(_) => "hotspots",
         Command::Overhead(_) => "overhead",
@@ -109,6 +111,7 @@ mod tests {
                 &["measure", "--input", "x.jsonl", "--harness", "codex"],
                 "measure",
             ),
+            (&["analyze", "--path", "x.jsonl"], "analyze"),
             (&["summary"], "summary"),
             (&["hotspots"], "hotspots"),
             (&["overhead"], "overhead"),
@@ -124,6 +127,22 @@ mod tests {
         ];
         for (argv, expected) in cases {
             assert_eq!(command_name(&parsed_command(argv)), *expected);
+        }
+    }
+
+    #[test]
+    fn the_update_offer_skips_machine_and_ledger_less_commands() {
+        let offered = |argv: &[&str]| offer_update_for(&parsed_command(argv));
+        for argv in [
+            &["update"][..],
+            &["mcp-server"],
+            &["measure", "--input", "x.jsonl", "--harness", "codex"],
+            &["analyze", "--path", "x.jsonl"],
+        ] {
+            assert!(!offered(argv), "{argv:?}");
+        }
+        for argv in [&["summary"][..], &["ingest"], &["state"]] {
+            assert!(offered(argv), "{argv:?}");
         }
     }
 }

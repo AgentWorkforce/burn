@@ -1,3 +1,4 @@
+use super::shell_command_has_file_read as reads;
 use super::*;
 
 fn toks(words: &[&str]) -> Vec<String> {
@@ -85,4 +86,33 @@ fn file_operand_skips_head_tail_count_values() {
     }
     assert!(has_shell_file_operand("cat", &toks(&["-n", "5"])));
     assert!(has_shell_file_operand("cat", &toks(&["+5"])));
+}
+
+#[test]
+fn file_printing_commands_with_a_file_operand_are_reads() {
+    for command in [
+        "cat src/lib.rs",
+        "head -n 20 src/main.rs",
+        "sed -n '1,80p' src/main.rs",
+        "sed -ne 5p Cargo.toml",
+        "git status && nl -ba src/lib.rs | head",
+        "bat README.md",
+    ] {
+        assert!(reads(command), "{command}");
+    }
+}
+
+#[test]
+fn edits_filters_and_searches_are_not_reads() {
+    for command in [
+        "sed -i 's/a/b/' src/main.rs",
+        "sed -n -i 1p src/main.rs",
+        "sed 's/a/b/' src/main.rs",
+        "sed -n 1p",
+        "git log | sed -n 1,5p",
+        "grep -n foo src/main.rs",
+        "cat <<EOF",
+    ] {
+        assert!(!reads(command), "{command}");
+    }
 }

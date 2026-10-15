@@ -342,6 +342,7 @@ mod tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         };
         handle.raw_mut().append_turns(&[turn]).unwrap();
 

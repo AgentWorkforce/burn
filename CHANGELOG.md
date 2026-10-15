@@ -4,7 +4,37 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-- `burn overhead` discovers the default Claude Code, Codex, and OpenCode user/ancestor/project instruction chains with harness-accurate precedence, boundaries, deduplication, and scope labels.
+5.0.0: burn reads every session through relayhistory (`ai-hist` 0.41) and no longer parses harness logs. See `docs/migrating-to-5.md`.
+
+### Breaking
+
+- `burn ingest` syncs the relayhistory store (`$AI_HIST_DB`, else `~/.local/share/ai-hist/ai-history.db`, created on first use; the `ai-hist` CLI is not required) and appends the sessions its change feed reports since the ledger's watermark. The first run on a 4.x ledger rebuilds every session once (minutes on a large history); matching turn identities keep it from duplicating any. Later runs with nothing new finish in well under a second.
+- `BURN_CLAUDE_PROJECTS_DIR` is removed; harness locations follow relayhistory (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`).
+- `relayburn-sdk`: `IngestRoots` / `IngestOptions.roots` are replaced by `IngestOptions.store: HistoryStoreOptions`; `start_watch_loop` and its option/sink types by `watch_ingest` + `WatchIngestOptions`; `RawIngestOptions` is `IngestOptions`; `ingest_claude_session`, `ingest_codex_sessions`, `ingest_opencode_sessions`, `default_session_roots`, `count_subagents_under`, `discover_subagents` and `pair_subagents_to_main` are removed. `SubagentTranscript` drops `records`.
+- `@relayburn/sdk` `ingest()` takes `{ ledgerHome, storeDbPath, home }`; the ignored `sessionId` / `harness` fields are removed.
+- `burn state rebuild` clears the ingest watermark with the derived rows, so the next ingest rebuilds every session from the store.
+
+### Added
+
+- Claude Code subagent spend is billed: every turn of a subagent transcript, nested subagents included, is a turn of the session that spawned it. Ledger totals for sessions that delegated work go up by exactly that spend.
+- OpenCode sessions in the SQLite store (`opencode.db`, current OpenCode releases) are ingested, as well as the `storage/` JSON tree.
+- A Codex subagent thread is ingested as a session of its own.
+- Codex threads in `~/.codex/archived_sessions/` are ingested.
+- `burn summary`'s `subagents: X paired, Y orphan` line counts the delegated subagents of the sessions in scope from the delegation edges of the relayhistory store the ledger was ingested from.
+
+### Fixed
+
+- Codex turn usage comes from each response's raw token snapshot.
+- Codex tasks that end in `turn_aborted`, that the next task interrupts, or that are still open when the session stops are billed; they were missing from every total. An aborted task's turn has stop reason `aborted` (a new `StopReason::Aborted`, counted as `aborted` in `burn summary` and `burn analyze` stop reasons). A trailing open task that reported spend is billed once its rollout has gone two minutes unwritten, as turn `<turn id>@<line>`; work the session adds to it later lands as a further turn, never re-billed.
+- A failed OpenCode tool call sets `isError`, as Claude and Codex turns do.
+- A Claude assistant turn still being written (no `stop_reason` yet) is billed once it settles, not early.
+- A Claude subagent turn that follows a tool result inside its sidechain keeps the subagent's agent id instead of starting a new subagent.
+- Pricing bills Claude 1-hour cache writes at 2x the input tariff on every host (Anthropic, Vertex AI, Bedrock; 5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, `analyze`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Claude models keep a single cache-write tariff.
+- Turns whose usage was measured as zero price at $0 regardless of model, so Claude Code's `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session; unmeasured usage stays unpriced. `burn compare` shows cost per turn only for fully priced cells.
+
+### Analysis and quality
+
+- `burn overhead` and `burn analyze` discover the default Claude Code, Codex, and OpenCode user/ancestor/project instruction chains with harness-accurate precedence, boundaries, deduplication, and scope labels.
 - `@relayburn/mcp` now exposes summary, hotspots, overhead attribution,
   overhead trimming, and model comparison as read-only MCP tool factories.
 - `burn search <query>` searches ingested session content with FTS5, with session scoping, result limits, optional highlighted snippets, and JSON output.
@@ -16,10 +46,19 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `--since` parsing now rejects overflowing relative ranges with an error instead of panicking.
 - `relayburn-sdk` now exposes SDK-owned summary report/time-series envelopes with schema/version, capability, and normalized window metadata for app and presenter consumers.
 - Summary reports accept an inclusive `until` bound; a bound without sub-second digits covers its whole final second. Bucketed summaries and comparisons reject a zero bucket width.
-- `burn hotspots --findings` ghost-surface results now account for user-text slash-command invocations, so active Claude/Codex commands and prompts are no longer flagged as unused when they do not appear as tool calls.
-- `burn hotspots --findings` adds a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL.
-- Pricing bills Claude 1-hour cache writes at 2x the input tariff on every host (Anthropic, Vertex AI, Bedrock; 5-minute writes stay at the `cache_write` tariff), so `summary`, `hotspots`, and every cost report stop undercounting sessions that use 1-hour prompt caching. `ModelCost` / `ModelCostTier` gain `cache_write_1h`, and a ledger-home `models.dev.json` entry can set `cache_write_1h` explicitly; non-Claude models keep a single cache-write tariff.
-- Turns whose usage was measured as zero price at $0 regardless of model, so Claude Code's `<synthetic>` messages no longer list as unpriced in `summary` or strip the dollar estimate from every hotspots finding in their session; unmeasured usage stays unpriced. `burn compare` shows cost per turn only for fully priced cells.
+- `burn hotspots --findings` and `burn analyze` ghost-surface results now account for user-text slash-command invocations, so active Claude/Codex commands and prompts are no longer flagged as unused when they do not appear as tool calls.
+- `burn analyze <source> <session-id>` / `burn analyze --path <transcript>` diagnose one session without a ledger or ingest: metrics, activity, hotspots, instruction overhead, subagents, flow, context growth, quality, and stop reasons, plus findings that explain each cost, cite turns/tools/files, and suggest a fix. `--json` emits `burn.session-analysis.v1`; the same document comes from Rust `analyze_session`, Node `analyzeSession()`, and the MCP `burn__analyzeSession` tool.
+- `burn analyze` and `burn measure` now include Claude Code subagent spend: every turn of a subagent sidecar transcript (`<session>/subagents/agent-<id>.jsonl`), nested subagents included, is billed once as subagent work of the session that spawned it.
+- `burn analyze` shows the subagent tree with each subagent's own and cumulative turns, tokens and cost, nested under the subagent that spawned it, and adds a `subagent-spend` finding when one subagent type carries at least a quarter of the session's tokens. Subagent tree nodes (`SubagentTreeNode`) add `selfTokens` / `cumulativeTokens`; `selfCost` / `cumulativeCost` are `null` when a turn they cover is unpriced, never `0`.
+- `burn analyze --path` reads a Codex subagent thread's rollout as its own session, and `burn analyze codex <thread-id>` finds a subagent thread the store has not synced yet.
+- Turn records carry an optional `reasoning` (`{ effort, summary }`) as the harness recorded it; Codex turns take it from the latest `turn_context`, which carries forward to later turns until it changes. Records without one serialize unchanged.
+- `burn analyze` adds a `reasoning` section (turns, tokens, reasoning tokens and cost per effort level, effort changes) and findings for high reasoning effort on routine work and for mid-session effort changes; unpriced spend reads unknown.
+- `burn summary` adds a reasoning-effort table (JSON `reasoningEfforts`) when any turn in scope recorded an effort.
+- `burn measure` / `measureSession()` read sessions through relayhistory, the same source path as `burn analyze`.
+- Session sourcing depends on a semver-compatible `ai-hist` release (`0.41`); adopting a new minor is a deliberate bump that re-runs the parity suite. A Codex turn's model, cwd and reasoning come from the `turn_context` naming it, else the latest earlier one; a forked Codex child's first turn is charged only its own spend, not the parent's inherited total; a Claude turn opened by a signature-only `thinking` record starts when that record was written.
+- Edit-heavy findings count file reads made through any harness's shell (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`, `less`, `more`), so sessions that read via Bash are no longer flagged as editing blind.
+- Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.
+- `burn hotspots --findings` and `burn analyze` add a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL. Under `--since`, a resume at the window start is measured against the session's earlier turns.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
 - Timestamps everywhere (ingest, `--since`, quality outcomes, pending stamps) go through one strict ISO-8601 parser: `±HH:MM` offsets are applied rather than ignored, and out-of-range components, leap seconds, or trailing text are rejected.
 

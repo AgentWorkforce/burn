@@ -4,9 +4,10 @@ use super::*;
 /// outcome breakdown (`142 end_turn, 3 max_tokens, 1 refusal, 0 pause`).
 ///
 /// Counts mirror the [`StopReason`] enum variants plus a `none` slot for
-/// turns whose row carried no `stop_reason` field at all — that's Codex
-/// today (no field in the rollout schema) and any pre-3.0 ledger row that
-/// was ingested before the reader started populating the enum.
+/// turns whose row carried no `stop_reason` field at all — that's a Codex
+/// task that was not aborted (the rollout reports no stop reason) and any
+/// pre-3.0 ledger row that was ingested before the reader started
+/// populating the enum.
 ///
 /// `Silent` is reserved for "row exists, carries a stop_reason that we
 /// don't recognize" — distinct from `none` so we can spot a future harness
@@ -20,6 +21,9 @@ pub struct StopReasonCounts {
     pub stop_sequence: u64,
     pub tool_use: u64,
     pub refusal: u64,
+    /// Turns the harness aborted (Codex `turn_aborted`).
+    #[serde(default)]
+    pub aborted: u64,
     pub silent: u64,
     /// Turns whose record carried no `stop_reason` field — e.g. Codex
     /// rollouts (the harness doesn't report one) or pre-3.0 ledger rows
@@ -40,6 +44,7 @@ impl StopReasonCounts {
             Some(StopReason::StopSequence) => self.stop_sequence += 1,
             Some(StopReason::ToolUse) => self.tool_use += 1,
             Some(StopReason::Refusal) => self.refusal += 1,
+            Some(StopReason::Aborted) => self.aborted += 1,
             Some(StopReason::Silent) => self.silent += 1,
         }
     }
@@ -62,6 +67,7 @@ impl StopReasonCounts {
             | self.stop_sequence
             | self.tool_use
             | self.refusal
+            | self.aborted
             | self.silent
             | self.none
             == 0
@@ -73,7 +79,7 @@ mod tests {
     use super::*;
     use crate::reader::{SourceKind, Usage};
 
-    const ALL_REASONS: [Option<StopReason>; 8] = [
+    const ALL_REASONS: [Option<StopReason>; 9] = [
         None,
         Some(StopReason::EndTurn),
         Some(StopReason::MaxTokens),
@@ -81,6 +87,7 @@ mod tests {
         Some(StopReason::StopSequence),
         Some(StopReason::ToolUse),
         Some(StopReason::Refusal),
+        Some(StopReason::Aborted),
         Some(StopReason::Silent),
     ];
 
@@ -110,6 +117,7 @@ mod tests {
             Some(StopReason::ToolUse),
             Some(StopReason::Refusal),
             Some(StopReason::Refusal),
+            Some(StopReason::Aborted),
             Some(StopReason::Silent),
             Some(StopReason::Silent),
             Some(StopReason::Silent),
@@ -123,6 +131,7 @@ mod tests {
                 stop_sequence: 2,
                 tool_use: 4,
                 refusal: 2,
+                aborted: 1,
                 silent: 3,
                 none: 1,
             }
@@ -154,6 +163,7 @@ mod tests {
                 retries: None,
                 has_edits: None,
                 fidelity: None,
+                reasoning: None,
             })
             .collect();
         assert_eq!(
@@ -189,6 +199,7 @@ mod tests {
             Some(StopReason::StopSequence),
             Some(StopReason::ToolUse),
             Some(StopReason::Refusal),
+            Some(StopReason::Aborted),
             Some(StopReason::Silent),
             None,
         ];

@@ -162,7 +162,6 @@ pub fn has_minimum_fidelity(fidelity: Option<&Fidelity>, minimum: FidelityClass)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reader::opencode::{parse_opencode_session, ParseOpencodeOptions};
     use crate::reader::{Coverage, Fidelity, FidelityClass, UsageGranularity};
     use std::path::PathBuf;
 
@@ -271,8 +270,7 @@ mod tests {
         p.pop();
         p.pop();
         p.push("tests/fixtures/opencode/multi-turn/storage/session/global/ses_multi.json");
-        let result = parse_opencode_session(&p, &ParseOpencodeOptions::default())
-            .expect("opencode fixture parses");
+        let result = crate::source::fixtures::fixture_records(crate::reader::Harness::Opencode, &p);
         assert!(!result.turns.is_empty());
         let summary = summarize_fidelity(&result.turns);
         assert_eq!(summary.unknown, 0);

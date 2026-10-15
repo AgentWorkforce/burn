@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "4.1.0"
+version = "5.0.0"
 edition = "2021"
 rust-version = "1.94"
 license = "Apache-2.0"
@@ -18,4 +18,3 @@ anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-memchr = "2"

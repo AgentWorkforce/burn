@@ -28,16 +28,15 @@ use crate::analyze::{
     render_unified_diff_for_recommendation, sort_findings, sum_costs, summarize_fidelity,
     summarize_fidelity_from_iter, summarize_replacement_savings, tally_unpriced,
     tool_call_pattern_to_finding, tool_output_bloat_to_finding, unpriced_usage_findings,
-    user_claude_settings_path, AggregateByProviderOptions, AttributeOverheadInput,
-    AttributionMethod, BashAggregation, BashVerbAggregation, BuildSubagentTreeOptions,
-    CompareOptions as AnalyzeCompareOptions, CompareTable, ContextDelta, ContextDeltaOpts,
-    CostBreakdown, DetectPatternsOptions, DetectToolCallPatternsOptions,
-    DetectToolOutputBloatOptions, FidelitySummary, FileAggregation, GhostSurfaceFindingOptions,
-    HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings, MarkdownSection,
-    McpServerAggregation, OverheadFile, OverheadFileKind, OverheadFileScope, OwnerRail,
-    ParsedOverheadFile, PricingTable, ProviderFilter, QualityResult, ReplacementSavingsSummary,
-    SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode, SubagentTypeStats,
-    ToolSavingsAggregate, TurnSpanTree, UsageCostAggregateRow, WasteFinding,
+    AggregateByProviderOptions, AttributeOverheadInput, AttributionMethod, BashAggregation,
+    BashVerbAggregation, BuildSubagentTreeOptions, CompareOptions as AnalyzeCompareOptions,
+    CompareTable, ContextDelta, ContextDeltaOpts, CostBreakdown, DetectPatternsOptions,
+    DetectToolCallPatternsOptions, DetectToolOutputBloatOptions, FidelitySummary, FileAggregation,
+    GhostSurfaceFindingOptions, HotspotsOptions as AnalyzeHotspotsOptions, LoadedClaudeSettings,
+    MarkdownSection, McpServerAggregation, OverheadFile, OverheadFileKind, OverheadFileScope,
+    OwnerRail, ParsedOverheadFile, PricingTable, ProviderFilter, QualityResult,
+    ReplacementSavingsSummary, SessionClaudeMdCost, SubagentAggregation, SubagentTreeNode,
+    SubagentTypeStats, ToolSavingsAggregate, TurnSpanTree, UsageCostAggregateRow, WasteFinding,
 };
 use crate::ledger::{EnrichedTurn, Enrichment, Query};
 use crate::reader::{
@@ -354,7 +353,7 @@ fn build_query(session: Option<&str>, project: Option<&str>, since: Option<&str>
 
 /// Mirrors the TS `HOTSPOTS_ATTRIBUTION_REQUIRED` + `turnPassesCoverage`
 /// pair. Records without `fidelity` (older ledger writers) pass.
-fn turn_passes_hotspots_coverage(turn: &TurnRecord) -> bool {
+pub(crate) fn turn_passes_hotspots_coverage(turn: &TurnRecord) -> bool {
     let Some(f) = turn.fidelity.as_ref() else {
         return true;
     };
@@ -366,44 +365,24 @@ fn collect_turns(handle: &LedgerHandle, q: &Query) -> Result<Vec<TurnRecord>> {
     Ok(enriched.into_iter().map(|e| e.turn).collect())
 }
 
-fn bucket_user_turns_by_session(
-    handle: &LedgerHandle,
-    side_q: &Query,
+/// Group `records` by their session id, keeping only sessions in `keep`
+/// when it is supplied. Source order is preserved within each session.
+pub(crate) fn group_by_session<T: Clone>(
+    records: &[T],
+    session_of: impl Fn(&T) -> &str,
     keep: Option<&HashSet<String>>,
-) -> Result<HashMap<String, Vec<UserTurnRecord>>> {
-    let mut out: HashMap<String, Vec<UserTurnRecord>> = HashMap::new();
-    let user_turns = handle.inner.query_user_turns(side_q)?;
-    for ut in user_turns {
-        if let Some(set) = keep {
-            if !set.contains(&ut.session_id) {
-                continue;
-            }
+) -> HashMap<String, Vec<T>> {
+    let mut out: HashMap<String, Vec<T>> = HashMap::new();
+    for record in records {
+        let session = session_of(record);
+        if keep.is_some_and(|set| !set.contains(session)) {
+            continue;
         }
-        out.entry(ut.session_id.clone()).or_default().push(ut);
+        out.entry(session.to_string())
+            .or_default()
+            .push(record.clone());
     }
-    Ok(out)
-}
-
-/// Bucket `tool_result_events` rows by `session_id`, optionally filtered
-/// to a `keep` set. Mirrors [`bucket_user_turns_by_session`]; powers the
-/// `output_bytes` plumbing for hotspots (#436) so the SDK can hand the
-/// analyze layer a per-session lookup without re-walking the ledger.
-fn bucket_tool_result_events_by_session(
-    handle: &LedgerHandle,
-    side_q: &Query,
-    keep: Option<&HashSet<String>>,
-) -> Result<HashMap<String, Vec<crate::reader::ToolResultEventRecord>>> {
-    let mut out: HashMap<String, Vec<crate::reader::ToolResultEventRecord>> = HashMap::new();
-    let events = handle.inner.query_tool_result_events(side_q)?;
-    for ev in events {
-        if let Some(set) = keep {
-            if !set.contains(&ev.session_id) {
-                continue;
-            }
-        }
-        out.entry(ev.session_id.clone()).or_default().push(ev);
-    }
-    Ok(out)
+    out
 }
 
 fn open_with(ledger_home: Option<&Path>) -> Result<LedgerHandle> {
@@ -460,13 +439,14 @@ mod overhead;
 pub use overhead::*;
 
 mod cache_expiry;
-use cache_expiry::cache_expiry_findings;
+use cache_expiry::cache_state_before_window;
 
 mod hotspots;
 pub use hotspots::*;
 
 mod ghost_surface_text;
 use ghost_surface_text::prompted_ghost_surface_inputs;
+pub(crate) use ghost_surface_text::session_prompt_text;
 
 mod compare;
 pub use compare::*;

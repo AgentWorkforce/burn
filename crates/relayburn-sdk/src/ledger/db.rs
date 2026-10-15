@@ -116,21 +116,7 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         // branch handles existing v1 ledgers whose `turns` table
         // pre-existed the bump.
         //
-        // We try the `ALTER TABLE` unconditionally and swallow the
-        // `duplicate column name` failure rather than pre-checking with
-        // `PRAGMA table_info`. The check-then-act sequence is racy under
-        // concurrent ledger opens: two processes can both observe the
-        // column missing, both issue the `ALTER`, and the second loses.
-        // Letting SQLite arbitrate via the duplicate-column error keeps
-        // the migration genuinely idempotent. We deliberately don't
-        // catch the `SqliteFailure(_, None)` shape — that's too broad
-        // and would mask real schema breakage.
-        match conn.execute("ALTER TABLE turns ADD COLUMN stop_reason TEXT", []) {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
-                if msg.contains("duplicate column name") => {}
-            Err(e) => return Err(e.into()),
-        }
+        add_column(conn, "ALTER TABLE turns ADD COLUMN stop_reason TEXT")?;
         conn.execute(
             "UPDATE archive_state SET schema_version = 2 WHERE id = 1",
             [],
@@ -139,20 +125,12 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
 
     if current_version < 3 {
         // v2 → v3: add nullable `output_bytes` / `output_truncated` to
-        // `tool_result_events` for hotspots-by-bytes ranking. Same
-        // duplicate-column-only swallow pattern as the v1 → v2 step —
-        // any other `SqliteFailure` (including `(_, None)`) must
-        // propagate rather than silently advance `schema_version`.
+        // `tool_result_events` for hotspots-by-bytes ranking.
         for ddl in [
             "ALTER TABLE tool_result_events ADD COLUMN output_bytes INTEGER",
             "ALTER TABLE tool_result_events ADD COLUMN output_truncated INTEGER",
         ] {
-            match conn.execute(ddl, []) {
-                Ok(_) => {}
-                Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
-                    if msg.contains("duplicate column name") => {}
-                Err(e) => return Err(e.into()),
-            }
+            add_column(conn, ddl)?;
         }
         conn.execute(
             "UPDATE archive_state SET schema_version = 3 WHERE id = 1",
@@ -165,15 +143,8 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         // (sidechain rows in the parent file today; sidecar transcripts
         // under `<sessionId>/subagents/` once the discovery path is
         // wired into ingest) are queryable structurally without
-        // re-deserializing `record_json`. Same duplicate-column-only
-        // swallow pattern as the earlier steps. See
-        // AgentWorkforce/burn#435.
-        match conn.execute("ALTER TABLE turns ADD COLUMN subagent_id TEXT", []) {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
-                if msg.contains("duplicate column name") => {}
-            Err(e) => return Err(e.into()),
-        }
+        // re-deserializing `record_json`. See AgentWorkforce/burn#435.
+        add_column(conn, "ALTER TABLE turns ADD COLUMN subagent_id TEXT")?;
         conn.execute(
             "UPDATE archive_state SET schema_version = 4 WHERE id = 1",
             [],
@@ -222,19 +193,13 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
 
     if current_version < 6 {
         // v5 → v6: add `archive_state.source_fingerprint` so `ingest_all`
-        // can short-circuit a no-op sweep. Same duplicate-column-only
-        // swallow pattern as the earlier steps; legacy rows default to ''
+        // can short-circuit a no-op sweep. Legacy rows default to ''
         // which never matches a live fingerprint, so the first post-upgrade
         // ingest walks normally and records the column. See #468.
-        match conn.execute(
+        add_column(
+            conn,
             "ALTER TABLE archive_state ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''",
-            [],
-        ) {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
-                if msg.contains("duplicate column name") => {}
-            Err(e) => return Err(e.into()),
-        }
+        )?;
         conn.execute(
             "UPDATE archive_state SET schema_version = 6 WHERE id = 1",
             [],
@@ -242,22 +207,17 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
     }
 
     if current_version < 7 {
-        match conn.execute(
-            "ALTER TABLE archive_state ADD COLUMN last_write_at_ms INTEGER",
-            [],
-        ) {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
-                if msg.contains("duplicate column name") => {}
-            Err(e) => return Err(e.into()),
-        }
-        // Legacy ledgers have no write clock. Seed conservatively from the
-        // newest event timestamp so an old snapshot is warned about on its
-        // first post-upgrade read instead of being made artificially fresh by
-        // the schema migration itself.
-        seed_last_write_from_events(conn)?;
+        migrate_to_v7(conn)?;
+    }
+
+    if current_version < 8 {
+        // The 4.x readers' per-file cursors are meaningless once sessions
+        // come from relayhistory, and the blob rides along with every
+        // `last_write_at_ms` update to the same row: drop it. The next
+        // ingest reconciles against the store and writes its watermark.
         conn.execute(
-            "UPDATE archive_state SET schema_version = 7 WHERE id = 1",
+            "UPDATE archive_state SET upstream_cursors_json = '{}', schema_version = 8 \
+             WHERE id = 1",
             [],
         )?;
     }
@@ -286,6 +246,45 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         [],
     )?;
 
+    Ok(())
+}
+
+/// Run one `ALTER TABLE … ADD COLUMN`, treating a column that already
+/// exists as added.
+///
+/// The `ALTER` runs unconditionally and only the `duplicate column name`
+/// failure is swallowed, rather than pre-checking with `PRAGMA table_info`:
+/// the check-then-act sequence is racy under concurrent ledger opens (both
+/// observe the column missing, both `ALTER`, the second loses). Letting
+/// SQLite arbitrate keeps the migration idempotent. Any other failure,
+/// including `SqliteFailure(_, None)`, propagates rather than silently
+/// advancing `schema_version`.
+pub(super) fn add_column(conn: &Connection, ddl: &str) -> Result<()> {
+    match conn.execute(ddl, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+            if msg.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn migrate_to_v7(conn: &Connection) -> Result<()> {
+    add_column(
+        conn,
+        "ALTER TABLE archive_state ADD COLUMN last_write_at_ms INTEGER",
+    )?;
+    // Legacy ledgers have no write clock. Seed conservatively from the
+    // newest event timestamp so an old snapshot is warned about on its
+    // first post-upgrade read instead of being made artificially fresh by
+    // the schema migration itself.
+    seed_last_write_from_events(conn)?;
+    conn.execute(
+        "UPDATE archive_state SET schema_version = 7 WHERE id = 1",
+        [],
+    )?;
     Ok(())
 }
 

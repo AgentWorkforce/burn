@@ -65,6 +65,7 @@ fn stdio_catalog_rejects_bad_input_and_keeps_serving() {
             "burn__overhead",
             "burn__overheadTrim",
             "burn__compare",
+            "burn__analyzeSession",
         ]
     );
     let property_names = |tool: &Value| {
@@ -115,4 +116,54 @@ fn stdio_catalog_rejects_bad_input_and_keeps_serving() {
     assert!(responses[1]["result"].get("structuredContent").is_none());
     assert!(responses[2]["result"]["structuredContent"].is_object());
     assert_eq!(responses[3]["error"]["code"], json!(-32601));
+}
+
+#[test]
+fn stdio_analyze_session_reads_a_transcript_without_the_ledger() {
+    let home = tempfile::tempdir().expect("temp home");
+    let transcript = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/claude/simple-turn.jsonl");
+    let request = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "burn__analyzeSession",
+            "arguments": {
+                "harness": "claude",
+                "path": transcript.to_str().expect("fixture path is utf-8"),
+                "storeDbPath": home.path().join("ai-history.db").to_str().unwrap(),
+                "home": home.path().to_str().unwrap(),
+            }
+        }
+    });
+    let output = assert_cmd::Command::new(env!("CARGO_BIN_EXE_burn"))
+        .args([
+            "--ledger-path",
+            home.path()
+                .join("ledger")
+                .to_str()
+                .expect("temp path is utf-8"),
+            "mcp-server",
+        ])
+        .env("HOME", home.path())
+        .write_stdin(format!("{request}\n"))
+        .timeout(Duration::from_secs(30))
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let response: Value = serde_json::from_slice(&output.stdout).expect("one JSON response");
+    let analysis = &response["result"]["structuredContent"];
+    assert_eq!(
+        analysis["schema"],
+        json!("burn.session-analysis.v1"),
+        "{response}"
+    );
+    assert_eq!(
+        analysis["session"]["sessionId"],
+        json!("11111111-1111-1111-1111-111111111111")
+    );
+    assert!(
+        analysis.get("ledgerFreshness").is_none(),
+        "a ledger-less analysis carries no ledger freshness"
+    );
 }

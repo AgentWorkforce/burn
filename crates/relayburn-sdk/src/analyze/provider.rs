@@ -400,6 +400,7 @@ mod tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     }
 
@@ -629,6 +630,7 @@ mod cost_lookup_via_reattribution_tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     }
 

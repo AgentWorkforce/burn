@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- **Breaking:** `ingest()` syncs the relayhistory store and appends what changed; it takes `{ ledgerHome, storeDbPath, home }` (store database and provider home) and drops the ignored `sessionId` / `harness` fields.
+- `ingest()` bills Claude Code subagent turns with the session that spawned them and reads OpenCode's SQLite store.
+- `analyzeSession({ harness, sessionId | path })` returns the ledger-less `burn.session-analysis.v1` diagnosis of one session, typed as `SessionAnalysis`.
+- `SessionAnalysis.reasoning` breaks a session's turns, tokens, reasoning tokens and cost down per recorded reasoning effort, with the turns where effort changed.
+- `measureSession()` reads sessions through relayhistory; an OpenCode input outside its `storage/session/<scope>/` tree is rejected with the expected layout.
+- `analyzeSession()` and `measureSession()` bill Claude Code subagent turns with the session that spawned them; `SubagentTreeNode` adds `selfTokens` / `cumulativeTokens`, and its costs are `null` when unpriced.
+- `analyzeSession()` and `measureSession()` return every counter their types declare `number | bigint` as `BigInt` when it crosses 2^53: subagent tree turns and tokens, flow `subagents`, stop-reason counts, and `unpricedTurns`.
+- `analyzeSession({ harness: 'codex', sessionId })` finds a Codex subagent thread in a store that has not synced it yet.
 - `overhead()` and `overheadTrim()` discover active instruction chains with configurable harness homes, label files by scope, and carry scope into trim recommendations.
 - `summary()` now returns context tokens per normalized generated-output token (including reasoning) plus p50/p95/max context sizes for the ten highest-ratio sessions. Context is input + cache-read + cache-creation tokens.
 - `hotspots()` accepts `contextOutputRatioThreshold` and `contextOutputMinTokens` for the new cost-independent finding (defaults: 382:1 inclusive and 1M context tokens).

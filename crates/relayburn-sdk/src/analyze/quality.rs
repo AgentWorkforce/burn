@@ -434,6 +434,7 @@ mod tests {
             },
             has_edits: Some(o.has_edits.unwrap_or(false)),
             fidelity: None,
+            reasoning: None,
         }
     }
 

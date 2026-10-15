@@ -173,11 +173,7 @@ pub(crate) fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> S
     }
 
     let savings = summarize_replacement_savings(turns, None);
-    let replacement_savings = if savings.calls > 0 {
-        Some(savings)
-    } else {
-        None
-    };
+    let replacement_savings = (savings.calls > 0).then_some(savings);
 
     // Use the same pricing table that was used for cost accumulation so the
     // count precisely matches which turns contributed $0 to `total_cost`.
@@ -366,11 +362,9 @@ pub struct SummaryGroupedReport {
     /// Per-outcome turn counts (issue #437). Always populated; presenters
     /// decide whether to render the line based on `is_empty()`.
     pub stop_reasons: StopReasonCounts,
-    /// Paired / orphan subagent transcript counts (issue #435). Populated
-    /// by a lazy walk over the Claude `~/.claude/projects/` tree at
-    /// summary time — when no sidecars exist anywhere reachable the
-    /// `read_dir` short-circuits and the field stays at
-    /// `SubagentCounts::default()`. Presenters render the
+    /// Paired / orphan Claude subagent counts for the summarized sessions,
+    /// from the delegation edges in the relayhistory store; empty when the
+    /// store is absent or no session delegated work. Presenters render the
     /// `subagents: X paired, Y orphan` line only when
     /// `!subagents.is_empty()`.
     #[serde(
@@ -388,6 +382,10 @@ pub struct SummaryGroupedReport {
     /// Empty when all models are priced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unpriced_models: Vec<String>,
+    /// Turns, tokens and cost per recorded reasoning effort; empty when no
+    /// turn recorded one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<crate::ReasoningEffortRow>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -618,13 +616,7 @@ impl LedgerHandle {
                 provider_filter.as_ref(),
             );
             let turns = summary_turns_from_enriched(&enriched);
-            let tree_opts =
-                BuildSubagentTreeOptions::new(&pricing).with_relationships(&relationships);
-            let trees = build_subagent_tree(&turns, &tree_opts);
-            let root = trees
-                .get(&session_id)
-                .cloned()
-                .or_else(|| find_summary_tree_node(trees.values(), &session_id));
+            let root = subagent_tree_for_session(&turns, &relationships, &pricing, &session_id);
             return Ok(SummaryReport::SubagentTree(SummarySubagentTreeReport {
                 session_id,
                 root,
@@ -675,24 +667,7 @@ impl LedgerHandle {
                     None
                 };
                 let stop_reasons = StopReasonCounts::from_turns(&turns);
-                // Lazy walk over `~/.claude/projects/` (or the configured
-                // override) for the `subagents: X paired, Y orphan`
-                // summary line (issue #435). The walk short-circuits when
-                // the projects root is missing or every session lacks a
-                // `subagents/` subdir — i.e. zero cost on the vast
-                // majority of summaries that don't hit a session with
-                // sidecar transcripts.
-                //
-                // When the summary itself is scoped (any of `--session`,
-                // `--project`, `--since`, `--workflow`, `--tags`,
-                // `--agent`, `--providers`) we restrict the sidecar
-                // walk to the same session-id set the rest of the
-                // summary covers; otherwise the line could report
-                // paired/orphan counts from sessions the user excluded.
-                // Un-filtered runs keep the original global walk
-                // behavior.
-                let session_filter = summary_subagent_session_filter(&opts, &turns);
-                let subagents = compute_summary_subagent_counts(session_filter.as_ref());
+                let subagents = crate::source::summary_subagent_counts(&turns, &self.inner);
                 let (unpriced_turns, unpriced_models) = tally_unpriced(&turns, &pricing);
                 Ok(SummaryReport::Grouped(SummaryGroupedReport {
                     group_by,
@@ -710,6 +685,7 @@ impl LedgerHandle {
                     quality,
                     unpriced_turns,
                     unpriced_models,
+                    reasoning_efforts: crate::reasoning_effort_rows(&turns, &pricing),
                 }))
             }
             SummaryReportMode::ByTool => {

@@ -92,6 +92,9 @@ pub enum Command {
     /// Measure one explicit session artifact without discovery or a ledger.
     Measure(MeasureArgs),
 
+    /// Diagnose one session's token spend without a ledger.
+    Analyze(crate::commands::analyze::AnalyzeArgs),
+
     /// Aggregate session usage and cost.
     Summary(crate::commands::summary::SummaryArgs),
 
@@ -119,7 +122,7 @@ pub enum Command {
     /// Inspect or export stamps in the ledger.
     Stamps(StampsArgs),
 
-    /// Scan harness session stores and append new turns to the ledger.
+    /// Sync session history and append new turns to the ledger.
     Ingest(IngestArgs),
 
     /// Stdio MCP server exposing read-only ledger queries for
@@ -179,27 +182,28 @@ pub struct MeasureArgs {
 
     /// Harness format of the input artifact.
     #[arg(long, value_enum, value_name = "HARNESS")]
-    pub harness: MeasureHarness,
+    pub harness: HarnessArg,
 
     /// Optional models.dev-compatible pricing overlay.
     #[arg(long, value_name = "PATH")]
     pub pricing: Option<PathBuf>,
 }
 
+/// A harness burn reads sessions from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum MeasureHarness {
+pub enum HarnessArg {
     #[value(name = "claude-code", alias = "claude")]
     ClaudeCode,
     Codex,
     Opencode,
 }
 
-impl From<MeasureHarness> for relayburn_sdk::Harness {
-    fn from(value: MeasureHarness) -> Self {
+impl From<HarnessArg> for relayburn_sdk::Harness {
+    fn from(value: HarnessArg) -> Self {
         match value {
-            MeasureHarness::ClaudeCode => relayburn_sdk::Harness::ClaudeCode,
-            MeasureHarness::Codex => relayburn_sdk::Harness::Codex,
-            MeasureHarness::Opencode => relayburn_sdk::Harness::Opencode,
+            HarnessArg::ClaudeCode => relayburn_sdk::Harness::ClaudeCode,
+            HarnessArg::Codex => relayburn_sdk::Harness::Codex,
+            HarnessArg::Opencode => relayburn_sdk::Harness::Opencode,
         }
     }
 }
@@ -245,15 +249,13 @@ pub struct ToggleAutoUpdateArgs {
     pub off: bool,
 }
 
-/// Per-command flags for `burn ingest`. Mirrors the TS surface in
-/// `packages/cli/src/commands/ingest.ts` so flag muscle memory carries
-/// across.
+/// Per-command flags for `burn ingest`.
 ///
 /// Three modes, exactly one applies per invocation:
 ///
-/// - No flags: scan all known session stores once and exit.
-/// - `--watch` (optionally with `--interval <MS>`): foreground poll loop
-///   driven by [`relayburn_sdk::start_watch_loop`].
+/// - No flags: sync the relayhistory store once, append what changed, exit.
+/// - `--watch` (optionally with `--interval <MS>`): foreground loop driven
+///   by [`relayburn_sdk::watch_ingest`].
 /// - `--hook <HARNESS>`: stdin-driven hook entrypoint. Today only
 ///   `--hook claude` is supported.
 ///
@@ -265,13 +267,14 @@ pub struct ToggleAutoUpdateArgs {
 /// the combination at runtime with exit 2 (matching TS).
 #[derive(Debug, Clone, ClapArgs)]
 pub struct IngestArgs {
-    /// Stay running and poll session stores at `--interval` ms.
+    /// Stay running and ingest as sessions change.
     /// Mutually exclusive with `--hook`.
     #[arg(long)]
     pub watch: bool,
 
-    /// Poll interval for `--watch`, in milliseconds. Defaults to 1000.
-    /// Ignored without `--watch`.
+    /// Poll interval for `--watch` when filesystem events are off or
+    /// unavailable, in milliseconds. Defaults to 1000. Ignored without
+    /// `--watch`.
     #[arg(long, value_name = "MS")]
     pub interval: Option<u64>,
 
@@ -291,9 +294,9 @@ pub struct IngestArgs {
     pub quiet: bool,
 
     /// Force the polling driver in `--watch` mode instead of the
-    /// default `notify`-backed FS-event driver. Use this on
-    /// filesystems where FS events are unreliable (network mounts,
-    /// some Docker setups). Ignored without `--watch`.
+    /// default filesystem-event driver. Use this on filesystems where
+    /// FS events are unreliable (network mounts, some Docker setups).
+    /// Ignored without `--watch`.
     #[arg(long, requires = "watch")]
     pub no_fsevents: bool,
 }
@@ -538,8 +541,8 @@ impl From<OverheadDeltasOwner> for relayburn_sdk::ContextDeltaOwnerFilter {
 ///
 /// - `burn state status` (default when no subcommand): print the row /
 ///   file / archive_state report.
-/// - `burn state rebuild <target>`: rebuild derivable tables from
-///   upstream session files.
+/// - `burn state rebuild <target>`: drop derivable tables so the next
+///   ingest rebuilds them from the relayhistory store.
 /// - `burn state prune`: TTL-based content sidecar prune.
 /// - `burn state reset`: wipe derived state and (optionally) re-ingest.
 #[derive(Debug, Clone, ClapArgs)]
@@ -556,14 +559,14 @@ pub enum StateSubcommand {
     /// archive-state metadata, resolved retention config.
     Status(StateStatusArgs),
 
-    /// Rebuild derived ledger artifacts from upstream session files.
+    /// Drop derived ledger artifacts so the next ingest rebuilds them from session history.
     Rebuild(StateRebuildArgs),
 
     /// Prune expired content sidecars below the TTL window.
     Prune(StatePruneArgs),
 
     /// Wipe derived state under `$RELAYBURN_HOME` (and optionally
-    /// re-ingest from upstream session logs).
+    /// re-ingest from session history).
     Reset(StateResetArgs),
 
     /// Print a cheap polling fingerprint over `turns`:
@@ -588,7 +591,7 @@ pub struct StateRebuildArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum StateRebuildTarget {
-    /// Rebuild the derivable tables from upstream session logs.
+    /// Rebuild the derivable tables from session history.
     /// In the 2.0 SQLite layout there is one rebuild path
     /// (`rebuild_derivable`) which drops + replays every derivable
     /// table — `index`, `classify`, `content`, `archive`, and `all`
@@ -599,7 +602,7 @@ pub enum StateRebuildTarget {
     /// (`reader/classifier.rs`), so follow with `burn ingest` to
     /// repopulate the derivable tables with fresh classifications.
     Classify,
-    /// Re-derive content rows from source session files.
+    /// Re-derive content rows from session history.
     Content,
     /// Apply / rebuild the archive_state metadata.
     Archive,
@@ -620,8 +623,8 @@ pub struct StateResetArgs {
     /// Actually delete. Without this flag, reset is a dry-run.
     #[arg(long)]
     pub force: bool,
-    /// After a successful `--force` wipe, re-parse all source harness
-    /// logs from offset 0. Only meaningful with `--force`; clap rejects
+    /// After a successful `--force` wipe, re-ingest every session from
+    /// session history. Only meaningful with `--force`; clap rejects
     /// `--reingest` on its own so a typo can't silently no-op.
     #[arg(long, requires = "force")]
     pub reingest: bool,

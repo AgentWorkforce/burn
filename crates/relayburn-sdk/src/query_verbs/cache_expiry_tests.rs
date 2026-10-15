@@ -33,6 +33,7 @@ fn turn(message_id: &str, ts: &str, cache_read: u64, create_1h: u64) -> TurnReco
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 

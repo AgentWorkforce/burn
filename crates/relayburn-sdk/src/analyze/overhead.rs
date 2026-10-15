@@ -90,7 +90,9 @@ pub(crate) struct AttributeOverheadInput<'a> {
 
 mod discovery;
 
-pub(crate) use discovery::{find_overhead_files, find_overhead_files_in_home};
+pub(crate) use discovery::{
+    find_overhead_files, find_overhead_files_in_home, find_overhead_files_in_install,
+};
 #[cfg(test)]
 use discovery::{
     find_overhead_files_with_roots, DiscoveryRoots, DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES,
@@ -215,6 +217,7 @@ mod tests {
             retries: None,
             has_edits: None,
             fidelity: None,
+            reasoning: None,
         }
     }
 

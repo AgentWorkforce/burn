@@ -18,7 +18,7 @@ const DEFAULT_HOTSPOTS_FINDING_KINDS: &[&str] = &[
     "unpriced-usage",
 ];
 
-pub(super) fn default_hotspots_finding_kinds() -> Vec<String> {
+pub(crate) fn default_hotspots_finding_kinds() -> Vec<String> {
     DEFAULT_HOTSPOTS_FINDING_KINDS
         .iter()
         .map(|s| (*s).to_string())

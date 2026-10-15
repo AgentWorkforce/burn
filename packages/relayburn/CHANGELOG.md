@@ -4,6 +4,12 @@ All notable changes to `relayburn`.
 
 ## [Unreleased]
 
+- **Breaking:** `burn ingest` reads sessions through relayhistory: it syncs `~/.local/share/ai-hist/ai-history.db` (or `$AI_HIST_DB`, created on first use) and appends what changed. `BURN_CLAUDE_PROJECTS_DIR` is removed. See `docs/migrating-to-5.md`.
+- Ledgers now include Claude Code subagent spend, archived Codex threads, and OpenCode SQLite sessions.
+- `burn analyze` diagnoses one session's token spend — by id or `--path` — with explained, evidence-backed findings and no ledger; `--json` emits `burn.session-analysis.v1`.
+- `burn analyze` reports spend per reasoning effort and flags high effort on routine work and mid-session effort changes; `burn summary` adds a reasoning-effort table when turns recorded one.
+- `burn mcp-server` serves `burn__analyzeSession`.
+- `burn hotspots` edit-heavy findings count Bash file reads (`cat`, `sed -n`, …); on unpriced models attribution still reports tokens and finding text reads "unknown" rather than `$0.0000`.
 - `burn overhead` discovers active user, ancestor, and project instruction chains and labels each file with its scope.
 
 ## [4.1.0] - 2026-09-20

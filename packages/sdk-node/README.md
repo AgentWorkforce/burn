@@ -26,6 +26,12 @@ Windows (`win32-x64-msvc`) is not yet shipped — see #247 follow-up.
   or open a ledger. Claude Code and Codex use transcript files. OpenCode uses
   its selected session metadata file inside a complete storage tree and reads
   only that session's message/part records.
+- `analyzeSession({ harness, sessionId })` or `analyzeSession({ harness, path })`
+  runs every burn analyzer over one session and returns
+  `burn.session-analysis.v1`: per-section results (each `available` with
+  `data`, or `unavailable` with a `reason`) and ranked `findings` that explain
+  what happened, why it costs tokens, the evidence, the impact, and a fix. It
+  needs no ledger; ids resolve through relayhistory (`storeDbPath`, `home`).
 - The SDK exposes read verbs such as `summary()`, `sessionCost()`,
   `hotspots()`, `compare()`, `search()`, `exportLedger()`, and
   `exportStamps()`.

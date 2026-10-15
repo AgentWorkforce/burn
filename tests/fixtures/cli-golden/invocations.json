@@ -24,6 +24,12 @@
     "enabled": true
   },
   {
+    "name": "summary-subagent-tree",
+    "args": ["summary", "--subagent-tree", "11111111-1111-1111-1111-111111111111"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
     "name": "hotspots",
     "args": ["hotspots"],
     "expectStatus": 0,
@@ -124,5 +130,17 @@
     "args": ["--help"],
     "expectStatus": 0,
     "enabled": false
+  },
+  {
+    "name": "analyze-path",
+    "args": ["analyze", "--path", "tests/fixtures/claude/retry-loop.jsonl", "--project", "tests/fixtures/cli-golden/project"],
+    "expectStatus": 0,
+    "enabled": true
+  },
+  {
+    "name": "analyze-path-json",
+    "args": ["analyze", "--path", "tests/fixtures/claude/retry-loop.jsonl", "--project", "tests/fixtures/cli-golden/project", "--json"],
+    "expectStatus": 0,
+    "enabled": true
   }
 ]

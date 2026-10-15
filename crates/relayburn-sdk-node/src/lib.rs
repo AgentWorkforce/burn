@@ -112,9 +112,12 @@ pub use context_efficiency::{
 pub use hotspots::{hotspots, HotspotsGroupBy, HotspotsOptions};
 
 mod bigint_promoting;
+pub mod session;
 pub mod summary_report;
 
-use bigint_promoting::BigIntPromoting;
+#[cfg(test)]
+pub(crate) use bigint_promoting::is_bigint_field;
+pub(crate) use bigint_promoting::BigIntPromoting;
 
 // ---------------------------------------------------------------------------
 // Error mapping
@@ -732,43 +735,6 @@ pub fn session_cost(opts: Option<SessionCostOptions>) -> Result<SessionCostResul
 }
 
 // ---------------------------------------------------------------------------
-// measure_session — one explicit transcript in, one metrics document out.
-// No ledger or harness-store discovery is involved.
-// ---------------------------------------------------------------------------
-
-#[napi(object)]
-pub struct MeasureSessionOptions {
-    pub input_path: String,
-    pub harness: String,
-    pub pricing_path: Option<String>,
-}
-
-fn parse_measure_harness(value: &str) -> Result<sdk::Harness, BurnError> {
-    match value {
-        "claude-code" | "claude" => Ok(sdk::Harness::ClaudeCode),
-        "codex" => Ok(sdk::Harness::Codex),
-        "opencode" => Ok(sdk::Harness::Opencode),
-        other => Err(invalid_arg(format!(
-            "measureSession: invalid harness {other:?} (expected claude-code, codex, or opencode)"
-        ))),
-    }
-}
-
-/// Parse one exact session artifact and return Cloud-ready token/cost metrics.
-#[napi(js_name = "measureSession")]
-pub fn measure_session(opts: MeasureSessionOptions) -> Result<BigIntPromoting, BurnError> {
-    let result = sdk::measure_session(sdk::MeasureSessionOptions {
-        input_path: PathBuf::from(opts.input_path),
-        harness: parse_measure_harness(&opts.harness)?,
-        pricing_path: opts.pricing_path.map(PathBuf::from),
-    })
-    .map_err(sdk_err)?;
-    let value = serde_json::to_value(&result)
-        .map_err(|e| NapiError::new(SDK_ERROR_CODE, format!("serialize measureSession: {e}")))?;
-    Ok(BigIntPromoting(value))
-}
-
-// ---------------------------------------------------------------------------
 // fingerprint — cheap polling primitive (count:maxMtimeUnix:totalBytes).
 // Mirrors `sdk::fingerprint`. Powers the MCP `burn__fingerprint` tool and
 // is exposed bare on `@relayburn/sdk` for embedders that want to poll.
@@ -1230,36 +1196,15 @@ pub fn export_stamps(opts: Option<ExportStampsOptions>) -> Result<BigIntPromotin
 // ingest — async; returns a Promise<IngestReport> on the JS side.
 // ---------------------------------------------------------------------------
 
-/// Mirror of the Node facade's
-/// `'claude-code' | 'codex' | 'opencode'` literal union. Surfaced as a
-/// `string_enum` so TS callers get the same string contract without a
-/// stringly-typed `harness: string` field.
-///
-/// Note: the SDK's `ingest_all` does not currently accept a per-harness
-/// filter — passing this is a forward-compat hook that mirrors the TS
-/// shape (`packages/sdk-node/src/index.js`'s `ingest()` likewise takes the option
-/// today and routes to `ingestAll()` without filtering).
-#[napi(string_enum = "kebab-case")]
-pub enum IngestHarness {
-    ClaudeCode,
-    Codex,
-    Opencode,
-}
-
-/// Mirrors `packages/sdk-node/src/index.d.ts`'s `IngestOptions` shape. The field
-/// set is kept intentionally narrow; the binding routes to the SDK's
-/// fuller `sdk::IngestOptions` shape (with default `IngestRoots`) at the
-/// boundary.
+/// Mirrors `packages/sdk-node/src/index.d.ts`'s `IngestOptions` shape.
 #[napi(object)]
 pub struct IngestOptions {
-    /// Reserved for compatibility; `ingestAll()` ignores
-    /// it; mirrored here so the napi binding accepts the same caller
-    /// shape without a TypeError.
-    pub session_id: Option<String>,
-    /// Reserved for compatibility; `ingestAll()` ignores
-    /// it; mirrored here for shape parity.
-    pub harness: Option<IngestHarness>,
     pub ledger_home: Option<String>,
+    /// ai-hist database sessions are read from. Defaults to `$AI_HIST_DB`,
+    /// then the XDG data path.
+    pub store_db_path: Option<String>,
+    /// Provider home whose harness stores are read, instead of `$HOME`.
+    pub home: Option<String>,
 }
 
 #[napi(object)]
@@ -1281,12 +1226,10 @@ impl From<sdk::IngestReport> for IngestReport {
     }
 }
 
-/// Discover and ingest unprocessed turns from the configured session
-/// stores. Returns a `Promise<IngestReport>`.
+/// Sync the relayhistory store and append every session it changed since
+/// the ledger's watermark. Returns a `Promise<IngestReport>`.
 ///
-/// Progress / warning sinks are intentionally not surfaced through the
-/// boundary in v1 — the JS surface today doesn't expose them either.
-/// Wave 2 D9 picks them up if the conformance gate calls for it.
+/// The progress sink is not surfaced through the boundary.
 ///
 /// **Error-code contract.** Unlike the synchronous verbs (which reject
 /// with `e.code` set to one of [`BurnErrorCode`]'s string values), this
@@ -1302,24 +1245,19 @@ impl From<sdk::IngestReport> for IngestReport {
 #[napi]
 pub async fn ingest(opts: Option<IngestOptions>) -> Result<IngestReport, NapiError> {
     let opts = opts.unwrap_or(IngestOptions {
-        session_id: None,
-        harness: None,
         ledger_home: None,
+        store_db_path: None,
+        home: None,
     });
-    // session_id / harness are TS-shape mirror fields; the SDK's
-    // `ingest_all` takes neither, so we drop them here and rely on the
-    // SDK's discovery to pick up every session under the configured
-    // roots. Matches the Node facade's behavior at packages/sdk-node/src/index.js's
-    // `ingest()`.
-    let _ = opts.session_id;
-    let _ = opts.harness;
     let raw = sdk::IngestOptions {
         ledger_home: maybe_path(opts.ledger_home),
-        roots: sdk::IngestRoots::default(),
+        store: sdk::HistoryStoreOptions {
+            db_path: maybe_path(opts.store_db_path),
+            home: maybe_path(opts.home),
+        },
         on_progress: None,
-        on_warn: None,
     };
-    // SDK ingest is sync (filesystem walks + rusqlite writes). Run it on
+    // SDK ingest is sync (a relayhistory sync + rusqlite writes). Run it on
     // tokio's blocking pool so the napi runtime stays responsive while the
     // sweep is in flight.
     let report = tokio::task::spawn_blocking(move || sdk::ingest(raw))

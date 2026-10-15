@@ -95,8 +95,7 @@ pub(super) fn emit_grouped(
     if globals.json {
         return emit_json(report, ingest_report);
     }
-    emit_human(report, ingest_report, pricing_override)?;
-    Ok(())
+    emit_human(report, ingest_report, pricing_override)
 }
 
 pub(super) fn emit_ingest_prelude(
@@ -447,7 +446,7 @@ pub(super) fn render_subagent_tree_report(
     out.push(format!("session: {}", report.session_id));
     out.push(format!(
         "total: {} across {} turn{}",
-        format_usd(root.cumulative_cost),
+        crate::render::format::format_cost(root.cumulative_cost),
         format_uint(root.cumulative_turns),
         if root.cumulative_turns == 1 { "" } else { "s" },
     ));
@@ -499,7 +498,7 @@ pub(super) fn render_node_line(node: &SubagentTreeNode, indent: &str) -> String 
         node.label,
         relationship,
         model,
-        format_usd(node.cumulative_cost),
+        crate::render::format::format_cost(node.cumulative_cost),
         format_uint(node.cumulative_turns),
         if node.cumulative_turns == 1 { "" } else { "s" },
     )
@@ -612,6 +611,7 @@ pub(super) fn emit_human(
         lines.push(format_stop_reasons_line(&report.stop_reasons));
         lines.push(String::new());
     }
+    lines.extend(reasoning_effort_lines(&report.reasoning_efforts));
 
     if !report.subagents.is_empty() {
         // `subagents: X paired, Y orphan` — paired sidecars resolved
@@ -637,9 +637,8 @@ pub(super) fn emit_human(
         lines.push(String::new());
     }
 
-    let out = lines.join("\n");
     // TS uses `process.stdout.write(lines.join('\n'))` — no trailing newline.
-    write_stdout(&out)?;
+    write_stdout(&lines.join("\n"))?;
 
     warn_unpriced_usage(
         report.unpriced_turns,
@@ -702,7 +701,7 @@ pub(super) fn render_quality(q: &QualityResult) -> String {
 ///
 /// Always renders `end_turn` / `max_tokens` / `refusal` / `pause` because
 /// users want to see the zero — "no refusals" is a meaningful signal.
-/// Other buckets (`tool_use`, `stop_sequence`, `silent`, `none`) appear
+/// Other buckets (`tool_use`, `stop_sequence`, `aborted`, `silent`, `none`) appear
 /// only when non-zero so the line stays scannable. Labels stay snake_case
 /// to match the historical Anthropic spelling the issue specified.
 pub(super) fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
@@ -717,6 +716,9 @@ pub(super) fn format_stop_reasons_line(s: &StopReasonCounts) -> String {
     }
     if s.stop_sequence > 0 {
         parts.push(format!("{} stop_sequence", format_uint(s.stop_sequence)));
+    }
+    if s.aborted > 0 {
+        parts.push(format!("{} aborted", format_uint(s.aborted)));
     }
     if s.silent > 0 {
         parts.push(format!("{} silent", format_uint(s.silent)));

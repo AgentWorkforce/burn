@@ -12,7 +12,8 @@ pub(super) const DEFAULT_CODEX_PROJECT_DOC_MAX_BYTES: usize = 32 * 1024;
 
 #[derive(Debug)]
 pub(super) struct DiscoveryRoots {
-    home: PathBuf,
+    /// Claude Code's configuration root (`~/.claude`).
+    claude_home: PathBuf,
     codex_home: PathBuf,
     opencode_config: PathBuf,
     /// Test-only filesystem-root substitute. Production always uses `None`
@@ -31,7 +32,7 @@ impl DiscoveryRoots {
             .unwrap_or_else(|| home.join(".config"))
             .join("opencode");
         Self {
-            home,
+            claude_home: home.join(".claude"),
             codex_home,
             opencode_config,
             claude_ancestor_stop: None,
@@ -40,7 +41,7 @@ impl DiscoveryRoots {
 
     fn for_harness_home(home: &Path) -> Self {
         Self {
-            home: home.to_path_buf(),
+            claude_home: home.join(".claude"),
             codex_home: home.join(".codex"),
             opencode_config: home.join(".config").join("opencode"),
             claude_ancestor_stop: None,
@@ -182,6 +183,23 @@ pub(crate) fn find_overhead_files_in_home(project_path: &Path, home: &Path) -> V
     find_overhead_files_with_roots(project_path, &DiscoveryRoots::for_harness_home(home))
 }
 
+/// Discovery against one harness install: Claude Code's configuration root
+/// `claude_home`, Codex's `codex_home`, and OpenCode's `opencode_config`.
+pub(crate) fn find_overhead_files_in_install(
+    project_path: &Path,
+    claude_home: &Path,
+    codex_home: &Path,
+    opencode_config: &Path,
+) -> Vec<OverheadFile> {
+    let roots = DiscoveryRoots {
+        claude_home: claude_home.to_path_buf(),
+        codex_home: codex_home.to_path_buf(),
+        opencode_config: opencode_config.to_path_buf(),
+        claude_ancestor_stop: None,
+    };
+    find_overhead_files_with_roots(project_path, &roots)
+}
+
 /// Discover only instruction files that the default harness configuration
 /// injects at session startup.
 ///
@@ -206,7 +224,7 @@ pub(super) fn find_overhead_files_with_roots(
     add_file(
         &mut found,
         OverheadFileKind::ClaudeMd,
-        &roots.home.join(".claude").join("CLAUDE.md"),
+        &roots.claude_home.join("CLAUDE.md"),
         OverheadFileScope::User,
         SourceKind::ClaudeCode,
         usize::MAX,
@@ -248,7 +266,7 @@ fn add_opencode_user_file(found: &mut Vec<DiscoveredFile>, roots: &DiscoveryRoot
             OverheadFileKind::AgentsMd,
         ),
         (
-            roots.home.join(".claude").join("CLAUDE.md"),
+            roots.claude_home.join("CLAUDE.md"),
             OverheadFileKind::ClaudeMd,
         ),
     ];

@@ -62,6 +62,7 @@ fn turn(message_id: &str, minutes: i64, usage: Usage) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 

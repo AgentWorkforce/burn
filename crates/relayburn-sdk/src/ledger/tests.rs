@@ -9,8 +9,7 @@ use std::thread;
 
 use crate::reader::{
     ContentKind, ContentRecord, ContentRole, RelationshipSourceKind, RelationshipType,
-    SessionRelationshipRecord, SourceKind, ToolCall, TurnRecord, Usage, UserTurnBlock,
-    UserTurnBlockKind, UserTurnRecord,
+    SessionRelationshipRecord, SourceKind, ToolCall, TurnRecord, Usage,
 };
 use tempfile::TempDir;
 
@@ -60,6 +59,7 @@ fn make_turn(session: &str, message: &str, ts: &str, input: u64) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
@@ -246,8 +246,9 @@ fn stamps_survive_state_rebuild() {
 }
 
 #[test]
-fn cursors_survive_state_rebuild() {
-    // Acceptance: ingest cursors in archive_state likewise survive.
+fn state_rebuild_clears_the_ingest_cursors() {
+    // The derived rows the cursors described are gone, so the next ingest
+    // must resync every session.
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
 
@@ -257,8 +258,7 @@ fn cursors_survive_state_rebuild() {
         .unwrap();
     l.rebuild_derivable().unwrap();
 
-    let cursors = l.read_cursors().unwrap();
-    assert_eq!(cursors, r#"{"claude-code": "2025-01-01T00:00:00Z"}"#);
+    assert_eq!(l.read_cursors().unwrap(), "{}");
 }
 
 #[test]
@@ -778,8 +778,8 @@ fn invalid_session_id_in_content_rejected() {
 /// column on `turns`, `archive_state.schema_version = 1`) opens cleanly
 /// against the 3.0 SDK, the column is back-added by the in-place
 /// migration, and the stored version bumps forward to the current
-/// `SCHEMA_VERSION` (7 after #436 + #435 + #434 + #468 + #507 chained on top of
-/// #437).
+/// `SCHEMA_VERSION` (8 after #436 + #435 + #434 + #468 + #507 and the
+/// relayhistory cutover chained on top of #437).
 /// Existing rows stay `NULL` for every back-added column until rewritten.
 #[test]
 fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
@@ -826,7 +826,7 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
     // Step 2: open through the SDK. The migration must:
     //   a) add `turns.stop_reason TEXT`,
     //   b) bump archive_state.schema_version forward to the current
-    //      `SCHEMA_VERSION` (chained v1 → v2 → v3 → v4 → v5 → v6 → v7),
+    //      `SCHEMA_VERSION` (chained v1 → v2 → … → v8),
     //   c) leave the legacy row's stop_reason as NULL.
     let l = Ledger::open(&layout.burn, &layout.content).unwrap();
     let version: i64 = l
@@ -838,11 +838,11 @@ fn legacy_v1_ledger_migrates_to_v2_on_open_and_adds_stop_reason_column() {
             |r| r.get(0),
         )
         .unwrap();
-    // Current `SCHEMA_VERSION` is 7 (chained #437 v2 + #436 v3 + #435
-    // v4 + #434 v5 + #468 v6 + #507 v7); the migration must walk every step in one
-    // open() call.
+    // The migration must walk every step to the current `SCHEMA_VERSION`
+    // in one open() call.
     assert_eq!(
-        version, 7,
+        version,
+        i64::from(schema::SCHEMA_VERSION),
         "open must bump v1 forward to the current schema version"
     );
 
@@ -1058,92 +1058,21 @@ fn concurrent_writers_serialize_via_wal() {
 }
 
 #[test]
-fn list_content_session_ids_returns_distinct_set() {
-    // #279: ingest's `reingest_missing_content` needs the set of session
-    // ids already covered in `content.sqlite` so it can skip them.
+fn turn_message_ids_are_one_sessions_held_turns() {
     let tmp = TempDir::new().unwrap();
     let mut l = open_in(&tmp);
-    // Empty content store ⇒ empty set.
-    assert!(l.list_content_session_ids().unwrap().is_empty());
-
-    l.append_content(&[
-        make_content("ses_a", "m1", "alpha"),
-        make_content("ses_a", "m2", "beta"),
-        make_content("ses_b", "m1", "gamma"),
-        make_content("ses_c", "m1", "delta"),
+    l.append_turns(&[
+        make_turn("s1", "m1", "2025-01-01T00:00:00Z", 10),
+        make_turn("s1", "m2", "2025-01-01T00:00:01Z", 11),
+        make_turn("s2", "m3", "2025-01-01T00:00:02Z", 12),
     ])
     .unwrap();
-
-    let ids = l.list_content_session_ids().unwrap();
-    assert_eq!(ids.len(), 3);
-    assert!(ids.contains("ses_a"));
-    assert!(ids.contains("ses_b"));
-    assert!(ids.contains("ses_c"));
-
-    // The `content` table is non-STRICT, so a row whose `session_id`
-    // column holds a non-TEXT storage class can land in the DB (e.g. via
-    // a future schema migration bug or direct ops intervention). The
-    // TEXT affinity coerces incoming integers/reals into text on insert,
-    // but it preserves BLOBs — so a BLOB literal is the way to plant a
-    // row that will not decode as `String`. The `list_session_ids` call
-    // must skip it rather than aborting the whole query.
-    l.conns
-        .content
-        .execute(
-            "INSERT INTO content (source, session_id, message_id, content_hash, body, byte_length, created_at)
-             VALUES ('claude-code', X'AABBCCDD', 'm-bad', 'h-bad', 'corrupt', 7, '2026-05-05T00:00:00Z')",
-            [],
-        )
-        .unwrap();
-    let ids = l.list_content_session_ids().unwrap();
-    assert_eq!(ids.len(), 3);
-    assert!(ids.contains("ses_a"));
-    assert!(ids.contains("ses_b"));
-    assert!(ids.contains("ses_c"));
-}
-
-#[test]
-fn list_user_turn_session_ids_returns_distinct_set() {
-    // #278: ingest's `reingest_missing_content` AND-combines content +
-    // user-turn coverage. Mirrors the `list_content_session_ids` test
-    // shape so a regression in either side surfaces the same way.
-    let tmp = TempDir::new().unwrap();
-    let mut l = open_in(&tmp);
-    // Empty user_turns ⇒ empty set.
-    assert!(l.list_user_turn_session_ids().unwrap().is_empty());
-
-    l.append_user_turns(&[
-        make_user_turn("ses_a", "u1", "2025-01-01T00:00:00Z"),
-        make_user_turn("ses_a", "u2", "2025-01-01T00:00:01Z"),
-        make_user_turn("ses_b", "u1", "2025-01-01T00:00:02Z"),
-        make_user_turn("ses_c", "u1", "2025-01-01T00:00:03Z"),
-    ])
-    .unwrap();
-
-    let ids = l.list_user_turn_session_ids().unwrap();
-    assert_eq!(ids.len(), 3);
-    assert!(ids.contains("ses_a"));
-    assert!(ids.contains("ses_b"));
-    assert!(ids.contains("ses_c"));
-}
-
-fn make_user_turn(session: &str, user_uuid: &str, ts: &str) -> UserTurnRecord {
-    UserTurnRecord {
-        v: 1,
-        source: SourceKind::ClaudeCode,
-        session_id: session.into(),
-        user_uuid: user_uuid.into(),
-        ts: ts.into(),
-        preceding_message_id: None,
-        following_message_id: None,
-        blocks: vec![UserTurnBlock {
-            kind: UserTurnBlockKind::Text,
-            tool_use_id: None,
-            byte_len: 4,
-            approx_tokens: 1,
-            is_error: None,
-        }],
-    }
+    let ids = l.turn_message_ids(SourceKind::ClaudeCode, "s1").unwrap();
+    assert_eq!(ids, ["m1", "m2"].map(String::from).into_iter().collect());
+    assert!(l
+        .turn_message_ids(SourceKind::Codex, "s1")
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -1643,4 +1572,66 @@ fn inference_freshness_changes_only_on_insert_or_material_update() {
     );
     assert_eq!(ledger.count_table("inferences").unwrap(), 1);
     assert_eq!(ledger.append_inferences(&inferences).unwrap(), 0);
+}
+
+/// A 4.x ledger's per-file reader cursors are dropped on open: sessions come
+/// from relayhistory now, and the blob would ride along with every write
+/// clock update to the same row.
+#[test]
+fn legacy_reader_cursors_are_dropped_on_open() {
+    let tmp = TempDir::new().unwrap();
+    {
+        let mut ledger = open_in(&tmp);
+        ledger
+            .write_cursors(r#"{"files":{"/x.jsonl":{"kind":"claude","offsetBytes":1}}}"#)
+            .unwrap();
+        ledger
+            .conns
+            .burn
+            .execute("UPDATE archive_state SET schema_version = 7", [])
+            .unwrap();
+    }
+    let ledger = open_in(&tmp);
+    assert_eq!(ledger.read_cursors().unwrap(), "{}");
+}
+
+/// The write clock is seeded from event time only when a ledger first gains
+/// it (v6 → v7); a v7 ledger's own clock survives the v8 step even when an
+/// event is newer.
+#[test]
+fn v7_write_clock_survives_the_v8_migration() {
+    let tmp = TempDir::new().unwrap();
+    {
+        let mut ledger = open_in(&tmp);
+        ledger
+            .append_turns(&[make_turn("s1", "m1", "2025-01-01T00:00:00.000Z", 1)])
+            .unwrap();
+        ledger
+            .conns
+            .burn
+            .execute(
+                "UPDATE archive_state SET schema_version = 7, last_write_at_ms = 1000",
+                [],
+            )
+            .unwrap();
+    }
+    assert_eq!(open_in(&tmp).last_write_at_ms().unwrap(), Some(1000));
+}
+
+/// A current ledger keeps its ingest cursors across opens.
+#[test]
+fn current_cursors_survive_reopening() {
+    let tmp = TempDir::new().unwrap();
+    let cursors = r#"{"relayhistory":{"revision":3,"epoch":1}}"#;
+    open_in(&tmp).write_cursors(cursors).unwrap();
+    assert_eq!(open_in(&tmp).read_cursors().unwrap(), cursors);
+}
+
+#[test]
+fn adding_an_existing_column_is_a_no_op_and_other_failures_propagate() {
+    let tmp = TempDir::new().unwrap();
+    let ledger = open_in(&tmp);
+    let conn = &ledger.conns.burn;
+    db::add_column(conn, "ALTER TABLE turns ADD COLUMN stop_reason TEXT").unwrap();
+    assert!(db::add_column(conn, "ALTER TABLE no_such_table ADD COLUMN x TEXT").is_err());
 }

@@ -22,6 +22,7 @@ fn turn(session: &str, index: u64, usage: Usage) -> TurnRecord {
         retries: None,
         has_edits: None,
         fidelity: None,
+        reasoning: None,
     }
 }
 
