@@ -1,6 +1,9 @@
 //! `burn ingest` end to end against a sealed provider home: which ledger
 //! config it honours, and how `--watch` reports and stops.
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -195,4 +198,24 @@ fn watch_rejects_a_zero_interval() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr)
         .contains("ingest --interval must be a positive integer in milliseconds"));
+}
+
+/// A `burn` run that inherits the test process environment instead of
+/// naming its homes resolves every default under the sealed `HOME` and
+/// fails there, so a test that forgets its paths can never sync the
+/// user's real relayhistory store or write their ledger.
+#[test]
+fn ingest_without_explicit_homes_fails_at_the_tripwire() {
+    let output = Command::new(env!("CARGO_BIN_EXE_burn"))
+        .arg("ingest")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("burn ingest");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "ingest succeeded: {output:?}");
+    let tripwire = relayburn_test_seal::tripwire().display().to_string();
+    assert!(
+        stderr.contains(&tripwire) || stderr.contains("Not a directory"),
+        "{stderr}"
+    );
 }

@@ -97,6 +97,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+// Seal the test process away from the user's real stores before any test runs.
+#[cfg(test)]
+use relayburn_test_seal as _;
+
 use napi::bindgen_prelude::{BigInt, Either, Error as NapiError, Null};
 use napi_derive::napi;
 use serde_json::Value as JsonValue;
@@ -115,8 +119,6 @@ mod bigint_promoting;
 pub mod session;
 pub mod summary_report;
 
-#[cfg(test)]
-pub(crate) use bigint_promoting::is_bigint_field;
 pub(crate) use bigint_promoting::BigIntPromoting;
 
 // ---------------------------------------------------------------------------

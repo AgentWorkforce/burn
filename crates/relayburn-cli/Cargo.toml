@@ -100,6 +100,10 @@ ureq = { version = "2", features = ["json"] }
 semver = "1"
 
 [dev-dependencies]
+# Seals the test process away from the real ai-hist store, ledger and
+# harness data; see crates/relayburn-test-seal.
+relayburn-test-seal = { path = "../relayburn-test-seal" }
+
 # Exercise read behavior when advisory SQLite metadata is unavailable.
 rusqlite = { workspace = true }
 

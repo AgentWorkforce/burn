@@ -5,6 +5,9 @@
 //! renderers must write through the fallible stdout helpers instead so
 //! an early close exits 0 quietly, matching the `--json` behavior.
 
+// Seal this test process away from the user's real stores before any test runs.
+use relayburn_test_seal as _;
+
 use std::io::Read;
 use std::process::{Command, Stdio};
 

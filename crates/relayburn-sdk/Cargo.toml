@@ -46,3 +46,7 @@ indexmap = { version = "2", features = ["serde"] }
 # ingest: pid-liveness probe in the pending-stamp resolver
 libc = "0.2"
 
+[dev-dependencies]
+# Seals the test process away from the real ai-hist store, ledger and
+# harness data; see crates/relayburn-test-seal.
+relayburn-test-seal = { path = "../relayburn-test-seal" }
