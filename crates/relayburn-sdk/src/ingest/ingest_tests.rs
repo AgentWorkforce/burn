@@ -803,3 +803,5 @@ fn ingest_reports_each_phase_to_its_progress_sink() {
         assert!(seen.iter().any(|p| p == phase), "{phase}: {seen:?}");
     }
 }
+
+mod request_accounting;

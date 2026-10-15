@@ -493,6 +493,67 @@ mod tests {
     }
 
     #[test]
+    fn multi_request_turns_weight_totals_while_the_sample_counts_records() {
+        let pricing = load_builtin_pricing();
+        let coding = || {
+            turn(
+                "claude-sonnet-4-6",
+                Some(ActivityCategory::Coding),
+                default_usage(),
+                Some(true),
+                Some(0),
+            )
+        };
+        let mut turns = vec![coding(), coding()];
+        turns[0].turn.request_count = Some(2);
+        turns[1].turn.request_count = Some(3);
+        let opts = CompareOptions {
+            pricing: &pricing,
+            models: None,
+            min_sample: Some(2),
+        };
+        let t = build_compare_table(&turns, &opts);
+        assert_eq!(t.totals["claude-sonnet-4-6"].turns, 5);
+        let cell = &t.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 5);
+        assert_eq!(cell.priced_turns, 5);
+        assert_eq!(cell.cost_per_turn, Some(cell.total_cost / 5.0));
+        assert!(
+            !cell.insufficient_sample,
+            "two records meet a sample of two"
+        );
+
+        let lone = build_compare_table(&turns[1..], &opts);
+        let cell = &lone.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 3);
+        assert!(
+            cell.insufficient_sample,
+            "requests do not satisfy the record sample gate"
+        );
+    }
+
+    #[test]
+    fn a_zero_request_record_is_insufficient_not_no_data() {
+        let pricing = load_builtin_pricing();
+        let mut turns = vec![turn(
+            "claude-sonnet-4-6",
+            Some(ActivityCategory::Coding),
+            Usage::default(),
+            Some(false),
+            None,
+        )];
+        turns[0].turn.source = SourceKind::Codex;
+        turns[0].turn.request_count = Some(0);
+
+        let table = build_compare_table(&turns, &CompareOptions::new(&pricing));
+        let cell = &table.cells["claude-sonnet-4-6"]["coding"];
+        assert_eq!(cell.turns, 0);
+        assert!(!cell.no_data);
+        assert!(cell.insufficient_sample);
+        assert_eq!(cell.cost_per_turn, None);
+    }
+
+    #[test]
     fn flags_low_sample_cells_as_insufficient_not_no_data() {
         let pricing = load_builtin_pricing();
         let turns = vec![

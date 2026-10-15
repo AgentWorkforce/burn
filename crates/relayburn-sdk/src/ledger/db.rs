@@ -96,9 +96,10 @@ fn configure_pragmas(conn: &Connection) -> Result<()> {
 /// open is idempotent; called BEFORE [`verify_schema_version`] so the
 /// version we read reflects the post-migration state.
 ///
-/// Migrations are tagged by destination schema version; each step is
-/// guarded so re-running `Ledger::open` after a crash mid-migration picks
-/// up where it left off without surfacing `duplicate column name` errors.
+/// Each step in [`MIGRATIONS`] runs when the stored version is below its
+/// destination, then records that version. Every step is idempotent so
+/// re-running `Ledger::open` after a crash mid-migration picks up where it
+/// left off without surfacing `duplicate column name` errors.
 fn migrate_burn_schema(conn: &Connection) -> Result<()> {
     let current_version: u32 = conn
         .query_row(
@@ -109,166 +110,118 @@ fn migrate_burn_schema(conn: &Connection) -> Result<()> {
         .map(|v| v as u32)
         .unwrap_or(SCHEMA_VERSION);
 
-    if current_version < 2 {
-        // v1 → v2: add the denormalized `turns.stop_reason` column for
-        // outcome aggregation. `CREATE TABLE IF NOT EXISTS` in the DDL
-        // already covers fresh DBs (the column lives in the DDL); this
-        // branch handles existing v1 ledgers whose `turns` table
-        // pre-existed the bump.
-        //
-        add_column(conn, "ALTER TABLE turns ADD COLUMN stop_reason TEXT")?;
-        conn.execute(
-            "UPDATE archive_state SET schema_version = 2 WHERE id = 1",
-            [],
-        )?;
-    }
-
-    if current_version < 3 {
-        // v2 → v3: add nullable `output_bytes` / `output_truncated` to
-        // `tool_result_events` for hotspots-by-bytes ranking.
-        for ddl in [
-            "ALTER TABLE tool_result_events ADD COLUMN output_bytes INTEGER",
-            "ALTER TABLE tool_result_events ADD COLUMN output_truncated INTEGER",
-        ] {
-            add_column(conn, ddl)?;
+    for (version, step) in MIGRATIONS {
+        if current_version < *version {
+            step(conn)?;
+            conn.execute(
+                "UPDATE archive_state SET schema_version = ? WHERE id = 1",
+                [version],
+            )?;
         }
-        conn.execute(
-            "UPDATE archive_state SET schema_version = 3 WHERE id = 1",
-            [],
-        )?;
     }
 
-    if current_version < 4 {
-        // v3 → v4: add nullable `turns.subagent_id` so subagent rows
-        // (sidechain rows in the parent file today; sidecar transcripts
-        // under `<sessionId>/subagents/` once the discovery path is
-        // wired into ingest) are queryable structurally without
-        // re-deserializing `record_json`. See AgentWorkforce/burn#435.
-        add_column(conn, "ALTER TABLE turns ADD COLUMN subagent_id TEXT")?;
-        conn.execute(
-            "UPDATE archive_state SET schema_version = 4 WHERE id = 1",
-            [],
-        )?;
+    // Partial indexes over back-added columns are created here rather than
+    // in the static DDL so a legacy table without the column doesn't fail
+    // the DDL pre-pass. By this point every column exists, so each is safe
+    // to create idempotently on every open. The predicates keep each index
+    // tracking only the rows it serves:
+    // - `idx_turns_stop_reason` / `idx_turns_subagent_id`: rows that carry
+    //   the field (subagent rows are a tiny minority on most ledgers).
+    // - `idx_turns_unaccounted_codex`: Codex rows still awaiting request
+    //   accounting, so ingest finds them cheaply and the index empties as
+    //   they are re-accounted.
+    for ddl in [
+        "CREATE INDEX IF NOT EXISTS idx_turns_stop_reason \
+         ON turns(stop_reason) WHERE stop_reason IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_turns_subagent_id \
+         ON turns(subagent_id) WHERE subagent_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS idx_turns_unaccounted_codex \
+         ON turns(session_id) WHERE source = 'codex' AND request_count IS NULL",
+    ] {
+        conn.execute(ddl, [])?;
     }
+    Ok(())
+}
 
-    if current_version < 5 {
-        // v4 → v5: add the `inferences` derived table. The full DDL is
-        // baked into `BURN_DDL`'s `CREATE TABLE IF NOT EXISTS` block so a
-        // fresh open is already correct; here we only need to make sure
-        // the table EXISTS on legacy DBs whose `BURN_DDL` pre-pass might
-        // have happened against the pre-v5 schema (e.g. if a future
-        // migration step changes ordering). The CREATE is idempotent on
-        // every open, so re-running this step costs only a catalog
-        // probe. The table is populated by the ingest pipeline; pre-v5
-        // ledgers stay empty until `burn state rebuild`. See issue #434.
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS inferences (\
-                 source              TEXT NOT NULL,\
-                 session_id          TEXT NOT NULL,\
-                 request_id          TEXT NOT NULL,\
-                 request_id_source   TEXT NOT NULL,\
-                 turn_id             TEXT NOT NULL,\
-                 model               TEXT NOT NULL,\
-                 kind                TEXT NOT NULL,\
-                 start_ts            TEXT NOT NULL,\
-                 end_ts              TEXT NOT NULL,\
-                 record_json         TEXT NOT NULL,\
-                 PRIMARY KEY (source, session_id, request_id)\
-             ) STRICT",
-            [],
-        )?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_inferences_session ON inferences(session_id)",
-            [],
-        )?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_inferences_turn ON inferences(turn_id)",
-            [],
-        )?;
-        conn.execute(
-            "UPDATE archive_state SET schema_version = 5 WHERE id = 1",
-            [],
-        )?;
-    }
+type Migration = fn(&Connection) -> Result<()>;
 
-    if current_version < 6 {
-        // v5 → v6: add `archive_state.source_fingerprint` so `ingest_all`
-        // can short-circuit a no-op sweep. Legacy rows default to ''
-        // which never matches a live fingerprint, so the first post-upgrade
-        // ingest walks normally and records the column. See #468.
+/// Forward steps by destination schema version (see
+/// [`crate::ledger::schema::SCHEMA_VERSION`] for what each version is).
+const MIGRATIONS: &[(u32, Migration)] = &[
+    // Denormalized `turns.stop_reason` for outcome aggregation. (#437)
+    (2, |conn| {
+        add_column(conn, "ALTER TABLE turns ADD COLUMN stop_reason TEXT")
+    }),
+    // `tool_result_events` payload bytes for hotspots-by-bytes. (#436)
+    (3, |conn| {
+        add_column(
+            conn,
+            "ALTER TABLE tool_result_events ADD COLUMN output_bytes INTEGER",
+        )?;
+        add_column(
+            conn,
+            "ALTER TABLE tool_result_events ADD COLUMN output_truncated INTEGER",
+        )
+    }),
+    // `turns.subagent_id`, queryable without re-parsing `record_json`. (#435)
+    (4, |conn| {
+        add_column(conn, "ALTER TABLE turns ADD COLUMN subagent_id TEXT")
+    }),
+    // The `inferences` table; `BURN_DDL` already creates it on every open,
+    // this keeps a legacy ledger correct whatever the DDL ordering. (#434)
+    (5, |conn| {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS inferences (
+                 source              TEXT NOT NULL,
+                 session_id          TEXT NOT NULL,
+                 request_id          TEXT NOT NULL,
+                 request_id_source   TEXT NOT NULL,
+                 turn_id             TEXT NOT NULL,
+                 model               TEXT NOT NULL,
+                 kind                TEXT NOT NULL,
+                 start_ts            TEXT NOT NULL,
+                 end_ts              TEXT NOT NULL,
+                 record_json         TEXT NOT NULL,
+                 PRIMARY KEY (source, session_id, request_id)
+             ) STRICT;
+             CREATE INDEX IF NOT EXISTS idx_inferences_session ON inferences(session_id);
+             CREATE INDEX IF NOT EXISTS idx_inferences_turn ON inferences(turn_id);",
+        )?;
+        Ok(())
+    }),
+    // `archive_state.source_fingerprint`. (#468)
+    (6, |conn| {
         add_column(
             conn,
             "ALTER TABLE archive_state ADD COLUMN source_fingerprint TEXT NOT NULL DEFAULT ''",
+        )
+    }),
+    // `archive_state.last_write_at_ms`, seeded conservatively from the
+    // newest event so an old snapshot is warned about on its first
+    // post-upgrade read instead of made fresh by the migration. (#507)
+    (7, |conn| {
+        add_column(
+            conn,
+            "ALTER TABLE archive_state ADD COLUMN last_write_at_ms INTEGER",
         )?;
+        seed_last_write_from_events(conn)
+    }),
+    // The 4.x readers' per-file cursors are meaningless once sessions come
+    // from relayhistory: drop them. The next ingest reconciles against the
+    // store and writes its watermark.
+    (8, |conn| {
         conn.execute(
-            "UPDATE archive_state SET schema_version = 6 WHERE id = 1",
+            "UPDATE archive_state SET upstream_cursors_json = '{}' WHERE id = 1",
             [],
         )?;
-    }
-
-    if current_version < 7 {
-        migrate_to_v7(conn)?;
-    }
-
-    if current_version < 8 {
-        // The 4.x readers' per-file cursors are meaningless once sessions
-        // come from relayhistory, and the blob rides along with every
-        // `last_write_at_ms` update to the same row: drop it. The next
-        // ingest reconciles against the store and writes its watermark.
-        conn.execute(
-            "UPDATE archive_state SET upstream_cursors_json = '{}', schema_version = 8 \
-             WHERE id = 1",
-            [],
-        )?;
-    }
-
-    if current_version < 9 {
-        // v8 → v9: Codex rows written before request accounting keep a
-        // NULL `request_count`, which is how ingest finds the sessions to
-        // re-account.
-        add_column(conn, "ALTER TABLE turns ADD COLUMN request_count INTEGER")?;
-        conn.execute(
-            "UPDATE archive_state SET schema_version = 9 WHERE id = 1",
-            [],
-        )?;
-    }
-
-    // `idx_turns_unaccounted_codex` indexes only Codex rows still awaiting
-    // request accounting, so finding them stays cheap on every ingest and
-    // the index empties as they are re-accounted. Created here for the same
-    // reason as `idx_turns_stop_reason` below.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_turns_unaccounted_codex \
-         ON turns(session_id) WHERE source = 'codex' AND request_count IS NULL",
-        [],
-    )?;
-
-    // The `idx_turns_stop_reason` index is created here rather than in
-    // the static DDL so a legacy v1 table (no `stop_reason` column yet)
-    // doesn't fail the DDL pre-pass. By this point the column either
-    // existed all along (fresh v2+ DDL) or was just added by the v1 → v2
-    // step above, so the index is safe to create idempotently every
-    // open.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_turns_stop_reason \
-         ON turns(stop_reason) WHERE stop_reason IS NOT NULL",
-        [],
-    )?;
-
-    // `idx_turns_subagent_id` lives here for the same reason as
-    // `idx_turns_stop_reason`: a legacy table without the column would
-    // otherwise blow up the DDL pre-pass. Partial-index predicate
-    // (`WHERE subagent_id IS NOT NULL`) keeps the index size tracking
-    // subagent row count, not the full turn count — subagent rows are
-    // a tiny minority on most ledgers.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_turns_subagent_id \
-         ON turns(subagent_id) WHERE subagent_id IS NOT NULL",
-        [],
-    )?;
-
-    Ok(())
-}
+        Ok(())
+    }),
+    // `turns.request_count`. Codex rows written before request accounting
+    // keep NULL, which is how ingest finds the sessions to re-account.
+    (9, |conn| {
+        add_column(conn, "ALTER TABLE turns ADD COLUMN request_count INTEGER")
+    }),
+];
 
 /// Run one `ALTER TABLE … ADD COLUMN`, treating a column that already
 /// exists as added.
@@ -290,23 +243,6 @@ pub(super) fn add_column(conn: &Connection, ddl: &str) -> Result<()> {
         }
         Err(e) => Err(e.into()),
     }
-}
-
-fn migrate_to_v7(conn: &Connection) -> Result<()> {
-    add_column(
-        conn,
-        "ALTER TABLE archive_state ADD COLUMN last_write_at_ms INTEGER",
-    )?;
-    // Legacy ledgers have no write clock. Seed conservatively from the
-    // newest event timestamp so an old snapshot is warned about on its
-    // first post-upgrade read instead of being made artificially fresh by
-    // the schema migration itself.
-    seed_last_write_from_events(conn)?;
-    conn.execute(
-        "UPDATE archive_state SET schema_version = 7 WHERE id = 1",
-        [],
-    )?;
-    Ok(())
 }
 
 fn verify_schema_version(conn: &Connection) -> Result<()> {

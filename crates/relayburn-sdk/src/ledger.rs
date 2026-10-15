@@ -661,4 +661,6 @@ impl LedgerLayout {
 }
 
 #[cfg(test)]
+mod request_accounting_tests;
+#[cfg(test)]
 mod tests;

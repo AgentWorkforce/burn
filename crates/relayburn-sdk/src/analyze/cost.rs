@@ -942,6 +942,26 @@ mod tests {
     }
 
     #[test]
+    fn tally_unpriced_counts_every_model_request() {
+        let p = load_builtin_pricing();
+        let mut multi = turn(
+            "made-up-model-xyz",
+            usage_with(100, 50, 0),
+            SourceKind::Codex,
+        );
+        multi.request_count = Some(7);
+        let single = turn("made-up-model-xyz", usage_with(10, 5, 0), SourceKind::Codex);
+        let priced = turn(
+            "claude-sonnet-4-6",
+            usage_with(300, 150, 0),
+            SourceKind::ClaudeCode,
+        );
+        let (count, models) = tally_unpriced(&[multi, single, priced], &p);
+        assert_eq!(count, 8, "unpriced count shares turnCount's request unit");
+        assert_eq!(models, vec!["made-up-model-xyz"]);
+    }
+
+    #[test]
     fn sum_costs_on_empty_input_returns_zero_aggregate() {
         let empty: Vec<CostBreakdown> = vec![];
         let s = sum_costs(empty.iter());
