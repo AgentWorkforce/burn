@@ -804,4 +804,5 @@ fn ingest_reports_each_phase_to_its_progress_sink() {
     }
 }
 
+mod fork_history;
 mod request_accounting;

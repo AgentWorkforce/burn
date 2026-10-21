@@ -326,6 +326,36 @@ impl Ledger {
         writer::rewrite_turns(&mut self.conns.burn, turns, inferences)
     }
 
+    /// Sessions `session_id` descends from by fork or spawn: the parents
+    /// its edges name, their parents, and so on, each once.
+    pub(crate) fn ancestor_sessions(
+        &self,
+        source: crate::reader::SourceKind,
+        session_id: &str,
+    ) -> Result<Vec<String>> {
+        reader::ancestor_sessions(&self.conns.burn, source.wire_str(), session_id)
+    }
+
+    /// Codex sessions holding a turn a session they descend from holds
+    /// too: the forks and subagents that may hold a copy of it.
+    pub(crate) fn sessions_holding_ancestor_turns(&self) -> Result<Vec<String>> {
+        reader::sessions_holding_ancestor_turns(&self.conns.burn)
+    }
+
+    /// Drop one session's turns `message_ids` with every row derived from
+    /// them, content first: a failure between the two leaves the turns
+    /// that select them again.
+    pub(crate) fn retire_turns(
+        &mut self,
+        source: crate::reader::SourceKind,
+        session_id: &str,
+        message_ids: &HashSet<String>,
+    ) -> Result<()> {
+        let source = source.wire_str();
+        content::retire_messages(&mut self.conns.content, source, session_id, message_ids)?;
+        writer::retire_turns(&mut self.conns.burn, source, session_id, message_ids)
+    }
+
     // --- content + FTS5 ----------------------------------------------
 
     pub fn search_content(&self, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {

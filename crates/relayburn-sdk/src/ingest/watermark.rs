@@ -23,6 +23,7 @@ use crate::ledger::Ledger;
 const KEY: &str = "relayhistory";
 const STORE_KEY: &str = "relayhistoryStore";
 const PENDING_KEY: &str = "relayhistoryPending";
+const COPIES_KEY: &str = "copiedHistoryChecked";
 
 /// Change kinds that move a session's records: its catalog row and its
 /// evidence. Prompt history, presences and connector observations do not.
@@ -80,8 +81,30 @@ pub(super) fn store(
     store_db: &Path,
     pending: &BTreeSet<SessionIdentity>,
 ) -> anyhow::Result<()> {
-    let cursors =
-        json!({ KEY: watermark, STORE_KEY: store_db, PENDING_KEY: pending_json(pending) });
+    let mut cursors = cursors(ledger)
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    cursors[KEY] = json!(watermark);
+    cursors[STORE_KEY] = json!(store_db);
+    cursors[PENDING_KEY] = pending_json(pending);
+    ledger.write_cursors(&cursors.to_string())?;
+    Ok(())
+}
+
+/// Whether every session the ledger holds was checked for history it
+/// copied from a session it descends from. A ledger written before burn
+/// retired such copies was not.
+pub(super) fn copies_checked(ledger: &Ledger) -> bool {
+    cursors(ledger).is_some_and(|c| c.get(COPIES_KEY) == Some(&json!(true)))
+}
+
+/// Record that every session the ledger holds was checked for copied
+/// history.
+pub(super) fn mark_copies_checked(ledger: &mut Ledger) -> anyhow::Result<()> {
+    let mut cursors = cursors(ledger)
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    cursors[COPIES_KEY] = json!(true);
     ledger.write_cursors(&cursors.to_string())?;
     Ok(())
 }

@@ -186,6 +186,59 @@ pub(crate) fn rewrite_turns(
     Ok(rewritten.len())
 }
 
+/// Drop the turns `message_ids` of one session with every row derived
+/// from them, in one transaction: their inferences and tool results, the
+/// user turns that led into them, the compactions that followed them, and
+/// the subagent edges their tool calls filed under the sessions they
+/// spawned. A retirement that drops a row records a write.
+pub(crate) fn retire_turns(
+    conn: &mut Connection,
+    source: &str,
+    session_id: &str,
+    message_ids: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut retired = 0;
+    {
+        let mut record = tx.prepare(
+            "SELECT record_json FROM turns WHERE source = ? AND session_id = ? AND message_id = ?",
+        )?;
+        let mut spawned = tx.prepare(
+            "DELETE FROM relationships
+             WHERE source = ? AND related_session_id = ? AND relationship_type = 'subagent'
+               AND json_extract(record_json, '$.parentToolUseId') = ?",
+        )?;
+        for id in message_ids {
+            let json: Option<String> = record
+                .query_row(params![source, session_id, id], |r| r.get(0))
+                .optional()?;
+            if let Some(json) = json {
+                let turn: TurnRecord = serde_json::from_str(&json)?;
+                for call in &turn.tool_calls {
+                    spawned.execute(params![source, session_id, call.id])?;
+                }
+            }
+            for sql in [
+                "DELETE FROM turns WHERE source = ?1 AND session_id = ?2 AND message_id = ?3",
+                "DELETE FROM inferences WHERE source = ?1 AND session_id = ?2 AND turn_id = ?3",
+                "DELETE FROM tool_result_events WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.messageId') = ?3",
+                "DELETE FROM user_turns WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.followingMessageId') = ?3",
+                "DELETE FROM compactions WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.precedingMessageId') = ?3",
+            ] {
+                retired += tx.execute(sql, params![source, session_id, id])?;
+            }
+        }
+    }
+    if retired > 0 {
+        touch_last_write(&tx, WriteOrigin::Live)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub(crate) fn append_compactions(
     conn: &mut Connection,
     events: &[CompactionEvent],

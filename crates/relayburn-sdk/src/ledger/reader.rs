@@ -276,6 +276,55 @@ pub(crate) fn turn_message_ids(
     Ok(ids.collect::<rusqlite::Result<HashSet<String>>>()?)
 }
 
+/// The sessions `session_id` descends from through its fork and subagent
+/// edges, in id order. Each id is visited once, so edges that loop end the
+/// walk.
+pub(crate) fn ancestor_sessions(
+    conn: &Connection,
+    source: &str,
+    session_id: &str,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "WITH RECURSIVE up(id) AS (
+             SELECT ?2
+             UNION
+             SELECT r.related_session_id FROM relationships r JOIN up
+               ON r.source = ?1 AND r.session_id = up.id
+             WHERE r.relationship_type IN ('fork', 'subagent')
+               AND r.related_session_id IS NOT NULL
+         )
+         SELECT id FROM up WHERE id != ?2 ORDER BY id",
+    )?;
+    let ids = stmt.query_map(rusqlite::params![source, session_id], |row| row.get(0))?;
+    Ok(ids.collect::<rusqlite::Result<Vec<String>>>()?)
+}
+
+/// Codex sessions holding a turn that a session they descend from (through
+/// fork and subagent edges) holds under the same id, in session id order.
+pub(crate) fn sessions_holding_ancestor_turns(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "WITH RECURSIVE up(child, ancestor) AS (
+             SELECT session_id, related_session_id FROM relationships
+             WHERE source = 'codex' AND relationship_type IN ('fork', 'subagent')
+               AND related_session_id IS NOT NULL
+             UNION
+             SELECT up.child, r.related_session_id FROM relationships r JOIN up
+               ON r.source = 'codex' AND r.session_id = up.ancestor
+             WHERE r.relationship_type IN ('fork', 'subagent')
+               AND r.related_session_id IS NOT NULL
+         )
+         SELECT DISTINCT up.child FROM up JOIN turns t
+           ON t.source = 'codex' AND t.session_id = up.child
+         WHERE up.child != up.ancestor AND EXISTS (
+             SELECT 1 FROM turns a
+             WHERE a.source = 'codex' AND a.session_id = up.ancestor
+               AND a.message_id = t.message_id)
+         ORDER BY up.child",
+    )?;
+    let ids = stmt.query_map([], |row| row.get(0))?;
+    Ok(ids.collect::<rusqlite::Result<Vec<String>>>()?)
+}
+
 /// Codex sessions holding a turn that predates request accounting (NULL
 /// `request_count`), in session id order.
 pub(crate) fn sessions_awaiting_request_accounting(conn: &Connection) -> Result<Vec<String>> {

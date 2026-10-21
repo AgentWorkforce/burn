@@ -4,7 +4,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ## [Unreleased]
 
-5.0.0: burn reads every session through relayhistory (`ai-hist` 0.41) and no longer parses harness logs. See `docs/migrating-to-5.md`.
+5.0.0: burn reads every session through relayhistory (`ai-hist` 0.49) and no longer parses harness logs. See `docs/migrating-to-5.md`.
 
 ### Breaking
 
@@ -27,6 +27,8 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - Codex turn usage comes from each response's raw token snapshot.
 - Codex tasks that end in `turn_aborted`, that the next task interrupts, or that are still open when the session stops are billed; they were missing from every total. An aborted task's turn has stop reason `aborted` (a new `StopReason::Aborted`, counted as `aborted` in `burn summary` and `burn analyze` stop reasons). A trailing open task that reported spend is billed once its rollout has gone two minutes unwritten, as turn `<turn id>@<line>`; work the session adds to it later lands as a further turn, never re-billed.
 - Codex turns count model requests, so per-turn cost no longer spreads a long agent loop's spend over one turn: a turn is still one task and records `requestCount`, the API calls it made (each `token_count` that moved the running total), and each request is an inference row with that call's spend and tool calls. `summary`, `sessions`, provider rows, unpriced-turn counts and `compare` count requests; `compare`'s `--min-sample` gate still counts turn records. The ledger moves to schema 9, and the next `burn ingest` re-accounts Codex turns it already holds in place: same turns, same totals.
+- Codex rollouts that Codex compressed to `rollout-*.jsonl.zst` are ingested and re-accounted; their turns were missing from every total.
+- A Codex paginated fork (Codex 0.133–0.148) no longer bills the parent history it copies into its rollout. `burn ingest` retires each copied turn a ledger already holds (one its parent holds under the same id), with its inferences, content, tool results, prompt and subagent edges; the fork's own turns stay billed. A ledger written before this is checked once, so forks whose rollout no longer changes are corrected too.
 - A failed OpenCode tool call sets `isError`, as Claude and Codex turns do.
 - A Claude assistant turn still being written (no `stop_reason` yet) is billed once it settles, not early.
 - A Claude subagent turn that follows a tool result inside its sidechain keeps the subagent's agent id instead of starting a new subagent.
@@ -56,7 +58,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - `burn analyze` adds a `reasoning` section (turns, tokens, reasoning tokens and cost per effort level, effort changes) and findings for high reasoning effort on routine work and for mid-session effort changes; unpriced spend reads unknown.
 - `burn summary` adds a reasoning-effort table (JSON `reasoningEfforts`) when any turn in scope recorded an effort.
 - `burn measure` / `measureSession()` read sessions through relayhistory, the same source path as `burn analyze`.
-- Session sourcing depends on a semver-compatible `ai-hist` release (`0.41`); adopting a new minor is a deliberate bump that re-runs the parity suite. A Codex turn's model, cwd and reasoning come from the `turn_context` naming it, else the latest earlier one; a forked Codex child's first turn is charged only its own spend, not the parent's inherited total; a Claude turn opened by a signature-only `thinking` record starts when that record was written.
+- Session sourcing depends on a semver-compatible `ai-hist` release (`0.49`); adopting a new minor is a deliberate bump that re-runs the parity suite. A Codex turn's model, cwd and reasoning come from the `turn_context` naming it, else the latest earlier one; a forked Codex child's first turn is charged only its own spend, not the parent's inherited total; a Claude turn opened by a signature-only `thinking` record starts when that record was written.
 - Edit-heavy findings count file reads made through any harness's shell (`cat`, `head`, `tail`, `sed -n`, `nl`, `bat`, `less`, `more`), so sessions that read via Bash are no longer flagged as editing blind.
 - Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.
 - `burn hotspots --findings` and `burn analyze` add a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL. Under `--since`, a resume at the window start is measured against the session's earlier turns.
