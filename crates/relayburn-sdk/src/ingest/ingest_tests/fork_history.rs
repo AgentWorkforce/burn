@@ -129,6 +129,28 @@ fn file_spawn(sandbox: &Sandbox, child: &str, spawner: &str, call: &str) {
         .unwrap();
 }
 
+/// File a compaction under `session_id` that followed turn `preceding`.
+fn file_compaction(sandbox: &Sandbox, session_id: &str, preceding: &str) {
+    let record = serde_json::json!({
+        "v": 1, "source": "codex", "sessionId": session_id,
+        "ts": "2026-04-20T00:00:50.000Z", "precedingMessageId": preceding,
+    });
+    burn_db(sandbox)
+        .execute(
+            "INSERT INTO compactions (id_fingerprint, source, session_id, ts, record_json)
+             VALUES (?1 || ?2, 'codex', ?1, '2026-04-20T00:00:50.000Z', ?3)",
+            [session_id, preceding, &record.to_string()],
+        )
+        .unwrap();
+}
+
+/// Set the ledger's last write back to the epoch.
+fn forget_last_write(sandbox: &Sandbox) {
+    burn_db(sandbox)
+        .execute("UPDATE archive_state SET last_write_at_ms = 0", [])
+        .unwrap();
+}
+
 /// Every edge filed under `session_id` or naming it as the parent, as
 /// `(session, related, type)`.
 fn edges(sandbox: &Sandbox, session_id: &str) -> Vec<(String, Option<String>, String)> {
@@ -211,6 +233,8 @@ fn a_dormant_fork_billed_for_its_copied_parent_history_keeps_only_its_own_turns(
     file_spawn(&sandbox, "agent-copied", CHILD, "call_copied");
     file_spawn(&sandbox, "agent-own", CHILD, "call_own");
     file_spawn(&sandbox, CHILD, PARENT, "call_parent");
+    file_compaction(&sandbox, CHILD, &parent_turns[1]);
+    file_compaction(&sandbox, CHILD, CHILD_TASK);
     let before = edges(&sandbox, CHILD);
     assert_eq!(turn_ids(&ledger, CHILD).len(), 3);
     assert_eq!(turn_tokens(&ledger, CHILD), 600 + 2_500);
@@ -225,11 +249,25 @@ fn a_dormant_fork_billed_for_its_copied_parent_history_keeps_only_its_own_turns(
     // The rollout is untouched, so the change feed never names the fork
     // again: the ledger's one-time check for copies brings it back.
     forget_copies_check(&mut ledger);
+    forget_last_write(&sandbox);
     let report = sandbox.ingest(&mut ledger);
 
     assert_eq!(report.appended_turns, 0);
+    assert!(
+        ledger.last_write_at_ms().unwrap().unwrap_or(0) > 0,
+        "the retirement is a write"
+    );
     assert_eq!(turn_ids(&ledger, CHILD), [CHILD_TASK]);
     assert_eq!(turn_tokens(&ledger, CHILD), 600);
+    assert_eq!(
+        column(
+            &sandbox,
+            "compactions",
+            "json_extract(record_json, '$.precedingMessageId')",
+            CHILD
+        ),
+        [CHILD_TASK]
+    );
     assert_eq!(
         column(&sandbox, "inferences", "turn_id", CHILD),
         [CHILD_TASK]
@@ -321,4 +359,49 @@ fn a_session_that_copied_nothing_keeps_every_turn_it_holds() {
     let ids = sorted_turn_ids(&ledger, PARENT);
     assert_eq!(ids.len(), 4);
     assert!(held.iter().all(|id| ids.contains(id)));
+}
+
+/// A check that cannot retire a fork's copies is owed again: the next
+/// ingest reads the fork once more.
+#[test]
+fn a_copies_check_that_fails_to_land_runs_again_next_time() {
+    let sandbox = Sandbox::new();
+    place_fork(&sandbox);
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    bill_under(&sandbox, PARENT, CHILD);
+    forget_copies_check(&mut ledger);
+    let raw = burn_db(&sandbox);
+    raw.execute_batch(&format!(
+        "CREATE TRIGGER refuse BEFORE DELETE ON turns WHEN OLD.session_id = '{CHILD}'
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;"
+    ))
+    .unwrap();
+    sandbox.ingest(&mut ledger);
+    assert_eq!(
+        turn_ids(&ledger, CHILD).len(),
+        3,
+        "the copies are still held"
+    );
+
+    raw.execute_batch("DROP TRIGGER refuse;").unwrap();
+    sandbox.ingest(&mut ledger);
+    assert_eq!(turn_ids(&ledger, CHILD), [CHILD_TASK]);
+}
+
+/// Retiring turns the ledger does not hold changes nothing, so it is not
+/// a write.
+#[test]
+fn retiring_turns_the_ledger_does_not_hold_is_not_a_write() {
+    let sandbox = Sandbox::new();
+    place_fork(&sandbox);
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    forget_last_write(&sandbox);
+    let absent = std::collections::HashSet::from(["no-such-turn".to_string()]);
+    ledger
+        .retire_turns(crate::reader::SourceKind::Codex, CHILD, &absent)
+        .unwrap();
+    assert_eq!(ledger.last_write_at_ms().unwrap().unwrap_or(0), 0);
+    assert_eq!(turn_ids(&ledger, CHILD), [CHILD_TASK]);
 }

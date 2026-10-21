@@ -188,8 +188,9 @@ pub(crate) fn rewrite_turns(
 
 /// Drop the turns `message_ids` of one session with every row derived
 /// from them, in one transaction: their inferences and tool results, the
-/// user turns that led into them, and the subagent edges their tool calls
-/// filed under the sessions they spawned.
+/// user turns that led into them, the compactions that followed them, and
+/// the subagent edges their tool calls filed under the sessions they
+/// spawned. A retirement that drops a row records a write.
 pub(crate) fn retire_turns(
     conn: &mut Connection,
     source: &str,
@@ -197,6 +198,7 @@ pub(crate) fn retire_turns(
     message_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut retired = 0;
     {
         let mut record = tx.prepare(
             "SELECT record_json FROM turns WHERE source = ? AND session_id = ? AND message_id = ?",
@@ -223,10 +225,15 @@ pub(crate) fn retire_turns(
                      AND json_extract(record_json, '$.messageId') = ?3",
                 "DELETE FROM user_turns WHERE source = ?1 AND session_id = ?2
                      AND json_extract(record_json, '$.followingMessageId') = ?3",
+                "DELETE FROM compactions WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.precedingMessageId') = ?3",
             ] {
-                tx.execute(sql, params![source, session_id, id])?;
+                retired += tx.execute(sql, params![source, session_id, id])?;
             }
         }
+    }
+    if retired > 0 {
+        touch_last_write(&tx, WriteOrigin::Live)?;
     }
     tx.commit()?;
     Ok(())
