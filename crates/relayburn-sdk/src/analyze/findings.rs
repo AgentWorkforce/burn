@@ -1251,6 +1251,10 @@ mod tests {
                 Some(433_000),
                 "{source:?}"
             );
+            assert_eq!(
+                findings[0].title, "Unpriced usage: 433,000 tokens across 1 turn",
+                "{source:?}"
+            );
         }
     }
 
