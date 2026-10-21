@@ -38,5 +38,15 @@ pub(super) fn records(ev: &SessionEvidence, billing: &Billing) -> SessionRecords
         request_id_lookup: Default::default(),
         inferences: Some(derived.inferences),
         pending: derived.pending,
+        copied_history: copied_history(ev),
     }
+}
+
+/// Whether relayhistory set aside history this fork copied from its
+/// parent: the copy is one `fork_replay_boundary` marker of subkind
+/// `copied_history`.
+fn copied_history(ev: &SessionEvidence) -> bool {
+    ev.markers
+        .iter()
+        .any(|m| m.kind == "fork_replay_boundary" && m.subkind.as_deref() == Some("copied_history"))
 }

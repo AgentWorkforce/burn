@@ -32,6 +32,11 @@ pub(crate) struct SessionRecords {
     /// rollout to settle, so the session is read again on a later ingest.
     #[serde(skip)]
     pub pending: bool,
+    /// The session is a fork whose evidence leaves out the history it
+    /// copied from its parent (a Codex paginated fork). A turn the ledger
+    /// holds for it beyond these records was billed from that copy.
+    #[serde(skip)]
+    pub copied_history: bool,
 }
 
 impl SessionRecords {

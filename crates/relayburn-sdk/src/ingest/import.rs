@@ -141,17 +141,16 @@ fn import_one(
     if source == Source::Claude && evidence.session.discovery_state == DiscoveryState::Delegated {
         return unchanged;
     }
-    let billing = Billing {
+    let mut billing = Billing {
         now_ms: ctx.now_ms,
         billed: ledger.turn_message_ids(kind, &evidence.session.session_id)?,
     };
-    let mut records = match source {
-        Source::Claude => {
-            let children = delegated_children(store, &evidence)?;
-            records_with_children(&evidence, &children, &billing)
-        }
-        _ => records_from_evidence(&evidence, &billing),
-    };
+    let mut records = session_records(store, &evidence, &billing)?;
+    if bills_copied_history(&records, &billing.billed) {
+        ledger.clear_session(kind, &evidence.session.session_id)?;
+        billing.billed.clear();
+        records = session_records(store, &evidence, &billing)?;
+    }
     // The evidence carries its text whatever the content mode: activity
     // classification and user-turn blocks are derived from it. The mode
     // decides only whether the text itself is kept.
@@ -173,6 +172,37 @@ fn import_one(
     }
     append_derived(ledger, &records)?;
     Ok((report, records.pending))
+}
+
+/// Burn's records for one session read against `billing`; a Claude
+/// session's with every subagent it delegated to folded in.
+fn session_records(
+    store: &SessionStore,
+    evidence: &SessionEvidence,
+    billing: &Billing,
+) -> anyhow::Result<SessionRecords> {
+    Ok(match evidence.session.source {
+        Source::Claude => {
+            let children = delegated_children(store, evidence)?;
+            records_with_children(evidence, &children, billing)
+        }
+        _ => records_from_evidence(evidence, billing),
+    })
+}
+
+/// Whether the ledger bills a fork for history it copied from its parent:
+/// it holds a turn its records, which leave that copy out, do not. Such a
+/// session is cleared and appended again whole.
+fn bills_copied_history(records: &SessionRecords, held: &HashSet<String>) -> bool {
+    if !records.copied_history {
+        return false;
+    }
+    let rebuilt: HashSet<&str> = records
+        .turns
+        .iter()
+        .map(|t| t.message_id.as_str())
+        .collect();
+    held.iter().any(|id| !rebuilt.contains(id.as_str()))
 }
 
 /// Append the turns the ledger does not hold yet. A session is rebuilt

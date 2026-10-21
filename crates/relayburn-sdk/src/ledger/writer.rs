@@ -186,6 +186,34 @@ pub(crate) fn rewrite_turns(
     Ok(rewritten.len())
 }
 
+/// Drop every row one session's records derived, in one transaction. A
+/// subagent edge filed under the session belongs to the session that
+/// spawned it and stays. The session's appends that follow record the
+/// write.
+pub(crate) fn clear_session(conn: &mut Connection, source: &str, session_id: &str) -> Result<()> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for table in [
+        "turns",
+        "compactions",
+        "tool_result_events",
+        "user_turns",
+        "inferences",
+        "sessions",
+    ] {
+        tx.execute(
+            &format!("DELETE FROM {table} WHERE source = ? AND session_id = ?"),
+            params![source, session_id],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM relationships WHERE source = ? AND session_id = ?
+             AND relationship_type != 'subagent'",
+        params![source, session_id],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub(crate) fn append_compactions(
     conn: &mut Connection,
     events: &[CompactionEvent],

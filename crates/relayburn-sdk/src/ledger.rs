@@ -326,6 +326,19 @@ impl Ledger {
         writer::rewrite_turns(&mut self.conns.burn, turns, inferences)
     }
 
+    /// Drop every row the ledger derived from one session's records, its
+    /// content included, so the session can be appended again from scratch.
+    /// Content goes first: a failure between the two leaves the turns
+    /// that make ingest clear the session again.
+    pub(crate) fn clear_session(
+        &mut self,
+        source: crate::reader::SourceKind,
+        session_id: &str,
+    ) -> Result<()> {
+        content::clear_session(&self.conns.content, source.wire_str(), session_id)?;
+        writer::clear_session(&mut self.conns.burn, source.wire_str(), session_id)
+    }
+
     // --- content + FTS5 ----------------------------------------------
 
     pub fn search_content(&self, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {
