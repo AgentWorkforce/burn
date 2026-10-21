@@ -236,6 +236,7 @@ fn aggregate_turn(
             },
         )),
         reasoning: None,
+        request_count: None,
     }
 }
 

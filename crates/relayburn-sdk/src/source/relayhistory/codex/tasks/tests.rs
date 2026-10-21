@@ -736,3 +736,5 @@ fn a_subagent_notification_falls_back_to_its_parent_call() {
         .collect();
     assert_eq!(answered, ["call_1"]);
 }
+
+mod requests;

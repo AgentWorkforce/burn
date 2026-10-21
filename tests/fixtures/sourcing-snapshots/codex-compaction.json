@@ -6,6 +6,7 @@
       "sessionId": "sess_codex_compact",
       "messageId": "turn_compact_1",
       "turnIndex": 0,
+      "requestCount": 1,
       "ts": "2026-04-20T03:00:00.200Z",
       "model": "gpt-5.4",
       "project": "/tmp/project",
@@ -43,6 +44,7 @@
       "sessionId": "sess_codex_compact",
       "messageId": "turn_compact_2",
       "turnIndex": 1,
+      "requestCount": 1,
       "ts": "2026-04-20T03:00:04.100Z",
       "model": "gpt-5.4",
       "project": "/tmp/project",
@@ -97,5 +99,53 @@
   ],
   "toolResultEvents": [],
   "userTurns": [],
-  "requestIdLookup": []
+  "requestIdLookup": [],
+  "inferences": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_compact",
+      "requestId": "turn_compact_1:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_compact_1",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 2000,
+        "output": 200,
+        "reasoning": 50,
+        "cacheRead": 1000,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "message",
+      "toolUses": [],
+      "startTs": "2026-04-20T03:00:01.000Z",
+      "endTs": "2026-04-20T03:00:01.000Z",
+      "startMs": 1776654001000,
+      "endMs": 1776654001000
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_compact",
+      "requestId": "turn_compact_2:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_compact_2",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 3000,
+        "output": 250,
+        "reasoning": 40,
+        "cacheRead": 500,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "message",
+      "toolUses": [],
+      "startTs": "2026-04-20T03:00:05.000Z",
+      "endTs": "2026-04-20T03:00:05.000Z",
+      "startMs": 1776654005000,
+      "endMs": 1776654005000
+    }
+  ]
 }

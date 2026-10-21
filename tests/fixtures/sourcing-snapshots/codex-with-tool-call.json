@@ -6,6 +6,7 @@
       "sessionId": "sess_tools_1",
       "messageId": "turn_tools_1",
       "turnIndex": 0,
+      "requestCount": 1,
       "ts": "2026-04-20T01:00:00.200Z",
       "model": "gpt-5.3-codex",
       "project": "/tmp/project",
@@ -124,5 +125,43 @@
   ],
   "toolResultEvents": [],
   "userTurns": [],
-  "requestIdLookup": []
+  "requestIdLookup": [],
+  "inferences": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_tools_1",
+      "requestId": "turn_tools_1:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_tools_1",
+      "model": "gpt-5.3-codex",
+      "usage": {
+        "input": 3000,
+        "output": 800,
+        "reasoning": 200,
+        "cacheRead": 2000,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "mixed",
+      "toolUses": [
+        {
+          "id": "call_exec_1",
+          "name": "exec_command"
+        },
+        {
+          "id": "call_patch_1",
+          "name": "apply_patch"
+        },
+        {
+          "id": "call_patch_2",
+          "name": "apply_patch"
+        }
+      ],
+      "startTs": "2026-04-20T01:00:01.000Z",
+      "endTs": "2026-04-20T01:00:04.000Z",
+      "startMs": 1776646801000,
+      "endMs": 1776646804000
+    }
+  ]
 }

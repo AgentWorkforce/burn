@@ -320,6 +320,11 @@ testing, review, exploration, docs, and refactoring.
 | `--bucket <duration>` | Emit a time series across `--since` instead of one comparison. |
 | `--no-archive` | Accepted for CLI parity; it is a no-op because the Rust SDK is SQLite-native. |
 
+Turn counts and cost per turn are per model request, in `burn compare` as in
+`burn summary` and `burn sessions`: a Codex turn is one task and counts each
+API call it made, every other harness's turn is one call. `--min-sample`
+counts turn records.
+
 `burn compare` reads the ledger as-is — it does not run an ingest sweep first.
 Run `burn ingest && burn compare claude-sonnet-4-6,claude-haiku-4-5 --since
 30d` (or keep `burn ingest --watch` running) when you need the freshest data.

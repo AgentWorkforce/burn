@@ -130,7 +130,7 @@ each published target.
 burn never parses harness logs. Every session comes from the
 [`ai-hist`](https://github.com/AgentWorkforce/relayhistory) crate's
 `SessionStore`. `crates/relayburn-sdk/Cargo.toml` depends on a
-semver-compatible ai-hist release (`ai-hist = "0.41"` floats across 0.41.x
+semver-compatible ai-hist release (`ai-hist = "0.49"` floats across 0.49.x
 patches); adopting a new minor is a deliberate bump that re-runs the parity
 suite.
 

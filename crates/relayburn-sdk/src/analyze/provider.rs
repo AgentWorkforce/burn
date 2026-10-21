@@ -258,7 +258,7 @@ pub(crate) fn aggregate_by_provider(
         let row = by_provider
             .entry(provider.clone())
             .or_insert_with(|| empty_provider_row(&provider));
-        row.turns += 1;
+        row.turns += t.request_count();
         row.usage.input += t.usage.input;
         row.usage.output += t.usage.output;
         row.usage.reasoning += t.usage.reasoning;
@@ -388,6 +388,7 @@ mod tests {
             session_path: None,
             message_id: "m-provider".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2026-04-20T00:00:00.000Z".into(),
             model: model.into(),
             project: None,
@@ -502,17 +503,13 @@ mod tests {
     #[test]
     fn aggregate_falls_through_to_collector_for_non_synthetic_turns() {
         let pricing = pricing_fixture();
-        let rows = aggregate_by_provider(
-            &[turn(
-                "gpt-5",
-                SourceKind::Codex,
-                one_million_in_one_million_out(),
-            )],
-            AggregateByProviderOptions::new(&pricing),
-        );
+        let mut codex = turn("gpt-5", SourceKind::Codex, one_million_in_one_million_out());
+        codex.request_count = Some(7);
+        let rows = aggregate_by_provider(&[codex], AggregateByProviderOptions::new(&pricing));
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].provider, "openai");
+        assert_eq!(rows[0].turns, 7, "a Codex task counts its requests");
         assert_eq!(rows[0].cost.total, 9.0);
     }
 
@@ -618,6 +615,7 @@ mod cost_lookup_via_reattribution_tests {
             session_path: None,
             message_id: "m".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2026-04-20T00:00:00.000Z".into(),
             model: model.into(),
             project: None,

@@ -88,6 +88,7 @@ fn turn(session_id: &str, message_id: &str, turn_index: u64) -> TurnRecord {
         session_path: None,
         message_id: message_id.into(),
         turn_index,
+        request_count: None,
         ts: "2026-04-20T00:00:00.000Z".into(),
         model: "claude-sonnet-4-6".into(),
         project: None,

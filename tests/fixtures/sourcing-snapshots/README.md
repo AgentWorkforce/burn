@@ -11,14 +11,25 @@ or a mapped session with no snapshot, fails the suite. Adopting a new `ai-hist`
 version re-runs that suite.
 
 The snapshots record what burn's original session readers derived from each
-fixture, except for two edited by hand where burn's records deliberately
-differ:
+fixture, except where burn's records deliberately differ:
 
 - `opencode-user-turn-blocks-ses_utb.json` — a failed OpenCode tool call sets
   `toolCalls[].isError = true`, as Claude and Codex turns already do.
 - `claude-incomplete-then-complete.json` — a Claude assistant turn still in
   progress (no `stop_reason` yet) is not emitted; it becomes a turn once its
   response settles.
+- Every `codex-*.json` — Codex accounts per model request (#504). A Codex
+  turn is still one task, and now records `requestCount`: how many of its
+  `token_count` snapshots moved the running total, one per API call. The
+  records gain `inferences`, one row per request (`requestId`
+  `{messageId}:request:{n:06}`, `requestIdSource: "row-synthetic"`) carrying
+  the spend between its snapshot and the one before, the tool calls written
+  since that snapshot, and the span from the request's first record to its
+  snapshot. A turn's inferences sum to its usage. Claude and OpenCode
+  records carry neither field. The other Codex fixtures make one request per
+  task, so these files differ from the readers' output only by those two
+  fields. `codex-many-requests-one-turn.json` (one task, four requests, and
+  a repeated snapshot that is not a request) has no reader counterpart.
 
 The `copilot-*` snapshots have no original reader behind them: they are burn's
 mapping of the Copilot CLI journals relayhistory captures, reviewed when the

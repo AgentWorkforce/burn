@@ -302,6 +302,60 @@ impl Ledger {
         reader::turn_message_ids(&self.conns.burn, source.wire_str(), session_id)
     }
 
+    /// Codex sessions holding turns that predate request accounting:
+    /// ingest re-accounts each from the store.
+    pub(crate) fn sessions_awaiting_request_accounting(&self) -> Result<Vec<String>> {
+        reader::sessions_awaiting_request_accounting(&self.conns.burn)
+    }
+
+    /// Whether Codex session `session_id` holds turns that predate request
+    /// accounting.
+    pub(crate) fn awaits_request_accounting(&self, session_id: &str) -> Result<bool> {
+        reader::awaits_request_accounting(&self.conns.burn, session_id)
+    }
+
+    /// Rewrite the held turns among `turns` that predate request
+    /// accounting, in place, and replace each rewritten turn's inferences
+    /// with its rows in `inferences`. Returns the turns rewritten; every
+    /// other turn is untouched.
+    pub(crate) fn rewrite_turns(
+        &mut self,
+        turns: &[crate::reader::TurnRecord],
+        inferences: &[crate::reader::Inference],
+    ) -> Result<usize> {
+        writer::rewrite_turns(&mut self.conns.burn, turns, inferences)
+    }
+
+    /// Sessions `session_id` descends from by fork or spawn, nearest
+    /// first: the parents its edges name, their parents, and so on.
+    pub(crate) fn ancestor_sessions(
+        &self,
+        source: crate::reader::SourceKind,
+        session_id: &str,
+    ) -> Result<Vec<String>> {
+        reader::ancestor_sessions(&self.conns.burn, source.wire_str(), session_id)
+    }
+
+    /// Codex sessions holding a turn a session they descend from holds
+    /// too: the forks and subagents that may hold a copy of it.
+    pub(crate) fn sessions_holding_ancestor_turns(&self) -> Result<Vec<String>> {
+        reader::sessions_holding_ancestor_turns(&self.conns.burn)
+    }
+
+    /// Drop one session's turns `message_ids` with every row derived from
+    /// them, content first: a failure between the two leaves the turns
+    /// that select them again.
+    pub(crate) fn retire_turns(
+        &mut self,
+        source: crate::reader::SourceKind,
+        session_id: &str,
+        message_ids: &HashSet<String>,
+    ) -> Result<()> {
+        let source = source.wire_str();
+        content::retire_messages(&mut self.conns.content, source, session_id, message_ids)?;
+        writer::retire_turns(&mut self.conns.burn, source, session_id, message_ids)
+    }
+
     // --- content + FTS5 ----------------------------------------------
 
     pub fn search_content(&self, opts: SearchOptions<'_>) -> Result<Vec<SearchHit>> {
@@ -636,5 +690,7 @@ impl LedgerLayout {
     }
 }
 
+#[cfg(test)]
+mod request_accounting_tests;
 #[cfg(test)]
 mod tests;

@@ -232,15 +232,17 @@ fn pricing_model_alias(model: &str) -> Option<&'static str> {
     }
 }
 
-/// Count turns whose cost is unknown because their model has no pricing
-/// entry, and collect the distinct model names, first-seen order. Used by summary surfaces to make pricing
-/// gaps visible instead of silently folding them in at $0.
+/// Count model requests ([`TurnRecord::request_count`], the unit of summary
+/// `turnCount`) whose cost is unknown because their model has no pricing
+/// entry, and collect the distinct model names, first-seen order. Used by
+/// summary surfaces to make pricing gaps visible instead of silently folding
+/// them in at $0.
 pub fn tally_unpriced(turns: &[TurnRecord], pricing: &PricingTable) -> (u64, Vec<String>) {
     let mut count = 0u64;
     let mut models: Vec<String> = Vec::new();
     for t in turns {
         if cost_for_turn(t, pricing).is_none() {
-            count += 1;
+            count += t.request_count();
             if !models.iter().any(|m| m == &t.model) {
                 models.push(t.model.clone());
             }
@@ -292,6 +294,7 @@ mod tests {
             session_path: None,
             message_id: "m".into(),
             turn_index: 0,
+            request_count: None,
             ts: "2026-04-20T00:00:00.000Z".into(),
             model: model.into(),
             project: None,
@@ -937,6 +940,26 @@ mod tests {
             true,
         );
         assert!(cost_for_turn(&some_tokens, &p).is_none());
+    }
+
+    #[test]
+    fn tally_unpriced_counts_every_model_request() {
+        let p = load_builtin_pricing();
+        let mut multi = turn(
+            "made-up-model-xyz",
+            usage_with(100, 50, 0),
+            SourceKind::Codex,
+        );
+        multi.request_count = Some(7);
+        let single = turn("made-up-model-xyz", usage_with(10, 5, 0), SourceKind::Codex);
+        let priced = turn(
+            "claude-sonnet-4-6",
+            usage_with(300, 150, 0),
+            SourceKind::ClaudeCode,
+        );
+        let (count, models) = tally_unpriced(&[multi, single, priced], &p);
+        assert_eq!(count, 8, "unpriced count shares turnCount's request unit");
+        assert_eq!(models, vec!["made-up-model-xyz"]);
     }
 
     #[test]

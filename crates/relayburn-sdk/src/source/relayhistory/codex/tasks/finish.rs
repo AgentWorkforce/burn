@@ -1,11 +1,12 @@
 //! A committed Codex task as burn's turn record.
 
 use super::super::snapshots::spend;
-use super::{Open, Tasks};
+use super::requests::RequestTurn;
+use super::{Finished, Open, Tasks};
 use crate::reader::classifier::{classify_activity, ClassificationInput};
 use crate::reader::resolve_project;
 use crate::reader::types::{
-    ContentRecord, Coverage, Fidelity, SourceKind, StopReason, TurnRecord, Usage, UsageGranularity,
+    Coverage, Fidelity, SourceKind, StopReason, TurnRecord, Usage, UsageGranularity,
 };
 use crate::reader::user_turn::join_nonempty;
 use crate::util::time::format_iso_ms;
@@ -16,7 +17,7 @@ impl<'a> Tasks<'a> {
         open: Open<'a>,
         message_id: String,
         stop_reason: Option<StopReason>,
-    ) -> (TurnRecord, Vec<ContentRecord>) {
+    ) -> Finished {
         let (usage, usage_known) = match (&open.counter_error, open.usage_observed) {
             (None, true) => match spend(&open.start, &self.cumulative) {
                 Ok(usage) => (usage, true),
@@ -37,6 +38,15 @@ impl<'a> Tasks<'a> {
             reasoning_tokens: usage.reasoning,
         });
         let files: Vec<String> = open.files.into_iter().collect();
+        let model = model.unwrap_or_default();
+        let request_count = open.requests.len() as u64;
+        let inferences = RequestTurn {
+            session_id: self.session_id,
+            message_id: &message_id,
+            model,
+            usage_known,
+        }
+        .inferences(open.requests);
         let mut content = open.content;
         for record in &mut content {
             record.message_id.clone_from(&message_id);
@@ -53,8 +63,9 @@ impl<'a> Tasks<'a> {
                 .map(|p| p.to_string_lossy().into_owned()),
             message_id,
             turn_index: 0,
+            request_count: Some(request_count),
             ts: format_iso_ms(open.ts_ms),
-            model: model.unwrap_or_default().to_string(),
+            model: model.to_string(),
             project: resolved.as_ref().map(|r| r.project.clone()),
             project_key: resolved.and_then(|r| r.project_key),
             usage,
@@ -81,7 +92,11 @@ impl<'a> Tasks<'a> {
             )),
             reasoning: open.context.and_then(|c| c.reasoning()),
         };
-        (turn, content)
+        Finished {
+            turn,
+            content,
+            inferences,
+        }
     }
 
     /// The task's model and cwd: its `turn_context`'s, else — only when no

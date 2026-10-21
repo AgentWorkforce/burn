@@ -146,8 +146,16 @@ pub(super) fn pull(
     let (mut changed, head) = super::watermark::changed_since(store, from)?;
     let waiting = super::watermark::pending(ledger);
     changed.extend(waiting.iter().cloned());
+    changed.extend(awaiting_request_accounting(ledger)?);
+    let copies_owed = !super::watermark::copies_checked(ledger);
+    if copies_owed {
+        changed.extend(holding_ancestor_turns(ledger)?);
+    }
     opts.progress("importing sessions");
     let imported = import_sessions(ledger, store, &opts.context(now_ms), changed)?;
+    if copies_owed && imported.complete {
+        super::watermark::mark_copies_checked(ledger)?;
+    }
     let pending: BTreeSet<SessionIdentity> = waiting
         .into_iter()
         .chain(imported.pending)
@@ -159,6 +167,29 @@ pub(super) fn pull(
         super::watermark::remember(ledger, store.db_path(), &pending)?;
     }
     Ok(imported.report)
+}
+
+/// Codex sessions whose turns predate request accounting. Each is read
+/// again until its turns are re-accounted: same turn identities and spend,
+/// with their request counts and one inference per request.
+fn awaiting_request_accounting(ledger: &Ledger) -> anyhow::Result<Vec<SessionIdentity>> {
+    Ok(ledger
+        .sessions_awaiting_request_accounting()?
+        .into_iter()
+        .map(|session_id| SessionIdentity::new(Source::Codex.as_str(), session_id))
+        .collect())
+}
+
+/// Codex forks and subagents holding a turn a session they descend from
+/// holds too, read once on a ledger written before copied history was
+/// retired: a dormant fork's rollout never changes again, so the change
+/// feed alone would not bring it back.
+fn holding_ancestor_turns(ledger: &Ledger) -> anyhow::Result<Vec<SessionIdentity>> {
+    Ok(ledger
+        .sessions_holding_ancestor_turns()?
+        .into_iter()
+        .map(|session_id| SessionIdentity::new(Source::Codex.as_str(), session_id))
+        .collect())
 }
 
 /// The hook fast path: index the one Claude transcript the hook names and

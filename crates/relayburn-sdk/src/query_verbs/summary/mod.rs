@@ -182,7 +182,7 @@ pub(crate) fn compute_summary(turns: &[TurnRecord], pricing: &PricingTable) -> S
     Summary {
         total_tokens,
         total_cost,
-        turn_count: turns.len() as u64,
+        turn_count: TurnRecord::total_requests(turns),
         context_efficiency: compute_context_efficiency_for_summary(turns),
         by_tool: by_tool_order
             .into_iter()
@@ -226,7 +226,7 @@ fn compute_summary_by_tag(
         });
         row.tokens += tokens;
         row.cost += cost;
-        row.turn_count += 1;
+        row.turn_count += e.turn.request_count();
     }
 
     let mut out: Vec<SummaryTagRow> = order
@@ -573,7 +573,7 @@ impl LedgerHandle {
                 SummaryBucket {
                     start: buckets.start_iso(i),
                     end: buckets.end_iso(i),
-                    turn_count: bturns.len() as u64,
+                    turn_count: TurnRecord::total_requests(&bturns),
                     unpriced_turns,
                     total_tokens,
                     total_cost,
@@ -673,7 +673,7 @@ impl LedgerHandle {
                     group_by,
                     tag_key,
                     tag_values,
-                    turn_count: turns.len() as u64,
+                    turn_count: TurnRecord::total_requests(&turns),
                     context_efficiency: compute_context_efficiency_for_summary(&turns),
                     rows,
                     total_cost,

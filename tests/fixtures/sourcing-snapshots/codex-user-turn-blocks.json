@@ -6,6 +6,7 @@
       "sessionId": "sess_codex_utb",
       "messageId": "turn_utb_1",
       "turnIndex": 0,
+      "requestCount": 1,
       "ts": "2026-04-21T00:00:00.200Z",
       "model": "gpt-5.4",
       "project": "/tmp/project",
@@ -50,6 +51,7 @@
       "sessionId": "sess_codex_utb",
       "messageId": "turn_utb_2",
       "turnIndex": 1,
+      "requestCount": 1,
       "ts": "2026-04-21T00:00:01.200Z",
       "model": "gpt-5.4",
       "project": "/tmp/project",
@@ -103,6 +105,7 @@
       "sessionId": "sess_codex_utb",
       "messageId": "turn_utb_3",
       "turnIndex": 2,
+      "requestCount": 1,
       "ts": "2026-04-21T00:00:02.200Z",
       "model": "gpt-5.4",
       "project": "/tmp/project",
@@ -416,5 +419,95 @@
       ]
     }
   ],
-  "requestIdLookup": []
+  "requestIdLookup": [],
+  "inferences": [
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "requestId": "turn_utb_1:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_utb_1",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 100,
+        "output": 50,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "tool-use",
+      "toolUses": [
+        {
+          "id": "call_b1",
+          "name": "exec_command"
+        }
+      ],
+      "startTs": "2026-04-21T00:00:00.400Z",
+      "endTs": "2026-04-21T00:00:00.900Z",
+      "startMs": 1776729600400,
+      "endMs": 1776729600900
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "requestId": "turn_utb_2:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_utb_2",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 55,
+        "output": 35,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "tool-use",
+      "toolUses": [
+        {
+          "id": "call_b2",
+          "name": "exec_command"
+        },
+        {
+          "id": "call_p1",
+          "name": "apply_patch"
+        }
+      ],
+      "startTs": "2026-04-21T00:00:01.400Z",
+      "endTs": "2026-04-21T00:00:01.900Z",
+      "startMs": 1776729601400,
+      "endMs": 1776729601900
+    },
+    {
+      "v": 1,
+      "source": "codex",
+      "sessionId": "sess_codex_utb",
+      "requestId": "turn_utb_3:request:000001",
+      "requestIdSource": "row-synthetic",
+      "turnId": "turn_utb_3",
+      "model": "gpt-5.4",
+      "usage": {
+        "input": 43,
+        "output": 25,
+        "reasoning": 0,
+        "cacheRead": 0,
+        "cacheCreate5m": 0,
+        "cacheCreate1h": 0
+      },
+      "kind": "tool-use",
+      "toolUses": [
+        {
+          "id": "call_b3",
+          "name": "exec_command"
+        }
+      ],
+      "startTs": "2026-04-21T00:00:02.400Z",
+      "endTs": "2026-04-21T00:00:02.900Z",
+      "startMs": 1776729602400,
+      "endMs": 1776729602900
+    }
+  ]
 }

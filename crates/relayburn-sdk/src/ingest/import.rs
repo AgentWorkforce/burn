@@ -17,7 +17,7 @@ use super::pending_stamps::{
 };
 use super::IngestReport;
 use crate::ledger::Ledger;
-use crate::reader::{build_inferences, ContentStoreMode, TurnRecord};
+use crate::reader::{ContentStoreMode, SourceKind, TurnRecord};
 use crate::source::SessionRecords;
 use crate::source::{
     delegated_children, records_from_evidence, records_query, records_with_children, source_kind,
@@ -158,6 +158,17 @@ fn import_one(
     if ctx.content_mode != ContentStoreMode::Full {
         records.content.clear();
     }
+    retire_copied_turns(
+        ledger,
+        kind,
+        &evidence.session.session_id,
+        &records,
+        &billing.billed,
+    )?;
+    // Only Codex rows await request accounting; the check is scoped to them.
+    if ledger.awaits_request_accounting(&session.session_id)? {
+        ledger.rewrite_turns(&records.turns, &records.inferences())?;
+    }
     let mut report = IngestReport {
         scanned_sessions: 1,
         ..IngestReport::empty()
@@ -169,6 +180,45 @@ fn import_one(
     }
     append_derived(ledger, &records)?;
     Ok((report, records.pending))
+}
+
+/// Retire the turns a session holds that it copied from one it descends
+/// from (a Codex fork or subagent replaying its parent's history): held by
+/// that ancestor under the same id, and absent from the session's records,
+/// which leave the copy out. A turn that is only absent stays billed.
+fn retire_copied_turns(
+    ledger: &mut Ledger,
+    kind: SourceKind,
+    session_id: &str,
+    records: &SessionRecords,
+    held: &HashSet<String>,
+) -> anyhow::Result<()> {
+    let rebuilt: HashSet<&str> = records
+        .turns
+        .iter()
+        .map(|t| t.message_id.as_str())
+        .collect();
+    let absent: Vec<&String> = held
+        .iter()
+        .filter(|id| !rebuilt.contains(id.as_str()))
+        .collect();
+    if absent.is_empty() {
+        return Ok(());
+    }
+    let mut copied = HashSet::new();
+    for ancestor in ledger.ancestor_sessions(kind, session_id)? {
+        let theirs = ledger.turn_message_ids(kind, &ancestor)?;
+        copied.extend(
+            absent
+                .iter()
+                .filter(|id| theirs.contains(id.as_str()))
+                .map(|id| id.to_string()),
+        );
+    }
+    if !copied.is_empty() {
+        ledger.retire_turns(kind, session_id, &copied)?;
+    }
+    Ok(())
 }
 
 /// Append the turns the ledger does not hold yet. A session is rebuilt
@@ -238,16 +288,14 @@ fn written_at_ms(evidence: &SessionEvidence) -> Option<i64> {
     modified.or(evidence.session.last_activity_ms)
 }
 
-/// Append every record bucket beside the turns, plus the per-request
-/// inferences rebuilt from the same turns. Each append skips what the
-/// ledger already holds.
+/// Append every record bucket beside the turns, plus one inference per
+/// model request of them. Each append skips what the ledger already holds.
 fn append_derived(ledger: &mut Ledger, records: &SessionRecords) -> anyhow::Result<()> {
     ledger.append_content(&records.content)?;
     ledger.append_compactions(&records.compactions)?;
     ledger.append_relationships(&records.relationships)?;
     ledger.append_tool_result_events(&records.tool_result_events)?;
     ledger.append_user_turns(&records.user_turns)?;
-    let inferences = build_inferences(&records.turns, &records.request_id_lookup);
-    ledger.append_inferences(&inferences)?;
+    ledger.append_inferences(&records.inferences())?;
     Ok(())
 }

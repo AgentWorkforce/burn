@@ -862,3 +862,6 @@ fn an_opencode_launcher_stamp_lands_on_the_opencode_session_it_spawned() {
     let mut ledger = sandbox.ledger();
     assert_eq!(sandbox.ingest(&mut ledger).applied_pending_stamps, 1);
 }
+
+mod fork_history;
+mod request_accounting;

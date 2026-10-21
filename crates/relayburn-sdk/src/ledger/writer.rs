@@ -79,8 +79,9 @@ pub(crate) fn append_turns(
         let mut insert = tx.prepare(
             "INSERT OR IGNORE INTO turns
                  (source, session_id, message_id, ts, project, project_key,
-                  record_json, content_fingerprint, stop_reason, subagent_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  record_json, content_fingerprint, stop_reason, subagent_id,
+                  request_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         for t in turns {
             let fingerprint = turn_content_fingerprint(t);
@@ -113,6 +114,7 @@ pub(crate) fn append_turns(
                 fingerprint,
                 stop_reason_str,
                 subagent_id,
+                t.request_count.map(|n| n as i64),
             ])?;
             if changed > 0 {
                 appended += 1;
@@ -124,6 +126,117 @@ pub(crate) fn append_turns(
     }
     tx.commit()?;
     Ok(appended)
+}
+
+/// Rewrite the held turns among `turns` that predate request accounting (a
+/// NULL `request_count`) in place, each keeping its key, and replace the
+/// inferences of every rewritten turn with `inferences`' rows for it, in
+/// one transaction. Turns the ledger does not hold are left to
+/// [`append_turns`]. Returns the turns rewritten.
+pub(crate) fn rewrite_turns(
+    conn: &mut Connection,
+    turns: &[TurnRecord],
+    inferences: &[Inference],
+) -> Result<usize> {
+    if turns.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut rewritten = std::collections::HashSet::new();
+    {
+        let mut update = tx.prepare(
+            "UPDATE turns SET ts = ?, project = ?, project_key = ?, record_json = ?,
+                 content_fingerprint = ?, stop_reason = ?, subagent_id = ?, request_count = ?
+             WHERE source = ? AND session_id = ? AND message_id = ?
+               AND request_count IS NULL",
+        )?;
+        let mut clear = tx.prepare(
+            "DELETE FROM inferences WHERE source = ? AND session_id = ? AND turn_id = ?",
+        )?;
+        for t in turns {
+            let changed = update.execute(params![
+                t.ts,
+                t.project,
+                t.project_key,
+                serde_json::to_string(t)?,
+                turn_content_fingerprint(t),
+                t.stop_reason.as_ref().map(|s| s.wire_str()),
+                t.subagent.as_ref().and_then(|s| s.agent_id.as_deref()),
+                t.request_count.map(|n| n as i64),
+                t.source.wire_str(),
+                t.session_id,
+                t.message_id,
+            ])?;
+            if changed > 0 {
+                clear.execute(params![t.source.wire_str(), t.session_id, t.message_id])?;
+                rewritten.insert((t.session_id.as_str(), t.message_id.as_str()));
+            }
+        }
+    }
+    let replacements: Vec<Inference> = inferences
+        .iter()
+        .filter(|i| rewritten.contains(&(i.session_id.as_str(), i.turn_id.as_str())))
+        .cloned()
+        .collect();
+    upsert_inferences(&tx, &replacements)?;
+    if !rewritten.is_empty() {
+        touch_last_write(&tx, WriteOrigin::Live)?;
+    }
+    tx.commit()?;
+    Ok(rewritten.len())
+}
+
+/// Drop the turns `message_ids` of one session with every row derived
+/// from them, in one transaction: their inferences and tool results, the
+/// user turns that led into them, the compactions that followed them, and
+/// the subagent edges their tool calls filed under the sessions they
+/// spawned. A retirement that drops a row records a write.
+pub(crate) fn retire_turns(
+    conn: &mut Connection,
+    source: &str,
+    session_id: &str,
+    message_ids: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut retired = 0;
+    {
+        let mut record = tx.prepare(
+            "SELECT record_json FROM turns WHERE source = ? AND session_id = ? AND message_id = ?",
+        )?;
+        let mut spawned = tx.prepare(
+            "DELETE FROM relationships
+             WHERE source = ? AND related_session_id = ? AND relationship_type = 'subagent'
+               AND json_extract(record_json, '$.parentToolUseId') = ?",
+        )?;
+        for id in message_ids {
+            let json: Option<String> = record
+                .query_row(params![source, session_id, id], |r| r.get(0))
+                .optional()?;
+            if let Some(json) = json {
+                let turn: TurnRecord = serde_json::from_str(&json)?;
+                for call in &turn.tool_calls {
+                    spawned.execute(params![source, session_id, call.id])?;
+                }
+            }
+            for sql in [
+                "DELETE FROM turns WHERE source = ?1 AND session_id = ?2 AND message_id = ?3",
+                "DELETE FROM inferences WHERE source = ?1 AND session_id = ?2 AND turn_id = ?3",
+                "DELETE FROM tool_result_events WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.messageId') = ?3",
+                "DELETE FROM user_turns WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.followingMessageId') = ?3",
+                "DELETE FROM compactions WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.precedingMessageId') = ?3",
+            ] {
+                retired += tx.execute(sql, params![source, session_id, id])?;
+            }
+        }
+    }
+    if retired > 0 {
+        touch_last_write(&tx, WriteOrigin::Live)?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub(crate) fn append_compactions(
@@ -259,52 +372,53 @@ pub(crate) fn append_inferences(
         return Ok(0);
     }
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let mut appended = 0usize;
-    {
-        let mut insert = tx.prepare(
-            "INSERT INTO inferences
-                 (source, session_id, request_id, request_id_source, turn_id,
-                  model, kind, start_ts, end_ts, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (source, session_id, request_id) DO UPDATE SET
-                 request_id_source = excluded.request_id_source,
-                 turn_id = excluded.turn_id,
-                 model = excluded.model,
-                 kind = excluded.kind,
-                 start_ts = excluded.start_ts,
-                 end_ts = excluded.end_ts,
-                 record_json = excluded.record_json
-             WHERE inferences.request_id_source IS NOT excluded.request_id_source
-                OR inferences.turn_id IS NOT excluded.turn_id
-                OR inferences.model IS NOT excluded.model
-                OR inferences.kind IS NOT excluded.kind
-                OR inferences.start_ts IS NOT excluded.start_ts
-                OR inferences.end_ts IS NOT excluded.end_ts
-                OR inferences.record_json IS NOT excluded.record_json",
-        )?;
-        for r in records {
-            let json = serde_json::to_string(r)?;
-            let changed = insert.execute(params![
-                r.source.wire_str(),
-                r.session_id,
-                r.request_id,
-                r.request_id_source.wire_str(),
-                r.turn_id,
-                r.model,
-                r.kind.wire_str(),
-                r.start_ts,
-                r.end_ts,
-                json,
-            ])?;
-            if changed > 0 {
-                appended += 1;
-            }
-        }
-    }
+    let appended = upsert_inferences(&tx, records)?;
     if appended > 0 {
         touch_last_write(&tx, origin)?;
     }
     tx.commit()?;
+    Ok(appended)
+}
+
+/// The upsert behind [`append_inferences`], inside `tx`.
+fn upsert_inferences(tx: &rusqlite::Transaction<'_>, records: &[Inference]) -> Result<usize> {
+    let mut insert = tx.prepare(
+        "INSERT INTO inferences
+             (source, session_id, request_id, request_id_source, turn_id,
+              model, kind, start_ts, end_ts, record_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (source, session_id, request_id) DO UPDATE SET
+             request_id_source = excluded.request_id_source,
+             turn_id = excluded.turn_id,
+             model = excluded.model,
+             kind = excluded.kind,
+             start_ts = excluded.start_ts,
+             end_ts = excluded.end_ts,
+             record_json = excluded.record_json
+         WHERE inferences.request_id_source IS NOT excluded.request_id_source
+            OR inferences.turn_id IS NOT excluded.turn_id
+            OR inferences.model IS NOT excluded.model
+            OR inferences.kind IS NOT excluded.kind
+            OR inferences.start_ts IS NOT excluded.start_ts
+            OR inferences.end_ts IS NOT excluded.end_ts
+            OR inferences.record_json IS NOT excluded.record_json",
+    )?;
+    let mut appended = 0usize;
+    for r in records {
+        let json = serde_json::to_string(r)?;
+        appended += insert.execute(params![
+            r.source.wire_str(),
+            r.session_id,
+            r.request_id,
+            r.request_id_source.wire_str(),
+            r.turn_id,
+            r.model,
+            r.kind.wire_str(),
+            r.start_ts,
+            r.end_ts,
+            json,
+        ])?;
+    }
     Ok(appended)
 }
 

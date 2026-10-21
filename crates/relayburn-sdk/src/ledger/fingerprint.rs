@@ -135,6 +135,7 @@ mod tests {
             session_path: None,
             message_id: message_id.into(),
             turn_index: 0,
+            request_count: None,
             ts: ts.into(),
             model: "claude-sonnet-4-6".into(),
             project: None,

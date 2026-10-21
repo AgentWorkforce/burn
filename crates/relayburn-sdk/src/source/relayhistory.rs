@@ -165,6 +165,7 @@ impl<'a> Context<'a> {
                     .map(|p| p.to_string_lossy().into_owned()),
                 message_id: unit.id.clone(),
                 turn_index: index as u64,
+                request_count: None,
                 ts: format_iso_ms(first.ts_ms),
                 model: unit.request.model.clone().unwrap_or_default(),
                 project: None,
