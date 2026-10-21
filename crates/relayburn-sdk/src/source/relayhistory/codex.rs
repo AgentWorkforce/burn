@@ -50,3 +50,54 @@ fn copied_history(ev: &SessionEvidence) -> bool {
         .iter()
         .any(|m| m.kind == "fork_replay_boundary" && m.subkind.as_deref() == Some("copied_history"))
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// A Codex session carrying one marker per `(kind, subkind)`.
+    fn with_markers(markers: &[(&str, &str)]) -> SessionEvidence {
+        let markers: Vec<_> = markers
+            .iter()
+            .enumerate()
+            .map(|(line, (kind, subkind))| {
+                json!({
+                    "marker_uid": format!("{line}:marker"), "ts_ms": line, "message_id": null,
+                    "parent_id": null, "turn_id": null, "kind": kind, "subkind": subkind,
+                    "text": null, "payload": null, "usage_snapshot": null
+                })
+            })
+            .collect();
+        serde_json::from_value(json!({
+            "session": {
+                "source": "codex", "session_id": "sess", "cwd": "/tmp/project",
+                "git_branch": null, "first_activity_ms": 0, "last_activity_ms": 0,
+                "first_prompt": null, "last_assistant_text": null, "models": [],
+                "originator": null, "agent_version": null, "repo_url": null,
+                "initial_commit": null, "workspace_roots": [], "project_key": null,
+                "project_key_method": null, "raw_path": null, "source_stamp": null,
+                "discovery_state": "full", "locations": ["local"]
+            },
+            "prompts": [], "messages": [], "tool_calls": [], "tool_results": [],
+            "file_edits": [], "markers": markers, "relationships": [], "requests": [],
+            "usage": null, "user_turns": [], "coverage": [], "loaded": [],
+            "include_text": true, "diagnostics": []
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_a_copied_history_boundary_marks_a_copy() {
+        let copied = [("fork_replay_boundary", "copied_history")];
+        assert!(copied_history(&with_markers(&copied)));
+        for markers in [
+            vec![],
+            vec![("fork_replay_boundary", "session_meta")],
+            vec![("compaction_boundary", "copied_history")],
+        ] {
+            assert!(!copied_history(&with_markers(&markers)), "{markers:?}");
+        }
+    }
+}

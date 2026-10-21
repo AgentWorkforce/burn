@@ -145,16 +145,16 @@ fn inference_turns(ledger: &Ledger, session_id: &str) -> Vec<String> {
     ids
 }
 
-fn content_messages(ledger: &Ledger, session_id: &str) -> Vec<String> {
-    let mut ids: Vec<String> = ledger
-        .query_content(&Query::for_session(session_id))
+/// The message ids of the content rows filed under `session_id`.
+fn content_messages(sandbox: &Sandbox, session_id: &str) -> Vec<String> {
+    let content = Connection::open(LedgerLayout::under(sandbox.ledger_home()).content).unwrap();
+    let mut stmt = content
+        .prepare("SELECT DISTINCT message_id FROM content WHERE session_id = ? ORDER BY 1")
+        .unwrap();
+    stmt.query_map([session_id], |r| r.get(0))
         .unwrap()
-        .into_iter()
-        .map(|c| c.message_id)
-        .collect();
-    ids.sort();
-    ids.dedup();
-    ids
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
 }
 
 #[test]
@@ -174,6 +174,9 @@ fn a_fork_billed_for_its_copied_parent_history_is_billed_for_its_own_turns_only(
     file_edge(&sandbox, CHILD, "subagent", "2026-04-20T00:00:30.000Z");
     assert_eq!(turn_ids(&ledger, CHILD).len(), 3);
     assert_eq!(turn_tokens(&ledger, CHILD), 600 + 2_500);
+    assert!(content_messages(&sandbox, CHILD)
+        .iter()
+        .any(|id| parent_turns.contains(id)));
 
     let next = "019da831-0000-7000-8000-0000000000c2";
     append_task(&sandbox, CHILD, next, 3_000, 900);
@@ -185,10 +188,9 @@ fn a_fork_billed_for_its_copied_parent_history_is_billed_for_its_own_turns_only(
     assert_eq!(sorted_turn_ids(&ledger, CHILD), own);
     assert_eq!(turn_tokens(&ledger, CHILD), 600 + 800);
     assert_eq!(inference_turns(&ledger, CHILD), own);
-    assert!(content_messages(&ledger, CHILD)
-        .iter()
-        .all(|id| own.contains(id)));
-    assert!(!content_messages(&ledger, CHILD).is_empty());
+    let content = content_messages(&sandbox, CHILD);
+    assert!(!content.is_empty());
+    assert!(content.iter().all(|id| own.contains(id)), "{content:?}");
     let mut kept_edges = own_edges.clone();
     kept_edges.push(("subagent".into(), "2026-04-20T00:00:30.000Z".into()));
     kept_edges.sort();
