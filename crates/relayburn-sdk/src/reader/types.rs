@@ -7,8 +7,7 @@
 //! continues to mean "absent" rather than "explicit null" — the ledger is
 //! append-only JSONL and we want byte-identical output to the TS writer.
 
-use std::collections::BTreeMap;
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +24,7 @@ pub enum SourceKind {
     ClaudeCode,
     Codex,
     Opencode,
+    CopilotCli,
     AnthropicApi,
     OpenaiApi,
     GeminiApi,
@@ -37,6 +37,7 @@ impl SourceKind {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Opencode => "opencode",
+            Self::CopilotCli => "copilot-cli",
             Self::AnthropicApi => "anthropic-api",
             Self::OpenaiApi => "openai-api",
             Self::GeminiApi => "gemini-api",
@@ -56,6 +57,7 @@ pub enum RelationshipSourceKind {
     ClaudeCode,
     Codex,
     Opencode,
+    CopilotCli,
     AnthropicApi,
     OpenaiApi,
     GeminiApi,
@@ -71,6 +73,7 @@ impl RelationshipSourceKind {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Opencode => "opencode",
+            Self::CopilotCli => "copilot-cli",
             Self::AnthropicApi => "anthropic-api",
             Self::OpenaiApi => "openai-api",
             Self::GeminiApi => "gemini-api",

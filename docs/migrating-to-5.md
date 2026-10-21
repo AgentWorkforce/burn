@@ -16,6 +16,9 @@ few numbers that were wrong before.
 - **OpenCode's SQLite store is read.** Current OpenCode releases keep sessions
   in `~/.local/share/opencode/opencode.db`; burn reads it (and the older
   `storage/` JSON tree).
+- **GitHub Copilot CLI sessions are read.** Copilot's session journals
+  (`~/.copilot/session-state/<id>/events.jsonl`) are ingested retroactively as
+  `copilot-cli` turns, with no exporter to enable.
 - **Archived Codex threads are read.** Rollouts Codex moved to
   `~/.codex/archived_sessions/` are ingested like live ones.
 - **Codex usage comes from each response's raw token snapshot**, and a Codex
@@ -99,7 +102,7 @@ names.
 | Variable | In burn 5 |
 |---|---|
 | `AI_HIST_DB` | The relayhistory store burn reads. |
-| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` | Harness store locations, resolved by relayhistory. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`, `COPILOT_HOME` | Harness store locations, resolved by relayhistory. |
 | `BURN_CLAUDE_PROJECTS_DIR` | Removed. Point `CLAUDE_CONFIG_DIR` (or `HOME`) at the Claude install instead. |
 | `RELAYBURN_HOME`, `RELAYBURN_*` ledger settings | Unchanged. |
 

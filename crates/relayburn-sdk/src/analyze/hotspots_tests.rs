@@ -1598,3 +1598,31 @@ fn persistence_rides_only_non_empty_results_the_cache_read_covers() {
         .collect();
     assert_eq!(rides, [(0, 0.0), (1, 100.0), (0, 0.0)]);
 }
+
+/// A harness's own name for a file tool (Copilot's `view`, `read`, `edit`,
+/// `create`) rolls up by file like the canonical one; a non-file tool does
+/// not.
+#[test]
+fn file_rollup_reads_every_harness_name_for_a_file_tool() {
+    let named = |tool: &str, path: &str| ToolAttribution {
+        tool_name: tool.into(),
+        ..bash_attribution(path, tool, 1.0, 0.0, 0.0, 0)
+    };
+    let attributions = [
+        named("view", "a.rs"),
+        named("read", "a.rs"),
+        named("edit", "b.rs"),
+        named("create", "c.rs"),
+        named("Read", "c.rs"),
+        named("bash", "ls"),
+    ];
+    let mut files: Vec<(String, u64)> = aggregate_by_file(&attributions)
+        .into_iter()
+        .map(|f| (f.path, f.tool_call_count))
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [("a.rs".into(), 2), ("b.rs".into(), 1), ("c.rs".into(), 2)]
+    );
+}

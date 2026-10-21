@@ -9,13 +9,14 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 ### Breaking
 
 - `burn ingest` syncs the relayhistory store (`$AI_HIST_DB`, else `~/.local/share/ai-hist/ai-history.db`, created on first use; the `ai-hist` CLI is not required) and appends the sessions its change feed reports since the ledger's watermark. The first run on a 4.x ledger rebuilds every session once (minutes on a large history); matching turn identities keep it from duplicating any. Later runs with nothing new finish in well under a second.
-- `BURN_CLAUDE_PROJECTS_DIR` is removed; harness locations follow relayhistory (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`).
+- `BURN_CLAUDE_PROJECTS_DIR` is removed; harness locations follow relayhistory (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`, `COPILOT_HOME`).
 - `relayburn-sdk`: `IngestRoots` / `IngestOptions.roots` are replaced by `IngestOptions.store: HistoryStoreOptions`; `start_watch_loop` and its option/sink types by `watch_ingest` + `WatchIngestOptions`; `RawIngestOptions` is `IngestOptions`; `ingest_claude_session`, `ingest_codex_sessions`, `ingest_opencode_sessions`, `default_session_roots`, `count_subagents_under`, `discover_subagents` and `pair_subagents_to_main` are removed. `SubagentTranscript` drops `records`.
 - `@relayburn/sdk` `ingest()` takes `{ ledgerHome, storeDbPath, home }`; the ignored `sessionId` / `harness` fields are removed.
 - `burn state rebuild` clears the ingest watermark with the derived rows, so the next ingest rebuilds every session from the store.
 
 ### Added
 
+- GitHub Copilot CLI sessions (`~/.copilot/session-state/`, or `$COPILOT_HOME`) are ingested and billed, retroactively and with no setup.
 - Claude Code subagent spend is billed: every turn of a subagent transcript, nested subagents included, is a turn of the session that spawned it. Ledger totals for sessions that delegated work go up by exactly that spend.
 - OpenCode sessions in the SQLite store (`opencode.db`, current OpenCode releases) are ingested, as well as the `storage/` JSON tree.
 - A Codex subagent thread is ingested as a session of its own.

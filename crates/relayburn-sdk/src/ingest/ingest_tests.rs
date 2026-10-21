@@ -804,5 +804,73 @@ fn ingest_reports_each_phase_to_its_progress_sink() {
     }
 }
 
+#[test]
+fn a_copilot_session_bills_its_calls_and_its_shutdown_totals_once() {
+    let sandbox = Sandbox::new();
+    let sid = "5f0c2a8e-1d4b-4c6e-9a7f-3b2d1e0c9a81";
+    sandbox.place(
+        "copilot/cli-usage.jsonl",
+        &format!(".copilot/session-state/{sid}/events.jsonl"),
+    );
+    // No launcher stamps a Copilot session, so another harness's stamp for
+    // the same project stays pending.
+    write_pending_stamp(WriteOptions {
+        harness: PendingStampHarness::Opencode,
+        ledger_home: Some(sandbox.ledger_home()),
+        cwd: "/tmp/project".into(),
+        enrichment: Enrichment::new(),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut ledger = sandbox.ledger();
+    let report = sandbox.ingest(&mut ledger);
+    assert_eq!(report.ingested_sessions, 1);
+    assert_eq!(report.applied_pending_stamps, 0);
+    let turns = ledger.query_turns(&Query::for_session(sid)).unwrap();
+    assert_eq!(turns.len(), 11);
+    assert!(turns
+        .iter()
+        .all(|t| t.turn.source == crate::reader::SourceKind::CopilotCli));
+    let sum =
+        |f: fn(&crate::reader::Usage) -> u64| turns.iter().map(|t| f(&t.turn.usage)).sum::<u64>();
+    // The final session.shutdown modelMetrics, summed over models.
+    assert_eq!(
+        sum(|u| u.input + u.cache_read + u.cache_create_5m),
+        30_000 + 25_000 + 4_000
+    );
+    assert_eq!(sum(|u| u.output), 82 + 65 + 11);
+    // A shutdown's running totals are no model call.
+    let calls: Vec<_> = turns.iter().map(|t| t.turn.request_count).collect();
+    assert_eq!(
+        calls.iter().filter(|c| **c == Some(0)).count(),
+        4,
+        "{calls:?}"
+    );
+    assert_eq!(calls.iter().filter(|c| c.is_none()).count(), 7, "{calls:?}");
+    assert_eq!(sandbox.ingest(&mut ledger).appended_turns, 0);
+}
+
+#[test]
+fn an_opencode_launcher_stamp_lands_on_the_opencode_session_it_spawned() {
+    let sandbox = Sandbox::new();
+    let mut enrichment = Enrichment::new();
+    enrichment.insert("persona".to_string(), "code-reviewer".to_string());
+    write_pending_stamp(WriteOptions {
+        harness: PendingStampHarness::Opencode,
+        ledger_home: Some(sandbox.ledger_home()),
+        cwd: "/tmp/project".into(),
+        enrichment,
+        ..Default::default()
+    })
+    .unwrap();
+    let storage = sandbox.place("opencode/simple/storage", ".local/share/opencode/storage");
+    // Written after the spawn, as a session the launcher started is.
+    let session = storage.join("session/global/ses_simple.json");
+    fs::write(&session, fs::read(&session).unwrap()).unwrap();
+    let mut ledger = sandbox.ledger();
+    assert_eq!(sandbox.ingest(&mut ledger).applied_pending_stamps, 1);
+}
+
+mod copilot;
 mod fork_history;
 mod request_accounting;

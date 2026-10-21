@@ -10,7 +10,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-use crate::reader::{SourceKind, TurnRecord, Usage};
+use crate::reader::{SourceKind, TurnRecord, Usage, UsageGranularity};
 
 use crate::analyze::pricing::{ModelCost, ModelCostTier, PricingTable, ReasoningMode};
 use crate::analyze::provider_reattribution::{resolve_provider, strip_provider_prefix};
@@ -39,6 +39,10 @@ pub struct CostBreakdown {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CostForUsageOptions {
     pub reasoning_mode: Option<ReasoningMode>,
+    /// The usage sums requests whose sizes are unknown (a per-session
+    /// aggregate), so no request is known to cross a context tier: the
+    /// model's base rates apply.
+    pub base_tier: bool,
 }
 
 /// Tokens-per-million divisor shared by every per-token cost calc in the
@@ -70,7 +74,12 @@ pub(crate) fn cost_for_usage(
     options: CostForUsageOptions,
 ) -> Option<CostBreakdown> {
     let rate = lookup_model_rate(model, pricing)?;
-    let effective = effective_model_rate(usage, rate);
+    let tier = if options.base_tier {
+        None
+    } else {
+        context_tier_for_usage(usage, rate)
+    };
+    let effective = rate_at_tier(rate, tier);
     let mode = options.reasoning_mode.unwrap_or(rate.reasoning_mode);
     let input = (usage.input as f64 / PER_MILLION) * effective.input;
     let output = (usage.output as f64 / PER_MILLION) * effective.output;
@@ -105,6 +114,10 @@ pub fn cost_for_turn(turn: &TurnRecord, pricing: &PricingTable) -> Option<CostBr
     }
     let opts = CostForUsageOptions {
         reasoning_mode: reasoning_mode_for_source(turn.source),
+        base_tier: turn
+            .fidelity
+            .as_ref()
+            .is_some_and(|f| f.granularity == UsageGranularity::PerSessionAggregate),
     };
     cost_for_usage(&turn.usage, &turn.model, pricing, opts)
 }
@@ -151,7 +164,10 @@ fn context_tier_for_usage<'a>(usage: &Usage, rate: &'a ModelCost) -> Option<&'a 
 }
 
 pub(crate) fn effective_model_rate(usage: &Usage, rate: &ModelCost) -> EffectiveModelRate {
-    let tier = context_tier_for_usage(usage, rate);
+    rate_at_tier(rate, context_tier_for_usage(usage, rate))
+}
+
+fn rate_at_tier(rate: &ModelCost, tier: Option<&ModelCostTier>) -> EffectiveModelRate {
     EffectiveModelRate {
         input: tier.map_or(rate.input, |tier| tier.input),
         output: tier.map_or(rate.output, |tier| tier.output),
@@ -184,13 +200,20 @@ fn reasoning_cost(
 /// Per-source reasoning-billing semantics override. Returning `None` means
 /// "defer to the model's `reasoning_mode`".
 ///
-/// - Codex: `output_tokens` already includes reasoning; never bill it on top.
+/// - Codex and Copilot CLI: `output_tokens` / `outputTokens` already include
+///   reasoning; never bill it on top.
 /// - Everyone else: defer to the model.
 pub(crate) fn reasoning_mode_for_source(source: SourceKind) -> Option<ReasoningMode> {
     match source {
-        SourceKind::Codex => Some(ReasoningMode::IncludedInOutput),
+        SourceKind::Codex | SourceKind::CopilotCli => Some(ReasoningMode::IncludedInOutput),
         _ => None,
     }
+}
+
+/// Whether `source`'s reasoning tokens are already counted inside its
+/// output tokens.
+pub(crate) fn reasoning_in_output(source: SourceKind) -> bool {
+    reasoning_mode_for_source(source) == Some(ReasoningMode::IncludedInOutput)
 }
 
 /// Shared lookup: direct match → synthetic reattribution → generic
@@ -651,6 +674,7 @@ mod tests {
             &p,
             CostForUsageOptions {
                 reasoning_mode: Some(ReasoningMode::IncludedInOutput),
+                ..Default::default()
             },
         )
         .expect("skipped priced");
@@ -890,6 +914,28 @@ mod tests {
             class: FidelityClass::UsageOnly,
         });
         t
+    }
+
+    /// A per-session aggregate sums requests whose sizes are unknown: three
+    /// 100k-token gpt-5.4 calls total 300k, past the 272k tier, yet none of
+    /// them crossed it, so the aggregate prices at the base rates.
+    #[test]
+    fn a_session_aggregate_prices_at_the_base_tier() {
+        let p = load_builtin_pricing();
+        let usage = Usage {
+            input: 300_000,
+            ..Usage::default()
+        };
+        let mut aggregate = turn("gpt-5.4", usage.clone(), SourceKind::CopilotCli);
+        aggregate.fidelity = Some(Fidelity::new(
+            UsageGranularity::PerSessionAggregate,
+            Coverage::EMPTY,
+        ));
+        let per_turn = with_coverage(turn("gpt-5.4", usage, SourceKind::CopilotCli), true, true);
+        let base = cost_for_turn(&aggregate, &p).expect("priced").input;
+        let tiered = cost_for_turn(&per_turn, &p).expect("priced").input;
+        assert!((base - 0.75).abs() < 1e-9, "{base}");
+        assert!((tiered - 1.50).abs() < 1e-9, "{tiered}");
     }
 
     #[test]

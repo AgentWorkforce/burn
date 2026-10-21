@@ -1,7 +1,7 @@
 ![relayburn](./burn-readme-banner.png)
 
 Understand how you're spending tokens in agent CLIs. Burn reads Claude Code,
-Codex, and OpenCode sessions through
+Codex, OpenCode, and GitHub Copilot CLI sessions through
 [relayhistory](https://github.com/AgentWorkforce/relayhistory) into a local
 ledger, then shows cost by model, provider, tool, file, workflow, agent,
 session, and overhead file. Subagent spend is billed to the session that
@@ -341,9 +341,21 @@ Run `burn summary --by-provider` to discover model IDs present in your ledger.
 
 ## `burn ingest`
 
-`burn ingest` syncs the relayhistory store (Claude Code, Codex, and OpenCode
-sessions) and appends every session it changed since the ledger's last ingest.
-Reporting commands that refresh the ledger run the same step.
+`burn ingest` syncs the relayhistory store (Claude Code, Codex, OpenCode, and
+GitHub Copilot CLI sessions) and appends every session it changed since the
+ledger's last ingest. Reporting commands that refresh the ledger run the same
+step.
+
+GitHub Copilot CLI needs no setup: its session journals under
+`~/.copilot/session-state/` (or `$COPILOT_HOME`) are read retroactively. Copilot
+records output tokens per model call but input and cache tokens only as
+per-model running totals when a session shuts down, so each `copilot-cli` turn
+carries its output tokens and each shutdown adds one `per-session-aggregate`
+turn per model with the input, cache, and remaining output it accounts for. A
+model call that names no model bills nothing itself ($0); the shutdown's
+per-model aggregates carry its output, so every token is billed once under a
+known model. A session that has not shut down yet shows the output tokens of
+the model calls that name their model.
 
 | Option | What it does |
 |---|---|
@@ -665,7 +677,7 @@ session.
 
 ### What does `burn ingest` do?
 
-Each harness (Claude Code, Codex, OpenCode) writes its own session transcripts
+Each harness (Claude Code, Codex, OpenCode, GitHub Copilot CLI) writes its own session transcripts
 to disk in its own format. relayhistory reads those into one session store;
 `burn ingest` syncs that store, derives burn's turns, costs, and activity from
 what changed, and writes them into burn's local SQLite ledger so the query
