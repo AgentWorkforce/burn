@@ -118,10 +118,15 @@ fn copilot_message(obj: &Map<String, Value>) -> (Usage, Coverage) {
 pub(crate) fn copilot_totals(usage: &Value) -> Option<Usage> {
     let counter = |key: &str| usage.get(key)?.as_u64();
     let (read, write) = (counter("cacheReadTokens")?, counter("cacheWriteTokens")?);
+    // Reasoning is optional, but one that is reported must be a counter.
+    let reasoning = match usage.get("reasoningTokens") {
+        None => 0,
+        Some(value) => value.as_u64()?,
+    };
     Some(Usage {
-        input: counter("inputTokens")?.checked_sub(read + write)?,
+        input: counter("inputTokens")?.checked_sub(read.checked_add(write)?)?,
         output: counter("outputTokens")?,
-        reasoning: counter("reasoningTokens").unwrap_or(0),
+        reasoning,
         cache_read: read,
         cache_create_5m: write,
         cache_create_1h: 0,
@@ -186,5 +191,26 @@ mod tests {
             .is_none()
         );
         assert!(copilot_totals(&serde_json::json!({"inputTokens": 1})).is_none());
+    }
+
+    /// Reasoning may be absent (zero), but a reported one that is no
+    /// counter, or cache counters whose sum overflows, reject the totals.
+    #[test]
+    fn copilot_totals_reject_malformed_counters() {
+        let totals = |extra: serde_json::Value| {
+            let mut usage = serde_json::json!({"inputTokens": 10, "outputTokens": 1,
+                "cacheReadTokens": 2, "cacheWriteTokens": 3});
+            usage
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            copilot_totals(&usage)
+        };
+        assert_eq!(totals(serde_json::json!({})).unwrap().reasoning, 0);
+        assert!(totals(serde_json::json!({"reasoningTokens": "4"})).is_none());
+        assert!(totals(serde_json::json!({"reasoningTokens": -1})).is_none());
+        assert!(totals(serde_json::json!({"inputTokens": u64::MAX,
+            "cacheReadTokens": u64::MAX, "cacheWriteTokens": 1}))
+        .is_none());
     }
 }

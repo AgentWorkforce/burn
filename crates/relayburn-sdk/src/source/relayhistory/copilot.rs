@@ -19,16 +19,17 @@ use crate::reader::resolve_project;
 use crate::reader::types::{
     Coverage, Fidelity, Subagent, ToolCall, TurnRecord, Usage, UsageGranularity,
 };
-use crate::source::usage::{copilot_totals, usage_from_raw};
+use crate::source::usage::copilot_totals;
 use crate::source::SessionRecords;
-use crate::util::time::format_iso_ms;
+use crate::util::time::{format_iso_ms, parse_iso_ms};
 
 /// Derive what the shared mapping cannot for copilot sessions.
 pub(super) fn refine(ctx: &Context<'_>, records: &mut SessionRecords) {
     for turn in &mut records.turns {
         refine_turn(ctx, turn);
     }
-    records.turns.extend(shutdown_turns(ctx));
+    let aggregates = shutdown_turns(ctx, &records.turns);
+    records.turns.extend(aggregates);
     // A shutdown's turn sits where the journal wrote it, so a session that
     // resumes appends turns after it and earlier indices never move.
     records.turns.sort_by(|a, b| a.ts.cmp(&b.ts));
@@ -144,17 +145,16 @@ fn shutdowns<'a>(ctx: &Context<'a>) -> Vec<Shutdown<'a>> {
     out
 }
 
-/// Output the session's messages billed per model, in `(after, through]`.
-/// Only assistant messages carry Copilot's `outputTokens`.
-fn message_output(ctx: &Context<'_>, after: i64, through: i64) -> HashMap<String, u64> {
+/// The output the session's message turns bill per model, in `(after,
+/// through]`: exactly what a shutdown's totals must not bill again.
+fn message_output(turns: &[TurnRecord], after: i64, through: i64) -> HashMap<String, u64> {
     let mut out = HashMap::new();
-    for message in &ctx.ev.messages {
-        if message.ts_ms <= after || message.ts_ms > through {
+    for turn in turns {
+        let Some(ts) = parse_iso_ms(&turn.ts) else {
             continue;
-        }
-        let (usage, coverage) = usage_from_raw(ctx.source, message.raw_usage());
-        if let (true, Some(model)) = (coverage.has_output_tokens, message.model.as_ref()) {
-            *out.entry(model.clone()).or_default() += usage.output;
+        };
+        if ts > after && ts <= through {
+            *out.entry(turn.model.clone()).or_default() += turn.usage.output;
         }
     }
     out
@@ -186,17 +186,23 @@ fn growth(now: &Usage, before: Option<&Usage>) -> Usage {
     }
 }
 
-fn shutdown_turns(ctx: &Context<'_>) -> Vec<TurnRecord> {
+fn shutdown_turns(ctx: &Context<'_>, message_turns: &[TurnRecord]) -> Vec<TurnRecord> {
     let mut turns = Vec::new();
     let mut previous: HashMap<String, Usage> = HashMap::new();
     let mut after = i64::MIN;
     for shutdown in shutdowns(ctx) {
-        let billed = message_output(ctx, after, shutdown.ts_ms);
+        let billed = message_output(message_turns, after, shutdown.ts_ms);
+        // Output a turn billed under no model is in some model's totals:
+        // each model in turn leaves out what of it remains.
+        let mut unattributed = billed.get("").copied().unwrap_or(0);
         for (model, totals) in &shutdown.totals {
             let mut usage = growth(totals, previous.get(model));
             usage.output = usage
                 .output
                 .saturating_sub(billed.get(model).copied().unwrap_or(0));
+            let covered = usage.output.min(unattributed);
+            usage.output -= covered;
+            unattributed -= covered;
             if usage != Usage::default() {
                 turns.push(aggregate_turn(ctx, &shutdown, model, usage));
             }

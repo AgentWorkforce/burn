@@ -16,7 +16,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Added
 
-- GitHub Copilot CLI sessions (`~/.copilot/session-state/`, or `$COPILOT_HOME`) are ingested as `copilot-cli` turns, retroactively and with no opt-in: one turn per model call with its tool calls, activity and per-message output tokens, plus one `per-session-aggregate` turn per `session.shutdown` and model billing the input, cache-read, cache-write and remaining output tokens Copilot's running totals grew by. Subagent turns are flagged sidechain; turns price under provider `github-copilot`, with reasoning counted inside output.
+- GitHub Copilot CLI sessions (`~/.copilot/session-state/`, or `$COPILOT_HOME`) are ingested and billed, retroactively and with no setup.
 - Claude Code subagent spend is billed: every turn of a subagent transcript, nested subagents included, is a turn of the session that spawned it. Ledger totals for sessions that delegated work go up by exactly that spend.
 - OpenCode sessions in the SQLite store (`opencode.db`, current OpenCode releases) are ingested, as well as the `storage/` JSON tree.
 - A Codex subagent thread is ingested as a session of its own.

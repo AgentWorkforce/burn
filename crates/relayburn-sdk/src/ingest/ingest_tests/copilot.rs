@@ -115,3 +115,23 @@ fn every_copilot_file_tool_name_touches_its_file() {
         .collect();
     assert_eq!(touched, want);
 }
+
+/// The output a message turn bills is what a shutdown's totals leave out,
+/// whatever model the turn resolved to.
+#[test]
+fn a_shutdown_bills_only_the_output_its_message_turns_did_not() {
+    let sandbox = Sandbox::new();
+    let mut text = journal(&[("view", "call_1", "a.rs")]).replace(r#""model":"gpt-5.4","#, "");
+    text.push_str(
+        &serde_json::json!({"type": "session.shutdown", "id": "00000000-0000-4000-8000-0000000000ff",
+            "parentId": null, "timestamp": "2026-09-18T21:31:00.000Z",
+            "data": {"modelMetrics": {"gpt-5.4": {"usage": {"inputTokens": 100,
+                "outputTokens": 10, "cacheReadTokens": 0, "cacheWriteTokens": 0}}}}})
+        .to_string(),
+    );
+    text.push('\n');
+    let turns = ingest_journal(&sandbox, &text);
+    let output: u64 = turns.iter().map(|t| t.usage.output).sum();
+    let models: Vec<&str> = turns.iter().map(|t| t.model.as_str()).collect();
+    assert_eq!(output, 10, "{models:?}");
+}
