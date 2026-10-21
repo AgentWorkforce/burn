@@ -116,10 +116,11 @@ fn every_copilot_file_tool_name_touches_its_file() {
     assert_eq!(touched, want);
 }
 
-/// The output a message turn bills is what a shutdown's totals leave out,
-/// whatever model the turn resolved to.
+/// A message that names no model bills its output under the model whose
+/// shutdown totals hold it, and that shutdown leaves it out: every token
+/// is priced once.
 #[test]
-fn a_shutdown_bills_only_the_output_its_message_turns_did_not() {
+fn a_message_naming_no_model_bills_under_the_model_its_shutdown_names() {
     let sandbox = Sandbox::new();
     let mut text = journal(&[("view", "call_1", "a.rs")]).replace(r#""model":"gpt-5.4","#, "");
     text.push_str(
@@ -131,7 +132,21 @@ fn a_shutdown_bills_only_the_output_its_message_turns_did_not() {
     );
     text.push('\n');
     let turns = ingest_journal(&sandbox, &text);
-    let output: u64 = turns.iter().map(|t| t.usage.output).sum();
-    let models: Vec<&str> = turns.iter().map(|t| t.model.as_str()).collect();
-    assert_eq!(output, 10, "{models:?}");
+    let billed: Vec<(&str, u64, u64)> = turns
+        .iter()
+        .map(|t| (t.model.as_str(), t.usage.input, t.usage.output))
+        .collect();
+    assert_eq!(billed, [("gpt-5.4", 0, 10), ("gpt-5.4", 100, 0)]);
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let rate = crate::analyze::cost::lookup_model_rate("gpt-5.4", &pricing).unwrap();
+    let cost: f64 = turns
+        .iter()
+        .map(|t| {
+            crate::analyze::cost::cost_for_turn(t, &pricing)
+                .expect("priced")
+                .total
+        })
+        .sum();
+    let want = (100.0 * rate.input + 10.0 * rate.output) / 1_000_000.0;
+    assert!((cost - want).abs() < 1e-12, "{cost} vs {want}");
 }

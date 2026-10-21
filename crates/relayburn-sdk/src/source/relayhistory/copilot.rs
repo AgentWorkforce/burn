@@ -28,7 +28,7 @@ pub(super) fn refine(ctx: &Context<'_>, records: &mut SessionRecords) {
     for turn in &mut records.turns {
         refine_turn(ctx, turn);
     }
-    let aggregates = shutdown_turns(ctx, &records.turns);
+    let aggregates = shutdown_turns(ctx, &mut records.turns);
     records.turns.extend(aggregates);
     // A shutdown's turn sits where the journal wrote it, so a session that
     // resumes appends turns after it and earlier indices never move.
@@ -186,31 +186,55 @@ fn growth(now: &Usage, before: Option<&Usage>) -> Usage {
     }
 }
 
-fn shutdown_turns(ctx: &Context<'_>, message_turns: &[TurnRecord]) -> Vec<TurnRecord> {
+fn shutdown_turns(ctx: &Context<'_>, message_turns: &mut [TurnRecord]) -> Vec<TurnRecord> {
     let mut turns = Vec::new();
     let mut previous: HashMap<String, Usage> = HashMap::new();
     let mut after = i64::MIN;
     for shutdown in shutdowns(ctx) {
+        let mut growths: Vec<(&str, Usage)> = shutdown
+            .totals
+            .iter()
+            .map(|(model, totals)| (model.as_str(), growth(totals, previous.get(model))))
+            .collect();
+        assign_models(message_turns, after, shutdown.ts_ms, &growths);
         let billed = message_output(message_turns, after, shutdown.ts_ms);
-        // Output a turn billed under no model is in some model's totals:
-        // each model in turn leaves out what of it remains.
-        let mut unattributed = billed.get("").copied().unwrap_or(0);
-        for (model, totals) in &shutdown.totals {
-            let mut usage = growth(totals, previous.get(model));
+        for (model, usage) in &mut growths {
             usage.output = usage
                 .output
-                .saturating_sub(billed.get(model).copied().unwrap_or(0));
-            let covered = usage.output.min(unattributed);
-            usage.output -= covered;
-            unattributed -= covered;
-            if usage != Usage::default() {
-                turns.push(aggregate_turn(ctx, &shutdown, model, usage));
+                .saturating_sub(billed.get(*model).copied().unwrap_or(0));
+            if *usage != Usage::default() {
+                turns.push(aggregate_turn(ctx, &shutdown, model, usage.clone()));
             }
+        }
+        for (model, totals) in &shutdown.totals {
             previous.insert(model.to_string(), totals.clone());
         }
         after = shutdown.ts_ms;
     }
     turns
+}
+
+/// Give each message turn in `(after, through]` that names no model the
+/// model whose growth over the interval still holds its output, so its
+/// output is priced once, under the model that produced it.
+fn assign_models(turns: &mut [TurnRecord], after: i64, through: i64, growths: &[(&str, Usage)]) {
+    let billed = message_output(turns, after, through);
+    let mut room: Vec<(&str, u64)> = growths
+        .iter()
+        .map(|(model, usage)| {
+            let named = billed.get(*model).copied().unwrap_or(0);
+            (*model, usage.output.saturating_sub(named))
+        })
+        .collect();
+    for turn in turns.iter_mut().filter(|t| t.model.is_empty()) {
+        if !parse_iso_ms(&turn.ts).is_some_and(|ts| ts > after && ts <= through) {
+            continue;
+        }
+        if let Some((model, left)) = room.iter_mut().find(|(_, left)| *left >= turn.usage.output) {
+            turn.model = model.to_string();
+            *left -= turn.usage.output;
+        }
+    }
 }
 
 fn aggregate_turn(
