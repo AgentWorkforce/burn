@@ -277,22 +277,23 @@ pub(crate) fn turn_message_ids(
 }
 
 /// The sessions `session_id` descends from through its fork and subagent
-/// edges, nearest first; a cycle of edges ends the walk.
+/// edges, in id order. Each id is visited once, so edges that loop end the
+/// walk.
 pub(crate) fn ancestor_sessions(
     conn: &Connection,
     source: &str,
     session_id: &str,
 ) -> Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
-        "WITH RECURSIVE up(id, depth) AS (
-             SELECT ?2, 0
+        "WITH RECURSIVE up(id) AS (
+             SELECT ?2
              UNION
-             SELECT r.related_session_id, up.depth + 1 FROM relationships r JOIN up
+             SELECT r.related_session_id FROM relationships r JOIN up
                ON r.source = ?1 AND r.session_id = up.id
              WHERE r.relationship_type IN ('fork', 'subagent')
                AND r.related_session_id IS NOT NULL
          )
-         SELECT id FROM up WHERE id != ?2 GROUP BY id ORDER BY MIN(depth), id",
+         SELECT id FROM up WHERE id != ?2 ORDER BY id",
     )?;
     let ids = stmt.query_map(rusqlite::params![source, session_id], |row| row.get(0))?;
     Ok(ids.collect::<rusqlite::Result<Vec<String>>>()?)
