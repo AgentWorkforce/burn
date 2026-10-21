@@ -116,37 +116,69 @@ fn every_copilot_file_tool_name_touches_its_file() {
     assert_eq!(touched, want);
 }
 
-/// A message that names no model bills its output under the model whose
-/// shutdown totals hold it, and that shutdown leaves it out: every token
-/// is priced once.
-#[test]
-fn a_message_naming_no_model_bills_under_the_model_its_shutdown_names() {
-    let sandbox = Sandbox::new();
-    let mut text = journal(&[("view", "call_1", "a.rs")]).replace(r#""model":"gpt-5.4","#, "");
-    text.push_str(
-        &serde_json::json!({"type": "session.shutdown", "id": "00000000-0000-4000-8000-0000000000ff",
-            "parentId": null, "timestamp": "2026-09-18T21:31:00.000Z",
-            "data": {"modelMetrics": {"gpt-5.4": {"usage": {"inputTokens": 100,
-                "outputTokens": 10, "cacheReadTokens": 0, "cacheWriteTokens": 0}}}}})
-        .to_string(),
-    );
-    text.push('\n');
-    let turns = ingest_journal(&sandbox, &text);
-    let billed: Vec<(&str, u64, u64)> = turns
-        .iter()
-        .map(|t| (t.model.as_str(), t.usage.input, t.usage.output))
-        .collect();
-    assert_eq!(billed, [("gpt-5.4", 0, 10), ("gpt-5.4", 100, 0)]);
+/// The journal of [`journal`] with no model on its messages, and the
+/// `session.shutdown` that closes it: gpt-5.4 grew 100 input, 10 output.
+fn unnamed_journal() -> (String, String) {
+    let text = journal(&[("view", "call_1", "a.rs")]).replace(r#""model":"gpt-5.4","#, "");
+    let shutdown = serde_json::json!({"type": "session.shutdown",
+        "id": "00000000-0000-4000-8000-0000000000ff", "parentId": null,
+        "timestamp": "2026-09-18T21:31:00.000Z",
+        "data": {"modelMetrics": {"gpt-5.4": {"usage": {"inputTokens": 100,
+            "outputTokens": 10, "cacheReadTokens": 0, "cacheWriteTokens": 0}}}}});
+    (text, format!("{shutdown}\n"))
+}
+
+/// Model, input, output and dollar cost per turn, in turn order.
+fn priced(turns: &[crate::reader::TurnRecord]) -> Vec<(String, u64, u64, f64)> {
     let pricing = crate::analyze::pricing::load_builtin_pricing();
-    let rate = crate::analyze::cost::lookup_model_rate("gpt-5.4", &pricing).unwrap();
-    let cost: f64 = turns
+    turns
         .iter()
         .map(|t| {
-            crate::analyze::cost::cost_for_turn(t, &pricing)
-                .expect("priced")
-                .total
+            let cost = crate::analyze::cost::cost_for_turn(t, &pricing).expect("priced");
+            (t.model.clone(), t.usage.input, t.usage.output, cost.total)
         })
-        .sum();
-    let want = (100.0 * rate.input + 10.0 * rate.output) / 1_000_000.0;
-    assert!((cost - want).abs() < 1e-12, "{cost} vs {want}");
+        .collect()
+}
+
+/// A message that names no model bills nothing, priced at \$0; its output
+/// is on the shutdown's aggregate, under the model the shutdown names.
+#[test]
+fn a_message_naming_no_model_leaves_its_output_to_the_shutdown() {
+    let sandbox = Sandbox::new();
+    let (text, shutdown) = unnamed_journal();
+    let turns = ingest_journal(&sandbox, &(text + &shutdown));
+    let pricing = crate::analyze::pricing::load_builtin_pricing();
+    let rate = crate::analyze::cost::lookup_model_rate("gpt-5.4", &pricing).unwrap();
+    let aggregate = (100.0 * rate.input + 10.0 * rate.output) / 1_000_000.0;
+    assert_eq!(
+        priced(&turns),
+        [
+            (String::new(), 0, 0, 0.0),
+            ("gpt-5.4".to_string(), 100, 10, aggregate)
+        ]
+    );
+    assert!(crate::analyze::findings::unpriced_usage_findings(&turns, &pricing).is_empty());
+}
+
+/// Ingested while running and again after it shuts down, a session bills
+/// exactly the shutdown's totals: the message turn the ledger already holds
+/// bills the same either way.
+#[test]
+fn a_session_ingested_before_and_after_its_shutdown_bills_its_totals_once() {
+    let sandbox = Sandbox::new();
+    let (text, shutdown) = unnamed_journal();
+    let running = ingest_journal(&sandbox, &text);
+    assert_eq!(priced(&running), [(String::new(), 0, 0, 0.0)]);
+
+    let settled = ingest_journal(&sandbox, &(text + &shutdown));
+    let billed: Vec<_> = priced(&settled)
+        .into_iter()
+        .map(|(model, input, output, _)| (model, input, output))
+        .collect();
+    assert_eq!(
+        billed,
+        [(String::new(), 0, 0), ("gpt-5.4".to_string(), 100, 10)]
+    );
+    let mut ledger = sandbox.ledger();
+    assert_eq!(sandbox.ingest(&mut ledger), IngestReport::empty());
 }

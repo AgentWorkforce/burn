@@ -27,8 +27,9 @@ use crate::util::time::{format_iso_ms, parse_iso_ms};
 pub(super) fn refine(ctx: &Context<'_>, records: &mut SessionRecords) {
     for turn in &mut records.turns {
         refine_turn(ctx, turn);
+        leave_unnamed_output_to_aggregates(turn);
     }
-    let aggregates = shutdown_turns(ctx, &mut records.turns);
+    let aggregates = shutdown_turns(ctx, &records.turns);
     records.turns.extend(aggregates);
     // A shutdown's turn sits where the journal wrote it, so a session that
     // resumes appends turns after it and earlier indices never move.
@@ -171,7 +172,7 @@ fn growth(now: &Usage, before: Option<&Usage>) -> Usage {
     }
 }
 
-fn shutdown_turns(ctx: &Context<'_>, message_turns: &mut [TurnRecord]) -> Vec<TurnRecord> {
+fn shutdown_turns(ctx: &Context<'_>, message_turns: &[TurnRecord]) -> Vec<TurnRecord> {
     let mut turns = Vec::new();
     let mut previous: HashMap<String, Usage> = HashMap::new();
     let mut after = i64::MIN;
@@ -181,11 +182,11 @@ fn shutdown_turns(ctx: &Context<'_>, message_turns: &mut [TurnRecord]) -> Vec<Tu
             .iter()
             .map(|(model, totals)| (model.clone(), growth(totals, previous.get(model))))
             .collect();
-        let mut messages: Vec<&mut TurnRecord> = message_turns
-            .iter_mut()
+        let messages: Vec<&TurnRecord> = message_turns
+            .iter()
             .filter(|t| parse_iso_ms(&t.ts).is_some_and(|ts| ts > after && ts <= shutdown.ts_ms))
             .collect();
-        for (model, usage) in settle(&mut messages, growths) {
+        for (model, usage) in settle(&messages, growths) {
             turns.push(aggregate_turn(ctx, &shutdown, &model, usage));
         }
         for (model, totals) in &shutdown.totals {
@@ -196,25 +197,34 @@ fn shutdown_turns(ctx: &Context<'_>, message_turns: &mut [TurnRecord]) -> Vec<Tu
     turns
 }
 
-/// Settle one shutdown interval: the message turns written in it, and what
-/// the shutdown's running totals grew by per model. Every output token
-/// lands on exactly one turn under a model the shutdown names:
-///
-/// - with one model in the totals, a message turn that names no model is
-///   that model's;
-/// - with several, such a turn keeps its tools and content but bills no
-///   output: which model produced it is unknown, so the aggregates carry it;
-/// - each model's aggregate is its growth less the output its own message
-///   turns billed.
+/// A message turn that names no model bills nothing: which model produced
+/// its output is unknown, so the shutdown's per-model totals carry it. Its
+/// zero is a measured one, so the turn is priced at \$0 rather than left
+/// unpriced. A message turn bills the same before and after its session
+/// shuts down, so the ledger never has to rewrite one.
+fn leave_unnamed_output_to_aggregates(turn: &mut TurnRecord) {
+    if !turn.model.is_empty() {
+        return;
+    }
+    turn.usage = Usage::default();
+    if let Some(fidelity) = &turn.fidelity {
+        let coverage = Coverage {
+            has_input_tokens: true,
+            has_output_tokens: true,
+            ..fidelity.coverage.clone()
+        };
+        turn.fidelity = Some(Fidelity::new(fidelity.granularity, coverage));
+    }
+}
+
+/// Settle one shutdown interval: each model's aggregate is what the
+/// shutdown's running total grew by, less the output the interval's message
+/// turns already billed under that model. Message turns that name no model
+/// bill nothing, so per model the interval bills exactly the growth, and
+/// every token sits on one turn under a model the shutdown names.
 ///
 /// Returns the aggregates that bill anything.
-fn settle(messages: &mut [&mut TurnRecord], growths: Vec<(String, Usage)>) -> Vec<(String, Usage)> {
-    let unnamed = messages.iter_mut().filter(|t| t.model.is_empty());
-    match growths.as_slice() {
-        [] => {}
-        [(only, _)] => unnamed.for_each(|t| t.model = only.clone()),
-        _ => unnamed.for_each(|t| t.usage.output = 0),
-    }
+fn settle(messages: &[&TurnRecord], growths: Vec<(String, Usage)>) -> Vec<(String, Usage)> {
     growths
         .into_iter()
         .filter_map(|(model, mut usage)| {

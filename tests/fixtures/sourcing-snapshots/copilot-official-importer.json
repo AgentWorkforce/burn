@@ -7,8 +7,8 @@
       "fidelity": {
         "granularity": "per-turn",
         "coverage": {
-          "hasInputTokens": false,
-          "hasOutputTokens": false,
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
           "hasReasoningTokens": false,
           "hasCacheReadTokens": false,
           "hasCacheCreateTokens": false,
@@ -17,7 +17,7 @@
           "hasSessionRelationships": true,
           "hasRawContent": true
         },
-        "class": "partial"
+        "class": "usage-only"
       },
       "messageId": "28e4dc43-6d27-415f-9889-7a018434e36c",
       "turnIndex": 0,
@@ -54,8 +54,8 @@
       "fidelity": {
         "granularity": "per-turn",
         "coverage": {
-          "hasInputTokens": false,
-          "hasOutputTokens": false,
+          "hasInputTokens": true,
+          "hasOutputTokens": true,
           "hasReasoningTokens": false,
           "hasCacheReadTokens": false,
           "hasCacheCreateTokens": false,
@@ -64,7 +64,7 @@
           "hasSessionRelationships": true,
           "hasRawContent": true
         },
-        "class": "partial"
+        "class": "usage-only"
       },
       "messageId": "5fd0999e-2bb7-4296-bddd-3b3fd418526d",
       "turnIndex": 1,

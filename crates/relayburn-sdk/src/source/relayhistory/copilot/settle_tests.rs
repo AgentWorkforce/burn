@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use super::settle;
+use super::{leave_unnamed_output_to_aggregates, settle};
 use crate::reader::types::{TurnRecord, Usage};
 
 fn message(model: &str, output: u64) -> TurnRecord {
@@ -40,16 +40,20 @@ fn billed(messages: &[TurnRecord], aggregates: &[(String, Usage)]) -> HashMap<St
     out
 }
 
+/// The interval's message turns as ingest bills them, and its aggregates.
 fn settled(
     mut messages: Vec<TurnRecord>,
     growths: &[(&str, u64)],
 ) -> (Vec<TurnRecord>, Vec<(String, Usage)>) {
+    messages
+        .iter_mut()
+        .for_each(leave_unnamed_output_to_aggregates);
     let growths = growths
         .iter()
         .map(|(model, output)| (model.to_string(), grew(*output)))
         .collect();
-    let mut refs: Vec<&mut TurnRecord> = messages.iter_mut().collect();
-    let aggregates = settle(&mut refs, growths);
+    let refs: Vec<&TurnRecord> = messages.iter().collect();
+    let aggregates = settle(&refs, growths);
     (messages, aggregates)
 }
 
@@ -67,21 +71,24 @@ fn unnamed_messages_under_several_models_leave_their_output_to_the_aggregates() 
     assert!(messages.iter().all(|t| t.usage.output == 0));
 }
 
+/// Under one model too, an unnamed message bills nothing and that model's
+/// aggregate carries its output.
 #[test]
-fn an_unnamed_message_under_one_model_is_that_models() {
+fn an_unnamed_message_under_one_model_leaves_its_output_to_that_models_aggregate() {
     let (messages, aggregates) = settled(vec![message("", 4)], &[("gpt-5.4", 10)]);
-    assert_eq!(messages[0].model, "gpt-5.4");
-    assert_eq!(messages[0].usage.output, 4);
-    assert_eq!(aggregates[0].1.output, 6);
-}
-
-#[test]
-fn an_interval_no_shutdown_names_a_model_for_keeps_its_messages() {
-    let (messages, aggregates) = settled(vec![message("", 4)], &[]);
     assert_eq!(
         (messages[0].model.as_str(), messages[0].usage.output),
-        ("", 4)
+        ("", 0)
     );
+    assert_eq!(aggregates, [("gpt-5.4".to_string(), grew(10))]);
+}
+
+/// Before any shutdown names a model, an unnamed message still bills
+/// nothing: it bills the same once a shutdown lands.
+#[test]
+fn an_unnamed_message_bills_nothing_before_a_shutdown() {
+    let (messages, aggregates) = settled(vec![message("", 4)], &[]);
+    assert_eq!(messages[0].usage.output, 0);
     assert!(aggregates.is_empty());
 }
 
