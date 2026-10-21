@@ -326,17 +326,34 @@ impl Ledger {
         writer::rewrite_turns(&mut self.conns.burn, turns, inferences)
     }
 
-    /// Drop every row the ledger derived from one session's records, its
-    /// content included, so the session can be appended again from scratch.
-    /// Content goes first: a failure between the two leaves the turns
-    /// that make ingest clear the session again.
-    pub(crate) fn clear_session(
+    /// Sessions `session_id` descends from by fork or spawn, nearest
+    /// first: the parents its edges name, their parents, and so on.
+    pub(crate) fn ancestor_sessions(
+        &self,
+        source: crate::reader::SourceKind,
+        session_id: &str,
+    ) -> Result<Vec<String>> {
+        reader::ancestor_sessions(&self.conns.burn, source.wire_str(), session_id)
+    }
+
+    /// Codex sessions holding a turn a session they descend from holds
+    /// too: the forks and subagents that may hold a copy of it.
+    pub(crate) fn sessions_holding_ancestor_turns(&self) -> Result<Vec<String>> {
+        reader::sessions_holding_ancestor_turns(&self.conns.burn)
+    }
+
+    /// Drop one session's turns `message_ids` with every row derived from
+    /// them, content first: a failure between the two leaves the turns
+    /// that select them again.
+    pub(crate) fn retire_turns(
         &mut self,
         source: crate::reader::SourceKind,
         session_id: &str,
+        message_ids: &HashSet<String>,
     ) -> Result<()> {
-        content::clear_session(&self.conns.content, source.wire_str(), session_id)?;
-        writer::clear_session(&mut self.conns.burn, source.wire_str(), session_id)
+        let source = source.wire_str();
+        content::retire_messages(&mut self.conns.content, source, session_id, message_ids)?;
+        writer::retire_turns(&mut self.conns.burn, source, session_id, message_ids)
     }
 
     // --- content + FTS5 ----------------------------------------------

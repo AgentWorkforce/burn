@@ -17,7 +17,7 @@ use super::pending_stamps::{
 };
 use super::IngestReport;
 use crate::ledger::Ledger;
-use crate::reader::{ContentStoreMode, TurnRecord};
+use crate::reader::{ContentStoreMode, SourceKind, TurnRecord};
 use crate::source::SessionRecords;
 use crate::source::{
     delegated_children, records_from_evidence, records_query, records_with_children, source_kind,
@@ -141,22 +141,30 @@ fn import_one(
     if source == Source::Claude && evidence.session.discovery_state == DiscoveryState::Delegated {
         return unchanged;
     }
-    let mut billing = Billing {
+    let billing = Billing {
         now_ms: ctx.now_ms,
         billed: ledger.turn_message_ids(kind, &evidence.session.session_id)?,
     };
-    let mut records = session_records(store, &evidence, &billing)?;
-    if bills_copied_history(&records, &billing.billed) {
-        ledger.clear_session(kind, &evidence.session.session_id)?;
-        billing.billed.clear();
-        records = session_records(store, &evidence, &billing)?;
-    }
+    let mut records = match source {
+        Source::Claude => {
+            let children = delegated_children(store, &evidence)?;
+            records_with_children(&evidence, &children, &billing)
+        }
+        _ => records_from_evidence(&evidence, &billing),
+    };
     // The evidence carries its text whatever the content mode: activity
     // classification and user-turn blocks are derived from it. The mode
     // decides only whether the text itself is kept.
     if ctx.content_mode != ContentStoreMode::Full {
         records.content.clear();
     }
+    retire_copied_turns(
+        ledger,
+        kind,
+        &evidence.session.session_id,
+        &records,
+        &billing.billed,
+    )?;
     // Only Codex rows await request accounting; the check is scoped to them.
     if ledger.awaits_request_accounting(&session.session_id)? {
         ledger.rewrite_turns(&records.turns, &records.inferences())?;
@@ -174,35 +182,43 @@ fn import_one(
     Ok((report, records.pending))
 }
 
-/// Burn's records for one session read against `billing`; a Claude
-/// session's with every subagent it delegated to folded in.
-fn session_records(
-    store: &SessionStore,
-    evidence: &SessionEvidence,
-    billing: &Billing,
-) -> anyhow::Result<SessionRecords> {
-    Ok(match evidence.session.source {
-        Source::Claude => {
-            let children = delegated_children(store, evidence)?;
-            records_with_children(evidence, &children, billing)
-        }
-        _ => records_from_evidence(evidence, billing),
-    })
-}
-
-/// Whether the ledger bills a fork for history it copied from its parent:
-/// it holds a turn its records, which leave that copy out, do not. Such a
-/// session is cleared and appended again whole.
-fn bills_copied_history(records: &SessionRecords, held: &HashSet<String>) -> bool {
-    if !records.copied_history {
-        return false;
-    }
+/// Retire the turns a session holds that it copied from one it descends
+/// from (a Codex fork or subagent replaying its parent's history): held by
+/// that ancestor under the same id, and absent from the session's records,
+/// which leave the copy out. A turn that is only absent stays billed.
+fn retire_copied_turns(
+    ledger: &mut Ledger,
+    kind: SourceKind,
+    session_id: &str,
+    records: &SessionRecords,
+    held: &HashSet<String>,
+) -> anyhow::Result<()> {
     let rebuilt: HashSet<&str> = records
         .turns
         .iter()
         .map(|t| t.message_id.as_str())
         .collect();
-    held.iter().any(|id| !rebuilt.contains(id.as_str()))
+    let absent: Vec<&String> = held
+        .iter()
+        .filter(|id| !rebuilt.contains(id.as_str()))
+        .collect();
+    if absent.is_empty() {
+        return Ok(());
+    }
+    let mut copied = HashSet::new();
+    for ancestor in ledger.ancestor_sessions(kind, session_id)? {
+        let theirs = ledger.turn_message_ids(kind, &ancestor)?;
+        copied.extend(
+            absent
+                .iter()
+                .filter(|id| theirs.contains(id.as_str()))
+                .map(|id| id.to_string()),
+        );
+    }
+    if !copied.is_empty() {
+        ledger.retire_turns(kind, session_id, &copied)?;
+    }
+    Ok(())
 }
 
 /// Append the turns the ledger does not hold yet. A session is rebuilt

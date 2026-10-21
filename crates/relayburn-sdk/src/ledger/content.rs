@@ -130,12 +130,21 @@ pub(crate) fn prune_older_than(conn: &mut Connection, cutoff: &str) -> Result<Pr
     })
 }
 
-/// Drop every content row of one session.
-pub(crate) fn clear_session(conn: &Connection, source: &str, session_id: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM content WHERE source = ? AND session_id = ?",
-        params![source, session_id],
-    )?;
+/// Drop the content rows of one session's turns `message_ids`.
+pub(crate) fn retire_messages(
+    conn: &mut Connection,
+    source: &str,
+    session_id: &str,
+    message_ids: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for id in message_ids {
+        tx.execute(
+            "DELETE FROM content WHERE source = ? AND session_id = ? AND message_id = ?",
+            params![source, session_id, id],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 

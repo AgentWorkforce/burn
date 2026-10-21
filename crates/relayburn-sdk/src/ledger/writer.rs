@@ -186,30 +186,48 @@ pub(crate) fn rewrite_turns(
     Ok(rewritten.len())
 }
 
-/// Drop every row one session's records derived, in one transaction. A
-/// subagent edge filed under the session belongs to the session that
-/// spawned it and stays. The session's appends that follow record the
-/// write.
-pub(crate) fn clear_session(conn: &mut Connection, source: &str, session_id: &str) -> Result<()> {
+/// Drop the turns `message_ids` of one session with every row derived
+/// from them, in one transaction: their inferences and tool results, the
+/// user turns that led into them, and the subagent edges their tool calls
+/// filed under the sessions they spawned.
+pub(crate) fn retire_turns(
+    conn: &mut Connection,
+    source: &str,
+    session_id: &str,
+    message_ids: &std::collections::HashSet<String>,
+) -> Result<()> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for table in [
-        "turns",
-        "compactions",
-        "tool_result_events",
-        "user_turns",
-        "inferences",
-        "sessions",
-    ] {
-        tx.execute(
-            &format!("DELETE FROM {table} WHERE source = ? AND session_id = ?"),
-            params![source, session_id],
+    {
+        let mut record = tx.prepare(
+            "SELECT record_json FROM turns WHERE source = ? AND session_id = ? AND message_id = ?",
         )?;
+        let mut spawned = tx.prepare(
+            "DELETE FROM relationships
+             WHERE source = ? AND related_session_id = ? AND relationship_type = 'subagent'
+               AND json_extract(record_json, '$.parentToolUseId') = ?",
+        )?;
+        for id in message_ids {
+            let json: Option<String> = record
+                .query_row(params![source, session_id, id], |r| r.get(0))
+                .optional()?;
+            if let Some(json) = json {
+                let turn: TurnRecord = serde_json::from_str(&json)?;
+                for call in &turn.tool_calls {
+                    spawned.execute(params![source, session_id, call.id])?;
+                }
+            }
+            for sql in [
+                "DELETE FROM turns WHERE source = ?1 AND session_id = ?2 AND message_id = ?3",
+                "DELETE FROM inferences WHERE source = ?1 AND session_id = ?2 AND turn_id = ?3",
+                "DELETE FROM tool_result_events WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.messageId') = ?3",
+                "DELETE FROM user_turns WHERE source = ?1 AND session_id = ?2
+                     AND json_extract(record_json, '$.followingMessageId') = ?3",
+            ] {
+                tx.execute(sql, params![source, session_id, id])?;
+            }
+        }
     }
-    tx.execute(
-        "DELETE FROM relationships WHERE source = ? AND session_id = ?
-             AND relationship_type != 'subagent'",
-        params![source, session_id],
-    )?;
     tx.commit()?;
     Ok(())
 }
