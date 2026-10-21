@@ -7,8 +7,7 @@
 //! continues to mean "absent" rather than "explicit null" — the ledger is
 //! append-only JSONL and we want byte-identical output to the TS writer.
 
-use std::collections::BTreeMap;
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
