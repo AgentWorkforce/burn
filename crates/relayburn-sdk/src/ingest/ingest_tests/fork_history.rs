@@ -405,3 +405,21 @@ fn retiring_turns_the_ledger_does_not_hold_is_not_a_write() {
     assert_eq!(ledger.last_write_at_ms().unwrap().unwrap_or(0), 0);
     assert_eq!(turn_ids(&ledger, CHILD), [CHILD_TASK]);
 }
+
+/// The check for copies runs once: a session that still shares a turn id
+/// with one it descends from is not read again on every ingest.
+#[test]
+fn a_checked_ledger_is_not_checked_again() {
+    let sandbox = Sandbox::new();
+    place_fork(&sandbox);
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    bill_under(&sandbox, CHILD, PARENT);
+
+    assert_eq!(sandbox.ingest(&mut ledger), IngestReport::empty());
+    forget_copies_check(&mut ledger);
+    let checked = sandbox.ingest(&mut ledger);
+    assert_eq!(checked.scanned_sessions, 1, "the fork is read once");
+    assert_eq!(checked.appended_turns, 0);
+    assert_eq!(sandbox.ingest(&mut ledger), IngestReport::empty());
+}
