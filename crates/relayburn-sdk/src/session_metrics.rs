@@ -64,9 +64,9 @@ pub(crate) fn turn_total_tokens(turn: &TurnRecord) -> u64 {
     usage
         .input
         .saturating_add(usage.output)
-        // Codex includes reasoning in output; the other supported sources
-        // expose a separate, billable reasoning bucket.
-        .saturating_add(if matches!(turn.source, crate::reader::SourceKind::Codex) {
+        // A source that counts reasoning inside output has no separate
+        // reasoning bucket to add.
+        .saturating_add(if crate::analyze::cost::reasoning_in_output(turn.source) {
             0
         } else {
             usage.reasoning
@@ -241,6 +241,49 @@ mod tests {
         assert_eq!(report.models.len(), 1);
         assert_eq!(report.models[0].provider, "anthropic");
         assert_eq!(report.models[0].model, "claude-sonnet-4-6");
+    }
+
+    /// Codex and Copilot CLI count reasoning inside output; every other
+    /// source reports it as a bucket of its own.
+    #[test]
+    fn total_tokens_count_reasoning_once() {
+        use crate::reader::SourceKind;
+        let turn = |source| TurnRecord {
+            v: 1,
+            source,
+            session_id: "s".to_string(),
+            session_path: None,
+            message_id: "m".to_string(),
+            turn_index: 0,
+            request_count: None,
+            ts: "2026-08-01T00:00:00.000Z".to_string(),
+            model: "m".to_string(),
+            project: None,
+            project_key: None,
+            usage: crate::reader::Usage {
+                input: 100,
+                output: 20,
+                reasoning: 5,
+                cache_read: 1_000,
+                ..Default::default()
+            },
+            tool_calls: Vec::new(),
+            files_touched: None,
+            subagent: None,
+            stop_reason: None,
+            activity: None,
+            retries: None,
+            has_edits: None,
+            fidelity: None,
+            reasoning: None,
+        };
+        for (source, total) in [
+            (SourceKind::Codex, 1_120),
+            (SourceKind::CopilotCli, 1_120),
+            (SourceKind::ClaudeCode, 1_125),
+        ] {
+            assert_eq!(turn_total_tokens(&turn(source)), total, "{source:?}");
+        }
     }
 
     #[test]

@@ -839,6 +839,14 @@ fn a_copilot_session_bills_its_calls_and_its_shutdown_totals_once() {
         30_000 + 25_000 + 4_000
     );
     assert_eq!(sum(|u| u.output), 82 + 65 + 11);
+    // A shutdown's running totals are no model call.
+    let calls: Vec<_> = turns.iter().map(|t| t.turn.request_count).collect();
+    assert_eq!(
+        calls.iter().filter(|c| **c == Some(0)).count(),
+        4,
+        "{calls:?}"
+    );
+    assert_eq!(calls.iter().filter(|c| c.is_none()).count(), 7, "{calls:?}");
     assert_eq!(sandbox.ingest(&mut ledger).appended_turns, 0);
 }
 
@@ -863,5 +871,6 @@ fn an_opencode_launcher_stamp_lands_on_the_opencode_session_it_spawned() {
     assert_eq!(sandbox.ingest(&mut ledger).applied_pending_stamps, 1);
 }
 
+mod copilot;
 mod fork_history;
 mod request_accounting;

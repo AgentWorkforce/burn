@@ -40,6 +40,9 @@
           "argsHash": "6b3640bd99e591a8"
         }
       ],
+      "filesTouched": [
+        "greeting.txt"
+      ],
       "activity": "review",
       "retries": 0,
       "hasEdits": false

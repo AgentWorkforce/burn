@@ -40,29 +40,43 @@ pub(super) fn refine(ctx: &Context<'_>, records: &mut SessionRecords) {
 /// Copilot's tool vocabulary for targets, edit hashes and touched files;
 /// subagent turns flagged; then the activity classification over them.
 fn refine_turn(ctx: &Context<'_>, turn: &mut TurnRecord) {
+    let message_ids: Vec<&str> = ctx
+        .units
+        .iter()
+        .filter(|u| u.id == turn.message_id)
+        .flat_map(|u| &u.request.message_ids)
+        .map(String::as_str)
+        .collect();
     let mut files = BTreeSet::new();
     for call in &mut turn.tool_calls {
+        // Copilot reuses a tool call id across turns: a call is the one its
+        // own messages made.
         let input = ctx
             .ev
             .tool_calls
             .iter()
-            .find(|c| c.tool_use_id == call.id)
+            .find(|c| {
+                c.tool_use_id == call.id
+                    && c.message_id
+                        .as_deref()
+                        .is_some_and(|m| message_ids.contains(&m))
+            })
             .and_then(|c| c.args.clone())
             .unwrap_or(Value::Null);
         apply_tool(call, &input);
-        if matches!(call.name.as_str(), "view" | "edit" | "create") {
+        if matches!(
+            call.name.as_str(),
+            "view" | "read" | "edit" | "create" | "write"
+        ) {
             if let Some(target) = &call.target {
                 files.insert(target.clone());
             }
         }
     }
     turn.files_touched = (!files.is_empty()).then(|| files.into_iter().collect());
-    let messages: Vec<&Message> = ctx
-        .units
+    let messages: Vec<&Message> = message_ids
         .iter()
-        .filter(|u| u.id == turn.message_id)
-        .flat_map(|u| &u.request.message_ids)
-        .filter_map(|id| ctx.by_id.get(id.as_str()).copied())
+        .filter_map(|id| ctx.by_id.get(id).copied())
         .collect();
     if messages.iter().any(|m| m.is_sidechain == Some(true)) {
         turn.subagent = Some(Subagent {
@@ -236,7 +250,8 @@ fn aggregate_turn(
             },
         )),
         reasoning: None,
-        request_count: None,
+        // Running totals, not a model call.
+        request_count: Some(0),
     }
 }
 

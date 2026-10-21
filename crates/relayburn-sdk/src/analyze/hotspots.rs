@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 
 use crate::reader::{
-    BashParse, ContentKind, ContentRecord, ToolResultEventRecord, TurnRecord, UserTurnBlockKind,
-    UserTurnRecord,
+    normalize_tool_name, BashParse, ContentKind, ContentRecord, ToolResultEventRecord, TurnRecord,
+    UserTurnBlockKind, UserTurnRecord,
 };
 use indexmap::IndexMap;
 use phf::phf_set;
@@ -620,13 +620,13 @@ fn accumulate_output_bytes(
 }
 
 /// Roll up file-touching tool attributions (`Read | Edit | Write |
-/// NotebookEdit`) by their target path. Rows missing or with an empty target
+/// NotebookEdit`, under any harness's name for them) by their target path. Rows missing or with an empty target
 /// are skipped. Output is sorted by `total_cost` descending.
 pub(crate) fn aggregate_by_file(attributions: &[ToolAttribution]) -> Vec<FileAggregation> {
     aggregate(
         attributions,
         |a| {
-            if !FILE_TOOLS.contains(a.tool_name.as_str()) {
+            if !FILE_TOOLS.contains(normalize_tool_name(&a.tool_name)) {
                 return None;
             }
             match a.target.as_ref() {
