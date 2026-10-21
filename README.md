@@ -352,7 +352,10 @@ records output tokens per model call but input and cache tokens only as
 per-model running totals when a session shuts down, so each `copilot-cli` turn
 carries its output tokens and each shutdown adds one `per-session-aggregate`
 turn per model with the input, cache, and remaining output it accounts for. A
-session that has not shut down yet shows output tokens only.
+model call that names no model is billed under the shutdown's model when the
+shutdown names one, and otherwise leaves its output to the per-model
+aggregates, so every token is billed once under a known model. A session that
+has not shut down yet shows output tokens only.
 
 | Option | What it does |
 |---|---|

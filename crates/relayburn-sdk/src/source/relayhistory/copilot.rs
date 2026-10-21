@@ -145,21 +145,6 @@ fn shutdowns<'a>(ctx: &Context<'a>) -> Vec<Shutdown<'a>> {
     out
 }
 
-/// The output the session's message turns bill per model, in `(after,
-/// through]`: exactly what a shutdown's totals must not bill again.
-fn message_output(turns: &[TurnRecord], after: i64, through: i64) -> HashMap<String, u64> {
-    let mut out = HashMap::new();
-    for turn in turns {
-        let Some(ts) = parse_iso_ms(&turn.ts) else {
-            continue;
-        };
-        if ts > after && ts <= through {
-            *out.entry(turn.model.clone()).or_default() += turn.usage.output;
-        }
-    }
-    out
-}
-
 /// What a running total grew by. A total lower than the previous one
 /// restarted, and counts whole.
 fn growth(now: &Usage, before: Option<&Usage>) -> Usage {
@@ -191,20 +176,17 @@ fn shutdown_turns(ctx: &Context<'_>, message_turns: &mut [TurnRecord]) -> Vec<Tu
     let mut previous: HashMap<String, Usage> = HashMap::new();
     let mut after = i64::MIN;
     for shutdown in shutdowns(ctx) {
-        let mut growths: Vec<(&str, Usage)> = shutdown
+        let growths = shutdown
             .totals
             .iter()
-            .map(|(model, totals)| (model.as_str(), growth(totals, previous.get(model))))
+            .map(|(model, totals)| (model.clone(), growth(totals, previous.get(model))))
             .collect();
-        assign_models(message_turns, after, shutdown.ts_ms, &growths);
-        let billed = message_output(message_turns, after, shutdown.ts_ms);
-        for (model, usage) in &mut growths {
-            usage.output = usage
-                .output
-                .saturating_sub(billed.get(*model).copied().unwrap_or(0));
-            if *usage != Usage::default() {
-                turns.push(aggregate_turn(ctx, &shutdown, model, usage.clone()));
-            }
+        let mut messages: Vec<&mut TurnRecord> = message_turns
+            .iter_mut()
+            .filter(|t| parse_iso_ms(&t.ts).is_some_and(|ts| ts > after && ts <= shutdown.ts_ms))
+            .collect();
+        for (model, usage) in settle(&mut messages, growths) {
+            turns.push(aggregate_turn(ctx, &shutdown, &model, usage));
         }
         for (model, totals) in &shutdown.totals {
             previous.insert(model.to_string(), totals.clone());
@@ -214,27 +196,37 @@ fn shutdown_turns(ctx: &Context<'_>, message_turns: &mut [TurnRecord]) -> Vec<Tu
     turns
 }
 
-/// Give each message turn in `(after, through]` that names no model the
-/// model whose growth over the interval still holds its output, so its
-/// output is priced once, under the model that produced it.
-fn assign_models(turns: &mut [TurnRecord], after: i64, through: i64, growths: &[(&str, Usage)]) {
-    let billed = message_output(turns, after, through);
-    let mut room: Vec<(&str, u64)> = growths
-        .iter()
-        .map(|(model, usage)| {
-            let named = billed.get(*model).copied().unwrap_or(0);
-            (*model, usage.output.saturating_sub(named))
-        })
-        .collect();
-    for turn in turns.iter_mut().filter(|t| t.model.is_empty()) {
-        if !parse_iso_ms(&turn.ts).is_some_and(|ts| ts > after && ts <= through) {
-            continue;
-        }
-        if let Some((model, left)) = room.iter_mut().find(|(_, left)| *left >= turn.usage.output) {
-            turn.model = model.to_string();
-            *left -= turn.usage.output;
-        }
+/// Settle one shutdown interval: the message turns written in it, and what
+/// the shutdown's running totals grew by per model. Every output token
+/// lands on exactly one turn under a model the shutdown names:
+///
+/// - with one model in the totals, a message turn that names no model is
+///   that model's;
+/// - with several, such a turn keeps its tools and content but bills no
+///   output: which model produced it is unknown, so the aggregates carry it;
+/// - each model's aggregate is its growth less the output its own message
+///   turns billed.
+///
+/// Returns the aggregates that bill anything.
+fn settle(messages: &mut [&mut TurnRecord], growths: Vec<(String, Usage)>) -> Vec<(String, Usage)> {
+    let unnamed = messages.iter_mut().filter(|t| t.model.is_empty());
+    match growths.as_slice() {
+        [] => {}
+        [(only, _)] => unnamed.for_each(|t| t.model = only.clone()),
+        _ => unnamed.for_each(|t| t.usage.output = 0),
     }
+    growths
+        .into_iter()
+        .filter_map(|(model, mut usage)| {
+            let billed: u64 = messages
+                .iter()
+                .filter(|t| t.model == model)
+                .map(|t| t.usage.output)
+                .sum();
+            usage.output = usage.output.saturating_sub(billed);
+            (usage != Usage::default()).then_some((model, usage))
+        })
+        .collect()
 }
 
 fn aggregate_turn(
@@ -284,6 +276,9 @@ fn aggregate_turn(
         request_count: Some(0),
     }
 }
+
+#[cfg(test)]
+mod settle_tests;
 
 #[cfg(test)]
 mod tests {
