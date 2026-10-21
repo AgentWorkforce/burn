@@ -326,8 +326,8 @@ impl Ledger {
         writer::rewrite_turns(&mut self.conns.burn, turns, inferences)
     }
 
-    /// Sessions `session_id` descends from by fork or spawn, nearest
-    /// first: the parents its edges name, their parents, and so on.
+    /// Sessions `session_id` descends from by fork or spawn: the parents
+    /// its edges name, their parents, and so on, each once.
     pub(crate) fn ancestor_sessions(
         &self,
         source: crate::reader::SourceKind,

@@ -423,3 +423,22 @@ fn a_checked_ledger_is_not_checked_again() {
     assert_eq!(checked.appended_turns, 0);
     assert_eq!(sandbox.ingest(&mut ledger), IngestReport::empty());
 }
+
+/// Edges that loop (a session filed as its own parent, two sessions as
+/// each other's) end the walk up a fork's ancestry instead of repeating it.
+#[test]
+fn looping_edges_end_the_walk_for_copies() {
+    let sandbox = Sandbox::new();
+    place_fork(&sandbox);
+    let mut ledger = sandbox.ledger();
+    sandbox.ingest(&mut ledger);
+    bill_under(&sandbox, PARENT, CHILD);
+    file_spawn(&sandbox, CHILD, CHILD, "call_self");
+    file_spawn(&sandbox, PARENT, CHILD, "call_back");
+    forget_copies_check(&mut ledger);
+
+    sandbox.ingest(&mut ledger);
+
+    assert_eq!(turn_ids(&ledger, CHILD), [CHILD_TASK]);
+    assert_eq!(turn_ids(&ledger, PARENT).len(), 2);
+}
