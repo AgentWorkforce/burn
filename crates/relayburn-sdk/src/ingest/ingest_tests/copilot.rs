@@ -182,3 +182,81 @@ fn a_session_ingested_before_and_after_its_shutdown_bills_its_totals_once() {
     let mut ledger = sandbox.ledger();
     assert_eq!(sandbox.ingest(&mut ledger), IngestReport::empty());
 }
+
+/// Each tool call of one message reads its own arguments.
+#[test]
+fn each_call_of_a_message_reads_its_own_arguments() {
+    let sandbox = Sandbox::new();
+    let second =
+        r#"{"toolCallId":"call_2","name":"view","arguments":{"path":"b.rs"},"type":"function"}"#;
+    let text = journal(&[("view", "call_1", "a.rs")]).replace(
+        r#""type":"function"}]"#,
+        &format!(r#""type":"function"}},{second}]"#),
+    );
+    assert!(text.contains("call_2"));
+    let turns = ingest_journal(&sandbox, &text);
+    let mut targets: Vec<_> = turns[0]
+        .tool_calls
+        .iter()
+        .map(|c| (c.id.clone(), c.target.clone()))
+        .collect();
+    targets.sort();
+    assert_eq!(
+        targets,
+        [
+            ("call_1".to_string(), Some("a.rs".to_string())),
+            ("call_2".to_string(), Some("b.rs".to_string()))
+        ]
+    );
+}
+
+/// A message written in its shutdown's millisecond belongs to that
+/// shutdown's interval alone: the next shutdown bills its own growth whole.
+#[test]
+fn a_message_on_a_shutdown_boundary_counts_in_one_interval() {
+    let sandbox = Sandbox::new();
+    let at = "2026-09-18T21:30:05.000Z";
+    let event = |kind: &str, n: u32, ts: &str, data: serde_json::Value| {
+        serde_json::json!({"type": kind, "id": format!("00000000-0000-4000-8000-{n:012}"),
+            "parentId": null, "timestamp": ts, "data": data})
+        .to_string()
+    };
+    let totals = |output: u64| {
+        serde_json::json!({"modelMetrics": {"gpt-5.4": {"usage": {"inputTokens": 100,
+            "outputTokens": output, "cacheReadTokens": 0, "cacheWriteTokens": 0}}}})
+    };
+    let text = [
+        event(
+            "session.start",
+            0,
+            "2026-09-18T21:30:00.000Z",
+            serde_json::json!({"sessionId": SID, "version": 1, "producer": "copilot-agent",
+                "copilotVersion": "1.0.86", "context": {"cwd": "/tmp/project"}}),
+        ),
+        event(
+            "user.message",
+            1,
+            "2026-09-18T21:30:01.000Z",
+            serde_json::json!({"content": "go", "turnId": "0"}),
+        ),
+        event(
+            "assistant.message",
+            2,
+            at,
+            serde_json::json!({"messageId": "msg-0", "model": "gpt-5.4", "content": "done",
+                "turnId": "0", "outputTokens": 10}),
+        ),
+        event("session.shutdown", 3, at, totals(10)),
+        event(
+            "session.shutdown",
+            4,
+            "2026-09-18T21:31:00.000Z",
+            totals(25),
+        ),
+    ]
+    .join("\n")
+        + "\n";
+    let turns = ingest_journal(&sandbox, &text);
+    let output: u64 = turns.iter().map(|t| t.usage.output).sum();
+    assert_eq!(output, 25);
+}
