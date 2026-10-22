@@ -82,11 +82,9 @@ impl Args {
     }
 }
 
-/// Top-level subcommand enum. One variant per binary subcommand. The
-/// Wave 2 PRs replace each unit variant with a fully-typed `*Args`
-/// struct (`Summary(SummaryArgs)`, etc.) once the per-command flag set
-/// is wired up; until then, every variant is a stub that prints a
-/// "not yet implemented" message and exits 1.
+/// Top-level subcommand enum. One variant per binary subcommand, each
+/// carrying its fully-typed `*Args` struct (`Summary(SummaryArgs)`, etc.)
+/// and dispatched to the matching presenter in `main`.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Measure one explicit session artifact without discovery or a ledger.
