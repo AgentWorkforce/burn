@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::reader::{SourceKind, TurnRecord, Usage, UsageGranularity};
 
-use crate::analyze::pricing::{ModelCost, ModelCostTier, PricingTable, ReasoningMode};
+use crate::analyze::pricing::{
+    billing_provider, ModelCost, ModelCostTier, PricingTable, ReasoningMode,
+};
 use crate::analyze::provider_reattribution::{resolve_provider, strip_provider_prefix};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +45,9 @@ pub struct CostForUsageOptions {
     /// aggregate), so no request is known to cross a context tier: the
     /// model's base rates apply.
     pub base_tier: bool,
+    /// Harness the usage was read from; selects the tariff of a provider
+    /// that bills that harness's sessions (see [`billing_provider`]).
+    pub source: Option<SourceKind>,
 }
 
 /// Tokens-per-million divisor shared by every per-token cost calc in the
@@ -73,7 +78,7 @@ pub(crate) fn cost_for_usage(
     pricing: &PricingTable,
     options: CostForUsageOptions,
 ) -> Option<CostBreakdown> {
-    let rate = lookup_model_rate(model, pricing)?;
+    let rate = lookup_model_rate(model, options.source, pricing)?;
     let tier = if options.base_tier {
         None
     } else {
@@ -118,6 +123,7 @@ pub fn cost_for_turn(turn: &TurnRecord, pricing: &PricingTable) -> Option<CostBr
             .fidelity
             .as_ref()
             .is_some_and(|f| f.granularity == UsageGranularity::PerSessionAggregate),
+        source: Some(turn.source),
     };
     cost_for_usage(&turn.usage, &turn.model, pricing, opts)
 }
@@ -216,28 +222,32 @@ pub(crate) fn reasoning_in_output(source: SourceKind) -> bool {
     reasoning_mode_for_source(source) == Some(ReasoningMode::IncludedInOutput)
 }
 
-/// Shared lookup: direct match → synthetic reattribution → generic
-/// `provider/model` strip. Used by `cost_for_usage` and (later) by the
-/// hotspots / claude-md attribution paths so synthetic-routed turns price
-/// consistently across views.
-pub fn lookup_model_rate<'a>(model: &str, pricing: &'a PricingTable) -> Option<&'a ModelCost> {
-    if let Some(direct) = pricing.get(model) {
+/// Shared lookup: direct match → alias → synthetic reattribution → generic
+/// `provider/model` strip, each step preferring the tariff of the provider
+/// that bills `source`'s sessions. Every cost view prices through here so a
+/// turn costs the same in all of them.
+pub fn lookup_model_rate<'a>(
+    model: &str,
+    source: Option<SourceKind>,
+    pricing: &'a PricingTable,
+) -> Option<&'a ModelCost> {
+    let billed_by = source.and_then(billing_provider);
+    let rate = |id: &str| pricing.rate(id, billed_by);
+    if let Some(direct) = rate(model) {
         return Some(direct);
     }
-    if let Some(alias) = pricing_model_alias(model) {
-        if let Some(via) = pricing.get(alias) {
-            return Some(via);
-        }
+    if let Some(via) = pricing_model_alias(model).and_then(rate) {
+        return Some(via);
     }
     let reattributed = resolve_provider(model);
     if reattributed.normalized_model != model {
-        if let Some(via) = pricing.get(&reattributed.normalized_model) {
+        if let Some(via) = rate(&reattributed.normalized_model) {
             return Some(via);
         }
     }
     let stripped = strip_provider_prefix(model);
     if stripped != model {
-        if let Some(via) = pricing.get(stripped) {
+        if let Some(via) = rate(stripped) {
             return Some(via);
         }
     }
@@ -683,6 +693,33 @@ mod tests {
     }
 
     #[test]
+    fn copilot_turns_price_at_copilots_tariff() {
+        // A cache-read-heavy kimi-k3 Copilot turn bills its cache reads at
+        // Copilot's cache-read tariff, well under its input tariff.
+        let p = load_builtin_pricing();
+        let usage = Usage {
+            input: 20_000,
+            output: 5_000,
+            reasoning: 0,
+            cache_read: 2_000_000,
+            cache_create_5m: 0,
+            cache_create_1h: 0,
+        };
+        let copilot = p.rate("kimi-k3", Some("github-copilot")).unwrap();
+        assert!(copilot.cache_read < copilot.input);
+        let expected = (20_000.0 * copilot.input
+            + 5_000.0 * copilot.output
+            + 2_000_000.0 * copilot.cache_read)
+            / PER_MILLION;
+        let c = cost_for_turn(&turn("kimi-k3", usage, SourceKind::CopilotCli), &p).unwrap();
+        assert!(
+            (c.total - expected).abs() < 1e-12,
+            "{} vs {expected}",
+            c.total
+        );
+    }
+
+    #[test]
     fn returns_none_for_unknown_model() {
         let p = load_builtin_pricing();
         let c = cost_for_turn(
@@ -723,9 +760,24 @@ mod tests {
                 context_tiers: Vec::new(),
             },
         );
-        let rate = lookup_model_rate("synthetic/qwen3-coder", &p).expect("synthetic prefix routes");
+        let rate =
+            lookup_model_rate("synthetic/qwen3-coder", None, &p).expect("synthetic prefix routes");
         assert_eq!(rate.input, 1.0);
         assert_eq!(rate.output, 2.0);
+    }
+
+    #[test]
+    fn lookup_model_rate_strips_a_provider_prefix_at_the_billing_providers_tariff() {
+        let p = crate::analyze::pricing::parse_pricing(
+            r#"{
+                "acme": { "models": { "foo": { "cost": { "input": 1, "output": 2 } } } },
+                "github-copilot": { "models": { "foo": { "cost": { "input": 3, "output": 4 } } } }
+            }"#,
+        )
+        .unwrap();
+        let rate = |source| lookup_model_rate("router/foo", source, &p).unwrap().input;
+        assert_eq!(rate(None), 1.0);
+        assert_eq!(rate(Some(SourceKind::CopilotCli)), 3.0);
     }
 
     #[test]
@@ -744,7 +796,8 @@ mod tests {
                 context_tiers: Vec::new(),
             },
         );
-        let rate = lookup_model_rate("codex-auto-review", &p).expect("auto-review alias routes");
+        let rate =
+            lookup_model_rate("codex-auto-review", None, &p).expect("auto-review alias routes");
         assert_eq!(rate.input, 1.75);
         assert_eq!(rate.output, 14.0);
         assert_eq!(rate.cache_read, 0.175);
@@ -779,8 +832,8 @@ mod tests {
                 context_tiers: Vec::new(),
             },
         );
-        let rate =
-            lookup_model_rate("codex-auto-review", &p).expect("direct auto-review price wins");
+        let rate = lookup_model_rate("codex-auto-review", None, &p)
+            .expect("direct auto-review price wins");
         assert_eq!(rate.input, 9.0);
         assert_eq!(rate.output, 10.0);
         assert_eq!(rate.cache_read, 1.0);

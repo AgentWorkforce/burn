@@ -148,7 +148,12 @@ fn a_message_naming_no_model_leaves_its_output_to_the_shutdown() {
     let (text, shutdown) = unnamed_journal();
     let turns = ingest_journal(&sandbox, &(text + &shutdown));
     let pricing = crate::analyze::pricing::load_builtin_pricing();
-    let rate = crate::analyze::cost::lookup_model_rate("gpt-5.4", &pricing).unwrap();
+    let rate = crate::analyze::cost::lookup_model_rate(
+        "gpt-5.4",
+        Some(crate::reader::SourceKind::CopilotCli),
+        &pricing,
+    )
+    .unwrap();
     let aggregate = (100.0 * rate.input + 10.0 * rate.output) / 1_000_000.0;
     assert_eq!(
         priced(&turns),

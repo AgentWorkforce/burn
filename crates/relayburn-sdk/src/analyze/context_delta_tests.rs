@@ -612,3 +612,16 @@ fn zero_delta_with_compaction_is_not_a_compaction_row() {
     );
     assert!(deltas.is_empty(), "{deltas:?}");
 }
+
+#[test]
+fn attributed_cost_charges_growth_at_the_cache_read_tariff() {
+    let pricing = crate::analyze::pricing::parse_pricing(
+        r#"{ "acme": { "models": {
+            "m": { "cost": { "input": 3, "output": 15, "cache_read": 0.25 } }
+        } } }"#,
+    )
+    .unwrap();
+    assert_eq!(attributed_cost(2_000_000, "m", &pricing), 0.5);
+    assert_eq!(attributed_cost(-5, "m", &pricing), 0.0);
+    assert_eq!(attributed_cost(2_000_000, "unpriced", &pricing), 0.0);
+}

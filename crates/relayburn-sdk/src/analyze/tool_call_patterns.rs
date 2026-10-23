@@ -376,7 +376,11 @@ fn pick_input_rate(turns: &[&TurnRecord], pricing: &PricingTable) -> f64 {
     let Some((best_model, _)) = best else {
         return 0.0;
     };
-    match lookup_model_rate(best_model, pricing) {
+    let source = turns
+        .iter()
+        .find(|t| t.model == best_model)
+        .map(|t| t.source);
+    match lookup_model_rate(best_model, source, pricing) {
         Some(rate) => rate.input / 1_000_000.0,
         None => 0.0,
     }
@@ -1008,5 +1012,26 @@ mod tests {
         assert_eq!(s, "\"search-sequence\"");
         let s = serde_json::to_string(&ToolCallPatternCategory::BashGhPr).unwrap();
         assert_eq!(s, "\"bash-gh-pr\"");
+    }
+
+    #[test]
+    fn input_rate_uses_the_dominant_models_billing_provider_tariff() {
+        let pricing = crate::analyze::pricing::parse_pricing(
+            r#"{
+                "acme": { "models": {
+                    "m": { "cost": { "input": 1, "output": 1 } },
+                    "other": { "cost": { "input": 9, "output": 1 } }
+                } },
+                "github-copilot": { "models": { "m": { "cost": { "input": 4, "output": 1 } } } }
+            }"#,
+        )
+        .unwrap();
+        let mut other = turn("s", "a", 0, SourceKind::ClaudeCode, vec![]);
+        other.model = "other".into();
+        let mut m = turn("s", "b", 1, SourceKind::CopilotCli, vec![]);
+        m.model = "m".into();
+        let turns = [other.clone(), m.clone(), m];
+        let refs: Vec<&TurnRecord> = turns.iter().collect();
+        assert_eq!(pick_input_rate(&refs, &pricing), 4.0 / 1_000_000.0);
     }
 }

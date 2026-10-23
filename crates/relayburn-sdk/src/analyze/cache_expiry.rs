@@ -303,7 +303,10 @@ fn recreated_prefix(prev: &Usage, cur: &Usage) -> Option<u64> {
 /// Extra USD `turn` paid to re-write `recreated` tokens versus reading them
 /// from a warm cache. `None` when the model is unpriced.
 fn expiry_penalty(turn: &TurnRecord, recreated: u64, pricing: &PricingTable) -> Option<f64> {
-    let rate = effective_model_rate(&turn.usage, lookup_model_rate(&turn.model, pricing)?);
+    let rate = effective_model_rate(
+        &turn.usage,
+        lookup_model_rate(&turn.model, Some(turn.source), pricing)?,
+    );
     let created = turn.usage.cache_create_5m + turn.usage.cache_create_1h;
     let recreated_write = rate.cache_create_cost(&turn.usage) * recreated as f64 / created as f64;
     let warm_read = recreated as f64 / PER_MILLION * rate.cache_read;
