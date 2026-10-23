@@ -76,7 +76,7 @@ fn a_priced_share_is_measured_in_cost() {
 #[test]
 fn a_free_model_falls_back_to_the_token_share() {
     let mut pricing = load_builtin_pricing();
-    let mut free = pricing["gpt-5.4"].clone();
+    let mut free = pricing.get("gpt-5.4").unwrap().clone();
     free.input = 0.0;
     free.output = 0.0;
     free.cache_read = 0.0;

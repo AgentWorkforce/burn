@@ -71,7 +71,10 @@ pub(super) fn detect_compaction_losses(
                             &usage,
                             &preceding.model,
                             pricing,
-                            CostForUsageOptions::default(),
+                            CostForUsageOptions {
+                                source: Some(preceding.source),
+                                ..CostForUsageOptions::default()
+                            },
                         ) {
                             cache_lost_cost = priced.total;
                         }

@@ -279,8 +279,8 @@ fn percentile(values: &[u64], p: f64) -> u64 {
     sorted[idx]
 }
 
-fn price_carry_cost(tokens: u64, model: &str, pricing: &PricingTable) -> f64 {
-    let Some(rate) = lookup_model_rate(model, pricing) else {
+fn price_carry_cost(tokens: u64, model: &str, source: SourceKind, pricing: &PricingTable) -> f64 {
+    let Some(rate) = lookup_model_rate(model, Some(source), pricing) else {
         return 0.0;
     };
     (tokens as f64 / 1_000_000.0) * rate.input
@@ -386,7 +386,7 @@ pub fn detect_observed_bloat(opts: &DetectObservedBloatOptions<'_>) -> Vec<ToolO
             })
             .or_else(|| first_model_for_session(opts.turns, e.source, &e.session_id));
         if let Some(model) = model {
-            bucket.cost += price_carry_cost(tokens, model, opts.pricing);
+            bucket.cost += price_carry_cost(tokens, model, e.source, opts.pricing);
         }
     }
 

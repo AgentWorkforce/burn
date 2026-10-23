@@ -11,8 +11,9 @@ use std::io;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+
+use crate::reader::SourceKind;
 
 /// How a model's reasoning tokens should be priced.
 ///
@@ -66,12 +67,93 @@ pub struct ModelCostTier {
     pub reasoning: Option<f64>,
 }
 
-pub(crate) type PricingTable = HashMap<String, ModelCost>;
+/// Per-model tariffs resolved from a models.dev-shaped snapshot, plus the
+/// tariffs of providers that bill a harness's sessions themselves.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PricingTable {
+    /// One tariff per model id, chosen by [`resolve_tariff`].
+    models: HashMap<String, ModelCost>,
+    /// provider id → model id → that provider's own tariff, kept only for
+    /// [`BILLING_PROVIDERS`].
+    billed: HashMap<String, HashMap<String, ModelCost>>,
+}
+
+impl PricingTable {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The resolved tariff for `model`, independent of who served it.
+    pub fn get(&self, model: &str) -> Option<&ModelCost> {
+        self.models.get(model)
+    }
+
+    /// The tariff `billing_provider` charges for `model` when it lists one,
+    /// else the resolved tariff.
+    pub fn rate(&self, model: &str, billing_provider: Option<&str>) -> Option<&ModelCost> {
+        billing_provider
+            .and_then(|provider| self.billed.get(provider))
+            .and_then(|models| models.get(model))
+            .or_else(|| self.get(model))
+    }
+
+    pub fn contains_key(&self, model: &str) -> bool {
+        self.models.contains_key(model)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ModelCost)> {
+        self.models.iter()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &ModelCost> {
+        self.models.values()
+    }
+
+    /// Set `model`'s tariff for every session, whoever bills it.
+    pub fn insert(&mut self, model: String, cost: ModelCost) {
+        for models in self.billed.values_mut() {
+            models.remove(&model);
+        }
+        self.models.insert(model, cost);
+    }
+
+    /// Shadow this table with `overlay`: its tariffs replace these for every
+    /// model it prices, its billing-provider tariffs included.
+    fn merge(&mut self, overlay: PricingTable) {
+        for (model, cost) in overlay.models {
+            self.insert(model, cost);
+        }
+        for (provider, models) in overlay.billed {
+            self.billed.entry(provider).or_default().extend(models);
+        }
+    }
+}
+
+const GITHUB_COPILOT: &str = "github-copilot";
+
+/// Providers whose own tariff bills a session whenever burn reads that
+/// session from their harness; see [`billing_provider`].
+const BILLING_PROVIDERS: &[&str] = &[GITHUB_COPILOT];
+
+/// The provider that bills every model call of a `source` session, when the
+/// harness fixes it. Copilot CLI routes every call through GitHub Copilot.
+/// Other harnesses can run against several providers under the same model
+/// id, so their turns take the resolved tariff.
+pub(crate) fn billing_provider(source: SourceKind) -> Option<&'static str> {
+    match source {
+        SourceKind::CopilotCli => Some(GITHUB_COPILOT),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Default, Deserialize)]
 struct ModelsDevModel {
     #[serde(default)]
     cost: Option<ModelsDevCost>,
+    /// `owner/model` naming the lab that publishes the model, e.g.
+    /// `moonshotai/kimi-k3` on every reseller's `kimi-k3`.
+    #[serde(default)]
+    canonical_model_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -120,17 +202,13 @@ struct ModelsDevTierCondition {
 
 #[derive(Debug, Default, Deserialize)]
 struct ModelsDevProvider {
-    // `IndexMap` preserves JSON insertion order so iteration over the model
-    // map matches the TS `Object.entries` walk; this is what makes
-    // duplicate-id resolution deterministic (last entry in file order wins).
     #[serde(default)]
-    models: Option<IndexMap<String, ModelsDevModel>>,
+    models: Option<HashMap<String, ModelsDevModel>>,
 }
 
-// Providers iterate in file order so duplicate non-primary model ids retain
-// deterministic last-wins behavior. Primary vendor entries are protected
-// from later reseller copies in `flatten`.
-type ModelsDevRoot = IndexMap<String, ModelsDevProvider>;
+/// Provider order in the file is not a pricing contract: models.dev adds
+/// provider blocks anywhere, so [`resolve_tariff`] never consults it.
+type ModelsDevRoot = HashMap<String, ModelsDevProvider>;
 
 /// models.dev publishes a single `cache_write` tariff, which for Claude is
 /// the 5-minute-TTL write (1.25x input). Claude prompt caching bills
@@ -158,9 +236,9 @@ fn cache_write_1h_rate(model_id: &str, explicit: Option<f64>, input: f64, cache_
     })
 }
 
-/// Primary model vendors whose own tariff should win over reseller/router
-/// copies with the same bare model id. models.dev regularly adds new provider
-/// blocks and their order is not a pricing-precedence contract.
+/// First-party vendors, in precedence order, whose listing of a model id
+/// prices it when no entry for that id names an owner that lists it
+/// (`canonical_model_id` is missing on older first-party models).
 const PRIMARY_PRICING_PROVIDERS: &[&str] =
     &["anthropic", "openai", "google", "google-vertex", "xai"];
 
@@ -196,16 +274,14 @@ pub fn load_builtin_pricing() -> PricingTable {
 
 /// Load pricing, optionally merging an override file over the builtin. When
 /// `override_path` is `Some` and the file exists + parses, its entries shadow
-/// builtin entries on key collision (TS `{ ...builtin, ...user }` semantics).
-/// Any read or parse error on the override silently falls back to the builtin
-/// — matches the TS `try/catch` in `loadPricing`.
+/// builtin entries on key collision, billing-provider tariffs included (see
+/// [`PricingTable::merge`]). Any read or parse error on the override silently
+/// falls back to the builtin.
 pub fn load_pricing(override_path: Option<&Path>) -> PricingTable {
     let mut table = load_builtin_pricing();
     if let Some(path) = override_path {
         if let Ok(user) = load_from_file(path) {
-            for (k, v) in user {
-                table.insert(k, v);
-            }
+            table.merge(user);
         }
     }
     table
@@ -228,53 +304,149 @@ fn parse_pricing_with_protected_models(
     Ok(flatten(&parsed, protected_models))
 }
 
-/// Flatten a nested `provider → model → cost` map into the flat
-/// `model_id → ModelCost` table burn uses for lookup. Skips entries that lack
-/// either `input` or `output` — matches the TS guard so we don't surface
-/// half-priced models.
+/// One provider's priced listing of a model id.
+struct Listing<'a> {
+    provider: &'a str,
+    cost: ModelCost,
+}
+
+/// Flatten a nested `provider → model → cost` map into the per-model table
+/// burn uses for lookup, one tariff per model id chosen by
+/// [`resolve_tariff`]. Entries lacking `input` or `output` are skipped so no
+/// half-priced model surfaces.
 fn flatten(root: &ModelsDevRoot, protected_models: &HashSet<String>) -> PricingTable {
-    let mut out = PricingTable::new();
-    let mut primary_models: HashSet<String> = HashSet::new();
+    let mut table = PricingTable::new();
+    let mut listings: HashMap<&str, Vec<Listing<'_>>> = HashMap::new();
+    let mut owner_votes: HashMap<&str, HashMap<&str, usize>> = HashMap::new();
     for (provider_id, provider) in root {
         let Some(models) = provider.models.as_ref() else {
             continue;
         };
         for (id, model) in models {
-            let primary_provider = PRIMARY_PRICING_PROVIDERS.contains(&provider_id.as_str());
-            if !primary_provider && (primary_models.contains(id) || protected_models.contains(id)) {
-                continue;
+            if let Some((owner, _)) = model
+                .canonical_model_id
+                .as_deref()
+                .and_then(|canonical| canonical.split_once('/'))
+            {
+                *owner_votes.entry(id).or_default().entry(owner).or_default() += 1;
             }
-            let Some(cost) = model.cost.as_ref() else {
+            let Some(cost) = model_cost(id, model) else {
                 continue;
             };
-            let (Some(input), Some(output)) = (cost.input, cost.output) else {
-                continue;
-            };
-            let has_reasoning = cost.reasoning.is_some();
-            // Models that don't publish a cache-write rate get billed at the
-            // input rate for cache creation.
-            let cache_write = cost.cache_write.unwrap_or(input);
-            let entry = ModelCost {
-                input,
-                output,
-                cache_read: cost.cache_read.unwrap_or(0.0),
-                cache_write,
-                cache_write_1h: cache_write_1h_rate(id, cost.cache_write_1h, input, cache_write),
-                reasoning: cost.reasoning,
-                reasoning_mode: if has_reasoning {
-                    ReasoningMode::Separate
-                } else {
-                    ReasoningMode::SameAsOutput
-                },
-                context_tiers: context_tiers(id, cost),
-            };
-            out.insert(id.clone(), entry);
-            if primary_provider {
-                primary_models.insert(id.clone());
+            if BILLING_PROVIDERS.contains(&provider_id.as_str()) {
+                table
+                    .billed
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .insert(id.clone(), cost.clone());
             }
+            listings.entry(id).or_default().push(Listing {
+                provider: provider_id,
+                cost,
+            });
         }
     }
-    out
+    for (id, listings) in listings {
+        let owners = ranked_owners(owner_votes.remove(id).unwrap_or_default());
+        if let Some(cost) = resolve_tariff(&listings, &owners, protected_models.contains(id)) {
+            table.models.insert(id.to_string(), cost.clone());
+        }
+    }
+    table
+}
+
+/// Owners named by a model id's `canonical_model_id`s, most-named first, ties
+/// in name order.
+fn ranked_owners(votes: HashMap<&str, usize>) -> Vec<&str> {
+    let mut owners: Vec<(&str, usize)> = votes.into_iter().collect();
+    owners.sort_by(|(a, a_votes), (b, b_votes)| b_votes.cmp(a_votes).then_with(|| a.cmp(b)));
+    owners.into_iter().map(|(owner, _)| owner).collect()
+}
+
+/// Choose a model id's tariff from its priced `listings`:
+///
+/// 1. the owner's own listing, trying `owners` in rank order;
+/// 2. else the listing of the first [`PRIMARY_PRICING_PROVIDERS`] vendor
+///    that has one;
+/// 3. else nothing when the id was ever first-party (`protected`), so a
+///    retired first-party model is unpriced rather than inheriting a
+///    reseller tariff;
+/// 4. else the tariff the most paid listings agree on, ties going to the
+///    tariff whose providers include the alphabetically first provider id.
+///    A listing free on both input and output is a free tier or plan, not a
+///    token tariff, so it prices the model only when every listing is free.
+fn resolve_tariff<'a>(
+    listings: &'a [Listing<'_>],
+    owners: &[&str],
+    protected: bool,
+) -> Option<&'a ModelCost> {
+    let listed_by = |provider: &str| {
+        listings
+            .iter()
+            .find(|listing| listing.provider == provider)
+            .map(|listing| &listing.cost)
+    };
+    if let Some(cost) = owners.iter().find_map(|owner| listed_by(owner)) {
+        return Some(cost);
+    }
+    if let Some(cost) = PRIMARY_PRICING_PROVIDERS
+        .iter()
+        .find_map(|vendor| listed_by(vendor))
+    {
+        return Some(cost);
+    }
+    if protected {
+        return None;
+    }
+    consensus_tariff(listings)
+}
+
+fn consensus_tariff<'a>(listings: &'a [Listing<'_>]) -> Option<&'a ModelCost> {
+    let free = |listing: &&Listing<'_>| listing.cost.input == 0.0 && listing.cost.output == 0.0;
+    let all_free = listings.iter().all(|listing| free(&listing));
+    // (tariff, listings agreeing, alphabetically first provider among them)
+    let mut groups: Vec<(&ModelCost, usize, &str)> = Vec::new();
+    for listing in listings.iter().filter(|listing| all_free || !free(listing)) {
+        match groups
+            .iter_mut()
+            .find(|(cost, _, _)| **cost == listing.cost)
+        {
+            Some((_, count, first)) => {
+                *count += 1;
+                *first = (*first).min(listing.provider);
+            }
+            None => groups.push((&listing.cost, 1, listing.provider)),
+        }
+    }
+    groups
+        .into_iter()
+        .max_by(|(_, a_count, a_first), (_, b_count, b_first)| {
+            a_count.cmp(b_count).then_with(|| b_first.cmp(a_first))
+        })
+        .map(|(cost, _, _)| cost)
+}
+
+/// A listing's tariff, or `None` when it lacks `input` or `output`.
+fn model_cost(id: &str, model: &ModelsDevModel) -> Option<ModelCost> {
+    let cost = model.cost.as_ref()?;
+    let (input, output) = (cost.input?, cost.output?);
+    // Models that don't publish a cache-write rate get billed at the input
+    // rate for cache creation.
+    let cache_write = cost.cache_write.unwrap_or(input);
+    Some(ModelCost {
+        input,
+        output,
+        cache_read: cost.cache_read.unwrap_or(0.0),
+        cache_write,
+        cache_write_1h: cache_write_1h_rate(id, cost.cache_write_1h, input, cache_write),
+        reasoning: cost.reasoning,
+        reasoning_mode: if cost.reasoning.is_some() {
+            ReasoningMode::Separate
+        } else {
+            ReasoningMode::SameAsOutput
+        },
+        context_tiers: context_tiers(id, cost),
+    })
 }
 
 fn context_tiers(model_id: &str, cost: &ModelsDevCost) -> Vec<ModelCostTier> {
@@ -609,25 +781,250 @@ mod tests {
         assert_eq!(gpt.cache_write_1h, gpt.cache_write);
     }
 
+    /// `id`'s tariff as `provider` lists it in the bundled snapshot.
+    pub(crate) fn builtin_listing(provider: &str, id: &str) -> ModelCost {
+        let root: ModelsDevRoot = serde_json::from_str(BUILTIN_PRICING_JSON).unwrap();
+        let model = &root[provider].models.as_ref().unwrap()[id];
+        model_cost(id, model).unwrap_or_else(|| panic!("{provider}/{id} is priced"))
+    }
+
+    /// The same providers in both file orders.
+    fn both_orders(blocks: &[&str]) -> [String; 2] {
+        let forward = blocks.join(",");
+        let reverse = blocks.iter().rev().copied().collect::<Vec<_>>().join(",");
+        [format!("{{{forward}}}"), format!("{{{reverse}}}")]
+    }
+
     #[test]
-    fn flatten_resolves_duplicate_model_ids_with_last_wins_file_order() {
-        // `models.dev.json` lists ~1900 model IDs that appear under multiple
-        // providers (e.g. `claude-sonnet-4-6` under both `anthropic` and
-        // `nano-gpt`). The TS path iterates `Object.values(root)` /
-        // `Object.entries(models)` in insertion order and lets the last
-        // assignment to `out[id]` win. We must do the same so duplicate-id
-        // pricing is deterministic across runs.
-        let raw = r#"{
-            "first":  { "models": { "shared": { "cost": { "input": 1, "output": 2 } } } },
-            "second": { "models": { "shared": { "cost": { "input": 9, "output": 8 } } } }
-        }"#;
-        // Run repeatedly; each run must surface the second-provider entry.
-        for _ in 0..10 {
-            let table = parse_pricing(raw).unwrap();
-            let entry = table.get("shared").unwrap();
-            assert_eq!(entry.input, 9.0);
-            assert_eq!(entry.output, 8.0);
+    fn flatten_prices_a_model_at_its_owners_tariff_in_any_file_order() {
+        // The kimi-k3 shape: the owner, a reseller that agrees with it, and
+        // a later reseller billing cache reads at the input rate.
+        for raw in both_orders(&[
+            r#""moonshotai": { "models": { "kimi-x": { "canonical_model_id": "moonshotai/kimi-x",
+                "cost": { "input": 3, "output": 15, "cache_read": 0.3, "cache_write": 3 } } } }"#,
+            r#""reseller-a": { "models": { "kimi-x": { "canonical_model_id": "moonshotai/kimi-x",
+                "cost": { "input": 3, "output": 15, "cache_read": 0.3 } } } }"#,
+            r#""reseller-b": { "models": { "kimi-x": { "canonical_model_id": "moonshotai/kimi-x",
+                "cost": { "input": 3, "output": 15, "cache_read": 3 } } } }"#,
+            r#""reseller-c": { "models": { "kimi-x": { "canonical_model_id": "moonshotai/kimi-x",
+                "cost": { "input": 3, "output": 15, "cache_read": 3 } } } }"#,
+        ]) {
+            let table = parse_pricing(&raw).unwrap();
+            let cost = table.get("kimi-x").unwrap();
+            assert_eq!(cost.cache_read, 0.3, "{raw}");
+            assert_eq!(cost.cache_write, 3.0, "{raw}");
         }
+    }
+
+    #[test]
+    fn flatten_tries_owners_most_named_first_then_by_name() {
+        let listing = |provider: &str, owner: &str, input: u32| {
+            format!(
+                r#""{provider}": {{ "models": {{ "m": {{ "canonical_model_id": "{owner}/m",
+                    "cost": {{ "input": {input}, "output": 1 }} }} }} }}"#
+            )
+        };
+        // lab-b is named twice, lab-a once: lab-b's own listing wins.
+        let named = [
+            listing("lab-a", "lab-a", 1),
+            listing("lab-b", "lab-b", 2),
+            listing("reseller", "lab-b", 3),
+        ];
+        // lab-a and lab-b tie: the first by name wins.
+        let tied = [listing("lab-b", "lab-b", 2), listing("lab-a", "lab-a", 1)];
+        // The most-named owner lists nothing, so the next one prices it.
+        let absent = [
+            listing("reseller-a", "lab-z", 7),
+            listing("reseller-b", "lab-z", 7),
+            listing("lab-a", "lab-a", 1),
+        ];
+        for (blocks, input) in [(&named[..], 2.0), (&tied[..], 1.0), (&absent[..], 1.0)] {
+            let blocks: Vec<&str> = blocks.iter().map(String::as_str).collect();
+            for raw in both_orders(&blocks) {
+                assert_eq!(
+                    parse_pricing(&raw).unwrap().get("m").unwrap().input,
+                    input,
+                    "{raw}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flatten_prefers_primary_vendors_in_precedence_order() {
+        for raw in both_orders(&[
+            r#""google-vertex": { "models": { "m": { "cost": { "input": 4, "output": 1 } } } }"#,
+            r#""google": { "models": { "m": { "cost": { "input": 3, "output": 1 } } } }"#,
+            r#""openai": { "models": { "m": { "cost": { "input": 2, "output": 1 } } } }"#,
+            r#""xai": { "models": { "m": { "cost": { "input": 5, "output": 1 } } } }"#,
+        ]) {
+            assert_eq!(
+                parse_pricing(&raw).unwrap().get("m").unwrap().input,
+                2.0,
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn flatten_prices_a_reseller_only_model_at_the_tariff_most_listings_agree_on() {
+        for raw in both_orders(&[
+            r#""alpha": { "models": { "m": { "cost": { "input": 9, "output": 9 } } } }"#,
+            r#""beta": { "models": { "m": { "cost": { "input": 1, "output": 2 } } } }"#,
+            r#""gamma": { "models": { "m": { "cost": { "input": 1, "output": 2 } } } }"#,
+        ]) {
+            let cost = parse_pricing(&raw).unwrap().get("m").cloned().unwrap();
+            assert_eq!((cost.input, cost.output), (1.0, 2.0), "{raw}");
+        }
+    }
+
+    #[test]
+    fn flatten_never_lets_free_listings_outvote_a_paid_tariff() {
+        for raw in both_orders(&[
+            r#""plan-a": { "models": { "m": { "cost": { "input": 0, "output": 0 } } } }"#,
+            r#""plan-b": { "models": { "m": { "cost": { "input": 0, "output": 0 } } } }"#,
+            r#""paid": { "models": { "m": { "cost": { "input": 0, "output": 4 } } } }"#,
+        ]) {
+            assert_eq!(
+                parse_pricing(&raw).unwrap().get("m").unwrap().output,
+                4.0,
+                "{raw}"
+            );
+        }
+        let only_free = r#"{
+            "plan-a": { "models": { "m": { "cost": { "input": 0, "output": 0 } } } }
+        }"#;
+        assert_eq!(
+            parse_pricing(only_free).unwrap().get("m").unwrap().output,
+            0.0
+        );
+    }
+
+    #[test]
+    fn flatten_breaks_reseller_ties_by_provider_id_not_file_order() {
+        for raw in both_orders(&[
+            r#""zeta": { "models": { "m": { "cost": { "input": 9, "output": 8 } } } }"#,
+            r#""beta": { "models": { "m": { "cost": { "input": 5, "output": 5 } } } }"#,
+            r#""alpha": { "models": { "m": { "cost": { "input": 1, "output": 2 } } } }"#,
+            r#""omega": { "models": { "m": { "cost": { "input": 5, "output": 5 } } } }"#,
+            r#""delta": { "models": { "m": { "cost": { "input": 1, "output": 2 } } } }"#,
+        ]) {
+            // {alpha, delta} and {beta, omega} tie at two listings; alpha
+            // sorts first.
+            assert_eq!(
+                parse_pricing(&raw).unwrap().get("m").unwrap().input,
+                1.0,
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn billing_provider_names_copilot_for_copilot_sessions_only() {
+        assert_eq!(
+            billing_provider(SourceKind::CopilotCli),
+            Some("github-copilot")
+        );
+        for source in [
+            SourceKind::ClaudeCode,
+            SourceKind::Codex,
+            SourceKind::Opencode,
+            SourceKind::AnthropicApi,
+            SourceKind::OpenaiApi,
+            SourceKind::GeminiApi,
+        ] {
+            assert_eq!(billing_provider(source), None, "{source}");
+        }
+    }
+
+    const COPILOT_FIXTURE: &str = r#"{
+        "moonshotai": { "models": {
+            "kimi-x": { "canonical_model_id": "moonshotai/kimi-x",
+                "cost": { "input": 3, "output": 15, "cache_read": 0.3 } },
+            "kimi-only-owner": { "cost": { "input": 2, "output": 4 } }
+        } },
+        "github-copilot": { "models": {
+            "kimi-x": { "canonical_model_id": "moonshotai/kimi-x",
+                "cost": { "input": 3, "output": 15, "cache_read": 0.5 } },
+            "copilot-unpriced": { "cost": { "input": 1 } }
+        } },
+        "reseller": { "models": {
+            "kimi-x": { "cost": { "input": 3, "output": 15, "cache_read": 0.9 } }
+        } }
+    }"#;
+
+    #[test]
+    fn rate_prefers_the_billing_providers_tariff_then_the_resolved_one() {
+        let table = parse_pricing(COPILOT_FIXTURE).unwrap();
+        let copilot = Some(GITHUB_COPILOT);
+        assert_eq!(table.rate("kimi-x", copilot).unwrap().cache_read, 0.5);
+        assert_eq!(table.rate("kimi-x", None).unwrap().cache_read, 0.3);
+        assert_eq!(
+            table.rate("kimi-x", Some("reseller")).unwrap().cache_read,
+            0.3
+        );
+        assert_eq!(table.rate("kimi-only-owner", copilot).unwrap().input, 2.0);
+        assert!(table.rate("copilot-unpriced", copilot).is_none());
+
+        let lookup = |source| {
+            crate::analyze::cost::lookup_model_rate("kimi-x", Some(source), &table)
+                .unwrap()
+                .cache_read
+        };
+        assert_eq!(lookup(SourceKind::CopilotCli), 0.5);
+        assert_eq!(lookup(SourceKind::Opencode), 0.3);
+    }
+
+    #[test]
+    fn insert_sets_a_models_tariff_for_every_billing_provider() {
+        let mut table = parse_pricing(COPILOT_FIXTURE).unwrap();
+        let mut custom = table.get("kimi-x").unwrap().clone();
+        custom.cache_read = 0.01;
+        table.insert("kimi-x".into(), custom);
+        assert_eq!(
+            table
+                .rate("kimi-x", Some(GITHUB_COPILOT))
+                .unwrap()
+                .cache_read,
+            0.01
+        );
+        assert_eq!(table.rate("kimi-x", None).unwrap().cache_read, 0.01);
+    }
+
+    #[test]
+    fn merge_shadows_resolved_and_billing_provider_tariffs() {
+        let mut table = parse_pricing(COPILOT_FIXTURE).unwrap();
+        table.merge(
+            parse_pricing(
+                r#"{
+                    "user": { "models": {
+                        "kimi-only-owner": { "cost": { "input": 7, "output": 7 } }
+                    } },
+                    "github-copilot": { "models": {
+                        "kimi-x": { "cost": { "input": 3, "output": 15, "cache_read": 0.02 } }
+                    } }
+                }"#,
+            )
+            .unwrap(),
+        );
+        let copilot = Some(GITHUB_COPILOT);
+        assert_eq!(table.rate("kimi-x", copilot).unwrap().cache_read, 0.02);
+        assert_eq!(table.rate("kimi-only-owner", copilot).unwrap().input, 7.0);
+        assert_eq!(table.rate("kimi-only-owner", None).unwrap().input, 7.0);
+    }
+
+    #[test]
+    fn builtin_snapshot_prices_kimi_k3_at_moonshots_tariff() {
+        // Resellers listed after Moonshot bill kimi-k3 cache reads at the
+        // input rate; Moonshot's own tariff prices the bare id.
+        let table = load_builtin_pricing();
+        let moonshot = builtin_listing("moonshotai", "kimi-k3");
+        assert_eq!(table.get("kimi-k3"), Some(&moonshot));
+        assert!(moonshot.cache_read < moonshot.input);
+        assert_eq!(
+            table.rate("kimi-k3", Some(GITHUB_COPILOT)),
+            Some(&builtin_listing(GITHUB_COPILOT, "kimi-k3"))
+        );
     }
 
     #[test]

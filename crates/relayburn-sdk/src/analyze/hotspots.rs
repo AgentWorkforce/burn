@@ -456,7 +456,7 @@ fn attribute_session(
     let mut grand_total = 0.0_f64;
 
     for &turn in turns {
-        let turn_rate = lookup_model_rate(&turn.model, pricing)
+        let turn_rate = lookup_model_rate(&turn.model, Some(turn.source), pricing)
             .map(|rate| effective_model_rate(&turn.usage, rate));
 
         // Accumulate the per-turn grand total in this same pass. Routes

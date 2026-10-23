@@ -473,7 +473,9 @@ fn attributed_cost(delta_tokens: i64, model: &str, pricing: &PricingTable) -> f6
     if delta_tokens <= 0 {
         return 0.0;
     }
-    let Some(rate) = crate::analyze::cost::lookup_model_rate(model, pricing) else {
+    // Span trees carry no harness; their Claude and Codex turns take the
+    // resolved tariff either way.
+    let Some(rate) = crate::analyze::cost::lookup_model_rate(model, None, pricing) else {
         return 0.0;
     };
     // Charge at cache_read because cache_read is what every *future*

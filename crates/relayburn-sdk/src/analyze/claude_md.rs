@@ -338,7 +338,7 @@ pub(crate) fn attribute_claude_md_refs(
             // or not; only priced turns add cost.
             let rides = t.usage.cache_read >= total_tokens;
             riding_turns += u64::from(rides);
-            let Some(rate) = lookup_model_rate(&t.model, pricing) else {
+            let Some(rate) = lookup_model_rate(&t.model, Some(t.source), pricing) else {
                 continue;
             };
             *model_counts.entry(t.model.clone()).or_insert(0) += 1;

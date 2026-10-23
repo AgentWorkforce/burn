@@ -376,7 +376,11 @@ fn pick_input_rate(turns: &[&TurnRecord], pricing: &PricingTable) -> f64 {
     let Some((best_model, _)) = best else {
         return 0.0;
     };
-    match lookup_model_rate(best_model, pricing) {
+    let source = turns
+        .iter()
+        .find(|t| t.model == best_model)
+        .map(|t| t.source);
+    match lookup_model_rate(best_model, source, pricing) {
         Some(rate) => rate.input / 1_000_000.0,
         None => 0.0,
     }
