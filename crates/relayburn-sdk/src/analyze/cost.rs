@@ -767,6 +767,20 @@ mod tests {
     }
 
     #[test]
+    fn lookup_model_rate_strips_a_provider_prefix_at_the_billing_providers_tariff() {
+        let p = crate::analyze::pricing::parse_pricing(
+            r#"{
+                "acme": { "models": { "foo": { "cost": { "input": 1, "output": 2 } } } },
+                "github-copilot": { "models": { "foo": { "cost": { "input": 3, "output": 4 } } } }
+            }"#,
+        )
+        .unwrap();
+        let rate = |source| lookup_model_rate("router/foo", source, &p).unwrap().input;
+        assert_eq!(rate(None), 1.0);
+        assert_eq!(rate(Some(SourceKind::CopilotCli)), 3.0);
+    }
+
+    #[test]
     fn lookup_model_rate_maps_codex_auto_review_to_gpt_5_2_codex() {
         let mut p = PricingTable::new();
         p.insert(

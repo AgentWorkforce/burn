@@ -101,10 +101,6 @@ impl PricingTable {
         self.models.contains_key(model)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &ModelCost)> {
-        self.models.iter()
-    }
-
     pub fn values(&self) -> impl Iterator<Item = &ModelCost> {
         self.models.values()
     }
@@ -292,7 +288,7 @@ fn load_from_file(path: &Path) -> io::Result<PricingTable> {
     parse_pricing(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-fn parse_pricing(raw: &str) -> serde_json::Result<PricingTable> {
+pub(crate) fn parse_pricing(raw: &str) -> serde_json::Result<PricingTable> {
     parse_pricing_with_protected_models(raw, &HashSet::new())
 }
 

@@ -584,6 +584,39 @@ mod compaction_losses {
         assert_eq!(c.preceding_message_id.as_deref(), Some("msg_c_1"));
         assert!(c.cache_lost_cost > 0.0);
     }
+
+    #[test]
+    fn prices_a_copilot_compaction_at_copilots_cache_read_tariff() {
+        let pricing = crate::analyze::pricing::parse_pricing(
+            r#"{
+                "acme": { "models": { "m": { "cost": { "input": 1, "output": 1, "cache_read": 0.1 } } } },
+                "github-copilot": { "models": { "m": { "cost": { "input": 1, "output": 1, "cache_read": 0.5 } } } }
+            }"#,
+        )
+        .unwrap();
+        let mut preceding = turn("s", "m1", 0);
+        preceding.source = SourceKind::CopilotCli;
+        preceding.model = "m".into();
+        let compaction = CompactionEvent {
+            v: 1,
+            source: SourceKind::CopilotCli,
+            session_id: "s".into(),
+            ts: "2026-04-20T00:00:01.000Z".into(),
+            preceding_message_id: Some("m1".into()),
+            tokens_before_compact: Some(1_000_000),
+        };
+        let result = detect_patterns(
+            &[preceding],
+            &DetectPatternsOptions {
+                pricing: &pricing,
+                compactions: Some(std::slice::from_ref(&compaction)),
+                user_turns_by_session: None,
+                content_by_session: None,
+                tool_result_events: None,
+            },
+        );
+        assert_eq!(result.compactions[0].cache_lost_cost, 0.5);
+    }
 }
 
 // ---------------------------------------------------------------------------

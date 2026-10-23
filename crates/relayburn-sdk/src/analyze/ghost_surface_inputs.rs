@@ -295,4 +295,26 @@ mod tests {
         let inputs = build_ghost_surface_inputs(&[], &pricing, Some(HashMap::new()));
         assert!(inputs.user_turn_text_by_session.is_none());
     }
+
+    #[test]
+    fn tied_models_take_the_first_seen_models_billing_provider_rate() {
+        let pricing = crate::analyze::pricing::parse_pricing(
+            r#"{
+                "acme": { "models": {
+                    "first": { "cost": { "input": 1, "output": 1, "cache_read": 0.1 } },
+                    "second": { "cost": { "input": 1, "output": 1, "cache_read": 0.9 } }
+                } },
+                "github-copilot": { "models": {
+                    "first": { "cost": { "input": 1, "output": 1, "cache_read": 0.4 } }
+                } }
+            }"#,
+        )
+        .unwrap();
+        let turns = vec![
+            make_turn(SourceKind::CopilotCli, "s1", "first", vec![], None),
+            make_turn(SourceKind::CopilotCli, "s1", "second", vec![], None),
+        ];
+        let rate = pick_representative_cache_read_rate(&turns, &pricing);
+        assert!((rate - 0.4 / 1_000_000.0).abs() < 1e-15, "{rate}");
+    }
 }
