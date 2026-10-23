@@ -95,17 +95,18 @@ pub struct Inference {
     pub v: u32,
     pub source: SourceKind,
     pub session_id: String,
-    /// Stable key. For Claude this is the upstream `requestId`; for
-    /// Codex / opencode (no requestId) it falls back to `message_id`
-    /// (see [`build_inferences`] / [`InferenceFallback::MessageId`]).
+    /// Stable key. For Claude this is the upstream `requestId` when one
+    /// is available; other harnesses fall back to a `message_id`-derived
+    /// or synthesized key (see [`build_inferences`] /
+    /// [`InferenceKeySource`]).
     pub request_id: String,
     /// Source of `request_id` — `request-id` (upstream `requestId`),
-    /// `message-id` (fallback), or `row-uuid` (final fallback). Lets a
-    /// debugger tell "is this a real request key" from "is this a
+    /// `message-id` (fallback), or `row-synthetic` (final fallback). Lets
+    /// a debugger tell "is this a real request key" from "is this a
     /// synthesized key".
     pub request_id_source: InferenceKeySource,
-    /// Logical "turn" identity — for Claude this is `message_id`; for
-    /// Codex / opencode it's the same as `request_id`.
+    /// Logical "turn" identity — the `message_id` of the underlying row
+    /// group.
     pub turn_id: String,
     pub model: String,
     pub usage: Usage,

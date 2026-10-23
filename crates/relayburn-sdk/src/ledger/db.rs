@@ -33,8 +33,8 @@ pub(crate) struct Connections {
 }
 
 impl Connections {
-    /// Open both DBs at the given paths, applying PRAGMAs + DDL. The
-    /// parent directory of each path must already exist.
+    /// Open both DBs at the given paths, applying PRAGMAs + DDL and
+    /// creating each parent directory if it is missing.
     pub fn open(burn_path: &Path, content_path: &Path) -> Result<Self> {
         if let Some(parent) = burn_path.parent() {
             if !parent.as_os_str().is_empty() {

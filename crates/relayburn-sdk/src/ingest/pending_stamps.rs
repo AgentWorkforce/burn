@@ -251,11 +251,13 @@ pub fn cleanup_stale_pending_stamps_in_at(
     Ok(PendingStampCleanupResult { scanned, deleted })
 }
 
-/// Try to claim and apply every manifest that matches `candidate`. Sorted by
-/// `spawnStartTs` (FIFO) so multiple concurrent same-harness/same-cwd runs
-/// don't all collapse onto the first session that ingests.
+/// Try to claim and apply the oldest manifest that matches `candidate`,
+/// sorted by `spawnStartTs` (FIFO), so multiple concurrent same-harness /
+/// same-cwd runs don't all collapse onto the first session that ingests. At
+/// most one manifest is applied per call, matching the TS adapter's `break`
+/// after the first successful append.
 ///
-/// Side effects: each successfully claimed manifest's enrichment is folded
+/// Side effects: the successfully claimed manifest's enrichment is folded
 /// onto the candidate session via `ledger.append_stamp`. The manifest file is
 /// removed on success and restored if the ledger append errors.
 pub fn resolve_pending_stamps_for_session_in(
