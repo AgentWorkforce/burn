@@ -329,7 +329,7 @@ fn flatten(root: &ModelsDevRoot, protected_models: &HashSet<String>) -> PricingT
             let Some(cost) = model_cost(id, model) else {
                 continue;
             };
-            if BILLING_PROVIDERS.contains(&provider_id.as_str()) {
+            if BILLING_PROVIDERS.contains(&provider_id.as_str()) && !is_free(&cost) {
                 table
                     .billed
                     .entry(provider_id.clone())
@@ -359,7 +359,9 @@ fn ranked_owners(votes: HashMap<&str, usize>) -> Vec<&str> {
     owners.into_iter().map(|(owner, _)| owner).collect()
 }
 
-/// Choose a model id's tariff from its priced `listings`:
+/// Choose a model id's tariff from its priced `listings`. A listing free on
+/// both input and output is a free tier or plan, not a token tariff, so it
+/// takes part only when every listing is free. Of the rest:
 ///
 /// 1. the owner's own listing, trying `owners` in rank order;
 /// 2. else the listing of the first [`PRIMARY_PRICING_PROVIDERS`] vendor
@@ -367,17 +369,20 @@ fn ranked_owners(votes: HashMap<&str, usize>) -> Vec<&str> {
 /// 3. else nothing when the id was ever first-party (`protected`), so a
 ///    retired first-party model is unpriced rather than inheriting a
 ///    reseller tariff;
-/// 4. else the tariff the most paid listings agree on, ties going to the
-///    tariff whose providers include the alphabetically first provider id.
-///    A listing free on both input and output is a free tier or plan, not a
-///    token tariff, so it prices the model only when every listing is free.
+/// 4. else the tariff the most listings agree on, ties going to the tariff
+///    whose providers include the alphabetically first provider id.
 fn resolve_tariff<'a>(
     listings: &'a [Listing<'_>],
     owners: &[&str],
     protected: bool,
 ) -> Option<&'a ModelCost> {
+    let any_paid = listings.iter().any(|listing| !is_free(&listing.cost));
+    let tariffs: Vec<&Listing<'_>> = listings
+        .iter()
+        .filter(|listing| !any_paid || !is_free(&listing.cost))
+        .collect();
     let listed_by = |provider: &str| {
-        listings
+        tariffs
             .iter()
             .find(|listing| listing.provider == provider)
             .map(|listing| &listing.cost)
@@ -394,15 +399,13 @@ fn resolve_tariff<'a>(
     if protected {
         return None;
     }
-    consensus_tariff(listings)
+    consensus_tariff(&tariffs)
 }
 
-fn consensus_tariff<'a>(listings: &'a [Listing<'_>]) -> Option<&'a ModelCost> {
-    let free = |listing: &&Listing<'_>| listing.cost.input == 0.0 && listing.cost.output == 0.0;
-    let all_free = listings.iter().all(|listing| free(&listing));
+fn consensus_tariff<'a>(listings: &[&'a Listing<'_>]) -> Option<&'a ModelCost> {
     // (tariff, listings agreeing, alphabetically first provider among them)
     let mut groups: Vec<(&ModelCost, usize, &str)> = Vec::new();
-    for listing in listings.iter().filter(|listing| all_free || !free(listing)) {
+    for listing in listings {
         match groups
             .iter_mut()
             .find(|(cost, _, _)| **cost == listing.cost)
@@ -420,6 +423,11 @@ fn consensus_tariff<'a>(listings: &'a [Listing<'_>]) -> Option<&'a ModelCost> {
             a_count.cmp(b_count).then_with(|| b_first.cmp(a_first))
         })
         .map(|(cost, _, _)| cost)
+}
+
+/// Free on both input and output: a free tier or plan, not a token tariff.
+fn is_free(cost: &ModelCost) -> bool {
+    cost.input == 0.0 && cost.output == 0.0
 }
 
 /// A listing's tariff, or `None` when it lacks `input` or `output`.
@@ -894,6 +902,40 @@ mod tests {
             parse_pricing(only_free).unwrap().get("m").unwrap().output,
             0.0
         );
+    }
+
+    #[test]
+    fn flatten_never_takes_a_free_owner_or_primary_listing_over_a_paid_one() {
+        for (free_block, provider) in [
+            (
+                r#""lab": { "models": { "m": { "canonical_model_id": "lab/m",
+                "cost": { "input": 0, "output": 0 } } } }"#,
+                "owner",
+            ),
+            (
+                r#""openai": { "models": { "m": { "cost": { "input": 0, "output": 0 } } } }"#,
+                "primary",
+            ),
+        ] {
+            let paid = r#""reseller": { "models": { "m": { "canonical_model_id": "lab/m",
+                "cost": { "input": 0.1, "output": 0.2 } } } }"#;
+            for raw in both_orders(&[free_block, paid]) {
+                let cost = parse_pricing(&raw).unwrap().get("m").cloned().unwrap();
+                assert_eq!((cost.input, cost.output), (0.1, 0.2), "{provider}: {raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_free_billing_provider_listing_never_shadows_the_resolved_tariff() {
+        let table = parse_pricing(
+            r#"{
+                "acme": { "models": { "m": { "cost": { "input": 2, "output": 8 } } } },
+                "github-copilot": { "models": { "m": { "cost": { "input": 0, "output": 0 } } } }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(table.rate("m", Some(GITHUB_COPILOT)).unwrap().input, 2.0);
     }
 
     #[test]

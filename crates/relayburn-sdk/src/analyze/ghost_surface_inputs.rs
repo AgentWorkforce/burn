@@ -65,23 +65,24 @@ pub fn build_session_count_by_source(turns: &[TurnRecord]) -> HashMap<SourceKind
 /// Falls back to 0 (which produces $0 cost but still surfaces ghosts) when
 /// no priced model is available.
 pub fn pick_representative_cache_read_rate(turns: &[TurnRecord], pricing: &PricingTable) -> f64 {
-    let mut counts: HashMap<&str, u64> = HashMap::new();
-    let mut order: Vec<(&str, SourceKind)> = Vec::new();
+    // A model's rate depends on who bills it, so turns count per (model,
+    // billing provider) pair.
+    let mut counts: HashMap<(&str, Option<&str>), u64> = HashMap::new();
+    let mut order: Vec<(&str, Option<&str>)> = Vec::new();
     for t in turns {
-        let m = t.model.as_str();
-        if !counts.contains_key(m) {
-            order.push((m, t.source));
+        let key = (t.model.as_str(), billing_provider(t.source));
+        if !counts.contains_key(&key) {
+            order.push(key);
         }
-        *counts.entry(m).or_insert(0) += 1;
+        *counts.entry(key).or_insert(0) += 1;
     }
     let mut best_rate: Option<f64> = None;
     let mut best_count: i64 = -1;
-    // Iterate in first-seen order so ties go to the earliest-seen model
+    // Iterate in first-seen order so ties go to the earliest-seen pair
     // (matches the TS `Map` iteration order).
-    for (m, source) in order {
-        let c = counts[m] as i64;
-        let rate = pricing.rate(m, billing_provider(source));
-        if let Some(rate) = rate.filter(|_| c > best_count) {
+    for key @ (model, billed_by) in order {
+        let c = counts[&key] as i64;
+        if let Some(rate) = pricing.rate(model, billed_by).filter(|_| c > best_count) {
             best_rate = Some(rate.cache_read);
             best_count = c;
         }
@@ -316,5 +317,23 @@ mod tests {
         ];
         let rate = pick_representative_cache_read_rate(&turns, &pricing);
         assert!((rate - 0.4 / 1_000_000.0).abs() < 1e-15, "{rate}");
+    }
+
+    #[test]
+    fn the_most_used_billing_provider_sets_a_shared_models_rate() {
+        let pricing = crate::analyze::pricing::parse_pricing(
+            r#"{
+                "acme": { "models": { "m": { "cost": { "input": 1, "output": 1, "cache_read": 0.3 } } } },
+                "github-copilot": { "models": { "m": { "cost": { "input": 1, "output": 1, "cache_read": 0.5 } } } }
+            }"#,
+        )
+        .unwrap();
+        let turns = vec![
+            make_turn(SourceKind::CopilotCli, "s1", "m", vec![], None),
+            make_turn(SourceKind::Opencode, "s2", "m", vec![], None),
+            make_turn(SourceKind::Opencode, "s2", "m", vec![], None),
+        ];
+        let rate = pick_representative_cache_read_rate(&turns, &pricing);
+        assert!((rate - 0.3 / 1_000_000.0).abs() < 1e-15, "{rate}");
     }
 }
