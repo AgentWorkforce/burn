@@ -77,23 +77,40 @@ cargo run -p relayburn-cli -- summary --since 24h
 The Quality CI workflow runs [rust-oleum](https://github.com/AgentWorkforce/rust-oleum)
 (our own OSS code-quality ratchet, extracted from this repo) against
 `rust-oleum.toml` at the repo root: targets for complexity, Halstead
-difficulty, lines per file, coverage, CRAP, and dead/redundant code, plus a
-grandfathered `[baseline]` of existing violations. CI fails on new
-violations or regressions beyond a grandfathered ceiling; PRs additionally
-get `cargo-mutants` run over their diff (target: zero surviving mutants in
-changed lines).
+difficulty, lines per file, coverage, CRAP, dead/redundant code, unsafe
+blocks, panic calls (bare and explained), lint suppressions (item- and
+file-level), public-API shape (`Rc`/`Arc`/`Box` in signatures, `get_`
+getters, public error types without an `Error` impl), denied warning groups,
+and rust-oleum's default `[lint_groups]`, plus a grandfathered `[baseline]` of
+existing violations. CI fails on new violations or regressions beyond a
+grandfathered ceiling; PRs additionally get `cargo-mutants` run over their
+diff (target: zero surviving mutants in changed lines).
+
+CI pins the crate version in `.github/workflows/quality.yml`
+(`RUST_OLEUM_VERSION`); install the same one locally. The gate reports
+coverage, CRAP, dead and redundant code only when it is handed the same
+inputs CI produces, so reproduce them before believing a local pass:
 
 ```bash
-cargo install --locked rust-oleum
-rust-oleum                              # report + gate
-rust-oleum --coverage lcov.info         # with coverage/CRAP
-rust-oleum --write-baseline             # regenerate [baseline]
+cargo install --locked rust-oleum --version 0.4.0
+cargo llvm-cov --workspace --exclude relayburn-sdk-node --lcov --output-path lcov.info
+cargo clippy --workspace --all-targets --message-format=json > clippy-log.json
+
+rust-oleum                              # report + gate (source metrics only)
+rust-oleum --coverage lcov.info        # + coverage/CRAP
+rust-oleum --coverage lcov.info --clippy-log clippy-log.json   # what CI runs
+rust-oleum --coverage lcov.info --clippy-log clippy-log.json --tighten
 ```
 
-When your PR trips the gate, prefer refactoring under the target over adding
-baseline entries. If you refactor a grandfathered offender, shrink or delete
-its baseline entry. Never raise a ceiling or add a new entry without calling
-it out in the PR description.
+`[baseline]` only shrinks. When your PR trips the gate, prefer refactoring
+under the target over adding baseline entries. If you refactor a
+grandfathered offender, run `--tighten` (with the same inputs) so the gain is
+locked in: it drops entries that now meet the target and lowers loose
+ceilings to today's values, and it never grandfathers a new violation.
+`--write-baseline` instead prints a fresh section to stdout; use it only when
+a metric starts being measured and everything it finds has to be
+grandfathered at once. Never raise a ceiling or add a new entry without
+calling it out in the PR description.
 
 ## Changelog
 
