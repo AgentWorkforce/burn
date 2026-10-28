@@ -93,7 +93,10 @@ inputs CI produces, so reproduce them before believing a local pass:
 
 ```bash
 cargo install --locked rust-oleum --version 0.4.0
-cargo llvm-cov --workspace --exclude relayburn-sdk-node --lcov --output-path lcov.info
+# BURN_GOLDEN=1 is what CI sets: without it golden_diff_against_cli_snapshots
+# (crates/relayburn-cli/tests/golden.rs) returns early, so a local run skips
+# the CLI snapshot diffs CI enforces.
+BURN_GOLDEN=1 cargo llvm-cov --workspace --exclude relayburn-sdk-node --lcov --output-path lcov.info
 cargo clippy --workspace --all-targets --message-format=json > clippy-log.json
 
 rust-oleum                              # report + gate (source metrics only)
