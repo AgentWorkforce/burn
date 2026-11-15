@@ -46,6 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ inputs.ref }}
       - id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -56,6 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.gate.outputs.sha }}
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
@@ -90,6 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.gate.outputs.sha }}
       - name: Setup Rust toolchain
         run: |
@@ -115,8 +118,11 @@ jobs:
         env:
           BURN_GOLDEN: '1'
         run: cargo test --workspace
+      # The restored cache can carry older .crate files in target/package.
       - name: Package crates (not published)
-        run: cargo package -p relayburn-sdk -p relayburn-cli --no-verify
+        run: |
+          rm -rf target/package
+          cargo package -p relayburn-sdk -p relayburn-cli --no-verify
       - uses: actions/upload-artifact@v4
         with:
           name: burn-crates-${{ needs.gate.outputs.sha }}
@@ -150,6 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.gate.outputs.sha }}
       - name: Setup Rust toolchain
         env:
@@ -251,6 +258,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.gate.outputs.sha }}
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
@@ -317,6 +325,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.gate.outputs.sha }}
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v6
