@@ -1,0 +1,419 @@
+# Fast path: run burn's CI checks (npm wrapper build + tests against a debug
+# napi binding; cargo build, fmt, clippy and tests), build the four `burn`
+# binaries and the four napi-rs SDK bindings, and pack all 11 npm packages on
+# Blacksmith runners, outside the shared GitHub-hosted queue. Anyone with write
+# access (people or agents) may start it; nothing runs until Khaliq approves
+# the fast-path environment.
+#
+# It does not publish anything. npm and crates.io both use trusted publishing
+# bound to publish.yml, and crates.io consumers take the latest version. It
+# uploads workflow artifacts instead:
+#   burn-npm-<sha>     the 11 npm tarballs at the versions in package.json
+#   burn-crates-<sha>  `cargo package` output for relayburn-sdk + relayburn-cli
+#   burn-cli-<short>-<sha>, burn-sdk-<short>-<sha>  the raw per-target builds
+# Versions are the on-disk ones (no release lockstep). It never bumps
+# versions, commits, tags git, creates a GitHub Release or moves a dist-tag.
+#
+# darwin-x64 is cross-compiled on an Apple Silicon runner (Blacksmith has no
+# Intel macOS), so that leg builds but does not execute its output.
+#
+# Caches are restore-only: this builds unreviewed refs, so it never saves into
+# a cache that normal CI or release workflows restore.
+name: fast-path
+run-name: fast-path ${{ inputs.ref }} (${{ inputs.reason }})
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build (a PR branch is fine)
+        required: true
+        default: main
+      reason:
+        description: Why this needs the fast path
+        required: true
+permissions:
+  contents: read
+concurrency:
+  # run_id: a run waiting for approval must not let a later dispatch cancel it.
+  group: fast-path-${{ inputs.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  gate:
+    environment: fast-path
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build-and-test:
+    needs: gate
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Build npm wrappers
+        run: pnpm -r --if-present run build
+      - name: Setup Rust toolchain
+        run: rustup toolchain install
+      - name: Restore cargo registry + target cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+      - name: Build native Node SDK binding
+        run: pnpm run build:napi:debug
+      - name: Run npm tests
+        env:
+          RELAYBURN_SDK_NAPI_BUILT: '1'
+        run: pnpm run test
+
+  cargo-build-and-test:
+    needs: gate
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+      - name: Cache cargo registry + target
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+      - name: Build workspace
+        run: cargo build --workspace --all-targets
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run tests
+        env:
+          BURN_GOLDEN: '1'
+        run: cargo test --workspace
+      # The restored cache can carry older .crate files in target/package.
+      - name: Package crates (not published)
+        run: |
+          rm -rf target/package
+          cargo package -p relayburn-sdk -p relayburn-cli --no-verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: burn-crates-${{ needs.gate.outputs.sha }}
+          path: target/package/*.crate
+          if-no-files-found: error
+
+  build-cli:
+    name: build cli ${{ matrix.short }}
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: blacksmith-6vcpu-macos-15
+            short: darwin-x64
+            native: false
+          - target: aarch64-apple-darwin
+            os: blacksmith-6vcpu-macos-15
+            short: darwin-arm64
+            native: true
+          - target: x86_64-unknown-linux-gnu
+            os: blacksmith-4vcpu-ubuntu-2404
+            short: linux-x64-gnu
+            native: true
+          - target: aarch64-unknown-linux-gnu
+            os: blacksmith-4vcpu-ubuntu-2404
+            short: linux-arm64-gnu
+            native: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Setup Rust toolchain
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: Install aarch64-linux cross toolchain (linux-arm64 only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Cache cargo registry + target
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-cli-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-cli-${{ runner.os }}-${{ matrix.target }}-
+            cargo-cli-${{ runner.os }}-
+      - name: Build burn binary
+        env:
+          TARGET: ${{ matrix.target }}
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target "$TARGET" --bin burn -p relayburn-cli
+      - name: Strip binary
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          BIN="target/$TARGET/release/burn"
+          case "$TARGET" in
+            *-apple-darwin) strip -x "$BIN" ;;
+            aarch64-unknown-linux-gnu) aarch64-linux-gnu-strip "$BIN" ;;
+            *-unknown-linux-gnu) strip "$BIN" ;;
+          esac
+          ls -lh "$BIN"
+      - name: Stage binary into platform package
+        env:
+          TARGET: ${{ matrix.target }}
+          SHORT: ${{ matrix.short }}
+        run: |
+          mkdir -p "packages/relayburn/npm/$SHORT/bin"
+          cp "target/$TARGET/release/burn" "packages/relayburn/npm/$SHORT/bin/burn"
+          chmod +x "packages/relayburn/npm/$SHORT/bin/burn"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: burn-cli-${{ matrix.short }}-${{ needs.gate.outputs.sha }}
+          path: packages/relayburn/npm/${{ matrix.short }}/bin/burn
+          if-no-files-found: error
+      - name: Smoke test (`burn --help`)
+        if: matrix.native
+        env:
+          SHORT: ${{ matrix.short }}
+        run: |
+          set -euo pipefail
+          "packages/relayburn/npm/$SHORT/bin/burn" --help
+          "packages/relayburn/npm/$SHORT/bin/burn" --version
+          smoke_dir="$(mktemp -d)"
+          umbrella_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir" "$umbrella_dir"' EXIT
+          npm install --prefix "$smoke_dir" --no-save --omit=optional \
+            --ignore-scripts --no-audit --no-fund \
+            "./packages/relayburn/npm/$SHORT"
+          "$smoke_dir/node_modules/.bin/burn" --help
+          npm install --prefix "$umbrella_dir" --no-save --omit=optional \
+            --ignore-scripts --no-audit --no-fund \
+            ./packages/relayburn
+          NODE_PATH="$smoke_dir/node_modules" "$umbrella_dir/node_modules/.bin/burn" --help
+
+  build-sdk:
+    name: build sdk ${{ matrix.short }}
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: blacksmith-6vcpu-macos-15
+            short: darwin-x64
+            native: false
+          - target: aarch64-apple-darwin
+            os: blacksmith-6vcpu-macos-15
+            short: darwin-arm64
+            native: true
+          - target: x86_64-unknown-linux-gnu
+            os: blacksmith-4vcpu-ubuntu-2404
+            short: linux-x64-gnu
+            native: true
+          - target: aarch64-unknown-linux-gnu
+            os: blacksmith-4vcpu-ubuntu-2404
+            short: linux-arm64-gnu
+            native: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+      - name: Setup Rust toolchain
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: Install aarch64-linux cross toolchain (linux-arm64 only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Cache cargo registry + target
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.target }}-
+            cargo-${{ runner.os }}-
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+      - name: Build napi binding
+        working-directory: packages/sdk-node
+        env:
+          TARGET: ${{ matrix.target }}
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          pnpm exec napi build \
+            --platform \
+            --release \
+            --target "$TARGET" \
+            --cargo-cwd ../../crates/relayburn-sdk-node \
+            --js binding.cjs \
+            --dts binding.d.ts \
+            src
+      - uses: actions/upload-artifact@v4
+        with:
+          name: burn-sdk-${{ matrix.short }}-${{ needs.gate.outputs.sha }}
+          path: packages/sdk-node/src/*.node
+          if-no-files-found: error
+      - name: Bundle smoke test (esbuild)
+        working-directory: packages/sdk-node
+        run: node --import ../../scripts/test-seal.mjs --test 'test/esbuild-smoke.test.js'
+      - name: Native SDK smoke test
+        if: matrix.native
+        working-directory: packages/sdk-node
+        env:
+          RELAYBURN_SDK_NAPI_BUILT: '1'
+        run: node --import ../../scripts/test-seal.mjs --test 'test/conformance.test.js'
+
+  pack:
+    needs: [gate, build-and-test, cargo-build-and-test, build-cli, build-sdk]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Build workspace
+        run: pnpm -r run build
+      - name: Download CLI binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/cli-artifacts
+          pattern: burn-cli-*
+      - name: Download SDK bindings
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/sdk-artifacts
+          pattern: burn-sdk-*
+      - name: Stage prebuilt binaries into platform packages
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for short in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu; do
+            cli_src=$(find "/tmp/cli-artifacts/burn-cli-${short}-${SHA}" -maxdepth 6 -name burn -type f -print -quit)
+            if [ -z "$cli_src" ]; then
+              echo "::error title=Missing CLI artifact::no burn binary for $short" >&2
+              exit 1
+            fi
+            mkdir -p "packages/relayburn/npm/${short}/bin"
+            cp "$cli_src" "packages/relayburn/npm/${short}/bin/burn"
+            chmod +x "packages/relayburn/npm/${short}/bin/burn"
+
+            sdk_src=$(find "/tmp/sdk-artifacts/burn-sdk-${short}-${SHA}" -maxdepth 2 -name '*.node' -print -quit)
+            if [ -z "$sdk_src" ]; then
+              echo "::error title=Missing SDK artifact::no .node binding for $short" >&2
+              exit 1
+            fi
+            cp "$sdk_src" "packages/sdk-node/npm/${short}/relayburn-sdk.${short}.node"
+          done
+      - name: Check the staged linux-x64 binary runs
+        id: binver
+        run: |
+          set -euo pipefail
+          v=$(packages/relayburn/npm/linux-x64-gnu/bin/burn --version | head -1)
+          echo "$v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: Pack all npm packages
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/packs"
+          mkdir -p "$PACK_DIR"
+          for dir in \
+            packages/relayburn/npm/darwin-arm64 packages/relayburn/npm/darwin-x64 \
+            packages/relayburn/npm/linux-arm64-gnu packages/relayburn/npm/linux-x64-gnu \
+            packages/sdk-node/npm/darwin-arm64 packages/sdk-node/npm/darwin-x64 \
+            packages/sdk-node/npm/linux-arm64-gnu packages/sdk-node/npm/linux-x64-gnu \
+            packages/sdk-node packages/relayburn; do
+            echo "==> Packing $dir (npm)"
+            (cd "$dir" && npm pack --ignore-scripts --pack-destination "$PACK_DIR")
+          done
+          echo "==> Packing @relayburn/mcp (pnpm)"
+          pnpm --filter @relayburn/mcp pack --pack-destination "$PACK_DIR"
+          ls "$PACK_DIR" > "$RUNNER_TEMP/pack-list.txt"
+          count=$(wc -l < "$RUNNER_TEMP/pack-list.txt")
+          if [ "$count" -ne 11 ]; then
+            echo "::error::expected 11 tarballs, got $count" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: burn-npm-${{ needs.gate.outputs.sha }}
+          path: ${{ runner.temp }}/packs/*.tgz
+          if-no-files-found: error
+      - name: Summary
+        env:
+          REF: ${{ inputs.ref }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          REASON: ${{ inputs.reason }}
+          BINVER: ${{ steps.binver.outputs.version }}
+        run: |
+          {
+            echo "### burn fast path"
+            echo "- ref: \`$REF\` at \`$SHA\`"
+            echo "- reason: $REASON"
+            echo "- binary reports: \`$BINVER\`"
+            echo "- crates: artifact \`burn-crates-$SHA\` (not published)"
+            echo "- npm tarballs in artifact \`burn-npm-$SHA\` (not published: npm trusted publishing is bound to publish.yml):"
+            while read -r f; do echo "  - \`$f\`"; done < "$RUNNER_TEMP/pack-list.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
