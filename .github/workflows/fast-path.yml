@@ -16,6 +16,9 @@
 #
 # darwin-x64 is cross-compiled on an Apple Silicon runner (Blacksmith has no
 # Intel macOS), so that leg builds but does not execute its output.
+#
+# Caches are restore-only: this builds unreviewed refs, so it never saves into
+# a cache that normal CI or release workflows restore.
 name: fast-path
 run-name: fast-path ${{ inputs.ref }} (${{ inputs.reason }})
 on:
@@ -31,7 +34,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fast-path-${{ inputs.ref }}
+  # run_id: a run waiting for approval must not let a later dispatch cancel it.
+  group: fast-path-${{ inputs.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   gate:
@@ -57,7 +61,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22.14.0'
-          cache: 'pnpm'
       - name: Install deps
         run: pnpm install --frozen-lockfile
       - name: Build npm wrappers
@@ -93,7 +96,7 @@ jobs:
           rustup toolchain install
           rustup component add rustfmt clippy
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -160,7 +163,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -253,7 +256,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22.14.0'
-          cache: 'pnpm'
       - name: Setup Rust toolchain
         env:
           TARGET: ${{ matrix.target }}
@@ -266,7 +268,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -320,7 +322,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22.14.0'
-          cache: 'pnpm'
       - name: Install deps
         run: pnpm install --frozen-lockfile
       - name: Build workspace
