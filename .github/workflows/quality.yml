@@ -2,9 +2,10 @@ name: Quality
 
 # Code-quality gate: rust-oleum (https://github.com/AgentWorkforce/rust-oleum)
 # measures cyclomatic / cognitive complexity, Halstead difficulty, file
-# size, test coverage, CRAP, and dead + redundant code against the targets
-# and grandfathered baseline in rust-oleum.toml. A second PR-only job runs
-# mutation testing over the PR diff.
+# size, test coverage, CRAP, dead + redundant code, unsafe / panic /
+# lint-suppression counts, public-API shape and the default lint groups
+# against the targets and grandfathered baseline in rust-oleum.toml. A
+# second PR-only job runs mutation testing over the PR diff.
 
 on:
   pull_request:
@@ -17,7 +18,7 @@ permissions:
 env:
   # Pinned so the cached ~/.cargo/bin copy is used only while it is this
   # version; bumping the pin forces a reinstall through the cache.
-  RUST_OLEUM_VERSION: 0.1.1
+  RUST_OLEUM_VERSION: 0.4.0
 
 concurrency:
   group: quality-${{ github.ref }}

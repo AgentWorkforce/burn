@@ -4,10 +4,16 @@
 # `[targets]` are the aspirational limits every metric is reported against.
 # The `[baseline]` section grandfathers existing violations at their current
 # ceiling so the CI gate can be enforced today: new violations, and
-# regressions beyond a grandfathered ceiling, fail CI. Ratchet the baseline
-# as code improves (`rust-oleum --write-baseline` regenerates it): per-item
-# ceilings only shrink, and the `coverage_min_pct` floor only rises —
-# regenerate after coverage improves so the new floor locks the gain in.
+# regressions beyond a grandfathered ceiling, fail CI.
+#
+# Ratcheting (rust-oleum >= 0.2): run `rust-oleum --tighten` after improving
+# the code — it rewrites `[baseline]` in place, dropping entries that now meet
+# the target and lowering loose ceilings to today's values. It never
+# grandfathers a new violation, so per-item ceilings only shrink and the
+# `coverage_min_pct` floor only rises. `rust-oleum --write-baseline` instead
+# prints a fresh section to stdout; it is only for adopting the gate, when a
+# whole metric (e.g. panic/unsafe/suppression counts in the 0.2 line) starts
+# being measured and everything it finds has to be grandfathered at once.
 
 [targets]
 cyclomatic_max = 22
@@ -19,6 +25,19 @@ crap_max = 25.0
 surviving_mutants_max = 0
 dead_code_max = 0
 redundant_code_max = 0
+# Safety and API-shape metrics (rust-oleum 0.2+). Zero is the target for every
+# one of them; the counts that are not yet zero are grandfathered below.
+unsafe_max = 0
+panic_max = 0
+bare_panic_max = 0
+allow_max = 0
+file_allow_max = 0
+bare_allow_max = 0
+file_bare_allow_max = 0
+deny_warnings_max = 0
+pub_wrapper_max = 0
+get_prefix_max = 0
+missing_error_impl_max = 0
 
 [sources]
 rust_roots = [
@@ -28,7 +47,7 @@ rust_roots = [
 ]
 
 [baseline]
-coverage_min_pct = 86.1
+coverage_min_pct = 90.1
 
 [baseline.file_loc]
 "crates/relayburn-cli/src/commands/compare.rs" = 696
@@ -36,25 +55,25 @@ coverage_min_pct = 86.1
 "crates/relayburn-cli/src/commands/mcp_server.rs" = 613
 "crates/relayburn-cli/src/commands/state.rs" = 563
 "crates/relayburn-cli/src/commands/summary/human.rs" = 738
+"crates/relayburn-sdk-node/src/lib.rs" = 894
 "crates/relayburn-sdk/src/analyze/findings.rs" = 723
 "crates/relayburn-sdk/src/analyze/hotspots.rs" = 706
 "crates/relayburn-sdk/src/analyze/patterns.rs" = 552
 "crates/relayburn-sdk/src/analyze/subagent_tree.rs" = 514
 "crates/relayburn-sdk/src/query_verbs/summary/compute.rs" = 983
 "crates/relayburn-sdk/src/query_verbs/summary/mod.rs" = 782
-"crates/relayburn-sdk-node/src/lib.rs" = 894
 
 [baseline.cyclomatic]
 "crates/relayburn-cli/src/commands/compare.rs::run_inner" = 36
 "crates/relayburn-cli/src/commands/hotspots/mod.rs::run_inner" = 26
 "crates/relayburn-cli/src/commands/summary/mod.rs::run_inner" = 63
 "crates/relayburn-sdk/src/ledger/bootstrap.rs::rebuild_from_jsonl" = 30
-"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::parse_bash_command_inner" = 31
 "crates/relayburn-sdk/src/reader/classifier.rs::pick_category" = 25
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::parse_bash_command_inner" = 31
 
 [baseline.cognitive]
-"crates/relayburn-cli/src/commands/compare.rs::run_inner" = 31
 "crates/relayburn-cli/src/commands/compare.rs::render_tty" = 31
+"crates/relayburn-cli/src/commands/compare.rs::run_inner" = 31
 "crates/relayburn-cli/src/commands/hotspots/human.rs::emit_human_attribution" = 33
 "crates/relayburn-cli/src/commands/state.rs::run_prune" = 33
 "crates/relayburn-cli/src/commands/summary/mod.rs::run_inner" = 55
@@ -62,67 +81,240 @@ coverage_min_pct = 86.1
 "crates/relayburn-sdk/src/analyze/claude_md.rs::parse_claude_md" = 23
 "crates/relayburn-sdk/src/analyze/compare.rs::build_compare_table" = 30
 "crates/relayburn-sdk/src/analyze/flow_graph.rs::Builder::add_turn" = 43
-"crates/relayburn-sdk/src/analyze/ghost_surface/adapters.rs::enumerate_opencode_project" = 67
-"crates/relayburn-sdk/src/analyze/ghost_surface.rs::mine_codex_slash_invocations" = 41
 "crates/relayburn-sdk/src/analyze/ghost_surface.rs::detect_ghost_surface_with_adapters" = 27
+"crates/relayburn-sdk/src/analyze/ghost_surface.rs::mine_codex_slash_invocations" = 41
+"crates/relayburn-sdk/src/analyze/ghost_surface/adapters.rs::enumerate_opencode_project" = 67
 "crates/relayburn-sdk/src/analyze/hotspots.rs::attribute_session" = 33
 "crates/relayburn-sdk/src/analyze/patterns/compaction.rs::detect_compaction_losses" = 35
 "crates/relayburn-sdk/src/analyze/patterns/compaction.rs::summarize_compacted_window" = 23
 "crates/relayburn-sdk/src/analyze/patterns/shell.rs::has_shell_file_operand" = 26
-"crates/relayburn-sdk/src/analyze/subagent_tree.rs::build_relationship_aliases" = 23
 "crates/relayburn-sdk/src/analyze/subagent_tree.rs::attach_turn_costs" = 27
-"crates/relayburn-sdk/src/analyze/tool_call_patterns.rs::detect_for_session" = 24
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::build_relationship_aliases" = 23
 "crates/relayburn-sdk/src/analyze/tool_call_patterns.rs::detect_edit_clusters" = 24
+"crates/relayburn-sdk/src/analyze/tool_call_patterns.rs::detect_for_session" = 24
 "crates/relayburn-sdk/src/ingest/pending_stamps.rs::cleanup_stale_pending_stamps_in_at" = 27
 "crates/relayburn-sdk/src/ledger/bootstrap.rs::rebuild_from_jsonl" = 27
 "crates/relayburn-sdk/src/query_verbs/summary/compute.rs::attribute_summary_cost_to_tools" = 48
-"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::parse_bash_command_inner" = 32
-"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::unwrap_subshell" = 29
-"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::first_top_level_operator" = 30
-"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::shell_words" = 23
 "crates/relayburn-sdk/src/reader/classifier.rs::pick_category" = 37
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::first_top_level_operator" = 30
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::parse_bash_command_inner" = 32
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::shell_words" = 23
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::unwrap_subshell" = 29
 "crates/relayburn-sdk/src/reader/span_tree/claude.rs::build_inference_node" = 27
 "crates/relayburn-sdk/src/reader/span_tree/codex.rs::build_inference_node" = 27
 
 [baseline.crap]
 "crates/relayburn-cli/src/commands/compare.rs::run_inner" = 1219.5
-"crates/relayburn-cli/src/commands/summary/mod.rs::run_inner" = 423.4
-"crates/relayburn-cli/src/commands/hotspots/human.rs::emit_human" = 332.2
-"crates/relayburn-cli/src/commands/state.rs::run_prune" = 272.1
-"crates/relayburn-cli/src/selfupdate.rs::maybe_offer_update" = 192.5
-"crates/relayburn-cli/src/commands/summary/human.rs::render_by_tool_report" = 156.1
 "crates/relayburn-cli/src/commands/flow.rs::run_inner" = 110.1
-"crates/relayburn-cli/src/commands/ingest.rs::run_watch" = 110.1
-"crates/relayburn-cli/src/commands/state.rs::run_fingerprint" = 110.1
-"crates/relayburn-cli/src/commands/update.rs::run_update" = 110.1
-"crates/relayburn-sdk/src/ledger/content.rs::query" = 110.1
-"crates/relayburn-sdk/src/query_verbs/compare.rs::LedgerHandle::compare_timeseries" = 110.1
-"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::summary_turns_for_relationship" = 110.1
-"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::LedgerHandle::summary_report" = 72.3
-"crates/relayburn-cli/src/commands/overhead.rs::run_report" = 72.1
-"crates/relayburn-cli/src/commands/overhead.rs::run_trim" = 72.1
-"crates/relayburn-cli/src/commands/summary/human.rs::render_relationship_subagent_report" = 72.1
-"crates/relayburn-cli/src/selfupdate.rs::detect_channel" = 72.1
-"crates/relayburn-sdk/src/ledger/bootstrap.rs::rebuild_from_jsonl" = 59.4
-"crates/relayburn-sdk/src/ledger/writer.rs::append_compactions" = 57.0
-"crates/relayburn-cli/src/commands/overhead.rs::render_human_trim" = 56.1
-"crates/relayburn-cli/src/commands/summary/human.rs::render_subagent_type_report" = 56.1
-"crates/relayburn-cli/src/commands/summary/human.rs::render_relationship_report" = 56.1
-"crates/relayburn-cli/src/commands/summary/human.rs::render_subagent_tree_report" = 56.1
-"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::parse_bash_command_inner" = 45.0
+"crates/relayburn-cli/src/commands/flow.rs::write_atomic" = 30.1
 "crates/relayburn-cli/src/commands/hotspots/human.rs::emit_findings_grouped" = 42.1
-"crates/relayburn-cli/src/commands/state.rs::run_status" = 42.1
-"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::build_summary_relationship_turn_index" = 42.1
+"crates/relayburn-cli/src/commands/hotspots/human.rs::emit_human" = 332.2
+"crates/relayburn-cli/src/commands/hotspots/mod.rs::run_inner" = 28.1
+"crates/relayburn-cli/src/commands/ingest.rs::run_hook" = 31.2
 "crates/relayburn-cli/src/commands/mcp_server.rs::Server::handle_frame" = 39.5
 "crates/relayburn-cli/src/commands/state.rs::print_reset_report" = 31.3
-"crates/relayburn-cli/src/commands/ingest.rs::run_hook" = 31.2
-"crates/relayburn-cli/src/commands/flow.rs::write_atomic" = 30.1
-"crates/relayburn-cli/src/commands/overhead.rs::render_human_report" = 30.1
-"crates/relayburn-cli/src/selfupdate.rs::fetch_latest" = 30.1
-"crates/relayburn-cli/src/selfupdate.rs::perform_install" = 30.1
-"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::load_summary_content_for_quality" = 30.1
-"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::aggregate_summary_relationship_subagent_stats" = 30.1
-"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::load_summary_subagent_tree_turns" = 30.1
-"crates/relayburn-cli/src/commands/hotspots/mod.rs::run_inner" = 29.6
+"crates/relayburn-cli/src/commands/state.rs::run_fingerprint" = 110.1
+"crates/relayburn-cli/src/commands/state.rs::run_prune" = 272.1
+"crates/relayburn-cli/src/commands/summary/human.rs::render_by_tool_report" = 156.1
+"crates/relayburn-cli/src/commands/summary/human.rs::render_relationship_report" = 56.1
+"crates/relayburn-cli/src/commands/summary/human.rs::render_relationship_subagent_report" = 72.1
+"crates/relayburn-cli/src/commands/summary/human.rs::render_subagent_tree_report" = 56.1
+"crates/relayburn-cli/src/commands/summary/human.rs::render_subagent_type_report" = 56.1
+"crates/relayburn-cli/src/commands/summary/mod.rs::run_inner" = 417.4
+"crates/relayburn-cli/src/commands/update.rs::run_update" = 110.1
 "crates/relayburn-cli/src/render/ux.rs::format_message" = 27.0
+"crates/relayburn-cli/src/selfupdate.rs::detect_channel" = 72.1
+"crates/relayburn-cli/src/selfupdate.rs::fetch_latest" = 30.1
+"crates/relayburn-cli/src/selfupdate.rs::maybe_offer_update" = 192.5
+"crates/relayburn-cli/src/selfupdate.rs::perform_install" = 30.1
+"crates/relayburn-sdk/src/ledger/bootstrap.rs::rebuild_from_jsonl" = 59.4
+"crates/relayburn-sdk/src/ledger/writer.rs::append_compactions" = 57.0
+"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::load_summary_content_for_quality" = 30.1
+"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::load_summary_subagent_tree_turns" = 30.1
+"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::summary_turns_for_relationship" = 52.3
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::LedgerHandle::summary_report" = 51.8
 "crates/relayburn-sdk/src/reader/classifier.rs::pick_category" = 25.2
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::parse_bash_command_inner" = 45.0
+
+[baseline.unsafe]
+"crates/relayburn-sdk-node/src/bigint_promoting.rs::BigIntPromoting::to_napi_value" = 1
+"crates/relayburn-sdk-node/src/bigint_promoting.rs::promote_value" = 1
+
+[baseline.panic]
+"crates/relayburn-cli/src/commands/compare.rs::fidelity_summary_to_value" = 2
+"crates/relayburn-cli/src/commands/flow.rs::render_mermaid" = 2
+"crates/relayburn-cli/src/commands/flow.rs::render_svg" = 4
+"crates/relayburn-cli/src/commands/flow.rs::render_svg_edge" = 1
+"crates/relayburn-cli/src/commands/flow.rs::render_svg_legend" = 4
+"crates/relayburn-cli/src/commands/flow.rs::render_svg_node" = 1
+"crates/relayburn-cli/src/commands/overhead/deltas.rs::driver_summary" = 1
+"crates/relayburn-cli/src/commands/sessions.rs::emit_json" = 2
+"crates/relayburn-cli/src/commands/summary/human.rs::render_by_tool_report" = 1
+"crates/relayburn-cli/src/commands/summary/json.rs::grouped_json_value" = 1
+"crates/relayburn-cli/src/selfupdate.rs::current_version" = 1
+"crates/relayburn-sdk/src/analyze/cache_expiry.rs::cache_expiry_to_finding" = 1
+"crates/relayburn-sdk/src/analyze/claude_md.rs::find_headings" = 4
+"crates/relayburn-sdk/src/analyze/compare.rs::build_compare_table" = 2
+"crates/relayburn-sdk/src/analyze/fidelity.rs::coverage_get" = 1
+"crates/relayburn-sdk/src/analyze/fidelity.rs::rank" = 1
+"crates/relayburn-sdk/src/analyze/ghost_surface.rs::mine_codex_slash_invocations" = 2
+"crates/relayburn-sdk/src/analyze/patterns.rs::build_summaries" = 2
+"crates/relayburn-sdk/src/analyze/patterns/compaction.rs::detect_compaction_losses" = 1
+"crates/relayburn-sdk/src/analyze/patterns/skills.rs::detect_skill_recall_dups_for_session" = 3
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_failure_runs_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_graph_cancellation_runs_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_graph_failure_runs_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_graph_retry_loops_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_retry_loops_for_session" = 2
+"crates/relayburn-sdk/src/analyze/provider_reattribution.rs::apply_rule" = 1
+"crates/relayburn-sdk/src/analyze/quality.rs::ending_role" = 1
+"crates/relayburn-sdk/src/analyze/quality.rs::infer_outcome_refs" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::add_legacy_subagent_gaps" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::apply_relationship_metadata" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::ensure_turn_session_roots" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::fold_cumulative" = 2
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::materialize_session_tree" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::resolve_graph_parent" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::sort_tree" = 2
+"crates/relayburn-sdk/src/analyze/subagent_types.rs::aggregate_subagent_type_stats" = 1
+"crates/relayburn-sdk/src/analyze/util.rs::without_dollar_figures" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/copilot.rs::ingest_journal" = 3
+"crates/relayburn-sdk/src/ingest/ingest_tests/copilot.rs::priced" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::append_task" = 2
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::bill_under" = 2
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::burn_db" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::column" = 3
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::content_db" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::edges" = 3
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::file_compaction" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::file_spawn" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::forget_copies_check" = 5
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::forget_last_write" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::give_call" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::place_fork" = 2
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::turn_tokens" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::codex_tokens" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::connection" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::inference_ids" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::place_sessions" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::rewind_to_task_accounting" = 4
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::rows" = 3
+"crates/relayburn-sdk/src/ingest/pending_stamps.rs::serialize_stamp" = 1
+"crates/relayburn-sdk/src/ledger.rs::Ledger::export_ledger_jsonl" = 1
+"crates/relayburn-sdk/src/query_verbs/hotspots/compute.rs::hotspots_attribution" = 1
+"crates/relayburn-sdk/src/query_verbs/mod.rs::normalize_time_bound" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::summary_aggregate_by_tag" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::LedgerHandle::summary_report" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::compute_summary" = 2
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::compute_summary_by_tag" = 1
+"crates/relayburn-sdk/src/reader/classifier.rs::build_re" = 1
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::find_python_module_flag" = 1
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::skip_leading_options" = 1
+"crates/relayburn-sdk/src/reader/git.rs::ProjectResolver::clear" = 1
+"crates/relayburn-sdk/src/reader/git.rs::ProjectResolver::resolve" = 1
+"crates/relayburn-sdk/src/reader/git.rs::canonicalize_remote_url" = 2
+"crates/relayburn-sdk/src/reader/git.rs::parse_git_config" = 2
+"crates/relayburn-sdk/src/reader/git.rs::resolve_worktree_git_dir" = 1
+"crates/relayburn-sdk/src/reader/hash.rs::finalize_object" = 1
+"crates/relayburn-sdk/src/reader/hash.rs::stable_stringify" = 1
+"crates/relayburn-sdk/src/reader/span_tree/claude.rs::build_tool_result_node" = 1
+"crates/relayburn-sdk/src/reader/span_tree/codex.rs::build_tool_result_node" = 1
+"crates/relayburn-sdk/src/source/fixtures.rs::fixture_records" = 1
+"crates/relayburn-sdk/src/source/fixtures.rs::render_value" = 3
+"crates/relayburn-sdk/src/stamp_verb.rs::now_iso" = 1
+
+[baseline.allow]
+"crates/relayburn-sdk/src/analyze/patterns.rs::build_summaries" = 1
+
+[baseline.file_allow]
+"crates/relayburn-cli/src/render/error.rs" = 1
+"crates/relayburn-cli/src/render/prompt.rs" = 1
+"crates/relayburn-cli/src/render/table.rs" = 1
+"crates/relayburn-cli/src/render/ux.rs" = 1
+"crates/relayburn-cli/src/selfupdate.rs" = 1
+"crates/relayburn-sdk-node/src/lib.rs" = 1
+"crates/relayburn-sdk/src/analyze/context_delta.rs" = 1
+"crates/relayburn-sdk/src/analyze/ghost_surface.rs" = 1
+"crates/relayburn-sdk/src/ingest.rs" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs" = 1
+
+[baseline.bare_panic]
+"crates/relayburn-cli/src/commands/compare.rs::fidelity_summary_to_value" = 2
+"crates/relayburn-cli/src/commands/flow.rs::render_mermaid" = 2
+"crates/relayburn-cli/src/commands/flow.rs::render_svg" = 4
+"crates/relayburn-cli/src/commands/flow.rs::render_svg_edge" = 1
+"crates/relayburn-cli/src/commands/flow.rs::render_svg_legend" = 4
+"crates/relayburn-cli/src/commands/flow.rs::render_svg_node" = 1
+"crates/relayburn-cli/src/commands/sessions.rs::emit_json" = 2
+"crates/relayburn-cli/src/commands/summary/human.rs::render_by_tool_report" = 1
+"crates/relayburn-cli/src/commands/summary/json.rs::grouped_json_value" = 1
+"crates/relayburn-sdk/src/analyze/claude_md.rs::find_headings" = 4
+"crates/relayburn-sdk/src/analyze/ghost_surface.rs::mine_codex_slash_invocations" = 2
+"crates/relayburn-sdk/src/analyze/patterns.rs::build_summaries" = 2
+"crates/relayburn-sdk/src/analyze/patterns/compaction.rs::detect_compaction_losses" = 1
+"crates/relayburn-sdk/src/analyze/patterns/skills.rs::detect_skill_recall_dups_for_session" = 3
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_failure_runs_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_graph_cancellation_runs_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_graph_failure_runs_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_graph_retry_loops_for_session" = 2
+"crates/relayburn-sdk/src/analyze/patterns/streaks.rs::detect_retry_loops_for_session" = 2
+"crates/relayburn-sdk/src/analyze/quality.rs::infer_outcome_refs" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::add_legacy_subagent_gaps" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::apply_relationship_metadata" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::ensure_turn_session_roots" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::fold_cumulative" = 2
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::materialize_session_tree" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::resolve_graph_parent" = 1
+"crates/relayburn-sdk/src/analyze/subagent_tree.rs::sort_tree" = 2
+"crates/relayburn-sdk/src/analyze/subagent_types.rs::aggregate_subagent_type_stats" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/copilot.rs::ingest_journal" = 3
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::append_task" = 2
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::bill_under" = 2
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::burn_db" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::column" = 3
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::content_db" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::edges" = 3
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::file_compaction" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::file_spawn" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::forget_copies_check" = 5
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::forget_last_write" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::give_call" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::place_fork" = 2
+"crates/relayburn-sdk/src/ingest/ingest_tests/fork_history.rs::turn_tokens" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::codex_tokens" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::connection" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::inference_ids" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::place_sessions" = 1
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::rewind_to_task_accounting" = 4
+"crates/relayburn-sdk/src/ingest/ingest_tests/request_accounting.rs::rows" = 3
+"crates/relayburn-sdk/src/ledger.rs::Ledger::export_ledger_jsonl" = 1
+"crates/relayburn-sdk/src/query_verbs/mod.rs::normalize_time_bound" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/compute.rs::summary_aggregate_by_tag" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::LedgerHandle::summary_report" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::compute_summary" = 2
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs::compute_summary_by_tag" = 1
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::find_python_module_flag" = 1
+"crates/relayburn-sdk/src/reader/classifier/bash_parse.rs::skip_leading_options" = 1
+"crates/relayburn-sdk/src/reader/git.rs::ProjectResolver::clear" = 1
+"crates/relayburn-sdk/src/reader/git.rs::ProjectResolver::resolve" = 1
+"crates/relayburn-sdk/src/reader/git.rs::canonicalize_remote_url" = 2
+"crates/relayburn-sdk/src/reader/git.rs::parse_git_config" = 2
+"crates/relayburn-sdk/src/reader/git.rs::resolve_worktree_git_dir" = 1
+"crates/relayburn-sdk/src/reader/span_tree/claude.rs::build_tool_result_node" = 1
+"crates/relayburn-sdk/src/reader/span_tree/codex.rs::build_tool_result_node" = 1
+"crates/relayburn-sdk/src/source/fixtures.rs::render_value" = 3
+
+[baseline.bare_allow]
+"crates/relayburn-sdk/src/analyze/patterns.rs::build_summaries" = 1
+
+[baseline.file_bare_allow]
+"crates/relayburn-cli/src/render/error.rs" = 1
+"crates/relayburn-cli/src/render/prompt.rs" = 1
+"crates/relayburn-cli/src/render/table.rs" = 1
+"crates/relayburn-cli/src/render/ux.rs" = 1
+"crates/relayburn-cli/src/selfupdate.rs" = 1
+"crates/relayburn-sdk-node/src/lib.rs" = 1
+"crates/relayburn-sdk/src/analyze/context_delta.rs" = 1
+"crates/relayburn-sdk/src/analyze/ghost_surface.rs" = 1
+"crates/relayburn-sdk/src/ingest.rs" = 1
+"crates/relayburn-sdk/src/query_verbs/summary/mod.rs" = 1
