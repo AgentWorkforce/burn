@@ -337,7 +337,7 @@ Run `burn ingest && burn compare claude-sonnet-4-6,claude-haiku-4-5 --since
 | `burn compare claude-sonnet-4-6,claude-haiku-4-5 --include-partial` | Include lower-fidelity records too. |
 | `burn compare claude-sonnet-4-6,claude-haiku-4-5 --since 7d --bucket 1d` | Daily comparison buckets for the last week. |
 
-Run `burn summary --by-provider` to discover model IDs present in your ledger.
+Run `burn summary` to discover model IDs present in your ledger.
 
 ## `burn ingest`
 
@@ -578,8 +578,11 @@ Three concrete questions follow:
 2. **Why was it spent?** - tool calls, files, subagents, cache-hit vs fresh input, and persistence.
 3. **Where can I save?** - redundant reads, bloated context prefixes, retry loops, and model choices that cost more than they needed to.
 
-Burn is local-first. Data lives in SQLite databases on your machine. Burn never
-phones home. Pricing is looked up at query time from a vendored snapshot, so
+Burn is local-first. Data lives in SQLite databases on your machine. The
+on-launch update check is enabled by default and sends a GET request to the npm
+registry or crates.io, depending on the install channel. Disable it with
+`burn update toggle-auto-update --off`. Pricing is looked up at query time from
+a vendored snapshot, so
 rate corrections never require rewriting the ledger.
 
 ## What burn is not
