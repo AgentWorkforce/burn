@@ -481,3 +481,65 @@ fn build_json_emits_cells_totals_and_fidelity() {
         ]
     );
 }
+
+/// `sample_compare_result` with its first model renamed to `first`.
+fn compare_result_with_first_model(first: &str) -> CompareResult {
+    let mut result = sample_compare_result();
+    let old = result.models[0].clone();
+    result.models[0] = first.to_string();
+    for cell in &mut result.cells {
+        if cell.model == old {
+            cell.model = first.to_string();
+        }
+    }
+    let total = result.totals.remove(&old).unwrap();
+    result.totals.insert(first.to_string(), total);
+    result
+}
+
+/// Byte offset of the second model's "Turns" column in the sub-header: the
+/// first model group's width decides it.
+fn second_group_offset(tty: &str) -> usize {
+    let header = tty.lines().find(|l| l.starts_with("Activity")).unwrap();
+    let first = header.find("Turns").unwrap();
+    first + 5 + header[first + 5..].find("Turns").unwrap()
+}
+
+/// Widths `render_tty` would give the first model's three columns before
+/// widening the group to fit its name.
+fn natural_first_group_widths(result: &CompareResult) -> [usize; 3] {
+    let cell = result
+        .cells
+        .iter()
+        .find(|c| c.model == result.models[0])
+        .unwrap();
+    let fields = cell_fields(cell);
+    let header = ["Turns", "Cost/turn", "1-shot"];
+    [0, 1, 2].map(|i| display_width(header[i]).max(display_width(&fields[i])))
+}
+
+#[test]
+fn render_tty_widens_a_model_group_only_when_its_name_is_wider() {
+    const SEP: usize = 2;
+    let activity = display_width("Activity").max(display_width("coding"));
+
+    // A short name fits inside the group: columns keep their natural width.
+    let short = compare_result_with_first_model("fx-a");
+    let [a, b, c] = natural_first_group_widths(&short);
+    assert_eq!(
+        second_group_offset(&render_tty(&short)),
+        activity + SEP + a + SEP + b + SEP + c + SEP
+    );
+
+    // A long name widens the group's last column by exactly the overflow.
+    let name = "fx-lab/fx-model-with-a-display-name-wider-than-its-columns";
+    let long = compare_result_with_first_model(name);
+    let [a, b, c] = natural_first_group_widths(&long);
+    let group = a + SEP + b + SEP + c;
+    let name_w = display_width(display_model_name(name));
+    assert!(name_w > group);
+    assert_eq!(
+        second_group_offset(&render_tty(&long)),
+        activity + SEP + name_w + SEP
+    );
+}
