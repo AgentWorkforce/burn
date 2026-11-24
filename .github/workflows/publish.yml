@@ -532,7 +532,12 @@ jobs:
           # (caret semantics) so the constraint only needs rewriting on
           # minor/major bumps; patch bumps no-op the sed.
           RUST_VER="$RELEASE_VER"
-          RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}')
+          # A prerelease (5.0.0-next.0) never matches a plain "5.0" requirement
+          # in Cargo, so pin the path-deps to the exact prerelease instead.
+          case "$RUST_VER" in
+            *-*) RUST_MINOR="$RUST_VER" ;;
+            *) RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}') ;;
+          esac
           echo "Rust workspace lockstep: $RUST_VER (minor pin: $RUST_MINOR)"
 
           sed -i -E "s/^version = \"[^\"]+\"$/version = \"$RUST_VER\"/" Cargo.toml
