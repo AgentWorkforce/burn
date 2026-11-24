@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn options_reject_a_bad_source() {
         let err = price_usage_options_from_value(json!({
-            "requests": [{"model": "fx-model", "source": "fx-harness"}]
+            "requests": [{"model": "fx-model", "source": "fx-harness", "usage": {}}]
         }));
         assert!(err.is_err());
     }

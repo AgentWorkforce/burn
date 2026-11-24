@@ -333,7 +333,10 @@ export type UsagePriceSource =
   | 'anthropic-api'
   | 'openai-api'
   | 'gemini-api';
-/** Token counters for one request. Missing counters read as zero. */
+/**
+ * Token counters for one request. Missing counters read as zero; an unknown
+ * counter name is rejected. Counts must be safe integers (< 2^53).
+ */
 export interface UsageTokens {
   input?: number;
   output?: number;
@@ -346,8 +349,12 @@ export interface UsageTokens {
 }
 export interface UsagePriceRequest {
   model: string;
-  source?: UsagePriceSource;
-  usage?: UsageTokens;
+  /**
+   * Required. Selects Copilot's billing provider and Codex/Copilot's
+   * reasoning-in-output rule; `null` for a harness burn does not model.
+   */
+  source: UsagePriceSource | null;
+  usage: UsageTokens;
   /** The usage sums requests of unknown size: base rates, no context tier. */
   aggregate?: boolean;
   /** The counters were measured: all-zero usage then costs $0 even unpriced. */
@@ -359,11 +366,14 @@ export interface PriceUsageOptions {
   pricingPath?: string;
 }
 export interface UsagePrice {
-  model: string;
-  /** False when burn has no tariff for the model. */
-  priced: boolean;
-  /** Null means the cost is unknown, never free. */
+  /** False when burn could not establish the cost; the fields below are then null. */
+  costKnown: boolean;
+  /**
+   * This request's total rounded to micro-USD. To match `measureSession`,
+   * sum `breakdown.total` and round once instead of adding these.
+   */
   costUsdMicros: number | bigint | null;
+  /** Unrounded per-bucket USD. */
   breakdown: {
     model: string;
     total: number;
@@ -377,10 +387,14 @@ export interface UsagePrice {
 export interface UsagePrices {
   schema: 'burn.usage-prices.v1';
   pricing: {
-    /** Hex SHA-256 of the models.dev snapshot compiled into this build. */
-    builtinSnapshotSha256: string;
-    overrideApplied: boolean;
+    /** relayburn-sdk version: the code-level pricing rules. */
+    sdkVersion: string;
+    /** Hex SHA-256 of the bundled pricing data compiled into this build. */
+    builtinPricingSha256: string;
+    /** Hex SHA-256 of the merged override file; null when none was applied. */
+    overrideSha256: string | null;
   };
+  /** One entry per request, in request order. */
   prices: UsagePrice[];
 }
 /** Price already-counted usage with burn's tariffs. No session read, no ledger. */
