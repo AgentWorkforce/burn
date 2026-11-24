@@ -132,7 +132,12 @@ jobs:
         run: |
           set -euo pipefail
           RUST_VER="${{ inputs.release_version }}"
-          RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}')
+          # A prerelease (5.0.0-next.0) never matches a plain "5.0" requirement
+          # in Cargo, so pin the path-deps to the exact prerelease instead.
+          case "$RUST_VER" in
+            *-*) RUST_MINOR="$RUST_VER" ;;
+            *) RUST_MINOR=$(echo "$RUST_VER" | awk -F. '{print $1"."$2}') ;;
+          esac
           echo "Rust workspace lockstep: $RUST_VER (minor pin: $RUST_MINOR)"
           sed -i.bak -E "s/^version = \"[^\"]+\"$/version = \"$RUST_VER\"/" Cargo.toml
           for crate in relayburn-cli relayburn-sdk-node; do
