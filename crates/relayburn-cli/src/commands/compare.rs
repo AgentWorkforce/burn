@@ -712,11 +712,11 @@ fn render_tty(result: &CompareResult) -> String {
 
     // Widen the last column of each model's group to fit the (possibly
     // longer) display name. Mirrors the TS path's group-line padding.
-    for mi in 0..result.models.len() {
+    for (mi, model) in result.models.iter().enumerate() {
         let start = 1 + mi * 3;
         let group_width =
             widths[start] + SEP.len() + widths[start + 1] + SEP.len() + widths[start + 2];
-        let name = display_model_name(&result.models[mi]);
+        let name = display_model_name(model);
         let name_w = display_width(name);
         if name_w > group_width {
             widths[start + 2] += name_w - group_width;
@@ -725,11 +725,11 @@ fn render_tty(result: &CompareResult) -> String {
 
     // Group-name line.
     let mut group_line: Vec<String> = vec![pad_end("", widths[0])];
-    for mi in 0..result.models.len() {
+    for (mi, model) in result.models.iter().enumerate() {
         let start = 1 + mi * 3;
         let group_width =
             widths[start] + SEP.len() + widths[start + 1] + SEP.len() + widths[start + 2];
-        let name = display_model_name(&result.models[mi]);
+        let name = display_model_name(model);
         group_line.push(pad_end(name, group_width));
     }
     lines.push(rstrip(&group_line.join(SEP)));

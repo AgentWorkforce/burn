@@ -42,7 +42,7 @@ coverage_min_pct = 86.1
 "crates/relayburn-sdk/src/analyze/subagent_tree.rs" = 514
 "crates/relayburn-sdk/src/query_verbs/summary/compute.rs" = 983
 "crates/relayburn-sdk/src/query_verbs/summary/mod.rs" = 782
-"crates/relayburn-sdk-node/src/lib.rs" = 894
+"crates/relayburn-sdk-node/src/lib.rs" = 895
 
 [baseline.cyclomatic]
 "crates/relayburn-cli/src/commands/compare.rs::run_inner" = 36
