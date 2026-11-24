@@ -63,7 +63,7 @@ jobs:
             os: macos-15-intel
             short: darwin-x64
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             short: darwin-arm64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
