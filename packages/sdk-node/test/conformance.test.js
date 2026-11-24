@@ -73,6 +73,7 @@ test('sdk facade exposes the expected verb set', async (t) => {
     'ledgerFreshness',
     'sessionCost',
     'measureSession',
+    'priceUsage',
     'analyzeSession',
     'fingerprint',
     'overhead',
@@ -92,6 +93,39 @@ test('sdk facade exposes the expected verb set', async (t) => {
   ]) {
     assert.equal(typeof sdk[name], 'function', `${name} should be exported`);
   }
+});
+
+test('priceUsage prices known models and leaves unknown ones null', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  const result = await sdk.priceUsage({
+    requests: [
+      { model: 'claude-sonnet-4-5', source: 'claude-code', usage: { input: 10_000, output: 2_000 } },
+      { model: 'fx-no-such-model', source: null, usage: { input: 10_000 } },
+    ],
+  });
+  assert.equal(result.schema, 'burn.usage-prices.v1');
+  assert.match(result.pricing.builtinPricingSha256, /^[0-9a-f]{64}$/);
+  assert.equal(result.pricing.overrideSha256, null);
+  assert.equal(typeof result.pricing.sdkVersion, 'string');
+  assert.equal(result.prices[0].costKnown, true);
+  assert.ok(Number(result.prices[0].costUsdMicros) > 0);
+  assert.equal(result.prices[1].costKnown, false);
+  assert.equal(result.prices[1].costUsdMicros, null);
+});
+
+test('priceUsage rejects a misspelled counter instead of pricing it as zero', async (t) => {
+  const sdk = await loadNapiSdk(t);
+  if (!sdk) return;
+
+  await assert.rejects(
+    async () =>
+      sdk.priceUsage({
+        requests: [{ model: 'claude-sonnet-4-5', source: null, usage: { cacheWrite: 5 } }],
+      }),
+    (err) => err.code === 'BURN_INVALID_ARGUMENT',
+  );
 });
 
 test('measureSession reports one explicit transcript without a ledger', async (t) => {
