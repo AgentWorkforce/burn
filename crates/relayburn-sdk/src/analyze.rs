@@ -65,9 +65,9 @@ pub use context_delta::{
 pub(crate) use context_output_ratio::{
     context_output_ratio_finding, ContextOutputRatioFindingInput,
 };
-pub(crate) use cost::reasoning_mode_for_source;
 pub(crate) use cost::sum_costs;
 pub use cost::{cost_for_turn, tally_unpriced, CostBreakdown};
+pub(crate) use cost::{cost_for_usage, reasoning_mode_for_source, CostForUsageOptions};
 pub(crate) use fidelity::has_minimum_fidelity;
 pub use fidelity::{summarize_fidelity, summarize_fidelity_from_iter, FidelitySummary};
 pub(crate) use findings::{
@@ -98,7 +98,9 @@ pub(crate) use overhead::{
 pub use overhead::{describe_applies_to, OverheadFileKind, OverheadFileScope};
 pub(crate) use patterns::detect_patterns;
 pub use patterns::DetectPatternsOptions;
-pub(crate) use pricing::{load_pricing, PricingTable};
+pub(crate) use pricing::{
+    builtin_pricing_sha256, load_pricing, load_pricing_reporting, PricingTable,
+};
 pub use pricing::{ModelCost, ModelCostTier, ReasoningMode};
 pub(crate) use provider::{
     aggregate_by_provider, AggregateByProviderOptions, ProviderAggregateRow,

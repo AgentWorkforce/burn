@@ -310,10 +310,11 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { HotspotsGroupBy, hotspots, measureSession, analyzeSession, capabilities, summaryReport, summaryTimeseries, BurnErrorCode, ledgerFreshness, PendingStampHarness, writePendingStamp, writeStamp, summary, sessionCost, fingerprint, turnSpanTree, sessionSpanTrees, flowGraph, contextDelta, OverheadFileKind, overhead, overheadTrim, compare, search, exportLedger, exportStamps, ingest, ledgerOpen } = nativeBinding
+const { HotspotsGroupBy, hotspots, priceUsage, measureSession, analyzeSession, capabilities, summaryReport, summaryTimeseries, BurnErrorCode, ledgerFreshness, PendingStampHarness, writePendingStamp, writeStamp, summary, sessionCost, fingerprint, turnSpanTree, sessionSpanTrees, flowGraph, contextDelta, OverheadFileKind, overhead, overheadTrim, compare, search, exportLedger, exportStamps, ingest, ledgerOpen } = nativeBinding
 
 module.exports.HotspotsGroupBy = HotspotsGroupBy
 module.exports.hotspots = hotspots
+module.exports.priceUsage = priceUsage
 module.exports.measureSession = measureSession
 module.exports.analyzeSession = analyzeSession
 module.exports.capabilities = capabilities

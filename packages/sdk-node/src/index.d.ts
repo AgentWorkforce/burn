@@ -324,6 +324,68 @@ export interface SessionCostResult {
 /** Compact session-scoped cost shape; powers the MCP `burn__sessionCost` tool. */
 export declare function sessionCost(opts?: SessionCostOptions): Promise<SessionCostResult>
 
+/** Harness the usage came from; selects billing-provider and reasoning rules. */
+export type UsagePriceSource =
+  | 'claude-code'
+  | 'codex'
+  | 'opencode'
+  | 'copilot-cli'
+  | 'anthropic-api'
+  | 'openai-api'
+  | 'gemini-api';
+/** Token counters for one request. Missing counters read as zero. */
+export interface UsageTokens {
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cacheRead?: number;
+  /** Cache writes at the default 5-minute TTL. */
+  cacheCreate5m?: number;
+  /** Cache writes at the 1-hour TTL. */
+  cacheCreate1h?: number;
+}
+export interface UsagePriceRequest {
+  model: string;
+  source?: UsagePriceSource;
+  usage?: UsageTokens;
+  /** The usage sums requests of unknown size: base rates, no context tier. */
+  aggregate?: boolean;
+  /** The counters were measured: all-zero usage then costs $0 even unpriced. */
+  measured?: boolean;
+}
+export interface PriceUsageOptions {
+  requests: UsagePriceRequest[];
+  /** Optional models.dev-compatible pricing overlay. */
+  pricingPath?: string;
+}
+export interface UsagePrice {
+  model: string;
+  /** False when burn has no tariff for the model. */
+  priced: boolean;
+  /** Null means the cost is unknown, never free. */
+  costUsdMicros: number | bigint | null;
+  breakdown: {
+    model: string;
+    total: number;
+    input: number;
+    output: number;
+    reasoning: number;
+    cacheRead: number;
+    cacheCreate: number;
+  } | null;
+}
+export interface UsagePrices {
+  schema: 'burn.usage-prices.v1';
+  pricing: {
+    /** Hex SHA-256 of the models.dev snapshot compiled into this build. */
+    builtinSnapshotSha256: string;
+    overrideApplied: boolean;
+  };
+  prices: UsagePrice[];
+}
+/** Price already-counted usage with burn's tariffs. No session read, no ledger. */
+export declare function priceUsage(opts: PriceUsageOptions): Promise<UsagePrices>
+
 export type MeasureSessionHarness = 'claude-code' | 'claude' | 'codex' | 'opencode';
 export interface MeasureSessionOptions {
   /**

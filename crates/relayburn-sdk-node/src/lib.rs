@@ -116,6 +116,7 @@ pub use context_efficiency::{
 pub use hotspots::{hotspots, HotspotsGroupBy, HotspotsOptions};
 
 mod bigint_promoting;
+pub mod price;
 pub mod session;
 pub mod summary_report;
 

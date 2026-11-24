@@ -283,6 +283,30 @@ pub fn load_pricing(override_path: Option<&Path>) -> PricingTable {
     table
 }
 
+/// [`load_pricing`], also reporting whether the override file was read and
+/// merged (`false` when there was no path or it fell back to the builtin).
+pub(crate) fn load_pricing_reporting(override_path: Option<&Path>) -> (PricingTable, bool) {
+    let mut table = load_builtin_pricing();
+    let applied = match override_path.map(load_from_file) {
+        Some(Ok(user)) => {
+            table.merge(user);
+            true
+        }
+        _ => false,
+    };
+    (table, applied)
+}
+
+/// Hex SHA-256 of the bundled `models.dev.json` snapshot, so a consumer can
+/// record exactly which price table produced a cost.
+pub(crate) fn builtin_pricing_sha256() -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(BUILTIN_PRICING_JSON.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn load_from_file(path: &Path) -> io::Result<PricingTable> {
     let raw = fs::read_to_string(path)?;
     parse_pricing(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
