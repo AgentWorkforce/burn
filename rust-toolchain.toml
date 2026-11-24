@@ -1,3 +1,6 @@
 [toolchain]
-channel = "stable"
+# Pinned, not "stable": coverage-based quality ceilings (rust-oleum CRAP)
+# and clippy lints move with the toolchain, so a floating channel fails
+# PRs that changed nothing. Bump deliberately and re-baseline in that PR.
+channel = "1.98.1"
 components = ["rustfmt", "clippy"]
