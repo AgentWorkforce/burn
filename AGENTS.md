@@ -1,178 +1,31 @@
-# Agent guide for relayburn
+# Working in burn
 
-Conventions an agent (or human) needs to know to work productively in this repo.
-Pairs with [`README.md`](./README.md) — README is what burn does, this file is
-how to work on it.
-
-## Layout
-
-The repo is Rust-first. `crates/` is the source of truth.
-
-### Rust crates (`crates/`)
-
-Only `relayburn-sdk` and `relayburn-cli` are published to crates.io. Crate
-names are prefixed `relayburn-*` because `burn` is taken on crates.io; the
-binary keeps the `burn` invocation via `[[bin]] name = "burn"` in
-`relayburn-cli`.
-
-```
-relayburn-sdk         — PUBLISHED to crates.io; embedding API.
-                          src/{reader,source,ledger,analyze,ingest}/ are internal
-                          modules: reader/ is burn's record model (types,
-                          classifier, inference, span trees), source/ maps
-                          relayhistory evidence onto it, ingest/ keeps the
-                          ledger up to date from the relayhistory store.
-                          The public verb surface lives in
-                          src/{query_verbs,export_verbs,ingest_verb}.rs.
-relayburn-cli         — PUBLISHED to crates.io; produces the `burn` binary.
-                          Consumes the SDK as an external embedder would.
-relayburn-sdk-node    — napi-rs bindings; built in CI to produce
-                          @relayburn/sdk .node artifacts. Not published to crates.io.
+```sh
+pnpm install
+pnpm run verify
+pnpm run test:bundle
 ```
 
-Build order is `relayburn-sdk -> relayburn-cli`, with `relayburn-sdk-node` also
-depending on `relayburn-sdk`. Toolchain is pinned in `rust-toolchain.toml` at
-the repo root.
+- Session acquisition and parsing belong to relayhistory. Consume its `ai-hist::SessionStore`; fix harness quirks upstream and keep frozen sourcing-parity fixtures meaningful.
+- Put new read behavior in the Rust SDK; CLI, Node and MCP surfaces wrap it. npm packages are native wrappers, not an independent implementation.
+- Keep ledger and schema changes deliberate. Use SDK ledger APIs and transactions for concurrent writes.
+- Do not silently raise rust-oleum baselines; call out any new ceiling in the PR. Curate the relevant package and root Unreleased changelogs.
 
-Every new read verb should land first in `relayburn-sdk` as a pure function or
-`LedgerHandle` method. The CLI and MCP presenter surfaces should wrap SDK calls
-rather than duplicating query logic.
+## Agency and guidance
 
-### npm packages (`packages/`)
+- Act autonomously on routine assigned work; ask forgiveness rather than permission. Preserve explicit production, release and credential gates.
+- For guidance, ask the engineering leads, the agent that spawned you, or the layered owner on Agent Relay.
+- Only a truly pressing or blocking question goes to `khaliq-gant` or `will-washburn` (CODEOWNERS) on Agent Relay.
 
-The npm workspace contains wrappers and platform package manifests only:
+## Cross-repo context
 
-```
-packages/sdk-node          — @relayburn/sdk Node facade over relayburn-sdk-node.
-packages/sdk-node/npm/*    — @relayburn/sdk-<platform> prebuilt native packages.
-packages/mcp               — @relayburn/mcp stdio MCP presenter over @relayburn/sdk.
-packages/relayburn         — unscoped npm install wrapper exposing `burn`.
-packages/relayburn/npm/*   — @relayburn/cli-<platform> prebuilt binary packages.
-```
+- Before and during changes, understand how this repo fits the wider system; consult its repo map and related-repo docs where available.
+- Check relevant agents’ summaries on Agent Relay and proactively contact owning agents about dependencies, adjacent changes and work in flight.
 
-Add query behavior to the Rust SDK/CLI/MCP presenter surface as appropriate.
+## Pull requests
 
-## Common commands
-
-```bash
-cargo build --workspace    # Build all Rust crates.
-cargo test --workspace     # Rust unit/integration tests.
-
-pnpm install               # Workspace install for npm wrappers.
-pnpm run test              # Node SDK facade + MCP tests.
-pnpm run test:bundle       # esbuild smoke test for @relayburn/sdk.
-pnpm run build:napi        # Local napi-rs build for @relayburn/sdk.
-
-pnpm run pricing:update    # Refresh the vendored models.dev snapshot.
-```
-
-When debugging CLI behavior locally, prefer the Rust binary:
-
-```bash
-cargo run -p relayburn-cli -- summary --since 24h
-```
-
-## Quality benchmark
-
-The Quality CI workflow runs [rust-oleum](https://github.com/AgentWorkforce/rust-oleum)
-(our own OSS code-quality ratchet, extracted from this repo) against
-`rust-oleum.toml` at the repo root: targets for complexity, Halstead
-difficulty, lines per file, coverage, CRAP, and dead/redundant code, plus a
-grandfathered `[baseline]` of existing violations. CI fails on new
-violations or regressions beyond a grandfathered ceiling; PRs additionally
-get `cargo-mutants` run over their diff (target: zero surviving mutants in
-changed lines).
-
-```bash
-cargo install --locked rust-oleum
-rust-oleum                              # report + gate
-rust-oleum --coverage lcov.info         # with coverage/CRAP
-rust-oleum --write-baseline             # regenerate [baseline]
-```
-
-When your PR trips the gate, prefer refactoring under the target over adding
-baseline entries. If you refactor a grandfathered offender, shrink or delete
-its baseline entry. Never raise a ceiling or add a new entry without calling
-it out in the PR description.
-
-## Changelog
-
-Curate `[Unreleased]` in the relevant changelog as you land PRs:
-
-- `CHANGELOG.md` for cross-package or user-facing release narrative.
-- `packages/sdk-node/CHANGELOG.md` for the Node SDK facade.
-- `packages/mcp/CHANGELOG.md` for the MCP package.
-- `packages/relayburn/CHANGELOG.md` for the npm CLI install wrapper.
-
-Changelog entries should be concise and impact-first. Prefer one short bullet
-per user-visible change: name the command/API/schema touched and the practical
-effect. Drop issue/PR links, internal review notes, implementation backstory,
-and "foundation for..." phrasing unless that text clearly explains the shipped
-impact.
-
-## Releases
-
-```bash
-# from GitHub Actions: workflow_dispatch -> "Publish Packages"
-#   version: patch | minor | major | prepatch | … | none (re-publish current)
-#   custom_version: 0.3.1 (overrides version type)
-#   tag: latest | next | beta | alpha
-#   dry_run: true to skip publish + tag + git push
-```
-
-The workflow builds and tests the Rust workspace, builds native artifacts for
-the npm platform packages, publishes the umbrellas (`relayburn`,
-`@relayburn/sdk`, `@relayburn/mcp`) and their optional dependencies, then tags
-each published target.
-
-## Session sourcing lives in relayhistory
-
-burn never parses harness logs. Every session comes from the
-[`ai-hist`](https://github.com/AgentWorkforce/relayhistory) crate's
-`SessionStore`. `crates/relayburn-sdk/Cargo.toml` depends on a
-semver-compatible ai-hist release (`ai-hist = "0.49"` floats across 0.49.x
-patches); adopting a new minor is a deliberate bump that re-runs the parity
-suite.
-
-- `crates/relayburn-sdk/src/source/relayhistory/` maps `SessionEvidence` onto
-  burn's records per harness; `source/usage.rs` owns what the raw provider
-  counters mean; `source/delegated.rs` bills Claude subagents to the session
-  that spawned them.
-- `source::parity_tests` holds the mapping to the frozen snapshots in
-  `tests/fixtures/sourcing-snapshots/` (see its README for the deliberate
-  deviations).
-- `crates/relayburn-sdk/src/ingest/` syncs the store, reads its change feed
-  from the ledger's watermark, and appends each changed session. The CLI
-  presenter lives at `crates/relayburn-cli/src/commands/ingest.rs`.
-
-A harness quirk is fixed in relayhistory, not here. A new harness lands in
-relayhistory first; burn then adds its `SourceKind`, mapping, pricing, and
-`TOOL_ALIASES` entries. Launchers that cannot provide a session ID before
-spawn use the pending-stamp API in
-`crates/relayburn-sdk/src/ingest/pending_stamps.rs`.
-
-## When in doubt
-
-- **Architecture / API surface:** read `README.md`, then
-  `crates/relayburn-sdk/src/lib.rs` for the Rust public surface and
-  `packages/sdk-node/src/index.d.ts` for the Node facade.
-- **CLI commands and flags:** read `crates/relayburn-cli/src/cli.rs` and verify
-  the rendered surface with `cargo run -p relayburn-cli -- --help` plus the
-  relevant subcommand `--help`. CLI registration expectations live in
-  `crates/relayburn-cli/tests/smoke.rs`.
-- **Activity classifier rules:** the rule tables (`TEST_PATTERNS`,
-  `EDIT_TOOLS`, `TOOL_ALIASES`, etc.) live at
-  `crates/relayburn-sdk/src/reader/classifier.rs`. New harness tool names need
-  entries in `TOOL_ALIASES`; a new category requires updating
-  `ActivityCategory` in `crates/relayburn-sdk/src/reader/types.rs` and adding
-  its rule plus tests.
-- **Derived state commands:** status, rebuild targets, and content pruning live
-  under `burn state` in `crates/relayburn-cli/src/commands/state.rs`. Keep
-  maintenance verbs there rather than adding new top-level CLI dispatch.
-- **Ledger schema:** `crates/relayburn-sdk/src/reader/types.rs` defines
-  `TurnRecord` / content record shapes and
-  `crates/relayburn-sdk/src/ledger/schema.rs` defines the SQLite layout. Bump
-  schema/versioning deliberately when the on-disk shape changes.
-- **Concurrency:** use the SDK ledger APIs and SQLite transactions. The 2.x
-  storage layout is `burn.sqlite` plus `content.sqlite`; WAL mode serializes
-  concurrent writers and permits concurrent readers.
+- Open PRs ready for review, never as drafts. If merging requires Khaliq’s OK, use `merge-train:hold`.
+- Immediately subscribe to PR feedback through Agent Relay using [this skill](https://github.com/AgentWorkforce/skills/blob/main/skills/subscribing-relay-webhooks-and-writebacks/SKILL.md), and verify the subscription.
+- Evaluate every finding. Address applicable feedback and explain declined changes; a PR with unaddressed feedback or conflicts is not ready.
+- When ready, loudly alert the CODEOWNERS and the agent that spawned you on Agent Relay.
+- Keep related older PRs moving by contacting their author agent; if unavailable, escalate to the CODEOWNERS or layered owner.
