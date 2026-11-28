@@ -9,7 +9,7 @@ pnpm run test:bundle
 - Session acquisition and parsing belong to relayhistory. Consume its `ai-hist::SessionStore`; fix harness quirks upstream and keep frozen sourcing-parity fixtures meaningful.
 - Put new read behavior in the Rust SDK; CLI, Node and MCP surfaces wrap it. npm packages are native wrappers, not an independent implementation.
 - Keep ledger and schema changes deliberate. Use SDK ledger APIs and transactions for concurrent writes.
-- Do not silently raise rust-oleum baselines; call out any new ceiling in the PR. Curate the relevant package and root Unreleased changelogs.
+- Follow the [quality benchmark workflow](docs/repository-guide.md#quality-benchmark) and call out any new rust-oleum ceiling in the PR. Curate the relevant package and root Unreleased changelogs.
 
 ## Agency and guidance
 

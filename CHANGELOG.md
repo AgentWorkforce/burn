@@ -66,6 +66,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 - Unpriced sessions: hotspot attribution and instruction-overhead riding turns still count tokens, and finding text says the dollar cost is unknown instead of `$0.0000`.
 - `burn hotspots --findings` and `burn analyze` add a `cache-expiry` finding: turns that resumed after the prompt cache's 5-minute or 1-hour TTL lapsed and re-wrote the full context, priced as the extra cost over warm cache reads, with advice keyed to whether the user was idle or a tool ran past the TTL. Under `--since`, a resume at the window start is measured against the session's earlier turns.
 - CI enforces a code-quality gate (rust-oleum): complexity, file size, coverage, CRAP, dead/redundant code, and surviving mutants in PR diffs, against a shrinking grandfathered baseline in `rust-oleum.toml`.
+- CI uses rust-oleum 0.4 to track safety, API shape, lint suppressions, and seven Clippy lint groups. The line coverage floor rises from 86.1% to 90.1%. Current main measured 90.66%.
 - Timestamps everywhere (ingest, `--since`, quality outcomes, pending stamps) go through one strict ISO-8601 parser: `±HH:MM` offsets are applied rather than ignored, and out-of-range components, leap seconds, or trailing text are rejected.
 
 ## [4.1.0] - 2026-09-20
