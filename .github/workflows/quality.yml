@@ -79,7 +79,7 @@ jobs:
           --lcov --output-path lcov.info
 
       - name: Collect clippy diagnostics
-        run: cargo clippy --workspace --all-targets --message-format=json > clippy-log.json
+        run: scripts/quality-clippy.sh > clippy-log.json
 
       - name: Run quality gate
         run: >
