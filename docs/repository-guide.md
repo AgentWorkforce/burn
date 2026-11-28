@@ -701,10 +701,9 @@ fire on lifecycle events — turn start, tool use, session end, etc. When an
 event fires, Claude pipes a JSON payload describing what just happened into
 the registered command's stdin.
 
-`burn ingest --hook claude` is burn registering itself as one of those
-commands. Instead of polling the transcript file looking for new turns, burn
-gets pushed each turn the moment it lands. Lower latency, no missed turns, no
-FS-watching contortions.
+After you [register the handler in Claude Code settings](#how-is-the-hook-installed),
+Claude Code runs `burn ingest --hook claude` for each configured event. Burn
+reads the event payload from stdin and ingests the transcript it references.
 
 ### Why both watch and hook?
 
