@@ -141,6 +141,10 @@ export async function measureSession(opts) {
   return coerceBigInts(await binding.measureSession(opts));
 }
 
+export async function priceUsage(opts) {
+  return coerceBigInts(binding.priceUsage(opts));
+}
+
 export async function analyzeSession(opts) {
   return coerceBigInts(await binding.analyzeSession(opts));
 }

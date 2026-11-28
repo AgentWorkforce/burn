@@ -4,6 +4,7 @@
 
 - **Breaking:** `ingest()` syncs the relayhistory store and appends what changed; it takes `{ ledgerHome, storeDbPath, home }` (store database and provider home) and drops the ignored `sessionId` / `harness` fields.
 - `ingest()` bills Claude Code subagent turns with the session that spawned them and reads OpenCode's SQLite store.
+- `priceUsage({ requests, pricingPath? })` prices already-counted usage with burn's tariffs and returns `burn.usage-prices.v1` (typed `UsagePrices`); an unknown cost is `costUsdMicros: null`, `source` is required (nullable) and a misspelled counter is rejected.
 - `analyzeSession({ harness, sessionId | path })` returns the ledger-less `burn.session-analysis.v1` diagnosis of one session, typed as `SessionAnalysis`.
 - `SessionAnalysis.reasoning` breaks a session's turns, tokens, reasoning tokens and cost down per recorded reasoning effort, with the turns where effort changed.
 - `measureSession()` reads sessions through relayhistory; an OpenCode input outside its `storage/session/<scope>/` tree is rejected with the expected layout.

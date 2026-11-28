@@ -57,6 +57,7 @@ mod reader;
 // implementation PRs land in parallel without touching `lib.rs`.
 mod export_verbs;
 mod ingest_verb;
+mod price_usage;
 mod query_verbs;
 mod session_analysis;
 mod session_metrics;
@@ -66,6 +67,7 @@ mod util;
 
 pub use export_verbs::*;
 pub use ingest_verb::*;
+pub use price_usage::*;
 pub use query_verbs::*;
 pub use session_analysis::*;
 pub use session_metrics::*;

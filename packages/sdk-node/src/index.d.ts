@@ -324,6 +324,82 @@ export interface SessionCostResult {
 /** Compact session-scoped cost shape; powers the MCP `burn__sessionCost` tool. */
 export declare function sessionCost(opts?: SessionCostOptions): Promise<SessionCostResult>
 
+/** Harness the usage came from; selects billing-provider and reasoning rules. */
+export type UsagePriceSource =
+  | 'claude-code'
+  | 'codex'
+  | 'opencode'
+  | 'copilot-cli'
+  | 'anthropic-api'
+  | 'openai-api'
+  | 'gemini-api';
+/**
+ * Token counters for one request. Missing counters read as zero; an unknown
+ * counter name is rejected. Counts must be safe integers (< 2^53).
+ */
+export interface UsageTokens {
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cacheRead?: number;
+  /** Cache writes at the default 5-minute TTL. */
+  cacheCreate5m?: number;
+  /** Cache writes at the 1-hour TTL. */
+  cacheCreate1h?: number;
+}
+export interface UsagePriceRequest {
+  model: string;
+  /**
+   * Required. Selects Copilot's billing provider and Codex/Copilot's
+   * reasoning-in-output rule; `null` for a harness burn does not model.
+   */
+  source: UsagePriceSource | null;
+  usage: UsageTokens;
+  /** The usage sums requests of unknown size: base rates, no context tier. */
+  aggregate?: boolean;
+  /** The counters were measured: all-zero usage then costs $0 even unpriced. */
+  measured?: boolean;
+}
+export interface PriceUsageOptions {
+  requests: UsagePriceRequest[];
+  /** Optional models.dev-compatible pricing overlay. */
+  pricingPath?: string;
+}
+export interface UsagePrice {
+  /** False when burn could not establish the cost; the fields below are then null. */
+  costKnown: boolean;
+  /**
+   * This request's total rounded to micro-USD. To match `measureSession`,
+   * sum `breakdown.total` and round once instead of adding these.
+   */
+  costUsdMicros: number | bigint | null;
+  /** Unrounded per-bucket USD. */
+  breakdown: {
+    model: string;
+    total: number;
+    input: number;
+    output: number;
+    reasoning: number;
+    cacheRead: number;
+    cacheCreate: number;
+  } | null;
+}
+export interface UsagePrices {
+  schema: 'burn.usage-prices.v1';
+  pricing: {
+    /** relayburn-sdk version: the code-level pricing rules. */
+    sdkVersion: string;
+    /** Hex SHA-256 of the bundled pricing data compiled into this build. */
+    builtinPricingSha256: string;
+    /** Hex SHA-256 of the merged override file; null when none was applied. */
+    overrideSha256: string | null;
+  };
+  /** One entry per request, in request order. */
+  prices: UsagePrice[];
+}
+/** Price already-counted usage with burn's tariffs. No session read, no ledger. */
+export declare function priceUsage(opts: PriceUsageOptions): Promise<UsagePrices>
+
 export type MeasureSessionHarness = 'claude-code' | 'claude' | 'codex' | 'opencode';
 export interface MeasureSessionOptions {
   /**

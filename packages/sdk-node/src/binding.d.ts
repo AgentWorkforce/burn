@@ -63,6 +63,11 @@ export interface HotspotsOptions {
  * `BigInt` per the file header rule.
  */
 export declare function hotspots(opts?: HotspotsOptions | undefined | null): import('./index').HotspotsResult
+/**
+ * One price per request, in order; returns `burn.usage-prices.v1`. An
+ * unknown model prices as `costUsdMicros: null`, never zero.
+ */
+export declare function priceUsage(opts: JsonValue): import('./index').UsagePrices
 export interface MeasureSessionOptions {
   inputPath: string
   harness: string

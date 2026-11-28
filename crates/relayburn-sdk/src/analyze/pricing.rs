@@ -283,6 +283,54 @@ pub fn load_pricing(override_path: Option<&Path>) -> PricingTable {
     table
 }
 
+/// [`load_pricing`], also returning the hex SHA-256 of the override file's
+/// bytes when it was read, parsed and priced at least one model. `None` when
+/// there was no path, it fell back to the builtin, or it priced nothing.
+pub(crate) fn load_pricing_reporting(
+    override_path: Option<&Path>,
+) -> (PricingTable, Option<String>) {
+    let mut table = load_builtin_pricing();
+    let applied = override_path.and_then(|path| {
+        let raw = fs::read(path).ok()?;
+        let user = parse_pricing(std::str::from_utf8(&raw).ok()?).ok()?;
+        if user.models.is_empty() && user.billed.values().all(HashMap::is_empty) {
+            return None;
+        }
+        table.merge(user);
+        Some(sha256_hex(&[&raw]))
+    });
+    (table, applied)
+}
+
+/// Hex SHA-256 over every bundled data file that decides a tariff (the
+/// models.dev snapshot and the protected first-party model ids), computed
+/// once. Code-level rules (aliases, precedence) are identified by the SDK
+/// version, which callers record alongside this hash.
+pub(crate) fn builtin_pricing_sha256() -> &'static str {
+    static HASH: LazyLock<String> = LazyLock::new(|| {
+        sha256_hex(&[
+            BUILTIN_PRICING_JSON.as_bytes(),
+            BUILTIN_PRIMARY_MODEL_IDS_JSON.as_bytes(),
+        ])
+    });
+    &HASH
+}
+
+/// Length-prefixed so the boundary between parts is part of the digest.
+fn sha256_hex(parts: &[&[u8]]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn load_from_file(path: &Path) -> io::Result<PricingTable> {
     let raw = fs::read_to_string(path)?;
     parse_pricing(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
