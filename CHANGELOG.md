@@ -16,6 +16,7 @@ Cross-package release notes for relayburn. Package changelogs contain package-le
 
 ### Added
 
+- `relayburn-sdk` `price_usage` / `@relayburn/sdk` `priceUsage()` price token counts a caller already has (no session read, no ledger) with burn's tariffs and return `burn.usage-prices.v1`: per-request `costUsdMicros` (null when the cost is unknown, never zero), an unrounded per-bucket breakdown, and provenance (SDK version, SHA-256 of the bundled pricing data and of any applied override). Requests must name their `source` and reject unknown fields.
 - GitHub Copilot CLI sessions (`~/.copilot/session-state/`, or `$COPILOT_HOME`) are ingested and billed, retroactively and with no setup.
 - Claude Code subagent spend is billed: every turn of a subagent transcript, nested subagents included, is a turn of the session that spawned it. Ledger totals for sessions that delegated work go up by exactly that spend.
 - OpenCode sessions in the SQLite store (`opencode.db`, current OpenCode releases) are ingested, as well as the `storage/` JSON tree.

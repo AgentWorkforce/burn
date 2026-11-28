@@ -114,7 +114,7 @@ struct ModelAccumulator {
     unpriced_turns: u64,
 }
 
-fn usd_to_micros(value: f64) -> Option<u64> {
+pub(crate) fn usd_to_micros(value: f64) -> Option<u64> {
     let micros = value * 1_000_000.0;
     (micros.is_finite() && micros >= 0.0 && micros <= u64::MAX as f64)
         .then(|| micros.round() as u64)
